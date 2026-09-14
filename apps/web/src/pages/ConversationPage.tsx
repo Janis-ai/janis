@@ -119,7 +119,7 @@ export default function ConversationPage() {
 
         {error && <div className="error">{error}</div>}
 
-        {suggestions?.length > 0 && (
+        {c.state === 'human' && suggestions?.length > 0 && (
           <div className="card suggestion">
             <div className="muted" style={{ marginBottom: 6 }}>
               Suggested ({suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
@@ -145,13 +145,13 @@ export default function ConversationPage() {
           </div>
         )}
 
-        <div className="row" style={{ marginBottom: 10 }}>
-          {c.state !== 'archived' && (
+        {c.state === 'human' && (
+          <div className="row" style={{ marginBottom: 10 }}>
             <button className="btn" onClick={() => suggest.mutate()} disabled={suggest.isPending}>
               {suggest.isPending ? 'Thinking…' : '✨ Suggest reply'}
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {canSend ? (
           <form className="composer" onSubmit={send}>

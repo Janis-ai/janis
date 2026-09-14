@@ -173,6 +173,9 @@ export function conversationRoutes(db: Db) {
         c.get('workspaceId'),
         c.req.param('id'),
       );
+      if (conversation.state !== 'human') {
+        return c.json({ error: 'take over the conversation before requesting a suggestion' }, 409);
+      }
       const result = await requestSuggestion(db, conversation, agent);
       return c.json(
         result.mode === 'llm'
