@@ -17,8 +17,15 @@ export function createApp(db: Db) {
   const app = new Hono();
 
   app.use('*', logger());
-  app.use('/api/*', cors({ origin: env.webOrigin, credentials: true }));
-  app.use('/auth/*', cors({ origin: env.webOrigin, credentials: true }));
+  // Echo back trusted origins (required for credentialed CORS). Allows the
+  // configured web origin plus any localhost/127.0.0.1 port — covers dev
+  // proxies like the IDE browser preview.
+  const corsOrigin = (origin: string) =>
+    origin === env.webOrigin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+      ? origin
+      : '';
+  app.use('/api/*', cors({ origin: corsOrigin, credentials: true }));
+  app.use('/auth/*', cors({ origin: corsOrigin, credentials: true }));
 
   app.get('/health', (c) => c.json({ ok: true, service: 'janis-api' }));
 
