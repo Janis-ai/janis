@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
+import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -18,6 +19,7 @@ const updateAgent = z.object({
   name: z.string().min(1).max(120).optional(),
   webhook_url: z.string().url().nullable().optional(),
   auto_resume_minutes: z.number().min(1).max(10080).nullable().optional(),
+  config: AgentConfig.optional(),
 });
 
 export function agentRoutes(db: Db) {
@@ -61,6 +63,7 @@ export function agentRoutes(db: Db) {
         ...(body.auto_resume_minutes !== undefined
           ? { autoResumeMinutes: body.auto_resume_minutes }
           : {}),
+        ...(body.config !== undefined ? { config: body.config } : {}),
       })
       .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
       .returning();

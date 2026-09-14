@@ -62,6 +62,12 @@ export function v1Routes(db: Db) {
     },
   );
 
+  // Agent's behavior config — polled by template-based agents at runtime
+  app.get('/config', (c) => {
+    const agent = c.get('agent');
+    return c.json({ config: agent.config ?? {} });
+  });
+
   // Verify an agent's webhook endpoint is reachable
   app.post('/agents/me/webhook-test', async (c) => {
     const agent = c.get('agent');

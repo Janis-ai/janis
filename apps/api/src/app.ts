@@ -18,6 +18,7 @@ import { savedReplyRoutes } from './routes/savedReplies.js';
 import { searchRoutes } from './routes/search.js';
 import { digestRoutes } from './routes/digests.js';
 import { slackApiRoutes, slackPublicRoutes } from './routes/slack.js';
+import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 
 export function createApp(db: Db) {
   const app = new Hono();
@@ -38,6 +39,7 @@ export function createApp(db: Db) {
   app.route('/v1', v1Routes(db)); // agent-facing (server-to-server, no CORS)
   app.route('/auth', authRoutes(db));
   app.route('/slack', slackPublicRoutes(db)); // Slack-signed (oauth/events/interactions)
+  app.route('/channels', channelWebhookRoutes(db)); // Meta webhooks (app-secret signed)
 
   const api = new Hono();
   api.route('/agents', agentRoutes(db));
@@ -52,6 +54,7 @@ export function createApp(db: Db) {
   api.route('/search', searchRoutes(db));
   api.route('/digests', digestRoutes(db));
   api.route('/slack', slackApiRoutes(db));
+  api.route('/channels', channelApiRoutes(db));
   app.route('/api', api);
 
   app.use('/uploads/*', serveStatic({ root: './' }));

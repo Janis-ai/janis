@@ -123,6 +123,14 @@ export type IngestResponse = z.infer<typeof IngestResponse>;
 // Entities returned by the console API
 // ---------------------------------------------------------------------------
 
+/** Behavior config for template-based agents — the Dialogflow-era "intents" replacement. */
+export const AgentConfig = z.object({
+  system_prompt: z.string().optional(),
+  knowledge: z.array(z.string()).optional(), // facts/snippets injected into the prompt
+  tone: z.string().optional(),
+});
+export type AgentConfig = z.infer<typeof AgentConfig>;
+
 export const Agent = z.object({
   id: z.string(),
   workspace_id: z.string(),
@@ -130,11 +138,29 @@ export const Agent = z.object({
   webhook_url: z.string().nullable(),
   has_webhook_secret: z.boolean(),
   auto_resume_minutes: z.number().nullable(),
+  config: AgentConfig,
   api_key_preview: z.string(), // e.g. "jk_live_…a1b2" — full key only shown at creation
   metadata: z.record(z.unknown()),
   created_at: z.string(),
 });
 export type Agent = z.infer<typeof Agent>;
+
+/** A hosted messaging channel (Meta). Tokens are never exposed to the console. */
+export const Channel = z.object({
+  id: z.string(),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp']),
+  name: z.string(),
+  agent_id: z.string(),
+  agent_name: z.string(),
+  // non-secret identifiers + the verify token needed to register the webhook
+  meta: z.object({
+    page_id: z.string().optional(),
+    phone_number_id: z.string().optional(),
+    verify_token: z.string(),
+  }),
+  created_at: z.string(),
+});
+export type Channel = z.infer<typeof Channel>;
 
 export const Conversation = z.object({
   id: z.string(),
@@ -240,6 +266,7 @@ export type WorkspaceUser = z.infer<typeof WorkspaceUser>;
 // ---------------------------------------------------------------------------
 
 export const OutboundWebhookType = z.enum([
+  'message.user', // hosted-channel inbound: end user sent a message; agent should reply via /v1/events
   'human.takeover', // a human took over; agent should pause for this conversation
   'message.human', // a human operator sent a message to the end user
   'human.resume', // human released the conversation; agent may resume
@@ -254,6 +281,9 @@ export const OutboundWebhook = z.object({
   janis_conversation_id: z.string(),
   text: z.string().optional(),
   operator: z.object({ id: z.string(), name: z.string() }).optional(),
+  user: z
+    .object({ id: z.string().optional(), name: z.string().optional() })
+    .optional(), // end-user info on message.user
   payload: z.record(z.unknown()).optional(),
   timestamp: z.string(),
 });

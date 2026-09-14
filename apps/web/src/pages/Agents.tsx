@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { Agent, AlertRule } from '@janis/shared';
+import type { Agent, AgentConfig, AlertRule } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgents, useAlertRules } from '../api/hooks';
 
@@ -34,7 +34,7 @@ export default function Agents() {
   });
 
   const update = useMutation({
-    mutationFn: ({ id, ...body }: { id: string; name?: string; webhook_url?: string | null }) =>
+    mutationFn: ({ id, ...body }: { id: string; name?: string; webhook_url?: string | null; config?: AgentConfig }) =>
       api(`/api/agents/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: refresh,
     onError: (e) => setError(e.message),
@@ -136,7 +136,12 @@ function AgentCard({
 }: {
   agent: Agent;
   rules: AlertRule[];
-  onSave: (body: { name?: string; webhook_url?: string | null; auto_resume_minutes?: number | null }) => void;
+  onSave: (body: {
+    name?: string;
+    webhook_url?: string | null;
+    auto_resume_minutes?: number | null;
+    config?: AgentConfig;
+  }) => void;
   onTestWebhook: () => void;
   onRotateKey: () => void;
   onRotateSecret: () => void;
@@ -149,6 +154,7 @@ function AgentCard({
   const [kind, setKind] = useState<(typeof RULE_KINDS)[number]>('keyword');
   const [keywords, setKeywords] = useState('');
   const [minutes, setMinutes] = useState('15');
+  const [cfg, setCfg] = useState<AgentConfig>(agent.config ?? {});
 
   return (
     <div className="card">
@@ -186,6 +192,37 @@ function AgentCard({
           Save
         </button>
       </div>
+
+      <details style={{ marginTop: 12 }}>
+        <summary style={{ cursor: 'pointer' }}>
+          <strong>Bot behavior</strong> — used by the Janis agent template (prompt + knowledge)
+        </summary>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+          <label>System prompt</label>
+          <textarea
+            rows={4}
+            placeholder="You are the support agent for Acme Co. You help with orders, returns…"
+            value={cfg.system_prompt ?? ''}
+            onChange={(e) => setCfg({ ...cfg, system_prompt: e.target.value })}
+          />
+          <label>Knowledge base — one fact/snippet per line</label>
+          <textarea
+            rows={5}
+            placeholder={'Refunds are allowed within 30 days of purchase.\nSupport hours are 9-5 ET.\nOrder lookup requires the order number.'}
+            value={(cfg.knowledge ?? []).join('\n')}
+            onChange={(e) => setCfg({ ...cfg, knowledge: e.target.value.split('\n').filter(Boolean) })}
+          />
+          <label>Tone</label>
+          <input
+            placeholder="e.g. warm, concise, never apologetic"
+            value={cfg.tone ?? ''}
+            onChange={(e) => setCfg({ ...cfg, tone: e.target.value })}
+          />
+          <div>
+            <button className="btn" onClick={() => onSave({ config: cfg })}>Save behavior</button>
+          </div>
+        </div>
+      </details>
 
       <label>Alert rules</label>
       {rules.map((r) => (

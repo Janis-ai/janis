@@ -87,6 +87,24 @@ Alerts post to the chosen channel with **Take over / Resume** buttons; each
 conversation gets a Slack thread, and replying in the thread takes over and
 relays to the end user.
 
+## Agent template + hosted channels
+
+`@janis/agent-template` is a runnable, config-driven support agent: it polls
+`GET /v1/config` for its system prompt/knowledge/tone (edited per-agent in the
+console), answers `message.user` webhooks, drafts suggestions, and honors
+takeover.
+
+    JANIS_API_KEY=jk_live_... LLM_API_KEY=sk-... npm run start -w packages/agent-template
+
+Set the agent's `webhook_url` to the template's `/webhook`. It also serves
+`POST /chat` for local testing without a channel.
+
+**Hosted channels** (Integrations page): Messenger, Instagram DMs, and WhatsApp
+Business via one Meta webhook — `{API}/channels/meta/webhook`. Janis owns the
+pipe: inbound messages reach the agent only while it owns the conversation, so
+human takeover is *enforced*, not cooperative. Human/agent replies deliver back
+through the channel automatically. Set `META_APP_SECRET` for signature checks.
+
 ## Deploy
 
 API: `Dockerfile.api` builds a Node image; needs `DATABASE_URL` (Postgres) and

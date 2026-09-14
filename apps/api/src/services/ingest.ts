@@ -12,6 +12,7 @@ import { bus } from '../lib/bus.js';
 import { notifyWorkspace } from '../lib/notify.js';
 import { evaluateEvent } from '../lib/rules.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
+import { deliverToChannel } from '../lib/channels.js';
 import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
 
 type AgentRow = typeof agents.$inferSelect;
@@ -40,6 +41,8 @@ export async function processEvents(
       if (message.text) {
         const label = message.direction === 'in' ? ':busts_in_silhouette: *user:*' : ':robot_face: *agent:*';
         void mirrorToSlack(db, conv.id, label, message.text);
+        // hosted channels: agent replies go straight to the end user
+        if (message.direction === 'out') void deliverToChannel(db, conv.id, message.text);
       }
     }
 

@@ -1,7 +1,9 @@
 import type {
+  AgentConfig,
   Alert,
   AlertRule,
   Agent,
+  Channel,
   Conversation,
   Digest,
   Message,
@@ -13,6 +15,7 @@ import type {
   agents,
   alertRules,
   alerts,
+  channels,
   conversations,
   digests,
   messages,
@@ -34,6 +37,7 @@ export function toAgent(row: Row<typeof agents>): Agent {
     webhook_url: row.webhookUrl,
     has_webhook_secret: Boolean(row.webhookSecret),
     auto_resume_minutes: row.autoResumeMinutes,
+    config: (row.config ?? {}) as AgentConfig,
     api_key_preview: row.apiKeyPreview,
     metadata: (row.metadata ?? {}) as Record<string, unknown>,
     created_at: iso(row.createdAt)!,
@@ -106,6 +110,27 @@ export function toAlertRule(row: Row<typeof alertRules>): AlertRule {
       keywords: config.keywords,
       inactivity_minutes: config.inactivity_minutes,
       enabled: config.enabled !== false,
+    },
+    created_at: iso(row.createdAt)!,
+  };
+}
+
+export function toChannel(row: Row<typeof channels>, agentName: string): Channel {
+  const creds = (row.credentials ?? {}) as {
+    page_id?: string;
+    phone_number_id?: string;
+    verify_token?: string;
+  };
+  return {
+    id: row.id,
+    kind: row.kind,
+    name: row.name,
+    agent_id: row.agentId,
+    agent_name: agentName,
+    meta: {
+      page_id: creds.page_id,
+      phone_number_id: creds.phone_number_id,
+      verify_token: creds.verify_token ?? '',
     },
     created_at: iso(row.createdAt)!,
   };

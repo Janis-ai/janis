@@ -17,4 +17,5 @@ export const env = {
   slackClientId: process.env.SLACK_CLIENT_ID ?? '',
   slackClientSecret: process.env.SLACK_CLIENT_SECRET ?? '',
   slackSigningSecret: process.env.SLACK_SIGNING_SECRET ?? '',
+  metaAppSecret: process.env.META_APP_SECRET ?? '', // X-Hub-Signature-256 verification
 };

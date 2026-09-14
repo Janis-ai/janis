@@ -8,6 +8,7 @@ import Channels from './pages/Channels';
 import ConversationPage from './pages/ConversationPage';
 import Agents from './pages/Agents';
 import Reports from './pages/Reports';
+import Integrations from './pages/Integrations';
 import Settings from './pages/Settings';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -35,6 +36,7 @@ export default function App() {
           <Route path="/conversations/:id" element={<ConversationPage />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/reports" element={<Reports />} />
+          <Route path="/integrations" element={<Integrations />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

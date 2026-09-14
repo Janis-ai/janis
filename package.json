@@ -12,7 +12,7 @@
     "dev:api": "npm run dev -w apps/api",
     "dev:web": "npm run dev -w apps/web",
     "build": "npm run build -w packages/shared && npm run build -w packages/sdk && npm run build -w apps/api && npm run build -w apps/web",
-    "typecheck": "npm run typecheck -w packages/shared && npm run typecheck -w packages/sdk && npm run typecheck -w apps/api && npm run typecheck -w apps/web",
+    "typecheck": "npm run typecheck -w packages/shared && npm run typecheck -w packages/sdk && npm run typecheck -w packages/agent-template && npm run typecheck -w apps/api && npm run typecheck -w apps/web",
     "test": "npm run test -w apps/api",
     "db:generate": "npm run db:generate -w apps/api",
     "demo-agent": "npm run demo-agent -w apps/api"

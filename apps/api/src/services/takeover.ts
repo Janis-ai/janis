@@ -3,6 +3,7 @@ import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, messages, users } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
 import { mirrorToSlack } from '../lib/slack.js';
+import { deliverToChannel } from '../lib/channels.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
 
@@ -121,6 +122,7 @@ export async function humanReply(
   if (!viaSlack) {
     void mirrorToSlack(db, conversationId, `:bust_in_silhouette: *${user.name}:*`, text);
   }
+  void deliverToChannel(db, conversationId, text); // hosted channel: human → end user
   await deliverWebhook(db, agent, 'message.human', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
@@ -173,6 +175,7 @@ export async function agentSend(
 
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
   void mirrorToSlack(db, conversationId, `:robot_face: *${user.name}* (via agent):`, text);
+  void deliverToChannel(db, conversationId, text); // hosted channel: send to end user
   await deliverWebhook(db, agent, 'agent.send', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,

@@ -1,0 +1,19 @@
+{
+  "name": "@janis/agent-template",
+  "version": "0.1.0",
+  "description": "Janis-ready LLM agent — boots from Janis config, honors takeover, serves hosted channels",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@janis/sdk": "0.1.0",
+    "@janis/shared": "0.1.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

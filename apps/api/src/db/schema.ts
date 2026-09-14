@@ -48,6 +48,8 @@ export const agents = pgTable('agents', {
   webhookUrl: text('webhook_url'),
   webhookSecret: text('webhook_secret'),
   autoResumeMinutes: integer('auto_resume_minutes'), // auto-release human takeover after N min
+  // Behavior config for template-based agents: {system_prompt, knowledge[], tone}
+  config: jsonb('config').notNull().default({}),
   metadata: jsonb('metadata').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -202,6 +204,42 @@ export const slackThreads = pgTable('slack_threads', {
   ts: text('ts').notNull(), // slack message timestamp = thread id
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Messaging channels hosted by Janis (Meta: Messenger / Instagram / WhatsApp).
+// Janis owns the platform webhook; inbound messages are forwarded to the agent
+// only while it owns the conversation — enforced gating during takeover.
+export const channels = pgTable('channels', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
+  agentId: uuid('agent_id')
+    .notNull()
+    .references(() => agents.id),
+  kind: text('kind', { enum: ['messenger', 'instagram', 'whatsapp'] }).notNull(),
+  name: text('name').notNull(),
+  // {page_id, page_access_token, verify_token, phone_number_id} — secrets never leave the API
+  credentials: jsonb('credentials').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// conversation ↔ platform user binding for hosted channels
+export const channelBindings = pgTable(
+  'channel_bindings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => channels.id),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id)
+      .unique(),
+    platformUserId: text('platform_user_id').notNull(), // PSID / phone number
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('channel_bindings_user').on(t.channelId, t.platformUserId)],
+);
 
 export const webhookDeliveries = pgTable('webhook_deliveries', {
   id: uuid('id').primaryKey().defaultRandom(),
