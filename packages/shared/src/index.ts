@@ -170,6 +170,16 @@ export const Alert = z.object({
 });
 export type Alert = z.infer<typeof Alert>;
 
+export const Suggestion = z.object({
+  id: z.string(),
+  conversation_id: z.string(),
+  text: z.string(),
+  source: z.enum(['agent', 'llm']),
+  status: z.enum(['pending', 'used', 'dismissed']),
+  created_at: z.string(),
+});
+export type Suggestion = z.infer<typeof Suggestion>;
+
 export const AlertRule = z.object({
   id: z.string(),
   agent_id: z.string(),
@@ -200,6 +210,7 @@ export const OutboundWebhookType = z.enum([
   'message.human', // a human operator sent a message to the end user
   'human.resume', // human released the conversation; agent may resume
   'agent.send', // operator asked the agent to deliver `text` to the end user verbatim
+  'suggestion.request', // operator asked for a suggested reply; agent POSTs it to /v1/suggestions
 ]);
 export type OutboundWebhookType = z.infer<typeof OutboundWebhookType>;
 
@@ -209,6 +220,7 @@ export const OutboundWebhook = z.object({
   janis_conversation_id: z.string(),
   text: z.string().optional(),
   operator: z.object({ id: z.string(), name: z.string() }).optional(),
+  payload: z.record(z.unknown()).optional(),
   timestamp: z.string(),
 });
 export type OutboundWebhook = z.infer<typeof OutboundWebhook>;
@@ -224,5 +236,6 @@ export const StreamEvent = z.discriminatedUnion('type', [
     data: z.object({ id: z.string(), state: ConversationState }),
   }),
   z.object({ type: z.literal('alert'), data: Alert }),
+  z.object({ type: z.literal('suggestion'), data: Suggestion }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEvent>;

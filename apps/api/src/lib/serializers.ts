@@ -1,10 +1,19 @@
-import type { Alert, AlertRule, Agent, Conversation, Message, WorkspaceUser } from '@janis/shared';
+import type {
+  Alert,
+  AlertRule,
+  Agent,
+  Conversation,
+  Message,
+  Suggestion,
+  WorkspaceUser,
+} from '@janis/shared';
 import type {
   agents,
   alertRules,
   alerts,
   conversations,
   messages,
+  suggestions,
   users,
 } from '../db/schema.js';
 
@@ -92,6 +101,17 @@ export function toAlertRule(row: Row<typeof alertRules>): AlertRule {
       inactivity_minutes: config.inactivity_minutes,
       enabled: config.enabled !== false,
     },
+    created_at: iso(row.createdAt)!,
+  };
+}
+
+export function toSuggestion(row: Row<typeof suggestions>): Suggestion {
+  return {
+    id: row.id,
+    conversation_id: row.conversationId,
+    text: row.text,
+    source: row.source,
+    status: row.status,
     created_at: iso(row.createdAt)!,
   };
 }

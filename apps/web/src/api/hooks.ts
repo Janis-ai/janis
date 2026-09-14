@@ -5,6 +5,7 @@ import type {
   AlertRule,
   Conversation,
   Message,
+  Suggestion,
   WorkspaceUser,
 } from '@janis/shared';
 import { api } from './client';
@@ -34,9 +35,12 @@ export function useConversation(id: string) {
   return useQuery({
     queryKey: ['conversation', id],
     queryFn: () =>
-      api<{ conversation: Conversation; messages: Message[]; alerts: Alert[] }>(
-        `/api/conversations/${id}`,
-      ),
+      api<{
+        conversation: Conversation;
+        messages: Message[];
+        alerts: Alert[];
+        suggestions: Suggestion[];
+      }>(`/api/conversations/${id}`),
   });
 }
 

@@ -151,6 +151,19 @@ export const slackInstallations = pgTable('slack_installations', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const suggestions = pgTable('suggestions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  conversationId: uuid('conversation_id')
+    .notNull()
+    .references(() => conversations.id),
+  text: text('text').notNull(),
+  source: text('source', { enum: ['agent', 'llm'] }).notNull(),
+  status: text('status', { enum: ['pending', 'used', 'dismissed'] })
+    .notNull()
+    .default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const webhookDeliveries = pgTable('webhook_deliveries', {
   id: uuid('id').primaryKey().defaultRandom(),
   agentId: uuid('agent_id')

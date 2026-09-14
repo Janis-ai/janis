@@ -10,6 +10,10 @@ export const env = {
   vapidSubject: process.env.VAPID_SUBJECT ?? 'mailto:ops@janis.ai',
   seedAdminEmail: process.env.SEED_ADMIN_EMAIL ?? 'admin@janis.local',
   seedAdminPassword: process.env.SEED_ADMIN_PASSWORD ?? 'janis-admin',
+  // Janis-side suggestion generation (OpenAI-compatible chat completions)
+  llmApiKey: process.env.JANIS_LLM_API_KEY ?? '',
+  llmBaseUrl: process.env.JANIS_LLM_BASE_URL ?? 'https://api.openai.com/v1',
+  llmModel: process.env.JANIS_LLM_MODEL ?? 'gpt-4o-mini',
   slackClientId: process.env.SLACK_CLIENT_ID ?? '',
   slackClientSecret: process.env.SLACK_CLIENT_SECRET ?? '',
   slackSigningSecret: process.env.SLACK_SIGNING_SECRET ?? '',

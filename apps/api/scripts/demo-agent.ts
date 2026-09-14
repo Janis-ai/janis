@@ -30,6 +30,15 @@ createServer((req, res) => {
     console.log(`\n← webhook ${event.type}: ${event.text ?? ''}`);
     if (event.type === 'human.takeover') console.log('  (agent paused for this conversation)');
     if (event.type === 'human.resume') console.log('  (agent resumed)');
+    if (event.type === 'suggestion.request') {
+      // a real agent would call its LLM here; we send a canned draft
+      const text = "I can see the charge on INV-2049 — I'll refund it right away and email a confirmation. Anything else?";
+      void fetch(`${BASE_URL}/v1/suggestions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${API_KEY}` },
+        body: JSON.stringify({ conversation_id: event.conversation_id, text }),
+      }).then(() => console.log('  → posted suggestion back to Janis'));
+    }
     res.writeHead(200).end('ok');
   });
 }).listen(WEBHOOK_PORT, () => console.log(`webhook receiver on :${WEBHOOK_PORT}`));

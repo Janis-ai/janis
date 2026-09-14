@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
+import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { IngestRequest } from '@janis/shared';
 import type { Db } from '../db/client.js';
@@ -7,6 +8,7 @@ import { conversations } from '../db/schema.js';
 import { agentAuth, type AgentAuthEnv } from '../middleware/agentAuth.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { processEvents } from '../services/ingest.js';
+import { storeSuggestion } from '../services/suggestions.js';
 
 /**
  * Agent-facing API. Auth: `Authorization: Bearer <agent api key>`.
@@ -39,6 +41,26 @@ export function v1Routes(db: Db) {
     if (!conv) return c.json({ error: 'not found' }, 404);
     return c.json({ state: conv.state, paused: conv.state === 'human' });
   });
+
+  // Agent answers a suggestion.request webhook with its drafted reply
+  app.post(
+    '/suggestions',
+    zValidator('json', z.object({ conversation_id: z.string(), text: z.string().min(1) })),
+    async (c) => {
+      const agent = c.get('agent');
+      const { conversation_id, text } = c.req.valid('json');
+      const [conv] = await db
+        .select()
+        .from(conversations)
+        .where(
+          and(eq(conversations.agentId, agent.id), eq(conversations.externalId, conversation_id)),
+        )
+        .limit(1);
+      if (!conv) return c.json({ error: 'conversation not found' }, 404);
+      const row = await storeSuggestion(db, conv.id, text, 'agent');
+      return c.json({ suggestion: { id: row.id } }, 201);
+    },
+  );
 
   // Verify an agent's webhook endpoint is reachable
   app.post('/agents/me/webhook-test', async (c) => {

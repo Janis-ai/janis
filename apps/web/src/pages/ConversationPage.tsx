@@ -48,6 +48,21 @@ export default function ConversationPage() {
     onError: (e) => setError(e.message),
   });
 
+  const suggest = useMutation({
+    mutationFn: () => api(`/api/conversations/${id}/suggest`, { method: 'POST' }),
+    onSuccess: () => { setError(''); void qc.invalidateQueries({ queryKey: ['conversation', id] }); },
+    onError: (e) => setError(e.message),
+  });
+
+  const suggestionStatus = useMutation({
+    mutationFn: ({ sid, status }: { sid: string; status: 'used' | 'dismissed' }) =>
+      api(`/api/conversations/${id}/suggestions/${sid}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status }),
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['conversation', id] }),
+  });
+
   const reply = useMutation({
     mutationFn: (text: string) =>
       api(`/api/conversations/${id}/${sendAs === 'agent' ? 'agent-send' : 'reply'}`, {
@@ -59,7 +74,7 @@ export default function ConversationPage() {
   });
 
   if (!data) return <div className="muted">Loading…</div>;
-  const { conversation: c, messages, alerts } = data;
+  const { conversation: c, messages, alerts, suggestions } = data;
   const name = (c.user_profile.name as string) ?? c.external_id;
   const agent = agents?.agents.find((a) => a.id === c.agent_id);
   const assignee = users?.users.find((u) => u.id === c.assignee_id);
@@ -103,6 +118,40 @@ export default function ConversationPage() {
         </div>
 
         {error && <div className="error">{error}</div>}
+
+        {suggestions?.length > 0 && (
+          <div className="card suggestion">
+            <div className="muted" style={{ marginBottom: 6 }}>
+              Suggested ({suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
+            </div>
+            <div>{suggestions[0].text}</div>
+            <div className="row" style={{ marginTop: 10 }}>
+              <button
+                className="btn primary"
+                onClick={() => {
+                  setDraft(suggestions[0].text);
+                  suggestionStatus.mutate({ sid: suggestions[0].id, status: 'used' });
+                }}
+              >
+                Use
+              </button>
+              <button
+                className="btn"
+                onClick={() => suggestionStatus.mutate({ sid: suggestions[0].id, status: 'dismissed' })}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="row" style={{ marginBottom: 10 }}>
+          {c.state !== 'archived' && (
+            <button className="btn" onClick={() => suggest.mutate()} disabled={suggest.isPending}>
+              {suggest.isPending ? 'Thinking…' : '✨ Suggest reply'}
+            </button>
+          )}
+        </div>
 
         {canSend ? (
           <form className="composer" onSubmit={send}>

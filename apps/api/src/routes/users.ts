@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { users } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -42,6 +42,36 @@ export function userRoutes(db: Db) {
       })
       .returning();
     return c.json({ user: toWorkspaceUser(row) }, 201);
+  });
+
+  // admin-only: change a teammate's role
+  app.patch(
+    '/:id',
+    zValidator('json', z.object({ role: z.enum(['admin', 'member']) })),
+    async (c) => {
+      const me = c.get('user');
+      if (me.role !== 'admin') return c.json({ error: 'admin required' }, 403);
+      const [row] = await db
+        .update(users)
+        .set({ role: c.req.valid('json').role })
+        .where(and(eq(users.id, c.req.param('id')), eq(users.workspaceId, me.workspaceId)))
+        .returning();
+      if (!row) return c.json({ error: 'not found' }, 404);
+      return c.json({ user: toWorkspaceUser(row) });
+    },
+  );
+
+  // admin-only: remove a teammate (can't remove yourself)
+  app.delete('/:id', async (c) => {
+    const me = c.get('user');
+    if (me.role !== 'admin') return c.json({ error: 'admin required' }, 403);
+    if (me.id === c.req.param('id')) return c.json({ error: 'cannot remove yourself' }, 409);
+    const [row] = await db
+      .delete(users)
+      .where(and(eq(users.id, c.req.param('id')), eq(users.workspaceId, me.workspaceId)))
+      .returning();
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({ ok: true });
   });
 
   return app;

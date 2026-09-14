@@ -9,7 +9,11 @@ import { generateApiKey, generateWebhookSecret, sha256 } from '../lib/crypto.js'
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toAgent } from '../lib/serializers.js';
 
-const createAgent = z.object({ name: z.string().min(1).max(120) });
+const createAgent = z.object({
+  name: z.string().min(1).max(120),
+  webhook_url: z.string().url().optional(),
+  auto_resume_minutes: z.number().min(1).max(10080).optional(),
+});
 const updateAgent = z.object({
   name: z.string().min(1).max(120).optional(),
   webhook_url: z.string().url().nullable().optional(),
@@ -29,16 +33,18 @@ export function agentRoutes(db: Db) {
   });
 
   app.post('/', zValidator('json', createAgent), async (c) => {
-    const { name } = c.req.valid('json');
+    const body = c.req.valid('json');
     const { key, hash, preview } = generateApiKey();
     const [row] = await db
       .insert(agents)
       .values({
         workspaceId: c.get('workspaceId'),
-        name,
+        name: body.name,
         apiKeyHash: hash,
         apiKeyPreview: preview,
         webhookSecret: generateWebhookSecret(),
+        webhookUrl: body.webhook_url ?? null,
+        autoResumeMinutes: body.auto_resume_minutes ?? null,
       })
       .returning();
     // Full key is returned exactly once — store a hash only

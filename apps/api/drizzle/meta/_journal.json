@@ -15,6 +15,13 @@
       "when": 1789415532143,
       "tag": "0001_right_orphan",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789416823717,
+      "tag": "0002_fast_lightspeed",
+      "breakpoints": true
     }
   ]
 }

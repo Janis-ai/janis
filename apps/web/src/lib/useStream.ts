@@ -18,6 +18,7 @@ export function useStream(enabled: boolean) {
     source.addEventListener('message', refresh);
     source.addEventListener('conversation', refresh);
     source.addEventListener('alert', refresh);
+    source.addEventListener('suggestion', refresh);
     return () => source.close();
   }, [enabled, qc]);
 }

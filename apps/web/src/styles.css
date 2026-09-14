@@ -95,6 +95,7 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 5px
 .conv-layout { display: flex; gap: 16px; align-items: flex-start; }
 .conv-main { flex: 1; min-width: 0; }
 .conv-side { width: 280px; flex-shrink: 0; }
+.card.suggestion { border-color: var(--accent); }
 @media (max-width: 900px) {
   .conv-layout { flex-direction: column; }
   .conv-side { width: 100%; }

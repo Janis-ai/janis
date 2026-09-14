@@ -11,7 +11,7 @@ export default function Agents() {
   const { data: rulesData } = useAlertRules();
   const qc = useQueryClient();
   const [newName, setNewName] = useState('');
-  const [freshKey, setFreshKey] = useState('');
+  const [freshSecret, setFreshSecret] = useState<{ label: string; value: string } | null>(null);
   const [error, setError] = useState('');
 
   const refresh = () => {
@@ -27,7 +27,7 @@ export default function Agents() {
       }),
     onSuccess: (r) => {
       setNewName('');
-      setFreshKey(r.api_key);
+      setFreshSecret({ label: 'New API key', value: r.api_key });
       refresh();
     },
     onError: (e) => setError(e.message),
@@ -42,6 +42,26 @@ export default function Agents() {
 
   const testWebhook = useMutation({
     mutationFn: (id: string) => api(`/api/agents/${id}/webhook-test`, { method: 'POST' }),
+    onError: (e) => setError(e.message),
+  });
+
+  const rotateKey = useMutation({
+    mutationFn: (id: string) =>
+      api<{ api_key: string }>(`/api/agents/${id}/rotate-key`, { method: 'POST' }),
+    onSuccess: (r) => { setFreshSecret({ label: 'New API key', value: r.api_key }); refresh(); },
+    onError: (e) => setError(e.message),
+  });
+
+  const rotateSecret = useMutation({
+    mutationFn: (id: string) =>
+      api<{ webhook_secret: string }>(`/api/agents/${id}/rotate-webhook-secret`, { method: 'POST' }),
+    onSuccess: (r) => { setFreshSecret({ label: 'New webhook secret', value: r.webhook_secret }); refresh(); },
+    onError: (e) => setError(e.message),
+  });
+
+  const removeAgent = useMutation({
+    mutationFn: (id: string) => api(`/api/agents/${id}`, { method: 'DELETE' }),
+    onSuccess: refresh,
     onError: (e) => setError(e.message),
   });
 
@@ -77,10 +97,10 @@ export default function Agents() {
         <button className="btn primary">Create agent</button>
       </form>
 
-      {freshKey && (
+      {freshSecret && (
         <div className="card" style={{ borderColor: 'var(--accent)', marginTop: 12 }}>
-          <div className="muted">New API key — copy it now, it won't be shown again:</div>
-          <div className="mono">{freshKey}</div>
+          <div className="muted">{freshSecret.label} — copy it now, it won't be shown again:</div>
+          <div className="mono">{freshSecret.value}</div>
         </div>
       )}
       {error && <div className="error">{error}</div>}
@@ -92,6 +112,9 @@ export default function Agents() {
           rules={rulesData?.rules.filter((r) => r.agent_id === agent.id) ?? []}
           onSave={(body) => update.mutate({ id: agent.id, ...body })}
           onTestWebhook={() => testWebhook.mutate(agent.id)}
+          onRotateKey={() => rotateKey.mutate(agent.id)}
+          onRotateSecret={() => rotateSecret.mutate(agent.id)}
+          onDelete={() => { if (confirm(`Delete agent "${agent.name}"?`)) removeAgent.mutate(agent.id); }}
           onAddRule={(kind, config) => addRule.mutate({ agent_id: agent.id, kind, config })}
           onDeleteRule={(id) => deleteRule.mutate(id)}
         />
@@ -105,6 +128,9 @@ function AgentCard({
   rules,
   onSave,
   onTestWebhook,
+  onRotateKey,
+  onRotateSecret,
+  onDelete,
   onAddRule,
   onDeleteRule,
 }: {
@@ -112,6 +138,9 @@ function AgentCard({
   rules: AlertRule[];
   onSave: (body: { name?: string; webhook_url?: string | null; auto_resume_minutes?: number | null }) => void;
   onTestWebhook: () => void;
+  onRotateKey: () => void;
+  onRotateSecret: () => void;
+  onDelete: () => void;
   onAddRule: (kind: string, config: Record<string, unknown>) => void;
   onDeleteRule: (id: string) => void;
 }) {
@@ -204,6 +233,13 @@ function AgentCard({
         >
           Add rule
         </button>
+      </div>
+
+      <div className="row" style={{ marginTop: 16 }}>
+        <button className="btn" onClick={onRotateKey}>Rotate API key</button>
+        <button className="btn" onClick={onRotateSecret}>Rotate webhook secret</button>
+        <span className="grow" />
+        <button className="btn danger" onClick={onDelete}>Delete agent</button>
       </div>
     </div>
   );

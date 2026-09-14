@@ -3,11 +3,19 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alerts, conversations, messages } from '../db/schema.js';
+import { agents, alerts, conversations, messages, suggestions } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
-import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
+import { toAlert, toConversation, toMessage, toSuggestion } from '../lib/serializers.js';
 import { bus } from '../lib/bus.js';
-import { agentSend, humanReply, resume, takeover, TakeoverError } from '../services/takeover.js';
+import {
+  agentSend,
+  getConversationForWorkspace,
+  humanReply,
+  resume,
+  takeover,
+  TakeoverError,
+} from '../services/takeover.js';
+import { requestSuggestion } from '../services/suggestions.js';
 
 const listQuery = z.object({
   state: z.enum(['active', 'needs_human', 'human', 'archived']).optional(),
@@ -68,7 +76,7 @@ export function conversationRoutes(db: Db) {
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
 
-    const [msgs, convAlerts] = await Promise.all([
+    const [msgs, convAlerts, convSuggestions] = await Promise.all([
       db
         .select()
         .from(messages)
@@ -81,6 +89,17 @@ export function conversationRoutes(db: Db) {
         .where(eq(alerts.conversationId, row.conversation.id))
         .orderBy(desc(alerts.createdAt))
         .limit(100),
+      db
+        .select()
+        .from(suggestions)
+        .where(
+          and(
+            eq(suggestions.conversationId, row.conversation.id),
+            eq(suggestions.status, 'pending'),
+          ),
+        )
+        .orderBy(desc(suggestions.createdAt))
+        .limit(10),
     ]);
 
     return c.json({
@@ -90,6 +109,7 @@ export function conversationRoutes(db: Db) {
       ),
       messages: msgs.map(toMessage),
       alerts: convAlerts.map(toAlert),
+      suggestions: convSuggestions.map(toSuggestion),
     });
   });
 
@@ -144,6 +164,51 @@ export function conversationRoutes(db: Db) {
       throw err;
     }
   });
+
+  // Ask for a suggested reply: agent webhook if configured, else Janis-side LLM
+  app.post('/:id/suggest', async (c) => {
+    try {
+      const { conversation, agent } = await getConversationForWorkspace(
+        db,
+        c.get('workspaceId'),
+        c.req.param('id'),
+      );
+      const result = await requestSuggestion(db, conversation, agent);
+      return c.json(
+        result.mode === 'llm'
+          ? { mode: 'llm', suggestion: toSuggestion(result.suggestion) }
+          : { mode: 'agent' },
+      );
+    } catch (err) {
+      if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+  });
+
+  // Mark a suggestion used/dismissed
+  app.post(
+    '/:id/suggestions/:sid/status',
+    zValidator('json', z.object({ status: z.enum(['used', 'dismissed']) })),
+    async (c) => {
+      const { conversation } = await getConversationForWorkspace(
+        db,
+        c.get('workspaceId'),
+        c.req.param('id'),
+      );
+      const [row] = await db
+        .update(suggestions)
+        .set({ status: c.req.valid('json').status })
+        .where(
+          and(
+            eq(suggestions.id, c.req.param('sid')),
+            eq(suggestions.conversationId, conversation.id),
+          ),
+        )
+        .returning();
+      if (!row) return c.json({ error: 'not found' }, 404);
+      return c.json({ suggestion: toSuggestion(row) });
+    },
+  );
 
   app.patch('/:id', zValidator('json', patchBody), async (c) => {
     const workspaceId = c.get('workspaceId');

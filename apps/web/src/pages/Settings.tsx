@@ -23,6 +23,19 @@ export default function Settings() {
     onError: (e) => setError(e instanceof ApiError ? e.message : 'failed'),
   });
 
+  const setRole = useMutation({
+    mutationFn: ({ id, role }: { id: string; role: string }) =>
+      api(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['users'] }),
+    onError: (e) => setError(e.message),
+  });
+
+  const removeUser = useMutation({
+    mutationFn: (id: string) => api(`/api/users/${id}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['users'] }),
+    onError: (e) => setError(e.message),
+  });
+
   const togglePush = async () => {
     try {
       const ok = await subscribeToPush();
@@ -58,7 +71,17 @@ export default function Settings() {
         {users?.users.map((u) => (
           <div key={u.id} className="row muted" style={{ marginTop: 8 }}>
             <span className="grow">{u.name} · {u.email}</span>
-            <span className="badge active">{u.role}</span>
+            {me?.user.role === 'admin' && u.id !== me.user.id ? (
+              <>
+                <select value={u.role} onChange={(e) => setRole.mutate({ id: u.id, role: e.target.value })}>
+                  <option value="member">member</option>
+                  <option value="admin">admin</option>
+                </select>
+                <button className="btn danger" onClick={() => removeUser.mutate(u.id)}>Remove</button>
+              </>
+            ) : (
+              <span className="badge active">{u.role}</span>
+            )}
           </div>
         ))}
 
