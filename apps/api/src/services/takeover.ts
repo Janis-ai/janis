@@ -1,0 +1,155 @@
+import { and, eq } from 'drizzle-orm';
+import type { Db } from '../db/client.js';
+import { agents, alerts, conversations, messages, users } from '../db/schema.js';
+import { bus } from '../lib/bus.js';
+import { deliverWebhook } from '../lib/webhooks.js';
+import { toAlert, toMessage } from '../lib/serializers.js';
+
+type UserRow = typeof users.$inferSelect;
+type ConversationRow = typeof conversations.$inferSelect;
+
+export class TakeoverError extends Error {
+  constructor(
+    message: string,
+    public status: 400 | 404 | 409 = 400,
+  ) {
+    super(message);
+  }
+}
+
+export async function getConversationForWorkspace(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+): Promise<{ conversation: ConversationRow; agent: typeof agents.$inferSelect }> {
+  const [row] = await db
+    .select({ conversation: conversations, agent: agents })
+    .from(conversations)
+    .innerJoin(agents, eq(conversations.agentId, agents.id))
+    .where(eq(conversations.id, conversationId))
+    .limit(1);
+  if (!row || row.agent.workspaceId !== workspaceId) {
+    throw new TakeoverError('conversation not found', 404);
+  }
+  return row;
+}
+
+/** Human takes over: conversation → 'human', open alerts resolved, agent notified. */
+export async function takeover(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  user: UserRow,
+): Promise<ConversationRow> {
+  const { conversation, agent } = await getConversationForWorkspace(
+    db,
+    workspaceId,
+    conversationId,
+  );
+  if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
+
+  const [updated] = await db
+    .update(conversations)
+    .set({ state: 'human', assigneeId: user.id })
+    .where(eq(conversations.id, conversationId))
+    .returning();
+
+  const openAlerts = await db
+    .update(alerts)
+    .set({ status: 'resolved' })
+    .where(and(eq(alerts.conversationId, conversationId), eq(alerts.status, 'open')))
+    .returning();
+  for (const a of openAlerts) {
+    bus.publish(workspaceId, { type: 'alert', data: toAlert(a) });
+  }
+
+  bus.publish(workspaceId, {
+    type: 'conversation',
+    data: { id: updated.id, state: updated.state },
+  });
+  await deliverWebhook(db, agent, 'human.takeover', {
+    conversation_id: conversation.externalId,
+    janis_conversation_id: conversation.id,
+    operator: { id: user.id, name: user.name },
+  });
+  return updated;
+}
+
+/** Human operator message → stored + relayed to the agent's webhook. */
+export async function humanReply(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  user: UserRow,
+  text: string,
+): Promise<typeof messages.$inferSelect> {
+  const { conversation, agent } = await getConversationForWorkspace(
+    db,
+    workspaceId,
+    conversationId,
+  );
+  if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
+  if (conversation.state !== 'human') {
+    throw new TakeoverError('take over the conversation before replying', 409);
+  }
+
+  const [message] = await db
+    .insert(messages)
+    .values({
+      conversationId,
+      direction: 'human',
+      authorId: user.id,
+      text,
+    })
+    .returning();
+
+  await db
+    .update(conversations)
+    .set({
+      lastMessageAt: message.createdAt,
+      lastMessagePreview: text.slice(0, 140),
+      lastMessageDirection: 'human',
+    })
+    .where(eq(conversations.id, conversationId));
+
+  bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
+  await deliverWebhook(db, agent, 'message.human', {
+    conversation_id: conversation.externalId,
+    janis_conversation_id: conversation.id,
+    text,
+    operator: { id: user.id, name: user.name },
+  });
+  return message;
+}
+
+/** Release back to the agent: conversation → 'active', agent notified. */
+export async function resume(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  user: UserRow,
+): Promise<ConversationRow> {
+  const { conversation, agent } = await getConversationForWorkspace(
+    db,
+    workspaceId,
+    conversationId,
+  );
+  if (conversation.state !== 'human') throw new TakeoverError('conversation is not in human mode', 409);
+
+  const [updated] = await db
+    .update(conversations)
+    .set({ state: 'active', assigneeId: null })
+    .where(eq(conversations.id, conversationId))
+    .returning();
+
+  bus.publish(workspaceId, {
+    type: 'conversation',
+    data: { id: updated.id, state: updated.state },
+  });
+  await deliverWebhook(db, agent, 'human.resume', {
+    conversation_id: conversation.externalId,
+    janis_conversation_id: conversation.id,
+    operator: { id: user.id, name: user.name },
+  });
+  return updated;
+}

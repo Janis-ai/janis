@@ -1,0 +1,162 @@
+import { Hono } from 'hono';
+import { zValidator } from '@hono/zod-validator';
+import { z } from 'zod';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import type { Db } from '../db/client.js';
+import { agents, alerts, conversations, messages } from '../db/schema.js';
+import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
+import { bus } from '../lib/bus.js';
+import { humanReply, resume, takeover, TakeoverError } from '../services/takeover.js';
+
+const listQuery = z.object({
+  state: z.enum(['active', 'needs_human', 'human', 'archived']).optional(),
+  agent_id: z.string().uuid().optional(),
+  attention: z.enum(['1', 'true']).optional(), // needs_human OR has open alerts
+});
+
+const patchBody = z.object({
+  tags: z.array(z.string()).optional(),
+  assignee_id: z.string().uuid().nullable().optional(),
+  state: z.enum(['active', 'archived']).optional(),
+});
+
+const replyBody = z.object({ text: z.string().min(1) });
+
+export function conversationRoutes(db: Db) {
+  const app = new Hono<SessionEnv>();
+  app.use('/*', sessionAuth(db));
+
+  app.get('/', zValidator('query', listQuery), async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const q = c.req.valid('query');
+
+    const conditions = [eq(agents.workspaceId, workspaceId)];
+    if (q.state) conditions.push(eq(conversations.state, q.state));
+    if (q.agent_id) conditions.push(eq(conversations.agentId, q.agent_id));
+    if (q.attention) {
+      conditions.push(inArray(conversations.state, ['needs_human', 'human']));
+    }
+
+    const rows = await db
+      .select({
+        conversation: conversations,
+        openAlertCount: sql<number>`(
+          select count(*)::int from ${alerts}
+          where ${alerts.conversationId} = ${conversations.id}
+            and ${alerts.status} = 'open'
+        )`,
+      })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(...conditions))
+      .orderBy(desc(conversations.lastMessageAt))
+      .limit(200);
+
+    return c.json({
+      conversations: rows.map((r) => toConversation(r.conversation, r.openAlertCount)),
+    });
+  });
+
+  app.get('/:id', async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const [row] = await db
+      .select({ conversation: conversations })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+
+    const [msgs, convAlerts] = await Promise.all([
+      db
+        .select()
+        .from(messages)
+        .where(eq(messages.conversationId, row.conversation.id))
+        .orderBy(messages.createdAt)
+        .limit(500),
+      db
+        .select()
+        .from(alerts)
+        .where(eq(alerts.conversationId, row.conversation.id))
+        .orderBy(desc(alerts.createdAt))
+        .limit(100),
+    ]);
+
+    return c.json({
+      conversation: toConversation(
+        row.conversation,
+        convAlerts.filter((a) => a.status === 'open').length,
+      ),
+      messages: msgs.map(toMessage),
+      alerts: convAlerts.map(toAlert),
+    });
+  });
+
+  app.post('/:id/takeover', async (c) => {
+    try {
+      const conv = await takeover(db, c.get('workspaceId'), c.req.param('id'), c.get('user'));
+      return c.json({ conversation: toConversation(conv) });
+    } catch (err) {
+      if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+  });
+
+  app.post('/:id/reply', zValidator('json', replyBody), async (c) => {
+    try {
+      const msg = await humanReply(
+        db,
+        c.get('workspaceId'),
+        c.req.param('id'),
+        c.get('user'),
+        c.req.valid('json').text,
+      );
+      return c.json({ message: toMessage(msg) }, 201);
+    } catch (err) {
+      if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+  });
+
+  app.post('/:id/resume', async (c) => {
+    try {
+      const conv = await resume(db, c.get('workspaceId'), c.req.param('id'), c.get('user'));
+      return c.json({ conversation: toConversation(conv) });
+    } catch (err) {
+      if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+  });
+
+  app.patch('/:id', zValidator('json', patchBody), async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const body = c.req.valid('json');
+
+    const [owned] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+      .limit(1);
+    if (!owned) return c.json({ error: 'not found' }, 404);
+
+    const [row] = await db
+      .update(conversations)
+      .set({
+        ...(body.tags !== undefined ? { tags: body.tags } : {}),
+        ...(body.assignee_id !== undefined ? { assigneeId: body.assignee_id } : {}),
+        ...(body.state !== undefined ? { state: body.state } : {}),
+      })
+      .where(eq(conversations.id, owned.id))
+      .returning();
+
+    bus.publish(workspaceId, {
+      type: 'conversation',
+      data: { id: row.id, state: row.state },
+    });
+    return c.json({ conversation: toConversation(row) });
+  });
+
+  return app;
+}

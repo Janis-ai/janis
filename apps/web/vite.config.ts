@@ -1,0 +1,32 @@
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
+
+export default defineConfig({
+  plugins: [
+    react(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      manifest: {
+        name: 'Janis',
+        short_name: 'Janis',
+        description: 'Human oversight for AI agents',
+        theme_color: '#0f1117',
+        background_color: '#0f1117',
+        display: 'standalone',
+        icons: [
+          { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+        ],
+      },
+    }),
+  ],
+  server: {
+    proxy: {
+      '/api': 'http://localhost:8787',
+      '/auth': 'http://localhost:8787',
+    },
+  },
+});
