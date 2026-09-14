@@ -92,6 +92,14 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 5px
 .error { color: var(--danger); font-size: 13px; margin-top: 8px; }
 .filters { display: flex; gap: 10px; margin-bottom: 16px; }
 
+.conv-layout { display: flex; gap: 16px; align-items: flex-start; }
+.conv-main { flex: 1; min-width: 0; }
+.conv-side { width: 280px; flex-shrink: 0; }
+@media (max-width: 900px) {
+  .conv-layout { flex-direction: column; }
+  .conv-side { width: 100%; }
+}
+
 .login-wrap { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
 .login-card { width: 340px; }
 .login-card h1 { color: var(--accent); text-align: center; }

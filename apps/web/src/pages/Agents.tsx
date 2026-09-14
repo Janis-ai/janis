@@ -110,12 +110,13 @@ function AgentCard({
 }: {
   agent: Agent;
   rules: AlertRule[];
-  onSave: (body: { name?: string; webhook_url?: string | null }) => void;
+  onSave: (body: { name?: string; webhook_url?: string | null; auto_resume_minutes?: number | null }) => void;
   onTestWebhook: () => void;
   onAddRule: (kind: string, config: Record<string, unknown>) => void;
   onDeleteRule: (id: string) => void;
 }) {
   const [webhookUrl, setWebhookUrl] = useState(agent.webhook_url ?? '');
+  const [autoResume, setAutoResume] = useState(agent.auto_resume_minutes?.toString() ?? '');
   const [kind, setKind] = useState<(typeof RULE_KINDS)[number]>('keyword');
   const [keywords, setKeywords] = useState('');
   const [minutes, setMinutes] = useState('15');
@@ -137,6 +138,24 @@ function AgentCard({
         />
         <button className="btn" onClick={() => onSave({ webhook_url: webhookUrl || null })}>Save</button>
         <button className="btn" onClick={onTestWebhook} disabled={!agent.webhook_url}>Test</button>
+      </div>
+
+      <label>Auto-resume — release a human takeover back to the agent after N minutes (blank = never)</label>
+      <div className="row">
+        <input
+          type="number"
+          min={1}
+          style={{ width: 110 }}
+          placeholder="minutes"
+          value={autoResume}
+          onChange={(e) => setAutoResume(e.target.value)}
+        />
+        <button
+          className="btn"
+          onClick={() => onSave({ auto_resume_minutes: autoResume ? Number(autoResume) : null })}
+        >
+          Save
+        </button>
       </div>
 
       <label>Alert rules</label>

@@ -20,6 +20,7 @@ export function toAgent(row: Row<typeof agents>): Agent {
     name: row.name,
     webhook_url: row.webhookUrl,
     has_webhook_secret: Boolean(row.webhookSecret),
+    auto_resume_minutes: row.autoResumeMinutes,
     api_key_preview: row.apiKeyPreview,
     metadata: (row.metadata ?? {}) as Record<string, unknown>,
     created_at: iso(row.createdAt)!,
@@ -38,6 +39,7 @@ export function toConversation(row: Row<typeof conversations>, openAlertCount = 
     last_message_at: iso(row.lastMessageAt),
     last_message_preview: row.lastMessagePreview,
     open_alert_count: openAlertCount,
+    human_since: iso(row.humanSince),
     created_at: iso(row.createdAt)!,
   };
 }

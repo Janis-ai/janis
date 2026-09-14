@@ -47,6 +47,7 @@ export const agents = pgTable('agents', {
   apiKeyPreview: text('api_key_preview').notNull(),
   webhookUrl: text('webhook_url'),
   webhookSecret: text('webhook_secret'),
+  autoResumeMinutes: integer('auto_resume_minutes'), // auto-release human takeover after N min
   metadata: jsonb('metadata').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -70,6 +71,7 @@ export const conversations = pgTable(
     lastMessageDirection: text('last_message_direction', {
       enum: ['in', 'out', 'human'],
     }),
+    humanSince: timestamp('human_since', { withTimezone: true }), // when takeover began
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

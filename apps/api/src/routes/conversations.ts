@@ -7,7 +7,7 @@ import { agents, alerts, conversations, messages } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
 import { bus } from '../lib/bus.js';
-import { humanReply, resume, takeover, TakeoverError } from '../services/takeover.js';
+import { agentSend, humanReply, resume, takeover, TakeoverError } from '../services/takeover.js';
 
 const listQuery = z.object({
   state: z.enum(['active', 'needs_human', 'human', 'archived']).optional(),
@@ -106,6 +106,22 @@ export function conversationRoutes(db: Db) {
   app.post('/:id/reply', zValidator('json', replyBody), async (c) => {
     try {
       const msg = await humanReply(
+        db,
+        c.get('workspaceId'),
+        c.req.param('id'),
+        c.get('user'),
+        c.req.valid('json').text,
+      );
+      return c.json({ message: toMessage(msg) }, 201);
+    } catch (err) {
+      if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+  });
+
+  app.post('/:id/agent-send', zValidator('json', replyBody), async (c) => {
+    try {
+      const msg = await agentSend(
         db,
         c.get('workspaceId'),
         c.req.param('id'),

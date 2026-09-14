@@ -1,19 +1,51 @@
-import { and, eq, lt } from 'drizzle-orm';
+import { and, eq, isNotNull, lt } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alertRules, alerts, conversations } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
 import { notifyWorkspace } from '../lib/notify.js';
 import { inactivityThresholds } from '../lib/rules.js';
 import { toAlert } from '../lib/serializers.js';
+import { resume } from './takeover.js';
 
 /**
- * Periodically escalate 'active' conversations where the end user is waiting
- * (last message was inbound) and the agent's inactivity threshold has passed.
+ * Periodically:
+ *  - escalate 'active' conversations where the end user is waiting
+ *    (last message inbound) past the agent's inactivity threshold
+ *  - auto-release 'human' takeovers past the agent's auto_resume_minutes
  */
 export function startSweeper(db: Db, intervalMs = 60_000): () => void {
-  const timer = setInterval(() => void sweep(db), intervalMs);
+  const timer = setInterval(() => {
+    void sweep(db);
+    void sweepAutoResume(db);
+  }, intervalMs);
   timer.unref();
   return () => clearInterval(timer);
+}
+
+export async function sweepAutoResume(db: Db): Promise<number> {
+  const agentRows = await db
+    .select()
+    .from(agents)
+    .where(isNotNull(agents.autoResumeMinutes));
+  let fired = 0;
+  for (const agent of agentRows) {
+    const cutoff = new Date(Date.now() - agent.autoResumeMinutes! * 60_000);
+    const stale = await db
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.agentId, agent.id),
+          eq(conversations.state, 'human'),
+          lt(conversations.humanSince, cutoff),
+        ),
+      );
+    for (const conv of stale) {
+      await resume(db, agent.workspaceId, conv.id, null);
+      fired++;
+    }
+  }
+  return fired;
 }
 
 export async function sweep(db: Db): Promise<number> {

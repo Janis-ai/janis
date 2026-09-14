@@ -50,7 +50,7 @@ export async function takeover(
 
   const [updated] = await db
     .update(conversations)
-    .set({ state: 'human', assigneeId: user.id })
+    .set({ state: 'human', assigneeId: user.id, humanSince: new Date() })
     .where(eq(conversations.id, conversationId))
     .returning();
 
@@ -122,12 +122,61 @@ export async function humanReply(
   return message;
 }
 
+/**
+ * "Send via agent" — operator writes text, the agent delivers it to the end
+ * user verbatim over its own channel. Stored as an agent-authored message
+ * (direction 'out') since that's who the end user sees.
+ */
+export async function agentSend(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  user: UserRow,
+  text: string,
+): Promise<typeof messages.$inferSelect> {
+  const { conversation, agent } = await getConversationForWorkspace(
+    db,
+    workspaceId,
+    conversationId,
+  );
+  if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
+
+  const [message] = await db
+    .insert(messages)
+    .values({
+      conversationId,
+      direction: 'out',
+      authorId: user.id,
+      text,
+      payload: { via: 'operator' },
+    })
+    .returning();
+
+  await db
+    .update(conversations)
+    .set({
+      lastMessageAt: message.createdAt,
+      lastMessagePreview: text.slice(0, 140),
+      lastMessageDirection: 'out',
+    })
+    .where(eq(conversations.id, conversationId));
+
+  bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
+  await deliverWebhook(db, agent, 'agent.send', {
+    conversation_id: conversation.externalId,
+    janis_conversation_id: conversation.id,
+    text,
+    operator: { id: user.id, name: user.name },
+  });
+  return message;
+}
+
 /** Release back to the agent: conversation → 'active', agent notified. */
 export async function resume(
   db: Db,
   workspaceId: string,
   conversationId: string,
-  user: UserRow,
+  user: UserRow | null,
 ): Promise<ConversationRow> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
@@ -138,7 +187,7 @@ export async function resume(
 
   const [updated] = await db
     .update(conversations)
-    .set({ state: 'active', assigneeId: null })
+    .set({ state: 'active', assigneeId: null, humanSince: null })
     .where(eq(conversations.id, conversationId))
     .returning();
 
@@ -149,7 +198,7 @@ export async function resume(
   await deliverWebhook(db, agent, 'human.resume', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
-    operator: { id: user.id, name: user.name },
+    operator: user ? { id: user.id, name: user.name } : undefined,
   });
   return updated;
 }

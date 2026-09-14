@@ -121,6 +121,7 @@ export const Agent = z.object({
   name: z.string(),
   webhook_url: z.string().nullable(),
   has_webhook_secret: z.boolean(),
+  auto_resume_minutes: z.number().nullable(),
   api_key_preview: z.string(), // e.g. "jk_live_…a1b2" — full key only shown at creation
   metadata: z.record(z.unknown()),
   created_at: z.string(),
@@ -138,6 +139,7 @@ export const Conversation = z.object({
   last_message_at: z.string().nullable(),
   last_message_preview: z.string().nullable(),
   open_alert_count: z.number(),
+  human_since: z.string().nullable(),
   created_at: z.string(),
 });
 export type Conversation = z.infer<typeof Conversation>;
@@ -197,6 +199,7 @@ export const OutboundWebhookType = z.enum([
   'human.takeover', // a human took over; agent should pause for this conversation
   'message.human', // a human operator sent a message to the end user
   'human.resume', // human released the conversation; agent may resume
+  'agent.send', // operator asked the agent to deliver `text` to the end user verbatim
 ]);
 export type OutboundWebhookType = z.infer<typeof OutboundWebhookType>;
 

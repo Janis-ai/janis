@@ -13,6 +13,7 @@ const createAgent = z.object({ name: z.string().min(1).max(120) });
 const updateAgent = z.object({
   name: z.string().min(1).max(120).optional(),
   webhook_url: z.string().url().nullable().optional(),
+  auto_resume_minutes: z.number().min(1).max(10080).nullable().optional(),
 });
 
 export function agentRoutes(db: Db) {
@@ -51,6 +52,9 @@ export function agentRoutes(db: Db) {
       .set({
         ...(body.name !== undefined ? { name: body.name } : {}),
         ...(body.webhook_url !== undefined ? { webhookUrl: body.webhook_url } : {}),
+        ...(body.auto_resume_minutes !== undefined
+          ? { autoResumeMinutes: body.auto_resume_minutes }
+          : {}),
       })
       .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
       .returning();
