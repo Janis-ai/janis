@@ -107,8 +107,25 @@ export default function Composer({
         </div>
       )}
 
-      <div className="composer-row">
-        <div className="composer-tools">
+      <div className="composer-inner">
+        <textarea
+          ref={taRef}
+          rows={1}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          onPaste={(e) => {
+            const files = e.clipboardData?.files;
+            if (files?.length) void uploadFiles(files);
+          }}
+          placeholder={
+            sendAs === 'agent'
+              ? 'Message the agent will deliver…'
+              : 'Reply as a human… (Enter sends, Shift+Enter for newline)'
+          }
+        />
+
+        <div className="composer-bar">
           <button type="button" className="btn icon" title="Emoji" onClick={() => setEmojiOpen((o) => !o)}>😊</button>
           <button type="button" className="btn icon" title="Attach file" onClick={() => fileRef.current?.click()}>📎</button>
           <input
@@ -124,35 +141,18 @@ export default function Composer({
               <option value="agent">via agent</option>
             </select>
           )}
+          <span className="grow" />
+          {onResume && (
+            <button className="btn" type="button" onClick={onResume}>Resume agent</button>
+          )}
+          <button
+            className="btn primary"
+            onClick={send}
+            disabled={sending || uploading || (!value.trim() && attachments.length === 0)}
+          >
+            {uploading ? 'Uploading…' : 'Send'}
+          </button>
         </div>
-
-        <textarea
-          ref={taRef}
-          rows={1}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={onKeyDown}
-          onPaste={(e) => {
-            const files = e.clipboardData?.files;
-            if (files?.length) void uploadFiles(files);
-          }}
-          placeholder={
-            sendAs === 'agent'
-              ? 'Message the agent will deliver… (Enter to send, Shift+Enter for newline)'
-              : 'Reply as a human… (Enter to send, Shift+Enter for newline)'
-          }
-        />
-
-        <button
-          className="btn primary"
-          onClick={send}
-          disabled={sending || uploading || (!value.trim() && attachments.length === 0)}
-        >
-          {uploading ? 'Uploading…' : 'Send'}
-        </button>
-        {onResume && (
-          <button className="btn" type="button" onClick={onResume}>Resume agent</button>
-        )}
       </div>
 
       {emojiOpen && (

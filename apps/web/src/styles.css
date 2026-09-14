@@ -69,11 +69,19 @@ button, input, select, textarea { font: inherit; }
 .composer input { flex: 1; }
 
 .composer-box { margin-top: 12px; position: relative; }
-.composer-row { display: flex; gap: 8px; align-items: flex-end; }
-.composer-row textarea {
-  flex: 1; resize: none; line-height: 1.45; max-height: 180px; overflow-y: auto;
+.composer-inner {
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px;
 }
-.composer-tools { display: flex; gap: 4px; align-items: center; padding-bottom: 2px; }
+.composer-inner:focus-within { border-color: var(--accent); }
+.composer-inner textarea {
+  width: 100%; resize: none; line-height: 1.45; max-height: 180px; overflow-y: auto;
+  background: transparent; border: none; padding: 2px 4px;
+}
+.composer-inner textarea:focus { outline: none; }
+.composer-bar { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.composer-bar .btn { padding: 6px 12px; }
+.composer-bar .btn.icon { padding: 6px 8px; }
 .btn.icon { padding: 9px 10px; }
 .attach-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .attach-chip {
@@ -82,7 +90,7 @@ button, input, select, textarea { font: inherit; }
 }
 .attach-chip a { color: var(--muted); }
 .emoji-pop {
-  position: absolute; bottom: 54px; left: 0; z-index: 10;
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 10;
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 10px; width: 320px; display: grid;
   grid-template-columns: repeat(8, 1fr); gap: 2px;
