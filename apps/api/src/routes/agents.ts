@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents } from '../db/schema.js';
+import { agents, webhookDeliveries } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { generateApiKey, generateWebhookSecret, sha256 } from '../lib/crypto.js';
 import { deliverWebhook } from '../lib/webhooks.js';
@@ -107,6 +107,43 @@ export function agentRoutes(db: Db) {
       text: 'Janis webhook test — if you received this, your endpoint works.',
     });
     return c.json({ ok: true });
+  });
+
+  // Reveal the webhook secret (needed to verify signatures agent-side)
+  app.get('/:id/webhook-secret', async (c) => {
+    const [row] = await db
+      .select({ webhookSecret: agents.webhookSecret })
+      .from(agents)
+      .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({ webhook_secret: row.webhookSecret });
+  });
+
+  // Recent outbound webhook deliveries — for debugging agent wiring
+  app.get('/:id/deliveries', async (c) => {
+    const [owned] = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
+      .limit(1);
+    if (!owned) return c.json({ error: 'not found' }, 404);
+    const rows = await db
+      .select()
+      .from(webhookDeliveries)
+      .where(eq(webhookDeliveries.agentId, owned.id))
+      .orderBy(desc(webhookDeliveries.createdAt))
+      .limit(20);
+    return c.json({
+      deliveries: rows.map((r) => ({
+        id: r.id,
+        type: r.type,
+        status: r.status,
+        attempts: r.attempts,
+        last_error: r.lastError,
+        created_at: r.createdAt.toISOString(),
+      })),
+    });
   });
 
   app.delete('/:id', async (c) => {

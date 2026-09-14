@@ -38,6 +38,7 @@ export function toAgent(row: Row<typeof agents>): Agent {
     has_webhook_secret: Boolean(row.webhookSecret),
     auto_resume_minutes: row.autoResumeMinutes,
     config: (row.config ?? {}) as AgentConfig,
+    last_seen_at: iso(row.lastSeenAt),
     api_key_preview: row.apiKeyPreview,
     metadata: (row.metadata ?? {}) as Record<string, unknown>,
     created_at: iso(row.createdAt)!,

@@ -29,6 +29,7 @@ export async function processEvents(
 ): Promise<IngestResult[]> {
   const rules = await db.select().from(alertRules).where(eq(alertRules.agentId, agent.id));
   const results: IngestResult[] = [];
+  await db.update(agents).set({ lastSeenAt: new Date() }).where(eq(agents.id, agent.id));
 
   for (const event of events) {
     const conv = await findOrCreateConversation(db, agent, event);

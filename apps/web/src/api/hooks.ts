@@ -3,11 +3,13 @@ import type {
   Agent,
   Alert,
   AlertRule,
+  Channel,
   Conversation,
   Digest,
   Message,
   SavedReply,
   Suggestion,
+  WebhookDelivery,
   WorkspaceUser,
 } from '@janis/shared';
 import { api } from './client';
@@ -99,6 +101,22 @@ export function useSlackStatus() {
       api<{ connected: boolean; team_id: string | null; alert_channel_id: string | null; configured: boolean }>(
         '/api/slack/status',
       ),
+  });
+}
+
+export function useChannels() {
+  return useQuery({
+    queryKey: ['channels'],
+    queryFn: () => api<{ channels: Channel[] }>('/api/channels'),
+  });
+}
+
+export function useDeliveries(agentId: string | null) {
+  return useQuery({
+    queryKey: ['deliveries', agentId],
+    queryFn: () => api<{ deliveries: WebhookDelivery[] }>(`/api/agents/${agentId}/deliveries`),
+    enabled: !!agentId,
+    refetchInterval: 15_000,
   });
 }
 

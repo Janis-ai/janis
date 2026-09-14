@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { useAgents } from '../api/hooks';
+import { useAgents, useChannels } from '../api/hooks';
 import { Empty } from '../components/bits';
 
 const KINDS = [
@@ -9,13 +9,6 @@ const KINDS = [
   { value: 'instagram', label: 'Instagram DM', needs: 'page_id' },
   { value: 'whatsapp', label: 'WhatsApp Business', needs: 'phone_number_id' },
 ] as const;
-
-function useChannels() {
-  return useQuery({
-    queryKey: ['channels'],
-    queryFn: () => api<{ channels: import('@janis/shared').Channel[] }>('/api/channels'),
-  });
-}
 
 /**
  * Hosted channel integrations — Messenger / Instagram / WhatsApp.

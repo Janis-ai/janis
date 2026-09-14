@@ -2,13 +2,16 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Agent, AgentConfig, AlertRule } from '@janis/shared';
 import { api } from '../api/client';
-import { useAgents, useAlertRules } from '../api/hooks';
+import { useAgents, useAlertRules, useChannels, useDeliveries } from '../api/hooks';
+import { timeAgo } from '../components/bits';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert'] as const;
+const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
 
 export default function Agents() {
   const { data } = useAgents();
   const { data: rulesData } = useAlertRules();
+  const { data: channelsData } = useChannels();
   const qc = useQueryClient();
   const [newName, setNewName] = useState('');
   const [freshSecret, setFreshSecret] = useState<{ label: string; value: string } | null>(null);
@@ -17,6 +20,7 @@ export default function Agents() {
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['agents'] });
     void qc.invalidateQueries({ queryKey: ['rules'] });
+    void qc.invalidateQueries({ queryKey: ['deliveries'] });
   };
 
   const create = useMutation({
@@ -34,8 +38,16 @@ export default function Agents() {
   });
 
   const update = useMutation({
-    mutationFn: ({ id, ...body }: { id: string; name?: string; webhook_url?: string | null; config?: AgentConfig }) =>
-      api(`/api/agents/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    mutationFn: ({
+      id,
+      ...body
+    }: {
+      id: string;
+      name?: string;
+      webhook_url?: string | null;
+      auto_resume_minutes?: number | null;
+      config?: AgentConfig;
+    }) => api(`/api/agents/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: refresh,
     onError: (e) => setError(e.message),
   });
@@ -110,10 +122,15 @@ export default function Agents() {
           key={agent.id}
           agent={agent}
           rules={rulesData?.rules.filter((r) => r.agent_id === agent.id) ?? []}
+          channels={channelsData?.channels.filter((c) => c.agent_id === agent.id) ?? []}
           onSave={(body) => update.mutate({ id: agent.id, ...body })}
           onTestWebhook={() => testWebhook.mutate(agent.id)}
           onRotateKey={() => rotateKey.mutate(agent.id)}
           onRotateSecret={() => rotateSecret.mutate(agent.id)}
+          onRevealSecret={async () => {
+            const r = await api<{ webhook_secret: string }>(`/api/agents/${agent.id}/webhook-secret`);
+            setFreshSecret({ label: 'Webhook secret', value: r.webhook_secret });
+          }}
           onDelete={() => { if (confirm(`Delete agent "${agent.name}"?`)) removeAgent.mutate(agent.id); }}
           onAddRule={(kind, config) => addRule.mutate({ agent_id: agent.id, kind, config })}
           onDeleteRule={(id) => deleteRule.mutate(id)}
@@ -126,16 +143,19 @@ export default function Agents() {
 function AgentCard({
   agent,
   rules,
+  channels,
   onSave,
   onTestWebhook,
   onRotateKey,
   onRotateSecret,
+  onRevealSecret,
   onDelete,
   onAddRule,
   onDeleteRule,
 }: {
   agent: Agent;
   rules: AlertRule[];
+  channels: { id: string; kind: string; name: string }[];
   onSave: (body: {
     name?: string;
     webhook_url?: string | null;
@@ -145,22 +165,36 @@ function AgentCard({
   onTestWebhook: () => void;
   onRotateKey: () => void;
   onRotateSecret: () => void;
+  onRevealSecret: () => void;
   onDelete: () => void;
   onAddRule: (kind: string, config: Record<string, unknown>) => void;
   onDeleteRule: (id: string) => void;
 }) {
+  const [name, setName] = useState(agent.name);
   const [webhookUrl, setWebhookUrl] = useState(agent.webhook_url ?? '');
   const [autoResume, setAutoResume] = useState(agent.auto_resume_minutes?.toString() ?? '');
   const [kind, setKind] = useState<(typeof RULE_KINDS)[number]>('keyword');
   const [keywords, setKeywords] = useState('');
   const [minutes, setMinutes] = useState('15');
   const [cfg, setCfg] = useState<AgentConfig>(agent.config ?? {});
+  const [showDeliveries, setShowDeliveries] = useState(false);
+  const { data: deliveries } = useDeliveries(showDeliveries ? agent.id : null);
 
   return (
     <div className="card">
       <div className="row">
-        <strong className="grow">{agent.name}</strong>
-        <span className="mono muted">{agent.api_key_preview}</span>
+        <input
+          className="grow"
+          style={{ fontWeight: 700 }}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={() => name.trim() && name !== agent.name && onSave({ name: name.trim() })}
+        />
+        <span className="mono muted" title="API key preview">{agent.api_key_preview}</span>
+      </div>
+      <div className="muted" style={{ margin: '4px 0 10px' }}>
+        {agent.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
+        {channels.length > 0 && ` · channels: ${channels.map((c) => c.name).join(', ')}`}
       </div>
 
       <label>Webhook URL (receives takeover + human messages, HMAC-signed)</label>
@@ -173,6 +207,14 @@ function AgentCard({
         />
         <button className="btn" onClick={() => onSave({ webhook_url: webhookUrl || null })}>Save</button>
         <button className="btn" onClick={onTestWebhook} disabled={!agent.webhook_url}>Test</button>
+      </div>
+      <div className="muted" style={{ margin: '4px 0 10px' }}>
+        Using the Janis agent template?{' '}
+        <a href="#" onClick={(e) => { e.preventDefault(); setWebhookUrl(TEMPLATE_WEBHOOK); onSave({ webhook_url: TEMPLATE_WEBHOOK }); }}>
+          point it at the local template
+        </a>
+        {' '}then run{' '}
+        <span className="mono">JANIS_API_KEY=… npm run start -w packages/agent-template</span>
       </div>
 
       <label>Auto-resume — release a human takeover back to the agent after N minutes (blank = never)</label>
@@ -275,9 +317,29 @@ function AgentCard({
       <div className="row" style={{ marginTop: 16 }}>
         <button className="btn" onClick={onRotateKey}>Rotate API key</button>
         <button className="btn" onClick={onRotateSecret}>Rotate webhook secret</button>
+        <button className="btn" onClick={onRevealSecret}>Show webhook secret</button>
+        <button className="btn" onClick={() => setShowDeliveries((s) => !s)}>
+          {showDeliveries ? 'Hide deliveries' : 'Deliveries'}
+        </button>
         <span className="grow" />
         <button className="btn danger" onClick={onDelete}>Delete agent</button>
       </div>
+
+      {showDeliveries && (
+        <div className="muted" style={{ marginTop: 10 }}>
+          {deliveries?.deliveries.length === 0 && <div>No deliveries yet.</div>}
+          {deliveries?.deliveries.map((d) => (
+            <div key={d.id} className="row" style={{ marginTop: 4 }}>
+              <span className={`badge ${d.status === 'delivered' ? 'active' : 'needs_human'}`}>
+                {d.status}
+              </span>
+              <span className="mono">{d.type}</span>
+              <span className="grow">{d.last_error ?? ''}</span>
+              <span>{timeAgo(d.created_at)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

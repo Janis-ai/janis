@@ -50,6 +50,7 @@ export const agents = pgTable('agents', {
   autoResumeMinutes: integer('auto_resume_minutes'), // auto-release human takeover after N min
   // Behavior config for template-based agents: {system_prompt, knowledge[], tone}
   config: jsonb('config').notNull().default({}),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }), // last ingest event
   metadata: jsonb('metadata').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

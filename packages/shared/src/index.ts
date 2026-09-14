@@ -139,6 +139,7 @@ export const Agent = z.object({
   has_webhook_secret: z.boolean(),
   auto_resume_minutes: z.number().nullable(),
   config: AgentConfig,
+  last_seen_at: z.string().nullable(), // last ingest event received
   api_key_preview: z.string(), // e.g. "jk_live_…a1b2" — full key only shown at creation
   metadata: z.record(z.unknown()),
   created_at: z.string(),
@@ -252,6 +253,16 @@ export const Digest = z.object({
   created_at: z.string(),
 });
 export type Digest = z.infer<typeof Digest>;
+
+export const WebhookDelivery = z.object({
+  id: z.string(),
+  type: z.string(),
+  status: z.enum(['pending', 'delivered', 'failed']),
+  attempts: z.number(),
+  last_error: z.string().nullable(),
+  created_at: z.string(),
+});
+export type WebhookDelivery = z.infer<typeof WebhookDelivery>;
 
 export const WorkspaceUser = z.object({
   id: z.string(),
