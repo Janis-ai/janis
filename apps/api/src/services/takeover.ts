@@ -82,6 +82,7 @@ export async function humanReply(
   conversationId: string,
   user: UserRow,
   text: string,
+  attachments?: { name: string; url: string; type: string; size: number }[],
 ): Promise<typeof messages.$inferSelect> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
@@ -100,6 +101,7 @@ export async function humanReply(
       direction: 'human',
       authorId: user.id,
       text,
+      payload: attachments?.length ? { attachments } : {},
     })
     .returning();
 
@@ -118,6 +120,7 @@ export async function humanReply(
     janis_conversation_id: conversation.id,
     text,
     operator: { id: user.id, name: user.name },
+    payload: attachments?.length ? { attachments } : undefined,
   });
   return message;
 }
@@ -133,6 +136,7 @@ export async function agentSend(
   conversationId: string,
   user: UserRow,
   text: string,
+  attachments?: { name: string; url: string; type: string; size: number }[],
 ): Promise<typeof messages.$inferSelect> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
@@ -148,7 +152,7 @@ export async function agentSend(
       direction: 'out',
       authorId: user.id,
       text,
-      payload: { via: 'operator' },
+      payload: { via: 'operator', ...(attachments?.length ? { attachments } : {}) },
     })
     .returning();
 
@@ -167,6 +171,9 @@ export async function agentSend(
     janis_conversation_id: conversation.id,
     text,
     operator: { id: user.id, name: user.name },
+    payload: attachments?.length
+      ? { via: 'operator', attachments }
+      : { via: 'operator' },
   });
   return message;
 }

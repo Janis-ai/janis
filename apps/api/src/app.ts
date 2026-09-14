@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { serveStatic } from '@hono/node-server/serve-static';
 import type { Db } from './db/client.js';
 import { env } from './env.js';
 import { authRoutes } from './routes/auth.js';
@@ -12,6 +13,7 @@ import { ruleRoutes } from './routes/rules.js';
 import { streamRoutes } from './routes/stream.js';
 import { pushRoutes } from './routes/push.js';
 import { userRoutes } from './routes/users.js';
+import { uploadRoutes } from './routes/uploads.js';
 
 export function createApp(db: Db) {
   const app = new Hono();
@@ -40,7 +42,10 @@ export function createApp(db: Db) {
   api.route('/stream', streamRoutes(db));
   api.route('/push', pushRoutes(db));
   api.route('/users', userRoutes(db));
+  api.route('/uploads', uploadRoutes(db));
   app.route('/api', api);
+
+  app.use('/uploads/*', serveStatic({ root: './' }));
 
   return app;
 }

@@ -29,7 +29,21 @@ const patchBody = z.object({
   state: z.enum(['active', 'archived']).optional(),
 });
 
-const replyBody = z.object({ text: z.string().min(1) });
+const attachment = z.object({
+  name: z.string(),
+  url: z.string(),
+  type: z.string(),
+  size: z.number(),
+});
+
+const replyBody = z
+  .object({
+    text: z.string().default(''),
+    attachments: z.array(attachment).optional(),
+  })
+  .refine((d) => d.text.trim().length > 0 || (d.attachments?.length ?? 0) > 0, {
+    message: 'text or attachments required',
+  });
 
 export function conversationRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
@@ -125,12 +139,14 @@ export function conversationRoutes(db: Db) {
 
   app.post('/:id/reply', zValidator('json', replyBody), async (c) => {
     try {
+      const body = c.req.valid('json');
       const msg = await humanReply(
         db,
         c.get('workspaceId'),
         c.req.param('id'),
         c.get('user'),
-        c.req.valid('json').text,
+        body.text,
+        body.attachments,
       );
       return c.json({ message: toMessage(msg) }, 201);
     } catch (err) {
@@ -141,12 +157,14 @@ export function conversationRoutes(db: Db) {
 
   app.post('/:id/agent-send', zValidator('json', replyBody), async (c) => {
     try {
+      const body = c.req.valid('json');
       const msg = await agentSend(
         db,
         c.get('workspaceId'),
         c.req.param('id'),
         c.get('user'),
-        c.req.valid('json').text,
+        body.text,
+        body.attachments,
       );
       return c.json({ message: toMessage(msg) }, 201);
     } catch (err) {

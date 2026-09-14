@@ -12,6 +12,14 @@ export const ConversationState = z.enum([
 ]);
 export type ConversationState = z.infer<typeof ConversationState>;
 
+export const Attachment = z.object({
+  name: z.string(),
+  url: z.string(),
+  type: z.string(),
+  size: z.number(),
+});
+export type Attachment = z.infer<typeof Attachment>;
+
 export const MessageDirection = z.enum(['in', 'out', 'human']);
 export type MessageDirection = z.infer<typeof MessageDirection>;
 

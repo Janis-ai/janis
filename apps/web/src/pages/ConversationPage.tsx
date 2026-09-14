@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { Conversation, Message } from '@janis/shared';
+import type { Attachment, Conversation, Message } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
 import { StateBadge } from '../components/bits';
+import Composer from '../components/Composer';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'User',
@@ -64,10 +65,10 @@ export default function ConversationPage() {
   });
 
   const reply = useMutation({
-    mutationFn: (text: string) =>
+    mutationFn: ({ text, attachments }: { text: string; attachments: Attachment[] }) =>
       api(`/api/conversations/${id}/${sendAs === 'agent' ? 'agent-send' : 'reply'}`, {
         method: 'POST',
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, attachments }),
       }),
     onSuccess: () => { setDraft(''); setError(''); void qc.invalidateQueries({ queryKey: ['conversation', id] }); },
     onError: (e) => setError(e.message),
@@ -81,9 +82,8 @@ export default function ConversationPage() {
   const openAlerts = alerts.filter((a) => a.status === 'open');
   const canSend = c.state === 'human' || sendAs === 'agent';
 
-  const send = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (draft.trim()) reply.mutate(draft.trim());
+  const send = (attachments: Attachment[]) => {
+    reply.mutate({ text: draft, attachments });
   };
 
   return (
@@ -112,6 +112,19 @@ export default function ConversationPage() {
                 {m.direction === 'out' && m.payload.via === 'operator' ? ' (via operator)' : ''}
               </div>
               {m.text}
+              {(m.payload.attachments as Attachment[] | undefined)?.map((a, i) => (
+                <div key={i}>
+                  {a.type.startsWith('image/') ? (
+                    <a href={a.url} target="_blank" rel="noreferrer">
+                      <img src={a.url} alt={a.name} style={{ maxWidth: 220, borderRadius: 8, marginTop: 6 }} />
+                    </a>
+                  ) : (
+                    <a href={a.url} target="_blank" rel="noreferrer" className="attach-chip">
+                      📎 {a.name}
+                    </a>
+                  )}
+                </div>
+              ))}
             </div>
           ))}
           <div ref={bottomRef} />
@@ -154,27 +167,21 @@ export default function ConversationPage() {
         )}
 
         {canSend ? (
-          <form className="composer" onSubmit={send}>
-            {c.state === 'human' && (
-              <select value={sendAs} onChange={(e) => setSendAs(e.target.value as 'human' | 'agent')}>
-                <option value="human">as human</option>
-                <option value="agent">via agent</option>
-              </select>
-            )}
-            <input
+          <>
+            <Composer
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder={sendAs === 'agent' ? 'Message the agent will deliver…' : 'Reply to user as a human…'}
-              autoFocus
+              onChange={setDraft}
+              onSend={send}
+              onResume={c.state === 'human' ? () => act.mutate('resume') : undefined}
+              sendAs={sendAs}
+              setSendAs={setSendAs}
+              showModeSelect={c.state === 'human'}
+              sending={reply.isPending}
             />
-            <button className="btn primary" type="submit" disabled={reply.isPending}>Send</button>
-            {c.state === 'human' && (
-              <button className="btn" type="button" onClick={() => act.mutate('resume')}>Resume agent</button>
-            )}
             {c.state !== 'human' && (
-              <button className="btn" type="button" onClick={() => setSendAs('human')}>Cancel</button>
+              <button className="btn" style={{ marginTop: 8 }} onClick={() => setSendAs('human')}>Cancel</button>
             )}
-          </form>
+          </>
         ) : (
           <div className="row">
             {c.state !== 'archived' && (

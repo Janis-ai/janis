@@ -68,6 +68,32 @@ button, input, select, textarea { font: inherit; }
 .composer { display: flex; gap: 8px; margin-top: 12px; }
 .composer input { flex: 1; }
 
+.composer-box { margin-top: 12px; position: relative; }
+.composer-row { display: flex; gap: 8px; align-items: flex-end; }
+.composer-row textarea {
+  flex: 1; resize: none; line-height: 1.45; max-height: 180px; overflow-y: auto;
+}
+.composer-tools { display: flex; gap: 4px; align-items: center; padding-bottom: 2px; }
+.btn.icon { padding: 9px 10px; }
+.attach-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.attach-chip {
+  display: inline-block; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 10px; font-size: 12px; color: var(--text);
+}
+.attach-chip a { color: var(--muted); }
+.emoji-pop {
+  position: absolute; bottom: 54px; left: 0; z-index: 10;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px; width: 320px; display: grid;
+  grid-template-columns: repeat(8, 1fr); gap: 2px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5);
+}
+.emoji-pop button {
+  background: none; border: none; font-size: 18px; cursor: pointer;
+  padding: 4px; border-radius: 6px;
+}
+.emoji-pop button:hover { background: var(--panel-2); }
+
 input, select, textarea {
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px;
