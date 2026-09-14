@@ -11,6 +11,7 @@ import {
 import { bus } from '../lib/bus.js';
 import { notifyWorkspace } from '../lib/notify.js';
 import { evaluateEvent } from '../lib/rules.js';
+import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
 
 type AgentRow = typeof agents.$inferSelect;
@@ -36,6 +37,10 @@ export async function processEvents(
     const message = await insertEventMessage(db, conv.id, event);
     if (message) {
       bus.publish(agent.workspaceId, { type: 'message', data: toMessage(message) });
+      if (message.text) {
+        const label = message.direction === 'in' ? ':busts_in_silhouette: *user:*' : ':robot_face: *agent:*';
+        void mirrorToSlack(db, conv.id, label, message.text);
+      }
     }
 
     // Evaluate alert rules
@@ -46,6 +51,7 @@ export async function processEvents(
         .returning();
       alertIds.push(alert.id);
       bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(alert) });
+      void postSlackAlert(db, agent.workspaceId, conv, agent, alert);
       void notifyWorkspace(db, agent.workspaceId, {
         title: `Janis: ${triggered.type.replace('_', ' ')}`,
         body: triggered.detail ?? `Conversation ${conv.externalId} needs attention`,
@@ -66,6 +72,8 @@ export async function processEvents(
         lastMessageAt: event.timestamp ? new Date(event.timestamp) : new Date(),
         lastMessagePreview: preview?.slice(0, 140) ?? conv.lastMessagePreview,
         lastMessageDirection: directionFor(event),
+        // new inbound traffic marks the conversation unread for operators
+        isUnread: directionFor(event) === 'in' ? true : conv.isUnread,
         ...(event.user ? { userProfile: event.user } : {}),
       })
       .where(eq(conversations.id, conv.id))

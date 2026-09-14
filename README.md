@@ -72,6 +72,21 @@ Per-agent rules: `keyword` (matched against inbound text), `failure`,
 `handoff_request`, `custom_alert`, `inactivity` (minutes with user waiting).
 With no rules configured, failure/handoff/custom always fire.
 
+## Slack integration
+
+Set `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_SIGNING_SECRET` on the API,
+then connect from **Settings → Slack** (OAuth install). Slack app config:
+
+- Redirect URL: `{API_ORIGIN}/slack/oauth/callback`
+- Event subscriptions: `{API_ORIGIN}/slack/events` — subscribe to `message.channels`, `message.groups`
+- Interactivity URL: `{API_ORIGIN}/slack/interactions`
+- Scopes: `chat:write`, `chat:write.public`, `channels:read`, `groups:read`,
+  `users:read`, `users:read.email`
+
+Alerts post to the chosen channel with **Take over / Resume** buttons; each
+conversation gets a Slack thread, and replying in the thread takes over and
+relays to the end user.
+
 ## Deploy
 
 API: `Dockerfile.api` builds a Node image; needs `DATABASE_URL` (Postgres) and

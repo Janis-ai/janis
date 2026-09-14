@@ -1,16 +1,25 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client';
-import { useMe, useUsers } from '../api/hooks';
+import { useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
 import { subscribeToPush, unsubscribeFromPush } from '../lib/push';
 
 export default function Settings() {
   const { data: me } = useMe();
   const { data: users } = useUsers();
+  const { data: slack } = useSlackStatus();
+  const { data: slackChannels } = useSlackChannels(!!slack?.connected);
+  const { data: savedReplies } = useSavedReplies();
   const qc = useQueryClient();
   const [form, setForm] = useState({ email: '', name: '', password: '' });
+  const [reply, setReply] = useState({ title: '', body: '' });
   const [error, setError] = useState('');
   const [pushMsg, setPushMsg] = useState('');
+  const [slackMsg, setSlackMsg] = useState(
+    new URLSearchParams(window.location.search).get('slack') === 'connected'
+      ? 'Slack connected — pick an alert channel below.'
+      : '',
+  );
 
   const addUser = useMutation({
     mutationFn: (body: typeof form) =>
@@ -34,6 +43,41 @@ export default function Settings() {
     mutationFn: (id: string) => api(`/api/users/${id}`, { method: 'DELETE' }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['users'] }),
     onError: (e) => setError(e.message),
+  });
+
+  const setSlackChannel = useMutation({
+    mutationFn: (channelId: string) =>
+      api('/api/slack/channel', { method: 'PATCH', body: JSON.stringify({ channel_id: channelId }) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['slackStatus'] }),
+  });
+
+  const testSlack = useMutation({
+    mutationFn: () => api('/api/slack/test', { method: 'POST' }),
+    onSuccess: () => setSlackMsg('Test message posted.'),
+    onError: (e) => setSlackMsg(e.message),
+  });
+
+  const disconnectSlack = useMutation({
+    mutationFn: () => api('/api/slack', { method: 'DELETE' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['slackStatus'] });
+      setSlackMsg('Slack disconnected.');
+    },
+  });
+
+  const addReply = useMutation({
+    mutationFn: (body: typeof reply) =>
+      api('/api/saved-replies', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      setReply({ title: '', body: '' });
+      void qc.invalidateQueries({ queryKey: ['savedReplies'] });
+    },
+    onError: (e) => setError(e.message),
+  });
+
+  const removeReply = useMutation({
+    mutationFn: (id: string) => api(`/api/saved-replies/${id}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['savedReplies'] }),
   });
 
   const togglePush = async () => {
@@ -64,6 +108,74 @@ export default function Settings() {
           <button className="btn" onClick={() => void unsubscribeFromPush()}>Disable</button>
         </div>
         {pushMsg && <div className="muted" style={{ marginTop: 8 }}>{pushMsg}</div>}
+      </div>
+
+      <div className="card">
+        <strong>Slack</strong>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          Alerts post to a Slack channel with Take over / Resume buttons; replying in the thread
+          talks to the end user.
+        </div>
+        {slack?.connected ? (
+          <>
+            <div className="row">
+              <select
+                value={slack.alert_channel_id ?? ''}
+                onChange={(e) => e.target.value && setSlackChannel.mutate(e.target.value)}
+              >
+                <option value="">Pick alert channel…</option>
+                {slackChannels?.channels.map((ch) => (
+                  <option key={ch.id} value={ch.id}>#{ch.name}</option>
+                ))}
+              </select>
+              <button className="btn" onClick={() => testSlack.mutate()}>Send test</button>
+              <button className="btn danger" onClick={() => disconnectSlack.mutate()}>Disconnect</button>
+            </div>
+            {slackMsg && <div className="muted" style={{ marginTop: 8 }}>{slackMsg}</div>}
+          </>
+        ) : slack?.configured ? (
+          <a className="btn primary" href="/api/slack/install">Connect Slack</a>
+        ) : (
+          <div className="muted">
+            Set SLACK_CLIENT_ID / SLACK_CLIENT_SECRET / SLACK_SIGNING_SECRET on the API to enable
+            the Slack app.
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <strong>Saved replies</strong>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          Canned responses — available in the composer via 📑.
+        </div>
+        {savedReplies?.saved_replies.map((r) => (
+          <div key={r.id} className="row muted" style={{ marginTop: 8 }}>
+            <span className="grow"><strong>{r.title}</strong> — {r.body.slice(0, 80)}</span>
+            <button className="btn danger" onClick={() => removeReply.mutate(r.id)}>Delete</button>
+          </div>
+        ))}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            addReply.mutate(reply);
+          }}
+        >
+          <label>New saved reply</label>
+          <input
+            placeholder="title (e.g. refund-policy)"
+            value={reply.title}
+            onChange={(e) => setReply({ ...reply, title: e.target.value })}
+            required
+          />
+          <textarea
+            placeholder="reply text…"
+            value={reply.body}
+            onChange={(e) => setReply({ ...reply, body: e.target.value })}
+            required
+            rows={3}
+          />
+          <button className="btn" style={{ marginTop: 8 }}>Add</button>
+        </form>
       </div>
 
       <div className="card">

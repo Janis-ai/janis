@@ -147,6 +147,8 @@ export const Conversation = z.object({
   last_message_at: z.string().nullable(),
   last_message_preview: z.string().nullable(),
   open_alert_count: z.number(),
+  is_starred: z.boolean(),
+  is_unread: z.boolean(),
   human_since: z.string().nullable(),
   created_at: z.string(),
 });
@@ -200,6 +202,30 @@ export const AlertRule = z.object({
   created_at: z.string(),
 });
 export type AlertRule = z.infer<typeof AlertRule>;
+
+export const SavedReply = z.object({
+  id: z.string(),
+  title: z.string(),
+  body: z.string(),
+  created_at: z.string(),
+});
+export type SavedReply = z.infer<typeof SavedReply>;
+
+export const Digest = z.object({
+  id: z.string(),
+  period_start: z.string(),
+  period_end: z.string(),
+  stats: z.object({
+    conversations: z.number(),
+    messages_in: z.number(),
+    messages_out: z.number(),
+    messages_human: z.number(),
+    alerts: z.number(),
+    takeovers: z.number(),
+  }),
+  created_at: z.string(),
+});
+export type Digest = z.infer<typeof Digest>;
 
 export const WorkspaceUser = z.object({
   id: z.string(),

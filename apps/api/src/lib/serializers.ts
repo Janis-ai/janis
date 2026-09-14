@@ -3,7 +3,9 @@ import type {
   AlertRule,
   Agent,
   Conversation,
+  Digest,
   Message,
+  SavedReply,
   Suggestion,
   WorkspaceUser,
 } from '@janis/shared';
@@ -12,7 +14,9 @@ import type {
   alertRules,
   alerts,
   conversations,
+  digests,
   messages,
+  savedReplies,
   suggestions,
   users,
 } from '../db/schema.js';
@@ -48,6 +52,8 @@ export function toConversation(row: Row<typeof conversations>, openAlertCount = 
     last_message_at: iso(row.lastMessageAt),
     last_message_preview: row.lastMessagePreview,
     open_alert_count: openAlertCount,
+    is_starred: row.isStarred,
+    is_unread: row.isUnread,
     human_since: iso(row.humanSince),
     created_at: iso(row.createdAt)!,
   };
@@ -101,6 +107,20 @@ export function toAlertRule(row: Row<typeof alertRules>): AlertRule {
       inactivity_minutes: config.inactivity_minutes,
       enabled: config.enabled !== false,
     },
+    created_at: iso(row.createdAt)!,
+  };
+}
+
+export function toSavedReply(row: Row<typeof savedReplies>): SavedReply {
+  return { id: row.id, title: row.title, body: row.body, created_at: iso(row.createdAt)! };
+}
+
+export function toDigest(row: Row<typeof digests>): Digest {
+  return {
+    id: row.id,
+    period_start: iso(row.periodStart)!,
+    period_end: iso(row.periodEnd)!,
+    stats: row.stats as Digest['stats'],
     created_at: iso(row.createdAt)!,
   };
 }

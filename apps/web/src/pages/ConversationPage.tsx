@@ -43,7 +43,12 @@ export default function ConversationPage() {
   });
 
   const patch = useMutation({
-    mutationFn: (body: { tags?: string[]; assignee_id?: string | null }) =>
+    mutationFn: (body: {
+      tags?: string[];
+      assignee_id?: string | null;
+      is_starred?: boolean;
+      is_unread?: boolean;
+    }) =>
       api(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: refresh,
     onError: (e) => setError(e.message),
@@ -91,6 +96,20 @@ export default function ConversationPage() {
       <div className="conv-main">
         <div className="row">
           <h1 className="page-title grow">{name}</h1>
+          <button
+            className="btn icon"
+            title={c.is_starred ? 'Unstar' : 'Star'}
+            onClick={() => patch.mutate({ is_starred: !c.is_starred })}
+          >
+            {c.is_starred ? '⭐' : '☆'}
+          </button>
+          <button
+            className="btn"
+            onClick={() => patch.mutate({ is_unread: true })}
+            title="Mark unread"
+          >
+            Mark unread
+          </button>
           <StateBadge state={c.state} />
         </div>
 

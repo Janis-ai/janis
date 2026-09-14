@@ -23,6 +23,7 @@ export default function Layout() {
         <NavLink to="/" end><span className="label">Inbox</span><span className="icon">⬤</span></NavLink>
         <NavLink to="/channels"><span className="label">Channels</span><span className="icon">▤</span></NavLink>
         <NavLink to="/agents"><span className="label">Agents</span><span className="icon">◈</span></NavLink>
+        <NavLink to="/reports"><span className="label">Reports</span><span className="icon">◫</span></NavLink>
         <NavLink to="/settings"><span className="label">Settings</span><span className="icon">⚙</span></NavLink>
         <div className="spacer" />
         <div className="user">

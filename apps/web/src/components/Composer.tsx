@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Attachment } from '@janis/shared';
+import { useSavedReplies } from '../api/hooks';
 
 const EMOJIS = [
   '😀','😄','😊','🙂','😉','😍','🤔','😅','😂','🥲','😢','😮','😴','🤗','🤝','👍',
@@ -30,8 +31,10 @@ export default function Composer({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [repliesOpen, setRepliesOpen] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  const { data: savedReplies } = useSavedReplies();
 
   // autosize: grow with content up to ~8 lines
   useEffect(() => {
@@ -53,6 +56,20 @@ export default function Composer({
       t.selectionStart = t.selectionEnd = start + emoji.length;
     });
     setEmojiOpen(false);
+  };
+
+  const insertText = (text: string) => {
+    const t = taRef.current;
+    const start = t?.selectionStart ?? value.length;
+    const end = t?.selectionEnd ?? value.length;
+    onChange(value.slice(0, start) + text + value.slice(end));
+    requestAnimationFrame(() => {
+      if (t) {
+        t.focus();
+        t.selectionStart = t.selectionEnd = start + text.length;
+      }
+    });
+    setRepliesOpen(false);
   };
 
   const uploadFiles = async (files: FileList | File[]) => {
@@ -128,6 +145,9 @@ export default function Composer({
         <div className="composer-bar">
           <button type="button" className="btn icon" title="Emoji" onClick={() => setEmojiOpen((o) => !o)}>😊</button>
           <button type="button" className="btn icon" title="Attach file" onClick={() => fileRef.current?.click()}>📎</button>
+          {(savedReplies?.saved_replies.length ?? 0) > 0 && (
+            <button type="button" className="btn icon" title="Saved replies" onClick={() => setRepliesOpen((o) => !o)}>📑</button>
+          )}
           <input
             ref={fileRef}
             type="file"
@@ -159,6 +179,16 @@ export default function Composer({
         <div className="emoji-pop">
           {EMOJIS.map((e) => (
             <button key={e} type="button" onClick={() => insertEmoji(e)}>{e}</button>
+          ))}
+        </div>
+      )}
+      {repliesOpen && (
+        <div className="emoji-pop reply-pop">
+          {savedReplies?.saved_replies.map((r) => (
+            <button key={r.id} type="button" className="reply-item" onClick={() => insertText(r.body)}>
+              <strong>{r.title}</strong>
+              <span className="muted">{r.body.slice(0, 80)}{r.body.length > 80 ? '…' : ''}</span>
+            </button>
           ))}
         </div>
       )}

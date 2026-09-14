@@ -72,6 +72,8 @@ export const conversations = pgTable(
       enum: ['in', 'out', 'human'],
     }),
     humanSince: timestamp('human_since', { withTimezone: true }), // when takeover began
+    isStarred: boolean('is_starred').notNull().default(false),
+    isUnread: boolean('is_unread').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -148,6 +150,7 @@ export const slackInstallations = pgTable('slack_installations', {
   teamId: text('team_id').notNull(),
   botToken: text('bot_token').notNull(),
   alertChannelId: text('alert_channel_id'),
+  installerUserId: uuid('installer_user_id').references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -161,6 +164,42 @@ export const suggestions = pgTable('suggestions', {
   status: text('status', { enum: ['pending', 'used', 'dismissed'] })
     .notNull()
     .default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const savedReplies = pgTable('saved_replies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
+  title: text('title').notNull(),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const digests = pgTable('digests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
+  periodStart: timestamp('period_start', { withTimezone: true }).notNull(),
+  periodEnd: timestamp('period_end', { withTimezone: true }).notNull(),
+  stats: jsonb('stats').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Slack thread ↔ conversation mapping for threaded takeover
+export const slackThreads = pgTable('slack_threads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  conversationId: uuid('conversation_id')
+    .notNull()
+    .references(() => conversations.id)
+    .unique(),
+  installationId: uuid('installation_id')
+    .notNull()
+    .references(() => slackInstallations.id),
+  channelId: text('channel_id').notNull(),
+  ts: text('ts').notNull(), // slack message timestamp = thread id
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

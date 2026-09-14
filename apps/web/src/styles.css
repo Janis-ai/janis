@@ -57,6 +57,9 @@ button, input, select, textarea { font: inherit; }
 .conv-row .who .preview { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-row .meta { text-align: right; font-size: 12px; color: var(--muted); }
 .alert-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
+.unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.conv-row .who .name.unread { font-weight: 700; }
+.search-box { flex: 1; min-width: 200px; }
 
 .transcript { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
 .msg { max-width: 75%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.45; }
@@ -101,6 +104,11 @@ button, input, select, textarea { font: inherit; }
   padding: 4px; border-radius: 6px;
 }
 .emoji-pop button:hover { background: var(--panel-2); }
+.reply-pop { display: flex; flex-direction: column; width: 340px; max-height: 300px; overflow-y: auto; }
+.reply-pop .reply-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  font-size: 13px; padding: 8px 10px; text-align: left; color: var(--text);
+}
 
 input, select, textarea {
   background: var(--panel-2); color: var(--text);

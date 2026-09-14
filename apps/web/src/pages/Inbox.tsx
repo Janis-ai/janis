@@ -16,8 +16,10 @@ export default function Inbox() {
       {data?.conversations.map((c) => (
         <Link key={c.id} to={`/conversations/${c.id}`} className="conv-row">
           {c.open_alert_count > 0 && <span className="alert-dot" />}
+          {c.is_unread && <span className="unread-dot" title="Unread" />}
           <div className="who">
-            <div className="name">
+            <div className={`name ${c.is_unread ? 'unread' : ''}`}>
+              {c.is_starred && '⭐ '}
               {(c.user_profile.name as string) ?? c.external_id}
             </div>
             <div className="preview">{c.last_message_preview}</div>

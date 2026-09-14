@@ -4,7 +4,9 @@ import type {
   Alert,
   AlertRule,
   Conversation,
+  Digest,
   Message,
+  SavedReply,
   Suggestion,
   WorkspaceUser,
 } from '@janis/shared';
@@ -62,6 +64,49 @@ export function useUsers() {
   return useQuery({
     queryKey: ['users'],
     queryFn: () => api<{ users: WorkspaceUser[] }>('/api/users'),
+  });
+}
+
+export function useSavedReplies() {
+  return useQuery({
+    queryKey: ['savedReplies'],
+    queryFn: () => api<{ saved_replies: SavedReply[] }>('/api/saved-replies'),
+  });
+}
+
+export function useDigests() {
+  return useQuery({
+    queryKey: ['digests'],
+    queryFn: () => api<{ digests: Digest[] }>('/api/digests'),
+  });
+}
+
+export function useSearch(q: string) {
+  return useQuery({
+    queryKey: ['search', q],
+    queryFn: () =>
+      api<{ conversations: Conversation[]; messages: Message[] }>(
+        `/api/search?q=${encodeURIComponent(q)}`,
+      ),
+    enabled: q.trim().length > 0,
+  });
+}
+
+export function useSlackStatus() {
+  return useQuery({
+    queryKey: ['slackStatus'],
+    queryFn: () =>
+      api<{ connected: boolean; team_id: string | null; alert_channel_id: string | null; configured: boolean }>(
+        '/api/slack/status',
+      ),
+  });
+}
+
+export function useSlackChannels(enabled: boolean) {
+  return useQuery({
+    queryKey: ['slackChannels'],
+    queryFn: () => api<{ channels: { id: string; name: string }[] }>('/api/slack/channels'),
+    enabled,
   });
 }
 

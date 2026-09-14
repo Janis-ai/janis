@@ -18,7 +18,7 @@ import {
 import { requestSuggestion } from '../services/suggestions.js';
 
 const listQuery = z.object({
-  state: z.enum(['active', 'needs_human', 'human', 'archived']).optional(),
+  state: z.enum(['active', 'needs_human', 'human', 'archived', 'unread', 'starred']).optional(),
   agent_id: z.string().uuid().optional(),
   attention: z.enum(['1', 'true']).optional(), // needs_human OR has open alerts
 });
@@ -27,6 +27,8 @@ const patchBody = z.object({
   tags: z.array(z.string()).optional(),
   assignee_id: z.string().uuid().nullable().optional(),
   state: z.enum(['active', 'archived']).optional(),
+  is_starred: z.boolean().optional(),
+  is_unread: z.boolean().optional(),
 });
 
 const attachment = z.object({
@@ -54,7 +56,9 @@ export function conversationRoutes(db: Db) {
     const q = c.req.valid('query');
 
     const conditions = [eq(agents.workspaceId, workspaceId)];
-    if (q.state) conditions.push(eq(conversations.state, q.state));
+    if (q.state === 'unread') conditions.push(eq(conversations.isUnread, true));
+    else if (q.state === 'starred') conditions.push(eq(conversations.isStarred, true));
+    else if (q.state) conditions.push(eq(conversations.state, q.state));
     if (q.agent_id) conditions.push(eq(conversations.agentId, q.agent_id));
     if (q.attention) {
       conditions.push(inArray(conversations.state, ['needs_human', 'human']));
@@ -89,6 +93,15 @@ export function conversationRoutes(db: Db) {
       .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
+
+    // opening a conversation clears the unread flag
+    if (row.conversation.isUnread) {
+      await db
+        .update(conversations)
+        .set({ isUnread: false })
+        .where(eq(conversations.id, row.conversation.id));
+      row.conversation.isUnread = false;
+    }
 
     const [msgs, convAlerts, convSuggestions] = await Promise.all([
       db
@@ -249,6 +262,8 @@ export function conversationRoutes(db: Db) {
         ...(body.tags !== undefined ? { tags: body.tags } : {}),
         ...(body.assignee_id !== undefined ? { assigneeId: body.assignee_id } : {}),
         ...(body.state !== undefined ? { state: body.state } : {}),
+        ...(body.is_starred !== undefined ? { isStarred: body.is_starred } : {}),
+        ...(body.is_unread !== undefined ? { isUnread: body.is_unread } : {}),
       })
       .where(eq(conversations.id, owned.id))
       .returning();

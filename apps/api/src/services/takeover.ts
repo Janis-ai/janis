@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, messages, users } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
+import { mirrorToSlack } from '../lib/slack.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
 
@@ -67,6 +68,7 @@ export async function takeover(
     type: 'conversation',
     data: { id: updated.id, state: updated.state },
   });
+  void mirrorToSlack(db, conversationId, ':raising_hand:', `*${user.name}* took over`);
   await deliverWebhook(db, agent, 'human.takeover', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
@@ -83,6 +85,7 @@ export async function humanReply(
   user: UserRow,
   text: string,
   attachments?: { name: string; url: string; type: string; size: number }[],
+  viaSlack = false,
 ): Promise<typeof messages.$inferSelect> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
@@ -115,6 +118,9 @@ export async function humanReply(
     .where(eq(conversations.id, conversationId));
 
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
+  if (!viaSlack) {
+    void mirrorToSlack(db, conversationId, `:bust_in_silhouette: *${user.name}:*`, text);
+  }
   await deliverWebhook(db, agent, 'message.human', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
@@ -166,6 +172,7 @@ export async function agentSend(
     .where(eq(conversations.id, conversationId));
 
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
+  void mirrorToSlack(db, conversationId, `:robot_face: *${user.name}* (via agent):`, text);
   await deliverWebhook(db, agent, 'agent.send', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
@@ -202,6 +209,12 @@ export async function resume(
     type: 'conversation',
     data: { id: updated.id, state: updated.state },
   });
+  void mirrorToSlack(
+    db,
+    conversationId,
+    ':arrow_forward:',
+    user ? `*${user.name}* resumed the agent` : 'auto-resumed to the agent',
+  );
   await deliverWebhook(db, agent, 'human.resume', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
