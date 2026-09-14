@@ -155,6 +155,7 @@ export default function Settings() {
           </div>
         ))}
         <form
+          style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, maxWidth: 520 }}
           onSubmit={(e) => {
             e.preventDefault();
             addReply.mutate(reply);
@@ -174,7 +175,9 @@ export default function Settings() {
             required
             rows={3}
           />
-          <button className="btn" style={{ marginTop: 8 }}>Add</button>
+          <div>
+            <button className="btn">Add</button>
+          </div>
         </form>
       </div>
 
