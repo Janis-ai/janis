@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Agent, AgentConfig, AlertRule } from '@janis/shared';
 import { api } from '../api/client';
@@ -45,6 +46,7 @@ export default function Agents() {
       id: string;
       name?: string;
       webhook_url?: string | null;
+      hosted?: boolean;
       auto_resume_minutes?: number | null;
       config?: AgentConfig;
     }) => api(`/api/agents/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
@@ -159,6 +161,7 @@ function AgentCard({
   onSave: (body: {
     name?: string;
     webhook_url?: string | null;
+    hosted?: boolean;
     auto_resume_minutes?: number | null;
     config?: AgentConfig;
   }) => void;
@@ -178,6 +181,15 @@ function AgentCard({
   const [minutes, setMinutes] = useState('15');
   const [cfg, setCfg] = useState<AgentConfig>(agent.config ?? {});
   const [showDeliveries, setShowDeliveries] = useState(false);
+  const [testMsg, setTestMsg] = useState('');
+  const navigate = useNavigate();
+  const onTestChat = async (text: string) => {
+    const r = await api<{ conversation_id: string | null }>(`/api/agents/${agent.id}/chat`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
+    if (r.conversation_id) navigate(`/conversations/${r.conversation_id}`);
+  };
   const { data: deliveries } = useDeliveries(showDeliveries ? agent.id : null);
 
   return (
@@ -197,25 +209,63 @@ function AgentCard({
         {channels.length > 0 && ` · channels: ${channels.map((c) => c.name).join(', ')}`}
       </div>
 
-      <label>Webhook URL (receives takeover + human messages, HMAC-signed)</label>
-      <div className="row">
-        <input
-          className="grow"
-          placeholder="https://your-agent.example.com/janis/webhook"
-          value={webhookUrl}
-          onChange={(e) => setWebhookUrl(e.target.value)}
-        />
-        <button className="btn" onClick={() => onSave({ webhook_url: webhookUrl || null })}>Save</button>
-        <button className="btn" onClick={onTestWebhook} disabled={!agent.webhook_url}>Test</button>
+      <div className="row" style={{ marginBottom: 10 }}>
+        <label style={{ margin: 0 }}>Runs</label>
+        <select
+          value={agent.hosted ? 'hosted' : 'external'}
+          onChange={(e) => onSave({ hosted: e.target.value === 'hosted' })}
+        >
+          <option value="hosted">Hosted by Janis — nothing to deploy</option>
+          <option value="external">External webhook — you run the agent</option>
+        </select>
       </div>
-      <div className="muted" style={{ margin: '4px 0 10px' }}>
-        Using the Janis agent template?{' '}
-        <a href="#" onClick={(e) => { e.preventDefault(); setWebhookUrl(TEMPLATE_WEBHOOK); onSave({ webhook_url: TEMPLATE_WEBHOOK }); }}>
-          point it at the local template
-        </a>
-        {' '}then run{' '}
-        <span className="mono">JANIS_API_KEY=… npm run start -w packages/agent-template</span>
-      </div>
+
+      {agent.hosted ? (
+        <div className="muted" style={{ margin: '4px 0 10px' }}>
+          Janis runs this agent in-process with the config below — replies go straight to the
+          connected channel. No webhook, no deploy.
+          <form
+            className="row"
+            style={{ marginTop: 8 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!testMsg.trim()) return;
+              void onTestChat(testMsg.trim());
+              setTestMsg('');
+            }}
+          >
+            <input
+              className="grow"
+              placeholder="Send a test message…"
+              value={testMsg}
+              onChange={(e) => setTestMsg(e.target.value)}
+            />
+            <button className="btn">Test</button>
+          </form>
+        </div>
+      ) : (
+        <>
+          <label>Webhook URL (receives takeover + human messages, HMAC-signed)</label>
+          <div className="row">
+            <input
+              className="grow"
+              placeholder="https://your-agent.example.com/janis/webhook"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+            />
+            <button className="btn" onClick={() => onSave({ webhook_url: webhookUrl || null })}>Save</button>
+            <button className="btn" onClick={onTestWebhook} disabled={!agent.webhook_url}>Test</button>
+          </div>
+          <div className="muted" style={{ margin: '4px 0 10px' }}>
+            Using the Janis agent template?{' '}
+            <a href="#" onClick={(e) => { e.preventDefault(); setWebhookUrl(TEMPLATE_WEBHOOK); onSave({ webhook_url: TEMPLATE_WEBHOOK }); }}>
+              point it at the local template
+            </a>
+            {' '}then run{' '}
+            <span className="mono">JANIS_API_KEY=… npm run start -w packages/agent-template</span>
+          </div>
+        </>
+      )}
 
       <label>Auto-resume — release a human takeover back to the agent after N minutes (blank = never)</label>
       <div className="row">
@@ -260,6 +310,30 @@ function AgentCard({
             value={cfg.tone ?? ''}
             onChange={(e) => setCfg({ ...cfg, tone: e.target.value })}
           />
+          {agent.hosted && (
+            <>
+              <label>LLM (OpenAI-compatible — leave blank to use server env)</label>
+              <input
+                placeholder="API key (sk-…)"
+                value={cfg.llm?.api_key ?? ''}
+                onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, api_key: e.target.value } })}
+              />
+              <div className="row">
+                <input
+                  className="grow"
+                  placeholder="Base URL (default https://api.openai.com/v1)"
+                  value={cfg.llm?.base_url ?? ''}
+                  onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, base_url: e.target.value } })}
+                />
+                <input
+                  placeholder="Model"
+                  style={{ width: 160 }}
+                  value={cfg.llm?.model ?? ''}
+                  onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, model: e.target.value } })}
+                />
+              </div>
+            </>
+          )}
           <div>
             <button className="btn" onClick={() => onSave({ config: cfg })}>Save behavior</button>
           </div>

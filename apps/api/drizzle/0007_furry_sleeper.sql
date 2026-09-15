@@ -1,0 +1,1 @@
+ALTER TABLE "agents" ADD COLUMN "hosted" boolean DEFAULT false NOT NULL;

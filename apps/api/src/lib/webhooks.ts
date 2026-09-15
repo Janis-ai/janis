@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, webhookDeliveries } from '../db/schema.js';
 import { signWebhookPayload } from './crypto.js';
+import { runHostedEvent } from './hostedAgent.js';
 
 const RETRY_DELAYS_MS = [0, 1_000, 5_000, 15_000];
 
@@ -19,20 +20,44 @@ export async function deliverWebhook(
   type: OutboundWebhookType,
   data: Omit<OutboundWebhook, 'type' | 'timestamp'>,
 ): Promise<void> {
-  if (!agent.webhookUrl) return;
+  if (!agent.hosted && !agent.webhookUrl) return;
 
   const payload: OutboundWebhook = {
     type,
     timestamp: new Date().toISOString(),
     ...data,
   };
-  const body = JSON.stringify(payload);
 
   const [delivery] = await db
     .insert(webhookDeliveries)
     .values({ agentId: agent.id, type, payload })
     .returning();
 
+  // Hosted agents run in-process — no HTTP round-trip, nothing to sign.
+  if (agent.hosted) {
+    void (async () => {
+      try {
+        await runHostedEvent(db, agent, payload);
+        await db
+          .update(webhookDeliveries)
+          .set({ status: 'delivered', attempts: 1 })
+          .where(eq(webhookDeliveries.id, delivery.id));
+      } catch (err) {
+        await db
+          .update(webhookDeliveries)
+          .set({
+            status: 'failed',
+            attempts: 1,
+            lastError: err instanceof Error ? err.message : String(err),
+          })
+          .where(eq(webhookDeliveries.id, delivery.id));
+      }
+    })();
+    return;
+  }
+
+  if (!agent.webhookUrl) return;
+  const body = JSON.stringify(payload);
   void attempt(db, delivery.id, agent, body, 0);
 }
 

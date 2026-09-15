@@ -128,6 +128,14 @@ export const AgentConfig = z.object({
   system_prompt: z.string().optional(),
   knowledge: z.array(z.string()).optional(), // facts/snippets injected into the prompt
   tone: z.string().optional(),
+  // hosted agents only — per-agent LLM override (OpenAI-compatible)
+  llm: z
+    .object({
+      api_key: z.string().optional(),
+      base_url: z.string().optional(),
+      model: z.string().optional(),
+    })
+    .optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 
@@ -137,6 +145,7 @@ export const Agent = z.object({
   name: z.string(),
   webhook_url: z.string().nullable(),
   has_webhook_secret: z.boolean(),
+  hosted: z.boolean(), // Janis runs the agent in-process (no webhook needed)
   auto_resume_minutes: z.number().nullable(),
   config: AgentConfig,
   last_seen_at: z.string().nullable(), // last ingest event received

@@ -23,7 +23,7 @@ export async function requestSuggestion(
   conv: ConvRow,
   agent: AgentRow,
 ): Promise<{ mode: 'agent' } | { mode: 'llm'; suggestion: typeof suggestions.$inferSelect }> {
-  if (agent.webhookUrl) {
+  if (agent.webhookUrl || agent.hosted) {
     const recent = await db
       .select()
       .from(messages)

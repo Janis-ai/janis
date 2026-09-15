@@ -36,6 +36,7 @@ export function toAgent(row: Row<typeof agents>): Agent {
     name: row.name,
     webhook_url: row.webhookUrl,
     has_webhook_secret: Boolean(row.webhookSecret),
+    hosted: row.hosted,
     auto_resume_minutes: row.autoResumeMinutes,
     config: (row.config ?? {}) as AgentConfig,
     last_seen_at: iso(row.lastSeenAt),
