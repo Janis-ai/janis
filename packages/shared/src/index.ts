@@ -184,6 +184,7 @@ export const Channel = z.object({
     phone_number_id: z.string().optional(),
     verify_token: z.string(),
     via: z.enum(['oauth', 'manual']).optional(),
+    chat_url: z.string().optional(), // where a customer opens a chat with this channel
   }),
   created_at: z.string(),
 });

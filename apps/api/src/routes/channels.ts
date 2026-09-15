@@ -10,6 +10,7 @@ import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import {
   findChannelByObjectId,
   parseMetaWebhook,
+  resolveChatIdentity,
   verifyMetaSignature,
   type ChannelCredentials,
 } from '../lib/channels.js';
@@ -37,6 +38,7 @@ export function channelApiRoutes(db: Db) {
       .from(channels)
       .innerJoin(agents, eq(channels.agentId, agents.id))
       .where(eq(channels.workspaceId, c.get('workspaceId')));
+    await Promise.all(rows.map((r) => resolveChatIdentity(db, r.channel)));
     return c.json({ channels: rows.map((r) => toChannel(r.channel, r.agentName)) });
   });
 

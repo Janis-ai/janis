@@ -9,6 +9,8 @@ export interface ChannelCredentials {
   via?: 'oauth' | 'manual'; // how the channel was created
   page_id?: string; // messenger / instagram
   phone_number_id?: string; // whatsapp
+  username?: string; // instagram @handle — for ig.me links
+  phone_number?: string; // whatsapp display number (digits only) — for wa.me links
   access_token?: string;
   verify_token?: string;
 }
@@ -153,4 +155,48 @@ export async function findChannelByObjectId(db: Db, objectId: string) {
     const c = ch.credentials as ChannelCredentials;
     return c.page_id === objectId || c.phone_number_id === objectId;
   });
+}
+
+/** URL where a customer can open a chat with this channel's identity. */
+export function channelChatUrl(channel: ChannelRow): string | undefined {
+  const c = channel.credentials as ChannelCredentials;
+  if (channel.kind === 'messenger' && c.page_id) return `https://m.me/${c.page_id}`;
+  if (channel.kind === 'instagram' && c.username) return `https://ig.me/m/${c.username}`;
+  if (channel.kind === 'whatsapp' && c.phone_number) return `https://wa.me/${c.phone_number}`;
+  return undefined;
+}
+
+/**
+ * Backfill chat-link identifiers (IG username, WA display number) from the
+ * Graph API for channels created before they were stored. Persists on success.
+ */
+export async function resolveChatIdentity(db: Db, channel: ChannelRow): Promise<void> {
+  const creds = channel.credentials as ChannelCredentials;
+  if (!creds.access_token) return;
+  let fields = '';
+  if (channel.kind === 'instagram' && !creds.username) fields = 'username';
+  if (channel.kind === 'whatsapp' && !creds.phone_number) fields = 'display_phone_number';
+  if (!fields) return;
+  const id = creds.page_id ?? creds.phone_number_id;
+  if (!id) return;
+  try {
+    const res = await fetch(
+      `${GRAPH}/${id}?fields=${fields}&access_token=${creds.access_token}`,
+    );
+    if (!res.ok) return;
+    const data = (await res.json()) as { username?: string; display_phone_number?: string };
+    const next: ChannelCredentials = { ...creds };
+    if (data.username) next.username = data.username;
+    if (data.display_phone_number) {
+      next.phone_number = data.display_phone_number.replace(/\D/g, '');
+    }
+    if (next.username === creds.username && next.phone_number === creds.phone_number) return;
+    await db
+      .update(channels)
+      .set({ credentials: next })
+      .where(eq(channels.id, channel.id));
+    channel.credentials = next;
+  } catch {
+    // best-effort — link just won't render
+  }
 }

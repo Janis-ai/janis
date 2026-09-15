@@ -23,6 +23,7 @@ import type {
   suggestions,
   users,
 } from '../db/schema.js';
+import { channelChatUrl } from './channels.js';
 
 type Row<T> = T extends { $inferSelect: infer S } ? S : never;
 
@@ -135,6 +136,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
       phone_number_id: creds.phone_number_id,
       verify_token: creds.verify_token ?? '',
       via: creds.via === 'oauth' || creds.via === 'manual' ? creds.via : undefined,
+      chat_url: channelChatUrl(row),
     },
     created_at: iso(row.createdAt)!,
   };

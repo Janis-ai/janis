@@ -194,6 +194,9 @@ export function metaApiRoutes(db: Db) {
       if (!num) return c.json({ error: 'phone number not found in discovered assets' }, 400);
       name = num.display_phone_number ?? waba?.name ?? 'WhatsApp';
       credentials.phone_number_id = num.id;
+      if (num.display_phone_number) {
+        credentials.phone_number = num.display_phone_number.replace(/\D/g, '');
+      }
       // A user token scoped whatsapp_business_messaging can send; a system-user
       // token is more durable for production — can be swapped later.
       credentials.access_token = p.userToken;
@@ -221,6 +224,7 @@ export function metaApiRoutes(db: Db) {
         return c.json({ error: 'no Instagram business account linked to that page' }, 400);
       }
       credentials.page_id = page.instagram_business_account.id;
+      credentials.username = page.instagram_business_account.username;
       name = page.instagram_business_account.username
         ? `@${page.instagram_business_account.username}`
         : `IG (${page.name})`;

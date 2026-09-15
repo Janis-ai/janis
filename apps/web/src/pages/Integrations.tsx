@@ -202,6 +202,13 @@ export default function Integrations() {
             {ch.meta.page_id && <> · page {ch.meta.page_id}</>}
             {ch.meta.phone_number_id && <> · {ch.meta.phone_number_id}</>}
           </div>
+          {ch.meta.chat_url && (
+            <div style={{ marginTop: 6 }}>
+              <a href={ch.meta.chat_url} target="_blank" rel="noreferrer">
+                Open chat as a customer ↗
+              </a>
+            </div>
+          )}
           {ch.meta.via !== 'oauth' && (
           <details className="webhook-details">
             <summary>Webhook details</summary>
