@@ -1,8 +1,14 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAgents, useChannels } from '../api/hooks';
 import { Empty } from '../components/bits';
+
+interface PendingAssets {
+  pages: { id: string; name: string; instagram: { id: string; username?: string } | null }[];
+  whatsapp: { id: string; name?: string; phone_numbers: { id: string; display_phone_number?: string }[] }[];
+}
 
 const KINDS = [
   { value: 'messenger', label: 'Facebook Messenger', needs: 'page_id' },
@@ -19,6 +25,33 @@ export default function Integrations() {
   const { data } = useChannels();
   const { data: agents } = useAgents();
   const qc = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const connectId = params.get('meta_connect') ?? '';
+  const metaError = params.get('meta_error') ?? '';
+  const metaStatus = useQuery({
+    queryKey: ['meta-status'],
+    queryFn: () => api<{ configured: boolean }>('/api/meta/status'),
+    staleTime: Infinity,
+  });
+  const pending = useQuery({
+    queryKey: ['meta-pending', connectId],
+    queryFn: () => api<PendingAssets>(`/api/meta/pending?id=${connectId}`),
+    enabled: Boolean(connectId),
+    retry: false,
+  });
+  const [linkAgent, setLinkAgent] = useState('');
+  const link = useMutation({
+    mutationFn: (body: { kind: string; page_id?: string; phone_number_id?: string }) =>
+      api('/api/meta/link', {
+        method: 'POST',
+        body: JSON.stringify({ connect_id: connectId, agent_id: linkAgent, ...body }),
+      }),
+    onSuccess: () => {
+      setParams({});
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+    },
+    onError: (e) => setError(e.message),
+  });
   const [form, setForm] = useState({
     kind: 'messenger' as (typeof KINDS)[number]['value'],
     name: '',
@@ -86,6 +119,69 @@ export default function Integrations() {
       ))}
       {data && data.channels.length === 0 && (
         <Empty>No channels yet — connect Messenger, Instagram, or WhatsApp below.</Empty>
+      )}
+
+      {metaStatus.data?.configured && (
+        <div className="card">
+          <div className="row">
+            <strong className="grow">Connect with Meta</strong>
+            <a className="btn primary" href="/api/meta/connect">Connect Facebook</a>
+          </div>
+          <div className="muted" style={{ marginTop: 8 }}>
+            Authorize once — Janis lists your Pages, linked Instagram accounts, and WhatsApp
+            numbers, then subscribes the webhook for you.
+          </div>
+        </div>
+      )}
+
+      {metaError && <div className="error">Meta connect failed: {metaError}</div>}
+
+      {connectId && (
+        <div className="card">
+          <strong>Pick what to connect</strong>
+          {pending.isLoading && <div className="muted" style={{ marginTop: 8 }}>Loading discovered assets…</div>}
+          {pending.isError && <div className="error">Connect session expired — start again.</div>}
+          {pending.data && (
+            <>
+              <div className="row" style={{ marginTop: 10 }}>
+                <label>Agent:</label>
+                <select value={linkAgent} onChange={(e) => setLinkAgent(e.target.value)} className="grow">
+                  <option value="">Which agent answers?…</option>
+                  {agents?.agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </div>
+              {pending.data.pages.map((pg) => (
+                <div key={pg.id} className="row" style={{ marginTop: 10 }}>
+                  <span className="grow">{pg.name} <span className="muted">(page {pg.id})</span></span>
+                  <button className="btn" disabled={!linkAgent || link.isPending}
+                    onClick={() => link.mutate({ kind: 'messenger', page_id: pg.id })}>
+                    Messenger
+                  </button>
+                  {pg.instagram && (
+                    <button className="btn" disabled={!linkAgent || link.isPending}
+                      onClick={() => link.mutate({ kind: 'instagram', page_id: pg.id })}>
+                      Instagram {pg.instagram.username ? `@${pg.instagram.username}` : ''}
+                    </button>
+                  )}
+                </div>
+              ))}
+              {pending.data.whatsapp.flatMap((w) =>
+                w.phone_numbers.map((n) => (
+                  <div key={n.id} className="row" style={{ marginTop: 10 }}>
+                    <span className="grow">{n.display_phone_number ?? n.id} <span className="muted">(WhatsApp)</span></span>
+                    <button className="btn" disabled={!linkAgent || link.isPending}
+                      onClick={() => link.mutate({ kind: 'whatsapp', phone_number_id: n.id })}>
+                      WhatsApp
+                    </button>
+                  </div>
+                )),
+              )}
+              {pending.data.pages.length === 0 && pending.data.whatsapp.length === 0 && (
+                <Empty>No Pages or WhatsApp accounts found on that Meta login.</Empty>
+              )}
+            </>
+          )}
+        </div>
       )}
 
       <div className="card">

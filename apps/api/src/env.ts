@@ -23,5 +23,7 @@ export const env = {
     process.env.GOOGLE_REDIRECT_URI ?? `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/auth/google/callback`,
   slackRedirectUri:
     process.env.SLACK_REDIRECT_URI ?? `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/auth/slack/callback`,
-  metaAppSecret: process.env.META_APP_SECRET ?? '', // X-Hub-Signature-256 verification
+  metaAppId: process.env.META_APP_ID ?? '', // FB app id for OAuth connect flow
+  metaAppSecret: process.env.META_APP_SECRET ?? '', // OAuth exchange + X-Hub-Signature-256
+  metaVerifyToken: process.env.META_VERIFY_TOKEN ?? '',
 };

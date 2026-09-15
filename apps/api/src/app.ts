@@ -19,6 +19,7 @@ import { searchRoutes } from './routes/search.js';
 import { digestRoutes } from './routes/digests.js';
 import { slackApiRoutes, slackPublicRoutes } from './routes/slack.js';
 import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
+import { metaApiRoutes } from './routes/meta.js';
 
 export function createApp(db: Db) {
   const app = new Hono();
@@ -55,6 +56,7 @@ export function createApp(db: Db) {
   api.route('/digests', digestRoutes(db));
   api.route('/slack', slackApiRoutes(db));
   api.route('/channels', channelApiRoutes(db));
+  api.route('/meta', metaApiRoutes(db));
   app.route('/api', api);
 
   app.use('/uploads/*', serveStatic({ root: './' }));
