@@ -179,6 +179,17 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 5px
 .oauth-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin: 12px 0 2px; }
 .oauth-divider::before, .oauth-divider::after { content: ''; flex: 1; border-top: 1px solid var(--border); }
 
+.section-title { font-size: 15px; margin: 22px 0 10px; color: var(--muted); font-weight: 600; }
+.connect-card { border-color: var(--accent-dim); }
+.asset-list { margin-top: 10px; }
+.asset-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.webhook-details { margin-top: 8px; font-size: 12px; }
+details summary { cursor: pointer; color: var(--muted); }
+details summary:hover { color: var(--text); }
+
 @media (max-width: 720px) {
   .sidebar { width: 60px; }
   .sidebar .brand, .sidebar a { padding-left: 0; padding-right: 0; text-align: center; }
