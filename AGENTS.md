@@ -30,3 +30,12 @@ npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod)
 ## Gotchas
 - Do NOT run the API with .pglite inside an iCloud/Dropbox-synced dir — file sync corrupts the live DB. This repo is under iCloud Drive, so apps/api/.env sets PGLITE_DIR=~/.janis/pglite.
 - Only ONE tsx watch may run against a PGlite dir at a time; kill extras (pkill -f "tsx watch src/index.ts") before restarting.
+
+## Billing / Stripe
+
+- Plans live in apps/api/src/lib/plans.ts (base + included msgs + overage/1k; free hard-caps).
+- Stripe test-mode price ids (in apps/api/.env): starter price_1UFvvnLuGzRk7fCQB5zSxMWZ, pro price_1UFvvoLuGzRk7fCQTsX4GeVn, scale price_1UFvvoLuGzRk7fCQnnhu8cRp.
+- Stripe live-mode price ids (created, not yet wired): starter price_1UFwIBLuGzRk7fCQtDS4VRVM, pro price_1UFwIBLuGzRk7fCQVyL9qP6A, scale price_1UFwICLuGzRk7fCQtkVk4Tq7. For prod set STRIPE_SECRET_KEY=sk_live_… + these price ids.
+- Webhook endpoint https://janis.ai/billing/stripe-webhook is registered on both test and live; local dev uses `stripe listen --api-key $STRIPE_SECRET_KEY --forward-to localhost:8787/billing/stripe-webhook` (the whsec it prints goes in STRIPE_WEBHOOK_SECRET).
+- Customer Portal configured on both modes: card updates, invoice history, immediate cancel.
+- .env edits do NOT trigger tsx watch reloads — restart the API after changing env.
