@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, channels, usageEvents, workspaces } from '../db/schema.js';
 import { billingConfig, currentPeriod } from '../lib/billing.js';
@@ -223,22 +223,37 @@ export function stripeWebhookRoutes(db: Db) {
           })
           .where(eq(workspaces.id, wsId));
       }
-    } else if (event.type === 'customer.subscription.updated') {
+    } else if (
+      event.type === 'customer.subscription.created' ||
+      event.type === 'customer.subscription.updated'
+    ) {
       const sub = event.data.object;
       const priceId = sub.items.data[0]?.price.id ?? '';
       const plan = planForPrice(priceId);
+      const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
       if (plan) {
         await db
           .update(workspaces)
-          .set({ plan })
-          .where(eq(workspaces.stripeSubscriptionId, sub.id));
+          .set({ plan, stripeSubscriptionId: sub.id })
+          .where(
+            or(
+              eq(workspaces.stripeSubscriptionId, sub.id),
+              customerId ? eq(workspaces.stripeCustomerId, customerId) : undefined,
+            ),
+          );
       }
     } else if (event.type === 'customer.subscription.deleted') {
       const sub = event.data.object;
+      const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
       await db
         .update(workspaces)
         .set({ plan: 'free', stripeSubscriptionId: null })
-        .where(eq(workspaces.stripeSubscriptionId, sub.id));
+        .where(
+          or(
+            eq(workspaces.stripeSubscriptionId, sub.id),
+            customerId ? eq(workspaces.stripeCustomerId, customerId) : undefined,
+          ),
+        );
     }
 
     return c.json({ received: true });
