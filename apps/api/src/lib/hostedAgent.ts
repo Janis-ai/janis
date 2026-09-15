@@ -155,20 +155,30 @@ async function complete(
   let completionTokens = 0;
 
   for (let round = 0; round < 4; round++) {
-    const res = await fetch(`${llm.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${llm.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: llm.model,
-        max_tokens: 400,
-        messages: msgs,
-        ...(openaiTools ? { tools: openaiTools } : {}),
-      }),
-      signal: AbortSignal.timeout(20_000),
+    const body = JSON.stringify({
+      model: llm.model,
+      max_tokens: 400,
+      messages: msgs,
+      ...(openaiTools ? { tools: openaiTools } : {}),
     });
+    // One retry — a single timeout shouldn't hand a live conversation to a human
+    let res!: Response;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        res = await fetch(`${llm.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${llm.apiKey}`,
+          },
+          body,
+          signal: AbortSignal.timeout(25_000),
+        });
+        break;
+      } catch (err) {
+        if (attempt === 1) throw err;
+      }
+    }
     if (!res.ok) throw new Error(`LLM HTTP ${res.status}`);
     const json = (await res.json()) as {
       choices?: {

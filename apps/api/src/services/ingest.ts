@@ -53,8 +53,9 @@ export async function processEvents(
       if (message.text) {
         const label = message.direction === 'in' ? ':busts_in_silhouette: *user:*' : ':robot_face: *agent:*';
         void mirrorToSlack(db, conv.id, label, message.text);
-        // hosted channels: agent replies go straight to the end user
-        if (message.direction === 'out') void deliverToChannel(db, conv.id, message.text);
+        // hosted channels: agent replies go straight to the end user —
+        // never internal notes (failures/handoffs/alerts), which are also 'out'
+        if (event.type === 'message_out') void deliverToChannel(db, conv.id, message.text);
       }
     }
 
