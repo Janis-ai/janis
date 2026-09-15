@@ -34,8 +34,9 @@ export const env = {
       return undefined;
     }
   })(),
-  // USD cents — fixed monthly costs added to metered usage before margin
-  billingBaseCents: Number(process.env.BILLING_BASE_CENTS ?? 2900), // $29 infra share
+  // USD cents — per connected channel per month
   billingChannelCents: Number(process.env.BILLING_CHANNEL_CENTS ?? 1000), // $10/channel
   billingMargin: Number(process.env.BILLING_MARGIN ?? 0.2),
+  // plan assigned to new workspaces — 'free'|'starter'|'pro'|'scale'
+  defaultPlan: process.env.DEFAULT_PLAN ?? 'free',
 };

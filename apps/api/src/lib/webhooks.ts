@@ -1,9 +1,10 @@
 import type { OutboundWebhook, OutboundWebhookType } from '@janis/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, webhookDeliveries } from '../db/schema.js';
+import { agents, alerts, webhookDeliveries } from '../db/schema.js';
 import { signWebhookPayload } from './crypto.js';
 import { runHostedEvent } from './hostedAgent.js';
+import { messageCap } from './plans.js';
 
 const RETRY_DELAYS_MS = [0, 1_000, 5_000, 15_000];
 
@@ -21,6 +22,41 @@ export async function deliverWebhook(
   data: Omit<OutboundWebhook, 'type' | 'timestamp'>,
 ): Promise<void> {
   if (!agent.hosted && !agent.webhookUrl) return;
+
+  // Hard-capped plan (free tier over its included messages): the bot stops
+  // answering but messages still land in the inbox for a human to handle.
+  if (type === 'message.user') {
+    const cap = await messageCap(db, agent.workspaceId);
+    if (cap.capped) {
+      const detail = `Message cap reached on ${cap.plan.name} plan (${cap.used}/${cap.plan.includedMessages} this period)`;
+      const [delivery] = await db
+        .insert(webhookDeliveries)
+        .values({ agentId: agent.id, type, payload: { type, ...data } })
+        .returning();
+      await db
+        .update(webhookDeliveries)
+        .set({ status: 'failed', attempts: 1, lastError: detail })
+        .where(eq(webhookDeliveries.id, delivery.id));
+      const convId = (data as { janis_conversation_id?: string }).janis_conversation_id;
+      if (convId) {
+        const [existing] = await db
+          .select({ id: alerts.id })
+          .from(alerts)
+          .where(
+            and(
+              eq(alerts.conversationId, convId),
+              eq(alerts.type, 'custom'),
+              eq(alerts.status, 'open'),
+            ),
+          )
+          .limit(1);
+        if (!existing) {
+          await db.insert(alerts).values({ conversationId: convId, type: 'custom', detail });
+        }
+      }
+      return;
+    }
+  }
 
   const payload: OutboundWebhook = {
     type,

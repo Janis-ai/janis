@@ -64,6 +64,13 @@
       "when": 1789474114647,
       "tag": "0008_bizarre_gamora",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789475126494,
+      "tag": "0009_chilly_greymalkin",
+      "breakpoints": true
     }
   ]
 }

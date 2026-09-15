@@ -13,6 +13,7 @@ import {
 export const workspaces = pgTable('workspaces', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
+  plan: text('plan').notNull().default('free'), // key into PLANS rate map
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

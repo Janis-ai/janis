@@ -12,7 +12,10 @@ export async function ensureSeed(db: Db): Promise<void> {
   const [anyUser] = await db.select({ id: users.id }).from(users).limit(1);
   if (anyUser) return;
 
-  const [workspace] = await db.insert(workspaces).values({ name: 'Default' }).returning();
+  const [workspace] = await db
+    .insert(workspaces)
+    .values({ name: 'Default', plan: env.defaultPlan })
+    .returning();
   await db.insert(users).values({
     workspaceId: workspace.id,
     email: env.seedAdminEmail,

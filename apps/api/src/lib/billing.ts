@@ -40,12 +40,10 @@ export function currentPeriod(d = new Date()): string {
   return d.toISOString().slice(0, 7); // 'YYYY-MM'
 }
 
-/** Fixed-cost config, USD cents — tune via env as real costs become known. */
+/** Fixed-cost config, USD cents — plan base price lives in plans.ts. */
 export const billingConfig = {
-  // monthly infra share per workspace (server/db/bandwidth amortization)
-  baseCents: env.billingBaseCents,
   // monthly per connected channel
   channelCents: env.billingChannelCents,
-  // margin applied on top of (infra + metered usage)
+  // margin applied on top of pass-through LLM cost
   margin: env.billingMargin,
 };

@@ -84,7 +84,7 @@ export function authRoutes(db: Db) {
     if (existing) return existing;
     const [ws] = await db
       .insert(workspaces)
-      .values({ name: `${name || email.split('@')[0]}'s workspace` })
+      .values({ name: `${name || email.split('@')[0]}'s workspace`, plan: env.defaultPlan })
       .returning();
     const [user] = await db
       .insert(users)

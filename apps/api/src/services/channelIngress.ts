@@ -68,7 +68,7 @@ export async function handleChannelMessage(
   ]);
 
   // Forward to the agent only while it owns the conversation
-  if (result?.conversation_state === 'active' && agent.webhookUrl) {
+  if (result?.conversation_state === 'active' && (agent.webhookUrl || agent.hosted)) {
     await deliverWebhook(db, agent, 'message.user', {
       conversation_id: externalId,
       janis_conversation_id: conv.id,
