@@ -16,3 +16,18 @@ export function planForPrice(priceId: string): string | null {
   }
   return null;
 }
+
+export const METER_MESSAGES = 'janis.messages';
+export const METER_LLM_MICROS = 'janis.llm_micros';
+
+/** Fire-and-forget usage report. Never throws — metering must not break flows. */
+export function reportMeter(customerId: string | null | undefined, eventName: string, value: number): void {
+  const s = stripe();
+  if (!s || !customerId || value <= 0) return;
+  void s.billing.meterEvents
+    .create({
+      event_name: eventName,
+      payload: { stripe_customer_id: customerId, value: String(value) },
+    })
+    .catch(() => {});
+}

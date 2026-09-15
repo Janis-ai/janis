@@ -7,6 +7,7 @@ import {
   alerts,
   conversations,
   messages,
+  workspaces,
 } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
 import { notifyWorkspace } from '../lib/notify.js';
@@ -14,6 +15,7 @@ import { evaluateEvent } from '../lib/rules.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { deliverToChannel } from '../lib/channels.js';
 import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
+import { METER_MESSAGES, reportMeter } from '../lib/stripe.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -31,6 +33,14 @@ export async function processEvents(
   const results: IngestResult[] = [];
   await db.update(agents).set({ lastSeenAt: new Date() }).where(eq(agents.id, agent.id));
 
+  // Stripe customer for metered billing — resolved once per batch
+  const [ws] = await db
+    .select({ stripeCustomerId: workspaces.stripeCustomerId })
+    .from(workspaces)
+    .where(eq(workspaces.id, agent.workspaceId))
+    .limit(1);
+  const stripeCustomerId = ws?.stripeCustomerId;
+
   for (const event of events) {
     const conv = await findOrCreateConversation(db, agent, event);
     const alertIds: string[] = [];
@@ -38,6 +48,7 @@ export async function processEvents(
     // Store a message row for events that carry conversational content
     const message = await insertEventMessage(db, conv.id, event);
     if (message) {
+      reportMeter(stripeCustomerId, METER_MESSAGES, 1);
       bus.publish(agent.workspaceId, { type: 'message', data: toMessage(message) });
       if (message.text) {
         const label = message.direction === 'in' ? ':busts_in_silhouette: *user:*' : ':robot_face: *agent:*';

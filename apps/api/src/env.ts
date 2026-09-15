@@ -47,4 +47,11 @@ export const env = {
     pro: process.env.STRIPE_PRICE_PRO ?? '',
     scale: process.env.STRIPE_PRICE_SCALE ?? '',
   } as Record<string, string>,
+  // metered overage prices (graduated: included msgs free, then per-msg) + shared LLM meter
+  stripeMeterPrices: {
+    starter: process.env.STRIPE_METER_PRICE_STARTER ?? '',
+    pro: process.env.STRIPE_METER_PRICE_PRO ?? '',
+    scale: process.env.STRIPE_METER_PRICE_SCALE ?? '',
+    llm: process.env.STRIPE_METER_PRICE_LLM ?? '',
+  } as Record<string, string>,
 };

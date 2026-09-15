@@ -152,10 +152,17 @@ export function billingRoutes(db: Db) {
         .where(eq(workspaces.id, workspaceId));
     }
 
+    // metered items ride on the same subscription: graduated message overage
+    // + LLM pass-through; Stripe computes the bill from reported usage
+    const line_items: { price: string; quantity?: number }[] = [{ price: priceId, quantity: 1 }];
+    const meterPrice = env.stripeMeterPrices[plan];
+    if (meterPrice) line_items.push({ price: meterPrice });
+    if (env.stripeMeterPrices.llm) line_items.push({ price: env.stripeMeterPrices.llm });
+
     const session = await s.checkout.sessions.create({
       customer: customerId,
       mode: 'subscription',
-      line_items: [{ price: priceId, quantity: 1 }],
+      line_items,
       metadata: { workspace_id: workspaceId, plan },
       subscription_data: { metadata: { workspace_id: workspaceId, plan } },
       success_url: `${env.webOrigin}/billing?upgraded=1`,
