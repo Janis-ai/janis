@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useConversations } from '../api/hooks';
 import { Empty, StateBadge, timeAgo } from '../components/bits';
+import Onboarding from '../components/Onboarding';
 
 /** Live inbox: conversations needing a human or currently human-handled. */
 export default function Inbox() {
@@ -9,6 +10,7 @@ export default function Inbox() {
   return (
     <>
       <h1 className="page-title">Inbox</h1>
+      <Onboarding />
       {isLoading && <div className="muted">Loading…</div>}
       {data && data.conversations.length === 0 && (
         <Empty>No conversations need attention. When an agent fails or asks for help, it lands here.</Empty>
