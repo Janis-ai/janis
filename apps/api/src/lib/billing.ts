@@ -11,6 +11,7 @@ const RATE_CARD: Record<string, { input: number; output: number }> = {
   'o4-mini': { input: 1.1, output: 4.4 },
   'claude-sonnet-4-5': { input: 3, output: 15 },
   'claude-haiku-4-5': { input: 1, output: 5 },
+  'gemini-3.5-flash-lite': { input: 0.1, output: 0.4 }, // verify against actual Google pricing
   'gemini-2.5-flash-lite': { input: 0.1, output: 0.4 }, // before -flash: prefix match order matters
   'gemini-2.5-flash': { input: 0.3, output: 2.5 },
   'gemini-2.5-pro': { input: 1.25, output: 10 },
