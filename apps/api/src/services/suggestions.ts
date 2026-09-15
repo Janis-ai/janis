@@ -134,10 +134,11 @@ async function generateWithLlm(
     };
     const text = json.choices?.[0]?.message?.content?.trim();
     if (!text) return null;
+    // estimate chars/4 when the endpoint omits `usage` rather than billing zero
     return {
       text,
-      promptTokens: json.usage?.prompt_tokens ?? 0,
-      completionTokens: json.usage?.completion_tokens ?? 0,
+      promptTokens: json.usage?.prompt_tokens ?? Math.ceil(transcript.length / 4),
+      completionTokens: json.usage?.completion_tokens ?? Math.ceil(text.length / 4),
     };
   } catch {
     return null;

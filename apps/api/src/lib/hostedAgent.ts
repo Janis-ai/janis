@@ -72,11 +72,15 @@ async function complete(
     choices?: { message?: { content?: string } }[];
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
-  return {
-    text: json.choices?.[0]?.message?.content?.trim() ?? null,
-    promptTokens: json.usage?.prompt_tokens ?? 0,
-    completionTokens: json.usage?.completion_tokens ?? 0,
-  };
+  const text = json.choices?.[0]?.message?.content?.trim() ?? null;
+  // Some OpenAI-compatible endpoints omit `usage` — estimate chars/4 rather
+  // than bill zero
+  const promptTokens =
+    json.usage?.prompt_tokens ??
+    Math.ceil((system.length + history.reduce((n, m) => n + m.content.length, 0)) / 4);
+  const completionTokens =
+    json.usage?.completion_tokens ?? (text ? Math.ceil(text.length / 4) : 0);
+  return { text, promptTokens, completionTokens };
 }
 
 async function transcriptFor(db: Db, convId: string) {
