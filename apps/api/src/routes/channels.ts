@@ -116,9 +116,25 @@ export function channelWebhookRoutes(db: Db) {
       return c.text('invalid signature', 401);
     }
     const msgs = parseMetaWebhook(JSON.parse(raw));
+    let handled = 0;
     for (const msg of msgs) {
       const channel = await findChannelByObjectId(db, msg.objectId);
-      if (channel) await handleChannelMessage(db, channel, msg);
+      if (channel) {
+        await handleChannelMessage(db, channel, msg);
+        handled++;
+      }
+    }
+    // Legacy coexistence: while old and new Janis share the Meta app, relay
+    // events for pages we don't own to the old system (raw body + signature).
+    if (env.metaLegacyWebhookUrl && handled < msgs.length) {
+      fetch(env.metaLegacyWebhookUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-hub-signature-256': c.req.header('x-hub-signature-256') ?? '',
+        },
+        body: raw,
+      }).catch(() => {});
     }
     return c.json({ ok: true });
   });
