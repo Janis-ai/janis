@@ -25,6 +25,7 @@ export default function Layout() {
         <NavLink to="/agents"><span className="label">Agents</span><span className="icon">◈</span></NavLink>
         <NavLink to="/reports"><span className="label">Reports</span><span className="icon">◫</span></NavLink>
         <NavLink to="/integrations"><span className="label">Integrations</span><span className="icon">⇄</span></NavLink>
+        <NavLink to="/billing"><span className="label">Billing</span><span className="icon">$</span></NavLink>
         <NavLink to="/settings"><span className="label">Settings</span><span className="icon">⚙</span></NavLink>
         <div className="spacer" />
         <div className="user">

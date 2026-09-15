@@ -5,6 +5,7 @@ import { agents, conversations, messages } from '../db/schema.js';
 import { env } from '../env.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
+import { recordLlmUsage } from './usage.js';
 
 type AgentRow = typeof agents.$inferSelect;
 
@@ -44,12 +45,19 @@ function systemPrompt(agent: AgentRow): string {
   return parts.join('');
 }
 
+interface Completion {
+  text: string | null;
+  promptTokens: number;
+  completionTokens: number;
+}
+
 async function complete(
   llm: LlmSettings,
   system: string,
   history: { role: string; content: string }[],
-): Promise<string | null> {
-  if (!llm.apiKey) return null;
+): Promise<Completion> {
+  const empty = { text: null, promptTokens: 0, completionTokens: 0 };
+  if (!llm.apiKey) return empty;
   const res = await fetch(`${llm.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -60,8 +68,15 @@ async function complete(
     signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) throw new Error(`LLM HTTP ${res.status}`);
-  const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  return json.choices?.[0]?.message?.content?.trim() ?? null;
+  const json = (await res.json()) as {
+    choices?: { message?: { content?: string } }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
+  return {
+    text: json.choices?.[0]?.message?.content?.trim() ?? null,
+    promptTokens: json.usage?.prompt_tokens ?? 0,
+    completionTokens: json.usage?.completion_tokens ?? 0,
+  };
 }
 
 async function transcriptFor(db: Db, convId: string) {
@@ -93,8 +108,20 @@ export async function runHostedEvent(
   if (event.type === 'suggestion.request') {
     const convId = event.janis_conversation_id;
     if (!convId) return;
+    const llm = llmFor(agent);
     const history = await transcriptFor(db, convId);
-    const draft = await complete(llmFor(agent), systemPrompt(agent), history).catch(() => null);
+    const result = await complete(llm, systemPrompt(agent), history).catch(() => null);
+    if (result) {
+      await recordLlmUsage(db, {
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        conversationId: convId,
+        model: llm.model,
+        promptTokens: result.promptTokens,
+        completionTokens: result.completionTokens,
+      });
+    }
+    const draft = result?.text;
     const text =
       draft && !draft.includes('[HANDOFF]')
         ? draft
@@ -118,8 +145,23 @@ export async function runHostedEvent(
   const emit = (e: Parameters<typeof processEvents>[2]) => processEvents(db, agent, e);
 
   try {
+    const llm = llmFor(agent);
     const history = await transcriptFor(db, convId);
-    const reply = await complete(llmFor(agent), systemPrompt(agent), history);
+    const { text: reply, promptTokens, completionTokens } = await complete(
+      llm,
+      systemPrompt(agent),
+      history,
+    );
+    if (promptTokens || completionTokens) {
+      await recordLlmUsage(db, {
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        conversationId: convId,
+        model: llm.model,
+        promptTokens,
+        completionTokens,
+      });
+    }
     if (!reply) {
       await emit([
         { type: 'handoff_request', conversation_id: externalId, reason: 'no LLM configured or empty reply' },

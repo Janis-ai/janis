@@ -4,6 +4,7 @@ import { agents, conversations, messages, suggestions } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toSuggestion } from '../lib/serializers.js';
+import { recordLlmUsage } from '../lib/usage.js';
 import { env } from '../env.js';
 import type { users } from '../db/schema.js';
 import { TakeoverError } from './takeover.js';
@@ -40,7 +41,18 @@ export async function requestSuggestion(
     return { mode: 'agent' };
   }
 
-  const text = await generateWithLlm(db, conv);
+  const result = await generateWithLlm(db, conv);
+  if (result) {
+    await recordLlmUsage(db, {
+      workspaceId: agent.workspaceId,
+      agentId: agent.id,
+      conversationId: conv.id,
+      model: env.llmModel,
+      promptTokens: result.promptTokens,
+      completionTokens: result.completionTokens,
+    });
+  }
+  const text = result?.text;
   if (!text) {
     throw new TakeoverError(
       'no suggestion source — set the agent webhook_url or JANIS_LLM_API_KEY',
@@ -77,7 +89,10 @@ export async function storeSuggestion(
   return row;
 }
 
-async function generateWithLlm(db: Db, conv: ConvRow): Promise<string | null> {
+async function generateWithLlm(
+  db: Db,
+  conv: ConvRow,
+): Promise<{ text: string; promptTokens: number; completionTokens: number } | null> {
   if (!env.llmApiKey) return null;
   const recent = await db
     .select()
@@ -115,8 +130,15 @@ async function generateWithLlm(db: Db, conv: ConvRow): Promise<string | null> {
     if (!res.ok) return null;
     const json = (await res.json()) as {
       choices?: { message?: { content?: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
-    return json.choices?.[0]?.message?.content?.trim() ?? null;
+    const text = json.choices?.[0]?.message?.content?.trim();
+    if (!text) return null;
+    return {
+      text,
+      promptTokens: json.usage?.prompt_tokens ?? 0,
+      completionTokens: json.usage?.completion_tokens ?? 0,
+    };
   } catch {
     return null;
   }

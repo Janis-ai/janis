@@ -26,4 +26,16 @@ export const env = {
   metaAppId: process.env.META_APP_ID ?? '', // FB app id for OAuth connect flow
   metaAppSecret: process.env.META_APP_SECRET ?? '', // OAuth exchange + X-Hub-Signature-256
   metaVerifyToken: process.env.META_VERIFY_TOKEN ?? '',
+  // billing — custom rate card JSON {"model":{"input":n,"output":n}} ($/1M tokens)
+  llmPrices: (() => {
+    try {
+      return process.env.LLM_PRICES ? JSON.parse(process.env.LLM_PRICES) : undefined;
+    } catch {
+      return undefined;
+    }
+  })(),
+  // USD cents — fixed monthly costs added to metered usage before margin
+  billingBaseCents: Number(process.env.BILLING_BASE_CENTS ?? 2900), // $29 infra share
+  billingChannelCents: Number(process.env.BILLING_CHANNEL_CENTS ?? 1000), // $10/channel
+  billingMargin: Number(process.env.BILLING_MARGIN ?? 0.2),
 };

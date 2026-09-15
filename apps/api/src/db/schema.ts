@@ -243,6 +243,29 @@ export const channelBindings = pgTable(
   (t) => [uniqueIndex('channel_bindings_user').on(t.channelId, t.platformUserId)],
 );
 
+// billable usage — one row per metered event (LLM call, etc.)
+// cost is locked at write time so rate-card changes never rewrite history
+export const usageEvents = pgTable(
+  'usage_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    agentId: uuid('agent_id').references(() => agents.id),
+    conversationId: uuid('conversation_id').references(() => conversations.id),
+    kind: text('kind', { enum: ['llm_tokens'] }).notNull(),
+    model: text('model'),
+    promptTokens: integer('prompt_tokens').notNull().default(0),
+    completionTokens: integer('completion_tokens').notNull().default(0),
+    // USD * 1e6, from the rate card at write time
+    costMicros: integer('cost_micros').notNull().default(0),
+    period: text('period').notNull(), // 'YYYY-MM' for monthly rollups
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('usage_events_ws_period').on(t.workspaceId, t.period)],
+);
+
 export const webhookDeliveries = pgTable('webhook_deliveries', {
   id: uuid('id').primaryKey().defaultRandom(),
   agentId: uuid('agent_id')
