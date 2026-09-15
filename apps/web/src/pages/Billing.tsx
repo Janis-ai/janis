@@ -1,9 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 
 interface BillingSummary {
   period: string;
+  stripe_enabled: boolean;
+  plans: {
+    key: string;
+    name: string;
+    base_cents: number;
+    included_messages: number;
+    overage_per_1k_cents: number | null;
+    purchasable: boolean;
+  }[];
   plan: {
     key: string;
     name: string;
@@ -37,10 +46,42 @@ const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 export default function Billing() {
   const [period, setPeriod] = useState(() => new Date().toISOString().slice(0, 7));
+  const [error, setError] = useState('');
+  const [upgraded, setUpgraded] = useState(
+    () => new URLSearchParams(window.location.search).has('upgraded'),
+  );
   const { data } = useQuery({
     queryKey: ['billing', period],
     queryFn: () => api<BillingSummary>(`/api/billing/summary?period=${period}`),
+    refetchInterval: upgraded ? 3000 : false, // poll until the webhook lands
   });
+
+  useEffect(() => {
+    if (data && upgraded && data.plan.key !== 'free') setUpgraded(false);
+  }, [data, upgraded]);
+
+  const checkout = async (plan: string) => {
+    setError('');
+    try {
+      const r = await api<{ url: string }>('/api/billing/checkout', {
+        method: 'POST',
+        body: JSON.stringify({ plan }),
+      });
+      window.location.href = r.url;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'checkout failed');
+    }
+  };
+
+  const portal = async () => {
+    setError('');
+    try {
+      const r = await api<{ url: string }>('/api/billing/portal', { method: 'POST' });
+      window.location.href = r.url;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'portal failed');
+    }
+  };
 
   const pct = data ? Math.min(100, (data.messages.used / data.messages.included) * 100) : 0;
 
@@ -56,8 +97,72 @@ export default function Billing() {
         />
       </div>
 
+      {upgraded && data?.plan.key === 'free' && (
+        <div className="card muted">Checkout complete — waiting for Stripe to confirm…</div>
+      )}
+      {error && <div className="error">{error}</div>}
+
       {data && (
         <>
+          <div className="card">
+            <h3 style={{ marginTop: 0 }}>Plan</h3>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(${data.plans.length}, 1fr)`,
+                gap: 10,
+              }}
+            >
+              {data.plans.map((p) => {
+                const current = p.key === data.plan.key;
+                return (
+                  <div
+                    key={p.key}
+                    style={{
+                      border: `1px solid ${current ? 'var(--accent)' : 'var(--border)'}`,
+                      borderRadius: 8,
+                      padding: 12,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700 }}>{p.name}</div>
+                    <div className="mono" style={{ fontSize: 20, margin: '4px 0' }}>
+                      {usd(p.base_cents)}<span className="muted" style={{ fontSize: 12 }}>/mo</span>
+                    </div>
+                    <div className="muted" style={{ fontSize: 13 }}>
+                      {p.included_messages.toLocaleString()} messages/mo
+                      <br />
+                      {p.overage_per_1k_cents === null
+                        ? 'hard cap beyond limit'
+                        : `${usd(p.overage_per_1k_cents)}/1k over`}
+                    </div>
+                    {current ? (
+                      <div className="muted" style={{ marginTop: 10 }}>Current plan</div>
+                    ) : p.key === 'free' ? (
+                      <div className="muted" style={{ marginTop: 10 }}>—</div>
+                    ) : p.purchasable ? (
+                      <button
+                        className="btn primary"
+                        style={{ marginTop: 10 }}
+                        onClick={() => void checkout(p.key)}
+                      >
+                        {data.plan.base_cents < p.base_cents ? 'Upgrade' : 'Switch'}
+                      </button>
+                    ) : (
+                      <div className="muted" style={{ marginTop: 10 }}>Contact us</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {data.stripe_enabled && (
+              <div style={{ marginTop: 12 }}>
+                <button className="btn" onClick={() => void portal()}>
+                  Manage payment method &amp; invoices
+                </button>
+              </div>
+            )}
+          </div>
+
           <div className="card">
             <div className="row" style={{ alignItems: 'baseline' }}>
               <h3 className="grow" style={{ marginTop: 0 }}>

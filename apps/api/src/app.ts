@@ -21,7 +21,7 @@ import { slackApiRoutes, slackPublicRoutes } from './routes/slack.js';
 import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 import { metaApiRoutes } from './routes/meta.js';
 import { onboardingRoutes } from './routes/onboarding.js';
-import { billingRoutes } from './routes/billing.js';
+import { billingRoutes, stripeWebhookRoutes } from './routes/billing.js';
 
 export function createApp(db: Db) {
   const app = new Hono();
@@ -43,6 +43,7 @@ export function createApp(db: Db) {
   app.route('/auth', authRoutes(db));
   app.route('/slack', slackPublicRoutes(db)); // Slack-signed (oauth/events/interactions)
   app.route('/channels', channelWebhookRoutes(db)); // Meta webhooks (app-secret signed)
+  app.route('/billing/stripe-webhook', stripeWebhookRoutes(db)); // Stripe-signed
 
   const api = new Hono();
   api.route('/agents', agentRoutes(db));

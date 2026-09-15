@@ -39,4 +39,12 @@ export const env = {
   billingMargin: Number(process.env.BILLING_MARGIN ?? 0.2),
   // plan assigned to new workspaces — 'free'|'starter'|'pro'|'scale'
   defaultPlan: process.env.DEFAULT_PLAN ?? 'free',
+  // Stripe — plan selection happens in-app, payment collection on Stripe-hosted pages
+  stripeSecret: process.env.STRIPE_SECRET_KEY ?? '',
+  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? '',
+  stripePrices: {
+    starter: process.env.STRIPE_PRICE_STARTER ?? '',
+    pro: process.env.STRIPE_PRICE_PRO ?? '',
+    scale: process.env.STRIPE_PRICE_SCALE ?? '',
+  } as Record<string, string>,
 };

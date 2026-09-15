@@ -4,6 +4,8 @@ import type { Db } from '../db/client.js';
 import { agents, channels, usageEvents, workspaces } from '../db/schema.js';
 import { billingConfig, currentPeriod } from '../lib/billing.js';
 import { messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
+import { planForPrice, stripe } from '../lib/stripe.js';
+import { env } from '../env.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
 export function billingRoutes(db: Db) {
@@ -61,6 +63,15 @@ export function billingRoutes(db: Db) {
 
     return c.json({
       period,
+      stripe_enabled: Boolean(env.stripeSecret),
+      plans: Object.entries(PLANS).map(([key, p]) => ({
+        key,
+        name: p.name,
+        base_cents: p.baseCents,
+        included_messages: p.includedMessages,
+        overage_per_1k_cents: p.overagePer1kCents,
+        purchasable: Boolean(env.stripePrices[key]),
+      })),
       plan: {
         key: ws?.plan ?? 'free',
         name: plan.name,
@@ -101,7 +112,7 @@ export function billingRoutes(db: Db) {
     });
   });
 
-  // PATCH /api/billing/plan {plan} — admin-only; Stripe checkout takes over later
+  // PATCH /api/billing/plan {plan} — admin-only override (support/dev tool)
   app.patch('/plan', async (c) => {
     if (c.get('user').role !== 'admin') return c.json({ error: 'admin only' }, 403);
     const { plan } = (await c.req.json()) as { plan?: string };
@@ -113,6 +124,124 @@ export function billingRoutes(db: Db) {
       .set({ plan })
       .where(eq(workspaces.id, c.get('workspaceId')));
     return c.json({ plan });
+  });
+
+  // POST /api/billing/checkout {plan} → Stripe Checkout Session URL
+  app.post('/checkout', async (c) => {
+    const s = stripe();
+    if (!s) return c.json({ error: 'billing not configured' }, 400);
+    const { plan } = (await c.req.json()) as { plan?: string };
+    const priceId = plan ? env.stripePrices[plan] : '';
+    if (!plan || !PLANS[plan] || !priceId) {
+      return c.json({ error: 'unknown or unavailable plan' }, 400);
+    }
+    const workspaceId = c.get('workspaceId');
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
+
+    let customerId = ws?.stripeCustomerId ?? undefined;
+    if (!customerId) {
+      const customer = await s.customers.create({
+        email: c.get('user').email,
+        name: ws?.name,
+        metadata: { workspace_id: workspaceId },
+      });
+      customerId = customer.id;
+      await db
+        .update(workspaces)
+        .set({ stripeCustomerId: customerId })
+        .where(eq(workspaces.id, workspaceId));
+    }
+
+    const session = await s.checkout.sessions.create({
+      customer: customerId,
+      mode: 'subscription',
+      line_items: [{ price: priceId, quantity: 1 }],
+      metadata: { workspace_id: workspaceId, plan },
+      subscription_data: { metadata: { workspace_id: workspaceId, plan } },
+      success_url: `${env.webOrigin}/billing?upgraded=1`,
+      cancel_url: `${env.webOrigin}/billing`,
+    });
+    return c.json({ url: session.url });
+  });
+
+  // POST /api/billing/portal → Stripe Customer Portal URL (cards, invoices, cancel)
+  app.post('/portal', async (c) => {
+    const s = stripe();
+    if (!s) return c.json({ error: 'billing not configured' }, 400);
+    const workspaceId = c.get('workspaceId');
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
+    if (!ws?.stripeCustomerId) {
+      return c.json({ error: 'no billing account yet — pick a plan first' }, 400);
+    }
+    const session = await s.billingPortal.sessions.create({
+      customer: ws.stripeCustomerId,
+      return_url: `${env.webOrigin}/billing`,
+    });
+    return c.json({ url: session.url });
+  });
+
+  return app;
+}
+
+/**
+ * Public Stripe webhook — signature-verified, no session. Mounted at
+ * /billing/stripe-webhook (outside /api).
+ */
+export function stripeWebhookRoutes(db: Db) {
+  const app = new Hono();
+
+  app.post('/', async (c) => {
+    const s = stripe();
+    if (!s || !env.stripeWebhookSecret) return c.json({ error: 'not configured' }, 400);
+    const body = await c.req.text();
+    let event;
+    try {
+      event = s.webhooks.constructEvent(
+        body,
+        c.req.header('stripe-signature') ?? '',
+        env.stripeWebhookSecret,
+      );
+    } catch {
+      return c.json({ error: 'bad signature' }, 400);
+    }
+
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      const wsId = session.metadata?.workspace_id;
+      const plan = session.metadata?.plan;
+      if (wsId && plan && PLANS[plan]) {
+        await db
+          .update(workspaces)
+          .set({
+            plan,
+            stripeCustomerId:
+              typeof session.customer === 'string' ? session.customer : session.customer?.id,
+            stripeSubscriptionId:
+              typeof session.subscription === 'string'
+                ? session.subscription
+                : session.subscription?.id,
+          })
+          .where(eq(workspaces.id, wsId));
+      }
+    } else if (event.type === 'customer.subscription.updated') {
+      const sub = event.data.object;
+      const priceId = sub.items.data[0]?.price.id ?? '';
+      const plan = planForPrice(priceId);
+      if (plan) {
+        await db
+          .update(workspaces)
+          .set({ plan })
+          .where(eq(workspaces.stripeSubscriptionId, sub.id));
+      }
+    } else if (event.type === 'customer.subscription.deleted') {
+      const sub = event.data.object;
+      await db
+        .update(workspaces)
+        .set({ plan: 'free', stripeSubscriptionId: null })
+        .where(eq(workspaces.stripeSubscriptionId, sub.id));
+    }
+
+    return c.json({ received: true });
   });
 
   return app;
