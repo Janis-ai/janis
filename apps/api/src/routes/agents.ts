@@ -33,7 +33,8 @@ export function agentRoutes(db: Db) {
     const rows = await db
       .select()
       .from(agents)
-      .where(eq(agents.workspaceId, c.get('workspaceId')));
+      .where(eq(agents.workspaceId, c.get('workspaceId')))
+      .orderBy(desc(agents.createdAt));
     return c.json({ agents: rows.map(toAgent) });
   });
 
