@@ -107,9 +107,12 @@ export default function Integrations() {
 
   const hasAssets =
     pending.data && (pending.data.pages.length > 0 || pending.data.whatsapp.length > 0);
-  const linkedIds = new Set(
+  // Map a discovered asset id (page / ig account / phone_number_id) to its channel.
+  const linkedChannels = new Map(
     (data?.channels ?? []).flatMap((ch) =>
-      [ch.meta.page_id, ch.meta.phone_number_id].filter((v): v is string => Boolean(v)),
+      [ch.meta.page_id, ch.meta.phone_number_id]
+        .filter((v): v is string => Boolean(v))
+        .map((v) => [v, ch.id] as const),
     ),
   );
 
@@ -166,8 +169,11 @@ export default function Integrations() {
                       <strong>{pg.name}</strong>
                       <div className="muted">Facebook Page</div>
                     </div>
-                    {linkedIds.has(pg.id) ? (
-                      <span className="badge active">Connected</span>
+                    {linkedChannels.has(pg.id) ? (
+                      <button className="btn danger" disabled={remove.isPending}
+                        onClick={() => remove.mutate(linkedChannels.get(pg.id)!)}>
+                        Remove Messenger
+                      </button>
                     ) : (
                       <button className="btn" disabled={!linkAgent || link.isPending}
                         onClick={() => link.mutate({ kind: 'messenger', page_id: pg.id })}>
@@ -175,8 +181,11 @@ export default function Integrations() {
                       </button>
                     )}
                     {pg.instagram && (
-                      linkedIds.has(pg.instagram.id) ? (
-                        <span className="badge active">IG Connected</span>
+                      linkedChannels.has(pg.instagram.id) ? (
+                        <button className="btn danger" disabled={remove.isPending}
+                          onClick={() => remove.mutate(linkedChannels.get(pg.instagram!.id)!)}>
+                          Remove Instagram
+                        </button>
                       ) : (
                         <button className="btn" disabled={!linkAgent || link.isPending}
                           onClick={() => link.mutate({ kind: 'instagram', page_id: pg.id })}>
@@ -193,8 +202,11 @@ export default function Integrations() {
                         <strong>{n.display_phone_number ?? n.id}</strong>
                         <div className="muted">WhatsApp Business{w.name ? ` · ${w.name}` : ''}</div>
                       </div>
-                      {linkedIds.has(n.id) ? (
-                        <span className="badge active">Connected</span>
+                      {linkedChannels.has(n.id) ? (
+                        <button className="btn danger" disabled={remove.isPending}
+                          onClick={() => remove.mutate(linkedChannels.get(n.id)!)}>
+                          Remove WhatsApp
+                        </button>
                       ) : (
                         <button className="btn" disabled={!linkAgent || link.isPending}
                           onClick={() => link.mutate({ kind: 'whatsapp', phone_number_id: n.id })}>
