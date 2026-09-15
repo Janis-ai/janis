@@ -40,3 +40,12 @@ npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod)
 - Customer Portal configured on both modes: card updates, invoice history, immediate cancel.
 - Meters (both modes): janis.messages (1 per stored message) and janis.llm_micros (billed micro-USD incl. margin per LLM call). Metered prices: test starter/pro/scale = price_1UFwMP…gq7Q/…XxYp/…HBJcnK, llm = price_1UFwMQ…C8tOE; live starter/pro/scale = price_1UFwMR…HYZq/…Zjls/…TkO, llm = price_1UFwMT…ion8. Checkout adds the plan's metered price + LLM price as extra line items.
 - .env edits do NOT trigger tsx watch reloads — restart the API after changing env.
+
+## Deploy (Cloud Run)
+
+`./scripts/deploy-gcp.sh` — Cloud Build → gcr.io/jottogame/janis-api → Cloud Run
+service `janis-api` (us-east1), serving web+API same-origin at
+https://janis-api-1090022080491.us-east1.run.app. PGlite data persists on GCS
+bucket janis-data-jottogame via FUSE mount at /app/data (demo-grade — use
+DATABASE_URL + managed Postgres for real load; keep --max-instances 1 with
+PGlite: single writer only).
