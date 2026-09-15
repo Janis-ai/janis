@@ -143,12 +143,37 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 5px
   .conv-side { width: 100%; }
 }
 
-.login-wrap { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-.login-card { width: 340px; }
-.login-card h1 { color: var(--accent); text-align: center; }
-.oauth-buttons { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; }
-.oauth-buttons .btn { width: 100%; text-align: center; text-decoration: none; }
-.oauth-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin: 8px 0; }
+.login-wrap {
+  display: flex; align-items: center; justify-content: center; min-height: 100vh;
+  background:
+    radial-gradient(600px 400px at 50% -10%, rgba(94, 234, 212, 0.08), transparent),
+    var(--bg);
+}
+.login-card {
+  width: 380px; padding: 32px 28px 28px; border-radius: 14px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.45);
+}
+.login-brand { text-align: center; margin-bottom: 22px; }
+.login-brand h1 { color: var(--accent); margin: 0 0 4px; font-size: 30px; letter-spacing: -0.5px; }
+.login-brand p { margin: 0; font-size: 13px; }
+.login-card label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+.login-card input {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: 10px 12px; transition: border-color 0.15s, box-shadow 0.15s;
+}
+.login-card input:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(94, 234, 212, 0.12);
+}
+.oauth-buttons { display: flex; flex-direction: column; gap: 10px; }
+.oauth-btn {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  width: 100%; padding: 10px 14px; font-weight: 500; text-decoration: none;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.oauth-btn:hover { background: #252a3a; border-color: #3a4156; }
+.oauth-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin: 12px 0 2px; }
 .oauth-divider::before, .oauth-divider::after { content: ''; flex: 1; border-top: 1px solid var(--border); }
 
 @media (max-width: 720px) {
