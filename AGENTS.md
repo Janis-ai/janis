@@ -26,3 +26,7 @@ npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod)
 - SSE check needs an existing conversation to trigger a bus event.
 - Slack features need SLACK_CLIENT_ID/SECRET/SIGNING_SECRET + a public API URL.
 - Devin preview proxies :5173 — API CORS echoes localhost/127.0.0.1 origins.
+
+## Gotchas
+- Do NOT run the API with .pglite inside an iCloud/Dropbox-synced dir — file sync corrupts the live DB. This repo is under iCloud Drive, so apps/api/.env sets PGLITE_DIR=~/.janis/pglite.
+- Only ONE tsx watch may run against a PGlite dir at a time; kill extras (pkill -f "tsx watch src/index.ts") before restarting.
