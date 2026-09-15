@@ -183,6 +183,7 @@ export const Channel = z.object({
     page_id: z.string().optional(),
     phone_number_id: z.string().optional(),
     verify_token: z.string(),
+    via: z.enum(['oauth', 'manual']).optional(),
   }),
   created_at: z.string(),
 });

@@ -122,6 +122,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     page_id?: string;
     phone_number_id?: string;
     verify_token?: string;
+    via?: string;
   };
   return {
     id: row.id,
@@ -133,6 +134,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
       page_id: creds.page_id,
       phone_number_id: creds.phone_number_id,
       verify_token: creds.verify_token ?? '',
+      via: creds.via === 'oauth' || creds.via === 'manual' ? creds.via : undefined,
     },
     created_at: iso(row.createdAt)!,
   };

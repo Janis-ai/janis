@@ -184,6 +184,7 @@ export function metaApiRoutes(db: Db) {
     let name = '';
     let pageToken = '';
     const credentials: ChannelCredentials = {
+      via: 'oauth',
       verify_token: env.metaVerifyToken || randomBytes(16).toString('hex'),
     };
 

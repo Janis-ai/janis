@@ -202,6 +202,7 @@ export default function Integrations() {
             {ch.meta.page_id && <> · page {ch.meta.page_id}</>}
             {ch.meta.phone_number_id && <> · {ch.meta.phone_number_id}</>}
           </div>
+          {ch.meta.via !== 'oauth' && (
           <details className="webhook-details">
             <summary>Webhook details</summary>
             <div className="mono" style={{ marginTop: 6 }}>
@@ -209,6 +210,7 @@ export default function Integrations() {
               <div>Verify token: {ch.meta.verify_token}</div>
             </div>
           </details>
+          )}
         </div>
       ))}
       {data && data.channels.length === 0 && !connectId && (

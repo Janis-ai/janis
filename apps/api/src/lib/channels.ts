@@ -6,6 +6,7 @@ import { channelBindings, channels } from '../db/schema.js';
 type ChannelRow = typeof channels.$inferSelect;
 
 export interface ChannelCredentials {
+  via?: 'oauth' | 'manual'; // how the channel was created
   page_id?: string; // messenger / instagram
   phone_number_id?: string; // whatsapp
   access_token?: string;
