@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
@@ -65,6 +68,23 @@ export function createApp(db: Db) {
   app.route('/api', api);
 
   app.use('/uploads/*', serveStatic({ root: './' }));
+
+  // Single-origin deploys: serve the built web app when present
+  // (src/app.ts and dist/app.js both resolve to apps/web/dist).
+  const webDist = fileURLToPath(new URL('../../web/dist', import.meta.url));
+  const indexHtml = existsSync(join(webDist, 'index.html'))
+    ? readFileSync(join(webDist, 'index.html'), 'utf8')
+    : null;
+  if (indexHtml) {
+    app.use('/*', serveStatic({ root: webDist }));
+    app.get('*', (c) => {
+      // Unknown API-ish paths should 404, not render the SPA
+      if (/^\/(api|auth|v1|channels|slack|billing|uploads)(\/|$)/.test(c.req.path)) {
+        return c.notFound();
+      }
+      return c.html(indexHtml);
+    });
+  }
 
   return app;
 }

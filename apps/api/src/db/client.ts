@@ -1,6 +1,10 @@
+import { fileURLToPath } from 'node:url';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
 import { env } from '../env.js';
 import * as schema from './schema.js';
+
+// src/db/client.ts → apps/api/drizzle (dev); dist/db/client.js → same (prod)
+const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 
 // Two drivers, one schema: real Postgres via DATABASE_URL in production,
 // embedded PGlite for zero-install local development. The db generic only
@@ -21,9 +25,9 @@ export async function createDb(): Promise<Db> {
 export async function migrateDb(db: Db) {
   if (env.databaseUrl) {
     const { migrate } = await import('drizzle-orm/postgres-js/migrator');
-    await migrate(db as never, { migrationsFolder: './drizzle' });
+    await migrate(db as never, { migrationsFolder: MIGRATIONS });
   } else {
     const { migrate } = await import('drizzle-orm/pglite/migrator');
-    await migrate(db as never, { migrationsFolder: './drizzle' });
+    await migrate(db as never, { migrationsFolder: MIGRATIONS });
   }
 }

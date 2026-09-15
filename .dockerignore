@@ -1,0 +1,10 @@
+node_modules
+**/node_modules
+**/dist
+**/.pglite
+.pglite
+.env
+**/.env
+*.log
+.git
+scripts/data
