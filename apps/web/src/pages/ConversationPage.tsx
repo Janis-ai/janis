@@ -26,7 +26,9 @@ export default function ConversationPage() {
   const invalidate = useInvalidateConversations();
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), [data?.messages.length]);
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [data?.messages.length]);
 
   const refresh = () => {
     invalidate();
