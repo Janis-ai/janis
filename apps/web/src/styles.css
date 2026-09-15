@@ -167,11 +167,13 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 5px
 }
 .oauth-buttons { display: flex; flex-direction: column; gap: 10px; }
 .oauth-btn {
-  display: flex; align-items: center; justify-content: center; gap: 10px;
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
   width: 100%; padding: 10px 14px; font-weight: 500; text-decoration: none;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
   transition: background 0.15s, border-color 0.15s;
 }
+.oauth-btn svg { position: absolute; left: 14px; }
 .oauth-btn:hover { background: #252a3a; border-color: #3a4156; }
 .oauth-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin: 12px 0 2px; }
 .oauth-divider::before, .oauth-divider::after { content: ''; flex: 1; border-top: 1px solid var(--border); }
