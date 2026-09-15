@@ -228,7 +228,7 @@ export default function ConversationPage() {
           <div className="muted" style={{ marginTop: 8 }}>
             <div>Agent: {agent?.name ?? '—'}</div>
             <div>User id: {c.external_id}</div>
-            {Object.entries(c.user_profile).map(([k, v]) =>
+            {Object.entries(c.user_profile ?? {}).map(([k, v]) =>
               k === 'metadata' ? null : (
                 <div key={k}>{k}: {String(v)}</div>
               ),

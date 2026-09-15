@@ -22,7 +22,7 @@ export default function Inbox() {
           <div className="who">
             <div className={`name ${c.is_unread ? 'unread' : ''}`}>
               {c.is_starred && '⭐ '}
-              {(c.user_profile.name as string) ?? c.external_id}
+              {(c.user_profile?.name as string) ?? c.external_id}
             </div>
             <div className="preview">{c.last_message_preview}</div>
           </div>

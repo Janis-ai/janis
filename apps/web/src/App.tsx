@@ -20,6 +20,16 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
+  componentDidCatch(error: Error, info: { componentStack?: string }) {
+    console.error(error, info.componentStack);
+    const params = new URLSearchParams({
+      msg: error.message,
+      stack: (error.stack ?? '').slice(0, 1500),
+      comp: (info.componentStack ?? '').slice(0, 500),
+      at: window.location.pathname,
+    });
+    fetch(`/api/__client_error?${params}`).catch(() => {});
+  }
   render() {
     if (this.state.error) {
       return (
