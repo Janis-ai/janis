@@ -23,7 +23,7 @@ export const users = pgTable('users', {
     .references(() => workspaces.id),
   email: text('email').notNull().unique(),
   name: text('name').notNull(),
-  passwordHash: text('password_hash').notNull(),
+  passwordHash: text('password_hash'), // null for OAuth-only accounts
   role: text('role', { enum: ['admin', 'member'] }).notNull().default('member'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

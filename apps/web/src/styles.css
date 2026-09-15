@@ -146,6 +146,10 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 5px
 .login-wrap { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
 .login-card { width: 340px; }
 .login-card h1 { color: var(--accent); text-align: center; }
+.oauth-buttons { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; }
+.oauth-buttons .btn { width: 100%; text-align: center; text-decoration: none; }
+.oauth-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin: 8px 0; }
+.oauth-divider::before, .oauth-divider::after { content: ''; flex: 1; border-top: 1px solid var(--border); }
 
 @media (max-width: 720px) {
   .sidebar { width: 60px; }
