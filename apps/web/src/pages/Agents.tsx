@@ -180,6 +180,10 @@ function AgentCard({
   const [keywords, setKeywords] = useState('');
   const [minutes, setMinutes] = useState('15');
   const [cfg, setCfg] = useState<AgentConfig>(agent.config ?? {});
+  const [toolsJson, setToolsJson] = useState(() =>
+    agent.config?.tools ? JSON.stringify(agent.config.tools, null, 2) : '',
+  );
+  const [toolsError, setToolsError] = useState('');
   const [showDeliveries, setShowDeliveries] = useState(false);
   const [testMsg, setTestMsg] = useState('');
   const navigate = useNavigate();
@@ -312,6 +316,24 @@ function AgentCard({
           />
           {agent.hosted && (
             <>
+              <label>Tools — client APIs the agent can call (JSON array, GET/POST, {'{param}'} URL placeholders)</label>
+              <textarea
+                rows={4}
+                className="mono"
+                placeholder={'[\n  {\n    "name": "lookup_order",\n    "description": "Look up an order in our POS by order number",\n    "method": "GET",\n    "url": "https://api.acme-pos.com/orders/{order_id}",\n    "headers": { "authorization": "Bearer …" },\n    "params": { "order_id": "the order number the user gave" }\n  }\n]'}
+                value={toolsJson}
+                onChange={(e) => setToolsJson(e.target.value)}
+                onBlur={() => {
+                  try {
+                    const parsed = toolsJson.trim() ? JSON.parse(toolsJson) : undefined;
+                    setCfg({ ...cfg, tools: parsed });
+                    setToolsError('');
+                  } catch {
+                    setToolsError('invalid JSON — not saved until it parses');
+                  }
+                }}
+              />
+              {toolsError && <div className="error">{toolsError}</div>}
               <label>LLM (OpenAI-compatible — leave blank to use server env)</label>
               <input
                 placeholder="API key (sk-…)"

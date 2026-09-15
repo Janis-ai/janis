@@ -136,6 +136,22 @@ export const AgentConfig = z.object({
       model: z.string().optional(),
     })
     .optional(),
+  // hosted agents only — client systems the agent can call (POS/CRM/etc).
+  // url may contain {param} placeholders filled from tool-call args.
+  tools: z
+    .array(
+      z.object({
+        name: z.string(),
+        description: z.string(),
+        method: z.enum(['GET', 'POST']).default('GET'),
+        url: z.string(),
+        // static headers (auth etc.) — secrets stay server-side
+        headers: z.record(z.string(), z.string()).optional(),
+        // JSON-schema-ish params the model fills: {order_id: 'order number'}
+        params: z.record(z.string(), z.string()).optional(),
+      }),
+    )
+    .optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 

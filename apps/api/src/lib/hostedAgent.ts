@@ -45,42 +45,166 @@ function systemPrompt(agent: AgentRow): string {
   return parts.join('');
 }
 
+interface ToolDef {
+  name: string;
+  description: string;
+  method: 'GET' | 'POST';
+  url: string;
+  headers?: Record<string, string>;
+  params?: Record<string, string>;
+}
+
+function toolsFor(agent: AgentRow): ToolDef[] {
+  const cfg = (agent.config ?? {}) as { tools?: ToolDef[] };
+  return (cfg.tools ?? []).filter((t) => t.name && t.url);
+}
+
+/**
+ * SSRF guard: https to anywhere; http only to localhost (dev stubs).
+ * Client-supplied URLs are called server-side, so this matters.
+ */
+function toolUrlAllowed(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    if (u.protocol === 'https:') return true;
+    return (
+      u.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(u.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+const MAX_TOOL_RESPONSE = 8_000;
+
+async function callTool(tool: ToolDef, args: Record<string, unknown>): Promise<string> {
+  let url = tool.url;
+  const used = new Set<string>();
+  for (const key of Object.keys(args)) {
+    if (url.includes(`{${key}}`)) {
+      url = url.replaceAll(`{${key}}`, encodeURIComponent(String(args[key])));
+      used.add(key);
+    }
+  }
+  if (!toolUrlAllowed(url)) return 'error: tool URL not allowed';
+  const rest = Object.fromEntries(Object.entries(args).filter(([k]) => !used.has(k)));
+
+  if (tool.method === 'GET') {
+    const qs = new URLSearchParams(
+      Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, String(v)])),
+    );
+    if ([...qs].length) url += (url.includes('?') ? '&' : '?') + qs.toString();
+  }
+  const res = await fetch(url, {
+    method: tool.method,
+    headers: {
+      accept: 'application/json',
+      ...(tool.method === 'POST' ? { 'content-type': 'application/json' } : {}),
+      ...tool.headers,
+    },
+    ...(tool.method === 'POST' ? { body: JSON.stringify(rest) } : {}),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const body = (await res.text()).slice(0, MAX_TOOL_RESPONSE);
+  return res.ok ? body : `error: HTTP ${res.status} ${body.slice(0, 300)}`;
+}
+
 interface Completion {
   text: string | null;
   promptTokens: number;
   completionTokens: number;
 }
 
+type ChatMsg = {
+  role: string;
+  content: string | null;
+  tool_calls?: unknown;
+  tool_call_id?: string;
+  name?: string;
+};
+
+/** Chat completion with an OpenAI-style tool-call loop (max 4 rounds). */
 async function complete(
   llm: LlmSettings,
   system: string,
   history: { role: string; content: string }[],
+  tools: ToolDef[] = [],
 ): Promise<Completion> {
   const empty = { text: null, promptTokens: 0, completionTokens: 0 };
   if (!llm.apiKey) return empty;
-  const res = await fetch(`${llm.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${llm.apiKey}`,
-    },
-    body: JSON.stringify({ model: llm.model, max_tokens: 400, messages: [{ role: 'system', content: system }, ...history] }),
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (!res.ok) throw new Error(`LLM HTTP ${res.status}`);
-  const json = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
-    usage?: { prompt_tokens?: number; completion_tokens?: number };
-  };
-  const text = json.choices?.[0]?.message?.content?.trim() ?? null;
-  // Some OpenAI-compatible endpoints omit `usage` — estimate chars/4 rather
-  // than bill zero
-  const promptTokens =
-    json.usage?.prompt_tokens ??
-    Math.ceil((system.length + history.reduce((n, m) => n + m.content.length, 0)) / 4);
-  const completionTokens =
-    json.usage?.completion_tokens ?? (text ? Math.ceil(text.length / 4) : 0);
-  return { text, promptTokens, completionTokens };
+
+  const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
+  const openaiTools = tools.length
+    ? tools.map((t) => ({
+        type: 'function',
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: {
+            type: 'object',
+            properties: Object.fromEntries(
+              Object.entries(t.params ?? {}).map(([k, d]) => [k, { type: 'string', description: d }]),
+            ),
+            required: Object.keys(t.params ?? {}),
+          },
+        },
+      }))
+    : undefined;
+
+  let promptTokens = 0;
+  let completionTokens = 0;
+
+  for (let round = 0; round < 4; round++) {
+    const res = await fetch(`${llm.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${llm.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: llm.model,
+        max_tokens: 400,
+        messages: msgs,
+        ...(openaiTools ? { tools: openaiTools } : {}),
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) throw new Error(`LLM HTTP ${res.status}`);
+    const json = (await res.json()) as {
+      choices?: {
+        message?: {
+          content?: string | null;
+          tool_calls?: { id: string; function: { name: string; arguments: string } }[];
+        };
+      }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    promptTokens += json.usage?.prompt_tokens ?? Math.ceil(msgs.reduce((n, m) => n + (m.content?.length ?? 0), 0) / 4);
+
+    const msg = json.choices?.[0]?.message;
+    const calls = msg?.tool_calls ?? [];
+    if (!calls.length) {
+      const text = msg?.content?.trim() ?? null;
+      completionTokens += json.usage?.completion_tokens ?? (text ? Math.ceil(text.length / 4) : 0);
+      return { text, promptTokens, completionTokens };
+    }
+
+    completionTokens += json.usage?.completion_tokens ?? 0;
+    msgs.push({ role: 'assistant', content: msg?.content ?? null, tool_calls: calls });
+    for (const call of calls) {
+      const tool = tools.find((t) => t.name === call.function.name);
+      let result: string;
+      try {
+        result = tool
+          ? await callTool(tool, JSON.parse(call.function.arguments || '{}'))
+          : `error: unknown tool ${call.function.name}`;
+      } catch (err) {
+        result = `error: ${err instanceof Error ? err.message : 'tool failed'}`;
+      }
+      msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
+    }
+  }
+  return { text: null, promptTokens, completionTokens };
 }
 
 async function transcriptFor(db: Db, convId: string) {
@@ -114,7 +238,7 @@ export async function runHostedEvent(
     if (!convId) return;
     const llm = llmFor(agent);
     const history = await transcriptFor(db, convId);
-    const result = await complete(llm, systemPrompt(agent), history).catch(() => null);
+    const result = await complete(llm, systemPrompt(agent), history, toolsFor(agent)).catch(() => null);
     if (result) {
       await recordLlmUsage(db, {
         workspaceId: agent.workspaceId,
@@ -155,6 +279,7 @@ export async function runHostedEvent(
       llm,
       systemPrompt(agent),
       history,
+      toolsFor(agent),
     );
     if (promptTokens || completionTokens) {
       await recordLlmUsage(db, {
