@@ -99,6 +99,8 @@ export function channelWebhookRoutes(db: Db) {
     const token = c.req.query('hub.verify_token');
     const challenge = c.req.query('hub.challenge');
     if (mode !== 'subscribe' || !token || !challenge) return c.text('bad request', 400);
+    // OAuth channels share the app-level token; manual channels carry their own.
+    if (env.metaVerifyToken && token === env.metaVerifyToken) return c.text(challenge);
     const all = await db.select().from(channels);
     const match = all.find(
       (ch) => (ch.credentials as ChannelCredentials).verify_token === token,
