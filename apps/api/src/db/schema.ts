@@ -149,6 +149,16 @@ export const pushSubscriptions = pgTable('push_subscriptions', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Long-lived Meta user token per workspace — survives reloads so the asset
+// picker can re-discover pages without re-running OAuth.
+export const metaConnections = pgTable('meta_connections', {
+  workspaceId: uuid('workspace_id')
+    .primaryKey()
+    .references(() => workspaces.id),
+  userToken: text('user_token').notNull(),
+  connectedAt: timestamp('connected_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const slackInstallations = pgTable('slack_installations', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id')

@@ -26,7 +26,6 @@ export default function Integrations() {
   const { data: agents } = useAgents();
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
-  const connectId = params.get('meta_connect') ?? '';
   const metaError = params.get('meta_error') ?? '';
   const [showManual, setShowManual] = useState(false);
   const [linkAgent, setLinkAgent] = useState('');
@@ -37,6 +36,21 @@ export default function Integrations() {
     queryKey: ['meta-status'],
     queryFn: () => api<{ configured: boolean }>('/api/meta/status'),
     staleTime: Infinity,
+  });
+  const session = useQuery({
+    queryKey: ['meta-session'],
+    queryFn: () =>
+      api<{ connected: boolean; connect_id?: string; expired?: boolean }>('/api/meta/session'),
+    staleTime: 60_000,
+  });
+  const connectId =
+    params.get('meta_connect') ?? (session.data?.connected ? session.data.connect_id ?? '' : '');
+  const disconnect = useMutation({
+    mutationFn: () => api('/api/meta/session', { method: 'DELETE' }),
+    onSuccess: () => {
+      setParams({});
+      void qc.invalidateQueries({ queryKey: ['meta-session'] });
+    },
   });
   const pending = useQuery({
     queryKey: ['meta-pending', connectId],
@@ -52,7 +66,6 @@ export default function Integrations() {
         body: JSON.stringify({ connect_id: connectId, agent_id: linkAgent, ...body }),
       }),
     onSuccess: () => {
-      setParams({});
       void qc.invalidateQueries({ queryKey: ['channels'] });
     },
     onError: (e) => setError(e.message),
@@ -94,6 +107,11 @@ export default function Integrations() {
 
   const hasAssets =
     pending.data && (pending.data.pages.length > 0 || pending.data.whatsapp.length > 0);
+  const linkedIds = new Set(
+    (data?.channels ?? []).flatMap((ch) =>
+      [ch.meta.page_id, ch.meta.phone_number_id].filter((v): v is string => Boolean(v)),
+    ),
+  );
 
   return (
     <>
@@ -109,12 +127,27 @@ export default function Integrations() {
       {/* Step 1: OAuth connect (primary path) or pending asset picker */}
       {connectId ? (
         <div className="card connect-card">
-          <strong>Almost there — pick what to connect</strong>
+          <div className="row">
+            <strong className="grow">Meta connected — pick what to link</strong>
+            <a href="/api/meta/connect" onClick={() => setParams({})}>Switch account</a>
+            <button className="btn" onClick={() => disconnect.mutate()}>Disconnect</button>
+          </div>
           {pending.isLoading && <div className="muted" style={{ marginTop: 8 }}>Looking up your Meta accounts…</div>}
           {pending.isError && (
             <div className="error">
-              Connect session expired.{' '}
-              <a href="/api/meta/connect" onClick={() => setParams({})}>Start again</a>
+              Couldn't load your Meta assets.{' '}
+              <a
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setParams({});
+                  void qc.invalidateQueries({ queryKey: ['meta-session'] });
+                }}
+              >
+                Retry
+              </a>
+              {' · '}
+              <a href="/api/meta/connect">Reconnect Facebook</a>
             </div>
           )}
           {pending.data && (
@@ -133,15 +166,23 @@ export default function Integrations() {
                       <strong>{pg.name}</strong>
                       <div className="muted">Facebook Page</div>
                     </div>
-                    <button className="btn" disabled={!linkAgent || link.isPending}
-                      onClick={() => link.mutate({ kind: 'messenger', page_id: pg.id })}>
-                      Connect Messenger
-                    </button>
-                    {pg.instagram && (
+                    {linkedIds.has(pg.id) ? (
+                      <span className="badge active">Connected</span>
+                    ) : (
                       <button className="btn" disabled={!linkAgent || link.isPending}
-                        onClick={() => link.mutate({ kind: 'instagram', page_id: pg.id })}>
-                        Connect Instagram{pg.instagram.username ? ` @${pg.instagram.username}` : ''}
+                        onClick={() => link.mutate({ kind: 'messenger', page_id: pg.id })}>
+                        Connect Messenger
                       </button>
+                    )}
+                    {pg.instagram && (
+                      linkedIds.has(pg.instagram.id) ? (
+                        <span className="badge active">IG Connected</span>
+                      ) : (
+                        <button className="btn" disabled={!linkAgent || link.isPending}
+                          onClick={() => link.mutate({ kind: 'instagram', page_id: pg.id })}>
+                          Connect Instagram{pg.instagram.username ? ` @${pg.instagram.username}` : ''}
+                        </button>
+                      )
                     )}
                   </div>
                 ))}
@@ -152,10 +193,14 @@ export default function Integrations() {
                         <strong>{n.display_phone_number ?? n.id}</strong>
                         <div className="muted">WhatsApp Business{w.name ? ` · ${w.name}` : ''}</div>
                       </div>
-                      <button className="btn" disabled={!linkAgent || link.isPending}
-                        onClick={() => link.mutate({ kind: 'whatsapp', phone_number_id: n.id })}>
-                        Connect WhatsApp
-                      </button>
+                      {linkedIds.has(n.id) ? (
+                        <span className="badge active">Connected</span>
+                      ) : (
+                        <button className="btn" disabled={!linkAgent || link.isPending}
+                          onClick={() => link.mutate({ kind: 'whatsapp', phone_number_id: n.id })}>
+                          Connect WhatsApp
+                        </button>
+                      )}
                     </div>
                   )),
                 )}
@@ -170,6 +215,11 @@ export default function Integrations() {
             <div className="row">
               <div className="grow">
                 <strong>Connect with Meta</strong>
+                {session.data?.expired && (
+                  <div className="error" style={{ marginTop: 4 }}>
+                    Your Facebook session expired — reconnect to manage channels.
+                  </div>
+                )}
                 <div className="muted" style={{ marginTop: 4 }}>
                   Sign in once — Janis finds your Pages, Instagram accounts, and WhatsApp numbers
                   and sets up the webhook for you.

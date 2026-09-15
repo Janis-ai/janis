@@ -6,7 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channels } from '../db/schema.js';
+import { agents, channels, metaConnections } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toChannel } from '../lib/serializers.js';
 import type { ChannelCredentials } from '../lib/channels.js';
@@ -57,6 +57,41 @@ async function graph<T>(path: string, token: string): Promise<T | null> {
   const res = await fetch(`${GRAPH}${path}${path.includes('?') ? '&' : '?'}access_token=${token}`);
   if (!res.ok) return null;
   return (await res.json()) as T;
+}
+
+/**
+ * Discover a user's pages (with IG accounts) and WhatsApp numbers.
+ * Returns null when the user token itself is rejected (expired/revoked).
+ */
+async function discoverAssets(
+  userToken: string,
+): Promise<{ pages: MetaPage[]; wabas: MetaWaba[] } | null> {
+  const pagesRes = await graph<{ data?: MetaPage[] }>(
+    `/me/accounts?fields=id,name,access_token,instagram_business_account{id,username}&limit=100`,
+    userToken,
+  );
+  if (!pagesRes) return null;
+
+  // WhatsApp: businesses → owned WABAs → phone numbers. Best-effort — the
+  // app may not have the WhatsApp product enabled.
+  const wabas: MetaWaba[] = [];
+  const businesses = (await graph<{ data?: { id: string }[] }>(`/me/businesses?limit=50`, userToken))?.data ?? [];
+  for (const biz of businesses) {
+    const list =
+      (await graph<{ data?: { id: string; name?: string }[] }>(
+        `/${biz.id}/owned_whatsapp_business_accounts?limit=50`,
+        userToken,
+      ))?.data ?? [];
+    for (const w of list) {
+      const phones =
+        (await graph<{ data?: { id: string; display_phone_number?: string }[] }>(
+          `/${w.id}/phone_numbers?limit=50`,
+          userToken,
+        ))?.data ?? [];
+      wabas.push({ id: w.id, name: w.name, phone_numbers: phones });
+    }
+  }
+  return { pages: pagesRes.data ?? [], wabas };
 }
 
 const linkBody = z.object({
@@ -111,42 +146,53 @@ export function metaApiRoutes(db: Db) {
     );
     const userToken = long?.access_token ?? tok.access_token;
 
-    // Pages (with their page access tokens + linked IG business accounts)
-    const pages =
-      (await graph<{ data?: MetaPage[] }>(
-        `/me/accounts?fields=id,name,access_token,instagram_business_account{id,username}&limit=100`,
-        userToken,
-      ))?.data ?? [];
+    // Persist the long-lived user token so the asset picker survives reloads.
+    const workspaceId = c.get('workspaceId');
+    await db
+      .insert(metaConnections)
+      .values({ workspaceId, userToken })
+      .onConflictDoUpdate({ target: metaConnections.workspaceId, set: { userToken } });
 
-    // WhatsApp: businesses → owned WABAs → phone numbers. Best-effort — the
-    // app may not have the WhatsApp product enabled.
-    const wabas: MetaWaba[] = [];
-    const businesses = (await graph<{ data?: { id: string }[] }>(`/me/businesses?limit=50`, userToken))?.data ?? [];
-    for (const biz of businesses) {
-      const list =
-        (await graph<{ data?: { id: string; name?: string }[] }>(
-          `/${biz.id}/owned_whatsapp_business_accounts?limit=50`,
-          userToken,
-        ))?.data ?? [];
-      for (const w of list) {
-        const phones =
-          (await graph<{ data?: { id: string; display_phone_number?: string }[] }>(
-            `/${w.id}/phone_numbers?limit=50`,
-            userToken,
-          ))?.data ?? [];
-        wabas.push({ id: w.id, name: w.name, phone_numbers: phones });
-      }
-    }
+    const assets = await discoverAssets(userToken);
+    if (!assets) return back('Meta token rejected — try connecting again');
 
     const id = randomBytes(12).toString('hex');
     pending.set(id, {
-      workspaceId: c.get('workspaceId'),
+      workspaceId,
       userToken,
-      pages,
-      wabas,
+      ...assets,
       expiresAt: Date.now() + PENDING_TTL_MS,
     });
     return c.redirect(`${env.webOrigin}/integrations?meta_connect=${id}`);
+  });
+
+  // Persistent session: if this workspace has a stored Meta token, re-discover
+  // assets with it and mint a fresh pending id — no re-OAuth needed on reload.
+  app.get('/session', async (c) => {
+    const [conn] = await db
+      .select()
+      .from(metaConnections)
+      .where(eq(metaConnections.workspaceId, c.get('workspaceId')))
+      .limit(1);
+    if (!conn) return c.json({ connected: false });
+    const assets = await discoverAssets(conn.userToken);
+    if (!assets) return c.json({ connected: false, expired: true });
+    const id = randomBytes(12).toString('hex');
+    pending.set(id, {
+      workspaceId: c.get('workspaceId'),
+      userToken: conn.userToken,
+      ...assets,
+      expiresAt: Date.now() + PENDING_TTL_MS,
+    });
+    return c.json({ connected: true, connect_id: id });
+  });
+
+  // Forget the stored Meta connection (e.g. to switch accounts).
+  app.delete('/session', async (c) => {
+    await db
+      .delete(metaConnections)
+      .where(eq(metaConnections.workspaceId, c.get('workspaceId')));
+    return c.json({ ok: true });
   });
 
   // Step 3: UI fetches discovered assets for the picker.
