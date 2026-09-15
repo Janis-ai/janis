@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Attachment, Conversation, Message } from '@janis/shared';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
 import { StateBadge } from '../components/bits';
 import Composer from '../components/Composer';
@@ -15,7 +15,7 @@ const WHO: Record<Message['direction'], string> = {
 
 export default function ConversationPage() {
   const { id = '' } = useParams();
-  const { data } = useConversation(id);
+  const { data, error: loadError } = useConversation(id);
   const { data: agents } = useAgents();
   const { data: users } = useUsers();
   const { data: me } = useMe();
@@ -79,9 +79,16 @@ export default function ConversationPage() {
     onError: (e) => setError(e.message),
   });
 
+  if (loadError instanceof ApiError && loadError.status === 404) {
+    return (
+      <div className="muted">
+        Conversation not found. <Link to="/inbox">Back to inbox</Link>
+      </div>
+    );
+  }
   if (!data) return <div className="muted">Loading…</div>;
   const { conversation: c, messages, alerts, suggestions } = data;
-  const name = (c.user_profile.name as string) ?? c.external_id;
+  const name = (c.user_profile?.name as string) ?? c.external_id;
   const agent = agents?.agents.find((a) => a.id === c.agent_id);
   const assignee = users?.users.find((u) => u.id === c.assignee_id);
   const openAlerts = alerts.filter((a) => a.status === 'open');

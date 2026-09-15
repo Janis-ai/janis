@@ -12,7 +12,7 @@ import type {
   WebhookDelivery,
   WorkspaceUser,
 } from '@janis/shared';
-import { api } from './client';
+import { api, ApiError } from './client';
 
 export function useMe() {
   return useQuery({
@@ -45,6 +45,7 @@ export function useConversation(id: string) {
         alerts: Alert[];
         suggestions: Suggestion[];
       }>(`/api/conversations/${id}`),
+    retry: (count, err) => !(err instanceof ApiError && err.status === 404) && count < 3,
   });
 }
 

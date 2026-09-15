@@ -1,3 +1,4 @@
+import { Component, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ApiError } from './api/client';
 import { useMe } from './api/hooks';
@@ -14,6 +15,24 @@ import Integrations from './pages/Integrations';
 import Billing from './pages/Billing';
 import Settings from './pages/Settings';
 
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="login-wrap">
+          <div className="error">Something went wrong: {this.state.error.message}</div>
+          <a href="/inbox">Back to inbox</a>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { data, isLoading, error } = useMe();
   if (isLoading) return <div className="login-wrap muted">Loading…</div>;
@@ -25,6 +44,7 @@ function RequireAuth({ children }: { children: JSX.Element }) {
 export default function App() {
   return (
     <BrowserRouter>
+      <ErrorBoundary>
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Login />} />
@@ -48,6 +68,7 @@ export default function App() {
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }
