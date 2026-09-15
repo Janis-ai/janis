@@ -19,5 +19,9 @@ export const env = {
   slackSigningSecret: process.env.SLACK_SIGNING_SECRET ?? '',
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? '',
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
+  googleRedirectUri:
+    process.env.GOOGLE_REDIRECT_URI ?? `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/auth/google/callback`,
+  slackRedirectUri:
+    process.env.SLACK_REDIRECT_URI ?? `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/auth/slack/callback`,
   metaAppSecret: process.env.META_APP_SECRET ?? '', // X-Hub-Signature-256 verification
 };

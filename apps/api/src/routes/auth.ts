@@ -134,13 +134,13 @@ export function authRoutes(db: Db) {
     if (!env.googleClientId) return oauthError(c, 'Google sign-in is not configured');
     return beginOAuth(c, 'https://accounts.google.com/o/oauth2/v2/auth', {
       client_id: env.googleClientId,
-      redirect_uri: `${env.apiOrigin}/auth/google/callback`,
+      redirect_uri: env.googleRedirectUri,
       response_type: 'code',
       scope: 'openid email profile',
     });
   });
 
-  app.get('/google/callback', async (c) => {
+  const googleCallback = async (c: Context) => {
     if (!checkState(c)) return oauthError(c, 'invalid OAuth state');
     const code = new URL(c.req.url).searchParams.get('code');
     if (!code) return oauthError(c, 'missing authorization code');
@@ -151,7 +151,7 @@ export function authRoutes(db: Db) {
         code,
         client_id: env.googleClientId,
         client_secret: env.googleClientSecret,
-        redirect_uri: `${env.apiOrigin}/auth/google/callback`,
+        redirect_uri: env.googleRedirectUri,
         grant_type: 'authorization_code',
       }),
     });
@@ -168,13 +168,15 @@ export function authRoutes(db: Db) {
       name?: string;
     };
     return finishOAuth(c, info);
-  });
+  };
+  app.get('/google/callback', googleCallback);
+  app.get('/dialogflow', googleCallback); // legacy registered path
 
   app.get('/slack', (c) => {
     if (!env.slackClientId) return oauthError(c, 'Slack sign-in is not configured');
     return beginOAuth(c, 'https://slack.com/openid/connect/authorize', {
       client_id: env.slackClientId,
-      redirect_uri: `${env.apiOrigin}/auth/slack/callback`,
+      redirect_uri: env.slackRedirectUri,
       response_type: 'code',
       scope: 'openid profile email',
     });
@@ -191,7 +193,7 @@ export function authRoutes(db: Db) {
         code,
         client_id: env.slackClientId,
         client_secret: env.slackClientSecret,
-        redirect_uri: `${env.apiOrigin}/auth/slack/callback`,
+        redirect_uri: env.slackRedirectUri,
       }),
     });
     if (!tokenRes.ok) return oauthError(c, 'Slack token exchange failed');

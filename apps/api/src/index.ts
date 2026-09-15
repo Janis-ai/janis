@@ -1,3 +1,4 @@
+import './loadEnv.js';
 import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
 import { createDb, migrateDb } from './db/client.js';
