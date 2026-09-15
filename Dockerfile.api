@@ -5,6 +5,7 @@ COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
 COPY packages/sdk/package.json packages/sdk/
+COPY packages/agent-template/package.json packages/agent-template/
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build -w packages/shared && npm run build -w packages/sdk && npm run build -w apps/api && npm run build -w apps/web
