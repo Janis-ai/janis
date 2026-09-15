@@ -20,7 +20,7 @@ export default function Layout() {
     <div className="layout">
       <nav className="sidebar">
         <div className="brand">Janis</div>
-        <NavLink to="/" end><span className="label">Inbox</span><span className="icon">⬤</span></NavLink>
+        <NavLink to="/inbox" end><span className="label">Inbox</span><span className="icon">⬤</span></NavLink>
         <NavLink to="/channels"><span className="label">Channels</span><span className="icon">▤</span></NavLink>
         <NavLink to="/agents"><span className="label">Agents</span><span className="icon">◈</span></NavLink>
         <NavLink to="/reports"><span className="label">Reports</span><span className="icon">◫</span></NavLink>

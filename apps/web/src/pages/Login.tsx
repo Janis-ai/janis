@@ -40,7 +40,7 @@ export default function Login() {
     try {
       await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
       await qc.invalidateQueries({ queryKey: ['me'] });
-      navigate('/');
+      navigate('/inbox');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'login failed');
     }

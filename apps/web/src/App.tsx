@@ -3,6 +3,8 @@ import { ApiError } from './api/client';
 import { useMe } from './api/hooks';
 import Layout from './components/Layout';
 import Login from './pages/Login';
+import Landing from './pages/Landing';
+import { Privacy, Terms } from './pages/Legal';
 import Inbox from './pages/Inbox';
 import Channels from './pages/Channels';
 import ConversationPage from './pages/ConversationPage';
@@ -24,7 +26,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/terms" element={<Terms />} />
         <Route
           element={
             <RequireAuth>
@@ -32,7 +37,7 @@ export default function App() {
             </RequireAuth>
           }
         >
-          <Route path="/" element={<Inbox />} />
+          <Route path="/inbox" element={<Inbox />} />
           <Route path="/channels" element={<Channels />} />
           <Route path="/conversations/:id" element={<ConversationPage />} />
           <Route path="/agents" element={<Agents />} />

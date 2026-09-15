@@ -49,3 +49,9 @@ https://janis-api-1090022080491.us-east1.run.app. PGlite data persists on GCS
 bucket janis-data-jottogame via FUSE mount at /app/data (demo-grade — use
 DATABASE_URL + managed Postgres for real load; keep --max-instances 1 with
 PGlite: single writer only).
+
+## Shared package
+
+@janis/shared resolves to dist/ in all consumers (prod Node can't load .ts).
+After editing packages/shared/src, run `npm run build -w packages/shared`
+before typecheck/tests/dev.
