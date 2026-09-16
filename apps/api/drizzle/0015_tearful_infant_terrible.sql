@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "messages_in_mid" ON "messages" USING btree ("conversation_id",(payload->>'mid')) WHERE direction = 'in' and payload->>'mid' is not null;

@@ -10,13 +10,13 @@ describe('parseMetaWebhook', () => {
         {
           id: 'PAGE123',
           messaging: [
-            { sender: { id: 'PSID1' }, recipient: { id: 'PAGE123' }, message: { text: 'hello' } },
+            { sender: { id: 'PSID1' }, recipient: { id: 'PAGE123' }, message: { mid: 'mid.1', text: 'hello' } },
           ],
         },
       ],
     };
     expect(parseMetaWebhook(body)).toEqual([
-      { objectId: 'PAGE123', senderId: 'PSID1', text: 'hello', name: undefined },
+      { objectId: 'PAGE123', senderId: 'PSID1', text: 'hello', messageId: 'mid.1', name: undefined },
     ]);
   });
 
@@ -44,7 +44,7 @@ describe('parseMetaWebhook', () => {
               value: {
                 metadata: { phone_number_id: 'PHONE1' },
                 contacts: [{ wa_id: '15551234567', profile: { name: 'Jane' } }],
-                messages: [{ from: '15551234567', type: 'text', text: { body: 'hi' } }],
+                messages: [{ id: 'wamid.1', from: '15551234567', type: 'text', text: { body: 'hi' } }],
               },
             },
           ],
@@ -52,7 +52,7 @@ describe('parseMetaWebhook', () => {
       ],
     };
     expect(parseMetaWebhook(body)).toEqual([
-      { objectId: 'PHONE1', senderId: '15551234567', text: 'hi', name: 'Jane' },
+      { objectId: 'PHONE1', senderId: '15551234567', text: 'hi', messageId: 'wamid.1', name: 'Jane' },
     ]);
   });
 });

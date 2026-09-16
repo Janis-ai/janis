@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   uuid,
@@ -107,7 +108,14 @@ export const messages = pgTable(
       .default({ failure: false, help_requested: false, custom_alert: false }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('messages_conversation').on(t.conversationId, t.createdAt)],
+  (t) => [
+    index('messages_conversation').on(t.conversationId, t.createdAt),
+    // platform message ids (mid/wamid) dedup inbound events delivered via
+    // both the direct webhook and the legacy relay
+    uniqueIndex('messages_in_mid')
+      .on(t.conversationId, sql`(payload->>'mid')`)
+      .where(sql`direction = 'in' and payload->>'mid' is not null`),
+  ],
 );
 
 export const alerts = pgTable(

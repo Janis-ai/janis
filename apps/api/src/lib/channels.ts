@@ -22,6 +22,8 @@ export interface InboundMessage {
   /** platform user id: PSID or phone number */
   senderId: string;
   text: string;
+  /** platform message id (mid / wamid) — dedups the same event arriving via webhook + relay */
+  messageId?: string;
   name?: string;
 }
 
@@ -56,13 +58,16 @@ export function parseMetaWebhook(body: unknown): InboundMessage[] {
     // Messenger / Instagram
     const messaging = (entry.messaging ?? []) as Record<string, unknown>[];
     for (const m of messaging) {
-      const msg = m.message as { text?: string; is_echo?: boolean } | undefined;
+      const msg = m.message as
+        | { text?: string; is_echo?: boolean; mid?: string }
+        | undefined;
       const sender = (m.sender as { id?: string })?.id;
       if (!msg?.text || msg.is_echo || !sender) continue;
       out.push({
         objectId: String((m.recipient as { id?: string })?.id ?? entry.id ?? ''),
         senderId: sender,
         text: msg.text,
+        messageId: msg.mid,
       });
     }
 
@@ -72,7 +77,7 @@ export function parseMetaWebhook(body: unknown): InboundMessage[] {
       const value = ch.value as
         | {
             metadata?: { phone_number_id?: string };
-            messages?: { from?: string; type?: string; text?: { body?: string } }[];
+            messages?: { id?: string; from?: string; type?: string; text?: { body?: string } }[];
             contacts?: { wa_id?: string; profile?: { name?: string } }[];
           }
         | undefined;
@@ -85,6 +90,7 @@ export function parseMetaWebhook(body: unknown): InboundMessage[] {
           objectId: phoneId,
           senderId: wm.from,
           text: wm.text.body,
+          messageId: wm.id,
           name: contact?.profile?.name,
         });
       }

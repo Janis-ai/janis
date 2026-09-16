@@ -1,7 +1,7 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, channelBindings, channels, conversations } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations, messages } from '../db/schema.js';
 import type { InboundMessage } from '../lib/channels.js';
 import { fetchPlatformProfile } from '../lib/channels.js';
 import { deliverWebhook } from '../lib/webhooks.js';
@@ -107,6 +107,24 @@ export async function handleChannelMessage(
     }
   }
 
+  // Dedup: the same Meta event can reach us twice — once via the direct app
+  // webhook and again through the legacy relay — when a page is subscribed
+  // to both apps. The platform message id is unique per message.
+  if (msg.messageId) {
+    const [dup] = await db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conv.id),
+          eq(messages.direction, 'in'),
+          sql`payload->>'mid' = ${msg.messageId}`,
+        ),
+      )
+      .limit(1);
+    if (dup) return;
+  }
+
   const user = defined(conv.userProfile as UserProfile);
   const { picture_url: _pic, ...publicUser } = user; // raw CDN url stays server-side
 
@@ -118,6 +136,7 @@ export async function handleChannelMessage(
       type: 'message_in',
       conversation_id: externalId,
       text: msg.text,
+      payload: msg.messageId ? { mid: msg.messageId } : undefined,
       user: { id: msg.senderId },
     },
   ]);
