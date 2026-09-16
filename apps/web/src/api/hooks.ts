@@ -23,11 +23,17 @@ export function useMe() {
   });
 }
 
-export function useConversations(filter: { state?: string; agent_id?: string; attention?: boolean }) {
+export function useConversations(filter: {
+  state?: string;
+  agent_id?: string;
+  attention?: boolean;
+  mine?: boolean;
+}) {
   const params = new URLSearchParams();
   if (filter.state) params.set('state', filter.state);
   if (filter.agent_id) params.set('agent_id', filter.agent_id);
   if (filter.attention) params.set('attention', '1');
+  if (filter.mine) params.set('assignee', 'me');
   return useQuery({
     queryKey: ['conversations', filter],
     queryFn: () => api<{ conversations: Conversation[] }>(`/api/conversations?${params}`),

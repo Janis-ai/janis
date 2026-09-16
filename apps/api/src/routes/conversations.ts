@@ -22,6 +22,7 @@ const listQuery = z.object({
   state: z.enum(['active', 'needs_human', 'human', 'archived', 'unread', 'starred']).optional(),
   agent_id: z.string().uuid().optional(),
   attention: z.enum(['1', 'true']).optional(), // needs_human OR has open alerts
+  assignee: z.enum(['me']).optional(), // only conversations assigned to the caller
 });
 
 const patchBody = z.object({
@@ -61,6 +62,7 @@ export function conversationRoutes(db: Db) {
     else if (q.state === 'starred') conditions.push(eq(conversations.isStarred, true));
     else if (q.state) conditions.push(eq(conversations.state, q.state));
     if (q.agent_id) conditions.push(eq(conversations.agentId, q.agent_id));
+    if (q.assignee === 'me') conditions.push(eq(conversations.assigneeId, c.get('user').id));
     if (q.attention) {
       conditions.push(inArray(conversations.state, ['needs_human', 'human']));
     }

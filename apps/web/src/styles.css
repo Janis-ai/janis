@@ -82,6 +82,7 @@ button, input, select, textarea { font: inherit; }
   border-radius: 8px; background: var(--panel-2); color: var(--muted);
   border: 1px solid var(--border); vertical-align: middle;
 }
+.check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; }
 .profile-head { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .profile-name { font-weight: 600; }
 .search-box { flex: 1; min-width: 200px; }

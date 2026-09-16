@@ -32,10 +32,12 @@ function ConvRow({ c }: { c: Conversation }) {
 export default function Channels() {
   const [state, setState] = useState('');
   const [agentId, setAgentId] = useState('');
+  const [mine, setMine] = useState(false);
   const [query, setQuery] = useState('');
   const { data } = useConversations({
     state: state || undefined,
     agent_id: agentId || undefined,
+    mine,
   });
   const { data: agents } = useAgents();
   const { data: hits } = useSearch(query);
@@ -60,6 +62,10 @@ export default function Channels() {
           <option value="">All agents</option>
           {agents?.agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
+        <label className="check">
+          <input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} />
+          Assigned to me
+        </label>
       </div>
 
       {searching ? (
