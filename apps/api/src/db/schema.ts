@@ -279,6 +279,29 @@ export const usageEvents = pgTable(
   (t) => [index('usage_events_ws_period').on(t.workspaceId, t.period)],
 );
 
+// Uploaded knowledge files for hosted agents — extracted text is injected
+// into the system prompt at reply time.
+export const knowledgeFiles = pgTable(
+  'knowledge_files',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    name: text('name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    text: text('text').notNull().default(''),
+    status: text('status', { enum: ['ready', 'failed'] }).notNull().default('ready'),
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('knowledge_files_agent').on(t.agentId)],
+);
+
 export const webhookDeliveries = pgTable('webhook_deliveries', {
   id: uuid('id').primaryKey().defaultRandom(),
   agentId: uuid('agent_id')

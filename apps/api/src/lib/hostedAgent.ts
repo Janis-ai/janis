@@ -1,7 +1,7 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { OutboundWebhook } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, conversations, messages } from '../db/schema.js';
+import { agents, conversations, knowledgeFiles, messages } from '../db/schema.js';
 import { env } from '../env.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
@@ -9,14 +9,14 @@ import { recordLlmUsage } from './usage.js';
 
 type AgentRow = typeof agents.$inferSelect;
 
-interface LlmSettings {
+export interface LlmSettings {
   apiKey: string;
   baseUrl: string;
   model: string;
 }
 
 /** Per-agent LLM config with env fallback (OpenAI-compatible). */
-function llmFor(agent: AgentRow): LlmSettings {
+export function llmFor(agent: AgentRow): LlmSettings {
   const cfg = (agent.config ?? {}) as {
     llm?: { api_key?: string; base_url?: string; model?: string };
   };
@@ -27,7 +27,31 @@ function llmFor(agent: AgentRow): LlmSettings {
   };
 }
 
-function systemPrompt(agent: AgentRow): string {
+const MAX_KNOWLEDGE_CHARS = 80_000;
+
+/** Extracted text from the agent's uploaded knowledge files, capped for the prompt. */
+export async function loadKnowledgeDocs(
+  db: Db,
+  agentId: string,
+): Promise<{ name: string; text: string }[]> {
+  const rows = await db
+    .select({ name: knowledgeFiles.name, text: knowledgeFiles.text })
+    .from(knowledgeFiles)
+    .where(and(eq(knowledgeFiles.agentId, agentId), eq(knowledgeFiles.status, 'ready')));
+  let used = 0;
+  const docs: { name: string; text: string }[] = [];
+  for (const row of rows) {
+    const remaining = MAX_KNOWLEDGE_CHARS - used;
+    if (remaining <= 0) break;
+    const text = row.text.slice(0, remaining);
+    if (!text) continue;
+    used += text.length;
+    docs.push({ name: row.name, text });
+  }
+  return docs;
+}
+
+export function systemPrompt(agent: AgentRow, docs: { name: string; text: string }[] = []): string {
   const cfg = (agent.config ?? {}) as {
     system_prompt?: string;
     knowledge?: string[];
@@ -39,6 +63,13 @@ function systemPrompt(agent: AgentRow): string {
   ];
   if (cfg.knowledge?.length) {
     parts.push(`\nKnowledge base:\n${cfg.knowledge.map((k) => `- ${k}`).join('\n')}`);
+  }
+  if (docs.length) {
+    parts.push(
+      `\nKnowledge base documents (answer from these when relevant):\n${docs
+        .map((d) => `--- ${d.name} ---\n${d.text}`)
+        .join('\n\n')}`,
+    );
   }
   if (cfg.tone) parts.push(`\nTone: ${cfg.tone}`);
   parts.push('\nIf the user asks for a human or you cannot help, reply with exactly: [HANDOFF]');
@@ -248,7 +279,8 @@ export async function runHostedEvent(
     if (!convId) return;
     const llm = llmFor(agent);
     const history = await transcriptFor(db, convId);
-    const result = await complete(llm, systemPrompt(agent), history, toolsFor(agent)).catch(() => null);
+    const docs = await loadKnowledgeDocs(db, agent.id);
+    const result = await complete(llm, systemPrompt(agent, docs), history, toolsFor(agent)).catch(() => null);
     if (result) {
       await recordLlmUsage(db, {
         workspaceId: agent.workspaceId,
@@ -285,9 +317,10 @@ export async function runHostedEvent(
   try {
     const llm = llmFor(agent);
     const history = await transcriptFor(db, convId);
+    const docs = await loadKnowledgeDocs(db, agent.id);
     const { text: reply, promptTokens, completionTokens } = await complete(
       llm,
-      systemPrompt(agent),
+      systemPrompt(agent, docs),
       history,
       toolsFor(agent),
     );

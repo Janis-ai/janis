@@ -1,13 +1,15 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, conversations, webhookDeliveries } from '../db/schema.js';
+import { agents, conversations, knowledgeFiles, webhookDeliveries } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { generateApiKey, generateWebhookSecret } from '../lib/crypto.js';
 import { deliverWebhook } from '../lib/webhooks.js';
+import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
+import { llmFor } from '../lib/hostedAgent.js';
 import { processEvents } from '../services/ingest.js';
 import { toAgent } from '../lib/serializers.js';
 
@@ -193,6 +195,103 @@ export function agentRoutes(db: Db) {
       return c.json({ conversation_id: conv?.id ?? null, state: conv?.state ?? null });
     },
   );
+
+  const ownedAgent = async (c: {
+    req: { param: (k: string) => string };
+    get: (k: 'workspaceId') => string;
+  }) => {
+    const [row] = await db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
+      .limit(1);
+    return row ?? null;
+  };
+
+  // Knowledge files — uploaded docs whose extracted text feeds the agent's prompt
+  app.get('/:id/knowledge', async (c) => {
+    if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
+    const rows = await db
+      .select()
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.agentId, c.req.param('id')))
+      .orderBy(desc(knowledgeFiles.createdAt));
+    return c.json({
+      files: rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        mime_type: r.mimeType,
+        size_bytes: r.sizeBytes,
+        chars: r.text.length,
+        status: r.status,
+        error: r.error,
+        created_at: r.createdAt.toISOString(),
+      })),
+    });
+  });
+
+  app.post('/:id/knowledge', async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+
+    const form = await c.req.formData();
+    const file = form.get('file');
+    if (!(file instanceof File)) return c.json({ error: 'file field required' }, 400);
+    if (file.size > 10 * 1024 * 1024) return c.json({ error: 'file too large (max 10MB)' }, 413);
+
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.agentId, agent.id));
+    if (count >= 50) return c.json({ error: 'knowledge file limit reached (50)' }, 409);
+
+    const buf = Buffer.from(await file.arrayBuffer());
+    let text: string;
+    try {
+      text = await extractKnowledgeText(buf, file.type, file.name, llmFor(agent));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'extraction failed';
+      return c.json({ error: msg }, err instanceof UnsupportedFileError ? 415 : 422);
+    }
+
+    const [row] = await db
+      .insert(knowledgeFiles)
+      .values({
+        workspaceId: c.get('workspaceId'),
+        agentId: agent.id,
+        name: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        sizeBytes: file.size,
+        text,
+      })
+      .returning();
+    return c.json(
+      {
+        file: {
+          id: row.id,
+          name: row.name,
+          mime_type: row.mimeType,
+          size_bytes: row.sizeBytes,
+          chars: row.text.length,
+          status: row.status,
+          created_at: row.createdAt.toISOString(),
+        },
+      },
+      201,
+    );
+  });
+
+  app.delete('/:id/knowledge/:fileId', async (c) => {
+    if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
+    const [row] = await db
+      .delete(knowledgeFiles)
+      .where(
+        and(eq(knowledgeFiles.id, c.req.param('fileId')), eq(knowledgeFiles.agentId, c.req.param('id'))),
+      )
+      .returning();
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({ ok: true });
+  });
 
   app.delete('/:id', async (c) => {
     const [row] = await db

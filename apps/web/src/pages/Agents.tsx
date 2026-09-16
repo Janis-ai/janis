@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Agent, AgentConfig, AlertRule } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgents, useAlertRules, useChannels, useDeliveries } from '../api/hooks';
@@ -314,6 +314,8 @@ function AgentCard({
             value={cfg.tone ?? ''}
             onChange={(e) => setCfg({ ...cfg, tone: e.target.value })}
           />
+          <label>Knowledge files — PDFs, docs, text, images; the agent answers from these</label>
+          <KnowledgeFiles agentId={agent.id} />
           {agent.hosted && (
             <>
               <label>Tools — client APIs the agent can call (JSON array, GET/POST, {'{param}'} URL placeholders)</label>
@@ -446,6 +448,86 @@ function AgentCard({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+interface KnowledgeFile {
+  id: string;
+  name: string;
+  mime_type: string;
+  size_bytes: number;
+  chars: number;
+  status: string;
+  error: string | null;
+  created_at: string;
+}
+
+function KnowledgeFiles({ agentId }: { agentId: string }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['knowledge', agentId],
+    queryFn: () => api<{ files: KnowledgeFile[] }>(`/api/agents/${agentId}/knowledge`),
+  });
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+
+  const upload = async (list: FileList | null) => {
+    if (!list?.length) return;
+    setUploading(true);
+    setError('');
+    for (const f of Array.from(list)) {
+      const form = new FormData();
+      form.append('file', f);
+      const res = await fetch(`/api/agents/${agentId}/knowledge`, {
+        method: 'POST',
+        body: form,
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(`${f.name}: ${body.error ?? `HTTP ${res.status}`}`);
+        break;
+      }
+    }
+    setUploading(false);
+    void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
+  };
+
+  const remove = useMutation({
+    mutationFn: (fileId: string) =>
+      api(`/api/agents/${agentId}/knowledge/${fileId}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['knowledge', agentId] }),
+  });
+
+  return (
+    <div>
+      {(data?.files ?? []).map((f) => (
+        <div key={f.id} className="row muted" style={{ marginTop: 6 }}>
+          <span className="grow">
+            📄 {f.name}
+            <span className="muted">
+              {' '}— {Math.max(1, Math.round(f.size_bytes / 1024))}KB → {f.chars.toLocaleString()} chars
+            </span>
+            {f.status === 'failed' && <span className="error"> {f.error}</span>}
+          </span>
+          <button className="btn danger" onClick={() => remove.mutate(f.id)}>✕</button>
+        </div>
+      ))}
+      <div className="row" style={{ marginTop: 8 }}>
+        <input
+          type="file"
+          multiple
+          disabled={uploading}
+          accept=".pdf,.docx,.txt,.md,.csv,.json,.xml,.html,.log,.yaml,.yml,.png,.jpg,.jpeg,.webp,.gif"
+          onChange={(e) => {
+            void upload(e.target.files);
+            e.target.value = '';
+          }}
+        />
+        {uploading && <span className="muted">extracting…</span>}
+      </div>
+      {error && <div className="error">{error}</div>}
     </div>
   );
 }
