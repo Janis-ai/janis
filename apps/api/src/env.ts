@@ -33,6 +33,11 @@ export const env = {
   metaAppId: process.env.META_APP_ID ?? '', // FB app id for OAuth connect flow
   metaAppSecret: process.env.META_APP_SECRET ?? '', // OAuth exchange + X-Hub-Signature-256
   metaVerifyToken: process.env.META_VERIFY_TOKEN ?? '',
+  // Shared secret for the legacy broadcast-api relay — it forwards Facebook
+  // page events for which no legacy client exists. Verified via
+  // x-janis-relay-signature (HMAC-SHA256). Required in prod — the endpoint
+  // refuses to run without it.
+  janisRelaySecret: process.env.JANIS_RELAY_SECRET ?? '',
   // Legacy Janis webhook receiver — while both systems share the Meta app,
   // events for pages we don't own are forwarded here verbatim.
   metaLegacyWebhookUrl: process.env.META_LEGACY_WEBHOOK_URL ?? '',

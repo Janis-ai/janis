@@ -139,5 +139,28 @@ export function channelWebhookRoutes(db: Db) {
     return c.json({ ok: true });
   });
 
+  // Events relayed by the legacy broadcast API after it determined no
+  // existing client owns this page. Signed with JANIS_RELAY_SECRET (our own
+  // trusted hop), not Meta's app secret — the relay serves many Meta apps.
+  app.post('/meta/relay', async (c) => {
+    if (!env.janisRelaySecret) return c.text('relay not configured', 503);
+    const raw = await c.req.text();
+    if (
+      !verifyMetaSignature(
+        env.janisRelaySecret,
+        raw,
+        c.req.header('x-janis-relay-signature'),
+      )
+    ) {
+      return c.text('invalid signature', 401);
+    }
+    const msgs = parseMetaWebhook(JSON.parse(raw));
+    for (const msg of msgs) {
+      const channel = await findChannelByObjectId(db, msg.objectId);
+      if (channel) await handleChannelMessage(db, channel, msg);
+    }
+    return c.json({ ok: true });
+  });
+
   return app;
 }
