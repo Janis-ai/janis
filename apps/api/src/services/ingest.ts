@@ -59,8 +59,21 @@ export async function processEvents(
       }
     }
 
-    // Evaluate alert rules
+    // Evaluate alert rules — one open alert per type per conversation, so a
+    // struggling agent doesn't spam push/email on every message
     for (const triggered of evaluateEvent(event, rules)) {
+      const [open] = await db
+        .select({ id: alerts.id })
+        .from(alerts)
+        .where(
+          and(
+            eq(alerts.conversationId, conv.id),
+            eq(alerts.type, triggered.type),
+            eq(alerts.status, 'open'),
+          ),
+        )
+        .limit(1);
+      if (open) continue;
       const [alert] = await db
         .insert(alerts)
         .values({ conversationId: conv.id, type: triggered.type, detail: triggered.detail })

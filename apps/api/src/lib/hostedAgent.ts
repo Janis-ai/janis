@@ -329,7 +329,9 @@ export async function runHostedEvent(
     .from(conversations)
     .where(eq(conversations.id, convId))
     .limit(1);
-  if (!conv || conv.state !== 'active') return; // human owns it — don't answer
+  // Only a human takeover (or archive) silences the agent — needs_human
+  // is a flag for attention, not a pause
+  if (!conv || conv.state === 'human' || conv.state === 'archived') return;
 
   const externalId = conv.externalId;
   const emit = (e: Parameters<typeof processEvents>[2]) => processEvents(db, agent, e);

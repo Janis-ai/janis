@@ -11,8 +11,8 @@ type ChannelRow = typeof channels.$inferSelect;
  * Handle an inbound message on a hosted channel:
  *   Meta → binding/conversation → ingest message_in → if the agent still owns
  *   the conversation, forward `message.user` to its webhook so it can reply.
- * While a human owns it (or an alert fired), nothing reaches the agent —
- * gating is enforced at the pipe, not by agent cooperation.
+ * needs_human only flags the conversation for attention — the agent keeps
+ * replying. Only a human takeover pauses it, enforced at the pipe.
  */
 export async function handleChannelMessage(
   db: Db,
@@ -67,8 +67,13 @@ export async function handleChannelMessage(
     },
   ]);
 
-  // Forward to the agent only while it owns the conversation
-  if (result?.conversation_state === 'active' && (agent.webhookUrl || agent.hosted)) {
+  // Forward to the agent unless a human owns it — needs_human is just a flag
+  if (
+    result &&
+    result.conversation_state !== 'human' &&
+    result.conversation_state !== 'archived' &&
+    (agent.webhookUrl || agent.hosted)
+  ) {
     await deliverWebhook(db, agent, 'message.user', {
       conversation_id: externalId,
       janis_conversation_id: conv.id,

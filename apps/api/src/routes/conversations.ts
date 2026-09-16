@@ -284,6 +284,19 @@ export function conversationRoutes(db: Db) {
       .where(eq(conversations.id, owned.id))
       .returning();
 
+    // Manually un-flagging back to the agent resolves open alerts — same
+    // as takeover does, so future handoffs can re-alert
+    if (body.state === 'active') {
+      const resolved = await db
+        .update(alerts)
+        .set({ status: 'resolved' })
+        .where(and(eq(alerts.conversationId, owned.id), eq(alerts.status, 'open')))
+        .returning();
+      for (const a of resolved) {
+        bus.publish(workspaceId, { type: 'alert', data: toAlert(a) });
+      }
+    }
+
     bus.publish(workspaceId, {
       type: 'conversation',
       data: { id: row.id, state: row.state },

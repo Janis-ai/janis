@@ -77,12 +77,18 @@ describe('processEvents', () => {
     const notice = msgs.find((m) => m.text?.includes('human teammate'));
     expect(notice?.direction).toBe('out');
 
-    // second handoff while already needs_human → no duplicate notice
-    await processEvents(db, agent, [
+    // second handoff while already needs_human → no duplicate notice or alert
+    const again = await processEvents(db, agent, [
       { type: 'handoff_request', conversation_id: 'c5', reason: 'stuck again' },
     ]);
+    expect(again[0].alert_ids).toHaveLength(0);
     const msgs2 = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
     expect(msgs2.filter((m) => m.text?.includes('human teammate'))).toHaveLength(1);
+    const openAlerts = await db
+      .select()
+      .from(alerts)
+      .where(eq(alerts.conversationId, conv.id));
+    expect(openAlerts).toHaveLength(1);
   });
 
   it('handoff notice respects config override and opt-out', async () => {
