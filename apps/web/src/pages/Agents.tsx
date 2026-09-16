@@ -191,6 +191,9 @@ function AgentCard({
   const [toolsJson, setToolsJson] = useState(() =>
     agent.config?.tools ? JSON.stringify(agent.config.tools, null, 2) : '',
   );
+  const [knowledgeText, setKnowledgeText] = useState(() =>
+    (agent.config?.knowledge ?? []).join('\n'),
+  );
   const [toolsError, setToolsError] = useState('');
   const [showDeliveries, setShowDeliveries] = useState(false);
   const [testMsg, setTestMsg] = useState('');
@@ -314,8 +317,11 @@ function AgentCard({
           <textarea
             rows={5}
             placeholder={'Refunds are allowed within 30 days of purchase.\nSupport hours are 9-5 ET.\nOrder lookup requires the order number.'}
-            value={(cfg.knowledge ?? []).join('\n')}
-            onChange={(e) => setCfg({ ...cfg, knowledge: e.target.value.split('\n').filter(Boolean) })}
+            value={knowledgeText}
+            onChange={(e) => setKnowledgeText(e.target.value)}
+            onBlur={() =>
+              setCfg({ ...cfg, knowledge: knowledgeText.split('\n').filter(Boolean) })
+            }
           />
           <label>Tone</label>
           <input
