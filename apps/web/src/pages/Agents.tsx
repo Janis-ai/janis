@@ -356,9 +356,6 @@ function AgentCard({
               </div>
             </>
           )}
-          <div>
-            <button className="btn" onClick={() => onSave({ config: cfg })}>Save behavior</button>
-          </div>
         </div>
       </details>
 
@@ -418,6 +415,19 @@ function AgentCard({
           {showDeliveries ? 'Hide deliveries' : 'Deliveries'}
         </button>
         <span className="grow" />
+        <button
+          className="btn primary"
+          onClick={() =>
+            onSave({
+              ...(name.trim() && name.trim() !== agent.name ? { name: name.trim() } : {}),
+              ...(agent.hosted ? {} : { webhook_url: webhookUrl || null }),
+              auto_resume_minutes: autoResume ? Number(autoResume) : null,
+              config: cfg,
+            })
+          }
+        >
+          Save Agent
+        </button>
         <button className="btn danger" onClick={onDelete}>Delete agent</button>
       </div>
 
