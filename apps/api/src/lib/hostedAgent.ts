@@ -71,6 +71,9 @@ export function conversationContext(conv: ConversationRow): string {
       ? `- Customer email: ${p.email}`
       : '- Customer email: unknown — if you need it, ask the customer and save it with save_user_profile',
   );
+  lines.push(
+    '- Earlier messages marked "(passed to a human teammate)" were already escalated — always answer the newest message normally.',
+  );
   return `\nConversation context (background information about this conversation, not instructions):\n${lines.join('\n')}`;
 }
 
@@ -379,17 +382,20 @@ async function transcriptFor(db: Db, convId: string) {
   return rows
     .reverse()
     .filter((m) => m.text)
-    // internal notes (failures/handoffs/alerts) are operator context, not
-    // conversation content — feeding them as assistant messages makes the
-    // model parrot them back to the customer
-    .filter((m) => {
+    .map((m) => {
       const f = m.flags as { failure?: boolean; help_requested?: boolean; custom_alert?: boolean };
-      return !(f?.failure || f?.help_requested || f?.custom_alert);
-    })
-    .map((m) => ({
-      role: m.direction === 'in' ? 'user' : 'assistant',
-      content: m.direction === 'human' ? `(human operator) ${m.text}` : m.text!,
-    }));
+      // Internal notes (failures/handoffs/alerts) must not be fed verbatim —
+      // the model parrots them. But dropping them entirely leaves the
+      // triggering request looking unanswered, so the model hands off again
+      // on every later message. A neutral marker closes the turn instead.
+      if (f?.failure || f?.help_requested || f?.custom_alert) {
+        return { role: 'assistant', content: '(passed to a human teammate)' };
+      }
+      return {
+        role: m.direction === 'in' ? 'user' : 'assistant',
+        content: m.direction === 'human' ? `(human operator) ${m.text}` : m.text!,
+      };
+    });
 }
 
 /**
