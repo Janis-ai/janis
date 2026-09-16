@@ -291,6 +291,13 @@ export const WebhookDelivery = z.object({
 });
 export type WebhookDelivery = z.infer<typeof WebhookDelivery>;
 
+// Agent secrets are write-only — only name + timestamps are ever returned.
+export const AgentSecretMeta = z.object({
+  name: z.string(),
+  created_at: z.string(),
+});
+export type AgentSecretMeta = z.infer<typeof AgentSecretMeta>;
+
 export const WorkspaceUser = z.object({
   id: z.string(),
   email: z.string(),

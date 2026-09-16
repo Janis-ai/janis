@@ -6,6 +6,7 @@ import { env } from '../env.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage } from './usage.js';
+import { interpolateSecrets, loadSecretsMap } from './secrets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 
@@ -108,8 +109,19 @@ function toolUrlAllowed(raw: string): boolean {
 
 const MAX_TOOL_RESPONSE = 8_000;
 
-async function callTool(tool: ToolDef, args: Record<string, unknown>): Promise<string> {
-  let url = tool.url;
+async function callTool(
+  tool: ToolDef,
+  args: Record<string, unknown>,
+  secrets: Record<string, string> = {},
+): Promise<string> {
+  // Secrets expand first — LLM-supplied args can never inject {{secrets.*}}
+  // placeholders, and arg values never get a second expansion pass.
+  let url = interpolateSecrets(tool.url, secrets);
+  const headers = tool.headers
+    ? Object.fromEntries(
+        Object.entries(tool.headers).map(([k, v]) => [k, interpolateSecrets(v, secrets)]),
+      )
+    : undefined;
   const used = new Set<string>();
   for (const key of Object.keys(args)) {
     if (url.includes(`{${key}}`)) {
@@ -131,7 +143,7 @@ async function callTool(tool: ToolDef, args: Record<string, unknown>): Promise<s
     headers: {
       accept: 'application/json',
       ...(tool.method === 'POST' ? { 'content-type': 'application/json' } : {}),
-      ...tool.headers,
+      ...headers,
     },
     ...(tool.method === 'POST' ? { body: JSON.stringify(rest) } : {}),
     signal: AbortSignal.timeout(10_000),
@@ -160,6 +172,7 @@ async function complete(
   system: string,
   history: { role: string; content: string }[],
   tools: ToolDef[] = [],
+  secrets: Record<string, string> = {},
 ): Promise<Completion> {
   const empty = { text: null, promptTokens: 0, completionTokens: 0 };
   if (!llm.apiKey) return empty;
@@ -237,7 +250,7 @@ async function complete(
       let result: string;
       try {
         result = tool
-          ? await callTool(tool, JSON.parse(call.function.arguments || '{}'))
+          ? await callTool(tool, JSON.parse(call.function.arguments || '{}'), secrets)
           : `error: unknown tool ${call.function.name}`;
       } catch (err) {
         result = `error: ${err instanceof Error ? err.message : 'tool failed'}`;
@@ -280,7 +293,14 @@ export async function runHostedEvent(
     const llm = llmFor(agent);
     const history = await transcriptFor(db, convId);
     const docs = await loadKnowledgeDocs(db, agent.id);
-    const result = await complete(llm, systemPrompt(agent, docs), history, toolsFor(agent)).catch(() => null);
+    const secrets = await loadSecretsMap(db, agent.id);
+    const result = await complete(
+      llm,
+      systemPrompt(agent, docs),
+      history,
+      toolsFor(agent),
+      secrets,
+    ).catch(() => null);
     if (result) {
       await recordLlmUsage(db, {
         workspaceId: agent.workspaceId,
@@ -318,11 +338,13 @@ export async function runHostedEvent(
     const llm = llmFor(agent);
     const history = await transcriptFor(db, convId);
     const docs = await loadKnowledgeDocs(db, agent.id);
+    const secrets = await loadSecretsMap(db, agent.id);
     const { text: reply, promptTokens, completionTokens } = await complete(
       llm,
       systemPrompt(agent, docs),
       history,
       toolsFor(agent),
+      secrets,
     );
     if (promptTokens || completionTokens) {
       await recordLlmUsage(db, {

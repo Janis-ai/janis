@@ -304,6 +304,26 @@ export const knowledgeFiles = pgTable(
   (t) => [index('knowledge_files_agent').on(t.agentId)],
 );
 
+// Per-agent secrets (API keys for tool calls) — AES-256-GCM encrypted at rest.
+// Write-only via the API: values are never returned after creation.
+export const agentSecrets = pgTable(
+  'agent_secrets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    name: text('name').notNull(),
+    valueEnc: text('value_enc').notNull(), // base64 iv.tag.ciphertext
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('agent_secrets_agent_name').on(t.agentId, t.name)],
+);
+
 export const webhookDeliveries = pgTable('webhook_deliveries', {
   id: uuid('id').primaryKey().defaultRandom(),
   agentId: uuid('agent_id')

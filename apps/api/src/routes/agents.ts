@@ -4,11 +4,12 @@ import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, conversations, knowledgeFiles, webhookDeliveries } from '../db/schema.js';
+import { agents, agentSecrets, conversations, knowledgeFiles, webhookDeliveries } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { generateApiKey, generateWebhookSecret } from '../lib/crypto.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
+import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
 import { processEvents } from '../services/ingest.js';
 import { toAgent } from '../lib/serializers.js';
@@ -279,6 +280,71 @@ export function agentRoutes(db: Db) {
       },
       201,
     );
+  });
+
+  // Agent secrets — API keys/credentials for tool calls. Write-only: the
+  // list endpoint returns names + timestamps, never values.
+  app.get('/:id/secrets', async (c) => {
+    if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
+    const rows = await db
+      .select({ name: agentSecrets.name, createdAt: agentSecrets.createdAt })
+      .from(agentSecrets)
+      .where(eq(agentSecrets.agentId, c.req.param('id')))
+      .orderBy(agentSecrets.name);
+    return c.json({
+      secrets: rows.map((r) => ({ name: r.name, created_at: r.createdAt.toISOString() })),
+    });
+  });
+
+  const secretBody = z.object({
+    name: z
+      .string()
+      .regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/, 'letters, digits, underscores — start with a letter'),
+    value: z.string().min(1).max(4096),
+  });
+
+  app.put('/:id/secrets', zValidator('json', secretBody), async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const { name, value } = c.req.valid('json');
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(agentSecrets)
+      .where(eq(agentSecrets.agentId, agent.id));
+    const [existing] = await db
+      .select({ id: agentSecrets.id })
+      .from(agentSecrets)
+      .where(and(eq(agentSecrets.agentId, agent.id), eq(agentSecrets.name, name)))
+      .limit(1);
+    if (!existing && count >= 50) return c.json({ error: 'secret limit reached (50)' }, 409);
+
+    const valueEnc = encryptSecret(value);
+    const [row] = existing
+      ? await db
+          .update(agentSecrets)
+          .set({ valueEnc, updatedAt: new Date() })
+          .where(eq(agentSecrets.id, existing.id))
+          .returning()
+      : await db
+          .insert(agentSecrets)
+          .values({ workspaceId: agent.workspaceId, agentId: agent.id, name, valueEnc })
+          .returning();
+    return c.json({ secret: { name: row.name, created_at: row.createdAt.toISOString() } });
+  });
+
+  app.delete('/:id/secrets/:name', async (c) => {
+    if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
+    const [row] = await db
+      .delete(agentSecrets)
+      .where(
+        and(
+          eq(agentSecrets.agentId, c.req.param('id')),
+          eq(agentSecrets.name, c.req.param('name')),
+        ),
+      )
+      .returning();
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({ ok: true });
   });
 
   app.delete('/:id/knowledge/:fileId', async (c) => {

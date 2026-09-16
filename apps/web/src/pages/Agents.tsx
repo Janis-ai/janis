@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Agent, AgentConfig, AlertRule } from '@janis/shared';
+import type { Agent, AgentConfig, AgentSecretMeta, AlertRule } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgents, useAlertRules, useChannels, useDeliveries } from '../api/hooks';
 import { timeAgo } from '../components/bits';
@@ -331,7 +331,7 @@ function AgentCard({
               <textarea
                 rows={4}
                 className="mono"
-                placeholder={'[\n  {\n    "name": "lookup_order",\n    "description": "Look up an order in our POS by order number",\n    "method": "GET",\n    "url": "https://api.acme-pos.com/orders/{order_id}",\n    "headers": { "authorization": "Bearer …" },\n    "params": { "order_id": "the order number the user gave" }\n  }\n]'}
+                placeholder={'[\n  {\n    "name": "lookup_order",\n    "description": "Look up an order in our POS by order number",\n    "method": "GET",\n    "url": "https://api.acme-pos.com/orders/{order_id}",\n    "headers": { "authorization": "Bearer {{secrets.POS_API_KEY}}" },\n    "params": { "order_id": "the order number the user gave" }\n  }\n]'}
                 value={toolsJson}
                 onChange={(e) => setToolsJson(e.target.value)}
                 onBlur={() => {
@@ -345,6 +345,11 @@ function AgentCard({
                 }}
               />
               {toolsError && <div className="error">{toolsError}</div>}
+              <label>
+                Secrets — API credentials for tool calls; reference as{' '}
+                <span className="mono">{'{{secrets.NAME}}'}</span> in tool URLs and headers
+              </label>
+              <Secrets agentId={agent.id} />
               <label>LLM (OpenAI-compatible — leave blank to use server env)</label>
               <input
                 placeholder="API key (sk-…)"
@@ -545,6 +550,79 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
         />
         {uploading && <span className="muted">extracting…</span>}
       </div>
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
+function Secrets({ agentId }: { agentId: string }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['secrets', agentId],
+    queryFn: () => api<{ secrets: AgentSecretMeta[] }>(`/api/agents/${agentId}/secrets`),
+  });
+  const [name, setName] = useState('');
+  const [value, setValue] = useState('');
+  const [error, setError] = useState('');
+
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/agents/${agentId}/secrets`, {
+        method: 'PUT',
+        body: JSON.stringify({ name: name.trim(), value }),
+      }),
+    onSuccess: () => {
+      setName('');
+      setValue('');
+      setError('');
+      void qc.invalidateQueries({ queryKey: ['secrets', agentId] });
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : 'failed'),
+  });
+
+  const remove = useMutation({
+    mutationFn: (n: string) =>
+      api(`/api/agents/${agentId}/secrets/${encodeURIComponent(n)}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['secrets', agentId] }),
+  });
+
+  return (
+    <div>
+      {(data?.secrets ?? []).map((s) => (
+        <div key={s.name} className="row muted" style={{ marginTop: 6 }}>
+          <span className="grow mono">
+            🔒 {s.name} <span className="muted">— •••••••• (write-only)</span>
+          </span>
+          <button className="btn danger" onClick={() => remove.mutate(s.name)}>✕</button>
+        </div>
+      ))}
+      <form
+        className="row"
+        style={{ marginTop: 8 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (name.trim() && value) save.mutate();
+        }}
+      >
+        <input
+          className="mono"
+          style={{ width: 190 }}
+          placeholder="NAME (e.g. POS_API_KEY)"
+          value={name}
+          onChange={(e) => setName(e.target.value.toUpperCase())}
+        />
+        <input
+          className="grow"
+          type="password"
+          placeholder="value — stored encrypted, never shown again"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          autoComplete="new-password"
+        />
+        <button className="btn" disabled={save.isPending || !name.trim() || !value}>
+          {save.isPending ? 'Saving…' : 'Add'}
+        </button>
+      </form>
       {error && <div className="error">{error}</div>}
     </div>
   );

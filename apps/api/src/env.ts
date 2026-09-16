@@ -8,6 +8,10 @@ export const env = {
   vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? '',
   vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? '',
   vapidSubject: process.env.VAPID_SUBJECT ?? 'mailto:ops@janis.ai',
+  // AES-256-GCM key for agent secrets — 32 bytes, hex or base64.
+  // Falls back to a key derived from SESSION_SECRET (fine for dev; set a
+  // dedicated key in prod so rotating sessions doesn't strand secrets).
+  secretsKey: process.env.JANIS_SECRETS_KEY ?? '',
   // transactional email alerts (Resend) — inactive until both are set
   resendApiKey: process.env.RESEND_API_KEY ?? '',
   emailFrom: process.env.JANIS_EMAIL_FROM ?? 'Janis <alerts@janis.ai>',
