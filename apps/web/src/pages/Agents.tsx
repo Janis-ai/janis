@@ -125,7 +125,10 @@ export default function Agents() {
           agent={agent}
           rules={rulesData?.rules.filter((r) => r.agent_id === agent.id) ?? []}
           channels={channelsData?.channels.filter((c) => c.agent_id === agent.id) ?? []}
-          onSave={(body) => update.mutate({ id: agent.id, ...body })}
+          onSave={(body, opts) =>
+            update.mutate({ id: agent.id, ...body }, { onSuccess: opts?.onSuccess })
+          }
+          saving={update.isPending && update.variables?.id === agent.id}
           onTestWebhook={() => testWebhook.mutate(agent.id)}
           onRotateKey={() => rotateKey.mutate(agent.id)}
           onRotateSecret={() => rotateSecret.mutate(agent.id)}
@@ -146,6 +149,7 @@ function AgentCard({
   agent,
   rules,
   channels,
+  saving,
   onSave,
   onTestWebhook,
   onRotateKey,
@@ -158,13 +162,17 @@ function AgentCard({
   agent: Agent;
   rules: AlertRule[];
   channels: { id: string; kind: string; name: string }[];
-  onSave: (body: {
-    name?: string;
-    webhook_url?: string | null;
-    hosted?: boolean;
-    auto_resume_minutes?: number | null;
-    config?: AgentConfig;
-  }) => void;
+  saving: boolean;
+  onSave: (
+    body: {
+      name?: string;
+      webhook_url?: string | null;
+      hosted?: boolean;
+      auto_resume_minutes?: number | null;
+      config?: AgentConfig;
+    },
+    opts?: { onSuccess?: () => void },
+  ) => void;
   onTestWebhook: () => void;
   onRotateKey: () => void;
   onRotateSecret: () => void;
@@ -186,6 +194,7 @@ function AgentCard({
   const [toolsError, setToolsError] = useState('');
   const [showDeliveries, setShowDeliveries] = useState(false);
   const [testMsg, setTestMsg] = useState('');
+  const [savedFlash, setSavedFlash] = useState(false);
   const navigate = useNavigate();
   const onTestChat = async (text: string) => {
     const r = await api<{ conversation_id: string | null }>(`/api/agents/${agent.id}/chat`, {
@@ -419,16 +428,25 @@ function AgentCard({
         <span className="grow" />
         <button
           className="btn primary"
+          disabled={saving}
           onClick={() =>
-            onSave({
-              ...(name.trim() && name.trim() !== agent.name ? { name: name.trim() } : {}),
-              ...(agent.hosted ? {} : { webhook_url: webhookUrl || null }),
-              auto_resume_minutes: autoResume ? Number(autoResume) : null,
-              config: cfg,
-            })
+            onSave(
+              {
+                ...(name.trim() && name.trim() !== agent.name ? { name: name.trim() } : {}),
+                ...(agent.hosted ? {} : { webhook_url: webhookUrl || null }),
+                auto_resume_minutes: autoResume ? Number(autoResume) : null,
+                config: cfg,
+              },
+              {
+                onSuccess: () => {
+                  setSavedFlash(true);
+                  setTimeout(() => setSavedFlash(false), 2000);
+                },
+              },
+            )
           }
         >
-          Save Agent
+          {saving ? 'Saving…' : savedFlash ? 'Saved ✓' : 'Save Agent'}
         </button>
         <button className="btn danger" onClick={onDelete}>Delete agent</button>
       </div>
