@@ -116,6 +116,16 @@ async function callTool(
 ): Promise<string> {
   // Secrets expand first — LLM-supplied args can never inject {{secrets.*}}
   // placeholders, and arg values never get a second expansion pass.
+  const missing = [
+    ...new Set(
+      [tool.url, ...Object.values(tool.headers ?? {})]
+        .flatMap((s) => [...s.matchAll(/\{\{secrets\.([A-Za-z0-9_]+)\}\}/g)].map((m) => m[1]))
+        .filter((n) => !(n in secrets)),
+    ),
+  ];
+  if (missing.length) {
+    return `error: tool needs secrets not configured on this agent: ${missing.join(', ')}`;
+  }
   let url = interpolateSecrets(tool.url, secrets);
   const headers = tool.headers
     ? Object.fromEntries(
@@ -271,6 +281,13 @@ async function transcriptFor(db: Db, convId: string) {
   return rows
     .reverse()
     .filter((m) => m.text)
+    // internal notes (failures/handoffs/alerts) are operator context, not
+    // conversation content — feeding them as assistant messages makes the
+    // model parrot them back to the customer
+    .filter((m) => {
+      const f = m.flags as { failure?: boolean; help_requested?: boolean; custom_alert?: boolean };
+      return !(f?.failure || f?.help_requested || f?.custom_alert);
+    })
     .map((m) => ({
       role: m.direction === 'in' ? 'user' : 'assistant',
       content: m.direction === 'human' ? `(human operator) ${m.text}` : m.text!,
