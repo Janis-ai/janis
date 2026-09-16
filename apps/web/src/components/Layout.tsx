@@ -1,11 +1,12 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { useMe } from '../api/hooks';
+import { useAttentionCount, useMe } from '../api/hooks';
 import { useStream } from '../lib/useStream';
 
 export default function Layout() {
   const { data } = useMe();
+  const { data: attention } = useAttentionCount();
   const navigate = useNavigate();
   const qc = useQueryClient();
   useStream(true);
@@ -20,7 +21,7 @@ export default function Layout() {
     <div className="layout">
       <nav className="sidebar">
         <div className="brand">Janis</div>
-        <NavLink to="/inbox" end><span className="label">Inbox</span><span className="icon">⬤</span></NavLink>
+        <NavLink to="/inbox" end><span className="label">Inbox</span><span className="icon">⬤</span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
         <NavLink to="/channels"><span className="label">Channels</span><span className="icon">▤</span></NavLink>
         <NavLink to="/agents"><span className="label">Agents</span><span className="icon">◈</span></NavLink>
         <NavLink to="/reports"><span className="label">Reports</span><span className="icon">◫</span></NavLink>

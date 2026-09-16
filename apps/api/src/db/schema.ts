@@ -28,6 +28,8 @@ export const users = pgTable('users', {
   name: text('name').notNull(),
   passwordHash: text('password_hash'), // null for OAuth-only accounts
   role: text('role', { enum: ['admin', 'member'] }).notNull().default('member'),
+  // {push, email} — which channels alert this user when agents need a human
+  notifyPrefs: jsonb('notify_prefs').notNull().default({ push: true, email: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

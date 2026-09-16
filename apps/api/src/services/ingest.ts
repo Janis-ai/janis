@@ -102,6 +102,29 @@ export async function processEvents(
       });
     }
 
+    // Handing off — tell the end user a human is joining. Works for hosted
+    // and external agents; config.handoff_message overrides, '' disables.
+    if (
+      event.type === 'handoff_request' &&
+      conv.state === 'active' &&
+      updated.state === 'needs_human'
+    ) {
+      const notice = handoffNotice(agent);
+      if (notice) {
+        const [note] = await db
+          .insert(messages)
+          .values({
+            conversationId: conv.id,
+            direction: 'out',
+            text: notice,
+            payload: { via: 'handoff' },
+          })
+          .returning();
+        bus.publish(agent.workspaceId, { type: 'message', data: toMessage(note) });
+        void deliverToChannel(db, conv.id, notice);
+      }
+    }
+
     results.push({
       conversation_id: event.conversation_id,
       paused: updated.state === 'human',
@@ -173,6 +196,15 @@ function directionFor(event: IngestEvent): 'in' | 'out' | 'human' {
       // failures/handoffs/alerts are stored as agent-side context notes
       return 'out';
   }
+}
+
+function handoffNotice(agent: AgentRow): string | null {
+  const cfg = (agent.config ?? {}) as { handoff_message?: string };
+  if (cfg.handoff_message === '') return null; // explicit opt-out
+  return (
+    cfg.handoff_message ??
+    'Thanks for your patience — a human teammate is joining the conversation to help you further.'
+  );
 }
 
 function eventText(event: IngestEvent): string | undefined {

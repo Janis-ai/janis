@@ -168,5 +168,12 @@ export function toSuggestion(row: Row<typeof suggestions>): Suggestion {
 }
 
 export function toWorkspaceUser(row: Row<typeof users>): WorkspaceUser {
-  return { id: row.id, email: row.email, name: row.name, role: row.role };
+  const prefs = (row.notifyPrefs ?? {}) as { push?: boolean; email?: boolean };
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    role: row.role,
+    notify: { push: prefs.push !== false, email: prefs.email !== false },
+  };
 }

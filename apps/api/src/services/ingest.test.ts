@@ -65,6 +65,62 @@ describe('processEvents', () => {
     expect(results[0].alert_ids).toHaveLength(1);
   });
 
+  it('handoff_request stores a user-facing notice, once', async () => {
+    await processEvents(db, agent, [
+      { type: 'handoff_request', conversation_id: 'c5', reason: 'stuck' },
+    ]);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c5'));
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    const notice = msgs.find((m) => m.text?.includes('human teammate'));
+    expect(notice?.direction).toBe('out');
+
+    // second handoff while already needs_human → no duplicate notice
+    await processEvents(db, agent, [
+      { type: 'handoff_request', conversation_id: 'c5', reason: 'stuck again' },
+    ]);
+    const msgs2 = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(msgs2.filter((m) => m.text?.includes('human teammate'))).toHaveLength(1);
+  });
+
+  it('handoff notice respects config override and opt-out', async () => {
+    const custom = await db
+      .update(agents)
+      .set({ config: { handoff_message: 'A person will join shortly.' } })
+      .where(eq(agents.id, agent.id))
+      .returning();
+    await processEvents(db, custom[0], [
+      { type: 'handoff_request', conversation_id: 'c6', reason: 'x' },
+    ]);
+    const [conv6] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c6'));
+    const msgs6 = await db.select().from(messages).where(eq(messages.conversationId, conv6.id));
+    expect(msgs6.some((m) => m.text === 'A person will join shortly.')).toBe(true);
+
+    const off = await db
+      .update(agents)
+      .set({ config: { handoff_message: '' } })
+      .where(eq(agents.id, agent.id))
+      .returning();
+    await processEvents(db, off[0], [
+      { type: 'handoff_request', conversation_id: 'c7', reason: 'x' },
+    ]);
+    const [conv7] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c7'));
+    const msgs7 = await db.select().from(messages).where(eq(messages.conversationId, conv7.id));
+    // internal note still stored, but no user-facing notice (via: handoff)
+    expect(msgs7.some((m) => (m.payload as { via?: string })?.via === 'handoff')).toBe(false);
+
+    // restore default for other tests
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agent.id));
+  });
+
   it('fires keyword rules on inbound text', async () => {
     await db.insert(alertRules).values({
       agentId: agent.id,

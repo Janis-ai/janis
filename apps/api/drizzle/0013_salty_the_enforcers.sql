@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "notify_prefs" jsonb DEFAULT '{"push":true,"email":true}'::jsonb NOT NULL;

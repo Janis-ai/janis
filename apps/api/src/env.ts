@@ -8,6 +8,9 @@ export const env = {
   vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? '',
   vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? '',
   vapidSubject: process.env.VAPID_SUBJECT ?? 'mailto:ops@janis.ai',
+  // transactional email alerts (Resend) — inactive until both are set
+  resendApiKey: process.env.RESEND_API_KEY ?? '',
+  emailFrom: process.env.JANIS_EMAIL_FROM ?? 'Janis <alerts@janis.ai>',
   seedAdminEmail: process.env.SEED_ADMIN_EMAIL ?? 'admin@janis.local',
   seedAdminPassword: process.env.SEED_ADMIN_PASSWORD ?? 'janis-admin',
   // Janis-side suggestion generation (OpenAI-compatible chat completions)

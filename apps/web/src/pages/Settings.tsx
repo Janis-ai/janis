@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import type { WorkspaceUser } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
 import { subscribeToPush, unsubscribeFromPush } from '../lib/push';
@@ -65,6 +66,18 @@ export default function Settings() {
     },
   });
 
+  const setNotify = useMutation({
+    mutationFn: (notify: { push?: boolean; email?: boolean }) =>
+      api<{ user: WorkspaceUser }>('/api/users/me', {
+        method: 'PATCH',
+        body: JSON.stringify({ notify }),
+      }),
+    onSuccess: (d) =>
+      qc.setQueryData<{ user: WorkspaceUser; workspace: unknown }>(['me'], (old) =>
+        old ? { ...old, user: d.user } : old,
+      ),
+  });
+
   const addReply = useMutation({
     mutationFn: (body: typeof reply) =>
       api('/api/saved-replies', { method: 'POST', body: JSON.stringify(body) }),
@@ -108,6 +121,28 @@ export default function Settings() {
           <button className="btn" onClick={() => void unsubscribeFromPush()}>Disable</button>
         </div>
         {pushMsg && <div className="muted" style={{ marginTop: 8 }}>{pushMsg}</div>}
+        {me && (
+          <div style={{ display: 'flex', gap: 18, marginTop: 12, fontSize: 14 }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={me.user.notify?.push !== false}
+                disabled={setNotify.isPending}
+                onChange={(e) => setNotify.mutate({ push: e.target.checked })}
+              />{' '}
+              Web push
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={me.user.notify?.email !== false}
+                disabled={setNotify.isPending}
+                onChange={(e) => setNotify.mutate({ email: e.target.checked })}
+              />{' '}
+              Email
+            </label>
+          </div>
+        )}
       </div>
 
       <div className="card">

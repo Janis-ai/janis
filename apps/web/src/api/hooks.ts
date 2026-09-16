@@ -129,6 +129,14 @@ export function useSlackChannels(enabled: boolean) {
   });
 }
 
+export function useAttentionCount() {
+  return useQuery({
+    queryKey: ['attention-count'],
+    queryFn: () => api<{ count: number }>('/api/conversations/attention-count'),
+    refetchInterval: 60_000,
+  });
+}
+
 export function useInvalidateConversations() {
   const qc = useQueryClient();
   return () => {

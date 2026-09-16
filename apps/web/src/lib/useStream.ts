@@ -14,6 +14,7 @@ export function useStream(enabled: boolean) {
       void qc.invalidateQueries({ queryKey: ['conversations'] });
       void qc.invalidateQueries({ queryKey: ['conversation'] });
       void qc.invalidateQueries({ queryKey: ['alerts'] });
+      void qc.invalidateQueries({ queryKey: ['attention-count'] });
     };
     source.addEventListener('message', refresh);
     source.addEventListener('conversation', refresh);

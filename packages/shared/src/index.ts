@@ -296,6 +296,7 @@ export const WorkspaceUser = z.object({
   email: z.string(),
   name: z.string(),
   role: z.enum(['admin', 'member']),
+  notify: z.object({ push: z.boolean(), email: z.boolean() }).default({ push: true, email: true }),
 });
 export type WorkspaceUser = z.infer<typeof WorkspaceUser>;
 

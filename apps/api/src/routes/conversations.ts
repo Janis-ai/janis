@@ -84,6 +84,22 @@ export function conversationRoutes(db: Db) {
     });
   });
 
+  // count of conversations needing a human — powers the nav badge
+  app.get('/attention-count', async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(
+        and(
+          eq(agents.workspaceId, workspaceId),
+          inArray(conversations.state, ['needs_human', 'human']),
+        ),
+      );
+    return c.json({ count });
+  });
+
   app.get('/:id', async (c) => {
     const workspaceId = c.get('workspaceId');
     const [row] = await db

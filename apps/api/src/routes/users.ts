@@ -44,6 +44,34 @@ export function userRoutes(db: Db) {
     return c.json({ user: toWorkspaceUser(row) }, 201);
   });
 
+  // update your own preferences (notification channels)
+  app.patch(
+    '/me',
+    zValidator(
+      'json',
+      z.object({
+        notify: z
+          .object({ push: z.boolean().optional(), email: z.boolean().optional() })
+          .optional(),
+      }),
+    ),
+    async (c) => {
+      const me = c.get('user');
+      const body = c.req.valid('json');
+      const current = (me.notifyPrefs ?? {}) as { push?: boolean; email?: boolean };
+      const next = {
+        push: body.notify?.push ?? current.push ?? true,
+        email: body.notify?.email ?? current.email ?? true,
+      };
+      const [row] = await db
+        .update(users)
+        .set({ notifyPrefs: next })
+        .where(eq(users.id, me.id))
+        .returning();
+      return c.json({ user: toWorkspaceUser(row) });
+    },
+  );
+
   // admin-only: change a teammate's role
   app.patch(
     '/:id',
