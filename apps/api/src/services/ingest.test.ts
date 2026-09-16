@@ -10,6 +10,7 @@ import { agents, alertRules, alerts, conversations, messages, users, workspaces 
 import { generateApiKey, hashPassword } from '../lib/crypto.js';
 import { processEvents } from './ingest.js';
 import { takeover, humanReply, resume } from './takeover.js';
+import { saveUserProfile } from '../lib/hostedAgent.js';
 
 let db: Db;
 let agent: typeof agents.$inferSelect;
@@ -127,6 +128,29 @@ describe('processEvents', () => {
     await db.update(agents).set({ config: {} }).where(eq(agents.id, agent.id));
   });
 
+  it('merges event.user into the stored profile instead of replacing it', async () => {
+    await processEvents(db, agent, [
+      {
+        type: 'message_in',
+        conversation_id: 'c8',
+        text: 'hi',
+        user: { id: 'u1', name: 'Jane', email: 'jane@x.com', channel: 'instagram' },
+      },
+    ]);
+    // sparse update — only carries name; email/channel must survive
+    await processEvents(db, agent, [
+      { type: 'message_in', conversation_id: 'c8', text: 'again', user: { id: 'u1', name: 'Janet' } },
+    ]);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c8'));
+    const p = conv.userProfile as Record<string, unknown>;
+    expect(p.name).toBe('Janet');
+    expect(p.email).toBe('jane@x.com');
+    expect(p.channel).toBe('instagram');
+  });
+
   it('fires keyword rules on inbound text', async () => {
     await db.insert(alertRules).values({
       agentId: agent.id,
@@ -165,6 +189,27 @@ describe('takeover lifecycle', () => {
 
     const resumed = await resume(db, admin.workspaceId, conv.id, admin);
     expect(resumed.state).toBe('active');
+  });
+
+  it('save_user_profile tool stores customer-supplied details', async () => {
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c8'));
+    const ctx = { db, convId: conv.id, workspaceId: agent.workspaceId };
+    expect(await saveUserProfile(ctx, { email: 'not-an-email' })).toContain('error');
+    expect(await saveUserProfile(ctx, {})).toContain('error');
+    expect(await saveUserProfile(ctx, { email: 'real@x.com', name: 'Jane R' })).toBe(
+      'saved: name, email',
+    );
+    const [updated] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    const p = updated.userProfile as Record<string, unknown>;
+    expect(p.email).toBe('real@x.com');
+    expect(p.name).toBe('Jane R');
+    expect(p.channel).toBe('instagram'); // earlier fields preserved
   });
 
   it('rejects reply without takeover', async () => {

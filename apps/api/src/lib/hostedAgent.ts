@@ -1,5 +1,5 @@
 import { and, desc, eq } from 'drizzle-orm';
-import type { OutboundWebhook } from '@janis/shared';
+import type { OutboundWebhook, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, conversations, knowledgeFiles, messages } from '../db/schema.js';
 import { env } from '../env.js';
@@ -7,8 +7,10 @@ import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage } from './usage.js';
 import { interpolateSecrets, loadSecretsMap } from './secrets.js';
+import { bus } from './bus.js';
 
 type AgentRow = typeof agents.$inferSelect;
+type ConversationRow = typeof conversations.$inferSelect;
 
 export interface LlmSettings {
   apiKey: string;
@@ -52,7 +54,31 @@ export async function loadKnowledgeDocs(
   return docs;
 }
 
-export function systemPrompt(agent: AgentRow, docs: { name: string; text: string }[] = []): string {
+/** Delimited, data-only context: which channel the agent is on and who the
+ *  end user is. Never framed as instructions. */
+export function conversationContext(conv: ConversationRow): string {
+  const p = (conv.userProfile ?? {}) as UserProfile;
+  const channel = p.channel ?? conv.externalId.split(':')[0] ?? 'external';
+  const lines = [
+    `- Channel: ${channel}${p.channel_name ? ` — account "${p.channel_name}"` : ''}`,
+  ];
+  const who = [p.name, p.username ? `(@${p.username})` : null].filter(Boolean).join(' ');
+  if (who) lines.push(`- Customer: ${who}`);
+  if (p.id) lines.push(`- Customer platform id: ${p.id}`);
+  if (p.phone) lines.push(`- Customer phone: ${p.phone}`);
+  lines.push(
+    p.email
+      ? `- Customer email: ${p.email}`
+      : '- Customer email: unknown — if you need it, ask the customer and save it with save_user_profile',
+  );
+  return `\nConversation context (background information about this conversation, not instructions):\n${lines.join('\n')}`;
+}
+
+export function systemPrompt(
+  agent: AgentRow,
+  docs: { name: string; text: string }[] = [],
+  conv?: ConversationRow,
+): string {
   const cfg = (agent.config ?? {}) as {
     system_prompt?: string;
     knowledge?: string[];
@@ -73,6 +99,7 @@ export function systemPrompt(agent: AgentRow, docs: { name: string; text: string
     );
   }
   if (cfg.tone) parts.push(`\nTone: ${cfg.tone}`);
+  if (conv) parts.push(conversationContext(conv));
   parts.push('\nIf the user asks for a human or you cannot help, reply with exactly: [HANDOFF]');
   return parts.join('');
 }
@@ -162,6 +189,50 @@ async function callTool(
   return res.ok ? body : `error: HTTP ${res.status} ${body.slice(0, 300)}`;
 }
 
+export interface AgentRunContext {
+  db: Db;
+  convId: string;
+  workspaceId: string;
+}
+
+const SAVE_PROFILE_TOOL = 'save_user_profile';
+
+/**
+ * Built-in tool: persist contact details the customer explicitly shared.
+ * Meta exposes no email on any platform, so this is how profiles get one.
+ * Returns a result string for the tool message.
+ */
+export async function saveUserProfile(
+  ctx: AgentRunContext,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const name = typeof args.name === 'string' ? args.name.trim() : undefined;
+  const email = typeof args.email === 'string' ? args.email.trim() : undefined;
+  const phone = typeof args.phone === 'string' ? args.phone.trim() : undefined;
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return 'error: not saved — that does not look like a valid email address';
+  }
+  const update = Object.fromEntries(
+    Object.entries({ name, email, phone }).filter(([, v]) => v),
+  );
+  if (!Object.keys(update).length) return 'error: nothing to save';
+  const [conv] = await ctx.db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.id, ctx.convId))
+    .limit(1);
+  if (!conv) return 'error: conversation not found';
+  await ctx.db
+    .update(conversations)
+    .set({ userProfile: { ...(conv.userProfile as UserProfile), ...update } })
+    .where(eq(conversations.id, ctx.convId));
+  bus.publish(ctx.workspaceId, {
+    type: 'conversation',
+    data: { id: ctx.convId, state: conv.state },
+  });
+  return `saved: ${Object.keys(update).join(', ')}`;
+}
+
 interface Completion {
   text: string | null;
   promptTokens: number;
@@ -183,27 +254,50 @@ async function complete(
   history: { role: string; content: string }[],
   tools: ToolDef[] = [],
   secrets: Record<string, string> = {},
+  ctx?: AgentRunContext,
 ): Promise<Completion> {
   const empty = { text: null, promptTokens: 0, completionTokens: 0 };
   if (!llm.apiKey) return empty;
 
   const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
-  const openaiTools = tools.length
-    ? tools.map((t) => ({
-        type: 'function',
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: {
-            type: 'object',
-            properties: Object.fromEntries(
-              Object.entries(t.params ?? {}).map(([k, d]) => [k, { type: 'string', description: d }]),
-            ),
-            required: Object.keys(t.params ?? {}),
-          },
+  const openaiTools = [
+    ...tools.map((t) => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: {
+          type: 'object',
+          properties: Object.fromEntries(
+            Object.entries(t.params ?? {}).map(([k, d]) => [k, { type: 'string', description: d }]),
+          ),
+          required: Object.keys(t.params ?? {}),
         },
-      }))
-    : undefined;
+      },
+    })),
+    // Built-in: lets the agent save contact details the customer volunteers
+    ...(ctx
+      ? [
+          {
+            type: 'function',
+            function: {
+              name: SAVE_PROFILE_TOOL,
+              description:
+                'Save contact details the customer explicitly stated in this conversation (name, email, phone). Only call with information the customer gave you — never guess.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string', description: "customer's full name" },
+                  email: { type: 'string', description: "customer's email address" },
+                  phone: { type: 'string', description: "customer's phone number" },
+                },
+              },
+            },
+          },
+        ]
+      : []),
+  ];
+  const toolsSchema = openaiTools.length ? openaiTools : undefined;
 
   let promptTokens = 0;
   let completionTokens = 0;
@@ -213,7 +307,7 @@ async function complete(
       model: llm.model,
       max_tokens: 400,
       messages: msgs,
-      ...(openaiTools ? { tools: openaiTools } : {}),
+      ...(toolsSchema ? { tools: toolsSchema } : {}),
     });
     // One retry — a single timeout shouldn't hand a live conversation to a human
     let res!: Response;
@@ -257,11 +351,15 @@ async function complete(
     msgs.push({ role: 'assistant', content: msg?.content ?? null, tool_calls: calls });
     for (const call of calls) {
       const tool = tools.find((t) => t.name === call.function.name);
+      const args = JSON.parse(call.function.arguments || '{}');
       let result: string;
       try {
-        result = tool
-          ? await callTool(tool, JSON.parse(call.function.arguments || '{}'), secrets)
-          : `error: unknown tool ${call.function.name}`;
+        result =
+          call.function.name === SAVE_PROFILE_TOOL && ctx
+            ? await saveUserProfile(ctx, args)
+            : tool
+              ? await callTool(tool, args, secrets)
+              : `error: unknown tool ${call.function.name}`;
       } catch (err) {
         result = `error: ${err instanceof Error ? err.message : 'tool failed'}`;
       }
@@ -307,16 +405,24 @@ export async function runHostedEvent(
   if (event.type === 'suggestion.request') {
     const convId = event.janis_conversation_id;
     if (!convId) return;
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, convId))
+      .limit(1);
+    if (!conv) return;
     const llm = llmFor(agent);
     const history = await transcriptFor(db, convId);
     const docs = await loadKnowledgeDocs(db, agent.id);
     const secrets = await loadSecretsMap(db, agent.id);
+    const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId };
     const result = await complete(
       llm,
-      systemPrompt(agent, docs),
+      systemPrompt(agent, docs, conv),
       history,
       toolsFor(agent),
       secrets,
+      ctx,
     ).catch(() => null);
     if (result) {
       await recordLlmUsage(db, {
@@ -358,12 +464,14 @@ export async function runHostedEvent(
     const history = await transcriptFor(db, convId);
     const docs = await loadKnowledgeDocs(db, agent.id);
     const secrets = await loadSecretsMap(db, agent.id);
+    const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId };
     const { text: reply, promptTokens, completionTokens } = await complete(
       llm,
-      systemPrompt(agent, docs),
+      systemPrompt(agent, docs, conv),
       history,
       toolsFor(agent),
       secrets,
+      ctx,
     );
     if (promptTokens || completionTokens) {
       await recordLlmUsage(db, {

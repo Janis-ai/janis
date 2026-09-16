@@ -103,7 +103,10 @@ export async function processEvents(
         lastMessageDirection: directionFor(event),
         // new inbound traffic marks the conversation unread for operators
         isUnread: directionFor(event) === 'in' ? true : conv.isUnread,
-        ...(event.user ? { userProfile: event.user } : {}),
+        // Merge, not replace — later events only overwrite the fields they
+        // actually carry, so a profile fetched earlier (or an email the
+        // customer shared) survives sparse updates
+        ...(event.user ? { userProfile: mergeProfile(conv.userProfile, event.user) } : {}),
       })
       .where(eq(conversations.id, conv.id))
       .returning();
@@ -197,6 +200,18 @@ async function insertEventMessage(db: Db, conversationId: string, event: IngestE
   // message_out / message_in / human-bearing events all produce a message row
   const [message] = await db.insert(messages).values(row).returning();
   return message;
+}
+
+/** Overlay defined values from `update` onto the stored profile. */
+function mergeProfile(
+  existing: unknown,
+  update: Record<string, unknown>,
+): Record<string, unknown> {
+  const base = (existing ?? {}) as Record<string, unknown>;
+  const defined = Object.fromEntries(
+    Object.entries(update).filter(([, v]) => v != null && v !== ''),
+  );
+  return { ...base, ...defined };
 }
 
 function directionFor(event: IngestEvent): 'in' | 'out' | 'human' {

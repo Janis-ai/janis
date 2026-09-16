@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Attachment, Conversation, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
-import { StateBadge } from '../components/bits';
+import { Avatar, channelLabel, displayName, StateBadge } from '../components/bits';
 import Composer from '../components/Composer';
 
 const WHO: Record<Message['direction'], string> = {
@@ -90,7 +90,13 @@ export default function ConversationPage() {
   }
   if (!data) return <div className="muted">Loading…</div>;
   const { conversation: c, messages, alerts, suggestions } = data;
-  const name = (c.user_profile?.name as string) ?? c.external_id;
+  const p = c.user_profile ?? {};
+  const name = displayName(c);
+  const KNOWN = new Set([
+    'id', 'name', 'first_name', 'last_name', 'username', 'email', 'phone',
+    'channel', 'channel_name', 'profile_fetched_at', 'metadata',
+  ]);
+  const extraProfile = Object.entries(p).filter(([k]) => !KNOWN.has(k));
   const agent = agents?.agents.find((a) => a.id === c.agent_id);
   const assignee = users?.users.find((u) => u.id === c.assignee_id);
   const openAlerts = alerts.filter((a) => a.status === 'open');
@@ -227,14 +233,29 @@ export default function ConversationPage() {
       <aside className="conv-side">
         <div className="card">
           <strong>Details</strong>
+          <div className="profile-head">
+            <Avatar c={c} size={44} />
+            <div>
+              <div className="profile-name">{name}</div>
+              {p.username && !name.startsWith('@') && (
+                <div className="muted">@{p.username}</div>
+              )}
+            </div>
+          </div>
           <div className="muted" style={{ marginTop: 8 }}>
-            <div>Agent: {agent?.name ?? '—'}</div>
-            <div>User id: {c.external_id}</div>
-            {Object.entries(c.user_profile ?? {}).map(([k, v]) =>
-              k === 'metadata' ? null : (
-                <div key={k}>{k}: {String(v)}</div>
-              ),
+            {(p.channel || p.channel_name) && (
+              <div>
+                Channel: {channelLabel(p.channel)}
+                {p.channel_name ? ` · ${p.channel_name}` : ''}
+              </div>
             )}
+            <div>Email: {p.email ?? '—'}</div>
+            {p.phone && <div>Phone: {p.phone}</div>}
+            <div>User id: {p.id ?? c.external_id}</div>
+            <div>Agent: {agent?.name ?? '—'}</div>
+            {extraProfile.map(([k, v]) => (
+              <div key={k}>{k}: {String(v)}</div>
+            ))}
             <div>Assigned: {assignee?.name ?? 'unassigned'}</div>
             {c.human_since && <div>Human since: {new Date(c.human_since).toLocaleTimeString()}</div>}
             {agent?.auto_resume_minutes && (

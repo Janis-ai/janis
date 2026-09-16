@@ -71,6 +71,19 @@ button, input, select, textarea { font: inherit; }
 .alert-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
 .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 .conv-row .who .name.unread { font-weight: 700; }
+
+.avatar { border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.avatar.fallback {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent-dim); color: var(--accent); font-weight: 600;
+}
+.channel-tag {
+  margin-left: 8px; font-size: 10px; font-weight: 500; padding: 1px 7px;
+  border-radius: 8px; background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--border); vertical-align: middle;
+}
+.profile-head { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.profile-name { font-weight: 600; }
 .search-box { flex: 1; min-width: 200px; }
 
 .transcript {

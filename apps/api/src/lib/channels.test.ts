@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { parseMetaWebhook, verifyMetaSignature } from './channels.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fetchPlatformProfile, parseMetaWebhook, verifyMetaSignature } from './channels.js';
+import type { channels } from '../db/schema.js';
 import { createHmac } from 'node:crypto';
 
 describe('parseMetaWebhook', () => {
@@ -53,6 +54,60 @@ describe('parseMetaWebhook', () => {
     expect(parseMetaWebhook(body)).toEqual([
       { objectId: 'PHONE1', senderId: '15551234567', text: 'hi', name: 'Jane' },
     ]);
+  });
+});
+
+describe('fetchPlatformProfile', () => {
+  const ch = (kind: string) =>
+    ({
+      kind,
+      credentials: { access_token: 'tok', page_id: 'PG1', phone_number_id: 'PN1' },
+    }) as typeof channels.$inferSelect;
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('fetches messenger name and picture with the right fields', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          first_name: 'Jane',
+          last_name: 'Doe',
+          profile_pic: 'https://cdn.example/pic.jpg',
+        }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const p = await fetchPlatformProfile(ch('messenger'), 'PSID1');
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('PSID1?fields=first_name,last_name,profile_pic'),
+      expect.anything(),
+    );
+    expect(p.name).toBe('Jane Doe');
+    expect(p.picture_url).toBe('https://cdn.example/pic.jpg');
+    expect(p.profile_fetched_at).toBeTruthy();
+  });
+
+  it('fetches instagram name/username/picture', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ name: 'Jane', username: 'jane.d', profile_pic: 'https://cdn/ig.jpg' }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const p = await fetchPlatformProfile(ch('instagram'), 'IGSID1');
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('IGSID1?fields=name,username,profile_pic'),
+      expect.anything(),
+    );
+    expect(p.username).toBe('jane.d');
+  });
+
+  it('returns {} for whatsapp (no profile endpoint) and failures', async () => {
+    expect(await fetchPlatformProfile(ch('whatsapp'), '1555')).toEqual({});
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 400 })));
+    expect(await fetchPlatformProfile(ch('messenger'), 'PSID1')).toEqual({});
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')));
+    expect(await fetchPlatformProfile(ch('messenger'), 'PSID1')).toEqual({});
   });
 });
 

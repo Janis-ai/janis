@@ -3,7 +3,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alerts, conversations, messages, suggestions } from '../db/schema.js';
+import { agents, alerts, channelBindings, channels, conversations, messages, suggestions } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toAlert, toConversation, toMessage, toSuggestion } from '../lib/serializers.js';
 import { bus } from '../lib/bus.js';
@@ -16,6 +16,7 @@ import {
   TakeoverError,
 } from '../services/takeover.js';
 import { requestSuggestion } from '../services/suggestions.js';
+import { fetchPlatformProfile } from '../lib/channels.js';
 
 const listQuery = z.object({
   state: z.enum(['active', 'needs_human', 'human', 'archived', 'unread', 'starred']).optional(),
@@ -153,6 +154,60 @@ export function conversationRoutes(db: Db) {
       messages: msgs.map(toMessage),
       alerts: convAlerts.map(toAlert),
       suggestions: convSuggestions.map(toSuggestion),
+    });
+  });
+
+  // Proxied profile picture — Meta CDN urls are signed and expire, so the
+  // client never sees them; on a dead link we re-resolve via the Graph API.
+  app.get('/:id/avatar', async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const [row] = await db
+      .select({ conversation: conversations })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+
+    const profile = (row.conversation.userProfile ?? {}) as {
+      picture_url?: string;
+      id?: string;
+    };
+    if (!profile.picture_url) return c.json({ error: 'no avatar' }, 404);
+
+    let res = await fetch(profile.picture_url, {
+      signal: AbortSignal.timeout(8_000),
+    }).catch(() => null);
+
+    if (!res?.ok) {
+      // Signed url likely expired — re-fetch the profile and try once more
+      const [bound] = await db
+        .select({ channel: channels, binding: channelBindings })
+        .from(channelBindings)
+        .innerJoin(channels, eq(channelBindings.channelId, channels.id))
+        .where(eq(channelBindings.conversationId, row.conversation.id))
+        .limit(1);
+      if (bound && profile.id) {
+        const fresh = await fetchPlatformProfile(bound.channel, profile.id);
+        if (fresh.picture_url && fresh.picture_url !== profile.picture_url) {
+          await db
+            .update(conversations)
+            .set({ userProfile: { ...profile, ...fresh } })
+            .where(eq(conversations.id, row.conversation.id));
+          res = await fetch(fresh.picture_url, {
+            signal: AbortSignal.timeout(8_000),
+          }).catch(() => null);
+        }
+      }
+    }
+
+    if (!res?.ok) return c.json({ error: 'avatar unavailable' }, 404);
+    const bytes = await res.arrayBuffer();
+    return new Response(bytes, {
+      headers: {
+        'content-type': res.headers.get('content-type') ?? 'image/jpeg',
+        'cache-control': 'private, max-age=86400',
+      },
     });
   });
 

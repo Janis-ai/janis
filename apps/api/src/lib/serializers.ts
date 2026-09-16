@@ -54,7 +54,10 @@ export function toConversation(row: Row<typeof conversations>, openAlertCount = 
     external_id: row.externalId,
     state: row.state,
     assignee_id: row.assigneeId,
-    user_profile: (row.userProfile ?? {}) as Record<string, unknown>,
+    // picture_url is a signed Meta CDN link — it stays server-side and is
+    // served through /api/conversations/:id/avatar instead
+    user_profile: stripPictureUrl(row.userProfile),
+    has_avatar: Boolean((row.userProfile as { picture_url?: string } | null)?.picture_url),
     tags: row.tags ?? [],
     last_message_at: iso(row.lastMessageAt),
     last_message_preview: row.lastMessagePreview,
@@ -64,6 +67,12 @@ export function toConversation(row: Row<typeof conversations>, openAlertCount = 
     human_since: iso(row.humanSince),
     created_at: iso(row.createdAt)!,
   };
+}
+
+function stripPictureUrl(profile: unknown): Record<string, unknown> {
+  const p = { ...((profile ?? {}) as Record<string, unknown>) };
+  delete p.picture_url;
+  return p;
 }
 
 export function toMessage(row: Row<typeof messages>): Message {

@@ -39,18 +39,33 @@ export type AlertStatus = z.infer<typeof AlertStatus>;
 // Ingestion — events an agent sends to Janis (POST /v1/events)
 // ---------------------------------------------------------------------------
 
+/** Normalized end-user profile stored on a conversation. All fields optional —
+ *  platforms supply different subsets (Meta never exposes email). */
+export const UserProfile = z
+  .object({
+    id: z.string().optional(), // platform user id (PSID / IGSID / wa_id) or client id
+    name: z.string().optional(),
+    first_name: z.string().optional(),
+    last_name: z.string().optional(),
+    username: z.string().optional(), // instagram handle
+    email: z.string().optional(),
+    phone: z.string().optional(), // whatsapp number
+    channel: z.string().optional(), // messenger | instagram | whatsapp | external
+    channel_name: z.string().optional(), // page/account the customer messaged
+    picture_url: z.string().optional(), // raw CDN url — internal, stripped in API
+    profile_fetched_at: z.string().optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .passthrough();
+export type UserProfile = z.infer<typeof UserProfile>;
+
 const eventBase = {
   /** Client's own conversation/user identifier; created if unseen. */
   conversation_id: z.string().min(1).max(256),
-  /** Optional end-user profile shown to the human operator. */
-  user: z
-    .object({
-      id: z.string().optional(),
-      name: z.string().optional(),
-      email: z.string().optional(),
-      metadata: z.record(z.unknown()).optional(),
-    })
-    .optional(),
+  /** Optional end-user profile shown to the human operator. Merged into the
+   *  conversation's stored profile — later events only overwrite the fields
+   *  they actually carry. */
+  user: UserProfile.optional(),
   /** ISO timestamp; defaults to server receive time. */
   timestamp: z.string().datetime({ offset: true }).optional(),
 };
@@ -196,7 +211,9 @@ export const Conversation = z.object({
   external_id: z.string(),
   state: ConversationState,
   assignee_id: z.string().nullable(),
-  user_profile: z.record(z.unknown()),
+  user_profile: UserProfile,
+  /** True when a profile picture exists — fetch it via /api/conversations/:id/avatar */
+  has_avatar: z.boolean(),
   tags: z.array(z.string()),
   last_message_at: z.string().nullable(),
   last_message_preview: z.string().nullable(),
@@ -327,9 +344,10 @@ export const OutboundWebhook = z.object({
   janis_conversation_id: z.string(),
   text: z.string().optional(),
   operator: z.object({ id: z.string(), name: z.string() }).optional(),
-  user: z
-    .object({ id: z.string().optional(), name: z.string().optional() })
-    .optional(), // end-user info on message.user
+  user: UserProfile.optional(), // end-user info on message.user (picture_url omitted)
+  channel: z
+    .object({ kind: z.string(), name: z.string() })
+    .optional(), // hosted channel the message arrived on, if any
   payload: z.record(z.unknown()).optional(),
   timestamp: z.string(),
 });

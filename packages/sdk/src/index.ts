@@ -12,8 +12,15 @@ export interface JanisOptions {
 export interface UserRef {
   id?: string;
   name?: string;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
   email?: string;
+  phone?: string;
+  channel?: string;
+  channel_name?: string;
   metadata?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 export interface ConversationState {

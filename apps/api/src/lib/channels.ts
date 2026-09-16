@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { eq } from 'drizzle-orm';
+import type { UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { channelBindings, channels } from '../db/schema.js';
 
@@ -164,6 +165,49 @@ export function channelChatUrl(channel: ChannelRow): string | undefined {
   if (channel.kind === 'instagram' && c.username) return `https://ig.me/m/${c.username}`;
   if (channel.kind === 'whatsapp' && c.phone_number) return `https://wa.me/${c.phone_number}`;
   return undefined;
+}
+
+/**
+ * Best-effort end-user profile lookup on the Graph API. Meta never exposes
+ * email; WhatsApp has no profile endpoint (name comes in the webhook), so it
+ * returns {}. Failures return {} — never block message ingest on this.
+ */
+export async function fetchPlatformProfile(
+  channel: ChannelRow,
+  platformUserId: string,
+): Promise<Partial<UserProfile>> {
+  const creds = channel.credentials as ChannelCredentials;
+  if (!creds.access_token || channel.kind === 'whatsapp') return {};
+  const fields =
+    channel.kind === 'instagram'
+      ? 'name,username,profile_pic'
+      : 'first_name,last_name,profile_pic';
+  try {
+    const res = await fetch(
+      `${GRAPH}/${platformUserId}?fields=${fields}&access_token=${creds.access_token}`,
+      { signal: AbortSignal.timeout(5_000) },
+    );
+    if (!res.ok) return {};
+    const d = (await res.json()) as {
+      name?: string;
+      first_name?: string;
+      last_name?: string;
+      username?: string;
+      profile_pic?: string;
+    };
+    const name =
+      d.name ?? ([d.first_name, d.last_name].filter(Boolean).join(' ') || undefined);
+    return {
+      name,
+      first_name: d.first_name,
+      last_name: d.last_name,
+      username: d.username,
+      picture_url: d.profile_pic,
+      profile_fetched_at: new Date().toISOString(),
+    };
+  } catch {
+    return {};
+  }
 }
 
 /**

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Conversation } from '@janis/shared';
 import { useConversations, useAgents, useSearch } from '../api/hooks';
-import { Empty, StateBadge, timeAgo } from '../components/bits';
+import { Avatar, channelLabel, displayName, Empty, StateBadge, timeAgo } from '../components/bits';
 
 const STATES = ['', 'needs_human', 'human', 'active', 'unread', 'starred', 'archived'] as const;
 
@@ -11,10 +11,14 @@ function ConvRow({ c }: { c: Conversation }) {
     <Link to={`/conversations/${c.id}`} className="conv-row">
       {c.open_alert_count > 0 && <span className="alert-dot" />}
       {c.is_unread && <span className="unread-dot" title="Unread" />}
+      <Avatar c={c} size={34} />
       <div className="who">
         <div className={`name ${c.is_unread ? 'unread' : ''}`}>
           {c.is_starred && '⭐ '}
-          {(c.user_profile?.name as string) ?? c.external_id}
+          {displayName(c)}
+          {c.user_profile?.channel && (
+            <span className="channel-tag">{channelLabel(c.user_profile.channel)}</span>
+          )}
         </div>
         <div className="preview">{c.last_message_preview}</div>
       </div>
