@@ -15,8 +15,8 @@ import { resume } from './takeover.js';
  */
 export function startSweeper(db: Db, intervalMs = 60_000): () => void {
   const timer = setInterval(() => {
-    void sweep(db);
-    void sweepAutoResume(db);
+    void sweep(db).catch((err) => console.error('sweep error:', err));
+    void sweepAutoResume(db).catch((err) => console.error('sweepAutoResume error:', err));
   }, intervalMs);
   timer.unref();
   return () => clearInterval(timer);

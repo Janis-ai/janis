@@ -78,7 +78,7 @@ export const conversations = pgTable(
     lastMessageDirection: text('last_message_direction', {
       enum: ['in', 'out', 'human'],
     }),
-    humanSince: timestamp('human_since', { withTimezone: true }), // when takeover began
+    humanSince: timestamp('human_since', { withTimezone: true }), // last human-side activity during takeover (auto-resume clock)
     isStarred: boolean('is_starred').notNull().default(false),
     isUnread: boolean('is_unread').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

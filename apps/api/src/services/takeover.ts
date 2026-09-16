@@ -115,6 +115,7 @@ export async function humanReply(
       lastMessageAt: message.createdAt,
       lastMessagePreview: text.slice(0, 140),
       lastMessageDirection: 'human',
+      humanSince: new Date(), // reset auto-resume clock on human activity
     })
     .where(eq(conversations.id, conversationId));
 
@@ -170,6 +171,7 @@ export async function agentSend(
       lastMessageAt: message.createdAt,
       lastMessagePreview: text.slice(0, 140),
       lastMessageDirection: 'out',
+      ...(conversation.state === 'human' ? { humanSince: new Date() } : {}), // operator activity resets auto-resume
     })
     .where(eq(conversations.id, conversationId));
 
