@@ -16,7 +16,7 @@ import {
   updateSlackAlert,
   verifySlackSignature,
 } from '../lib/slack.js';
-import { humanReply, resume, takeover, TakeoverError } from '../services/takeover.js';
+import { agentSend, humanReply, resume, takeover, TakeoverError } from '../services/takeover.js';
 
 const SCOPES = [
   'chat:write',
@@ -253,14 +253,25 @@ export function slackPublicRoutes(db: Db) {
     const payload = JSON.parse(payloadParam) as {
       type: string;
       user?: { id: string };
+      response_url?: string;
       actions?: { action_id: string; value?: string }[];
     };
     if (payload.type !== 'block_actions' || !payload.actions?.length || !payload.user) {
       return c.json({ ok: true });
     }
     const action = payload.actions[0];
-    const convId = action.value;
+    let convId = action.value;
     if (!convId) return c.json({ ok: true });
+    // Send carries the suggestion id — resolve the conversation through it
+    if (action.action_id === 'janis_send_suggestion') {
+      const [sug] = await db
+        .select()
+        .from(suggestions)
+        .where(eq(suggestions.id, convId))
+        .limit(1);
+      convId = sug?.conversationId;
+      if (!convId) return c.json({ ok: true });
+    }
 
     // Resolve workspace via the thread record (or conversation → agent chain)
     const [thread] = await db
@@ -290,8 +301,37 @@ export function slackPublicRoutes(db: Db) {
     try {
       if (action.action_id === 'janis_takeover') {
         await takeover(db, inst.workspaceId, convId, user);
+        // Thread replies are how the operator talks to the customer — point
+        // the clicker there since nothing visibly changes in-channel.
+        await slackApi(inst.botToken, 'chat.postEphemeral', {
+          channel: thread.channelId,
+          user: payload.user.id,
+          text: '_You took over — your replies in the alert thread now go to the customer. Click the thread link on the alert above._',
+        }).catch(() => {});
       } else if (action.action_id === 'janis_resume') {
         await resume(db, inst.workspaceId, convId, user);
+      } else if (action.action_id === 'janis_send_suggestion') {
+        // Deliver the drafted suggestion to the customer as the agent.
+        const [sug] = await db
+          .select()
+          .from(suggestions)
+          .where(eq(suggestions.id, action.value!))
+          .limit(1);
+        if (sug && conv) {
+          await agentSend(db, inst.workspaceId, conv.id, user, sug.text);
+          // Replace the ephemeral draft with a sent receipt.
+          if (payload.response_url) {
+            await fetch(payload.response_url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                replace_original: true,
+                text: `:white_check_mark: Sent via *${agent?.name ?? 'agent'}:*\n${sug.text}`,
+              }),
+            });
+          }
+        }
+        return c.json({ ok: true });
       } else if (action.action_id === 'janis_suggest' && conv && agent) {
         // Draft in the background (LLM takes seconds), then post the
         // suggestion ephemerally — visible only to the person who clicked.
@@ -315,8 +355,36 @@ export function slackPublicRoutes(db: Db) {
             text: sug
               ? `*Suggested reply:*\n${sug.text}`
               : "couldn't draft a suggestion right now",
+            ...(sug
+              ? {
+                  blocks: [
+                    {
+                      type: 'section',
+                      text: { type: 'mrkdwn', text: `*Suggested reply:*\n${sug.text}` },
+                    },
+                    {
+                      type: 'actions',
+                      elements: [
+                        {
+                          type: 'button',
+                          action_id: 'janis_send_suggestion',
+                          text: { type: 'plain_text', text: 'Send' },
+                          style: 'primary',
+                          value: sug.id,
+                        },
+                      ],
+                    },
+                  ],
+                }
+              : {}),
           });
           if (!res.ok) console.error('slack ephemeral failed:', res.error);
+          // The draft lands in the thread — point the clicker there.
+          await slackApi(inst.botToken, 'chat.postEphemeral', {
+            channel: thread.channelId,
+            user: payload.user!.id,
+            text: '_Suggestion posted in the thread — click the thread link on the alert above to view and send it._',
+          }).catch(() => {});
         })();
         return c.json({ ok: true });
       }

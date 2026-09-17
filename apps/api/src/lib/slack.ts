@@ -136,14 +136,15 @@ function alertBlocks(
           style: 'primary',
           value: conv.id,
         },
-        {
-          type: 'button',
-          action_id: 'janis_suggest',
-          text: { type: 'plain_text', text: 'Suggest reply' },
-          value: conv.id,
-        },
       ];
-  actions.push({
+  actions.push(
+    {
+      type: 'button',
+      action_id: 'janis_suggest',
+      text: { type: 'plain_text', text: 'Suggest reply' },
+      value: conv.id,
+    },
+    {
     type: 'button',
     action_id: 'janis_open',
     text: { type: 'plain_text', text: 'Open in Janis' },
