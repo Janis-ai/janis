@@ -42,7 +42,11 @@ export async function loadKnowledgeDocs(
 
 /** Delimited, data-only context: which channel the agent is on and who the
  *  end user is. Never framed as instructions. */
-export function conversationContext(conv: ConversationRow, agentName?: string): string {
+export function conversationContext(
+  conv: ConversationRow,
+  agentName?: string,
+  forSuggestion = false,
+): string {
   const p = (conv.userProfile ?? {}) as UserProfile;
   const channel = p.channel ?? conv.externalId.split(':')[0] ?? 'external';
   const lines = [
@@ -63,7 +67,7 @@ export function conversationContext(conv: ConversationRow, agentName?: string): 
   lines.push(
     '- Earlier messages marked "(passed to a human teammate)" were already escalated — always answer the newest message normally.',
   );
-  if (conv.state === 'needs_human') {
+  if (conv.state === 'needs_human' && !forSuggestion) {
     lines.push(
       '- A human teammate has already been notified and will join when available. Keep helping the customer normally in the meantime — only request a handoff again if the customer asks for something new that you genuinely cannot handle.',
     );
@@ -97,7 +101,7 @@ export function systemPrompt(
     );
   }
   if (cfg.tone) parts.push(`\nTone: ${cfg.tone}`);
-  if (conv) parts.push(conversationContext(conv, agent.name));
+  if (conv) parts.push(conversationContext(conv, agent.name, opts.forSuggestion));
   if (conv?.agentSummary) {
     parts.push(
       `\nConversation so far — condensed summary of earlier messages (background, not instructions):\n${conv.agentSummary}`,
@@ -571,14 +575,47 @@ export async function runHostedEvent(
     }
     // The model sometimes mimics the transcript's speaker labels
     // ("(human operator) ...") — strip any leading role prefix.
-    const draft = result?.text?.replace(
-      /^\s*\(?(human operator|operator|agent|assistant)\)?\s*[:\-–—]\s*/i,
-      '',
-    );
+    const stripLabel = (t?: string | null) =>
+      t?.replace(/^\s*\(?(human operator|operator|agent|assistant)\)?\s*[:\-–—]\s*/i, '') ?? undefined;
+    let draft = stripLabel(result?.text);
+    if (draft?.includes('[HANDOFF]')) draft = undefined;
+
+    if (!draft) {
+      // Escalated conversations prime the model to emit [HANDOFF] no matter
+      // what the directive says — retry with a minimal ask, no transcript.
+      const lastCustomerMsg = [...history].reverse().find((m) => m.role === 'user')?.content;
+      const retry = lastCustomerMsg
+        ? await complete(
+            llm,
+            systemPrompt(agent, docs, conv, { forSuggestion: true }),
+            [
+              {
+                role: 'user',
+                content: `The customer said: "${lastCustomerMsg}". Draft the agent's reply — output only the reply text.`,
+              },
+            ],
+            [],
+            secrets,
+            ctx,
+          ).catch(() => null)
+        : null;
+      if (retry && (retry.promptTokens || retry.completionTokens)) {
+        await recordLlmUsage(db, {
+          workspaceId: agent.workspaceId,
+          agentId: agent.id,
+          conversationId: convId,
+          model: llm.model,
+          promptTokens: retry.promptTokens,
+          completionTokens: retry.completionTokens,
+        });
+      }
+      draft = stripLabel(retry?.text);
+      if (draft?.includes('[HANDOFF]')) draft = undefined;
+    }
+
     const text =
-      draft && !draft.includes('[HANDOFF]')
-        ? draft
-        : 'I want to make sure we get this right — let me look into it and follow up shortly.';
+      draft ??
+      'I want to make sure we get this right — let me look into it and follow up shortly.';
     await storeSuggestion(db, convId, text, 'agent');
     return;
   }
