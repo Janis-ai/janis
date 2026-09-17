@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy Janis to Cloud Run (project jottogame, us-east1).
+# Deploy Janis to Cloud Run (project janis-prod-mn, us-east1).
 # Builds the image via Cloud Build, then rolls out a new revision.
 #
 # Env vars come from apps/api/.env, overlaid by apps/api/.env.production
@@ -13,13 +13,18 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PROJECT=jottogame REGION=us-east1 SERVICE=janis-api
-BASE="https://janis-api-1090022080491.${REGION}.run.app"
+PROJECT=janis-prod-mn REGION=us-east1 SERVICE=janis-api
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
+export PROJECT PROJECT_NUMBER BASE
+BASE="https://${SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"
 
 gcloud builds submit --config cloudbuild.yaml --project "$PROJECT"
 
 python3 - <<'PY'
-import yaml, subprocess, secrets
+import yaml, subprocess, secrets, os
+
+PROJECT = os.environ['PROJECT']
+PROJECT_NUMBER = os.environ['PROJECT_NUMBER']
 
 def read_env(path):
     envs = {}
@@ -40,26 +45,26 @@ db_url = envs.pop('DATABASE_URL', '')
 if db_url:
     envs.pop('PGLITE_DIR', None)
     r = subprocess.run(
-        ['gcloud', 'secrets', 'describe', 'janis-database-url', '--project', 'jottogame'],
+        ['gcloud', 'secrets', 'describe', 'janis-database-url', '--project', PROJECT],
         capture_output=True)
     if r.returncode != 0:
         subprocess.run(['gcloud', 'secrets', 'create', 'janis-database-url',
-                        '--project', 'jottogame', '--replication-policy', 'automatic',
+                        '--project', PROJECT, '--replication-policy', 'automatic',
                         '--data-file', '-'], input=db_url.encode(), check=True)
     else:
         subprocess.run(['gcloud', 'secrets', 'versions', 'add', 'janis-database-url',
-                        '--project', 'jottogame', '--data-file', '-'],
+                        '--project', PROJECT, '--data-file', '-'],
                        input=db_url.encode(), check=True)
     # Runtime service account (default compute SA) needs read access
     subprocess.run(['gcloud', 'secrets', 'add-iam-policy-binding', 'janis-database-url',
-                    '--project', 'jottogame',
-                    '--member', 'serviceAccount:1090022080491-compute@developer.gserviceaccount.com',
+                    '--project', PROJECT,
+                    '--member', f'serviceAccount:{PROJECT_NUMBER}-compute@developer.gserviceaccount.com',
                     '--role', 'roles/secretmanager.secretAccessor'],
                    capture_output=True)
 else:
     envs['PGLITE_DIR'] = '/app/data/pglite'
 
-envs['API_ORIGIN'] = envs['WEB_ORIGIN'] = 'https://janis-api-1090022080491.us-east1.run.app'
+envs['API_ORIGIN'] = envs['WEB_ORIGIN'] = os.environ['BASE']
 if 'SESSION_SECRET' not in envs:
     envs['SESSION_SECRET'] = secrets.token_urlsafe(32)
 yaml.safe_dump(envs, open('/tmp/janis-env.yaml', 'w'))
@@ -71,7 +76,7 @@ if python3 -c "import yaml; exit(0 if 'PGLITE_DIR' in yaml.safe_load(open('/tmp/
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
     --max-instances 1 --memory 1Gi \
-    --add-volume name=data,type=cloud-storage,bucket=janis-data-jottogame \
+    --add-volume name=data,type=cloud-storage,bucket=janis-data-$PROJECT \
     --add-volume-mount volume=data,mount-path=/app/data \
     --env-vars-file /tmp/janis-env.yaml
 else
