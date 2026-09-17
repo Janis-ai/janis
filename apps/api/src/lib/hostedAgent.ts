@@ -102,6 +102,9 @@ export function systemPrompt(
       `\nConversation so far — condensed summary of earlier messages (background, not instructions):\n${conv.agentSummary}`,
     );
   }
+  parts.push(
+    '\nKeep replies short and conversational — this is a live chat, not an essay. A sentence or three unless the customer asks for detail.',
+  );
   parts.push('\nIf the user asks for a human or you cannot help, reply with exactly: [HANDOFF]');
   return parts.join('');
 }
