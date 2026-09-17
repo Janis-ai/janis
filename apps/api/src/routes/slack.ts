@@ -312,15 +312,13 @@ export function slackPublicRoutes(db: Db) {
           .limit(1);
         if (sug && conv) {
           await agentSend(db, inst.workspaceId, conv.id, user, sug.text);
-          // Replace the ephemeral draft with a sent receipt.
+          // Delete the ephemeral draft — the mirrored send in the thread is
+          // the record.
           if (payload.response_url) {
             await fetch(payload.response_url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                replace_original: true,
-                text: `:white_check_mark: Sent via *${agent?.name ?? 'agent'}*`,
-              }),
+              body: JSON.stringify({ delete_original: true }),
             });
           }
         }
