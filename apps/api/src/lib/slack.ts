@@ -260,19 +260,32 @@ export async function postSlackAlert(
       .from(messages)
       .where(eq(messages.conversationId, conv.id))
       .orderBy(desc(messages.createdAt))
-      .limit(6);
+      .limit(20);
     const lines = recent.reverse().flatMap((m) => {
       if (!m.text) return [];
       const who =
         m.direction === 'in' ? 'customer' : m.direction === 'human' ? 'operator' : 'agent';
       return [`*${who}:* ${m.text}`];
     });
-    if (lines.length) {
-      await slackApi(inst.botToken, 'chat.postMessage', {
-        channel: res.channel,
-        thread_ts: res.ts,
-        text: lines.join('\n'),
-      });
+    // Slack caps message length — split the transcript into ~3.5k-char
+    // replies rather than truncating context.
+    for (let i = 0, chunk = ''; i < lines.length; i++) {
+      if (chunk && chunk.length + lines[i].length > 3500) {
+        await slackApi(inst.botToken, 'chat.postMessage', {
+          channel: res.channel,
+          thread_ts: res.ts,
+          text: chunk,
+        });
+        chunk = '';
+      }
+      chunk += (chunk ? '\n' : '') + lines[i];
+      if (i === lines.length - 1 && chunk) {
+        await slackApi(inst.botToken, 'chat.postMessage', {
+          channel: res.channel,
+          thread_ts: res.ts,
+          text: chunk,
+        });
+      }
     }
     // One pointer to the thread per alert, right after it's seeded.
     await slackApi(inst.botToken, 'chat.postMessage', {
