@@ -75,7 +75,7 @@ describe('conversation context', () => {
       id: '7383693028315153',
     }));
     expect(prompt).toContain('Channel: instagram — account "George Harrison Band"');
-    expect(prompt).toContain('Customer: Michael Nathan (@mnatha)');
+    expect(prompt).toContain('Customer (the person messaging you — not you): Michael Nathan (@mnatha)');
     expect(prompt).toContain('7383693028315153');
     expect(prompt).toContain('email: unknown');
     expect(prompt).toContain('save_user_profile');
@@ -94,5 +94,11 @@ describe('conversation context', () => {
   it('falls back to the external id prefix for non-channel convs', () => {
     const ctx = conversationContext(conv({}, 'webtest:u1'));
     expect(ctx).toContain('Channel: webtest');
+  });
+
+  it('flags a customer who shares the agent name', () => {
+    const named = { config: {}, name: 'Michael Nathanson' } as typeof agents.$inferSelect;
+    const prompt = systemPrompt(named, [], conv({ channel: 'messenger', name: 'Michael Nathanson' }));
+    expect(prompt).toContain('the customer happens to share your name');
   });
 });
