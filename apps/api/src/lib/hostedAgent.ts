@@ -108,7 +108,7 @@ export function systemPrompt(
   );
   if (opts.forSuggestion) {
     parts.push(
-      '\nYou are drafting a suggested reply for a human operator to review and send — write what the agent would say to the customer. Output only the suggested message text; never output [HANDOFF] in a draft.',
+      '\nYou are drafting a suggested reply for a human operator to review and send — write what the agent would say to the customer. Output only the suggested message text — no speaker labels, no preamble; never output [HANDOFF] in a draft.',
     );
   } else {
     parts.push('\nIf the user asks for a human or you cannot help, reply with exactly: [HANDOFF]');
@@ -569,7 +569,12 @@ export async function runHostedEvent(
         completionTokens: result.completionTokens,
       });
     }
-    const draft = result?.text;
+    // The model sometimes mimics the transcript's speaker labels
+    // ("(human operator) ...") — strip any leading role prefix.
+    const draft = result?.text?.replace(
+      /^\s*\(?(human operator|operator|agent|assistant)\)?\s*[:\-–—]\s*/i,
+      '',
+    );
     const text =
       draft && !draft.includes('[HANDOFF]')
         ? draft

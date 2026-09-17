@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -81,6 +81,83 @@ export async function postSlackMessage(
   return { channel: res.channel, ts: res.ts };
 }
 
+type SlackBlock = Record<string, unknown>;
+
+/** Alert message blocks: summary, customer/channel details, state-aware
+ * action buttons. When a human owns the conversation the buttons collapse
+ * to Resume — mirroring how the wordhop alert toggled pause/resume. */
+function alertBlocks(
+  conv: ConversationRow,
+  agent: typeof agents.$inferSelect,
+  alert: Pick<AlertRow, 'type' | 'detail'>,
+): SlackBlock[] {
+  const p = (conv.userProfile ?? {}) as {
+    name?: string;
+    username?: string;
+    id?: string;
+    channel?: string;
+    channel_name?: string;
+    email?: string;
+  };
+  const who =
+    [p.name, p.username ? `@${p.username}` : null].filter(Boolean).join(' ') ||
+    p.id ||
+    'unknown';
+  const channel = `${p.channel ?? conv.externalId.split(':')[0]}${p.channel_name ? ` — "${p.channel_name}"` : ''}`;
+  const summary =
+    `:rotating_light: *${alert.type.replace('_', ' ')}* — agent *${agent.name}*\n` +
+    `${alert.detail ?? conv.lastMessagePreview ?? ''}`;
+  const paused = conv.state === 'human';
+
+  const details = [
+    `*Customer:* ${who}`,
+    p.email ? `*Email:* ${p.email}` : null,
+    `*Channel:* ${channel}`,
+    `*Conv:* \`${conv.externalId}\``,
+  ]
+    .filter(Boolean)
+    .join('   ·   ');
+
+  const actions: SlackBlock[] = paused
+    ? [
+        {
+          type: 'button',
+          action_id: 'janis_resume',
+          text: { type: 'plain_text', text: 'Resume agent' },
+          style: 'primary',
+          value: conv.id,
+        },
+      ]
+    : [
+        {
+          type: 'button',
+          action_id: 'janis_takeover',
+          text: { type: 'plain_text', text: 'Take over' },
+          style: 'primary',
+          value: conv.id,
+        },
+        {
+          type: 'button',
+          action_id: 'janis_suggest',
+          text: { type: 'plain_text', text: 'Suggest reply' },
+          value: conv.id,
+        },
+      ];
+  actions.push({
+    type: 'button',
+    action_id: 'janis_open',
+    text: { type: 'plain_text', text: 'Open in Janis' },
+    url: `${env.webOrigin}/conversations/${conv.id}`,
+  });
+
+  const stateLine = paused ? `\n*Agent paused* — replying as human.` : '';
+  return [
+    { type: 'section', text: { type: 'mrkdwn', text: summary + stateLine } },
+    { type: 'context', elements: [{ type: 'mrkdwn', text: details }] },
+    { type: 'actions', elements: actions },
+  ];
+}
+
 /**
  * Post an alert into Slack with action buttons and record the thread so
  * subsequent messages mirror into it. One thread per conversation.
@@ -118,33 +195,7 @@ export async function postSlackAlert(
   const res = await slackApi<{ channel: string; ts: string }>(inst.botToken, 'chat.postMessage', {
     channel: inst.alertChannelId,
     text: summary,
-    blocks: [
-      { type: 'section', text: { type: 'mrkdwn', text: summary } },
-      {
-        type: 'actions',
-        elements: [
-          {
-            type: 'button',
-            action_id: 'janis_takeover',
-            text: { type: 'plain_text', text: 'Take over' },
-            style: 'primary',
-            value: conv.id,
-          },
-          {
-            type: 'button',
-            action_id: 'janis_resume',
-            text: { type: 'plain_text', text: 'Resume agent' },
-            value: conv.id,
-          },
-          {
-            type: 'button',
-            action_id: 'janis_open',
-            text: { type: 'plain_text', text: 'Open in Janis' },
-            url: `${env.webOrigin}/conversations/${conv.id}`,
-          },
-        ],
-      },
-    ],
+    blocks: alertBlocks(conv, agent, alert),
   });
   if (res.ok) {
     await db.insert(slackThreads).values({
@@ -156,6 +207,36 @@ export async function postSlackAlert(
   } else {
     console.error('slack alert post failed:', res.error);
   }
+}
+
+/** Refresh the alert message after takeover/resume so the buttons toggle
+ * to match conversation state (Take over ↔ Resume agent). */
+export async function updateSlackAlert(
+  db: Db,
+  workspaceId: string,
+  conv: ConversationRow,
+  agent: typeof agents.$inferSelect,
+): Promise<void> {
+  const [thread] = await db
+    .select({ slackThreads, installation: slackInstallations })
+    .from(slackThreads)
+    .innerJoin(slackInstallations, eq(slackThreads.installationId, slackInstallations.id))
+    .where(eq(slackThreads.conversationId, conv.id))
+    .limit(1);
+  if (!thread) return;
+  const [alert] = await db
+    .select()
+    .from(alerts)
+    .where(eq(alerts.conversationId, conv.id))
+    .orderBy(desc(alerts.createdAt))
+    .limit(1);
+  const res = await slackApi(thread.installation.botToken, 'chat.update', {
+    channel: thread.slackThreads.channelId,
+    ts: thread.slackThreads.ts,
+    text: `alert — ${conv.externalId}`,
+    blocks: alertBlocks(conv, agent, alert ?? { type: 'help_request', detail: null }),
+  });
+  if (!res.ok) console.error('slack alert update failed:', res.error);
 }
 
 /** Mirror a console-originated message into the conversation's Slack thread. */

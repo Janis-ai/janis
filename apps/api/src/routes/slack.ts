@@ -1,17 +1,19 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { conversations, slackInstallations, slackThreads } from '../db/schema.js';
+import { agents, conversations, slackInstallations, slackThreads, suggestions } from '../db/schema.js';
 import { env } from '../env.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { runHostedEvent } from '../lib/hostedAgent.js';
 import {
   findThread,
   getInstallation,
   postSlackMessage,
   slackApi,
   slackUserToMember,
+  updateSlackAlert,
   verifySlackSignature,
 } from '../lib/slack.js';
 import { humanReply, resume, takeover, TakeoverError } from '../services/takeover.js';
@@ -276,11 +278,47 @@ export function slackPublicRoutes(db: Db) {
     const user = await slackUserToMember(db, inst, payload.user.id);
     if (!user) return c.json({ ok: true });
 
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, convId))
+      .limit(1);
+    const [agent] = conv
+      ? await db.select().from(agents).where(eq(agents.id, conv.agentId)).limit(1)
+      : [];
+
     try {
       if (action.action_id === 'janis_takeover') {
         await takeover(db, inst.workspaceId, convId, user);
       } else if (action.action_id === 'janis_resume') {
         await resume(db, inst.workspaceId, convId, user);
+      } else if (action.action_id === 'janis_suggest' && conv && agent) {
+        // Draft in the background (LLM takes seconds), then post the
+        // suggestion ephemerally — visible only to the person who clicked.
+        void (async () => {
+          await runHostedEvent(db, agent, {
+            type: 'suggestion.request',
+            timestamp: new Date().toISOString(),
+            conversation_id: conv.externalId,
+            janis_conversation_id: conv.id,
+          }).catch(() => {});
+          const [sug] = await db
+            .select()
+            .from(suggestions)
+            .where(eq(suggestions.conversationId, conv.id))
+            .orderBy(desc(suggestions.createdAt))
+            .limit(1);
+          const res = await slackApi(inst.botToken, 'chat.postEphemeral', {
+            channel: thread.channelId,
+            thread_ts: thread.ts,
+            user: payload.user!.id,
+            text: sug
+              ? `*Suggested reply:*\n${sug.text}`
+              : "couldn't draft a suggestion right now",
+          });
+          if (!res.ok) console.error('slack ephemeral failed:', res.error);
+        })();
+        return c.json({ ok: true });
       }
     } catch (err) {
       if (err instanceof TakeoverError) {
@@ -291,6 +329,22 @@ export function slackPublicRoutes(db: Db) {
       } else {
         throw err;
       }
+    }
+
+    // Reflect the new state on the alert message — Take over ↔ Resume agent
+    if (
+      conv &&
+      agent &&
+      (action.action_id === 'janis_takeover' || action.action_id === 'janis_resume')
+    ) {
+      const [fresh] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, convId))
+        .limit(1);
+      await updateSlackAlert(db, inst.workspaceId, fresh ?? conv, agent).catch((err) =>
+        console.error('slack alert update failed:', err),
+      );
     }
     return c.json({ ok: true });
   });
