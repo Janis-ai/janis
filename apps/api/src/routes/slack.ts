@@ -301,13 +301,6 @@ export function slackPublicRoutes(db: Db) {
     try {
       if (action.action_id === 'janis_takeover') {
         await takeover(db, inst.workspaceId, convId, user);
-        // Thread replies are how the operator talks to the customer — point
-        // the clicker there since nothing visibly changes in-channel.
-        await slackApi(inst.botToken, 'chat.postEphemeral', {
-          channel: thread.channelId,
-          user: payload.user.id,
-          text: '_You took over — your replies in the alert thread now go to the customer. Click the thread link on the alert above._',
-        }).catch(() => {});
       } else if (action.action_id === 'janis_resume') {
         await resume(db, inst.workspaceId, convId, user);
       } else if (action.action_id === 'janis_send_suggestion') {
@@ -379,12 +372,6 @@ export function slackPublicRoutes(db: Db) {
               : {}),
           });
           if (!res.ok) console.error('slack ephemeral failed:', res.error);
-          // The draft lands in the thread — point the clicker there.
-          await slackApi(inst.botToken, 'chat.postEphemeral', {
-            channel: thread.channelId,
-            user: payload.user!.id,
-            text: '_Suggestion posted in the thread — click the thread link on the alert above to view and send it._',
-          }).catch(() => {});
         })();
         return c.json({ ok: true });
       }

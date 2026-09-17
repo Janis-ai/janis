@@ -119,6 +119,8 @@ function alertBlocks(
     .filter(Boolean)
     .join('   ·   ');
 
+  // Suggest reply lives only on the paused (taken-over) state — its output
+  // lands in the thread, and by then the operator is already in it.
   const actions: SlackBlock[] = paused
     ? [
         {
@@ -126,6 +128,12 @@ function alertBlocks(
           action_id: 'janis_resume',
           text: { type: 'plain_text', text: 'Resume agent' },
           style: 'primary',
+          value: conv.id,
+        },
+        {
+          type: 'button',
+          action_id: 'janis_suggest',
+          text: { type: 'plain_text', text: 'Suggest reply' },
           value: conv.id,
         },
       ]
@@ -139,12 +147,6 @@ function alertBlocks(
         },
       ];
   actions.push(
-    {
-      type: 'button',
-      action_id: 'janis_suggest',
-      text: { type: 'plain_text', text: 'Suggest reply' },
-      value: conv.id,
-    },
     {
     type: 'button',
     action_id: 'janis_open',
@@ -239,6 +241,11 @@ export async function postSlackAlert(
         text: lines.join('\n'),
       });
     }
+    // One pointer to the thread per alert, right after it's seeded.
+    await slackApi(inst.botToken, 'chat.postMessage', {
+      channel: res.channel,
+      text: '_Transcript and controls are in the thread — click the replies link on the alert above._',
+    });
   } else {
     console.error('slack alert post failed:', res.error);
   }
