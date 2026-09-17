@@ -266,7 +266,7 @@ details summary:hover { color: var(--text); }
 .landing-grid.four { grid-template-columns: repeat(4, 1fr); }
 .landing-card { display: flex; flex-direction: column; gap: 8px; }
 .landing-card p { margin: 0; font-size: 14px; line-height: 1.55; flex: 1; }
-.landing-icon { height: 44px; width: auto; display: block; object-fit: contain; object-position: left top; opacity: 0.9; }
+.landing-icon { width: 52px; height: 44px; display: block; object-fit: contain; object-position: left top; opacity: 0.9; }
 
 /* Align icon/title/body rows across cards; leftover whitespace pools at card bottoms */
 @supports (grid-template-rows: subgrid) {

@@ -5,6 +5,7 @@ import { api } from '../api/client';
 interface BillingSummary {
   period: string;
   stripe_enabled: boolean;
+  has_billing_account: boolean;
   plans: {
     key: string;
     name: string;
@@ -154,7 +155,7 @@ export default function Billing() {
                 );
               })}
             </div>
-            {data.stripe_enabled && (
+            {data.stripe_enabled && data.has_billing_account && (
               <div style={{ marginTop: 12 }}>
                 <button className="btn" onClick={() => void portal()}>
                   Manage payment method &amp; invoices

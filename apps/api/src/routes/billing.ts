@@ -64,6 +64,7 @@ export function billingRoutes(db: Db) {
     return c.json({
       period,
       stripe_enabled: Boolean(env.stripeSecret),
+      has_billing_account: Boolean(ws?.stripeCustomerId),
       plans: Object.entries(PLANS).map(([key, p]) => ({
         key,
         name: p.name,
