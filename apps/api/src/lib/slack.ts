@@ -160,7 +160,10 @@ function alertBlocks(
 
 /**
  * Post an alert into Slack with action buttons and record the thread so
- * subsequent messages mirror into it. One thread per conversation.
+ * subsequent messages mirror into it. A NEW alert always posts a fresh
+ * channel message and claims the conversation's thread row — after a
+ * takeover/resume cycle a new escalation must be a new top-level alert,
+ * not a buried reply. Deduped handoffs (opts.reply) stay in the thread.
  */
 export async function postSlackAlert(
   db: Db,
@@ -168,6 +171,7 @@ export async function postSlackAlert(
   conv: ConversationRow,
   agent: typeof agents.$inferSelect,
   alert: AlertRow,
+  opts: { reply?: boolean } = {},
 ): Promise<void> {
   const inst = await getInstallation(db, workspaceId);
   if (!inst?.alertChannelId) return;
@@ -182,7 +186,7 @@ export async function postSlackAlert(
     `:rotating_light: *${alert.type.replace('_', ' ')}* — agent *${agent.name}* · ` +
     `conversation \`${conv.externalId}\`\n${alert.detail ?? conv.lastMessagePreview ?? ''}`;
 
-  if (existing) {
+  if (existing && opts.reply) {
     const res = await slackApi(inst.botToken, 'chat.postMessage', {
       channel: existing.channelId,
       thread_ts: existing.ts,
@@ -198,12 +202,20 @@ export async function postSlackAlert(
     blocks: alertBlocks(conv, agent, alert),
   });
   if (res.ok) {
-    await db.insert(slackThreads).values({
-      conversationId: conv.id,
-      installationId: inst.id,
-      channelId: res.channel,
-      ts: res.ts,
-    });
+    if (existing) {
+      // Point mirroring/interactions at the current escalation thread.
+      await db
+        .update(slackThreads)
+        .set({ channelId: res.channel, ts: res.ts })
+        .where(eq(slackThreads.id, existing.id));
+    } else {
+      await db.insert(slackThreads).values({
+        conversationId: conv.id,
+        installationId: inst.id,
+        channelId: res.channel,
+        ts: res.ts,
+      });
+    }
   } else {
     console.error('slack alert post failed:', res.error);
   }

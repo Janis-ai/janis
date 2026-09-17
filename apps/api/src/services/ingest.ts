@@ -81,7 +81,7 @@ export async function processEvents(
           handoffAlertId = open.id;
           // Deduped handoffs still reply in the Slack thread — a thread
           // reply, not a new channel post, so it doesn't spam the channel
-          void postSlackAlert(db, agent.workspaceId, conv, agent, open);
+          void postSlackAlert(db, agent.workspaceId, conv, agent, open, { reply: true });
         }
         continue;
       }
