@@ -75,6 +75,7 @@ export function systemPrompt(
   agent: AgentRow,
   docs: { name: string; text: string }[] = [],
   conv?: ConversationRow,
+  opts: { forSuggestion?: boolean } = {},
 ): string {
   const cfg = (agent.config ?? {}) as {
     system_prompt?: string;
@@ -105,7 +106,13 @@ export function systemPrompt(
   parts.push(
     '\nKeep replies short and conversational — this is a live chat, not an essay. A sentence or three unless the customer asks for detail.',
   );
-  parts.push('\nIf the user asks for a human or you cannot help, reply with exactly: [HANDOFF]');
+  if (opts.forSuggestion) {
+    parts.push(
+      '\nYou are drafting a suggested reply for a human operator to review and send — write what the agent would say to the customer. Output only the suggested message text; never output [HANDOFF] in a draft.',
+    );
+  } else {
+    parts.push('\nIf the user asks for a human or you cannot help, reply with exactly: [HANDOFF]');
+  }
   return parts.join('');
 }
 
@@ -546,7 +553,7 @@ export async function runHostedEvent(
     const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId };
     const result = await complete(
       llm,
-      systemPrompt(agent, docs, conv),
+      systemPrompt(agent, docs, conv, { forSuggestion: true }),
       history,
       toolsFor(agent),
       secrets,
