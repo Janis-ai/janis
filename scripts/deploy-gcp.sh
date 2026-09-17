@@ -75,14 +75,14 @@ PY
 if python3 -c "import yaml; exit(0 if 'PGLITE_DIR' in yaml.safe_load(open('/tmp/janis-env.yaml')) else 1)"; then
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
-    --max-instances 1 --memory 1Gi \
+    --max-instances 1 --memory 1Gi --no-cpu-throttling \
     --add-volume name=data,type=cloud-storage,bucket=janis-data-$PROJECT \
     --add-volume-mount volume=data,mount-path=/app/data \
     --env-vars-file /tmp/janis-env.yaml
 else
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
-    --memory 1Gi \
+    --memory 1Gi --no-cpu-throttling \
     --clear-volumes --clear-volume-mounts \
     --update-secrets "DATABASE_URL=janis-database-url:latest" \
     --env-vars-file /tmp/janis-env.yaml
