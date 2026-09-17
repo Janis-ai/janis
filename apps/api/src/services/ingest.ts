@@ -145,14 +145,15 @@ export async function processEvents(
       );
     }
 
-    // Handing off — tell the end user a human is joining. Works for hosted
-    // and external agents; config.handoff_message overrides, '' disables.
+    // Handing off — tell the end user a human is joining. Every request gets
+    // a reply until a human actually takes over (needs_human doesn't pause
+    // the agent); config.handoff_message overrides, '' disables.
     if (
       event.type === 'handoff_request' &&
-      conv.state === 'active' &&
-      updated.state === 'needs_human'
+      updated.state !== 'human' &&
+      updated.state !== 'archived'
     ) {
-      const notice = handoffNotice(agent);
+      const notice = handoffNotice(agent, conv.state === 'needs_human');
       if (notice) {
         const [note] = await db
           .insert(messages)
@@ -253,9 +254,19 @@ function directionFor(event: IngestEvent): 'in' | 'out' | 'human' {
   }
 }
 
-function handoffNotice(agent: AgentRow): string | null {
-  const cfg = (agent.config ?? {}) as { handoff_message?: string };
+function handoffNotice(agent: AgentRow, repeat: boolean): string | null {
+  const cfg = (agent.config ?? {}) as {
+    handoff_message?: string;
+    handoff_repeat_message?: string;
+  };
   if (cfg.handoff_message === '') return null; // explicit opt-out
+  if (repeat) {
+    return (
+      cfg.handoff_repeat_message ??
+      cfg.handoff_message ??
+      'Thanks for bearing with us — a human teammate is still on the way.'
+    );
+  }
   return (
     cfg.handoff_message ??
     'Thanks for your patience — a human teammate is joining the conversation to help you further.'

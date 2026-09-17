@@ -66,7 +66,7 @@ describe('processEvents', () => {
     expect(results[0].alert_ids).toHaveLength(1);
   });
 
-  it('handoff_request stores a user-facing notice, once', async () => {
+  it('handoff_request replies to the customer every time until takeover', async () => {
     await processEvents(db, agent, [
       { type: 'handoff_request', conversation_id: 'c5', reason: 'stuck' },
     ]);
@@ -78,18 +78,28 @@ describe('processEvents', () => {
     const notice = msgs.find((m) => m.text?.includes('human teammate'));
     expect(notice?.direction).toBe('out');
 
-    // second handoff while already needs_human → no duplicate notice or alert
+    // second handoff while already needs_human → customer still gets a reply
+    // (repeat wording), but the alert stays deduped
     const again = await processEvents(db, agent, [
       { type: 'handoff_request', conversation_id: 'c5', reason: 'stuck again' },
     ]);
     expect(again[0].alert_ids).toHaveLength(0);
     const msgs2 = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
-    expect(msgs2.filter((m) => m.text?.includes('human teammate'))).toHaveLength(1);
+    expect(msgs2.filter((m) => m.text?.includes('human teammate'))).toHaveLength(2);
+    expect(msgs2.some((m) => m.text?.includes('still on the way'))).toBe(true);
     const openAlerts = await db
       .select()
       .from(alerts)
       .where(eq(alerts.conversationId, conv.id));
     expect(openAlerts).toHaveLength(1);
+
+    // once a human takes over, handoff requests no longer reply
+    await takeover(db, admin.workspaceId, conv.id, admin);
+    await processEvents(db, agent, [
+      { type: 'handoff_request', conversation_id: 'c5', reason: 'post-takeover' },
+    ]);
+    const msgs3 = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(msgs3.filter((m) => m.text?.includes('human teammate'))).toHaveLength(2);
   });
 
   it('handoff notice respects config override and opt-out', async () => {
