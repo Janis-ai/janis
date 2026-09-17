@@ -82,6 +82,11 @@ button, input, select, textarea { font: inherit; }
   border-radius: 8px; background: var(--panel-2); color: var(--muted);
   border: 1px solid var(--border); vertical-align: middle;
 }
+.agent-tag {
+  margin-left: 8px; font-size: 10px; font-weight: 500; padding: 1px 7px;
+  border-radius: 8px; background: var(--accent-dim); color: var(--accent);
+  border: 1px solid var(--border); vertical-align: middle;
+}
 .check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; }
 .profile-head { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .profile-name { font-weight: 600; }

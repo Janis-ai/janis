@@ -1,11 +1,12 @@
 import { Link } from 'react-router-dom';
-import { useConversations } from '../api/hooks';
+import { useAgents, useConversations } from '../api/hooks';
 import { Avatar, channelLabel, displayName, Empty, StateBadge, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 
 /** Live inbox: conversations needing a human or currently human-handled. */
 export default function Inbox() {
   const { data, isLoading } = useConversations({ attention: true });
+  const { data: agents } = useAgents();
 
   return (
     <>
@@ -24,6 +25,11 @@ export default function Inbox() {
             <div className={`name ${c.is_unread ? 'unread' : ''}`}>
               {c.is_starred && '⭐ '}
               {displayName(c)}
+              {agents?.agents.find((a) => a.id === c.agent_id)?.name && (
+                <span className="agent-tag">
+                  {agents.agents.find((a) => a.id === c.agent_id)!.name}
+                </span>
+              )}
               {c.user_profile?.channel && (
                 <span className="channel-tag">{channelLabel(c.user_profile.channel)}</span>
               )}

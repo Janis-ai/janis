@@ -6,7 +6,7 @@ import { Avatar, channelLabel, displayName, Empty, StateBadge, timeAgo } from '.
 
 const STATES = ['', 'needs_human', 'human', 'active', 'unread', 'starred', 'archived'] as const;
 
-function ConvRow({ c }: { c: Conversation }) {
+function ConvRow({ c, agentName }: { c: Conversation; agentName?: string }) {
   return (
     <Link to={`/conversations/${c.id}`} className="conv-row">
       {c.open_alert_count > 0 && <span className="alert-dot" />}
@@ -16,6 +16,7 @@ function ConvRow({ c }: { c: Conversation }) {
         <div className={`name ${c.is_unread ? 'unread' : ''}`}>
           {c.is_starred && '⭐ '}
           {displayName(c)}
+          {agentName && <span className="agent-tag">{agentName}</span>}
           {c.user_profile?.channel && (
             <span className="channel-tag">{channelLabel(c.user_profile.channel)}</span>
           )}
@@ -43,6 +44,8 @@ export default function Channels() {
   const { data: hits } = useSearch(query);
 
   const searching = query.trim().length > 0;
+  const agentName = (c: Conversation) =>
+    agents?.agents.find((a) => a.id === c.agent_id)?.name;
 
   return (
     <>
@@ -71,7 +74,7 @@ export default function Channels() {
       {searching ? (
         <>
           {hits && hits.conversations.length === 0 && <Empty>No matches.</Empty>}
-          {hits?.conversations.map((c) => <ConvRow key={c.id} c={c} />)}
+          {hits?.conversations.map((c) => <ConvRow key={c.id} c={c} agentName={agentName(c)} />)}
           {hits && hits.messages.length > 0 && (
             <div className="card" style={{ marginTop: 16 }}>
               <strong>Message hits</strong>
@@ -88,7 +91,7 @@ export default function Channels() {
       ) : (
         <>
           {data && data.conversations.length === 0 && <Empty>No conversations.</Empty>}
-          {data?.conversations.map((c) => <ConvRow key={c.id} c={c} />)}
+          {data?.conversations.map((c) => <ConvRow key={c.id} c={c} agentName={agentName(c)} />)}
         </>
       )}
     </>
