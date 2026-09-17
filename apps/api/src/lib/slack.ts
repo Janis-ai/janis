@@ -51,6 +51,29 @@ export function verifySlackSignature(
   );
 }
 
+/** Public avatar URL for Slack message blocks — Slack's image fetcher has
+ * no session, so the URL carries an HMAC over the conversation id. */
+export function slackAvatarUrl(convId: string): string | null {
+  if (!env.slackSigningSecret) return null;
+  const sig = createHmac('sha256', env.slackSigningSecret)
+    .update(`avatar:${convId}`)
+    .digest('hex')
+    .slice(0, 32);
+  return `${env.apiOrigin}/slack/avatar/${convId}?sig=${sig}`;
+}
+
+export function verifyAvatarSig(convId: string, sig: string | undefined): boolean {
+  if (!env.slackSigningSecret || !sig) return false;
+  const expected = createHmac('sha256', env.slackSigningSecret)
+    .update(`avatar:${convId}`)
+    .digest('hex')
+    .slice(0, 32);
+  return (
+    sig.length === expected.length &&
+    timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
+  );
+}
+
 export async function getInstallation(
   db: Db,
   workspaceId: string,
@@ -155,8 +178,18 @@ function alertBlocks(
   });
 
   const stateLine = paused ? `\n*Agent paused* — replying as human.` : '';
+  const avatar = (conv.userProfile as { picture_url?: string } | null)?.picture_url
+    ? slackAvatarUrl(conv.id)
+    : null;
+  const section: SlackBlock = {
+    type: 'section',
+    text: { type: 'mrkdwn', text: summary + stateLine },
+    ...(avatar
+      ? { accessory: { type: 'image', image_url: avatar, alt_text: p.name ?? 'customer' } }
+      : {}),
+  };
   return [
-    { type: 'section', text: { type: 'mrkdwn', text: summary + stateLine } },
+    section,
     { type: 'context', elements: [{ type: 'mrkdwn', text: details }] },
     { type: 'actions', elements: actions },
   ];

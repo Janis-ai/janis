@@ -14,8 +14,10 @@ import {
   slackApi,
   slackUserToMember,
   updateSlackAlert,
+  verifyAvatarSig,
   verifySlackSignature,
 } from '../lib/slack.js';
+import { fetchAvatar } from '../lib/avatar.js';
 import { agentSend, humanReply, resume, takeover, TakeoverError } from '../services/takeover.js';
 
 const SCOPES = [
@@ -185,6 +187,28 @@ export function slackPublicRoutes(db: Db) {
   });
 
   // Events API: thread replies become human messages
+  // HMAC-signed avatar proxy — Slack's image fetcher has no session, so
+  // alert blocks embed /slack/avatar/:id?sig=… instead of the authed route.
+  app.get('/avatar/:id', async (c) => {
+    const id = c.req.param('id');
+    if (!verifyAvatarSig(id, c.req.query('sig'))) return c.json({ error: 'unauthorized' }, 401);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, id))
+      .limit(1);
+    if (!conv) return c.json({ error: 'not found' }, 404);
+    const res = await fetchAvatar(db, conv);
+    if (!res) return c.json({ error: 'avatar unavailable' }, 404);
+    const bytes = await res.arrayBuffer();
+    return new Response(bytes, {
+      headers: {
+        'content-type': res.headers.get('content-type') ?? 'image/jpeg',
+        'cache-control': 'public, max-age=86400',
+      },
+    });
+  });
+
   app.post('/events', async (c) => {
     const raw = await c.req.text();
     if (!verify(c, raw)) return c.text('invalid signature', 401);
