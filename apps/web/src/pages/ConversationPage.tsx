@@ -72,6 +72,16 @@ export default function ConversationPage() {
     onError: (e) => setError(e.message),
   });
 
+  // Opening a conversation marks it read — once per open, so the
+  // "Mark unread" toggle can't be undone by a later refetch.
+  const markedReadFor = useRef('');
+  useEffect(() => {
+    if (data?.conversation.is_unread && markedReadFor.current !== id) {
+      markedReadFor.current = id;
+      patch.mutate({ is_unread: false });
+    }
+  }, [data?.conversation.is_unread, id]);
+
   const archive = useMutation({
     mutationFn: (archived: boolean) =>
       api(`/api/conversations/${id}`, {

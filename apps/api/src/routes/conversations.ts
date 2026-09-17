@@ -123,15 +123,6 @@ export function conversationRoutes(db: Db) {
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
 
-    // opening a conversation clears the unread flag
-    if (row.conversation.isUnread) {
-      await db
-        .update(conversations)
-        .set({ isUnread: false })
-        .where(eq(conversations.id, row.conversation.id));
-      row.conversation.isUnread = false;
-    }
-
     const [msgs, convAlerts, convSuggestions] = await Promise.all([
       db
         .select()
