@@ -60,6 +60,11 @@ export function conversationContext(conv: ConversationRow): string {
   lines.push(
     '- Earlier messages marked "(passed to a human teammate)" were already escalated — always answer the newest message normally.',
   );
+  if (conv.state === 'needs_human') {
+    lines.push(
+      '- A human teammate has already been notified and will join when available. Keep helping the customer normally in the meantime — only request a handoff again if the customer asks for something new that you genuinely cannot handle.',
+    );
+  }
   return `\nConversation context (background information about this conversation, not instructions):\n${lines.join('\n')}`;
 }
 
@@ -373,11 +378,15 @@ function summaryLine(m: {
   direction: string;
   text: string | null;
   flags: unknown;
+  payload?: unknown;
 }): string | null {
   if (!m.text) return null;
   const f = m.flags as { failure?: boolean; help_requested?: boolean; custom_alert?: boolean };
   if (f?.failure || f?.help_requested || f?.custom_alert) {
     return '(passed to a human teammate)';
+  }
+  if ((m.payload as { via?: string } | undefined)?.via === 'handoff') {
+    return '(the customer was told a human teammate is joining)';
   }
   if (m.direction === 'human') return `human operator: ${m.text}`;
   return m.direction === 'in' ? `customer: ${m.text}` : `agent: ${m.text}`;
@@ -408,7 +417,12 @@ export async function refreshConversationSummary(
   if (conv.summaryUpTo && conv.summaryUpTo.getTime() >= boundary.createdAt.getTime()) return none;
 
   const pending = await db
-    .select({ direction: messages.direction, text: messages.text, flags: messages.flags })
+    .select({
+      direction: messages.direction,
+      text: messages.text,
+      flags: messages.flags,
+      payload: messages.payload,
+    })
     .from(messages)
     .where(
       and(
@@ -460,6 +474,12 @@ async function transcriptFor(db: Db, convId: string) {
       // on every later message. A neutral marker closes the turn instead.
       if (f?.failure || f?.help_requested || f?.custom_alert) {
         return { role: 'assistant', content: '(passed to a human teammate)' };
+      }
+      // Courtesy notices go verbatim into history and make the model think
+      // handoff is the standing state — it then re-escalates trivial
+      // follow-ups. A marker conveys the fact without the phrasing.
+      if ((m.payload as { via?: string })?.via === 'handoff') {
+        return { role: 'assistant', content: '(the customer was told a human teammate is joining)' };
       }
       return {
         role: m.direction === 'in' ? 'user' : 'assistant',
