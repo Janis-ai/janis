@@ -119,9 +119,11 @@ export default function Agents() {
       )}
       {error && <div className="error">{error}</div>}
 
-      {data?.agents.map((agent) => (
+      <div className="agent-list">
+      {data?.agents.map((agent, i) => (
         <AgentCard
           key={agent.id}
+          alt={i % 2 === 1}
           agent={agent}
           rules={rulesData?.rules.filter((r) => r.agent_id === agent.id) ?? []}
           channels={channelsData?.channels.filter((c) => c.agent_id === agent.id) ?? []}
@@ -141,12 +143,14 @@ export default function Agents() {
           onDeleteRule={(id) => deleteRule.mutate(id)}
         />
       ))}
+      </div>
     </>
   );
 }
 
 function AgentCard({
   agent,
+  alt,
   rules,
   channels,
   saving,
@@ -160,6 +164,7 @@ function AgentCard({
   onDeleteRule,
 }: {
   agent: Agent;
+  alt?: boolean;
   rules: AlertRule[];
   channels: { id: string; kind: string; name: string }[];
   saving: boolean;
@@ -209,7 +214,7 @@ function AgentCard({
   const { data: deliveries } = useDeliveries(showDeliveries ? agent.id : null);
 
   return (
-    <div className="card">
+    <div className={`card agent-card${alt ? ' alt' : ''}`}>
       <div className="row">
         <input
           className="grow"

@@ -2,6 +2,7 @@
   --bg: #0f1117;
   --panel: #171a23;
   --panel-2: #1e2230;
+  --panel-alt: #12151f;
   --border: #2a2f3f;
   --text: #e6e9f0;
   --muted: #8a91a6;
@@ -48,6 +49,10 @@ button, input, select, textarea { font: inherit; }
 
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
 .card + .card { margin-top: 12px; }
+
+.agent-list { margin-top: 24px; display: flex; flex-direction: column; gap: 16px; }
+.agent-list .card { margin-top: 0; }
+.agent-card.alt { background: var(--panel-alt); }
 
 .badge {
   display: inline-block; padding: 2px 10px; border-radius: 99px;
