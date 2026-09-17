@@ -51,7 +51,7 @@ function ConvRow({ c, agentName }: { c: Conversation; agentName?: string }) {
 
 /** Conversations: triage (needs attention) + search/browse of everything. */
 export default function Conversations() {
-  const [tab, setTab] = useSticky<'attention' | 'all'>('conv.tab', 'attention');
+  const [tab, setTab] = useSticky<'attention' | 'all'>('conv.tab', 'all');
   const [state, setState] = useSticky('conv.state', '');
   const [agentId, setAgentId] = useSticky('conv.agent', '');
   const [mine, setMine] = useSticky('conv.mine', false);
@@ -75,16 +75,16 @@ export default function Conversations() {
       <Onboarding />
       <div className="filters">
         <button
-          className={`btn ${tab === 'attention' ? 'primary' : ''}`}
-          onClick={() => setTab('attention')}
-        >
-          Needs attention
-        </button>
-        <button
           className={`btn ${tab === 'all' ? 'primary' : ''}`}
           onClick={() => setTab('all')}
         >
           All
+        </button>
+        <button
+          className={`btn ${tab === 'attention' ? 'primary' : ''}`}
+          onClick={() => setTab('attention')}
+        >
+          Needs attention
         </button>
         <input
           className="search-box"

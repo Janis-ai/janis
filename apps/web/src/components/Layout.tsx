@@ -20,7 +20,7 @@ export default function Layout() {
   return (
     <div className="layout">
       <nav className="sidebar">
-        <div className="brand">Janis</div>
+        <div className="brand"><img src="/img/janis-top.png" alt="Janis" style={{ height: 26, display: 'block' }} /></div>
         <NavLink to="/conversations" end><span className="label">Conversations</span><span className="icon">▤</span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
         <NavLink to="/agents"><span className="label">Agents</span><span className="icon">◈</span></NavLink>
         <NavLink to="/reports"><span className="label">Reports</span><span className="icon">◫</span></NavLink>

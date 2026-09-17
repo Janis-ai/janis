@@ -53,8 +53,8 @@ export default function Login() {
     <div className="login-wrap">
       <form className="card login-card" onSubmit={submit}>
         <div className="login-brand">
-          <h1>Janis</h1>
-          <p className="muted">Human oversight for AI agents</p>
+          <img src="/img/janis-top.png" alt="Janis" style={{ height: 40, marginBottom: 6 }} />
+          <p className="muted">Human backup for AI agents</p>
         </div>
         {anyProvider && (
           <div className="oauth-buttons">
