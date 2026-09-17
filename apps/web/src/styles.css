@@ -267,12 +267,6 @@ details summary:hover { color: var(--text); }
 .landing-card { display: flex; flex-direction: column; gap: 8px; }
 .landing-card p { margin: 0; font-size: 14px; line-height: 1.55; flex: 1; }
 .landing-icon { width: 52px; height: 44px; display: block; object-fit: contain; object-position: left top; opacity: 0.9; }
-
-/* Align icon/title/body rows across cards; leftover whitespace pools at card bottoms */
-@supports (grid-template-rows: subgrid) {
-  .landing-grid { grid-template-rows: auto auto 1fr; }
-  .landing-card, .landing-step { display: grid; grid-template-rows: subgrid; grid-row: span 3; gap: 8px; }
-}
 .landing-steps h2, .landing-cta h2 { font-size: 28px; letter-spacing: -0.5px; margin: 0 0 18px; }
 .landing-step p { font-size: 13px; line-height: 1.55; margin: 6px 0 0; }
 .landing-stepnum {
