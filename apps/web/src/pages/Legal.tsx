@@ -58,9 +58,11 @@ Questions: support@janis.ai
 
 function Doc({ title, body }: { title: string; body: string }) {
   return (
-    <div style={{ maxWidth: 680, margin: '0 auto', padding: '40px 24px 60px' }}>
-      <Link to="/" style={{ color: 'var(--accent)', fontWeight: 700, fontSize: 18 }}>Janis</Link>
-      <h1 style={{ marginTop: 28 }}>{title}</h1>
+    <div className="landing" style={{ maxWidth: 720 }}>
+      <Link to="/">
+        <img className="landing-logo" src="/img/janis-top.png" alt="Janis" />
+      </Link>
+      <h1 style={{ marginTop: 40 }}>{title}</h1>
       {body.split('\n\n').map((block, i) =>
         /^[A-Z].*\n?$/s.test(block) && block.length < 60 && !block.includes('.') ? (
           <h3 key={i} style={{ marginTop: 24 }}>{block}</h3>
@@ -68,6 +70,12 @@ function Doc({ title, body }: { title: string; body: string }) {
           <p key={i} className="muted" style={{ lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{block}</p>
         ),
       )}
+      <footer className="landing-footer muted" style={{ marginTop: 48 }}>
+        <span>© {new Date().getFullYear()} Janis</span>
+        <Link to="/">Home</Link>
+        {title !== 'Privacy Policy' && <Link to="/privacy">Privacy Policy</Link>}
+        {title !== 'Terms of Service' && <Link to="/terms">Terms of Service</Link>}
+      </footer>
     </div>
   );
 }
