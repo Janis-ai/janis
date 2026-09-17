@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Attachment, Conversation, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
@@ -15,6 +15,7 @@ const WHO: Record<Message['direction'], string> = {
 
 export default function ConversationPage() {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const { data, error: loadError } = useConversation(id);
   const { data: agents } = useAgents();
   const { data: users } = useUsers();
@@ -56,6 +57,15 @@ export default function ConversationPage() {
     onError: (e) => setError(e.message),
   });
 
+  const del = useMutation({
+    mutationFn: () => api(`/api/conversations/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      invalidate();
+      navigate('/conversations');
+    },
+    onError: (e) => setError(e.message),
+  });
+
   const suggest = useMutation({
     mutationFn: () => api(`/api/conversations/${id}/suggest`, { method: 'POST' }),
     onSuccess: () => { setError(''); void qc.invalidateQueries({ queryKey: ['conversation', id] }); },
@@ -84,7 +94,7 @@ export default function ConversationPage() {
   if (loadError instanceof ApiError && loadError.status === 404) {
     return (
       <div className="muted">
-        Conversation not found. <Link to="/inbox">Back to inbox</Link>
+        Conversation not found. <Link to="/conversations">Back to conversations</Link>
       </div>
     );
   }
@@ -294,6 +304,20 @@ export default function ConversationPage() {
         </div>
 
         <TagEditor conversation={c} onSave={(tags) => patch.mutate({ tags })} />
+
+        <div className="card">
+          <button
+            className="btn danger"
+            disabled={del.isPending}
+            onClick={() => {
+              if (window.confirm('Delete this conversation and its transcript? This cannot be undone.')) {
+                del.mutate();
+              }
+            }}
+          >
+            {del.isPending ? 'Deleting…' : 'Delete conversation'}
+          </button>
+        </div>
       </aside>
     </div>
   );

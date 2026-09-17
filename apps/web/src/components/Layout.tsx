@@ -21,8 +21,7 @@ export default function Layout() {
     <div className="layout">
       <nav className="sidebar">
         <div className="brand">Janis</div>
-        <NavLink to="/inbox" end><span className="label">Inbox</span><span className="icon">⬤</span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
-        <NavLink to="/channels"><span className="label">Channels</span><span className="icon">▤</span></NavLink>
+        <NavLink to="/conversations" end><span className="label">Conversations</span><span className="icon">▤</span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
         <NavLink to="/agents"><span className="label">Agents</span><span className="icon">◈</span></NavLink>
         <NavLink to="/reports"><span className="label">Reports</span><span className="icon">◫</span></NavLink>
         <NavLink to="/integrations"><span className="label">Integrations</span><span className="icon">⇄</span></NavLink>

@@ -3,7 +3,16 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alerts, conversations, messages, suggestions } from '../db/schema.js';
+import {
+  agents,
+  alerts,
+  channelBindings,
+  conversations,
+  messages,
+  slackThreads,
+  suggestions,
+  usageEvents,
+} from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toAlert, toConversation, toMessage, toSuggestion } from '../lib/serializers.js';
 import { bus } from '../lib/bus.js';
@@ -284,6 +293,32 @@ export function conversationRoutes(db: Db) {
       return c.json({ suggestion: toSuggestion(row) });
     },
   );
+
+  // Delete a conversation and its transcript — children have no FK cascade,
+  // so remove them explicitly. usage_events keeps billing rows (fk nulled).
+  app.delete('/:id', async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const [row] = await db
+      .select({ conversation: conversations })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    const id = row.conversation.id;
+
+    await db.delete(messages).where(eq(messages.conversationId, id));
+    await db.delete(alerts).where(eq(alerts.conversationId, id));
+    await db.delete(suggestions).where(eq(suggestions.conversationId, id));
+    await db.delete(slackThreads).where(eq(slackThreads.conversationId, id));
+    await db.delete(channelBindings).where(eq(channelBindings.conversationId, id));
+    await db
+      .update(usageEvents)
+      .set({ conversationId: null })
+      .where(eq(usageEvents.conversationId, id));
+    await db.delete(conversations).where(eq(conversations.id, id));
+    return c.json({ ok: true });
+  });
 
   app.patch('/:id', zValidator('json', patchBody), async (c) => {
     const workspaceId = c.get('workspaceId');

@@ -6,8 +6,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Landing from './pages/Landing';
 import { Privacy, Terms } from './pages/Legal';
-import Inbox from './pages/Inbox';
-import Channels from './pages/Channels';
+import Conversations from './pages/Conversations';
 import ConversationPage from './pages/ConversationPage';
 import Agents from './pages/Agents';
 import Reports from './pages/Reports';
@@ -35,7 +34,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
       return (
         <div className="login-wrap">
           <div className="error">Something went wrong: {this.state.error.message}</div>
-          <a href="/inbox">Back to inbox</a>
+          <a href="/conversations">Back to conversations</a>
         </div>
       );
     }
@@ -67,8 +66,9 @@ export default function App() {
             </RequireAuth>
           }
         >
-          <Route path="/inbox" element={<Inbox />} />
-          <Route path="/channels" element={<Channels />} />
+          <Route path="/conversations" element={<Conversations />} />
+          <Route path="/inbox" element={<Navigate to="/conversations" replace />} />
+          <Route path="/channels" element={<Navigate to="/conversations" replace />} />
           <Route path="/conversations/:id" element={<ConversationPage />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/reports" element={<Reports />} />

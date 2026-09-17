@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import type { Conversation } from '@janis/shared';
 import { useConversations, useAgents, useSearch } from '../api/hooks';
 import { Avatar, channelLabel, displayName, Empty, StateBadge, timeAgo } from '../components/bits';
+import Onboarding from '../components/Onboarding';
 
 const STATES = ['', 'needs_human', 'human', 'active', 'unread', 'starred', 'archived'] as const;
 
@@ -29,13 +30,15 @@ function ConvRow({ c, agentName }: { c: Conversation; agentName?: string }) {
   );
 }
 
-/** Channel management: search + browse/filter every conversation. */
-export default function Channels() {
+/** Conversations: triage (needs attention) + search/browse of everything. */
+export default function Conversations() {
+  const [tab, setTab] = useState<'attention' | 'all'>('attention');
   const [state, setState] = useState('');
   const [agentId, setAgentId] = useState('');
   const [mine, setMine] = useState(false);
   const [query, setQuery] = useState('');
   const { data } = useConversations({
+    attention: tab === 'attention' || undefined,
     state: state || undefined,
     agent_id: agentId || undefined,
     mine,
@@ -49,8 +52,21 @@ export default function Channels() {
 
   return (
     <>
-      <h1 className="page-title">Channels</h1>
+      <h1 className="page-title">Conversations</h1>
+      <Onboarding />
       <div className="filters">
+        <button
+          className={`btn ${tab === 'attention' ? 'primary' : ''}`}
+          onClick={() => setTab('attention')}
+        >
+          Needs attention
+        </button>
+        <button
+          className={`btn ${tab === 'all' ? 'primary' : ''}`}
+          onClick={() => setTab('all')}
+        >
+          All
+        </button>
         <input
           className="search-box"
           placeholder="Search transcripts, users, ids…"
@@ -90,7 +106,13 @@ export default function Channels() {
         </>
       ) : (
         <>
-          {data && data.conversations.length === 0 && <Empty>No conversations.</Empty>}
+          {data && data.conversations.length === 0 && (
+            <Empty>
+              {tab === 'attention'
+                ? 'No conversations need attention. When an agent fails or asks for help, it lands here.'
+                : 'No conversations.'}
+            </Empty>
+          )}
           {data?.conversations.map((c) => <ConvRow key={c.id} c={c} agentName={agentName(c)} />)}
         </>
       )}

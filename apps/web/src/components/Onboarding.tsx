@@ -15,7 +15,7 @@ const STEP_LINKS: Record<string, string> = {
   agent_live: '/agents',
   add_channel: '/integrations',
   first_message: '/integrations',
-  take_over: '/channels',
+  take_over: '/conversations',
 };
 
 /** Setup checklist shown on the inbox until every step is done (or dismissed). */

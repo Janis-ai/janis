@@ -9,7 +9,7 @@ export default function Landing() {
       <div style={{ maxWidth: 720, margin: '0 auto', padding: '28px 24px 60px' }}>
         <div className="row" style={{ padding: '8px 0 48px' }}>
           <strong className="grow" style={{ color: 'var(--accent)', fontSize: 20 }}>Janis</strong>
-          <Link className="btn" to={data ? '/inbox' : '/login'}>
+          <Link className="btn" to={data ? '/conversations' : '/login'}>
             {data ? 'Open console' : 'Sign in'}
           </Link>
         </div>
@@ -22,7 +22,7 @@ export default function Landing() {
           in one inbox — and hands them to a human the moment your agent gets stuck.
         </p>
         <div className="row">
-          <Link className="btn primary" to={data ? '/inbox' : '/login'}>
+          <Link className="btn primary" to={data ? '/conversations' : '/login'}>
             {data ? 'Open console' : 'Get started'}
           </Link>
         </div>
