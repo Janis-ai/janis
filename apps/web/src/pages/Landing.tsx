@@ -110,7 +110,7 @@ export default function Landing() {
       </section>
 
       <footer className="landing-footer muted">
-        <img src="/img/janis-logo-bot.png" alt="Janis" style={{ height: 20, opacity: 0.8 }} />
+        <img src="/img/janis-top.png" alt="Janis" style={{ height: 20, opacity: 0.8 }} />
         <span>© {new Date().getFullYear()} Janis</span>
         <Link to="/privacy">Privacy Policy</Link>
         <Link to="/terms">Terms of Service</Link>
