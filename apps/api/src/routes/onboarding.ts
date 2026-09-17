@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import { and, eq, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, channels, conversations } from '../db/schema.js';
+import { agents, channels, conversations, messages } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
 const count = sql<number>`count(*)::int`;
@@ -25,11 +25,22 @@ export function onboardingRoutes(db: Db) {
         .from(conversations)
         .innerJoin(agents, eq(conversations.agentId, agents.id))
         .where(eq(agents.workspaceId, ws)),
+      // Taken over = currently human-owned, or has a human reply on record.
+      // human_since alone won't do — resume clears it back to null.
       db
-        .select({ n: count })
+        .select({ n: sql<number>`count(distinct ${conversations.id})::int` })
         .from(conversations)
         .innerJoin(agents, eq(conversations.agentId, agents.id))
-        .where(and(eq(agents.workspaceId, ws), isNotNull(conversations.humanSince))),
+        .leftJoin(
+          messages,
+          and(eq(messages.conversationId, conversations.id), eq(messages.direction, 'human')),
+        )
+        .where(
+          and(
+            eq(agents.workspaceId, ws),
+            or(isNotNull(conversations.humanSince), isNotNull(messages.id)),
+          ),
+        ),
     ]);
 
     const steps = [
