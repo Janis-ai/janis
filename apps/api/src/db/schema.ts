@@ -84,6 +84,10 @@ export const conversations = pgTable(
     humanSince: timestamp('human_since', { withTimezone: true }), // last human-side activity during takeover (auto-resume clock)
     isStarred: boolean('is_starred').notNull().default(false),
     isUnread: boolean('is_unread').notNull().default(false),
+    // Rolling agent memory: everything before summaryUpTo is folded into
+    // agentSummary so the hosted agent remembers the whole conversation
+    agentSummary: text('agent_summary'),
+    summaryUpTo: timestamp('summary_up_to', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

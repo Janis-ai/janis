@@ -15,6 +15,15 @@ import {
 } from '../db/schema.js';
 import { generateApiKey } from '../lib/crypto.js';
 import { handleChannelMessage } from './channelIngress.js';
+import { refreshConversationSummary } from '../lib/hostedAgent.js';
+import { systemPrompt } from '../lib/hostedAgent.js';
+
+const llm = { apiKey: 'k', baseUrl: 'https://llm.test', model: 'test-model' };
+const llmResponse = (text: string) =>
+  new Response(
+    JSON.stringify({ choices: [{ message: { content: text } }], usage: { prompt_tokens: 10, completion_tokens: 5 } }),
+    { status: 200 },
+  );
 
 let db: Db;
 let agent: typeof agents.$inferSelect;
@@ -87,5 +96,104 @@ describe('handleChannelMessage dedup', () => {
     });
     const deliveries = await db.select().from(webhookDeliveries);
     expect(deliveries).toHaveLength(2);
+  });
+});
+
+describe('conversation memory', () => {
+  const seedMessages = async (convId: string, count: number) => {
+    const t = Date.now() - count * 60_000;
+    for (let i = 0; i < count; i++) {
+      await db.insert(messages).values({
+        conversationId: convId,
+        direction: i % 2 ? 'out' : 'in',
+        text: `msg ${i}`,
+        createdAt: new Date(t + i * 60_000),
+      });
+    }
+  };
+
+  it('does nothing for short conversations', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(llmResponse('summary'));
+    vi.stubGlobal('fetch', fetchMock);
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'short-conv' })
+      .returning();
+    await seedMessages(conv.id, 5);
+    const res = await refreshConversationSummary(db, conv, llm);
+    expect(res.summary).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('summarizes messages older than the recent window', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(llmResponse('Customer wanted a refund'));
+    vi.stubGlobal('fetch', fetchMock);
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'long-conv' })
+      .returning();
+    await seedMessages(conv.id, 25);
+
+    const res = await refreshConversationSummary(db, conv, llm);
+    expect(res.summary).toBe('Customer wanted a refund');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const [updated] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(updated.agentSummary).toBe('Customer wanted a refund');
+    expect(updated.summaryUpTo).not.toBeNull();
+
+    // no new messages since the cursor — no extra LLM call
+    const again = await refreshConversationSummary(db, updated, llm);
+    expect(again.summary).toBe('Customer wanted a refund');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // the summary lands in the prompt as background
+    expect(systemPrompt(agent, [], updated)).toContain('Customer wanted a refund');
+  });
+
+  it('folds only new messages on subsequent refreshes', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(llmResponse('first summary'))
+      .mockResolvedValueOnce(llmResponse('extended summary'));
+    vi.stubGlobal('fetch', fetchMock);
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'growing-conv' })
+      .returning();
+    await seedMessages(conv.id, 25);
+
+    const first = await refreshConversationSummary(db, conv, llm);
+    const [afterFirst] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+
+    // more traffic beyond the window
+    const base = afterFirst.summaryUpTo!.getTime() + 25 * 60_000;
+    for (let i = 0; i < 10; i++) {
+      await db.insert(messages).values({
+        conversationId: conv.id,
+        direction: 'in',
+        text: `later ${i}`,
+        createdAt: new Date(base + i * 60_000),
+      });
+    }
+    const second = await refreshConversationSummary(db, afterFirst, llm);
+    expect(second.summary).toBe('extended summary');
+    expect(first.summary).toBe('first summary');
+
+    // second call's payload includes the prior summary + only new messages
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    const prompt = body.messages[1].content as string;
+    expect(prompt).toContain('first summary');
+    // folds only messages between the old cursor and the new window edge:
+    // msg5..msg14 — msg4 was already summarized, later* is in the window
+    expect(prompt).toContain('msg 5');
+    expect(prompt).not.toContain('msg 4');
+    expect(prompt).not.toContain('later 0');
   });
 });

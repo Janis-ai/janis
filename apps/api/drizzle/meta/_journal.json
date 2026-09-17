@@ -113,6 +113,13 @@
       "when": 1789591461406,
       "tag": "0015_tearful_infant_terrible",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1789604494662,
+      "tag": "0016_ancient_thunderbolt",
+      "breakpoints": true
     }
   ]
 }
