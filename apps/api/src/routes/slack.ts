@@ -199,12 +199,11 @@ export function slackPublicRoutes(db: Db) {
       .where(eq(conversations.id, id))
       .limit(1);
     if (!conv) return c.json({ error: 'not found' }, 404);
-    const res = await fetchAvatar(db, conv);
-    if (!res) return c.json({ error: 'avatar unavailable' }, 404);
-    const bytes = await res.arrayBuffer();
-    return new Response(bytes, {
+    const avatar = await fetchAvatar(db, conv);
+    if (!avatar) return c.json({ error: 'avatar unavailable' }, 404);
+    return new Response(avatar.bytes, {
       headers: {
-        'content-type': res.headers.get('content-type') ?? 'image/jpeg',
+        'content-type': avatar.type,
         'cache-control': 'public, max-age=86400',
       },
     });

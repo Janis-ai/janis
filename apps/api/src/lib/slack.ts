@@ -275,12 +275,14 @@ export async function postSlackAlert(
     const avatar = profile.picture_url ? slackAvatarUrl(conv.id) : null;
     for (const m of recent.reverse()) {
       if (!m.text) continue;
+      // Role suffixes keep same-named participants (e.g. agent and customer
+      // both "Michael Nathanson") from collapsing into a single header.
       const identity =
         m.direction === 'in'
-          ? { username: customerName, icon_url: avatar ?? undefined }
+          ? { username: `${customerName} (customer)`, icon_url: avatar ?? undefined }
           : m.direction === 'human'
-            ? { username: m.author ?? 'operator' }
-            : { username: agent.name };
+            ? { username: `${m.author ?? 'operator'} (operator)` }
+            : { username: `${agent.name} (agent)` };
       const res2 = await slackApi(inst.botToken, 'chat.postMessage', {
         channel: res.channel,
         thread_ts: res.ts,
@@ -368,11 +370,11 @@ export async function mirrorToSlack(
       identity =
         direction === 'in'
           ? {
-              username: profile.name ?? 'customer',
+              username: `${profile.name ?? 'customer'} (customer)`,
               icon_url: profile.picture_url ? slackAvatarUrl(conversationId) ?? undefined : undefined,
             }
           : direction === 'out'
-            ? { username: row.agent.name }
+            ? { username: `${row.agent.name} (agent)` }
             : {};
     }
   }

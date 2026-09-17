@@ -171,12 +171,11 @@ export function conversationRoutes(db: Db) {
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
 
-    const res = await fetchAvatar(db, row.conversation);
-    if (!res) return c.json({ error: 'avatar unavailable' }, 404);
-    const bytes = await res.arrayBuffer();
-    return new Response(bytes, {
+    const avatar = await fetchAvatar(db, row.conversation);
+    if (!avatar) return c.json({ error: 'avatar unavailable' }, 404);
+    return new Response(avatar.bytes, {
       headers: {
-        'content-type': res.headers.get('content-type') ?? 'image/jpeg',
+        'content-type': avatar.type,
         'cache-control': 'private, max-age=86400',
       },
     });
