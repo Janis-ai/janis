@@ -17,6 +17,8 @@ import { generateApiKey } from '../lib/crypto.js';
 import { handleChannelMessage } from './channelIngress.js';
 import { refreshConversationSummary } from '../lib/hostedAgent.js';
 import { systemPrompt } from '../lib/hostedAgent.js';
+import { enrichHandoff } from '../lib/handoff.js';
+import { alerts } from '../db/schema.js';
 
 const llm = { apiKey: 'k', baseUrl: 'https://llm.test', model: 'test-model' };
 const llmResponse = (text: string) =>
@@ -195,5 +197,52 @@ describe('conversation memory', () => {
     expect(prompt).toContain('msg 5');
     expect(prompt).not.toContain('msg 4');
     expect(prompt).not.toContain('later 0');
+  });
+});
+
+describe('handoff brief', () => {
+  it('summarizes the ask onto the note and the alert', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(llmResponse('Customer needs a refund for order #4213'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'handoff-conv' })
+      .returning();
+    await db.insert(messages).values({
+      conversationId: conv.id,
+      direction: 'in',
+      text: 'can I get a refund?',
+    });
+    const [note] = await db
+      .insert(messages)
+      .values({
+        conversationId: conv.id,
+        direction: 'out',
+        text: 'Handoff requested: agent signalled handoff',
+        flags: { failure: false, help_requested: true, custom_alert: false },
+      })
+      .returning();
+    const [alert] = await db
+      .insert(alerts)
+      .values({ conversationId: conv.id, type: 'help_request', detail: 'agent signalled handoff' })
+      .returning();
+
+    const agentWithLlm = {
+      ...agent,
+      config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+    };
+    await enrichHandoff(db, agentWithLlm, conv, note, alert.id, false, 'agent signalled handoff');
+
+    const [updatedNote] = await db.select().from(messages).where(eq(messages.id, note.id));
+    expect((updatedNote.payload as { summary?: string }).summary).toBe(
+      'Customer needs a refund for order #4213',
+    );
+    const [updatedAlert] = await db.select().from(alerts).where(eq(alerts.id, alert.id));
+    expect(updatedAlert.detail).toBe(
+      'agent signalled handoff — Customer needs a refund for order #4213',
+    );
   });
 });

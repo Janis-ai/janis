@@ -2,7 +2,6 @@ import { and, asc, desc, eq, gt, lte } from 'drizzle-orm';
 import type { OutboundWebhook, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, conversations, knowledgeFiles, messages } from '../db/schema.js';
-import { env } from '../env.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage } from './usage.js';
@@ -12,23 +11,10 @@ import { bus } from './bus.js';
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
 
-export interface LlmSettings {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-}
-
-/** Per-agent LLM config with env fallback (OpenAI-compatible). */
-export function llmFor(agent: AgentRow): LlmSettings {
-  const cfg = (agent.config ?? {}) as {
-    llm?: { api_key?: string; base_url?: string; model?: string };
-  };
-  return {
-    apiKey: cfg.llm?.api_key || env.llmApiKey,
-    baseUrl: (cfg.llm?.base_url || env.llmBaseUrl).replace(/\/$/, ''),
-    model: cfg.llm?.model || env.llmModel,
-  };
-}
+export type { LlmSettings } from './llm.js';
+export { llmFor } from './llm.js';
+import type { LlmSettings } from './llm.js';
+import { llmFor } from './llm.js';
 
 const MAX_KNOWLEDGE_CHARS = 80_000;
 

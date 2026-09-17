@@ -146,6 +146,11 @@ export default function ConversationPage() {
                 {m.direction === 'out' && m.payload.via === 'operator' ? ' (via operator)' : ''}
               </div>
               {m.text}
+              {m.flags.help_requested && m.payload.summary ? (
+                <div className="muted" style={{ marginTop: 4 }}>
+                  {String(m.payload.summary)}
+                </div>
+              ) : null}
               {(m.payload.attachments as Attachment[] | undefined)?.map((a, i) => (
                 <div key={i}>
                   {a.type.startsWith('image/') ? (

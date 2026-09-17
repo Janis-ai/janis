@@ -10,6 +10,7 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
+import { enrichHandoff } from '../lib/handoff.js';
 import { notifyWorkspace } from '../lib/notify.js';
 import { evaluateEvent } from '../lib/rules.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
@@ -61,6 +62,8 @@ export async function processEvents(
 
     // Evaluate alert rules — one open alert per type per conversation, so a
     // struggling agent doesn't spam push/email on every message
+    let handoffAlertId: string | undefined;
+    let handoffAlertNew = false;
     for (const triggered of evaluateEvent(event, rules)) {
       const [open] = await db
         .select({ id: alerts.id })
@@ -73,13 +76,23 @@ export async function processEvents(
           ),
         )
         .limit(1);
-      if (open) continue;
+      if (open) {
+        if (triggered.type === 'help_request') handoffAlertId = open.id;
+        continue;
+      }
       const [alert] = await db
         .insert(alerts)
         .values({ conversationId: conv.id, type: triggered.type, detail: triggered.detail })
         .returning();
       alertIds.push(alert.id);
       bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(alert) });
+      if (triggered.type === 'help_request') {
+        // handoff alerts notify after the "what does the customer need"
+        // brief is generated — enriched below via enrichHandoff
+        handoffAlertId = alert.id;
+        handoffAlertNew = true;
+        continue;
+      }
       void postSlackAlert(db, agent.workspaceId, conv, agent, alert);
       void notifyWorkspace(db, agent.workspaceId, {
         title: `Janis: ${triggered.type.replace('_', ' ')}`,
@@ -116,6 +129,20 @@ export async function processEvents(
         type: 'conversation',
         data: { id: updated.id, state: updated.state },
       });
+    }
+
+    // Enrich every handoff moment with an operator brief — even when the
+    // alert was deduped, each note keeps its own summary in the transcript
+    if (event.type === 'handoff_request' && message) {
+      void enrichHandoff(
+        db,
+        agent,
+        updated,
+        message,
+        handoffAlertId,
+        handoffAlertNew,
+        event.reason,
+      );
     }
 
     // Handing off — tell the end user a human is joining. Works for hosted
