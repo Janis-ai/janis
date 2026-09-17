@@ -253,37 +253,46 @@ export async function postSlackAlert(
         ts: res.ts,
       });
     }
-    // Seed the thread with the recent transcript — the replies link exists
-    // from the start and operators get context without opening Janis.
+    // Seed the thread with the recent transcript — one reply per message,
+    // attributed to the actual participants (customer photo included via
+    // icon_url when the install has chat:write.customize).
     const recent = await db
-      .select({ direction: messages.direction, text: messages.text })
+      .select({
+        direction: messages.direction,
+        text: messages.text,
+        author: users.name,
+      })
       .from(messages)
+      .leftJoin(users, eq(messages.authorId, users.id))
       .where(eq(messages.conversationId, conv.id))
       .orderBy(desc(messages.createdAt))
       .limit(20);
-    const lines = recent.reverse().flatMap((m) => {
-      if (!m.text) return [];
-      const who =
-        m.direction === 'in' ? 'customer' : m.direction === 'human' ? 'operator' : 'agent';
-      return [`*${who}:* ${m.text}`];
-    });
-    // Slack caps message length — split the transcript into ~3.5k-char
-    // replies rather than truncating context.
-    for (let i = 0, chunk = ''; i < lines.length; i++) {
-      if (chunk && chunk.length + lines[i].length > 3500) {
+    const profile = (conv.userProfile ?? {}) as {
+      name?: string;
+      picture_url?: string;
+    };
+    const customerName = profile.name ?? 'customer';
+    const avatar = profile.picture_url ? slackAvatarUrl(conv.id) : null;
+    for (const m of recent.reverse()) {
+      if (!m.text) continue;
+      const identity =
+        m.direction === 'in'
+          ? { username: customerName, icon_url: avatar ?? undefined }
+          : m.direction === 'human'
+            ? { username: m.author ?? 'operator' }
+            : { username: agent.name };
+      const res2 = await slackApi(inst.botToken, 'chat.postMessage', {
+        channel: res.channel,
+        thread_ts: res.ts,
+        text: m.text,
+        ...identity,
+      });
+      if (!res2.ok) {
+        // Install predates chat:write.customize — fall back to a label.
         await slackApi(inst.botToken, 'chat.postMessage', {
           channel: res.channel,
           thread_ts: res.ts,
-          text: chunk,
-        });
-        chunk = '';
-      }
-      chunk += (chunk ? '\n' : '') + lines[i];
-      if (i === lines.length - 1 && chunk) {
-        await slackApi(inst.botToken, 'chat.postMessage', {
-          channel: res.channel,
-          thread_ts: res.ts,
-          text: chunk,
+          text: `*${identity.username}:* ${m.text}`,
         });
       }
     }
@@ -333,6 +342,7 @@ export async function mirrorToSlack(
   conversationId: string,
   label: string,
   text: string,
+  direction?: 'in' | 'out' | 'human',
 ): Promise<void> {
   const [thread] = await db
     .select({ slackThreads, installation: slackInstallations })
@@ -341,11 +351,46 @@ export async function mirrorToSlack(
     .where(eq(slackThreads.conversationId, conversationId))
     .limit(1);
   if (!thread) return;
-  await slackApi(thread.installation.botToken, 'chat.postMessage', {
+
+  let identity: { username?: string; icon_url?: string } = {};
+  if (direction) {
+    const [row] = await db
+      .select({ conv: conversations, agent: agents })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    if (row) {
+      const profile = (row.conv.userProfile ?? {}) as {
+        name?: string;
+        picture_url?: string;
+      };
+      identity =
+        direction === 'in'
+          ? {
+              username: profile.name ?? 'customer',
+              icon_url: profile.picture_url ? slackAvatarUrl(conversationId) ?? undefined : undefined,
+            }
+          : direction === 'out'
+            ? { username: row.agent.name }
+            : {};
+    }
+  }
+
+  const res = await slackApi(thread.installation.botToken, 'chat.postMessage', {
     channel: thread.slackThreads.channelId,
     thread_ts: thread.slackThreads.ts,
-    text: `${label} ${text}`,
+    text,
+    ...identity,
   });
+  if (!res.ok) {
+    // Install predates chat:write.customize — keep the labeled text form.
+    await slackApi(thread.installation.botToken, 'chat.postMessage', {
+      channel: thread.slackThreads.channelId,
+      thread_ts: thread.slackThreads.ts,
+      text: `${label} ${text}`,
+    });
+  }
 }
 
 /** Look up the Slack thread for a channel+thread_ts pair. */

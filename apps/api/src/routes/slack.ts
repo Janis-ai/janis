@@ -23,6 +23,7 @@ import { agentSend, humanReply, resume, takeover, TakeoverError } from '../servi
 const SCOPES = [
   'chat:write',
   'chat:write.public',
+  'chat:write.customize', // per-message username/avatar in transcript mirrors
   'channels:read',
   'groups:read',
   'users:read',
