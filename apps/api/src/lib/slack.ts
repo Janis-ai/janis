@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -273,6 +273,19 @@ export async function postSlackAlert(
     };
     const customerName = profile.name ?? 'customer';
     const avatar = profile.picture_url ? slackAvatarUrl(conv.id) : null;
+
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    if (count > recent.length) {
+      await slackApi(inst.botToken, 'chat.postMessage', {
+        channel: res.channel,
+        thread_ts: res.ts,
+        text: `_Showing the last ${recent.length} of ${count} messages — <${env.webOrigin}/conversations/${conv.id}|full transcript in Janis>._`,
+      });
+    }
+
     for (const m of recent.reverse()) {
       if (!m.text) continue;
       // Role suffixes keep same-named participants (e.g. agent and customer
