@@ -7,6 +7,25 @@ import Onboarding from '../components/Onboarding';
 
 const STATES = ['', 'needs_human', 'human', 'active', 'unread', 'starred', 'archived'] as const;
 
+/** useState persisted to localStorage — filters survive navigation. */
+function useSticky<T>(key: string, initial: T): [T, (v: T) => void] {
+  const [v, setV] = useState<T>(() => {
+    try {
+      const s = localStorage.getItem(key);
+      return s !== null ? (JSON.parse(s) as T) : initial;
+    } catch {
+      return initial;
+    }
+  });
+  return [
+    v,
+    (next: T) => {
+      setV(next);
+      localStorage.setItem(key, JSON.stringify(next));
+    },
+  ];
+}
+
 function ConvRow({ c, agentName }: { c: Conversation; agentName?: string }) {
   return (
     <Link to={`/conversations/${c.id}`} className="conv-row">
@@ -32,11 +51,11 @@ function ConvRow({ c, agentName }: { c: Conversation; agentName?: string }) {
 
 /** Conversations: triage (needs attention) + search/browse of everything. */
 export default function Conversations() {
-  const [tab, setTab] = useState<'attention' | 'all'>('attention');
-  const [state, setState] = useState('');
-  const [agentId, setAgentId] = useState('');
-  const [mine, setMine] = useState(false);
-  const [query, setQuery] = useState('');
+  const [tab, setTab] = useSticky<'attention' | 'all'>('conv.tab', 'attention');
+  const [state, setState] = useSticky('conv.state', '');
+  const [agentId, setAgentId] = useSticky('conv.agent', '');
+  const [mine, setMine] = useSticky('conv.mine', false);
+  const [query, setQuery] = useSticky('conv.query', '');
   const { data } = useConversations({
     attention: tab === 'attention' || undefined,
     state: state || undefined,

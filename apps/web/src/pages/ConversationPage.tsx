@@ -52,7 +52,23 @@ export default function ConversationPage() {
       is_unread?: boolean;
     }) =>
       api(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-    onSuccess: refresh,
+    onSuccess: (_d, body) => {
+      // Viewing a conversation auto-marks it read server-side on every
+      // fetch — refetching after "mark unread" would instantly undo it.
+      // Patch the cache instead; the list still invalidates for the dot.
+      if (body.is_unread !== undefined) {
+        qc.setQueryData(
+          ['conversation', id],
+          (old: { conversation?: { is_unread?: boolean } } | undefined) =>
+            old?.conversation
+              ? { ...old, conversation: { ...old.conversation, is_unread: body.is_unread } }
+              : old,
+        );
+        invalidate();
+      } else {
+        refresh();
+      }
+    },
     onError: (e) => setError(e.message),
   });
 
@@ -130,10 +146,10 @@ export default function ConversationPage() {
           </button>
           <button
             className="btn"
-            onClick={() => patch.mutate({ is_unread: true })}
-            title="Mark unread"
+            onClick={() => patch.mutate({ is_unread: !c.is_unread })}
+            title={c.is_unread ? 'Mark as read' : 'Mark unread'}
           >
-            Mark unread
+            {c.is_unread ? 'Mark as read' : 'Mark unread'}
           </button>
           <StateBadge state={c.state} />
         </div>
