@@ -8,7 +8,7 @@ import { Avatar, channelLabel, displayName, StateBadge } from '../components/bit
 import Composer from '../components/Composer';
 
 const WHO: Record<Message['direction'], string> = {
-  in: 'User',
+  in: 'Customer',
   out: 'Agent',
   human: 'Operator',
 };
@@ -139,10 +139,17 @@ export default function ConversationPage() {
         )}
 
         <div className="transcript">
-          {messages.map((m) => (
+          {messages.map((m) => {
+            const who =
+              m.direction === 'in'
+                ? c.user_profile.name ?? WHO.in
+                : m.direction === 'out'
+                  ? agent?.name ?? WHO.out
+                  : users?.users.find((u) => u.id === m.author)?.name ?? WHO.human;
+            return (
             <div key={m.id} className={`msg ${m.direction}`}>
               <div className="who">
-                {WHO[m.direction]}
+                {who}
                 {m.direction === 'out' && m.payload.via === 'operator' ? ' (via operator)' : ''}
               </div>
               {m.text}
@@ -165,7 +172,8 @@ export default function ConversationPage() {
                 </div>
               ))}
             </div>
-          ))}
+            );
+          })}
           <div ref={bottomRef} />
         </div>
 
