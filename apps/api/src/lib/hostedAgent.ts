@@ -88,7 +88,11 @@ export function systemPrompt(
   };
   const parts = [
     cfg.system_prompt ||
-      'You are a helpful support agent. Answer concisely and accurately. If you are unsure, or the request needs a human, reply with exactly: [HANDOFF]',
+      `You are a helpful support agent. Answer concisely and accurately.${
+        opts.forSuggestion
+          ? ''
+          : ' If you are unsure, or the request needs a human, reply with exactly: [HANDOFF]'
+      }`,
   ];
   if (cfg.knowledge?.length) {
     parts.push(`\nKnowledge base:\n${cfg.knowledge.map((k) => `- ${k}`).join('\n')}`);
@@ -112,7 +116,7 @@ export function systemPrompt(
   );
   if (opts.forSuggestion) {
     parts.push(
-      '\nYou are drafting a suggested reply for a human operator to review and send — write what the agent would say to the customer. Output only the suggested message text — no speaker labels, no preamble; never output [HANDOFF] in a draft.',
+      '\nNow write the reply you would send to the customer right now — your single best, most confident answer to their latest message, in your own voice. If details are missing, give the best answer you can and ask one targeted follow-up rather than hedging or deferring. Output only the reply text — no speaker labels, no preamble; never output [HANDOFF] in a draft.',
     );
   } else {
     parts.push('\nIf the user asks for a human or you cannot help, reply with exactly: [HANDOFF]');
