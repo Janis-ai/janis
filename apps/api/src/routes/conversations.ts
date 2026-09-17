@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -70,6 +70,7 @@ export function conversationRoutes(db: Db) {
     if (q.state === 'unread') conditions.push(eq(conversations.isUnread, true));
     else if (q.state === 'starred') conditions.push(eq(conversations.isStarred, true));
     else if (q.state) conditions.push(eq(conversations.state, q.state));
+    else conditions.push(ne(conversations.state, 'archived')); // archived hidden unless filtered
     if (q.agent_id) conditions.push(eq(conversations.agentId, q.agent_id));
     if (q.assignee === 'me') conditions.push(eq(conversations.assigneeId, c.get('user').id));
     if (q.attention) {

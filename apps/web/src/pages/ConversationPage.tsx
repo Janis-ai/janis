@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Attachment, Conversation, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
@@ -15,7 +15,6 @@ const WHO: Record<Message['direction'], string> = {
 
 export default function ConversationPage() {
   const { id = '' } = useParams();
-  const navigate = useNavigate();
   const { data, error: loadError } = useConversation(id);
   const { data: agents } = useAgents();
   const { data: users } = useUsers();
@@ -57,12 +56,13 @@ export default function ConversationPage() {
     onError: (e) => setError(e.message),
   });
 
-  const del = useMutation({
-    mutationFn: () => api(`/api/conversations/${id}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      invalidate();
-      navigate('/conversations');
-    },
+  const archive = useMutation({
+    mutationFn: (archived: boolean) =>
+      api(`/api/conversations/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ state: archived ? 'archived' : 'active' }),
+      }),
+    onSuccess: refresh,
     onError: (e) => setError(e.message),
   });
 
@@ -248,7 +248,14 @@ export default function ConversationPage() {
                 <button className="btn danger" onClick={() => act.mutate('archive')}>Archive</button>
               </>
             )}
-            {c.state === 'archived' && <span className="muted">Archived</span>}
+            {c.state === 'archived' && (
+              <>
+                <span className="muted">Archived</span>
+                <button className="btn" disabled={archive.isPending} onClick={() => archive.mutate(false)}>
+                  {archive.isPending ? 'Working…' : 'Unarchive'}
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -305,19 +312,6 @@ export default function ConversationPage() {
 
         <TagEditor conversation={c} onSave={(tags) => patch.mutate({ tags })} />
 
-        <div className="card">
-          <button
-            className="btn danger"
-            disabled={del.isPending}
-            onClick={() => {
-              if (window.confirm('Delete this conversation and its transcript? This cannot be undone.')) {
-                del.mutate();
-              }
-            }}
-          >
-            {del.isPending ? 'Deleting…' : 'Delete conversation'}
-          </button>
-        </div>
       </aside>
     </div>
   );
