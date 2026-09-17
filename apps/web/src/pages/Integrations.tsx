@@ -74,6 +74,7 @@ export default function Integrations() {
   const remove = useMutation({
     mutationFn: (id: string) => api(`/api/channels/${id}`, { method: 'DELETE' }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
+    onError: (e) => setError(e.message),
   });
 
   const [form, setForm] = useState({

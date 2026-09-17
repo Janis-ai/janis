@@ -78,11 +78,14 @@ export function channelApiRoutes(db: Db) {
 
   app.delete('/:id', async (c) => {
     const [row] = await db
-      .delete(channels)
+      .select({ id: channels.id })
+      .from(channels)
       .where(and(eq(channels.id, c.req.param('id')), eq(channels.workspaceId, c.get('workspaceId'))))
-      .returning();
+      .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
+    // Bindings reference channels without cascade — remove them first.
     await db.delete(channelBindings).where(eq(channelBindings.channelId, row.id));
+    await db.delete(channels).where(eq(channels.id, row.id));
     return c.json({ ok: true });
   });
 
