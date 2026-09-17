@@ -5,6 +5,7 @@ import {
   agents,
   alerts,
   conversations,
+  messages,
   slackInstallations,
   slackThreads,
   users,
@@ -215,6 +216,27 @@ export async function postSlackAlert(
         installationId: inst.id,
         channelId: res.channel,
         ts: res.ts,
+      });
+    }
+    // Seed the thread with the recent transcript — the replies link exists
+    // from the start and operators get context without opening Janis.
+    const recent = await db
+      .select({ direction: messages.direction, text: messages.text })
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id))
+      .orderBy(desc(messages.createdAt))
+      .limit(6);
+    const lines = recent.reverse().flatMap((m) => {
+      if (!m.text) return [];
+      const who =
+        m.direction === 'in' ? 'customer' : m.direction === 'human' ? 'operator' : 'agent';
+      return [`*${who}:* ${m.text}`];
+    });
+    if (lines.length) {
+      await slackApi(inst.botToken, 'chat.postMessage', {
+        channel: res.channel,
+        thread_ts: res.ts,
+        text: lines.join('\n'),
       });
     }
   } else {
