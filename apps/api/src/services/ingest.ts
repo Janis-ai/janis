@@ -66,7 +66,7 @@ export async function processEvents(
     let handoffAlertNew = false;
     for (const triggered of evaluateEvent(event, rules)) {
       const [open] = await db
-        .select({ id: alerts.id })
+        .select()
         .from(alerts)
         .where(
           and(
@@ -77,7 +77,12 @@ export async function processEvents(
         )
         .limit(1);
       if (open) {
-        if (triggered.type === 'help_request') handoffAlertId = open.id;
+        if (triggered.type === 'help_request') {
+          handoffAlertId = open.id;
+          // Deduped handoffs still reply in the Slack thread — a thread
+          // reply, not a new channel post, so it doesn't spam the channel
+          void postSlackAlert(db, agent.workspaceId, conv, agent, open);
+        }
         continue;
       }
       const [alert] = await db

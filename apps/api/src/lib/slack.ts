@@ -106,11 +106,12 @@ export async function postSlackAlert(
     `conversation \`${conv.externalId}\`\n${alert.detail ?? conv.lastMessagePreview ?? ''}`;
 
   if (existing) {
-    await slackApi(inst.botToken, 'chat.postMessage', {
+    const res = await slackApi(inst.botToken, 'chat.postMessage', {
       channel: existing.channelId,
       thread_ts: existing.ts,
       text: summary,
     });
+    if (!res.ok) console.error('slack thread reply failed:', res.error);
     return;
   }
 
@@ -152,6 +153,8 @@ export async function postSlackAlert(
       channelId: res.channel,
       ts: res.ts,
     });
+  } else {
+    console.error('slack alert post failed:', res.error);
   }
 }
 
