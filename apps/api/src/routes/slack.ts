@@ -319,7 +319,7 @@ export function slackPublicRoutes(db: Db) {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 replace_original: true,
-                text: `:white_check_mark: Sent via *${agent?.name ?? 'agent'}:*\n${sug.text}`,
+                text: `:white_check_mark: Sent via *${agent?.name ?? 'agent'}*`,
               }),
             });
           }
