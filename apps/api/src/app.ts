@@ -81,9 +81,11 @@ export function createApp(db: Db) {
     app.use('/*', serveStatic({ root: webDist }));
     app.get('*', (c) => {
       // Unknown API-ish paths should 404, not render the SPA
-      // (/channels is a web page; only /channels/meta/* is an API route)
-      if (/^\/(api|auth|v1|slack|billing|uploads)(\/|$)/.test(c.req.path) ||
-          /^\/channels\/meta(\/|$)/.test(c.req.path)) {
+      // (/channels and /billing are web pages; only /channels/meta/* and
+      // /billing/stripe-webhook are API routes)
+      if (/^\/(api|auth|v1|slack|uploads)(\/|$)/.test(c.req.path) ||
+          /^\/channels\/meta(\/|$)/.test(c.req.path) ||
+          /^\/billing\/stripe-webhook(\/|$)/.test(c.req.path)) {
         return c.notFound();
       }
       return c.html(indexHtml);
