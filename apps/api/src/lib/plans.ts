@@ -9,7 +9,7 @@ export interface Plan {
   baseCents: number;
   includedMessages: number;
   // sell price per 1k messages beyond the included amount.
-  // null = hard cap (free tier): agent stops answering, inbox still works
+  // null = hard cap (free tier): inbound messages are dropped, not transcribed
   overagePer1kCents: number | null;
 }
 

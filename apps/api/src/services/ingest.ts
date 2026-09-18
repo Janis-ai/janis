@@ -17,6 +17,7 @@ import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { deliverToChannel } from '../lib/channels.js';
 import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
 import { METER_MESSAGES, reportMeter } from '../lib/stripe.js';
+import { messageCap } from '../lib/plans.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -41,8 +42,12 @@ export async function processEvents(
     .where(eq(workspaces.id, agent.workspaceId))
     .limit(1);
   const stripeCustomerId = ws?.stripeCustomerId;
+  // Hard-capped plan (free tier over its included volume): customer messages
+  // are dropped before storage — nothing is transcribed, metered, or mirrored.
+  const cap = await messageCap(db, agent.workspaceId);
 
   for (const event of events) {
+    if (cap.capped && event.type === 'message_in') continue;
     const conv = await findOrCreateConversation(db, agent, event);
     const alertIds: string[] = [];
 

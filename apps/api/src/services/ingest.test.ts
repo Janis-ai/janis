@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { IngestEvent } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -11,6 +11,7 @@ import { generateApiKey, hashPassword } from '../lib/crypto.js';
 import { processEvents } from './ingest.js';
 import { takeover, humanReply, resume } from './takeover.js';
 import { saveUserProfile } from '../lib/hostedAgent.js';
+import { messagesInPeriod } from '../lib/plans.js';
 
 let db: Db;
 let agent: typeof agents.$inferSelect;
@@ -230,5 +231,46 @@ describe('takeover lifecycle', () => {
     await expect(humanReply(db, admin.workspaceId, conv.id, admin, 'hi')).rejects.toThrow(
       'take over',
     );
+  });
+});
+
+describe('hard cap', () => {
+  it('drops inbound messages without storing once the free-plan cap is hit', async () => {
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'capped' })
+      .returning();
+    // fill the period to the free-plan limit
+    const [ws] = await db.select().from(workspaces);
+    const included = 250;
+    const already = await messagesInPeriod(db, ws.id);
+    await db.insert(messages).values(
+      Array.from({ length: included - already }, () => ({
+        conversationId: conv.id,
+        direction: 'in' as const,
+        text: 'filler',
+      })),
+    );
+
+    const results = await processEvents(db, agent, [
+      { type: 'message_in', conversation_id: 'capped', text: 'should not store' },
+    ]);
+    expect(results).toHaveLength(0);
+    const stored = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.conversationId, conv.id), eq(messages.text, 'should not store')));
+    expect(stored).toHaveLength(0);
+
+    // agent-side events still record (audit trail)
+    const out = await processEvents(db, agent, [
+      { type: 'failure', conversation_id: 'capped', text: 'still stored' },
+    ]);
+    expect(out).toHaveLength(1);
+    const note = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.conversationId, conv.id), eq(messages.text, 'still stored')));
+    expect(note).toHaveLength(1);
   });
 });

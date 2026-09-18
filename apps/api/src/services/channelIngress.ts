@@ -141,13 +141,12 @@ export async function handleChannelMessage(
     },
   ]);
 
-  // Forward to the agent unless a human owns it — needs_human is just a flag
-  if (
-    result &&
-    result.conversation_state !== 'human' &&
-    result.conversation_state !== 'archived' &&
-    (agent.webhookUrl || agent.hosted)
-  ) {
+  // Forward to the agent unless a human owns it — needs_human is just a flag.
+  // A capped workspace drops the message before storage (result undefined),
+  // but still runs deliverWebhook: its cap check logs the blocked delivery
+  // and raises the "cap reached" alert so the operator sees the dropped traffic.
+  const state = result?.conversation_state ?? conv.state;
+  if (state !== 'human' && state !== 'archived' && (agent.webhookUrl || agent.hosted)) {
     await deliverWebhook(db, agent, 'message.user', {
       conversation_id: externalId,
       janis_conversation_id: conv.id,

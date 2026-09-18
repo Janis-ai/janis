@@ -192,7 +192,7 @@ export default function Billing() {
                 {data.plan.name} plan — {usd(data.plan.base_cents)}/mo
               </h3>
               {data.plan.capped && (
-                <span className="muted">hard cap — bot stops answering past the limit</span>
+                <span className="muted">hard cap — bot stops answering, messages dropped past the limit</span>
               )}
             </div>
             <div className="muted" style={{ marginBottom: 6 }}>
@@ -252,7 +252,8 @@ export default function Billing() {
 
           <div className="card muted" style={{ fontSize: 13 }}>
             Every stored message counts toward the plan — user, agent, and human replies alike.
-            On a capped plan the bot stops answering past the limit; humans can still reply.
+            On a capped plan the bot stops answering past the limit and new inbound
+            messages are dropped — not transcribed — until the next billing period or an upgrade.
             LLM tokens are metered on calls Janis makes (hosted agents, suggestions) and passed
             through at cost + {data.costs.margin_pct}%.
           </div>

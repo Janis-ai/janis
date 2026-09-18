@@ -24,7 +24,9 @@ export async function deliverWebhook(
   if (!agent.hosted && !agent.webhookUrl) return;
 
   // Hard-capped plan (free tier over its included messages): the bot stops
-  // answering but messages still land in the inbox for a human to handle.
+  // answering. Inbound messages aren't transcribed — ingest drops them
+  // before storage; this still runs so the blocked delivery is logged and
+  // the operator gets a "cap reached" alert on the conversation.
   if (type === 'message.user') {
     const cap = await messageCap(db, agent.workspaceId);
     if (cap.capped) {
