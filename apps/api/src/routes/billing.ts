@@ -19,6 +19,27 @@ export function billingRoutes(db: Db) {
     if (!/^\d{4}-\d{2}$/.test(period)) return c.json({ error: 'period must be YYYY-MM' }, 400);
 
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
+
+    // Self-heal: if the customer has an active Stripe subscription we never
+    // recorded (missed/disabled webhook), sync the plan from the source of
+    // truth. Upgrades only — never downgrades on a missed event.
+    const s = stripe();
+    if (s && ws?.stripeCustomerId) {
+      const subs = await s.subscriptions
+        .list({ customer: ws.stripeCustomerId, status: 'active', limit: 1 })
+        .catch(() => null);
+      const sub = subs?.data[0];
+      const syncedPlan = sub ? planForPrice(sub.items.data[0]?.price.id ?? '') : '';
+      if (sub && syncedPlan && (ws.plan !== syncedPlan || ws.stripeSubscriptionId !== sub.id)) {
+        await db
+          .update(workspaces)
+          .set({ plan: syncedPlan, stripeSubscriptionId: sub.id })
+          .where(eq(workspaces.id, workspaceId));
+        ws.plan = syncedPlan;
+        ws.stripeSubscriptionId = sub.id;
+      }
+    }
+
     const plan = planFor(ws?.plan);
 
     const [llm] = await db
