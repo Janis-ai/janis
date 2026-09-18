@@ -172,6 +172,33 @@ export function billingRoutes(db: Db) {
     return c.json({ url: session.url });
   });
 
+  // POST /api/billing/downgrade — back to free. Cancels the Stripe
+  // subscription at period end when one exists (the deleted webhook flips
+  // the plan then); workspaces with no subscription flip immediately.
+  app.post('/downgrade', async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
+    if (!ws) return c.json({ error: 'not found' }, 404);
+    if (ws.plan === 'free') return c.json({ plan: 'free', at_period_end: false });
+
+    if (ws.stripeSubscriptionId) {
+      const s = stripe();
+      if (s) {
+        try {
+          await s.subscriptions.update(ws.stripeSubscriptionId, { cancel_at_period_end: true });
+          return c.json({ plan: ws.plan, at_period_end: true });
+        } catch {
+          // subscription is already gone on Stripe's side — flip locally
+        }
+      }
+    }
+    await db
+      .update(workspaces)
+      .set({ plan: 'free', stripeSubscriptionId: null })
+      .where(eq(workspaces.id, workspaceId));
+    return c.json({ plan: 'free', at_period_end: false });
+  });
+
   // POST /api/billing/portal → Stripe Customer Portal URL (cards, invoices, cancel)
   app.post('/portal', async (c) => {
     const s = stripe();

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 
 interface BillingSummary {
@@ -48,6 +48,8 @@ const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 export default function Billing() {
   const [period, setPeriod] = useState(() => new Date().toISOString().slice(0, 7));
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const qc = useQueryClient();
   const [upgraded, setUpgraded] = useState(
     () => new URLSearchParams(window.location.search).has('upgraded'),
   );
@@ -84,6 +86,23 @@ export default function Billing() {
     }
   };
 
+  const downgrade = async () => {
+    setError('');
+    setNotice('');
+    if (!window.confirm('Move to the Free plan?')) return;
+    try {
+      const r = await api<{ at_period_end: boolean }>('/api/billing/downgrade', { method: 'POST' });
+      setNotice(
+        r.at_period_end
+          ? 'Subscription will cancel at the end of the paid period — your plan stays active until then.'
+          : 'You are now on the Free plan.',
+      );
+      void qc.invalidateQueries({ queryKey: ['billing'] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'downgrade failed');
+    }
+  };
+
   const pct = data ? Math.min(100, (data.messages.used / data.messages.included) * 100) : 0;
 
   return (
@@ -102,6 +121,7 @@ export default function Billing() {
         <div className="card muted">Checkout complete — waiting for Stripe to confirm…</div>
       )}
       {error && <div className="error">{error}</div>}
+      {notice && <div className="card muted">{notice}</div>}
 
       {data && (
         <>
@@ -139,7 +159,9 @@ export default function Billing() {
                     {current ? (
                       <div className="muted" style={{ marginTop: 10 }}>Current plan</div>
                     ) : p.key === 'free' ? (
-                      <div className="muted" style={{ marginTop: 10 }}>—</div>
+                      <button className="btn" style={{ marginTop: 10 }} onClick={() => void downgrade()}>
+                        Downgrade
+                      </button>
                     ) : p.purchasable ? (
                       <button
                         className="btn primary"

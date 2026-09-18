@@ -25,6 +25,7 @@ import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 import { metaApiRoutes } from './routes/meta.js';
 import { onboardingRoutes } from './routes/onboarding.js';
 import { billingRoutes, stripeWebhookRoutes } from './routes/billing.js';
+import { workspaceRoutes } from './routes/workspace.js';
 
 export function createApp(db: Db) {
   const app = new Hono();
@@ -65,6 +66,7 @@ export function createApp(db: Db) {
   api.route('/meta', metaApiRoutes(db));
   api.route('/onboarding', onboardingRoutes(db));
   api.route('/billing', billingRoutes(db));
+  api.route('/workspace', workspaceRoutes(db));
   app.route('/api', api);
 
   app.use('/uploads/*', serveStatic({ root: './' }));

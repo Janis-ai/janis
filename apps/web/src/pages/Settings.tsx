@@ -66,6 +66,14 @@ export default function Settings() {
     },
   });
 
+  const deleteWorkspace = useMutation({
+    mutationFn: () => api('/api/workspace', { method: 'DELETE' }),
+    onSuccess: () => {
+      window.location.href = '/';
+    },
+    onError: (e) => setError(e.message),
+  });
+
   const setNotify = useMutation({
     mutationFn: (notify: { push?: boolean; email?: boolean }) =>
       api<{ user: WorkspaceUser }>('/api/users/me', {
@@ -253,6 +261,29 @@ export default function Settings() {
         )}
         {error && <div className="error">{error}</div>}
       </div>
+
+      {me?.user.role === 'admin' && (
+        <div className="card" style={{ borderColor: 'var(--danger)' }}>
+          <strong>Danger zone</strong>
+          <div className="muted" style={{ margin: '6px 0 10px' }}>
+            Permanently delete this workspace — every conversation, agent, channel, and teammate.
+            Any active subscription is canceled. This cannot be undone.
+          </div>
+          <button
+            className="btn danger"
+            disabled={deleteWorkspace.isPending}
+            onClick={() => {
+              const name = window.prompt(
+                `Type the workspace name (${me.workspace.name}) to confirm deletion:`,
+              );
+              if (name === me.workspace.name) deleteWorkspace.mutate();
+              else if (name !== null) setError('Workspace name did not match — nothing deleted.');
+            }}
+          >
+            {deleteWorkspace.isPending ? 'Deleting…' : 'Delete workspace'}
+          </button>
+        </div>
+      )}
     </>
   );
 }
