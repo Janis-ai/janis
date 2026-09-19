@@ -120,7 +120,7 @@ export function authRoutes(db: Db) {
     const user = await findOrProvisionUser(profile.email, profile.name ?? '');
     await issueSession(c, user.id);
     deleteCookie(c, OAUTH_STATE_COOKIE, { path: '/' });
-    return c.redirect(`${env.webOrigin}/`);
+    return c.redirect(`${env.webOrigin}/conversations`);
   };
 
   const checkState = (c: Context) => {

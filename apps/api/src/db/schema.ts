@@ -9,7 +9,12 @@ import {
   uniqueIndex,
   index,
   integer,
+  customType,
 } from 'drizzle-orm/pg-core';
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+});
 
 export const workspaces = pgTable('workspaces', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -31,6 +36,7 @@ export const users = pgTable('users', {
   role: text('role', { enum: ['admin', 'member'] }).notNull().default('member'),
   // {push, email} — which channels alert this user when agents need a human
   notifyPrefs: jsonb('notify_prefs').notNull().default({ push: true, email: true }),
+  slackUserId: text('slack_user_id'), // resolved via users.lookupByEmail — cached for alert @mentions
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -49,8 +55,9 @@ export const agents = pgTable('agents', {
     .notNull()
     .references(() => workspaces.id),
   name: text('name').notNull(),
-  apiKeyHash: text('api_key_hash').notNull().unique(),
-  apiKeyPreview: text('api_key_preview').notNull(),
+  // null until the operator generates one — hosted agents may never need it
+  apiKeyHash: text('api_key_hash').unique(),
+  apiKeyPreview: text('api_key_preview'),
   webhookUrl: text('webhook_url'),
   webhookSecret: text('webhook_secret'),
   hosted: boolean('hosted').notNull().default(false), // Janis runs the agent in-process
@@ -130,7 +137,7 @@ export const alerts = pgTable(
       .notNull()
       .references(() => conversations.id),
     type: text('type', {
-      enum: ['failure', 'help_request', 'custom', 'inactivity', 'keyword'],
+      enum: ['failure', 'help_request', 'custom', 'inactivity', 'keyword', 'sla'],
     }).notNull(),
     detail: text('detail'),
     status: text('status', { enum: ['open', 'acknowledged', 'resolved'] })
@@ -245,7 +252,7 @@ export const channels = pgTable('channels', {
   agentId: uuid('agent_id')
     .notNull()
     .references(() => agents.id),
-  kind: text('kind', { enum: ['messenger', 'instagram', 'whatsapp'] }).notNull(),
+  kind: text('kind', { enum: ['messenger', 'instagram', 'whatsapp', 'webchat'] }).notNull(),
   name: text('name').notNull(),
   // {page_id, page_access_token, verify_token, phone_number_id} — secrets never leave the API
   credentials: jsonb('credentials').notNull().default({}),
@@ -348,5 +355,20 @@ export const webhookDeliveries = pgTable('webhook_deliveries', {
     .default('pending'),
   attempts: integer('attempts').notNull().default(0),
   lastError: text('last_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Uploaded file blobs — attachments live in Postgres (not the container
+ * filesystem, which is ephemeral on Cloud Run) so transcript links survive
+ * deploys. `filename` is the generated public name in /uploads/<filename>.
+ */
+export const uploads = pgTable('uploads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  filename: text('filename').notNull().unique(),
+  name: text('name').notNull(),
+  type: text('type').notNull(),
+  size: integer('size').notNull(),
+  data: bytea('data').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

@@ -11,6 +11,7 @@ import {
   findChannelByObjectId,
   parseMetaWebhook,
   resolveChatIdentity,
+  setGetStartedButton,
   verifyMetaSignature,
   type ChannelCredentials,
 } from '../lib/channels.js';
@@ -18,13 +19,31 @@ import { toChannel } from '../lib/serializers.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 
 const createChannel = z.object({
-  kind: z.enum(['messenger', 'instagram', 'whatsapp']),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat']),
   name: z.string().min(1).max(120),
   agent_id: z.string().uuid(),
   page_id: z.string().optional(), // messenger / instagram
   phone_number_id: z.string().optional(), // whatsapp
-  access_token: z.string().min(1),
+  access_token: z.string().min(1).optional(), // not required for webchat
   verify_token: z.string().optional(), // auto-generated if absent
+  greeting: z.string().max(500).optional(), // webchat
+  quick_replies: z.array(z.string().min(1).max(120)).max(8).optional(), // webchat
+});
+
+const patchChannel = z.object({
+  name: z.string().min(1).max(120).optional(),
+  // webchat widget appearance; empty strings clear a field
+  branding: z
+    .object({
+      title: z.string().max(120).optional(),
+      subtitle: z.string().max(200).optional(),
+      greeting: z.string().max(500).optional(),
+      quick_replies: z.array(z.string().min(1).max(120)).max(8).optional(),
+      accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).or(z.literal('')).optional(),
+      position: z.enum(['left', 'right']).optional(),
+      logo_url: z.string().url().max(500).or(z.literal('')).optional(),
+    })
+    .optional(),
 });
 
 /** Console endpoints mounted at /api/channels (session auth). */
@@ -53,8 +72,13 @@ export function channelApiRoutes(db: Db) {
     if (body.kind === 'whatsapp' && !body.phone_number_id) {
       return c.json({ error: 'phone_number_id required for whatsapp' }, 400);
     }
-    if (body.kind !== 'whatsapp' && !body.page_id) {
-      return c.json({ error: 'page_id required for messenger/instagram' }, 400);
+    if (body.kind === 'messenger' || body.kind === 'instagram') {
+      if (!body.page_id) {
+        return c.json({ error: 'page_id required for messenger/instagram' }, 400);
+      }
+      if (!body.access_token) {
+        return c.json({ error: 'access_token required for messenger/instagram' }, 400);
+      }
     }
 
     const credentials: ChannelCredentials = {
@@ -62,6 +86,8 @@ export function channelApiRoutes(db: Db) {
       phone_number_id: body.phone_number_id,
       access_token: body.access_token,
       verify_token: body.verify_token || randomBytes(16).toString('hex'),
+      greeting: body.greeting,
+      quick_replies: body.quick_replies,
     };
     const [row] = await db
       .insert(channels)
@@ -73,7 +99,47 @@ export function channelApiRoutes(db: Db) {
         credentials,
       })
       .returning();
+    // Get Started button on the page profile — best-effort, never block creation
+    void setGetStartedButton(body.kind, credentials).catch(() => {});
     return c.json({ channel: toChannel(row, agent.name) }, 201);
+  });
+
+  app.patch('/:id', zValidator('json', patchChannel), async (c) => {
+    const body = c.req.valid('json');
+    const [row] = await db
+      .select()
+      .from(channels)
+      .where(and(eq(channels.id, c.req.param('id')), eq(channels.workspaceId, c.get('workspaceId'))))
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    if (body.branding && row.kind !== 'webchat') {
+      return c.json({ error: 'branding applies to webchat channels' }, 400);
+    }
+
+    const creds = { ...(row.credentials as ChannelCredentials) };
+    if (body.branding) {
+      const b = body.branding;
+      for (const key of ['title', 'subtitle', 'greeting', 'accent', 'logo_url'] as const) {
+        const v = b[key];
+        if (v === undefined) continue;
+        if (v === '') delete creds[key];
+        else creds[key] = v;
+      }
+      if (b.position !== undefined) creds.position = b.position;
+      if (b.quick_replies !== undefined) {
+        if (b.quick_replies.length) creds.quick_replies = b.quick_replies;
+        else delete creds.quick_replies;
+      }
+    }
+    const [updated] = await db
+      .update(channels)
+      .set({ name: body.name ?? row.name, credentials: creds })
+      .where(eq(channels.id, row.id))
+      .returning();
+    // Re-apply Get Started on edits — covers channels created before this existed
+    void setGetStartedButton(row.kind, creds).catch(() => {});
+    const [agent] = await db.select({ name: agents.name }).from(agents).where(eq(agents.id, row.agentId)).limit(1);
+    return c.json({ channel: toChannel(updated, agent?.name ?? '') });
   });
 
   app.delete('/:id', async (c) => {

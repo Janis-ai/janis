@@ -5,11 +5,11 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, conversations, users, workspaces } from '../db/schema.js';
+import { agents, alerts, conversations, users, workspaces } from '../db/schema.js';
 import { generateApiKey, hashPassword } from '../lib/crypto.js';
 import { processEvents } from './ingest.js';
 import { takeover, humanReply, agentSend } from './takeover.js';
-import { sweepAutoResume } from './sweeper.js';
+import { sweepAutoResume, sweepSla } from './sweeper.js';
 
 let db: Db;
 let agent: typeof agents.$inferSelect;
@@ -138,5 +138,81 @@ describe('sweepAutoResume', () => {
       .where(eq(conversations.id, conv.id));
 
     expect(await sweepAutoResume(db)).toBe(0);
+  });
+});
+
+describe('sweepSla', () => {
+  it('re-alerts an unclaimed handoff past the SLA, deduped per window', async () => {
+    const slaAgent = (
+      await db
+        .insert(agents)
+        .values({
+          workspaceId: admin.workspaceId,
+          name: 'SLA Bot',
+          apiKeyHash: generateApiKey().hash,
+          apiKeyPreview: 'sla',
+          config: { sla_minutes: 10 },
+        })
+        .returning()
+    )[0];
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: slaAgent.id, externalId: 'sla-conv', state: 'needs_human' })
+      .returning();
+    await db.insert(alerts).values({
+      conversationId: conv.id,
+      type: 'help_request',
+      detail: 'needs help',
+      createdAt: new Date(Date.now() - 20 * MIN), // handoff 20m ago, SLA 10m
+    });
+
+    expect(await sweepSla(db)).toBe(1); // breaches → one sla alert
+    expect(await sweepSla(db)).toBe(0); // deduped inside the same window
+
+    const slaAlerts = await db.select().from(alerts).where(eq(alerts.type, 'sla'));
+    expect(slaAlerts).toHaveLength(1);
+    expect(slaAlerts[0].detail).toContain('SLA 10m');
+  });
+
+  it('ignores conversations still inside the SLA window', async () => {
+    const slaAgent = (
+      await db.select().from(agents).where(eq(agents.name, 'SLA Bot'))
+    )[0];
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: slaAgent.id, externalId: 'sla-fresh', state: 'needs_human' })
+      .returning();
+    await db.insert(alerts).values({
+      conversationId: conv.id,
+      type: 'help_request',
+      createdAt: new Date(), // just now — inside the 10m window
+    });
+    expect(await sweepSla(db)).toBe(0);
+  });
+});
+
+describe('auto_assign', () => {
+  it('assigns a fresh handoff to the least-loaded teammate', async () => {
+    const assignAgent = (
+      await db
+        .insert(agents)
+        .values({
+          workspaceId: admin.workspaceId,
+          name: 'Assign Bot',
+          apiKeyHash: generateApiKey().hash,
+          apiKeyPreview: 'asg',
+          config: { auto_assign: true },
+        })
+        .returning()
+    )[0];
+    await processEvents(db, assignAgent, [
+      { type: 'handoff_request', conversation_id: 'assign-conv', reason: 'stuck' },
+    ]);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'assign-conv'));
+    expect(conv.state).toBe('needs_human');
+    expect(conv.assigneeId).toBe(admin.id); // only member → gets it
   });
 });

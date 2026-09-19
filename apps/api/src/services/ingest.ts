@@ -1,5 +1,5 @@
 import type { IngestEvent, IngestResult } from '@janis/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -7,14 +7,15 @@ import {
   alerts,
   conversations,
   messages,
+  users,
   workspaces,
 } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
 import { enrichHandoff } from '../lib/handoff.js';
-import { notifyWorkspace } from '../lib/notify.js';
+import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { evaluateEvent } from '../lib/rules.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
-import { deliverToChannel } from '../lib/channels.js';
+import { deliverToChannel, type AttachmentRef } from '../lib/channels.js';
 import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
 import { METER_MESSAGES, reportMeter } from '../lib/stripe.js';
 import { messageCap } from '../lib/plans.js';
@@ -26,6 +27,10 @@ type ConversationRow = typeof conversations.$inferSelect;
  * Process a batch of ingest events for one agent.
  * Creates conversations/messages/alerts, updates state, emits SSE + push.
  */
+/** An open handoff alert this old escalates again as a fresh channel post
+ *  rather than a deduped thread reply. */
+const REHANDOFF_ALERT_MS = 5 * 60_000;
+
 export async function processEvents(
   db: Db,
   agent: AgentRow,
@@ -57,11 +62,25 @@ export async function processEvents(
       reportMeter(stripeCustomerId, METER_MESSAGES, 1);
       bus.publish(agent.workspaceId, { type: 'message', data: toMessage(message) });
       if (message.text) {
-        const label = message.direction === 'in' ? ':busts_in_silhouette: *user:*' : ':robot_face: *agent:*';
-        void mirrorToSlack(db, conv.id, label, message.text, message.direction);
+        const flags = (message.flags ?? {}) as {
+          failure?: boolean;
+          help_requested?: boolean;
+          custom_alert?: boolean;
+        };
+        if (flags.failure || flags.help_requested || flags.custom_alert) {
+          // Internal notes are system messages in Slack, not agent transcript lines
+          const icon = flags.failure ? ':warning:' : flags.help_requested ? ':raising_hand:' : ':rotating_light:';
+          void mirrorToSlack(db, conv.id, icon, `_${message.text}_`);
+        } else {
+          const label = message.direction === 'in' ? ':busts_in_silhouette: *user:*' : ':robot_face: *agent:*';
+          void mirrorToSlack(db, conv.id, label, message.text, { direction: message.direction });
+        }
         // hosted channels: agent replies go straight to the end user —
         // never internal notes (failures/handoffs/alerts), which are also 'out'
-        if (event.type === 'message_out') void deliverToChannel(db, conv.id, message.text);
+        if (event.type === 'message_out') {
+          const atts = (message.payload as { attachments?: AttachmentRef[] } | undefined)?.attachments;
+          void deliverToChannel(db, conv.id, message.text, atts);
+        }
       }
     }
 
@@ -69,6 +88,7 @@ export async function processEvents(
     // struggling agent doesn't spam push/email on every message
     let handoffAlertId: string | undefined;
     let handoffAlertNew = false;
+    const pendingNotifies: { title: string; body: string; url: string }[] = [];
     for (const triggered of evaluateEvent(event, rules)) {
       const [open] = await db
         .select()
@@ -84,9 +104,31 @@ export async function processEvents(
       if (open) {
         if (triggered.type === 'help_request') {
           handoffAlertId = open.id;
-          // Deduped handoffs still reply in the Slack thread — a thread
-          // reply, not a new channel post, so it doesn't spam the channel
-          void postSlackAlert(db, agent.workspaceId, conv, agent, open, { reply: true });
+          const ageMs = Date.now() - new Date(open.createdAt).getTime();
+          if (ageMs >= REHANDOFF_ALERT_MS) {
+            // Ignored for 5+ min and the agent asked again — escalate with a
+            // fresh channel post, not a buried thread reply. Bumping the
+            // alert's age means repeats re-alert at most once per window.
+            await db
+              .update(alerts)
+              .set({ createdAt: new Date(), detail: triggered.detail })
+              .where(eq(alerts.id, open.id));
+            const reAlert = { ...open, createdAt: new Date(), detail: triggered.detail };
+            const n = await alertNotification(db, reAlert, conv, agent);
+            bus.publish(agent.workspaceId, {
+              type: 'alert',
+              data: { ...toAlert(reAlert), notification: n },
+            });
+            void postSlackAlert(db, agent.workspaceId, conv, agent, reAlert);
+            // Re-page whoever owns it — an ignored handoff is an escalation
+            void notifyWorkspace(db, agent.workspaceId, n, {
+              userIds: conv.assigneeId ? [conv.assigneeId] : undefined,
+            });
+          } else {
+            // Recent open alert — dedupe to a thread reply so a struggling
+            // agent doesn't spam the channel every message
+            void postSlackAlert(db, agent.workspaceId, conv, agent, open, { reply: true });
+          }
         }
         continue;
       }
@@ -95,7 +137,10 @@ export async function processEvents(
         .values({ conversationId: conv.id, type: triggered.type, detail: triggered.detail })
         .returning();
       alertIds.push(alert.id);
-      bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(alert) });
+      bus.publish(agent.workspaceId, {
+        type: 'alert',
+        data: { ...toAlert(alert), notification: await alertNotification(db, alert, conv, agent) },
+      });
       if (triggered.type === 'help_request') {
         // handoff alerts notify after the "what does the customer need"
         // brief is generated — enriched below via enrichHandoff
@@ -104,11 +149,8 @@ export async function processEvents(
         continue;
       }
       void postSlackAlert(db, agent.workspaceId, conv, agent, alert);
-      void notifyWorkspace(db, agent.workspaceId, {
-        title: `Janis: ${triggered.type.replace('_', ' ')}`,
-        body: triggered.detail ?? `Conversation ${conv.externalId} needs attention`,
-        url: `/conversations/${conv.id}`,
-      });
+      // queued — fired after auto-assign so the page goes to the owner
+      pendingNotifies.push(await alertNotification(db, alert, conv, agent));
     }
 
     // State transitions: alerts escalate to needs_human unless a human owns it
@@ -141,6 +183,26 @@ export async function processEvents(
       });
     }
 
+    // Escalation routing: auto-assign fresh handoffs to the least-loaded
+    // teammate when the agent opts in (config.auto_assign).
+    let assigneeId = updated.assigneeId;
+    if (
+      updated.state === 'needs_human' &&
+      conv.state !== 'needs_human' &&
+      !assigneeId &&
+      (agent.config as { auto_assign?: boolean } | null)?.auto_assign
+    ) {
+      assigneeId = (await autoAssign(db, agent, updated)) ?? null;
+    }
+
+    // Queued alert notifications — scoped to the assignee when one exists so
+    // the page reaches the person who owns it, not the whole workspace
+    for (const n of pendingNotifies) {
+      void notifyWorkspace(db, agent.workspaceId, n, {
+        userIds: assigneeId ? [assigneeId] : undefined,
+      });
+    }
+
     // Enrich every handoff moment with an operator brief — even when the
     // alert was deduped, each note keeps its own summary in the transcript
     if (event.type === 'handoff_request' && message) {
@@ -152,6 +214,7 @@ export async function processEvents(
         handoffAlertId,
         handoffAlertNew,
         event.reason,
+        assigneeId,
       );
     }
 
@@ -295,4 +358,42 @@ function eventText(event: IngestEvent): string | undefined {
     case 'custom_alert':
       return event.text ?? `Alert: ${event.alert_type}`;
   }
+}
+
+/** Assign a fresh handoff to the workspace member with the fewest open
+ * conversations. Returns the chosen assignee so callers can route alerts. */
+async function autoAssign(
+  db: Db,
+  agent: AgentRow,
+  conv: ConversationRow,
+): Promise<string | undefined> {
+  const members = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.workspaceId, agent.workspaceId));
+  if (!members.length) return undefined;
+  const loads = new Map(members.map((m) => [m.id, 0]));
+  const open = await db
+    .select({ assignee: conversations.assigneeId, n: sql<number>`count(*)::int` })
+    .from(conversations)
+    .innerJoin(agents, eq(conversations.agentId, agents.id))
+    .where(
+      and(
+        eq(agents.workspaceId, agent.workspaceId),
+        inArray(conversations.state, ['needs_human', 'human']),
+      ),
+    )
+    .groupBy(conversations.assigneeId);
+  for (const r of open) if (r.assignee && loads.has(r.assignee)) loads.set(r.assignee, r.n);
+  const [assignee] = [...loads.entries()].sort((a, b) => a[1] - b[1])[0];
+  await db
+    .update(conversations)
+    .set({ assigneeId: assignee })
+    .where(eq(conversations.id, conv.id));
+  // re-emit so the client refetches the row (assignee is fetched, not pushed)
+  bus.publish(agent.workspaceId, {
+    type: 'conversation',
+    data: { id: conv.id, state: conv.state },
+  });
+  return assignee;
 }

@@ -133,6 +133,13 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     phone_number_id?: string;
     verify_token?: string;
     via?: string;
+    title?: string;
+    subtitle?: string;
+    greeting?: string;
+    accent?: string;
+    position?: 'left' | 'right';
+    logo_url?: string;
+    quick_replies?: string[];
   };
   return {
     id: row.id,
@@ -146,6 +153,18 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
       verify_token: creds.verify_token ?? '',
       via: creds.via === 'oauth' || creds.via === 'manual' ? creds.via : undefined,
       chat_url: channelChatUrl(row),
+      branding:
+        row.kind === 'webchat'
+          ? {
+              title: creds.title,
+              subtitle: creds.subtitle,
+              greeting: creds.greeting,
+              accent: creds.accent,
+              position: creds.position,
+              logo_url: creds.logo_url,
+              quick_replies: creds.quick_replies,
+            }
+          : undefined,
     },
     created_at: iso(row.createdAt)!,
   };
@@ -177,12 +196,16 @@ export function toSuggestion(row: Row<typeof suggestions>): Suggestion {
 }
 
 export function toWorkspaceUser(row: Row<typeof users>): WorkspaceUser {
-  const prefs = (row.notifyPrefs ?? {}) as { push?: boolean; email?: boolean };
+  const prefs = (row.notifyPrefs ?? {}) as { push?: boolean; email?: boolean; sound?: boolean };
   return {
     id: row.id,
     email: row.email,
     name: row.name,
     role: row.role,
-    notify: { push: prefs.push !== false, email: prefs.email !== false },
+    notify: {
+      push: prefs.push !== false,
+      email: prefs.email !== false,
+      sound: prefs.sound !== false,
+    },
   };
 }

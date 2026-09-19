@@ -2,6 +2,7 @@ import { and, eq, gte, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, conversations, messages, workspaces } from '../db/schema.js';
 import { currentPeriod } from './billing.js';
+import { planForPrice, stripe } from './stripe.js';
 
 export interface Plan {
   name: string;
@@ -53,14 +54,48 @@ export interface CapStatus {
   capped: boolean; // hard-capped plan over its included amount
 }
 
+/**
+ * Best-effort plan refresh from Stripe — upgrades only. workspaces.plan is a
+ * cache filled by webhooks; a missed webhook can leave a paying customer
+ * looking 'free'. Called only at the cap boundary, where the stale row would
+ * actually drop a paying customer's traffic. Returns the synced plan key.
+ */
+async function syncPlanFromStripe(
+  db: Db,
+  workspaceId: string,
+  customerId: string,
+): Promise<string | null> {
+  const s = stripe();
+  if (!s) return null;
+  const sub = (
+    await s.subscriptions.list({ customer: customerId, status: 'active', limit: 1 }).catch(() => null)
+  )?.data[0];
+  // Check every line item — metered prices can land before the plan base.
+  const plan = sub?.items.data.map((i) => planForPrice(i.price.id)).find(Boolean);
+  if (!sub || !plan) return null;
+  await db
+    .update(workspaces)
+    .set({ plan, stripeSubscriptionId: sub.id })
+    .where(eq(workspaces.id, workspaceId));
+  return plan;
+}
+
 /** Hard cap check — only hard-cap plans (free) ever return capped. */
 export async function messageCap(db: Db, workspaceId: string): Promise<CapStatus> {
   const [ws] = await db
-    .select({ plan: workspaces.plan })
+    .select({ plan: workspaces.plan, stripeCustomerId: workspaces.stripeCustomerId })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
-  const plan = planFor(ws?.plan);
+  let plan = planFor(ws?.plan);
   const used = await messagesInPeriod(db, workspaceId);
-  return { plan, used, capped: plan.overagePer1kCents === null && used >= plan.includedMessages };
+  let capped = plan.overagePer1kCents === null && used >= plan.includedMessages;
+  if (capped && ws?.stripeCustomerId) {
+    const synced = await syncPlanFromStripe(db, workspaceId, ws.stripeCustomerId);
+    if (synced) {
+      plan = planFor(synced);
+      capped = plan.overagePer1kCents === null && used >= plan.includedMessages;
+    }
+  }
+  return { plan, used, capped };
 }

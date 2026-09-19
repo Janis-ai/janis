@@ -40,7 +40,7 @@ Inbox, click **Take over**, and reply — the demo agent prints your message.
 
 ```ts
 import { Janis } from '@janis/sdk';
-const janis = new Janis({ apiKey: 'jk_live_...', baseUrl: 'https://api.janis.ai' });
+const janis = new Janis({ apiKey: 'jk_live_...', baseUrl: 'https://app.janis.ai' });
 
 // around your agent loop:
 const r = await janis.userMessage(convId, userText);

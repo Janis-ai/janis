@@ -103,6 +103,46 @@ describe('processEvents', () => {
     expect(msgs3.filter((m) => m.text?.includes('human teammate'))).toHaveLength(2);
   });
 
+  it('re-alerts on a repeat handoff once the open alert is 5+ min old', async () => {
+    await processEvents(db, agent, [
+      { type: 'handoff_request', conversation_id: 'c6', reason: 'stuck' },
+    ]);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c6'));
+
+    // repeat inside the window → deduped: alert keeps its original timestamp
+    const [alert] = await db
+      .select()
+      .from(alerts)
+      .where(and(eq(alerts.conversationId, conv.id), eq(alerts.type, 'help_request')));
+    const original = alert.createdAt;
+    await processEvents(db, agent, [
+      { type: 'handoff_request', conversation_id: 'c6', reason: 'still stuck' },
+    ]);
+    const [stillDeduped] = await db.select().from(alerts).where(eq(alerts.id, alert.id));
+    expect(stillDeduped.createdAt.getTime()).toBe(original.getTime());
+
+    // age the open alert past the re-alert threshold
+    const stale = new Date(Date.now() - 6 * 60_000);
+    await db.update(alerts).set({ createdAt: stale }).where(eq(alerts.id, alert.id));
+
+    // repeat after the window → fresh channel post path: the alert's age is
+    // bumped so subsequent repeats re-alert at most once per window
+    await processEvents(db, agent, [
+      { type: 'handoff_request', conversation_id: 'c6', reason: 'stuck, ignored' },
+    ]);
+    const [bumped] = await db.select().from(alerts).where(eq(alerts.id, alert.id));
+    expect(bumped.createdAt.getTime()).toBeGreaterThan(stale.getTime() + 60_000);
+    expect(bumped.detail).toContain('ignored');
+    const all = await db
+      .select()
+      .from(alerts)
+      .where(eq(alerts.conversationId, conv.id));
+    expect(all).toHaveLength(1);
+  });
+
   it('handoff notice respects config override and opt-out', async () => {
     const custom = await db
       .update(agents)

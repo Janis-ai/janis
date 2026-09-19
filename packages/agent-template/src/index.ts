@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * @janis/agent-template — a Janis-ready support agent.
  *
@@ -7,7 +8,7 @@
  *
  * Env:
  *   JANIS_API_KEY     agent api key (required)
- *   JANIS_BASE_URL    api origin (default http://localhost:8787)
+ *   JANIS_BASE_URL    api origin (default https://app.janis.ai)
  *   JANIS_WEBHOOK_SECRET  verify webhook signatures (optional)
  *   LLM_API_KEY       OpenAI-compatible key (optional — without it the agent
  *                     always hands off to a human)
@@ -27,7 +28,7 @@ import { verifySignature } from '@janis/sdk/webhook';
 import type { AgentConfig, OutboundWebhook } from '@janis/shared';
 
 const JANIS_API_KEY = process.env.JANIS_API_KEY ?? '';
-const JANIS_BASE_URL = (process.env.JANIS_BASE_URL ?? 'http://localhost:8787').replace(/\/$/, '');
+const JANIS_BASE_URL = (process.env.JANIS_BASE_URL ?? 'https://app.janis.ai').replace(/\/$/, '');
 const WEBHOOK_SECRET = process.env.JANIS_WEBHOOK_SECRET ?? '';
 const LLM_API_KEY = process.env.LLM_API_KEY ?? '';
 const LLM_BASE_URL = (process.env.LLM_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/$/, '');

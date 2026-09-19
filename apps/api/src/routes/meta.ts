@@ -9,7 +9,7 @@ import { env } from '../env.js';
 import { agents, channels, metaConnections } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toChannel } from '../lib/serializers.js';
-import type { ChannelCredentials } from '../lib/channels.js';
+import { setGetStartedButton, type ChannelCredentials } from '../lib/channels.js';
 
 const GRAPH = 'https://graph.facebook.com/v21.0';
 const STATE_COOKIE = 'janis_meta_state';
@@ -300,6 +300,10 @@ export function metaApiRoutes(db: Db) {
         access_token: pageToken,
       }),
     }).catch(() => {});
+
+    // Enable the page's Get Started button — its tap arrives as a
+    // messaging_postback, which opens the conversation and fires the greeting.
+    void setGetStartedButton(body.kind, credentials).catch(() => {});
 
     return c.json({ channel: toChannel(row, agent.name) }, 201);
   });

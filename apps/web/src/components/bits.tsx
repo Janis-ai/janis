@@ -1,21 +1,28 @@
 import { useState } from 'react';
 import type { Conversation, ConversationState, UserProfile } from '@janis/shared';
+import { friendlyName } from '@janis/shared';
 
 export function StateBadge({ state }: { state: ConversationState }) {
   const label = { active: 'Agent', needs_human: 'Needs human', human: 'Human', archived: 'Archived' }[state];
   return <span className={`badge ${state}`}>{label}</span>;
 }
 
-/** Display name for a conversation: real name → @handle → external id. */
+/** Display name for a conversation: real name → @handle → email → external id. */
 export function displayName(c: Pick<Conversation, 'external_id' | 'user_profile'>): string {
   const p = (c.user_profile ?? {}) as UserProfile;
-  return p.name ?? (p.username ? `@${p.username}` : c.external_id);
+  if (p.name) return p.name;
+  if (p.username) return `@${p.username}`;
+  if (p.email) return p.email;
+  // anonymous visitors have no profile — show a short stable handle
+  // ("Calm Otter a48f") instead of the raw `webchat:<uuid>` external id
+  return friendlyName(c.external_id);
 }
 
 const CHANNEL_LABELS: Record<string, string> = {
   messenger: 'Messenger',
   instagram: 'Instagram',
   whatsapp: 'WhatsApp',
+  webchat: 'Web chat',
 };
 
 export function channelLabel(kind?: string): string {

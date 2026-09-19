@@ -116,7 +116,9 @@ export default function Conversations() {
               {hits.messages.slice(0, 20).map((m) => (
                 <div key={m.id} className="muted" style={{ marginTop: 6 }}>
                   <Link to={`/conversations/${m.conversation_id}`}>
-                    {m.direction === 'in' ? '👤' : m.direction === 'out' ? '🤖' : '🧑'} {m.text}
+                    {m.flags.help_requested || m.flags.failure || m.flags.custom_alert
+                      ? '⚙️'
+                      : m.direction === 'in' ? '👤' : m.direction === 'out' ? '🤖' : '🧑'} {m.text}
                   </Link>
                 </div>
               ))}

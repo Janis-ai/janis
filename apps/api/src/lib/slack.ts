@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, desc, eq, sql } from 'drizzle-orm';
+import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -26,7 +27,13 @@ export async function slackApi<T = Record<string, unknown>>(
 ): Promise<T & { ok: boolean; error?: string }> {
   const res = await fetch(`${SLACK_API}/${method}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    // charset is required — without it Slack silently ignores the JSON body
+    // on most methods (chat.postMessage tolerates it; users.*, conversations.*
+    // return invalid_arguments / "missing required field").
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
     body: JSON.stringify(body),
   });
   return (await res.json()) as T & { ok: boolean; error?: string };
@@ -114,6 +121,7 @@ function alertBlocks(
   conv: ConversationRow,
   agent: typeof agents.$inferSelect,
   alert: Pick<AlertRow, 'type' | 'detail'>,
+  mention = '',
 ): SlackBlock[] {
   const p = (conv.userProfile ?? {}) as {
     name?: string;
@@ -183,7 +191,9 @@ function alertBlocks(
     : null;
   const section: SlackBlock = {
     type: 'section',
-    text: { type: 'mrkdwn', text: summary + stateLine },
+    // mention (<@U…>/<!channel>) must live in a rendered block — the `text`
+    // fallback field never displays when blocks are present.
+    text: { type: 'mrkdwn', text: mention + summary + stateLine },
     ...(avatar
       ? { accessory: { type: 'image', image_url: avatar, alt_text: p.name ?? 'customer' } }
       : {}),
@@ -193,6 +203,135 @@ function alertBlocks(
     { type: 'context', elements: [{ type: 'mrkdwn', text: details }] },
     { type: 'actions', elements: actions },
   ];
+}
+
+/**
+ * Resolve a Janis member to their Slack user id, cached on users.slackUserId.
+ * Uses users.lookupByEmail (scope: users:read.email) — Slack user ids are
+ * workspace-scoped so the cache is keyed on this installation's mapping.
+ */
+async function memberToSlackUser(
+  db: Db,
+  inst: Installation,
+  memberId: string,
+): Promise<string | null> {
+  const [member] = await db
+    .select({ id: users.id, email: users.email, slackUserId: users.slackUserId })
+    .from(users)
+    .where(eq(users.id, memberId))
+    .limit(1);
+  if (!member) return null;
+  if (member.slackUserId) return member.slackUserId;
+  const res = await slackApi<{ user: { id: string } }>(
+    inst.botToken,
+    'users.lookupByEmail',
+    { email: member.email },
+  ).catch(() => null);
+  const slackId = res?.ok ? res.user.id : null;
+  if (slackId) {
+    await db.update(users).set({ slackUserId: slackId }).where(eq(users.id, member.id));
+  }
+  return slackId;
+}
+
+/** Who an alert post should ping: the assignee's Slack mention, every member
+ * when unassigned (individual <@U>s can't be suppressed the way @channel can
+ * by user prefs or workspace restrictions — and each gets a DM pointer too),
+ * or @here when the assignee isn't on Slack. Pure lookup — invites and DMs
+ * are side effects of posting, handled by the caller. */
+async function alertMention(
+  db: Db,
+  inst: Installation,
+  conv: ConversationRow,
+): Promise<{ text: string; slackUserId: string | null; dmIds: string[] }> {
+  if (!conv.assigneeId) {
+    const members = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.workspaceId, inst.workspaceId));
+    const ids = (
+      await Promise.all(members.map((m) => memberToSlackUser(db, inst, m.id)))
+    ).filter((x): x is string => !!x);
+    if (ids.length && ids.length <= 8) {
+      return { text: ids.map((id) => `<@${id}>`).join(' ') + ' ', slackUserId: null, dmIds: ids };
+    }
+    return { text: '<!channel> ', slackUserId: null, dmIds: [] };
+  }
+  const slackId = await memberToSlackUser(db, inst, conv.assigneeId);
+  return slackId
+    ? { text: `<@${slackId}> `, slackUserId: slackId, dmIds: [] }
+    : { text: '<!here> ', slackUserId: null, dmIds: [] };
+}
+
+/**
+ * Make sure a Slack user can see the alert channel — conversations.invite is
+ * idempotent (already_in_channel is fine). Returns false when the bot lacks
+ * channels:manage/groups:write or the channel can't invite.
+ */
+async function ensureInAlertChannel(
+  inst: Installation,
+  slackUserId: string,
+  channelId: string,
+): Promise<boolean> {
+  const invite = () =>
+    slackApi(inst.botToken, 'conversations.invite', {
+      channel: channelId,
+      users: slackUserId,
+    }).catch(() => null);
+  let res = await invite();
+  // Bot must be a channel member to invite — join first on public channels.
+  if (res?.error === 'not_in_channel') {
+    await slackApi(inst.botToken, 'conversations.join', { channel: channelId }).catch(() => null);
+    res = await invite();
+  }
+  if (!res) return false;
+  if (res.ok || res.error === 'already_in_channel') return true;
+  if (res.error !== 'user_not_found') {
+    console.error('slack invite failed:', res.error);
+  }
+  return false;
+}
+
+/** Resolve every workspace member to a Slack user and invite them into the
+ * alert channel — thread replies only reach humans who are channel members. */
+export async function inviteWorkspaceMembers(
+  db: Db,
+  inst: Installation,
+  channelId: string,
+): Promise<void> {
+  const members = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.workspaceId, inst.workspaceId));
+  for (const m of members) {
+    const sid = await memberToSlackUser(db, inst, m.id);
+    if (sid) await ensureInAlertChannel(inst, sid, channelId);
+  }
+}
+
+/**
+ * DM fallback for assignees who can't be invited to the alert channel —
+ * opens an app DM (im:write) and posts a one-line pointer.
+ */
+async function dmAlertPointer(
+  inst: Installation,
+  slackUserId: string,
+  text: string,
+): Promise<void> {
+  const opened = await slackApi<{ channel: { id: string } }>(
+    inst.botToken,
+    'conversations.open',
+    { users: slackUserId },
+  ).catch(() => null);
+  if (!opened?.ok) {
+    console.error('slack dm open failed:', opened?.error);
+    return;
+  }
+  const res = await slackApi(inst.botToken, 'chat.postMessage', {
+    channel: opened.channel.id,
+    text,
+  });
+  if (!res.ok) console.error('slack dm post failed:', res.error);
 }
 
 /**
@@ -219,9 +358,30 @@ export async function postSlackAlert(
     .where(eq(slackThreads.conversationId, conv.id))
     .limit(1);
 
+  // Routing: assigned → invite them into the alert channel (idempotent) and
+  // @mention; if they can't be invited, DM a pointer instead. Unassigned →
+  // every resolvable member gets an individual <@U> in the post plus a DM
+  // (direct mentions can't be suppressed the way @channel can). Assigned-but-
+  // unresolvable → @here: the assignee is paged via Janis push/email anyway.
+  const { text: mention, slackUserId, dmIds } = await alertMention(db, inst, conv);
+  const dmTargets = new Set(dmIds);
+  if (
+    slackUserId &&
+    !(await ensureInAlertChannel(inst, slackUserId, inst.alertChannelId))
+  ) {
+    dmTargets.add(slackUserId);
+  }
+
   const summary =
-    `:rotating_light: *${alert.type.replace('_', ' ')}* — agent *${agent.name}* · ` +
+    `${mention}:rotating_light: *${alert.type.replace('_', ' ')}* — agent *${agent.name}* · ` +
     `conversation \`${conv.externalId}\`\n${alert.detail ?? conv.lastMessagePreview ?? ''}`;
+
+  const dmAll = (channelId: string, ts: string) => {
+    const text =
+      `${summary}\n<https://slack.com/app_redirect?channel=${channelId}&message=${ts}|View alert thread>` +
+      ` · <${env.webOrigin}/conversations/${conv.id}|Open in Janis>`;
+    for (const id of dmTargets) void dmAlertPointer(inst, id, text);
+  };
 
   if (existing && opts.reply) {
     const res = await slackApi(inst.botToken, 'chat.postMessage', {
@@ -230,95 +390,128 @@ export async function postSlackAlert(
       text: summary,
     });
     if (!res.ok) console.error('slack thread reply failed:', res.error);
+    else dmAll(existing.channelId, existing.ts);
     return;
   }
 
   const res = await slackApi<{ channel: string; ts: string }>(inst.botToken, 'chat.postMessage', {
     channel: inst.alertChannelId,
     text: summary,
-    blocks: alertBlocks(conv, agent, alert),
+    blocks: alertBlocks(conv, agent, alert, mention),
   });
   if (res.ok) {
+    dmAll(res.channel, res.ts);
     if (existing) {
-      // Point mirroring/interactions at the current escalation thread.
+      // Point mirroring/interactions at the current escalation thread, then
+      // seed it — a fresh top-level alert still needs its transcript.
       await db
         .update(slackThreads)
         .set({ channelId: res.channel, ts: res.ts })
         .where(eq(slackThreads.id, existing.id));
-    } else {
-      await db.insert(slackThreads).values({
+      await seedSlackThread(db, inst, res.channel, res.ts, conv, agent);
+      return;
+    }
+    const [inserted] = await db
+      .insert(slackThreads)
+      .values({
         conversationId: conv.id,
         installationId: inst.id,
         channelId: res.channel,
         ts: res.ts,
-      });
-    }
-    // Seed the thread with the recent transcript — one reply per message,
-    // attributed to the actual participants (customer photo included via
-    // icon_url when the install has chat:write.customize).
-    const recent = await db
-      .select({
-        direction: messages.direction,
-        text: messages.text,
-        author: users.name,
       })
-      .from(messages)
-      .leftJoin(users, eq(messages.authorId, users.id))
-      .where(eq(messages.conversationId, conv.id))
-      .orderBy(desc(messages.createdAt))
-      .limit(20);
-    const profile = (conv.userProfile ?? {}) as {
-      name?: string;
-      picture_url?: string;
-    };
-    const customerName = profile.name ?? 'customer';
-    const avatar = profile.picture_url ? slackAvatarUrl(conv.id) : null;
-
-    const [{ count }] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(messages)
-      .where(eq(messages.conversationId, conv.id));
-    if (count > recent.length) {
-      await slackApi(inst.botToken, 'chat.postMessage', {
-        channel: res.channel,
-        thread_ts: res.ts,
-        text: `_Showing the last ${recent.length} of ${count} messages — <${env.webOrigin}/conversations/${conv.id}|full transcript in Janis>._`,
-      });
+      .onConflictDoNothing({ target: slackThreads.conversationId })
+      .returning();
+    if (!inserted) {
+      // Another alert won the race for this conversation's thread row —
+      // its seeded thread stays canonical.
+      return;
     }
-
-    for (const m of recent.reverse()) {
-      if (!m.text) continue;
-      // Role suffixes keep same-named participants (e.g. agent and customer
-      // both "Michael Nathanson") from collapsing into a single header.
-      const identity =
-        m.direction === 'in'
-          ? { username: `${customerName} (customer)`, icon_url: avatar ?? undefined }
-          : m.direction === 'human'
-            ? { username: `${m.author ?? 'operator'} (operator)` }
-            : { username: `${agent.name} (agent)` };
-      const res2 = await slackApi(inst.botToken, 'chat.postMessage', {
-        channel: res.channel,
-        thread_ts: res.ts,
-        text: m.text,
-        ...identity,
-      });
-      if (!res2.ok) {
-        // Install predates chat:write.customize — fall back to a label.
-        await slackApi(inst.botToken, 'chat.postMessage', {
-          channel: res.channel,
-          thread_ts: res.ts,
-          text: `*${identity.username}:* ${m.text}`,
-        });
-      }
-    }
-    // One pointer to the thread per alert, right after it's seeded.
-    await slackApi(inst.botToken, 'chat.postMessage', {
-      channel: res.channel,
-      text: '_Transcript and controls are in the thread — click the replies link on the alert above._',
-    });
+    await seedSlackThread(db, inst, res.channel, res.ts, conv, agent);
   } else {
     console.error('slack alert post failed:', res.error);
   }
+}
+
+/**
+ * Seed a fresh alert's thread with the recent transcript — one reply per
+ * message, attributed to the actual participants (customer photo included
+ * via icon_url when the install has chat:write.customize) — then post the
+ * channel pointer so operators know the thread exists.
+ */
+async function seedSlackThread(
+  db: Db,
+  inst: Installation,
+  channel: string,
+  threadTs: string,
+  conv: ConversationRow,
+  agent: typeof agents.$inferSelect,
+): Promise<void> {
+  const recent = await db
+    .select({
+      direction: messages.direction,
+      text: messages.text,
+      author: users.name,
+      flags: messages.flags,
+    })
+    .from(messages)
+    .leftJoin(users, eq(messages.authorId, users.id))
+    .where(eq(messages.conversationId, conv.id))
+    .orderBy(desc(messages.createdAt))
+    .limit(20);
+  const profile = (conv.userProfile ?? {}) as {
+    name?: string;
+    picture_url?: string;
+  };
+  const customerName = profile.name ?? friendlyName(conv.externalId);
+  const avatar = profile.picture_url ? slackAvatarUrl(conv.id) : null;
+
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(messages)
+    .where(eq(messages.conversationId, conv.id));
+  if (count > recent.length) {
+    await slackApi(inst.botToken, 'chat.postMessage', {
+      channel,
+      thread_ts: threadTs,
+      text: `_Showing the last ${recent.length} of ${count} messages — <${env.webOrigin}/conversations/${conv.id}|full transcript in Janis>._`,
+    });
+  }
+
+  for (const m of recent.reverse()) {
+    if (!m.text) continue;
+    // Flagged notes (handoff/failure/custom alert) are internal system lines
+    // — italic, from the app itself, not attributed to a participant.
+    const f = m.flags as { failure?: boolean; help_requested?: boolean; custom_alert?: boolean } | null;
+    const isSystemNote = Boolean(f?.failure || f?.help_requested || f?.custom_alert);
+    // Role suffixes keep same-named participants (e.g. agent and customer
+    // both "Michael Nathanson") from collapsing into a single header.
+    const identity = isSystemNote
+      ? {}
+      : m.direction === 'in'
+        ? { username: `${customerName} (customer)`, icon_url: avatar ?? undefined }
+        : m.direction === 'human'
+          ? { username: `${m.author ?? 'operator'} (operator)` }
+          : { username: `${agent.name} (agent)` };
+    const res2 = await slackApi(inst.botToken, 'chat.postMessage', {
+      channel,
+      thread_ts: threadTs,
+      text: isSystemNote ? `_${m.text}_` : m.text,
+      ...identity,
+    });
+    if (!res2.ok && !isSystemNote) {
+      // Install predates chat:write.customize — fall back to a label.
+      await slackApi(inst.botToken, 'chat.postMessage', {
+        channel,
+        thread_ts: threadTs,
+        text: `*${identity.username}:* ${m.text}`,
+      });
+    }
+  }
+  // One pointer to the thread per alert, right after it's seeded.
+  await slackApi(inst.botToken, 'chat.postMessage', {
+    channel,
+    text: '_Transcript and controls are in the thread — click the replies link on the alert above._',
+  });
 }
 
 /** Refresh the alert message after takeover/resume so the buttons toggle
@@ -342,22 +535,28 @@ export async function updateSlackAlert(
     .where(eq(alerts.conversationId, conv.id))
     .orderBy(desc(alerts.createdAt))
     .limit(1);
+  const { text: mention } = await alertMention(db, thread.installation, conv);
   const res = await slackApi(thread.installation.botToken, 'chat.update', {
     channel: thread.slackThreads.channelId,
     ts: thread.slackThreads.ts,
-    text: `alert — ${conv.externalId}`,
-    blocks: alertBlocks(conv, agent, alert ?? { type: 'help_request', detail: null }),
+    text: `${mention}alert — ${conv.externalId}`,
+    blocks: alertBlocks(conv, agent, alert ?? { type: 'help_request', detail: null }, mention),
   });
   if (!res.ok) console.error('slack alert update failed:', res.error);
 }
 
-/** Mirror a console-originated message into the conversation's Slack thread. */
+/** Mirror a console-originated message into the conversation's Slack thread.
+ * opts.identity overrides the sender attribution (username/icon) so mirrored
+ * messages match the seeded transcript style; opts.direction derives it. */
 export async function mirrorToSlack(
   db: Db,
   conversationId: string,
   label: string,
   text: string,
-  direction?: 'in' | 'out' | 'human',
+  opts: {
+    direction?: 'in' | 'out' | 'human';
+    identity?: { username?: string; icon_url?: string };
+  } = {},
 ): Promise<void> {
   const [thread] = await db
     .select({ slackThreads, installation: slackInstallations })
@@ -367,8 +566,8 @@ export async function mirrorToSlack(
     .limit(1);
   if (!thread) return;
 
-  let identity: { username?: string; icon_url?: string } = {};
-  if (direction) {
+  let identity: { username?: string; icon_url?: string } = opts.identity ?? {};
+  if (!opts.identity && opts.direction) {
     const [row] = await db
       .select({ conv: conversations, agent: agents })
       .from(conversations)
@@ -381,12 +580,12 @@ export async function mirrorToSlack(
         picture_url?: string;
       };
       identity =
-        direction === 'in'
+        opts.direction === 'in'
           ? {
-              username: `${profile.name ?? 'customer'} (customer)`,
+              username: `${profile.name ?? friendlyName(row.conv.externalId)} (customer)`,
               icon_url: profile.picture_url ? slackAvatarUrl(conversationId) ?? undefined : undefined,
             }
-          : direction === 'out'
+          : opts.direction === 'out'
             ? { username: `${row.agent.name} (agent)` }
             : {};
     }

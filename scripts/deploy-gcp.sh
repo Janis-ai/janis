@@ -64,7 +64,15 @@ if db_url:
 else:
     envs['PGLITE_DIR'] = '/app/data/pglite'
 
-envs['API_ORIGIN'] = envs['WEB_ORIGIN'] = os.environ['BASE']
+# Attachments write to the FUSE bucket in both modes — container-local
+# storage would lose them on every redeploy/instance recycle.
+envs.setdefault('UPLOAD_DIR', '/app/data/uploads')
+
+# PUBLIC_ORIGIN (set in .env.production once the custom domain is live)
+# canonicalizes links/OAuth callbacks to the branded domain; otherwise the
+# raw run.app URL is used.
+public_origin = envs.pop('PUBLIC_ORIGIN', '') or os.environ['BASE']
+envs['API_ORIGIN'] = envs['WEB_ORIGIN'] = public_origin
 if 'SESSION_SECRET' not in envs:
     envs['SESSION_SECRET'] = secrets.token_urlsafe(32)
 yaml.safe_dump(envs, open('/tmp/janis-env.yaml', 'w'))
@@ -83,7 +91,8 @@ else
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
     --memory 1Gi --no-cpu-throttling \
-    --clear-volumes --clear-volume-mounts \
+    --add-volume name=data,type=cloud-storage,bucket=janis-data-$PROJECT \
+    --add-volume-mount volume=data,mount-path=/app/data \
     --update-secrets "DATABASE_URL=janis-database-url:latest" \
     --env-vars-file /tmp/janis-env.yaml
 fi

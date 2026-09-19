@@ -10,10 +10,10 @@ import { runHostedEvent } from '../lib/hostedAgent.js';
 import {
   findThread,
   getInstallation,
+  inviteWorkspaceMembers,
   postSlackMessage,
   slackApi,
   slackUserToMember,
-  updateSlackAlert,
   verifyAvatarSig,
   verifySlackSignature,
 } from '../lib/slack.js';
@@ -26,6 +26,10 @@ const SCOPES = [
   'chat:write.customize', // per-message username/avatar in transcript mirrors
   'channels:read',
   'groups:read',
+  'channels:manage', // invite assignees into the public alert channel
+  'channels:join', // bot joins the public alert channel before inviting
+  'groups:write', // same for private alert channels
+  'im:write', // DM pointer when an assignee can't be invited
   'users:read',
   'users:read.email',
 ].join(',');
@@ -79,10 +83,12 @@ export function slackApiRoutes(db: Db) {
     async (c) => {
       const inst = await getInstallation(db, c.get('workspaceId'));
       if (!inst) return c.json({ error: 'slack not connected' }, 404);
+      const channelId = c.req.valid('json').channel_id;
       await db
         .update(slackInstallations)
-        .set({ alertChannelId: c.req.valid('json').channel_id })
+        .set({ alertChannelId: channelId })
         .where(eq(slackInstallations.id, inst.id));
+      void inviteWorkspaceMembers(db, inst, channelId);
       return c.json({ ok: true });
     },
   );
@@ -182,6 +188,7 @@ export function slackPublicRoutes(db: Db) {
         .update(slackInstallations)
         .set({ alertChannelId: pick.id })
         .where(eq(slackInstallations.id, inst.id));
+      void inviteWorkspaceMembers(db, inst, pick.id);
     }
 
     return c.redirect(`${env.webOrigin}/settings?slack=connected`);
@@ -231,7 +238,7 @@ export function slackPublicRoutes(db: Db) {
 
     const ev = body.event;
     // Only user-authored thread replies (ignore bot echoes, edits, joins)
-    if (!ev || ev.type !== 'message' || !ev.thread_ts || !ev.channel || !ev.user || !ev.text) {
+    if (!ev || ev.type !== 'message' || !ev.thread_ts || !ev.channel || !ev.user || !ev.text || !ev.ts) {
       return c.json({ ok: true });
     }
     if (ev.bot_id || ev.subtype) return c.json({ ok: true });
@@ -249,19 +256,30 @@ export function slackPublicRoutes(db: Db) {
     if (!conv || conv.state === 'archived') return c.json({ ok: true });
 
     try {
-      // Replying in the thread takes over implicitly if the agent still owns it
-      if (conv.state !== 'human') {
-        await takeover(db, found.installation.workspaceId, conv.id, user);
+      // `/agent <text>` delivers as the agent; anything else is the operator.
+      const asAgent = ev.text.startsWith('/agent ');
+      const text = asAgent ? ev.text.slice('/agent '.length).trim() : ev.text;
+      if (!text) return c.json({ ok: true });
+
+      // Replace the raw reply with a styled transcript entry. The delete
+      // only succeeds if the bot may remove users' messages — otherwise the
+      // raw message stays and the mirror is skipped so nothing duplicates.
+      const deleted = await slackApi(found.installation.botToken, 'chat.delete', {
+        channel: ev.channel,
+        ts: ev.ts,
+      })
+        .then((r) => r.ok)
+        .catch(() => false);
+
+      if (asAgent) {
+        await agentSend(db, found.installation.workspaceId, conv.id, user, text, undefined, !deleted);
+      } else {
+        // Replying in the thread takes over implicitly if the agent still owns it
+        if (conv.state !== 'human') {
+          await takeover(db, found.installation.workspaceId, conv.id, user);
+        }
+        await humanReply(db, found.installation.workspaceId, conv.id, user, text, undefined, !deleted);
       }
-      await humanReply(
-        db,
-        found.installation.workspaceId,
-        conv.id,
-        user,
-        ev.text,
-        undefined,
-        true, // viaSlack — don't mirror back
-      );
     } catch (err) {
       if (!(err instanceof TakeoverError)) throw err;
     }
@@ -287,7 +305,10 @@ export function slackPublicRoutes(db: Db) {
     let convId = action.value;
     if (!convId) return c.json({ ok: true });
     // Send carries the suggestion id — resolve the conversation through it
-    if (action.action_id === 'janis_send_suggestion') {
+    if (
+      action.action_id === 'janis_send_suggestion' ||
+      action.action_id === 'janis_send_suggestion_human'
+    ) {
       const [sug] = await db
         .select()
         .from(suggestions)
@@ -327,15 +348,24 @@ export function slackPublicRoutes(db: Db) {
         await takeover(db, inst.workspaceId, convId, user);
       } else if (action.action_id === 'janis_resume') {
         await resume(db, inst.workspaceId, convId, user);
-      } else if (action.action_id === 'janis_send_suggestion') {
-        // Deliver the drafted suggestion to the customer as the agent.
+      } else if (
+        action.action_id === 'janis_send_suggestion' ||
+        action.action_id === 'janis_send_suggestion_human'
+      ) {
+        // Deliver the drafted suggestion — as the agent, or as the operator
+        // (auto-takes over first since humanReply requires human mode).
         const [sug] = await db
           .select()
           .from(suggestions)
           .where(eq(suggestions.id, action.value!))
           .limit(1);
         if (sug && conv) {
-          await agentSend(db, inst.workspaceId, conv.id, user, sug.text);
+          if (action.action_id === 'janis_send_suggestion_human') {
+            if (conv.state !== 'human') await takeover(db, inst.workspaceId, conv.id, user);
+            await humanReply(db, inst.workspaceId, conv.id, user, sug.text);
+          } else {
+            await agentSend(db, inst.workspaceId, conv.id, user, sug.text);
+          }
           // Delete the ephemeral draft — the mirrored send in the thread is
           // the record.
           if (payload.response_url) {
@@ -383,8 +413,14 @@ export function slackPublicRoutes(db: Db) {
                         {
                           type: 'button',
                           action_id: 'janis_send_suggestion',
-                          text: { type: 'plain_text', text: 'Send' },
+                          text: { type: 'plain_text', text: 'Send as agent' },
                           style: 'primary',
+                          value: sug.id,
+                        },
+                        {
+                          type: 'button',
+                          action_id: 'janis_send_suggestion_human',
+                          text: { type: 'plain_text', text: 'Send as me' },
                           value: sug.id,
                         },
                       ],
@@ -408,21 +444,7 @@ export function slackPublicRoutes(db: Db) {
       }
     }
 
-    // Reflect the new state on the alert message — Take over ↔ Resume agent
-    if (
-      conv &&
-      agent &&
-      (action.action_id === 'janis_takeover' || action.action_id === 'janis_resume')
-    ) {
-      const [fresh] = await db
-        .select()
-        .from(conversations)
-        .where(eq(conversations.id, convId))
-        .limit(1);
-      await updateSlackAlert(db, inst.workspaceId, fresh ?? conv, agent).catch((err) =>
-        console.error('slack alert update failed:', err),
-      );
-    }
+    // takeover()/resume() already refresh the alert message via updateSlackAlert
     return c.json({ ok: true });
   });
 

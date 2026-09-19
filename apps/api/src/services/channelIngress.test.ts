@@ -76,12 +76,15 @@ describe('handleChannelMessage dedup', () => {
     await handleChannelMessage(db, channel, msg); // legacy relay copy
 
     const [conv] = await db.select().from(conversations);
-    const inbound = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.conversationId, conv.id));
+    const all = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    const inbound = all.filter((m) => m.direction === 'in');
     expect(inbound).toHaveLength(1);
     expect((inbound[0].payload as { mid?: string }).mid).toBe('mid.dup');
+    // the greeting is stored once on creation — the redelivery doesn't repeat it
+    const greetings = all.filter(
+      (m) => m.direction === 'out' && (m.payload as { via?: string })?.via === 'greeting',
+    );
+    expect(greetings).toHaveLength(1);
 
     // the agent was invoked exactly once
     const deliveries = await db.select().from(webhookDeliveries);

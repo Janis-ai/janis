@@ -9,6 +9,7 @@ import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { generateApiKey, generateWebhookSecret } from '../lib/crypto.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
+import { detectKnowledgeGaps, draftKnowledgeEntry } from '../services/knowledgeGaps.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
 import { processEvents } from '../services/ingest.js';
@@ -43,22 +44,19 @@ export function agentRoutes(db: Db) {
 
   app.post('/', zValidator('json', createAgent), async (c) => {
     const body = c.req.valid('json');
-    const { key, hash, preview } = generateApiKey();
     const [row] = await db
       .insert(agents)
       .values({
         workspaceId: c.get('workspaceId'),
         name: body.name,
-        apiKeyHash: hash,
-        apiKeyPreview: preview,
+        // no API key until the operator generates one — hosted agents never call /v1
         webhookSecret: generateWebhookSecret(),
         webhookUrl: body.webhook_url ?? null,
         hosted: body.hosted ?? false,
         autoResumeMinutes: body.auto_resume_minutes ?? null,
       })
       .returning();
-    // Full key is returned exactly once — store a hash only
-    return c.json({ agent: toAgent(row), api_key: key }, 201);
+    return c.json({ agent: toAgent(row) }, 201);
   });
 
   app.patch('/:id', zValidator('json', updateAgent), async (c) => {
@@ -281,6 +279,54 @@ export function agentRoutes(db: Db) {
       201,
     );
   });
+
+  // Knowledge-gap loop: clusters of conversations where the agent asked for a
+  // human — the recurring questions it's failing on. Operator drafts → edits →
+  // approves; approved entries land in config.knowledge (prompt-visible).
+  app.get('/:id/knowledge-gaps', async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const gaps = await detectKnowledgeGaps(db, agent.id);
+    return c.json({ gaps });
+  });
+
+  app.post(
+    '/:id/knowledge-gaps/draft',
+    zValidator(
+      'json',
+      z.object({
+        questions: z.array(z.string().min(1)).min(1).max(10),
+        resolutions: z.array(z.string()).max(5).default([]),
+      }),
+    ),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const { questions, resolutions } = c.req.valid('json');
+      const draft = await draftKnowledgeEntry(db, agent, questions, resolutions);
+      return c.json({ draft });
+    },
+  );
+
+  // Approve an entry — append to config.knowledge without clobbering other keys.
+  app.post(
+    '/:id/knowledge-gaps',
+    zValidator('json', z.object({ entry: z.string().min(1).max(2000) })),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const cfg = (agent.config ?? {}) as Record<string, unknown> & { knowledge?: string[] };
+      const entry = c.req.valid('json').entry.trim();
+      const knowledge = cfg.knowledge ?? [];
+      if (!knowledge.includes(entry)) knowledge.push(entry);
+      const [updated] = await db
+        .update(agents)
+        .set({ config: { ...cfg, knowledge } })
+        .where(eq(agents.id, agent.id))
+        .returning();
+      return c.json({ agent: toAgent(updated) });
+    },
+  );
 
   // Agent secrets — API keys/credentials for tool calls. Write-only: the
   // list endpoint returns names + timestamps, never values.

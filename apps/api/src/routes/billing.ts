@@ -29,7 +29,9 @@ export function billingRoutes(db: Db) {
         .list({ customer: ws.stripeCustomerId, status: 'active', limit: 1 })
         .catch(() => null);
       const sub = subs?.data[0];
-      const syncedPlan = sub ? planForPrice(sub.items.data[0]?.price.id ?? '') : '';
+      const syncedPlan = sub
+        ? (sub.items.data.map((i) => planForPrice(i.price.id)).find(Boolean) ?? '')
+        : '';
       if (sub && syncedPlan && (ws.plan !== syncedPlan || ws.stripeSubscriptionId !== sub.id)) {
         await db
           .update(workspaces)

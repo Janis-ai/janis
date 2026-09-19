@@ -1,10 +1,11 @@
-import { and, eq, isNotNull, lt } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, lt, ne } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alertRules, alerts, conversations } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
-import { notifyWorkspace } from '../lib/notify.js';
+import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { inactivityThresholds } from '../lib/rules.js';
 import { toAlert } from '../lib/serializers.js';
+import { postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
 
 /**
@@ -12,11 +13,13 @@ import { resume } from './takeover.js';
  *  - escalate 'active' conversations where the end user is waiting
  *    (last message inbound) past the agent's inactivity threshold
  *  - auto-release 'human' takeovers past the agent's auto_resume_minutes
+ *  - re-alert 'needs_human' conversations unclaimed past the agent's SLA
  */
 export function startSweeper(db: Db, intervalMs = 60_000): () => void {
   const timer = setInterval(() => {
     void sweep(db).catch((err) => console.error('sweep error:', err));
     void sweepAutoResume(db).catch((err) => console.error('sweepAutoResume error:', err));
+    void sweepSla(db).catch((err) => console.error('sweepSla error:', err));
   }, intervalMs);
   timer.unref();
   return () => clearInterval(timer);
@@ -90,16 +93,93 @@ export async function sweep(db: Db): Promise<number> {
         .update(conversations)
         .set({ state: 'needs_human' })
         .where(eq(conversations.id, conversation.id));
-      bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(alert) });
+      const n = await alertNotification(db, alert, conversation, agent);
+      bus.publish(agent.workspaceId, {
+        type: 'alert',
+        data: { ...toAlert(alert), notification: n },
+      });
       bus.publish(agent.workspaceId, {
         type: 'conversation',
         data: { id: conversation.id, state: 'needs_human' },
       });
-      void notifyWorkspace(db, agent.workspaceId, {
-        title: 'Janis: user waiting',
-        body: `No agent response for ${minutes}m in ${conversation.externalId}`,
-        url: `/conversations/${conversation.id}`,
+      void notifyWorkspace(db, agent.workspaceId, n);
+      fired++;
+    }
+  }
+  return fired;
+}
+
+/**
+ * SLA re-alerts: for agents with config.sla_minutes, re-notify the workspace
+ * when a needs_human conversation stays unclaimed past the SLA. Each breach
+ * raises one 'sla' alert; repeat breaches also repost to the Slack alert
+ * channel (escalation path). Deduped — at most one sla alert per SLA window.
+ */
+export async function sweepSla(db: Db): Promise<number> {
+  const agentRows = (await db.select().from(agents)).filter(
+    (a) => (a.config as { sla_minutes?: number } | null)?.sla_minutes,
+  );
+  let fired = 0;
+  for (const agent of agentRows) {
+    const slaMinutes = (agent.config as { sla_minutes: number }).sla_minutes;
+    const cutoff = new Date(Date.now() - slaMinutes * 60_000);
+    const stale = await db
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.agentId, agent.id),
+          eq(conversations.state, 'needs_human'),
+        ),
+      );
+
+    for (const conv of stale) {
+      // handoff age = the newest open non-sla alert (fallback: last activity)
+      const [anchor] = await db
+        .select()
+        .from(alerts)
+        .where(
+          and(
+            eq(alerts.conversationId, conv.id),
+            ne(alerts.type, 'sla'),
+            eq(alerts.status, 'open'),
+          ),
+        )
+        .orderBy(desc(alerts.createdAt))
+        .limit(1);
+      const handoffAt = anchor?.createdAt ?? conv.lastMessageAt ?? conv.createdAt;
+      if (handoffAt > cutoff) continue; // still within the SLA window
+
+      // at most one re-alert per SLA window
+      const [lastSla] = await db
+        .select()
+        .from(alerts)
+        .where(and(eq(alerts.conversationId, conv.id), eq(alerts.type, 'sla')))
+        .orderBy(desc(alerts.createdAt))
+        .limit(1);
+      if (lastSla && lastSla.createdAt > cutoff) continue;
+
+      const ageMin = Math.round((Date.now() - handoffAt.getTime()) / 60_000);
+      const escalated = Boolean(lastSla); // 2nd+ breach → escalate to Slack
+      const [alert] = await db
+        .insert(alerts)
+        .values({
+          conversationId: conv.id,
+          type: 'sla',
+          detail: `unclaimed for ${ageMin}m (SLA ${slaMinutes}m)${escalated ? ' — escalated' : ''}`,
+        })
+        .returning();
+      const n = await alertNotification(db, alert, conv, agent);
+      bus.publish(agent.workspaceId, {
+        type: 'alert',
+        data: { ...toAlert(alert), notification: n },
       });
+      // SLA breaches page the whole workspace even when assigned — the point
+      // of the escalation is that the owner didn't respond
+      void notifyWorkspace(db, agent.workspaceId, n);
+      if (escalated) {
+        void postSlackAlert(db, agent.workspaceId, conv, agent, alert);
+      }
       fired++;
     }
   }

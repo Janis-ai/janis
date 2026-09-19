@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceUser } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
-import { subscribeToPush, unsubscribeFromPush } from '../lib/push';
+import { getPushSubscription, subscribeToPush, unsubscribeFromPush, markPushDisabled, PUSH_CHANGE_EVENT } from '../lib/push';
+import { installAvailable, isIOS, isStandalone, onInstallStateChange, promptInstall } from '../lib/install';
 
 export default function Settings() {
   const { data: me } = useMe();
@@ -16,6 +17,19 @@ export default function Settings() {
   const [reply, setReply] = useState({ title: '', body: '' });
   const [error, setError] = useState('');
   const [pushMsg, setPushMsg] = useState('');
+  const [pushEnabled, setPushEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const refresh = () =>
+      void getPushSubscription()
+        .then((sub) => setPushEnabled(!!sub))
+        .catch(() => setPushEnabled(false));
+    refresh();
+    // Re-sync when push is toggled from elsewhere in this tab (e.g. the
+    // activate banner) — the banner fires janis-push-change.
+    window.addEventListener(PUSH_CHANGE_EVENT, refresh);
+    return () => window.removeEventListener(PUSH_CHANGE_EVENT, refresh);
+  }, []);
   const [slackMsg, setSlackMsg] = useState(
     new URLSearchParams(window.location.search).get('slack') === 'connected'
       ? 'Slack connected — pick an alert channel below.'
@@ -75,7 +89,7 @@ export default function Settings() {
   });
 
   const setNotify = useMutation({
-    mutationFn: (notify: { push?: boolean; email?: boolean }) =>
+    mutationFn: (notify: { push?: boolean; email?: boolean; sound?: boolean }) =>
       api<{ user: WorkspaceUser }>('/api/users/me', {
         method: 'PATCH',
         body: JSON.stringify({ notify }),
@@ -104,9 +118,25 @@ export default function Settings() {
   const togglePush = async () => {
     try {
       const ok = await subscribeToPush();
+      if (ok) setPushEnabled(true);
       setPushMsg(ok ? 'Push notifications enabled on this device.' : 'Push not configured (VAPID keys missing or unsupported).');
+    } catch (err) {
+      console.error('push subscribe failed:', err);
+      const perm = 'Notification' in window ? Notification.permission : 'unavailable';
+      setPushMsg(
+        `Could not enable push — ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)} (permission: ${perm})`,
+      );
+    }
+  };
+
+  const disablePush = async () => {
+    try {
+      markPushDisabled(); // suppress the banner's auto re-subscribe on next load
+      await unsubscribeFromPush();
+      setPushEnabled(false);
+      setPushMsg('Push disabled on this device.');
     } catch {
-      setPushMsg('Could not enable push — check browser permission.');
+      setPushMsg('Could not disable push.');
     }
   };
 
@@ -125,8 +155,14 @@ export default function Settings() {
           Get pushed when an agent needs a human — works on mobile once installed as an app.
         </div>
         <div className="row">
-          <button className="btn" onClick={() => void togglePush()}>Enable push</button>
-          <button className="btn" onClick={() => void unsubscribeFromPush()}>Disable</button>
+          {pushEnabled ? (
+            <>
+              <span className="muted" style={{ alignSelf: 'center' }}>Enabled on this device</span>
+              <button className="btn" onClick={() => void disablePush()}>Disable</button>
+            </>
+          ) : (
+            <button className="btn" onClick={() => void togglePush()}>Enable push</button>
+          )}
         </div>
         {pushMsg && <div className="muted" style={{ marginTop: 8 }}>{pushMsg}</div>}
         {me && (
@@ -149,9 +185,20 @@ export default function Settings() {
               />{' '}
               Email
             </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={me.user.notify?.sound !== false}
+                disabled={setNotify.isPending}
+                onChange={(e) => setNotify.mutate({ sound: e.target.checked })}
+              />{' '}
+              Alert sounds
+            </label>
           </div>
         )}
       </div>
+
+      <InstallCard />
 
       <div className="card">
         <strong>Slack</strong>
@@ -285,5 +332,31 @@ export default function Settings() {
         </div>
       )}
     </>
+  );
+}
+
+/** Install-as-app card — hidden once installed; iOS shows the Safari steps. */
+function InstallCard() {
+  const [available, setAvailable] = useState(installAvailable());
+  useEffect(() => onInstallStateChange(() => setAvailable(installAvailable())), []);
+  const ios = isIOS();
+  if (isStandalone() || (!available && !ios)) return null;
+  return (
+    <div className="card">
+      <strong>Install the app</strong>
+      {ios && !available ? (
+        <div className="muted" style={{ marginTop: 6 }}>
+          On iOS: open this page in <strong>Safari</strong>, tap <strong>Share</strong> →{' '}
+          <strong>Add to Home Screen</strong>. Push notifications only work once installed.
+        </div>
+      ) : (
+        <>
+          <div className="muted" style={{ margin: '6px 0 10px' }}>
+            Add Janis to your home screen or dock for one-tap access and push notifications.
+          </div>
+          <button className="btn" onClick={() => void promptInstall()}>Install Janis</button>
+        </>
+      )}
+    </div>
   );
 }

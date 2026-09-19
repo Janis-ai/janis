@@ -3,7 +3,7 @@ import type { IngestEvent, IngestResponse } from '@janis/shared';
 export interface JanisOptions {
   /** Agent API key (jk_live_...) */
   apiKey: string;
-  /** Janis API origin, e.g. https://api.janis.ai */
+  /** Janis API origin, e.g. https://app.janis.ai */
   baseUrl?: string;
   /** fetch implementation override (testing, alternate runtimes) */
   fetch?: typeof fetch;
@@ -43,7 +43,7 @@ export class Janis {
   constructor(options: JanisOptions) {
     if (!options.apiKey) throw new Error('Janis: apiKey is required');
     this.apiKey = options.apiKey;
-    this.baseUrl = (options.baseUrl ?? 'https://api.janis.ai').replace(/\/$/, '');
+    this.baseUrl = (options.baseUrl ?? 'https://app.janis.ai').replace(/\/$/, '');
     this.fetchImpl = options.fetch ?? fetch;
   }
 

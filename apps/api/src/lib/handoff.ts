@@ -3,7 +3,7 @@ import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, messages } from '../db/schema.js';
 import { bus } from './bus.js';
 import { llmFor } from './llm.js';
-import { notifyWorkspace } from './notify.js';
+import { alertNotification, notifyWorkspace } from './notify.js';
 import { toAlert, toMessage } from './serializers.js';
 import { postSlackAlert } from './slack.js';
 import { recordLlmUsage } from './usage.js';
@@ -95,6 +95,7 @@ export async function enrichHandoff(
   alertId: string | undefined,
   isNewAlert: boolean,
   reason?: string,
+  assigneeId?: string | null,
 ): Promise<void> {
   try {
     const summary = await summarizeHandoff(db, agent, conv, reason).catch(() => null);
@@ -112,7 +113,12 @@ export async function enrichHandoff(
           .set({ detail: reason ? `${reason} — ${summary}` : summary })
           .where(eq(alerts.id, alertId))
           .returning();
-        if (a) bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(a) });
+        if (a) {
+          bus.publish(agent.workspaceId, {
+            type: 'alert',
+            data: { ...toAlert(a), notification: await alertNotification(db, a, conv, agent) },
+          });
+        }
       }
     }
 
@@ -120,11 +126,12 @@ export async function enrichHandoff(
       const [alert] = await db.select().from(alerts).where(eq(alerts.id, alertId)).limit(1);
       if (!alert) return;
       void postSlackAlert(db, agent.workspaceId, conv, agent, alert);
-      void notifyWorkspace(db, agent.workspaceId, {
-        title: 'Janis: help request',
-        body: summary ?? reason ?? `Conversation ${conv.externalId} needs attention`,
-        url: `/conversations/${conv.id}`,
-      });
+      void notifyWorkspace(
+        db,
+        agent.workspaceId,
+        await alertNotification(db, alert, conv, agent, summary ?? reason),
+        { userIds: assigneeId ? [assigneeId] : undefined },
+      );
     }
   } catch {
     // enrichment is best-effort — the alert already exists regardless

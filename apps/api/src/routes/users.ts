@@ -51,17 +51,26 @@ export function userRoutes(db: Db) {
       'json',
       z.object({
         notify: z
-          .object({ push: z.boolean().optional(), email: z.boolean().optional() })
+          .object({
+            push: z.boolean().optional(),
+            email: z.boolean().optional(),
+            sound: z.boolean().optional(),
+          })
           .optional(),
       }),
     ),
     async (c) => {
       const me = c.get('user');
       const body = c.req.valid('json');
-      const current = (me.notifyPrefs ?? {}) as { push?: boolean; email?: boolean };
+      const current = (me.notifyPrefs ?? {}) as {
+        push?: boolean;
+        email?: boolean;
+        sound?: boolean;
+      };
       const next = {
         push: body.notify?.push ?? current.push ?? true,
         email: body.notify?.email ?? current.email ?? true,
+        sound: body.notify?.sound ?? current.sound ?? true,
       };
       const [row] = await db
         .update(users)

@@ -9,3 +9,7 @@ dev-dist
 coverage
 .DS_Store
 .pglite*
+
+# uploaded attachments (dev)
+uploads/
+apps/api/uploads/

@@ -1,12 +1,15 @@
 import { and, asc, desc, eq, gt, lte } from 'drizzle-orm';
 import type { OutboundWebhook, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, conversations, knowledgeFiles, messages } from '../db/schema.js';
+import { agents, conversations, knowledgeFiles, messages, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage } from './usage.js';
 import { interpolateSecrets, loadSecretsMap } from './secrets.js';
 import { bus } from './bus.js';
+import { PLANS, planFor } from './plans.js';
+import type { AttachmentRef } from './channels.js';
+import { getUpload } from './uploads.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -259,19 +262,63 @@ interface Completion {
   completionTokens: number;
 }
 
+/** OpenAI-compat multimodal content part — Gemini accepts image_url parts. */
+type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 type ChatMsg = {
   role: string;
-  content: string | null;
+  content: string | ContentPart[] | null;
   tool_calls?: unknown;
   tool_call_id?: string;
   name?: string;
 };
 
+/** Text of a message content — multipart messages join their text parts. */
+function contentText(content: ChatMsg['content']): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.filter((p) => p.type === 'text').map((p) => p.text).join(' ');
+  }
+  return '';
+}
+
+/** Rough char length for token estimation when the API omits usage. */
+function contentLen(content: ChatMsg['content']): number {
+  if (typeof content === 'string') return content.length;
+  if (Array.isArray(content)) {
+    // ~1k tokens per image is a reasonable flash-lite estimate
+    return content.reduce((n, p) => n + (p.type === 'text' ? p.text.length : 4_000), 0);
+  }
+  return 0;
+}
+
+/**
+ * Replace assistant+tool_calls / tool-result turns with a plain assistant
+ * note. Used when a provider rejects the echoed functionCall parts — the
+ * model keeps the context ("I called X and got Y") without the wire format
+ * that triggered the rejection.
+ */
+function flattenToolHistory(msgs: ChatMsg[]): void {
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (!m.tool_calls) continue;
+    const results: string[] = [];
+    while (i + 1 < msgs.length && msgs[i + 1].role === 'tool') {
+      const t = msgs.splice(i + 1, 1)[0];
+      results.push(`${t.name ?? 'tool'} → ${contentText(t.content).slice(0, 200)}`);
+    }
+    const note = [contentText(m.content), ...results.map((r) => `(${r})`)].filter(Boolean).join(' ');
+    msgs[i] = { role: 'assistant', content: note || '(called tools)' };
+  }
+}
+
 /** Chat completion with an OpenAI-style tool-call loop (max 4 rounds). */
 async function complete(
   llm: LlmSettings,
   system: string,
-  history: { role: string; content: string }[],
+  history: { role: string; content: string | ContentPart[] }[],
   tools: ToolDef[] = [],
   secrets: Record<string, string> = {},
   ctx?: AgentRunContext,
@@ -323,15 +370,12 @@ async function complete(
   let completionTokens = 0;
 
   for (let round = 0; round < 4; round++) {
-    const body = JSON.stringify({
-      model: llm.model,
-      max_tokens: 400,
-      messages: msgs,
-      ...(toolsSchema ? { tools: toolsSchema } : {}),
-    });
-    // One retry — a single timeout shouldn't hand a live conversation to a human
+    // Retry network timeouts and transient upstream errors (429 / 5xx —
+    // Gemini flash often 503s "model overloaded"). 4xx is our problem:
+    // surface it immediately instead of retrying an identical bad request.
     let res!: Response;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    let flattenedTools = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         res = await fetch(`${llm.baseUrl}/chat/completions`, {
           method: 'POST',
@@ -339,15 +383,41 @@ async function complete(
             'content-type': 'application/json',
             authorization: `Bearer ${llm.apiKey}`,
           },
-          body,
+          body: JSON.stringify({
+            model: llm.model,
+            max_tokens: 400,
+            messages: msgs,
+            ...(toolsSchema ? { tools: toolsSchema } : {}),
+          }),
           signal: AbortSignal.timeout(25_000),
         });
-        break;
       } catch (err) {
-        if (attempt === 1) throw err;
+        if (attempt === 2) throw err;
+        continue;
       }
+      if (res.ok) break;
+      // Gemini 3 requires echoed thought_signatures on functionCall parts;
+      // when the shim omits one, the round-trip is a permanent 400. Flatten
+      // the tool turns into a plain assistant note and retry once.
+      if (
+        res.status === 400 &&
+        !flattenedTools &&
+        msgs.some((m) => m.tool_calls || m.role === 'tool')
+      ) {
+        flattenToolHistory(msgs);
+        flattenedTools = true;
+        continue;
+      }
+      if (res.status < 500 && res.status !== 429) break;
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
     }
-    if (!res.ok) throw new Error(`LLM HTTP ${res.status}`);
+    if (!res.ok) {
+      // The provider's error body carries the real reason (bad field,
+      // context limit, overloaded model) — keep it so failure notes are
+      // diagnosable instead of a bare status code.
+      const detail = await res.text().catch(() => '');
+      throw new Error(`LLM HTTP ${res.status}${detail ? ` — ${detail.slice(0, 300)}` : ''}`);
+    }
     const json = (await res.json()) as {
       choices?: {
         message?: {
@@ -357,7 +427,7 @@ async function complete(
       }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
-    promptTokens += json.usage?.prompt_tokens ?? Math.ceil(msgs.reduce((n, m) => n + (m.content?.length ?? 0), 0) / 4);
+    promptTokens += json.usage?.prompt_tokens ?? Math.ceil(msgs.reduce((n, m) => n + contentLen(m.content), 0) / 4);
 
     const msg = json.choices?.[0]?.message;
     const calls = msg?.tool_calls ?? [];
@@ -368,12 +438,15 @@ async function complete(
     }
 
     completionTokens += json.usage?.completion_tokens ?? 0;
-    msgs.push({ role: 'assistant', content: msg?.content ?? null, tool_calls: calls });
+    // Echo the whole message verbatim — Gemini 3 requires thought_signatures
+    // on functionCall parts, and the shim puts them in extra_content at
+    // either message or tool-call level. Dropping any of it 400s the next round.
+    msgs.push({ ...(msg as ChatMsg), role: 'assistant' });
     for (const call of calls) {
       const tool = tools.find((t) => t.name === call.function.name);
-      const args = JSON.parse(call.function.arguments || '{}');
       let result: string;
       try {
+        const args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
         result =
           call.function.name === SAVE_PROFILE_TOOL && ctx
             ? await saveUserProfile(ctx, args)
@@ -410,7 +483,81 @@ function summaryLine(m: {
     return '(the customer was told a human teammate is joining)';
   }
   if (m.direction === 'human') return `human operator: ${m.text}`;
-  return m.direction === 'in' ? `customer: ${m.text}` : `agent: ${m.text}`;
+  return (m.direction === 'in' ? `customer: ${m.text}` : `agent: ${m.text}`) + attachmentNote(m.payload);
+}
+
+function attachmentsOf(payload: unknown): AttachmentRef[] {
+  return (payload as { attachments?: AttachmentRef[] } | undefined)?.attachments ?? [];
+}
+
+/** Attachment names from a message payload, for transcript annotations. */
+function attachmentNote(payload: unknown): string {
+  const atts = attachmentsOf(payload);
+  return atts.length ? ` [attachments: ${atts.map((a) => a.name ?? 'file').join(', ')}]` : '';
+}
+
+const MAX_VISION_BYTES = 8 * 1024 * 1024;
+const MAX_FILE_TEXT = 4_000;
+const MAX_FILE_TEXT_TOTAL = 12_000;
+const MAX_ATTS_PER_MSG = 3;
+/** Only the most recent attachment-bearing customer turns get real image
+ *  parts — older files degrade to name annotations so they don't re-bill
+ *  vision tokens on every subsequent reply. */
+const VISION_TURNS = 2;
+
+const TEXT_MIME = /^(text\/|application\/(json|javascript|xml|x-yaml|x-sh|sql|csv|rtf))/i;
+const TEXT_EXT = /\.(txt|md|csv|tsv|json|ya?ml|xml|log|ini|cfg|ts|tsx|jsx?|mjs|py|rb|go|rs|java|cs?|h|cpp|sh|sql|html?|css)$/i;
+
+/**
+ * Turn stored attachments into LLM content: images become base64 image_url
+ * parts (Gemini's OpenAI shim rejects remote URLs — INVALID_ARGUMENT), and
+ * text-like files inline their content. Anything else stays a name annotation.
+ */
+async function attachmentContent(
+  db: Db,
+  atts: AttachmentRef[],
+  vision: boolean,
+): Promise<{ parts: ContentPart[]; extraText: string; skipped: string[] }> {
+  const parts: ContentPart[] = [];
+  const texts: string[] = [];
+  const skipped: string[] = [];
+  let textBudget = MAX_FILE_TEXT_TOTAL;
+  for (const a of atts.slice(0, MAX_ATTS_PER_MSG)) {
+    const isImage = a.type.startsWith('image/');
+    const key = a.url.startsWith('/uploads/') ? a.url.slice('/uploads/'.length) : undefined;
+    if (!key) { skipped.push(a.name); continue; }
+    const row = await getUpload(db, key).catch(() => undefined);
+    if (!row) { skipped.push(a.name); continue; }
+    // bytea arrives as Buffer (postgres) or Uint8Array (PGlite) — normalize
+    const data = Buffer.from(row.data);
+    if (vision && isImage) {
+      if (data.length > MAX_VISION_BYTES) { skipped.push(a.name); continue; }
+      parts.push({
+        type: 'image_url',
+        image_url: { url: `data:${a.type};base64,${data.toString('base64')}` },
+      });
+      continue;
+    }
+    if ((TEXT_MIME.test(a.type) || TEXT_EXT.test(a.name)) && textBudget > 0) {
+      const text = data.toString('utf8').slice(0, Math.min(MAX_FILE_TEXT, textBudget));
+      textBudget -= text.length;
+      texts.push(`<file name="${a.name}">\n${text}\n</file>`);
+      continue;
+    }
+    skipped.push(a.name);
+  }
+  return { parts, extraText: texts.length ? `\n${texts.join('\n')}` : '', skipped };
+}
+
+/** File analysis (vision + inline file text) is a paid-plan feature — free
+ *  workspaces keep filename annotations only. */
+export async function fileAnalysisAllowed(db: Db, workspaceId: string): Promise<boolean> {
+  const [ws] = await db
+    .select({ plan: workspaces.plan })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  return planFor(ws?.plan) !== PLANS.free;
 }
 
 /**
@@ -477,36 +624,95 @@ export async function refreshConversationSummary(
   return { summary: res.text.trim(), promptTokens: res.promptTokens, completionTokens: res.completionTokens };
 }
 
-async function transcriptFor(db: Db, convId: string) {
-  const rows = await db
+/**
+ * Greeting intent: the agent writes its own opening line from its persona —
+ * no configured text needed. Used when greeting is enabled but unset.
+ */
+export async function generateGreeting(
+  agent: AgentRow,
+  channelName?: string,
+): Promise<string | null> {
+  const cfg = (agent.config ?? {}) as { system_prompt?: string; tone?: string };
+  const persona = [cfg.system_prompt, cfg.tone ? `Tone: ${cfg.tone}` : '']
+    .filter(Boolean)
+    .join('\n\n');
+  const system =
+    `${persona ? persona + '\n\n' : ''}` +
+    `Write a short, warm greeting that ${agent.name} sends the moment a customer opens a new chat` +
+    `${channelName ? ` on ${channelName}` : ''}. One or two sentences, under 160 characters. ` +
+    `Output only the greeting text — no quotes, no preamble.`;
+  const res = await complete(llmFor(agent), system, [{ role: 'user', content: 'Greeting:' }]);
+  const text = res.text?.trim().replace(/^["']+|["']+$/g, '');
+  return text ? text.slice(0, 480) : null;
+}
+
+export async function transcriptFor(
+  db: Db,
+  convId: string,
+  fileAnalysis = false,
+): Promise<{ role: string; content: string | ContentPart[] }[]> {
+  const rows = (await db
     .select()
     .from(messages)
     .where(eq(messages.conversationId, convId))
     .orderBy(desc(messages.createdAt))
-    .limit(RECENT_WINDOW);
-  return rows
+    .limit(RECENT_WINDOW))
     .reverse()
-    .filter((m) => m.text)
-    .map((m) => {
-      const f = m.flags as { failure?: boolean; help_requested?: boolean; custom_alert?: boolean };
-      // Internal notes (failures/handoffs/alerts) must not be fed verbatim —
-      // the model parrots them. But dropping them entirely leaves the
-      // triggering request looking unanswered, so the model hands off again
-      // on every later message. A neutral marker closes the turn instead.
-      if (f?.failure || f?.help_requested || f?.custom_alert) {
-        return { role: 'assistant', content: '(passed to a human teammate)' };
-      }
-      // Courtesy notices go verbatim into history and make the model think
-      // handoff is the standing state — it then re-escalates trivial
-      // follow-ups. A marker conveys the fact without the phrasing.
-      if ((m.payload as { via?: string })?.via === 'handoff') {
-        return { role: 'assistant', content: '(the customer was told a human teammate is joining)' };
-      }
-      return {
-        role: m.direction === 'in' ? 'user' : 'assistant',
-        content: m.direction === 'human' ? `(human operator) ${m.text}` : m.text!,
-      };
+    .filter((m) => m.text);
+
+  // Vision budget: the most recent VISION_TURNS attachment-bearing customer
+  // messages get real image parts; older ones keep name annotations.
+  const fileTurns = fileAnalysis
+    ? rows.filter((m) => m.direction === 'in' && attachmentsOf(m.payload).length).length
+    : 0;
+  let fileIdx = 0;
+
+  const out: { role: string; content: string | ContentPart[] }[] = [];
+  for (const m of rows) {
+    const f = m.flags as { failure?: boolean; help_requested?: boolean; custom_alert?: boolean };
+    // Internal notes (failures/handoffs/alerts) must not be fed verbatim —
+    // the model parrots them. But dropping them entirely leaves the
+    // triggering request looking unanswered, so the model hands off again
+    // on every later message. A neutral marker closes the turn instead.
+    if (f?.failure || f?.help_requested || f?.custom_alert) {
+      out.push({ role: 'assistant', content: '(passed to a human teammate)' });
+      continue;
+    }
+    // Courtesy notices go verbatim into history and make the model think
+    // handoff is the standing state — it then re-escalates trivial
+    // follow-ups. A marker conveys the fact without the phrasing.
+    if ((m.payload as { via?: string })?.via === 'handoff') {
+      out.push({ role: 'assistant', content: '(the customer was told a human teammate is joining)' });
+      continue;
+    }
+    const atts = m.direction === 'in' ? attachmentsOf(m.payload) : [];
+    if (atts.length && fileAnalysis) {
+      const vision = fileIdx++ >= fileTurns - VISION_TURNS;
+      const { parts, extraText, skipped } = await attachmentContent(db, atts, vision);
+      console.log(
+        `[files] attachments=${atts.length} vision=${vision} parts=${parts.length}` +
+          `${skipped.length ? ` skipped=${skipped.join(',')}` : ''}` +
+          `${parts.length ? ` bytes=${parts.map((p) => (p.type === 'image_url' ? p.image_url.url.length : 0)).join('+')}` : ''}`,
+      );
+      const text =
+        m.text! +
+        extraText +
+        (skipped.length ? ` [attachments: ${skipped.join(', ')}]` : '');
+      out.push(
+        parts.length
+          ? { role: 'user', content: [{ type: 'text' as const, text }, ...parts] }
+          : { role: 'user', content: text },
+      );
+      continue;
+    }
+    out.push({
+      role: m.direction === 'in' ? 'user' : 'assistant',
+      content:
+        (m.direction === 'human' ? `(human operator) ${m.text}` : m.text!) +
+        attachmentNote(m.payload),
     });
+  }
+  return out;
 }
 
 /** Fold older messages into the running summary — best-effort, never blocks a reply. */
@@ -554,8 +760,8 @@ export async function runHostedEvent(
       .limit(1);
     if (!conv) return;
     const llm = llmFor(agent);
-    await foldConversationMemory(db, agent, conv, llm);
-    const history = await transcriptFor(db, convId);
+    void foldConversationMemory(db, agent, conv, llm);
+    const history = await transcriptFor(db, convId, await fileAnalysisAllowed(db, agent.workspaceId));
     const docs = await loadKnowledgeDocs(db, agent.id);
     const secrets = await loadSecretsMap(db, agent.id);
     const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId };
@@ -587,7 +793,9 @@ export async function runHostedEvent(
     if (!draft) {
       // Escalated conversations prime the model to emit [HANDOFF] no matter
       // what the directive says — retry with a minimal ask, no transcript.
-      const lastCustomerMsg = [...history].reverse().find((m) => m.role === 'user')?.content;
+      const lastCustomerMsg = contentText(
+        [...history].reverse().find((m) => m.role === 'user')?.content ?? null,
+      );
       const retry = lastCustomerMsg
         ? await complete(
             llm,
@@ -638,12 +846,17 @@ export async function runHostedEvent(
   if (!conv || conv.state === 'human' || conv.state === 'archived') return;
 
   const externalId = conv.externalId;
+  const t0 = Date.now();
   const emit = (e: Parameters<typeof processEvents>[2]) => processEvents(db, agent, e);
 
   try {
     const llm = llmFor(agent);
-    await foldConversationMemory(db, agent, conv, llm);
-    const history = await transcriptFor(db, convId);
+    // Fold memory alongside the reply — the summary only matters for future
+    // turns, so blocking on it adds a whole LLM call to every reply.
+    void foldConversationMemory(db, agent, conv, llm);
+    const fileAnalysis = await fileAnalysisAllowed(db, agent.workspaceId);
+    console.log(`[files] conv=${convId} analysis=${fileAnalysis}`);
+    const history = await transcriptFor(db, convId, fileAnalysis);
     const docs = await loadKnowledgeDocs(db, agent.id);
     const secrets = await loadSecretsMap(db, agent.id);
     const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId };
@@ -680,6 +893,7 @@ export async function runHostedEvent(
     await emit([
       { type: 'message_out', conversation_id: externalId, text: reply, payload: { via: 'hosted' } },
     ]);
+    console.log(`[hosted] ${agent.name} replied in ${Date.now() - t0}ms`);
   } catch (err) {
     await emit([
       { type: 'failure', conversation_id: externalId, reason: err instanceof Error ? err.message : 'generation failed' },

@@ -127,13 +127,7 @@ export default function Billing() {
         <>
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Plan</h3>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: `repeat(${data.plans.length}, 1fr)`,
-                gap: 10,
-              }}
-            >
+            <div className="plan-grid">
               {data.plans.map((p) => {
                 const current = p.key === data.plan.key;
                 return (

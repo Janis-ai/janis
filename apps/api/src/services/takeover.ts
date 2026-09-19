@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, messages, users } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
-import { mirrorToSlack } from '../lib/slack.js';
+import { mirrorToSlack, updateSlackAlert } from '../lib/slack.js';
 import { deliverToChannel } from '../lib/channels.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
@@ -69,7 +69,11 @@ export async function takeover(
     type: 'conversation',
     data: { id: updated.id, state: updated.state },
   });
-  void mirrorToSlack(db, conversationId, ':raising_hand:', `*${user.name}* took over`);
+  // Status note, not transcript — italic so it reads as a system line in Slack
+  void mirrorToSlack(db, conversationId, ':raising_hand:', `_${user.name} took over_`);
+  // Refresh the parent alert's buttons even when the action came from the
+  // console — otherwise the Slack message keeps offering a stale action.
+  void updateSlackAlert(db, workspaceId, updated, agent).catch(() => {});
   await deliverWebhook(db, agent, 'human.takeover', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
@@ -121,9 +125,11 @@ export async function humanReply(
 
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
   if (!viaSlack) {
-    void mirrorToSlack(db, conversationId, `:bust_in_silhouette: *${user.name}:*`, text);
+    void mirrorToSlack(db, conversationId, `:bust_in_silhouette: *${user.name}:*`, text, {
+      identity: { username: `${user.name} (operator)` },
+    });
   }
-  void deliverToChannel(db, conversationId, text); // hosted channel: human → end user
+  void deliverToChannel(db, conversationId, text, attachments); // hosted channel: human → end user
   await deliverWebhook(db, agent, 'message.human', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
@@ -146,6 +152,7 @@ export async function agentSend(
   user: UserRow,
   text: string,
   attachments?: { name: string; url: string; type: string; size: number }[],
+  viaSlack = false,
 ): Promise<typeof messages.$inferSelect> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
@@ -176,8 +183,12 @@ export async function agentSend(
     .where(eq(conversations.id, conversationId));
 
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
-  void mirrorToSlack(db, conversationId, `:robot_face: *${user.name}* (via agent):`, text);
-  void deliverToChannel(db, conversationId, text); // hosted channel: send to end user
+  if (!viaSlack) {
+    void mirrorToSlack(db, conversationId, `:robot_face: *${user.name}* (via agent):`, text, {
+      identity: { username: `${agent.name} (agent)` },
+    });
+  }
+  void deliverToChannel(db, conversationId, text, attachments); // hosted channel: send to end user
   await deliverWebhook(db, agent, 'agent.send', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
@@ -218,8 +229,9 @@ export async function resume(
     db,
     conversationId,
     ':arrow_forward:',
-    user ? `*${user.name}* resumed the agent` : 'auto-resumed to the agent',
+    user ? `_${user.name} resumed the agent_` : '_auto-resumed to the agent_',
   );
+  void updateSlackAlert(db, workspaceId, updated, agent).catch(() => {});
   await deliverWebhook(db, agent, 'human.resume', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,

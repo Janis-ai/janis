@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
+import type { Channel } from '@janis/shared';
 import { useAgents, useChannels } from '../api/hooks';
 import { Empty } from '../components/bits';
 
@@ -14,7 +15,13 @@ const KIND_LABEL: Record<string, string> = {
   messenger: 'Messenger',
   instagram: 'Instagram',
   whatsapp: 'WhatsApp',
+  webchat: 'Web chat',
 };
+
+/** Comma- or newline-separated text → trimmed array of quick-reply labels. */
+function parseReplies(text: string): string[] {
+  return text.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+}
 
 /**
  * Hosted channel integrations — Messenger / Instagram / WhatsApp.
@@ -28,9 +35,11 @@ export default function Integrations() {
   const [params, setParams] = useSearchParams();
   const metaError = params.get('meta_error') ?? '';
   const [showManual, setShowManual] = useState(false);
-  const [linkAgent, setLinkAgent] = useState('');
+  const [linkAgent, setLinkAgent] = useState(() => params.get('agent') ?? '');
   const [error, setError] = useState('');
-  const apiOrigin = window.location.hostname === 'localhost' ? 'http://localhost:8787' : '';
+  // Same-origin deploys serve the API on the web origin; dev splits :5173/:8787.
+  const apiOrigin =
+    window.location.hostname === 'localhost' ? 'http://localhost:8787' : window.location.origin;
 
   const metaStatus = useQuery({
     queryKey: ['meta-status'],
@@ -80,7 +89,7 @@ export default function Integrations() {
   const [form, setForm] = useState({
     kind: 'messenger' as 'messenger' | 'instagram' | 'whatsapp',
     name: '',
-    agent_id: '',
+    agent_id: params.get('agent') ?? '',
     page_id: '',
     phone_number_id: '',
     access_token: '',
@@ -100,6 +109,33 @@ export default function Integrations() {
       }),
     onSuccess: () => {
       setForm({ ...form, name: '', page_id: '', phone_number_id: '', access_token: '' });
+      setError('');
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+    },
+    onError: (e) => setError(e.message),
+  });
+
+  // Web chat widget — no credentials needed, just an agent + display config.
+  const [wcForm, setWcForm] = useState({
+    name: '',
+    agent_id: params.get('agent') ?? '',
+    greeting: '',
+    quick_replies: '',
+  });
+  const createWebchat = useMutation({
+    mutationFn: () =>
+      api('/api/channels', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'webchat',
+          name: wcForm.name,
+          agent_id: wcForm.agent_id,
+          greeting: wcForm.greeting || undefined,
+          quick_replies: parseReplies(wcForm.quick_replies),
+        }),
+      }),
+    onSuccess: () => {
+      setWcForm({ ...wcForm, name: '', greeting: '', quick_replies: '' });
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
     },
@@ -249,12 +285,62 @@ export default function Integrations() {
         </div>
       )}
 
+      {/* Web chat widget */}
+      <div className="card connect-card">
+        <div className="row">
+          <div className="grow">
+            <strong>Web chat widget</strong>
+            <div className="muted" style={{ marginTop: 4 }}>
+              Embed a chat bubble on any website — visitors land in the same inbox, with
+              agent answers and human takeover. No Meta app required.
+            </div>
+          </div>
+        </div>
+        <form
+          className="row wrap"
+          style={{ marginTop: 12 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            createWebchat.mutate();
+          }}
+        >
+          <select
+            value={wcForm.agent_id}
+            onChange={(e) => setWcForm({ ...wcForm, agent_id: e.target.value })}
+            required
+          >
+            <option value="">Which agent answers?…</option>
+            {agents?.agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+          <input
+            className="grow"
+            placeholder="Widget name (e.g. Acme website)"
+            value={wcForm.name}
+            onChange={(e) => setWcForm({ ...wcForm, name: e.target.value })}
+            required
+          />
+          <input
+            className="grow"
+            placeholder="Greeting — overrides the agent's greeting (optional)"
+            value={wcForm.greeting}
+            onChange={(e) => setWcForm({ ...wcForm, greeting: e.target.value })}
+          />
+          <input
+            className="grow"
+            placeholder="Quick replies — comma-separated (optional, e.g. Pricing, Support, Book demo)"
+            value={wcForm.quick_replies}
+            onChange={(e) => setWcForm({ ...wcForm, quick_replies: e.target.value })}
+          />
+          <button className="btn" disabled={createWebchat.isPending}>Create widget</button>
+        </form>
+      </div>
+
       {/* Connected channels */}
       {data && data.channels.length > 0 && (
         <h2 className="section-title">Connected channels</h2>
       )}
       {data?.channels.map((ch) => (
-        <div key={ch.id} className="card channel-card">
+        <div key={ch.id} id={`ch-${ch.id}`} className="card channel-card">
           <div className="row">
             <strong className="grow">{ch.name}</strong>
             <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
@@ -272,11 +358,25 @@ export default function Integrations() {
               </a>
             </div>
           )}
-          {ch.meta.via !== 'oauth' && (
+          {ch.kind === 'webchat' && (
+            <>
+              <details className="webhook-details" open>
+                <summary>Embed code — paste before &lt;/body&gt; on your site</summary>
+                <pre className="mono" style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
+{`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
+                </pre>
+              </details>
+              <details className="webhook-details" style={{ marginTop: 8 }}>
+                <summary>Appearance — branding for the embedded widget</summary>
+                <WebchatBranding channel={ch} />
+              </details>
+            </>
+          )}
+          {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && (
           <details className="webhook-details">
             <summary>Webhook details</summary>
             <div className="mono" style={{ marginTop: 6 }}>
-              <div>URL: {apiOrigin || '{API_ORIGIN}'}/channels/meta/webhook</div>
+              <div>URL: {apiOrigin}/channels/meta/webhook</div>
               <div>Verify token: {ch.meta.verify_token}</div>
             </div>
           </details>
@@ -350,11 +450,105 @@ export default function Integrations() {
             </div>
           </form>
           <div className="muted" style={{ marginTop: 10 }}>
-            Then register <span className="mono">{apiOrigin || '{API_ORIGIN}'}/channels/meta/webhook</span>{' '}
+            Then register <span className="mono">{apiOrigin}/channels/meta/webhook</span>{' '}
             in your Meta app with the channel's verify token, and subscribe to <span className="mono">messages</span>.
           </div>
         </details>
       </div>
     </>
+  );
+}
+
+/** Webchat widget appearance editor — PATCHes display config on the channel. */
+function WebchatBranding({ channel }: { channel: Channel }) {
+  const qc = useQueryClient();
+  const b = channel.meta.branding ?? {};
+  const [f, setF] = useState({
+    title: b.title ?? '',
+    subtitle: b.subtitle ?? '',
+    greeting: b.greeting ?? '',
+    accent: b.accent ?? '#5b21b6',
+    position: b.position ?? 'right',
+    logo_url: b.logo_url ?? '',
+    quick_replies: (b.quick_replies ?? []).join(', '),
+  });
+  const [msg, setMsg] = useState('');
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/channels/${channel.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          branding: {
+            title: f.title,
+            subtitle: f.subtitle,
+            greeting: f.greeting,
+            accent: f.accent,
+            position: f.position,
+            logo_url: f.logo_url,
+            quick_replies: parseReplies(f.quick_replies),
+          },
+        }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      setMsg('Saved — the widget picks it up on the next page load.');
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),
+  });
+  return (
+    <form
+      style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, maxWidth: 460 }}
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate();
+      }}
+    >
+      <div className="row">
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          Accent{' '}
+          <input
+            type="color"
+            value={f.accent}
+            onChange={(e) => setF({ ...f, accent: e.target.value })}
+          />
+        </label>
+        <label className="grow" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          Position
+          <select value={f.position} onChange={(e) => setF({ ...f, position: e.target.value as 'left' | 'right' })}>
+            <option value="right">Bottom right</option>
+            <option value="left">Bottom left</option>
+          </select>
+        </label>
+      </div>
+      <input
+        placeholder="Header title (defaults to widget name)"
+        value={f.title}
+        onChange={(e) => setF({ ...f, title: e.target.value })}
+      />
+      <input
+        placeholder="Subtitle (defaults to agent name)"
+        value={f.subtitle}
+        onChange={(e) => setF({ ...f, subtitle: e.target.value })}
+      />
+      <input
+        placeholder="Greeting — overrides the agent's greeting (optional)"
+        value={f.greeting}
+        onChange={(e) => setF({ ...f, greeting: e.target.value })}
+      />
+      <input
+        placeholder="Logo image URL — header + bubble icon (optional)"
+        value={f.logo_url}
+        onChange={(e) => setF({ ...f, logo_url: e.target.value })}
+      />
+      <input
+        placeholder="Quick replies — comma-separated (optional, e.g. Pricing, Support, Book demo)"
+        value={f.quick_replies}
+        onChange={(e) => setF({ ...f, quick_replies: e.target.value })}
+      />
+      <div className="row">
+        <button className="btn" disabled={save.isPending}>Save appearance</button>
+        {msg && <span className="muted" style={{ alignSelf: 'center' }}>{msg}</span>}
+      </div>
+    </form>
   );
 }

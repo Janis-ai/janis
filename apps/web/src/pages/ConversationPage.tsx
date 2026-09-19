@@ -92,11 +92,33 @@ export default function ConversationPage() {
     onError: (e) => setError(e.message),
   });
 
+  const [suggestOpen, setSuggestOpen] = useState(false);
+
   const suggest = useMutation({
     mutationFn: () => api(`/api/conversations/${id}/suggest`, { method: 'POST' }),
     onSuccess: () => { setError(''); void qc.invalidateQueries({ queryKey: ['conversation', id] }); },
-    onError: (e) => setError(e.message),
+    onError: (e) => { setError(e.message); setSuggestOpen(false); },
   });
+
+  const askSuggestion = () => {
+    setSuggestOpen(true);
+    suggest.mutate();
+  };
+
+  // Dismiss EVERY pending suggestion — otherwise the next one in the queue
+  // slides into the card and it feels like dismiss loads another iteration.
+  const dismissSuggestions = async () => {
+    const pending = data?.suggestions ?? [];
+    await Promise.all(
+      pending.map((s) =>
+        api(`/api/conversations/${id}/suggestions/${s.id}/status`, {
+          method: 'POST',
+          body: JSON.stringify({ status: 'dismissed' }),
+        }).catch(() => {}),
+      ),
+    );
+    void qc.invalidateQueries({ queryKey: ['conversation', id] });
+  };
 
   const suggestionStatus = useMutation({
     mutationFn: ({ sid, status }: { sid: string; status: 'used' | 'dismissed' }) =>
@@ -176,6 +198,7 @@ export default function ConversationPage() {
 
         <div className="transcript">
           {messages.map((m) => {
+            const isSystem = m.flags.failure || m.flags.help_requested || m.flags.custom_alert;
             const who =
               m.direction === 'in'
                 ? c.user_profile.name ?? WHO.in
@@ -183,11 +206,13 @@ export default function ConversationPage() {
                   ? agent?.name ?? WHO.out
                   : users?.users.find((u) => u.id === m.author)?.name ?? WHO.human;
             return (
-            <div key={m.id} className={`msg ${m.direction}`}>
-              <div className="who">
-                {who}
-                {m.direction === 'out' && m.payload.via === 'operator' ? ' (via operator)' : ''}
-              </div>
+            <div key={m.id} className={`msg ${isSystem ? 'system' : m.direction}`}>
+              {!isSystem && (
+                <div className="who">
+                  {who}
+                  {m.direction === 'out' && m.payload.via === 'operator' ? ' (via operator)' : ''}
+                </div>
+              )}
               {m.text}
               {m.flags.help_requested && m.payload.summary ? (
                 <div className="muted" style={{ marginTop: 4 }}>
@@ -215,25 +240,41 @@ export default function ConversationPage() {
 
         {error && <div className="error">{error}</div>}
 
-        {c.state === 'human' && suggestions?.length > 0 && (
+        {canSend && (suggestOpen || suggestions?.length > 0) && (
           <div className="card suggestion">
-            <div className="muted" style={{ marginBottom: 6 }}>
-              Suggested ({suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
-            </div>
-            <div>{suggestions[0].text}</div>
+            {suggestions?.length > 0 ? (
+              <>
+                <div className="muted" style={{ marginBottom: 6 }}>
+                  Suggested ({suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
+                </div>
+                <div>{suggestions[0].text}</div>
+              </>
+            ) : (
+              <div className="muted">Thinking…</div>
+            )}
             <div className="row" style={{ marginTop: 10 }}>
               <button
                 className="btn primary"
+                disabled={!(suggestions?.length > 0)}
                 onClick={() => {
                   setDraft(suggestions[0].text);
                   suggestionStatus.mutate({ sid: suggestions[0].id, status: 'used' });
+                  setSuggestOpen(false);
                 }}
               >
                 Use
               </button>
               <button
+                className="btn icon"
+                title="Try another suggestion"
+                disabled={suggest.isPending}
+                onClick={() => { void dismissSuggestions(); suggest.mutate(); }}
+              >
+                ↻
+              </button>
+              <button
                 className="btn"
-                onClick={() => suggestionStatus.mutate({ sid: suggestions[0].id, status: 'dismissed' })}
+                onClick={() => { setSuggestOpen(false); void dismissSuggestions(); }}
               >
                 Dismiss
               </button>
@@ -241,10 +282,10 @@ export default function ConversationPage() {
           </div>
         )}
 
-        {c.state === 'human' && (
+        {canSend && !suggestOpen && !(suggestions?.length > 0) && (
           <div className="row" style={{ marginBottom: 10 }}>
-            <button className="btn" onClick={() => suggest.mutate()} disabled={suggest.isPending}>
-              {suggest.isPending ? 'Thinking…' : '✨ Suggest reply'}
+            <button className="btn" onClick={askSuggestion} disabled={suggest.isPending}>
+              ✨ Suggest reply
             </button>
           </div>
         )}
