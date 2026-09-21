@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
+    "db:studio": "drizzle-kit studio --config drizzle.studio.config.ts",
     "seed": "tsx src/seed.ts",
     "demo-agent": "tsx scripts/demo-agent.ts",
     "import-legacy": "tsx scripts/import-legacy.ts",
