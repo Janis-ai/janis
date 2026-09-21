@@ -8,8 +8,16 @@ import { env } from '../env.js';
 type ChannelRow = typeof channels.$inferSelect;
 
 export interface ChannelCredentials {
-  via?: 'oauth' | 'manual'; // how the channel was created
+  via?: 'oauth' | 'manual' | 'legacy'; // how the channel was created
   page_id?: string; // messenger / instagram
+  // migrated legacy bots: a page-inbox human reply (standby echo) pauses the
+  // bot; the pause lapses after takeover_timeout minutes (legacy ~5)
+  takeover_from_page_inbox?: boolean;
+  takeover_timeout?: number;
+  // legacy bots: Meta app id to pass thread control to ("stop chat" trigger)
+  secondary_receiver_id?: string;
+  // legacy ManyChat bots: bearer token for api.manychat.com sends
+  manychat_token?: string;
   phone_number_id?: string; // whatsapp
   username?: string; // instagram @handle — for ig.me links
   phone_number?: string; // whatsapp display number (digits only) — for wa.me links
@@ -322,6 +330,69 @@ export async function sendChannelMessage(
   }
 }
 
+/** Channel binding for a conversation — channel row + the platform user id. */
+export async function channelBindingFor(
+  db: Db,
+  conversationId: string,
+): Promise<{ channel: ChannelRow; platformUserId: string } | undefined> {
+  const [row] = await db
+    .select({ binding: channelBindings, channel: channels })
+    .from(channelBindings)
+    .innerJoin(channels, eq(channelBindings.channelId, channels.id))
+    .where(eq(channelBindings.conversationId, conversationId))
+    .limit(1);
+  return row ? { channel: row.channel, platformUserId: row.binding.platformUserId } : undefined;
+}
+
+/** Meta handover protocol: pull the thread to this channel's app so it can send. */
+export async function takeThreadControl(
+  channel: ChannelRow,
+  platformUserId: string,
+): Promise<void> {
+  if (channel.kind !== 'messenger' && channel.kind !== 'instagram') return;
+  const creds = channel.credentials as ChannelCredentials;
+  if (!creds.access_token) return;
+  try {
+    await fetch(`${GRAPH}/me/take_thread_control?access_token=${creds.access_token}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ recipient: { id: platformUserId }, metadata: 'janis takeover' }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {}
+}
+
+/** Meta handover protocol: hand the thread back to another receiver app. */
+export async function passThreadControlTo(
+  channel: ChannelRow,
+  platformUserId: string,
+  targetAppId: string,
+): Promise<void> {
+  if (channel.kind !== 'messenger' && channel.kind !== 'instagram') return;
+  const creds = channel.credentials as ChannelCredentials;
+  if (!creds.access_token || !targetAppId) return;
+  try {
+    await fetch(`${GRAPH}/me/pass_thread_control?access_token=${creds.access_token}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        recipient: { id: platformUserId },
+        target_app_id: targetAppId,
+        metadata: 'JANIS_SENDING_RESUME',
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {}
+}
+
+/** Hand the thread back to the channel's configured secondary receiver, if any. */
+export async function releaseThreadControl(channel: ChannelRow, platformUserId: string): Promise<void> {
+  const creds = channel.credentials as ChannelCredentials;
+  if (creds.secondary_receiver_id) {
+    await passThreadControlTo(channel, platformUserId, creds.secondary_receiver_id);
+  }
+}
+
 /**
  * Show a typing indicator on Messenger/Instagram while the agent works.
  * Meta clears it automatically on the next message or after ~20s.
@@ -359,6 +430,38 @@ export async function deliverToChannel(
     .limit(1);
   if (!row || (!text.trim() && !attachments?.length)) return;
   await sendChannelMessage(row.channel, row.binding.platformUserId, text, attachments, opts).catch(() => {});
+}
+
+/**
+ * Send a raw Messenger message object (legacy Dialogflow payload.facebook
+ * passthrough — quick replies, cards, templates) to the conversation's user.
+ * Returns false when the conversation isn't bound to a Meta channel.
+ */
+export async function sendRawFbMessage(
+  db: Db,
+  conversationId: string,
+  message: Record<string, unknown>,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ binding: channelBindings, channel: channels })
+    .from(channelBindings)
+    .innerJoin(channels, eq(channelBindings.channelId, channels.id))
+    .where(eq(channelBindings.conversationId, conversationId))
+    .limit(1);
+  if (!row) return false;
+  if (row.channel.kind !== 'messenger' && row.channel.kind !== 'instagram') return false;
+  const creds = row.channel.credentials as ChannelCredentials;
+  if (!creds.access_token) return false;
+  try {
+    const res = await fetch(`${GRAPH}/me/messages?access_token=${creds.access_token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient: { id: row.binding.platformUserId }, message }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /** Find a channel by the webhook's object id (page_id or phone_number_id). */

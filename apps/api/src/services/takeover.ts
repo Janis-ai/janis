@@ -3,7 +3,7 @@ import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, messages, users } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
 import { mirrorToSlack, updateSlackAlert } from '../lib/slack.js';
-import { deliverToChannel } from '../lib/channels.js';
+import { channelBindingFor, deliverToChannel, releaseThreadControl, takeThreadControl } from '../lib/channels.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
 
@@ -69,6 +69,12 @@ export async function takeover(
     type: 'conversation',
     data: { id: updated.id, state: updated.state },
   });
+  // Meta handover protocol: pull the thread so operator sends aren't rejected
+  // while another receiver app (Chatfuel/ManyChat) technically holds it.
+  void (async () => {
+    const b = await channelBindingFor(db, conversationId);
+    if (b) await takeThreadControl(b.channel, b.platformUserId);
+  })();
   // Status note, not transcript — italic so it reads as a system line in Slack
   void mirrorToSlack(db, conversationId, ':raising_hand:', `_${user.name} took over_`);
   // Refresh the parent alert's buttons even when the action came from the
@@ -129,7 +135,13 @@ export async function humanReply(
       identity: { username: `${user.name} (operator)` },
     });
   }
-  void deliverToChannel(db, conversationId, text, attachments); // hosted channel: human → end user
+  // If the conv went 'human' without an explicit takeover (DF action, Page
+  // Inbox, stop-chat), we may not hold the thread yet — claim it before send.
+  void (async () => {
+    const b = await channelBindingFor(db, conversationId);
+    if (b) await takeThreadControl(b.channel, b.platformUserId);
+    await deliverToChannel(db, conversationId, text, attachments); // hosted channel: human → end user
+  })();
   await deliverWebhook(db, agent, 'message.human', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
@@ -188,7 +200,11 @@ export async function agentSend(
       identity: { username: `${agent.name} (agent)` },
     });
   }
-  void deliverToChannel(db, conversationId, text, attachments); // hosted channel: send to end user
+  void (async () => {
+    const b = await channelBindingFor(db, conversationId);
+    if (b) await takeThreadControl(b.channel, b.platformUserId);
+    await deliverToChannel(db, conversationId, text, attachments); // hosted channel: send to end user
+  })();
   await deliverWebhook(db, agent, 'agent.send', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
@@ -225,6 +241,12 @@ export async function resume(
     type: 'conversation',
     data: { id: updated.id, state: updated.state },
   });
+  // Hand the thread back to the bot platform's receiver app (legacy channels
+  // carry secondary_receiver_id); no-op for channels where we're primary.
+  void (async () => {
+    const b = await channelBindingFor(db, conversationId);
+    if (b) await releaseThreadControl(b.channel, b.platformUserId);
+  })();
   void mirrorToSlack(
     db,
     conversationId,

@@ -76,8 +76,13 @@ export async function processEvents(
           void mirrorToSlack(db, conv.id, label, message.text, { direction: message.direction });
         }
         // hosted channels: agent replies go straight to the end user —
-        // never internal notes (failures/handoffs/alerts), which are also 'out'
-        if (event.type === 'message_out') {
+        // never internal notes (failures/handoffs/alerts), which are also 'out'.
+        // payload.delivered marks replies already sent raw by the caller
+        // (legacy Dialogflow payload.facebook passthrough).
+        if (
+          event.type === 'message_out' &&
+          !(message.payload as { delivered?: boolean } | undefined)?.delivered
+        ) {
           const atts = (message.payload as { attachments?: AttachmentRef[] } | undefined)?.attachments;
           void deliverToChannel(db, conv.id, message.text, atts);
         }

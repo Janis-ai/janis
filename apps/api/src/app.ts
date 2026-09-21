@@ -32,6 +32,7 @@ import { onboardingRoutes } from './routes/onboarding.js';
 import { billingRoutes, stripeWebhookRoutes } from './routes/billing.js';
 import { workspaceRoutes } from './routes/workspace.js';
 import { webchatRoutes } from './routes/webchat.js';
+import { legacyWebhookRoutes } from './routes/legacy.js';
 
 export function createApp(db: Db) {
   const app = new Hono();
@@ -69,6 +70,7 @@ export function createApp(db: Db) {
   app.use('/slack/events', rateLimit({ scope: 'slack', windowMs: 60_000, max: 120 }));
   app.use('/slack/interactions', rateLimit({ scope: 'slack', windowMs: 60_000, max: 120 }));
   app.use('/channels/meta/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));
+  app.use('/messenger/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));
   app.use('/billing/stripe-webhook', rateLimit({ scope: 'stripe', windowMs: 60_000, max: 60 }));
   // Web-chat: visitors poll while the widget is open (~20/min); posts are stricter.
   app.use('/chat/*', rateLimit({ scope: 'chat-read', windowMs: 60_000, max: 120, methods: ['GET'] }));
@@ -80,6 +82,7 @@ export function createApp(db: Db) {
   app.route('/channels', channelWebhookRoutes(db)); // Meta webhooks (app-secret signed)
   app.route('/billing/stripe-webhook', stripeWebhookRoutes(db)); // Stripe-signed
   app.route('/chat', webchatRoutes(db)); // embeddable web-chat widget
+  app.route('/messenger', legacyWebhookRoutes(db)); // legacy Meta app path (webhook.janis.ai)
 
   // Embed script for the web-chat widget — plain JS, cacheable.
   const widgetJs = readFileSync(
@@ -142,7 +145,7 @@ export function createApp(db: Db) {
       // Unknown API-ish paths should 404, not render the SPA
       // (/channels and /billing are web pages; only /channels/meta/* and
       // /billing/stripe-webhook are API routes)
-      if (/^\/(api|auth|v1|slack|uploads|chat)(\/|$)/.test(c.req.path) ||
+      if (/^\/(api|auth|v1|slack|uploads|chat|messenger)(\/|$)/.test(c.req.path) ||
           /^\/widget\.js$/.test(c.req.path) ||
           /^\/channels\/meta(\/|$)/.test(c.req.path) ||
           /^\/billing\/stripe-webhook(\/|$)/.test(c.req.path)) {

@@ -180,6 +180,26 @@ export const AgentConfig = z.object({
   greeting: z.string().max(500).optional(),
   // set false to start conversations silently (default on)
   greeting_enabled: z.boolean().optional(),
+  // runtime engine: default hosted LLM; 'dialogflow' answers inbound via a
+  // migrated legacy Dialogflow ES bot; 'monitor' = migrated Chatfuel/ManyChat
+  // bot where the bot platform replies itself — Janis observes, runs the
+  // /messenger/client/* fallback endpoints, and tracks takeovers.
+  engine: z.enum(['hosted', 'dialogflow', 'monitor']).optional(),
+  dialogflow: z
+    .object({
+      project: z.string(),
+      lang: z.string().default('en'),
+    })
+    .optional(),
+  // migrated wordhopapi bot bookkeeping (see apps/api/src/routes/legacy.ts)
+  legacy: z
+    .object({
+      client_key: z.string(),
+      code_lang: z.string().optional(), // 'chatfuel' | 'manychat' | ...
+      // page-inbox pauses auto-resume after N minutes (legacy default ~5)
+      takeover_timeout: z.number().min(1).max(1440).optional(),
+    })
+    .optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 

@@ -18,6 +18,7 @@ export type { LlmSettings } from './llm.js';
 export { llmFor } from './llm.js';
 import type { LlmSettings } from './llm.js';
 import { llmFor } from './llm.js';
+import { runLegacyReply } from './legacyAgent.js';
 
 const MAX_KNOWLEDGE_CHARS = 80_000;
 
@@ -844,6 +845,16 @@ export async function runHostedEvent(
   // Only a human takeover (or archive) silences the agent — needs_human
   // is a flag for attention, not a pause
   if (!conv || conv.state === 'human' || conv.state === 'archived') return;
+
+  // Legacy engines: migrated wordhopapi bots. 'monitor' bots (Chatfuel-era —
+  // the bot platform replies on its own) never answer; 'dialogflow' bots
+  // answer via their imported DF agent.
+  const engine = (agent.config as { engine?: string }).engine;
+  if (engine === 'monitor') return;
+  if (engine === 'dialogflow') {
+    await runLegacyReply(db, agent, event, conv);
+    return;
+  }
 
   const externalId = conv.externalId;
   const t0 = Date.now();

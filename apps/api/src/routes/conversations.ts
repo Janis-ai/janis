@@ -26,6 +26,7 @@ import {
 } from '../services/takeover.js';
 import { requestSuggestion } from '../services/suggestions.js';
 import { fetchAvatar } from '../lib/avatar.js';
+import { channelBindingFor, releaseThreadControl } from '../lib/channels.js';
 
 const listQuery = z.object({
   state: z.enum(['active', 'needs_human', 'human', 'archived', 'unread', 'starred']).optional(),
@@ -317,7 +318,7 @@ export function conversationRoutes(db: Db) {
     const body = c.req.valid('json');
 
     const [owned] = await db
-      .select({ id: conversations.id })
+      .select({ id: conversations.id, state: conversations.state })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
       .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
@@ -335,6 +336,16 @@ export function conversationRoutes(db: Db) {
       })
       .where(eq(conversations.id, owned.id))
       .returning();
+
+    // Meta handover protocol: releasing back to 'active' returns the thread
+    // to the channel's configured secondary receiver (the bot platform's app).
+    // ('human' transitions go through the takeover service, already handled.)
+    if (body.state === 'active' && owned.state === 'human') {
+      void (async () => {
+        const b = await channelBindingFor(db, owned.id);
+        if (b) await releaseThreadControl(b.channel, b.platformUserId);
+      })();
+    }
 
     // Manually un-flagging back to the agent resolves open alerts — same
     // as takeover does, so future handoffs can re-alert
