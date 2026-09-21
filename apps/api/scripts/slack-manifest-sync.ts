@@ -61,6 +61,11 @@ const REQUIRED_BOT_EVENTS = [
 const REDIRECT_URL = `${API_ORIGIN}/slack/oauth/callback`;
 const EVENTS_URL = `${API_ORIGIN}/slack/events`;
 const INTERACTIONS_URL = `${API_ORIGIN}/slack/interactions`;
+const COMMANDS_URL = `${API_ORIGIN}/slack/commands`;
+
+// Commands the new API implements — their URLs repoint at us (the command
+// endpoint fans unresolved channels out to wordhop-slack). Others stay put.
+const PORTED_COMMANDS = new Set(['/pause', '/resume']);
 
 interface Manifest {
   oauth_config?: {
@@ -142,6 +147,14 @@ m.settings.interactivity = {
   request_url: INTERACTIONS_URL,
 };
 
+// Repoint the slash commands we've ported — the new endpoint forwards
+// unresolvable channels to wordhop-slack, so legacy channels keep working.
+const cmds = (m as { features?: { slash_commands?: { command?: string; url?: string }[] } })
+  .features?.slash_commands ?? [];
+for (const cmd of cmds) {
+  if (cmd.command && PORTED_COMMANDS.has(cmd.command)) cmd.url = COMMANDS_URL;
+}
+
 const diff = (label: string, b: unknown, a: unknown) => {
   if (JSON.stringify(b) !== JSON.stringify(a)) {
     console.log(`\n${label}:`);
@@ -156,9 +169,15 @@ diff('user scopes', before.oauth_config?.scopes?.user, m.oauth_config.scopes.use
 diff('redirect_urls', before.oauth_config?.redirect_urls, m.oauth_config.redirect_urls);
 diff('event_subscriptions', before.settings?.event_subscriptions, m.settings.event_subscriptions);
 diff('interactivity', before.settings?.interactivity, m.settings.interactivity);
+diff(
+  'slash_commands',
+  (before as { features?: { slash_commands?: unknown } }).features?.slash_commands,
+  (m as { features?: { slash_commands?: unknown } }).features?.slash_commands,
+);
 
-const slashCount = ((m as { features?: { slash_commands?: unknown[] } }).features?.slash_commands ?? []).length;
-if (slashCount) console.log(`\n${slashCount} slash command(s) left untouched (still point at legacy slack.janis.ai).`);
+const slashCount = ((m as { features?: { slash_commands?: { command?: string }[] } }).features?.slash_commands ?? [])
+  .filter((c) => !c.command || !PORTED_COMMANDS.has(c.command)).length;
+if (slashCount) console.log(`\n${slashCount} slash command(s) still point at legacy.`);
 
 if (JSON.stringify(before) === JSON.stringify(m)) {
   console.log('\nAlready in sync — nothing to do.');

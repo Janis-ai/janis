@@ -53,7 +53,7 @@ export async function takeover(
 
   const [updated] = await db
     .update(conversations)
-    .set({ state: 'human', assigneeId: user.id, humanSince: new Date(), resumeWarnedAt: null })
+    .set({ state: 'human', assigneeId: user.id, humanSince: new Date(), resumeWarnedAt: null, pauseMinutes: null })
     .where(eq(conversations.id, conversationId))
     .returning();
 
@@ -339,7 +339,7 @@ export async function resume(
 
   const [updated] = await db
     .update(conversations)
-    .set({ state: 'active', assigneeId: null, humanSince: null, resumeWarnedAt: null })
+    .set({ state: 'active', assigneeId: null, humanSince: null, resumeWarnedAt: null, pauseMinutes: null })
     .where(eq(conversations.id, conversationId))
     .returning();
 

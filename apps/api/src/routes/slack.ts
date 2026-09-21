@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, ne } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, conversations, slackInstallations, slackThreads, suggestions } from '../db/schema.js';
 import { env } from '../env.js';
@@ -113,6 +113,28 @@ export function slackApiRoutes(db: Db) {
   });
 
   return app;
+}
+
+/** Relay a signed payload verbatim to wordhop-slack and pass its response
+ * through — legacy surfaces (dialogs, menus, slash commands) keep working
+ * while the app's request URLs point at us. */
+async function forwardToLegacySlack(raw: string): Promise<Response> {
+  if (!env.legacySlackInteractionsUrl) return Response.json({ ok: true });
+  try {
+    const res = await fetch(env.legacySlackInteractionsUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: raw,
+      signal: AbortSignal.timeout(2500), // Slack's 3s ack budget
+    });
+    const text = await res.text();
+    return new Response(text, {
+      status: res.status,
+      headers: { 'content-type': res.headers.get('content-type') ?? 'text/plain' },
+    });
+  } catch {
+    return Response.json({ ok: true }); // legacy down — ack, don't retry-storm
+  }
 }
 
 /** Public endpoints Slack calls directly (verified by signing secret). */
@@ -333,26 +355,7 @@ export function slackPublicRoutes(db: Db) {
       payload.type === 'block_actions' &&
       (payload.actions?.length ?? 0) > 0 &&
       payload.actions!.every((a) => a.action_id?.startsWith('janis_'));
-    if (!isOurs) {
-      if (!env.legacySlackInteractionsUrl) return c.json({ ok: true });
-      try {
-        const res = await fetch(env.legacySlackInteractionsUrl, {
-          method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
-          body: raw,
-          signal: AbortSignal.timeout(2500), // Slack's 3s ack budget
-        });
-        const text = await res.text();
-        return new Response(text, {
-          status: res.status,
-          headers: {
-            'content-type': res.headers.get('content-type') ?? 'text/plain',
-          },
-        });
-      } catch {
-        return c.json({ ok: true }); // legacy down — ack so Slack doesn't retry-storm
-      }
-    }
+    if (!isOurs) return forwardToLegacySlack(raw);
 
     if (!payload.user) return c.json({ ok: true });
     const action = payload.actions![0];
@@ -500,6 +503,95 @@ export function slackPublicRoutes(db: Db) {
 
     // takeover()/resume() already refresh the alert message via updateSlackAlert
     return c.json({ ok: true });
+  });
+
+  // Slash commands: /pause [N|forever], /resume. Commands are channel-scoped —
+  // no thread context — so in a mapped channel we act on the most recently
+  // active conversation; anything we can't resolve forwards verbatim to
+  // wordhop-slack, which serves legacy per-conversation channels.
+  app.post('/commands', async (c) => {
+    const raw = await c.req.text();
+    if (!verify(c, raw)) return c.text('invalid signature', 401);
+    const f = new URLSearchParams(raw);
+    const command = f.get('command') ?? '';
+    const channelId = f.get('channel_id') ?? '';
+    const teamId = f.get('team_id') ?? '';
+    const slackUserId = f.get('user_id') ?? '';
+    const arg = f.get('text')?.trim() ?? '';
+
+    if (command !== '/pause' && command !== '/resume') return forwardToLegacySlack(raw);
+
+    const [inst] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, teamId))
+      .limit(1);
+    if (!inst) return forwardToLegacySlack(raw);
+
+    const user = await slackUserToMember(db, inst, slackUserId);
+    if (!user) return forwardToLegacySlack(raw);
+
+    const candidates = await db
+      .select({ conv: conversations })
+      .from(slackThreads)
+      .innerJoin(conversations, eq(slackThreads.conversationId, conversations.id))
+      .where(
+        and(
+          eq(slackThreads.installationId, inst.id),
+          eq(slackThreads.channelId, channelId),
+          ne(conversations.state, 'archived'),
+        ),
+      )
+      .orderBy(desc(conversations.lastMessageAt))
+      .limit(20);
+
+    // /pause: prefer the live takeover (re-pause updates duration), else the
+    // most recent conversation. /resume only makes sense on a human conv.
+    const target =
+      command === '/pause'
+        ? (candidates.find((r) => r.conv.state === 'human')?.conv ?? candidates[0]?.conv)
+        : candidates.find((r) => r.conv.state === 'human')?.conv;
+    if (!target) return forwardToLegacySlack(raw); // nothing of ours → maybe legacy
+
+    const displayName =
+      (target.userProfile as { name?: string } | null)?.name ?? target.externalId;
+
+    try {
+      if (command === '/pause') {
+        // /pause N | /pause forever | /pause (agent default)
+        let minutes: number | undefined;
+        if (/^(unlimited|forever|infinity)$/i.test(arg)) minutes = -1;
+        else if (arg) {
+          const n = parseInt(arg, 10);
+          if (Number.isFinite(n) && n > 0) minutes = n;
+        }
+        if (target.state !== 'human') {
+          await takeover(db, inst.workspaceId, target.id, user);
+        }
+        await db
+          .update(conversations)
+          .set({
+            humanSince: new Date(), // operator intent refreshes the window
+            resumeWarnedAt: null,
+            ...(minutes !== undefined ? { pauseMinutes: minutes } : {}),
+          })
+          .where(eq(conversations.id, target.id));
+        const span =
+          minutes === -1
+            ? 'until resumed manually'
+            : minutes !== undefined
+              ? `for ${minutes}m`
+              : `for the agent default`;
+        return c.json({ response_type: 'ephemeral', text: `⏸️ paused *${displayName}* ${span}` });
+      }
+      await resume(db, inst.workspaceId, target.id, user);
+      return c.json({ response_type: 'ephemeral', text: `▶️ resumed the agent on *${displayName}*` });
+    } catch (err) {
+      if (err instanceof TakeoverError) {
+        return c.json({ response_type: 'ephemeral', text: `:warning: ${err.message}` });
+      }
+      throw err;
+    }
   });
 
   return app;

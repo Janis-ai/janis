@@ -169,6 +169,13 @@
       "when": 1790006320380,
       "tag": "0023_auto_resume_default",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790009651302,
+      "tag": "0024_pause_minutes",
+      "breakpoints": true
     }
   ]
 }

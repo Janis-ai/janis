@@ -1,0 +1,1 @@
+ALTER TABLE "conversations" ADD COLUMN "pause_minutes" integer;

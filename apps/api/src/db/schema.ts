@@ -98,6 +98,7 @@ export const conversations = pgTable(
     }),
     humanSince: timestamp('human_since', { withTimezone: true }), // last human-side activity during takeover (auto-resume clock)
     resumeWarnedAt: timestamp('resume_warned_at', { withTimezone: true }), // pre-resume warning posted to Slack (legacy warningSent)
+    pauseMinutes: integer('pause_minutes'), // per-takeover duration override (null = agent default, -1 = never)
     isStarred: boolean('is_starred').notNull().default(false),
     isUnread: boolean('is_unread').notNull().default(false),
     // Rolling agent memory: everything before summaryUpTo is folded into

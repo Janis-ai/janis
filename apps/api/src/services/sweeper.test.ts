@@ -206,6 +206,34 @@ describe('sweepAutoResume', () => {
       first.resumeWarnedAt!.getTime(),
     );
   });
+
+  it('honors a per-conversation pause_minutes override', async () => {
+    const conv = await makeConversation('ar-override');
+    await takeover(db, admin.workspaceId, conv.id, admin);
+    // agent default is 30m; override to 60m → a 31m-old takeover stays human
+    await db
+      .update(conversations)
+      .set({ pauseMinutes: 60 })
+      .where(eq(conversations.id, conv.id));
+    await backdateHumanSince(conv.id, 31 * MIN);
+    expect(await sweepAutoResume(db)).toBe(0);
+    const [c] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(c.state).toBe('human');
+  });
+
+  it('pause_minutes -1 never auto-resumes or warns', async () => {
+    const conv = await makeConversation('ar-forever');
+    await takeover(db, admin.workspaceId, conv.id, admin);
+    await db
+      .update(conversations)
+      .set({ pauseMinutes: -1 })
+      .where(eq(conversations.id, conv.id));
+    await backdateHumanSince(conv.id, 10 * 60 * MIN); // ancient
+    expect(await sweepAutoResume(db)).toBe(0);
+    const [c] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(c.state).toBe('human');
+    expect(c.resumeWarnedAt).toBeNull();
+  });
 });
 
 describe('sweepSla', () => {

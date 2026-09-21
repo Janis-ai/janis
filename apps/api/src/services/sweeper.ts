@@ -26,59 +26,44 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
 }
 
 export async function sweepAutoResume(db: Db): Promise<number> {
-  const agentRows = await db
-    .select()
-    .from(agents)
-    .where(isNotNull(agents.autoResumeMinutes));
+  // Per-takeover override wins (legacy /pause N): pause_minutes null → agent
+  // default, -1 → never auto-resume.
+  const rows = await db
+    .select({ conv: conversations, agent: agents })
+    .from(conversations)
+    .innerJoin(agents, eq(conversations.agentId, agents.id))
+    .where(eq(conversations.state, 'human'));
+
   let fired = 0;
-  for (const agent of agentRows) {
-    const windowMs = agent.autoResumeMinutes! * 60_000;
-    const cutoff = new Date(Date.now() - windowMs);
+  const now = Date.now();
+  for (const { conv, agent } of rows) {
+    const minutes = conv.pauseMinutes ?? agent.autoResumeMinutes;
+    if (minutes == null || minutes < 0 || !conv.humanSince) continue;
+    const windowMs = minutes * 60_000;
+    const cutoff = new Date(now - windowMs);
     // Warn shortly before the takeover expires (legacy warningSent). Lead is
     // 60s or half the window, whichever is shorter.
     const warnCutoff = new Date(cutoff.getTime() + Math.min(60_000, windowMs / 2));
 
-    // Expired takeovers → resume (resume() clears resumeWarnedAt)
-    const stale = await db
-      .select()
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.agentId, agent.id),
-          eq(conversations.state, 'human'),
-          lt(conversations.humanSince, cutoff),
-        ),
-      );
-    for (const conv of stale) {
+    if (conv.humanSince < cutoff) {
       await resume(db, agent.workspaceId, conv.id, null);
       fired++;
+      continue;
     }
 
     // Inside the warning window, not yet warned for this humanSince → warn.
     // resumeWarnedAt < humanSince re-arms the warning when operator activity
     // pushes the clock out again.
-    const due = await db
-      .select()
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.agentId, agent.id),
-          eq(conversations.state, 'human'),
-          lt(conversations.humanSince, warnCutoff),
-          or(
-            isNull(conversations.resumeWarnedAt),
-            lt(conversations.resumeWarnedAt, conversations.humanSince),
-          ),
-        ),
-      );
-    for (const conv of due) {
+    const staleWarning =
+      conv.resumeWarnedAt == null || conv.resumeWarnedAt < conv.humanSince;
+    if (conv.humanSince < warnCutoff && staleWarning) {
       await db
         .update(conversations)
         .set({ resumeWarnedAt: new Date() })
         .where(eq(conversations.id, conv.id));
       const remainingMin = Math.max(
         1,
-        Math.round((conv.humanSince!.getTime() + windowMs - Date.now()) / 60_000),
+        Math.round((conv.humanSince.getTime() + windowMs - now) / 60_000),
       );
       void mirrorToSlack(
         db,
