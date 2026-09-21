@@ -118,7 +118,12 @@ const existingEvents = new Set(ev.bot_events ?? []);
 ev.request_url = EVENTS_URL;
 ev.bot_events = [...existingEvents, ...REQUIRED_BOT_EVENTS.filter((e) => !existingEvents.has(e))];
 
-m.settings.interactivity = { is_enabled: true, request_url: INTERACTIONS_URL };
+// Merge — legacy still owns message_menu_options_url (wordhopapi /intents)
+m.settings.interactivity = {
+  ...m.settings.interactivity,
+  is_enabled: true,
+  request_url: INTERACTIONS_URL,
+};
 
 const diff = (label: string, b: unknown, a: unknown) => {
   if (JSON.stringify(b) !== JSON.stringify(a)) {

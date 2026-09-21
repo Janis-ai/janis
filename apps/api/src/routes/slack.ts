@@ -119,13 +119,16 @@ export function slackApiRoutes(db: Db) {
 export function slackPublicRoutes(db: Db) {
   const app = new Hono();
 
-  const verify = (c: { req: { header: (n: string) => string | undefined } }, rawBody: string) =>
-    verifySlackSignature(
-      env.slackSigningSecret,
-      c.req.header('x-slack-request-timestamp'),
-      c.req.header('x-slack-signature'),
-      rawBody,
+  const verify = (c: { req: { header: (n: string) => string | undefined } }, rawBody: string) => {
+    const ts = c.req.header('x-slack-request-timestamp');
+    const sig = c.req.header('x-slack-signature');
+    return (
+      verifySlackSignature(env.slackSigningSecret, ts, sig, rawBody) ||
+      (env.slackSigningSecretAlt
+        ? verifySlackSignature(env.slackSigningSecretAlt, ts, sig, rawBody)
+        : false)
     );
+  };
 
   // OAuth redirect target
   app.get('/oauth/callback', async (c) => {

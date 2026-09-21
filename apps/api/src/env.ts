@@ -24,6 +24,9 @@ export const env = {
   slackClientId: process.env.SLACK_CLIENT_ID ?? '',
   slackClientSecret: process.env.SLACK_CLIENT_SECRET ?? '',
   slackSigningSecret: process.env.SLACK_SIGNING_SECRET ?? '',
+  // Second accepted signing secret — the test app's during the cutover, so
+  // requests signed by EITHER app verify while both are live.
+  slackSigningSecretAlt: process.env.SLACK_SIGNING_SECRET_ALT ?? '',
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? '',
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
   googleRedirectUri:
