@@ -73,7 +73,7 @@ export default function Docs() {
         takeover. Run it as-is or fork the source as your starting point.
       </p>
       <Code>{`docker run -e JANIS_API_KEY=jk_live_... -e LLM_API_KEY=sk-... \\
-  -p 9798:9798 ghcr.io/mnatha/janis-agent`}</Code>
+  -p 9798:9798 ghcr.io/janis-ai/janis-agent`}</Code>
       <p className="muted" style={{ lineHeight: 1.6 }}>
         Get the key from the agent's Connection tab → Generate API key (shown once).
         Then set your agent's webhook URL (console → Agents → your agent →

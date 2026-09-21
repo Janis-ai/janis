@@ -13,7 +13,7 @@ over, it goes quiet.
 
 ```bash
 docker run -e JANIS_API_KEY=jk_live_... -e LLM_API_KEY=sk-... \
-  -p 9798:9798 ghcr.io/mnatha/janis-agent
+  -p 9798:9798 ghcr.io/janis-ai/janis-agent
 ```
 
 Then set your agent's **webhook_url** (Agents → your agent → Connection) to

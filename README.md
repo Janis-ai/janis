@@ -95,7 +95,7 @@ console), answers `message.user` webhooks, drafts suggestions, and honors
 takeover.
 
     docker run -e JANIS_API_KEY=jk_live_... -e LLM_API_KEY=sk-... \
-      -p 9798:9798 ghcr.io/mnatha/janis-agent
+      -p 9798:9798 ghcr.io/janis-ai/janis-agent
 
 Locally: `JANIS_API_KEY=jk_live_... npm run start -w packages/agent-template`.
 Set the agent's `webhook_url` to the template's `/webhook`. It also serves

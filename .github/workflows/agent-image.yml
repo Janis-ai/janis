@@ -29,5 +29,5 @@ jobs:
           file: packages/agent-template/Dockerfile
           push: true
           tags: |
-            ghcr.io/mnatha/janis-agent:latest
-            ghcr.io/mnatha/janis-agent:${{ github.sha }}
+            ghcr.io/janis-ai/janis-agent:latest
+            ghcr.io/janis-ai/janis-agent:${{ github.sha }}
