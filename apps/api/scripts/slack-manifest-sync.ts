@@ -22,6 +22,8 @@
  *   - socket_mode, token_rotation, org_deploy: UNTOUCHED
  */
 
+export {};
+
 const APP_ID = process.env.SLACK_APP_ID ?? 'A15NCEA7K';
 const API_ORIGIN = process.env.API_ORIGIN ?? 'https://app.janis.ai';
 const TOKEN = process.env.SLACK_CONFIG_TOKEN;
@@ -90,7 +92,7 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-const { manifest } = (await slackApi('apps.manifest.export', { app_id: APP_ID })) as {
+const { manifest } = (await slackApi('apps.manifest.export', { app_id: APP_ID })) as unknown as {
   manifest: Manifest;
 };
 
