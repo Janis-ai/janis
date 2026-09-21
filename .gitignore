@@ -13,3 +13,6 @@ coverage
 # uploaded attachments (dev)
 uploads/
 apps/api/uploads/
+
+# legacy bot migration exports contain live credentials
+legacy-bots*.json
