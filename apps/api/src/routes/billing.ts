@@ -8,6 +8,32 @@ import { planForPrice, stripe } from '../lib/stripe.js';
 import { env } from '../env.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
+/** The stored Stripe customer may have been created under the other mode
+ *  (test vs live) — verify it exists under the active key, else re-create. */
+async function ensureStripeCustomer(
+  s: NonNullable<ReturnType<typeof stripe>>,
+  db: Db,
+  workspaceId: string,
+  ws: typeof workspaces.$inferSelect | undefined,
+  email: string,
+): Promise<string> {
+  const existing = ws?.stripeCustomerId;
+  if (existing) {
+    const found = await s.customers.retrieve(existing).catch(() => null);
+    if (found && !(found as { deleted?: boolean }).deleted) return existing;
+  }
+  const customer = await s.customers.create({
+    email,
+    name: ws?.name,
+    metadata: { workspace_id: workspaceId },
+  });
+  await db
+    .update(workspaces)
+    .set({ stripeCustomerId: customer.id })
+    .where(eq(workspaces.id, workspaceId));
+  return customer.id;
+}
+
 export function billingRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
@@ -162,19 +188,7 @@ export function billingRoutes(db: Db) {
     const workspaceId = c.get('workspaceId');
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
 
-    let customerId = ws?.stripeCustomerId ?? undefined;
-    if (!customerId) {
-      const customer = await s.customers.create({
-        email: c.get('user').email,
-        name: ws?.name,
-        metadata: { workspace_id: workspaceId },
-      });
-      customerId = customer.id;
-      await db
-        .update(workspaces)
-        .set({ stripeCustomerId: customerId })
-        .where(eq(workspaces.id, workspaceId));
-    }
+    const customerId = await ensureStripeCustomer(s, db, workspaceId, ws, c.get('user').email);
 
     // metered items ride on the same subscription: graduated message overage
     // + LLM pass-through; Stripe computes the bill from reported usage
@@ -228,11 +242,9 @@ export function billingRoutes(db: Db) {
     if (!s) return c.json({ error: 'billing not configured' }, 400);
     const workspaceId = c.get('workspaceId');
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
-    if (!ws?.stripeCustomerId) {
-      return c.json({ error: 'no billing account yet — pick a plan first' }, 400);
-    }
+    const customerId = await ensureStripeCustomer(s, db, workspaceId, ws, c.get('user').email);
     const session = await s.billingPortal.sessions.create({
-      customer: ws.stripeCustomerId,
+      customer: customerId,
       return_url: `${env.webOrigin}/billing`,
     });
     return c.json({ url: session.url });
