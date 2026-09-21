@@ -319,10 +319,40 @@ export function slackPublicRoutes(db: Db) {
       response_url?: string;
       actions?: { action_id: string; value?: string }[];
     };
-    if (payload.type !== 'block_actions' || !payload.actions?.length || !payload.user) {
-      return c.json({ ok: true });
+
+    // Fan-out: the real Janis Slack app has ONE Interactivity URL serving both
+    // systems during migration. Everything that isn't one of ours (janis_*
+    // block_actions) belongs to wordhop-slack — legacy dialogs, training
+    // buttons, followup menus — so relay the signed body verbatim and pass
+    // through its response (dialog_submission returns validation errors this
+    // way; block_actions ignore the body anyway).
+    const isOurs =
+      payload.type === 'block_actions' &&
+      (payload.actions?.length ?? 0) > 0 &&
+      payload.actions!.every((a) => a.action_id?.startsWith('janis_'));
+    if (!isOurs) {
+      if (!env.legacySlackInteractionsUrl) return c.json({ ok: true });
+      try {
+        const res = await fetch(env.legacySlackInteractionsUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: raw,
+          signal: AbortSignal.timeout(2500), // Slack's 3s ack budget
+        });
+        const text = await res.text();
+        return new Response(text, {
+          status: res.status,
+          headers: {
+            'content-type': res.headers.get('content-type') ?? 'text/plain',
+          },
+        });
+      } catch {
+        return c.json({ ok: true }); // legacy down — ack so Slack doesn't retry-storm
+      }
     }
-    const action = payload.actions[0];
+
+    if (!payload.user) return c.json({ ok: true });
+    const action = payload.actions![0];
     let convId = action.value;
     if (!convId) return c.json({ ok: true });
     // Send carries the suggestion id — resolve the conversation through it

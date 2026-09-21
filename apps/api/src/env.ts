@@ -49,6 +49,11 @@ export const env = {
   // old dashboard (Mongo transcripts) and wordhop-slack takeovers keep
   // working during the migration. Empty disables forwarding (dev/tests).
   legacyApiUrl: process.env.WORDHOP_API_URL ?? '',
+  // Legacy wordhop-slack interactivity endpoint — Slack apps have a single
+  // Interactivity URL, so once the real Janis app points at this service we
+  // fan out payloads we don't recognize (legacy dialogs, training buttons,
+  // followup menus) to wordhop-slack verbatim. Empty disables.
+  legacySlackInteractionsUrl: process.env.LEGACY_SLACK_INTERACTIONS_URL ?? '',
   // billing — custom rate card JSON {"model":{"input":n,"output":n}} ($/1M tokens)
   llmPrices: (() => {
     try {
