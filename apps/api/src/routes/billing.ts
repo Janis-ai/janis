@@ -3,7 +3,7 @@ import { and, eq, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, channels, usageEvents, workspaces } from '../db/schema.js';
 import { billingConfig, currentPeriod } from '../lib/billing.js';
-import { messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
+import { invalidateCapCache, messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
 import { planForPrice, stripe } from '../lib/stripe.js';
 import { env } from '../env.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -63,6 +63,7 @@ export function billingRoutes(db: Db) {
           .update(workspaces)
           .set({ plan: syncedPlan, stripeSubscriptionId: sub.id })
           .where(eq(workspaces.id, workspaceId));
+        invalidateCapCache(workspaceId);
         ws.plan = syncedPlan;
         ws.stripeSubscriptionId = sub.id;
       }
@@ -175,6 +176,7 @@ export function billingRoutes(db: Db) {
       .update(workspaces)
       .set({ plan })
       .where(eq(workspaces.id, c.get('workspaceId')));
+    invalidateCapCache(c.get('workspaceId'));
     return c.json({ plan });
   });
 
@@ -235,6 +237,7 @@ export function billingRoutes(db: Db) {
       .update(workspaces)
       .set({ plan: 'free', stripeSubscriptionId: null })
       .where(eq(workspaces.id, workspaceId));
+    invalidateCapCache(workspaceId);
     return c.json({ plan: 'free', at_period_end: false });
   });
 
@@ -294,6 +297,7 @@ export function stripeWebhookRoutes(db: Db) {
                 : session.subscription?.id,
           })
           .where(eq(workspaces.id, wsId));
+        invalidateCapCache(wsId);
       }
     } else if (
       event.type === 'customer.subscription.created' ||
@@ -304,7 +308,7 @@ export function stripeWebhookRoutes(db: Db) {
       const plan = planForPrice(priceId);
       const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
       if (plan) {
-        await db
+        const updated = await db
           .update(workspaces)
           .set({ plan, stripeSubscriptionId: sub.id })
           .where(
@@ -312,12 +316,14 @@ export function stripeWebhookRoutes(db: Db) {
               eq(workspaces.stripeSubscriptionId, sub.id),
               customerId ? eq(workspaces.stripeCustomerId, customerId) : undefined,
             ),
-          );
+          )
+          .returning({ id: workspaces.id });
+        for (const ws of updated) invalidateCapCache(ws.id);
       }
     } else if (event.type === 'customer.subscription.deleted') {
       const sub = event.data.object;
       const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
-      await db
+      const updated = await db
         .update(workspaces)
         .set({ plan: 'free', stripeSubscriptionId: null })
         .where(
@@ -325,7 +331,9 @@ export function stripeWebhookRoutes(db: Db) {
             eq(workspaces.stripeSubscriptionId, sub.id),
             customerId ? eq(workspaces.stripeCustomerId, customerId) : undefined,
           ),
-        );
+        )
+        .returning({ id: workspaces.id });
+      for (const ws of updated) invalidateCapCache(ws.id);
     }
 
     return c.json({ received: true });

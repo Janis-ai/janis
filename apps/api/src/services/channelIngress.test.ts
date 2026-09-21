@@ -104,6 +104,66 @@ describe('handleChannelMessage dedup', () => {
   });
 });
 
+describe('hard cap', () => {
+  it('drops capped inbound before storage, alerting once per conversation', async () => {
+    // Fresh workspace so the 60s cap cache from other tests can't interfere.
+    const [ws] = await db.insert(workspaces).values({ name: 'Capped' }).returning();
+    const { hash, preview } = generateApiKey();
+    const [cappedAgent] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'CappedBot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    const [cappedChannel] = await db
+      .insert(channels)
+      .values({
+        workspaceId: ws.id,
+        agentId: cappedAgent.id,
+        kind: 'messenger',
+        name: 'CappedPage',
+        credentials: { page_id: 'PGC', access_token: 'tok' },
+      })
+      .returning();
+
+    // Fill the free plan (250 included messages) on an existing conversation.
+    const [seedConv] = await db
+      .insert(conversations)
+      .values({ agentId: cappedAgent.id, externalId: 'seed' })
+      .returning();
+    for (let i = 0; i < 250; i++) {
+      await db.insert(messages).values({
+        conversationId: seedConv.id,
+        direction: 'in',
+        text: `seed ${i}`,
+      });
+    }
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const msg = { objectId: 'PGC', senderId: 'PSID-CAPPED', text: 'hello?' };
+    await handleChannelMessage(db, cappedChannel, msg);
+    await handleChannelMessage(db, cappedChannel, msg); // repeat — still silent
+
+    const convs = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.agentId, cappedAgent.id));
+    const inbound = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, convs.find((c) => c.externalId === 'messenger:PSID-CAPPED')!.id));
+    expect(inbound).toHaveLength(0); // nothing transcribed
+    expect(fetchMock).not.toHaveBeenCalled(); // no profile fetch, no webhook
+
+    const capAlerts = await db
+      .select()
+      .from(alerts)
+      .where(eq(alerts.conversationId, convs.find((c) => c.externalId === 'messenger:PSID-CAPPED')!.id));
+    expect(capAlerts).toHaveLength(1);
+    expect(capAlerts[0].detail).toContain('Message cap reached');
+  });
+});
+
 describe('conversation memory', () => {
   const seedMessages = async (convId: string, count: number) => {
     const t = Date.now() - count * 60_000;

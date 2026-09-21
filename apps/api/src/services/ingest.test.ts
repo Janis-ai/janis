@@ -11,7 +11,7 @@ import { generateApiKey, hashPassword } from '../lib/crypto.js';
 import { processEvents } from './ingest.js';
 import { takeover, humanReply, resume } from './takeover.js';
 import { saveUserProfile } from '../lib/hostedAgent.js';
-import { messagesInPeriod } from '../lib/plans.js';
+import { invalidateCapCache, messagesInPeriod } from '../lib/plans.js';
 
 let db: Db;
 let agent: typeof agents.$inferSelect;
@@ -291,6 +291,7 @@ describe('hard cap', () => {
         text: 'filler',
       })),
     );
+    invalidateCapCache(ws.id); // earlier tests cached this workspace's uncapped status
 
     const results = await processEvents(db, agent, [
       { type: 'message_in', conversation_id: 'capped', text: 'should not store' },

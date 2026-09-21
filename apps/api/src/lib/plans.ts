@@ -90,8 +90,21 @@ async function syncPlanFromStripe(
   return plan;
 }
 
+// Per-message cap checks would otherwise run a COUNT on every inbound —
+// the result is cached briefly. A missed webhook/upgrade un-caps within a
+// minute; a stale 'capped' for 60s just delays a new customer's reply.
+const CAP_CACHE_TTL_MS = 60_000;
+const capCache = new Map<string, { status: CapStatus; exp: number }>();
+
+/** Drop a cached cap entry — plan changes (webhooks, admin) un-cap instantly. */
+export function invalidateCapCache(workspaceId: string): void {
+  capCache.delete(workspaceId);
+}
+
 /** Hard cap check — only hard-cap plans (free) ever return capped. */
 export async function messageCap(db: Db, workspaceId: string): Promise<CapStatus> {
+  const hit = capCache.get(workspaceId);
+  if (hit && hit.exp > Date.now()) return hit.status;
   const [ws] = await db
     .select({ plan: workspaces.plan, stripeCustomerId: workspaces.stripeCustomerId })
     .from(workspaces)
@@ -107,5 +120,7 @@ export async function messageCap(db: Db, workspaceId: string): Promise<CapStatus
       capped = plan.overagePer1kCents === null && used >= plan.includedMessages;
     }
   }
-  return { plan, used, capped };
+  const status = { plan, used, capped };
+  capCache.set(workspaceId, { status, exp: Date.now() + CAP_CACHE_TTL_MS });
+  return status;
 }

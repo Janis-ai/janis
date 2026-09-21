@@ -1,9 +1,10 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, channelBindings, channels, conversations, messages } from '../db/schema.js';
+import { agents, alerts, channelBindings, channels, conversations, messages } from '../db/schema.js';
 import type { ChannelCredentials, InboundMessage } from '../lib/channels.js';
 import { resolveGreeting } from '../lib/greeting.js';
+import { messageCap } from '../lib/plans.js';
 import { deliverToChannel, fetchPlatformProfile, sendChannelTyping } from '../lib/channels.js';
 import { rehostAttachments } from '../lib/uploads.js';
 import { toMessage } from '../lib/serializers.js';
@@ -80,6 +81,46 @@ export async function handleChannelMessage(
     .limit(1);
 
   let conv = binding?.conversation;
+
+  // Hard-capped plan (free tier over its included volume): drop the inbound
+  // before any platform calls or transcript writes — no profile fetch, no
+  // greeting, no message row, no webhook delivery. First-time senders still
+  // get a conversation shell so the alert has a home; one open 'custom'
+  // alert per conversation keeps a flooded page from spamming alerts.
+  const cap = await messageCap(db, agent.workspaceId);
+  if (cap.capped) {
+    if (!conv) {
+      [conv] = await db
+        .insert(conversations)
+        .values({ agentId: channel.agentId, externalId, userProfile: baseProfile(channel, msg) })
+        .returning();
+      await db.insert(channelBindings).values({
+        channelId: channel.id,
+        conversationId: conv.id,
+        platformUserId: msg.senderId,
+      });
+    }
+    const [open] = await db
+      .select({ id: alerts.id })
+      .from(alerts)
+      .where(
+        and(
+          eq(alerts.conversationId, conv.id),
+          eq(alerts.type, 'custom'),
+          eq(alerts.status, 'open'),
+        ),
+      )
+      .limit(1);
+    if (!open) {
+      await db.insert(alerts).values({
+        conversationId: conv.id,
+        type: 'custom',
+        detail: `Message cap reached on ${cap.plan.name} plan (${cap.used}/${cap.plan.includedMessages} this period) — inbound messages are dropped until the plan is upgraded.`,
+      });
+    }
+    return;
+  }
+
   if (!conv) {
     // First contact — enrich with the platform profile (name/handle/picture)
     const fetched = await fetchPlatformProfile(channel, msg.senderId);
@@ -193,9 +234,6 @@ export async function handleChannelMessage(
   }
 
   // Forward to the agent unless a human owns it — needs_human is just a flag.
-  // A capped workspace drops the message before storage (result undefined),
-  // but still runs deliverWebhook: its cap check logs the blocked delivery
-  // and raises the "cap reached" alert so the operator sees the dropped traffic.
   const state = result?.conversation_state ?? conv.state;
   if (state !== 'human' && state !== 'archived' && (agent.webhookUrl || agent.hosted)) {
     void sendChannelTyping(channel, msg.senderId);
