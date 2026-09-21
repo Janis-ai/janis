@@ -193,6 +193,24 @@ describe('POST /webhook echoes', () => {
       expect(after.tags).toContain('page-inbox-takeover');
     }
   });
+
+  it('dedupes the echo of our own send — no human dup, no takeover', async () => {
+    vi.stubGlobal('fetch', stubFetches());
+    const conv = await convByUser();
+    await db
+      .update(conversations)
+      .set({ state: 'active', humanSince: null, tags: [] })
+      .where(eq(conversations.id, conv.id));
+    // Our send stamped its Meta message_id on the stored 'out' row
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'out', text: 'agent reply', payload: { mid: 'echo.ours' } });
+    await postWebhook(entry('PGLEG', [echo('agent reply', undefined, 'echo.ours')], []));
+    const msgs = await msgsFor(conv.id);
+    expect(msgs.filter((m) => m.direction === 'human' && m.text === 'agent reply')).toHaveLength(0);
+    const [after] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(after.state).toBe('active');
+  });
 });
 
 describe('POST /client/:key/chatfuel/fallback', () => {

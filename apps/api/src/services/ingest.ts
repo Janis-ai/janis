@@ -84,7 +84,7 @@ export async function processEvents(
           !(message.payload as { delivered?: boolean } | undefined)?.delivered
         ) {
           const atts = (message.payload as { attachments?: AttachmentRef[] } | undefined)?.attachments;
-          void deliverToChannel(db, conv.id, message.text, atts);
+          void deliverToChannel(db, conv.id, message.text, atts, { messageId: message.id });
         }
       }
     }
@@ -243,7 +243,7 @@ export async function processEvents(
           })
           .returning();
         bus.publish(agent.workspaceId, { type: 'message', data: toMessage(note) });
-        void deliverToChannel(db, conv.id, notice);
+        void deliverToChannel(db, conv.id, notice, undefined, { messageId: note.id });
       }
     }
 

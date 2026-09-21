@@ -1,8 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, channelBindings, channels, conversations } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations, messages } from '../db/schema.js';
 import { env } from '../env.js';
 import { emitChatResponse } from './legacySocket.js';
 
@@ -233,6 +233,9 @@ export interface SendOptions {
   /** Suggested replies — tappable buttons on Messenger/IG quick replies and
    * WhatsApp interactive buttons. 20-char titles; WhatsApp shows max 3. */
   quickReplies?: string[];
+  /** Message row to stamp with Meta's message_id after a successful send —
+   * lets the webhook echo of our own delivery be deduped by mid. */
+  messageId?: string;
 }
 
 /** Send a message (text and/or attachments) to a platform user through the channel's credentials. */
@@ -242,11 +245,11 @@ export async function sendChannelMessage(
   text: string,
   attachments?: AttachmentRef[],
   opts?: SendOptions,
-): Promise<boolean> {
+): Promise<string | null> {
   // webchat has no push channel — the widget polls for new messages
-  if (channel.kind === 'webchat') return true;
+  if (channel.kind === 'webchat') return null;
   const creds = channel.credentials as ChannelCredentials;
-  if (!creds.access_token) return false;
+  if (!creds.access_token) return null;
   const atts = attachments ?? [];
   const qrs = (opts?.quickReplies ?? []).map((t) => t.trim().slice(0, 20)).filter(Boolean);
   try {
@@ -291,20 +294,24 @@ export async function sendChannelMessage(
           },
         })) && ok;
       }
-      return ok;
+      return null;
     }
-    // messenger / instagram — page access token
-    const send = async (message: unknown) => {
+    // messenger / instagram — page access token. Meta echoes our sends back
+    // as webhook events; the returned message_id is stamped on the stored
+    // row so midSeen can recognise the echo.
+    const send = async (message: unknown): Promise<string | null> => {
       const res = await fetch(`${GRAPH}/me/messages?access_token=${creds.access_token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ recipient: { id: platformUserId }, message }),
       });
-      return res.ok;
+      if (!res.ok) return null;
+      const data = (await res.json().catch(() => null)) as { message_id?: string } | null;
+      return data?.message_id ?? null;
     };
-    let ok = true;
+    let mid: string | null = null;
     if (text.trim()) {
-      ok = await send(
+      mid = await send(
         qrs.length
           ? {
               text,
@@ -318,16 +325,16 @@ export async function sendChannelMessage(
       );
     }
     for (const a of atts) {
-      ok = (await send({
+      mid = (await send({
         attachment: {
           type: mediaKind(a.type, false),
           payload: { url: absoluteAttachmentUrl(a), is_reusable: true },
         },
-      })) && ok;
+      })) ?? mid;
     }
-    return ok;
+    return mid;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -439,7 +446,16 @@ export async function deliverToChannel(
     .where(eq(agents.id, row.conv.agentId))
     .limit(1);
   if (agent && (await emitChatResponse(agent, row.binding.platformUserId, text))) return;
-  await sendChannelMessage(row.channel, row.binding.platformUserId, text, attachments, opts).catch(() => {});
+  const mid = await sendChannelMessage(row.channel, row.binding.platformUserId, text, attachments, opts).catch(
+    () => null,
+  );
+  if (mid && opts?.messageId) {
+    await db
+      .update(messages)
+      .set({ payload: sql`payload || ${JSON.stringify({ mid })}::jsonb` })
+      .where(eq(messages.id, opts.messageId))
+      .catch(() => {});
+  }
 }
 
 /**

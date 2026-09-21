@@ -627,14 +627,13 @@ async function takeoverFromPageInbox(
   msg: { mid?: string; text?: string },
 ): Promise<void> {
   const conv = await convFor(db, channel, platformUserId);
-  if (!conv) return;
+  if (!conv || (await midSeen(db, conv.id, msg.mid))) return;
   const tags = conv.tags.includes(PAGE_INBOX_TAG) ? conv.tags : [...conv.tags, PAGE_INBOX_TAG];
   const [updated] = await db
     .update(conversations)
     .set({ state: 'human', humanSince: new Date(), tags })
     .where(eq(conversations.id, conv.id))
     .returning();
-  if (await midSeen(db, conv.id, msg.mid)) return;
   const [note] = await db
     .insert(messages)
     .values({

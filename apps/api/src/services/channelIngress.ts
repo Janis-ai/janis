@@ -156,7 +156,7 @@ export async function handleChannelMessage(
       const replies = creds.quick_replies?.length
         ? creds.quick_replies
         : (((agent.config ?? {}) as { quick_replies?: string[] }).quick_replies ?? []);
-      void deliverToChannel(db, conv.id, greeting, undefined, { quickReplies: replies });
+      void deliverToChannel(db, conv.id, greeting, undefined, { quickReplies: replies, messageId: note.id });
     }
   } else {
     // Keep WhatsApp names and channel identity current on every message;

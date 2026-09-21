@@ -159,7 +159,7 @@ export async function humanReply(
   void (async () => {
     const b = await channelBindingFor(db, conversationId);
     if (b) await takeThreadControl(b.channel, b.platformUserId);
-    await deliverToChannel(db, conversationId, text, attachments); // hosted channel: human → end user
+    await deliverToChannel(db, conversationId, text, attachments, { messageId: message.id }); // hosted channel: human → end user
   })();
   await deliverWebhook(db, agent, 'message.human', {
     conversation_id: conversation.externalId,
@@ -222,7 +222,7 @@ export async function agentSend(
   void (async () => {
     const b = await channelBindingFor(db, conversationId);
     if (b) await takeThreadControl(b.channel, b.platformUserId);
-    await deliverToChannel(db, conversationId, text, attachments); // hosted channel: send to end user
+    await deliverToChannel(db, conversationId, text, attachments, { messageId: message.id }); // hosted channel: send to end user
   })();
   await deliverWebhook(db, agent, 'agent.send', {
     conversation_id: conversation.externalId,
