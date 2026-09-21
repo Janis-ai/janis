@@ -161,11 +161,22 @@ for (const integ of integrations) {
       (chans.channels.find((ch) => /janis|wordhop|alerts?/i.test(ch.name)) ??
         chans.channels.find((ch) => ch.name === 'general'));
     if (pick) {
-      await db
-        .update(slackInstallations)
-        .set({ alertChannelId: pick.id })
-        .where(eq(slackInstallations.id, instId));
-      console.log(`     alert channel → #${pick.name}`);
+      // chat.postMessage fails not_in_channel if the bot isn't a member —
+      // join public channels; private ones need a human invite (flag it).
+      const joined = await slackApi(integ.bot_access_token, 'conversations.join', {
+        channel: pick.id,
+      }).catch(() => null);
+      if (joined?.ok || (joined as { error?: string } | null)?.error === 'already_in_channel') {
+        await db
+          .update(slackInstallations)
+          .set({ alertChannelId: pick.id })
+          .where(eq(slackInstallations.id, instId));
+        console.log(`     alert channel → #${pick.name} (bot joined)`);
+      } else {
+        console.log(
+          `     picked #${pick.name} but bot can't join (${(joined as { error?: string } | null)?.error ?? 'unknown'}) — invite it or set another channel in Settings`,
+        );
+      }
     } else {
       console.log('     no alert channel picked — set it in Settings → Slack');
     }
@@ -185,3 +196,4 @@ console.log(
     `\nNext: MONGODB_URI=… node scripts/slack-migration.js mark migrated-teams.json   (in wordhop-slack)` +
     `\nThen: heroku restart -a wordhop-slack`,
 );
+process.exit(0); // postgres.js keeps the event loop alive otherwise
