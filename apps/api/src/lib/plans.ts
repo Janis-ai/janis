@@ -12,6 +12,8 @@ export interface Plan {
   // sell price per 1k messages beyond the included amount.
   // null = hard cap (free tier): inbound messages are dropped, not transcribed
   overagePer1kCents: number | null;
+  // never offered on the billing page — comped/internal accounts only
+  hidden?: boolean;
 }
 
 export const PLANS: Record<string, Plan> = {
@@ -19,6 +21,14 @@ export const PLANS: Record<string, Plan> = {
   starter: { name: 'Starter', baseCents: 2900, includedMessages: 2_000, overagePer1kCents: 800 },
   pro: { name: 'Pro', baseCents: 9900, includedMessages: 20_000, overagePer1kCents: 500 },
   scale: { name: 'Scale', baseCents: 29900, includedMessages: 100_000, overagePer1kCents: 300 },
+  // $0 forever, uncapped — internal accounts. No Stripe price, hidden from checkout.
+  internal: {
+    name: 'Internal',
+    baseCents: 0,
+    includedMessages: Number.MAX_SAFE_INTEGER,
+    overagePer1kCents: 0,
+    hidden: true,
+  },
 };
 
 export function planFor(key: string | null | undefined): Plan {

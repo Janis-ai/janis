@@ -114,7 +114,9 @@ export function billingRoutes(db: Db) {
       period,
       stripe_enabled: Boolean(env.stripeSecret),
       has_billing_account: Boolean(ws?.stripeCustomerId),
-      plans: Object.entries(PLANS).map(([key, p]) => ({
+      plans: Object.entries(PLANS)
+        .filter(([, p]) => !p.hidden)
+        .map(([key, p]) => ({
         key,
         name: p.name,
         base_cents: p.baseCents,

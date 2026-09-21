@@ -12,7 +12,8 @@
     "db:generate": "drizzle-kit generate",
     "seed": "tsx src/seed.ts",
     "demo-agent": "tsx scripts/demo-agent.ts",
-    "import-legacy": "tsx scripts/import-legacy.ts"
+    "import-legacy": "tsx scripts/import-legacy.ts",
+    "set-plan": "tsx scripts/set-plan.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
