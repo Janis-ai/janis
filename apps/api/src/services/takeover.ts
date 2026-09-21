@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, messages, users } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
-import { mirrorToSlack, updateSlackAlert } from '../lib/slack.js';
+import { mirrorToSlack, slackNotice, updateSlackAlert } from '../lib/slack.js';
 import { channelBindingFor, deliverToChannel, releaseThreadControl, takeThreadControl } from '../lib/channels.js';
 import { emitChannelUpdate } from '../lib/legacySocket.js';
 import { deliverWebhook } from '../lib/webhooks.js';
@@ -79,8 +79,23 @@ export async function takeover(
     // carry it lazily on the next inbound message.
     if (b) await emitChannelUpdate(agent, b.platformUserId, true);
   })();
-  // Status note, not transcript — italic so it reads as a system line in Slack
-  void mirrorToSlack(db, conversationId, ':raising_hand:', `_${user.name} took over_`);
+  // Status note in the transcript (internal — never sent to the customer)
+  // and in Slack. slackNotice is awaited so a fresh thread row exists before
+  // updateSlackAlert tries to restyle it.
+  const [note] = await db
+    .insert(messages)
+    .values({
+      conversationId,
+      direction: 'human',
+      authorId: user.id,
+      text: `${user.name} took over`,
+      payload: { internal: true, event: 'takeover' },
+    })
+    .returning();
+  bus.publish(workspaceId, { type: 'message', data: toMessage(note) });
+  await slackNotice(db, workspaceId, updated, ':raising_hand:', `_${user.name} took over_`).catch(
+    (e) => console.error('slack notice:', e),
+  );
   // Refresh the parent alert's buttons even when the action came from the
   // console — otherwise the Slack message keeps offering a stale action.
   void updateSlackAlert(db, workspaceId, updated, agent).catch(() => {});
@@ -354,12 +369,24 @@ export async function resume(
     if (b) await releaseThreadControl(b.channel, b.platformUserId);
     if (b) await emitChannelUpdate(agent, b.platformUserId, false);
   })();
-  void mirrorToSlack(
+  const [note] = await db
+    .insert(messages)
+    .values({
+      conversationId,
+      direction: 'human',
+      authorId: user?.id ?? null,
+      text: user ? `${user.name} resumed the agent` : 'auto-resumed to the agent',
+      payload: { internal: true, event: 'resume' },
+    })
+    .returning();
+  bus.publish(workspaceId, { type: 'message', data: toMessage(note) });
+  await slackNotice(
     db,
-    conversationId,
+    workspaceId,
+    updated,
     ':arrow_forward:',
     user ? `_${user.name} resumed the agent_` : '_auto-resumed to the agent_',
-  );
+  ).catch((e) => console.error('slack notice:', e));
   void updateSlackAlert(db, workspaceId, updated, agent).catch(() => {});
   await deliverWebhook(db, agent, 'human.resume', {
     conversation_id: conversation.externalId,

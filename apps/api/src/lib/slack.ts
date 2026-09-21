@@ -607,6 +607,54 @@ export async function mirrorToSlack(
   }
 }
 
+/** Post a lifecycle notice (takeover/resume) into the conversation's Slack
+ * thread. If the conversation never escalated it has no thread — post the
+ * notice to the alert channel top-level and adopt it as the thread anchor so
+ * later mirrors, warnings, and the refreshed alert card have somewhere to go.
+ * Always best-effort: failures log and return, never throw. */
+export async function slackNotice(
+  db: Db,
+  workspaceId: string,
+  conv: ConversationRow,
+  label: string,
+  text: string,
+): Promise<void> {
+  const [thread] = await db
+    .select({ slackThreads, installation: slackInstallations })
+    .from(slackThreads)
+    .innerJoin(slackInstallations, eq(slackThreads.installationId, slackInstallations.id))
+    .where(eq(slackThreads.conversationId, conv.id))
+    .limit(1);
+  if (thread) {
+    const res = await slackApi(thread.installation.botToken, 'chat.postMessage', {
+      channel: thread.slackThreads.channelId,
+      thread_ts: thread.slackThreads.ts,
+      text: `${label} ${text}`,
+    });
+    if (!res.ok) console.error('slack notice failed:', res.error);
+    return;
+  }
+  const inst = await getInstallation(db, workspaceId);
+  if (!inst?.alertChannelId) return;
+  const res = await slackApi<{ channel: string; ts: string }>(inst.botToken, 'chat.postMessage', {
+    channel: inst.alertChannelId,
+    text: `${label} ${text} — \`${conv.externalId}\``,
+  });
+  if (!res.ok) {
+    console.error('slack notice failed:', res.error);
+    return;
+  }
+  await db
+    .insert(slackThreads)
+    .values({
+      conversationId: conv.id,
+      installationId: inst.id,
+      channelId: res.channel,
+      ts: res.ts,
+    })
+    .onConflictDoNothing({ target: slackThreads.conversationId });
+}
+
 /** Look up the Slack thread for a channel+thread_ts pair. */
 export async function findThread(db: Db, channelId: string, threadTs: string) {
   const [row] = await db
