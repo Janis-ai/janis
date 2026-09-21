@@ -169,18 +169,28 @@ export async function handleChannelMessage(
 
   // Store + evaluate rules
   const hasFiles = (msg.attachments?.length ?? 0) > 0;
-  const [result] = await processEvents(db, agent, [
-    {
-      type: 'message_in',
-      conversation_id: externalId,
-      text: msg.text || (msg.attachments ?? []).map((a) => `📎 ${a.name}`).join('\n'),
-      payload: {
-        ...(msg.messageId ? { mid: msg.messageId } : {}),
-        ...(hasFiles ? { attachments: msg.attachments } : {}),
+  let result: Awaited<ReturnType<typeof processEvents>>[number] | undefined;
+  try {
+    [result] = await processEvents(db, agent, [
+      {
+        type: 'message_in',
+        conversation_id: externalId,
+        text: msg.text || (msg.attachments ?? []).map((a) => `📎 ${a.name}`).join('\n'),
+        payload: {
+          ...(msg.messageId ? { mid: msg.messageId } : {}),
+          ...(hasFiles ? { attachments: msg.attachments } : {}),
+        },
+        user: { id: msg.senderId },
       },
-      user: { id: msg.senderId },
-    },
-  ]);
+    ]);
+  } catch (err) {
+    // The same Meta event delivered concurrently via webhook + relay races
+    // the dedup select above — the mid unique index settles it: the loser
+    // is a dup, not an error.
+    const e = err as { code?: string; constraint_name?: string };
+    if (e.code === '23505' && e.constraint_name === 'messages_in_mid') return;
+    throw err;
+  }
 
   // Forward to the agent unless a human owns it — needs_human is just a flag.
   // A capped workspace drops the message before storage (result undefined),
