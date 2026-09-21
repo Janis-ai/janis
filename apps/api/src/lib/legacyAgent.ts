@@ -5,7 +5,7 @@ import { processEvents } from '../services/ingest.js';
 import { loadSecretsMap } from './secrets.js';
 import { detectIntent, type ServiceAccount } from './dialogflow.js';
 import { sendRawFbMessage } from './channels.js';
-import { reportLegacyUsage } from './legacyBilling.js';
+import { reportLegacyUsage, isLegacyPaid } from './legacyBilling.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -53,6 +53,9 @@ export async function runLegacyReply(
   }
   const text = event.text?.trim();
   if (!text) return;
+
+  // paywall — same gate as the fallback path: inactive legacy sub → no DF call
+  if (!(await isLegacyPaid(agent))) return;
 
   try {
     const r = await detectIntent(dfCfg.project, conv.id, text, dfCfg.lang ?? 'en', sa);

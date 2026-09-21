@@ -12,7 +12,7 @@ import { env } from '../env.js';
 import { detectIntentChain, type LegacyContext, type ServiceAccount } from '../lib/dialogflow.js';
 import { buildChatfuelPayload, buildManychatPayload } from '../lib/legacyFormat.js';
 import { loadSecretsMap } from '../lib/secrets.js';
-import { reportLegacyUsage } from '../lib/legacyBilling.js';
+import { reportLegacyUsage, isLegacyPaid } from '../lib/legacyBilling.js';
 
 const PAGE_INBOX_TAG = 'page-inbox-takeover';
 const DF_PAUSE_TAG = 'df-pause';
@@ -427,6 +427,9 @@ async function runFallback(
     ]);
   }
   if (conv.state === 'human' && !sendtouser) return empty;
+
+  // paywall — non-paying/expired legacy subs get silence, not a DF call
+  if (!(await isLegacyPaid(agent))) return empty;
 
   const secrets = await loadSecretsMap(db, agent.id);
   let sa: ServiceAccount | undefined;

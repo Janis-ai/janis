@@ -112,7 +112,12 @@ beforeAll(async () => {
         legacy: { client_key: CLIENT_KEY, code_lang: 'chatfuel' },
         greeting_enabled: false,
       },
-      metadata: { legacy_client_key: CLIENT_KEY },
+      metadata: {
+        legacy_client_key: CLIENT_KEY,
+        // paywall needs linkage; the fake sub id fails the Stripe fetch and
+        // isLegacyPaid fails open, keeping the test hermetic
+        legacy_stripe: { subscription_id: 'sub_test_fake' },
+      },
     })
     .returning();
   await db.insert(agentSecrets).values({

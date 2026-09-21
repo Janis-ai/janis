@@ -74,6 +74,21 @@ async function fetchSubscription(subId: string): Promise<SubInfo | null> {
 }
 
 /**
+ * Is this migrated bot backed by a live paid/trialing legacy subscription?
+ * Mirrors wordhopapi's checkQuantityForBasic gate: no linkage or a
+ * canceled/expired sub → refuse the (paid) Dialogflow call. Fails OPEN when
+ * Stripe is unreachable so a billing API blip never silences real bots.
+ */
+export async function isLegacyPaid(agent: AgentRow): Promise<boolean> {
+  const ls = ((agent.metadata ?? {}) as { legacy_stripe?: LegacyStripe }).legacy_stripe;
+  if (!ls?.subscription_id) return false;
+  if (!env.stripeSecret) return true; // no key to check with (dev) — allow
+  const sub = await fetchSubscription(ls.subscription_id);
+  if (!sub) return true;
+  return sub.status === 'active' || sub.status === 'trialing';
+}
+
+/**
  * Report one handled user turn to the legacy Stripe meter. Fire-and-forget
  * by contract: never throws, never blocks the reply path.
  */

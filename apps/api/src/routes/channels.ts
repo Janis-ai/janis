@@ -9,6 +9,7 @@ import { agents, channelBindings, channels } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import {
   findChannelByObjectId,
+  invalidateChannelCache,
   parseMetaWebhook,
   resolveChatIdentity,
   setGetStartedButton,
@@ -99,6 +100,7 @@ export function channelApiRoutes(db: Db) {
         credentials,
       })
       .returning();
+    invalidateChannelCache();
     // Get Started button on the page profile — best-effort, never block creation
     void setGetStartedButton(body.kind, credentials).catch(() => {});
     return c.json({ channel: toChannel(row, agent.name) }, 201);
@@ -136,6 +138,7 @@ export function channelApiRoutes(db: Db) {
       .set({ name: body.name ?? row.name, credentials: creds })
       .where(eq(channels.id, row.id))
       .returning();
+    invalidateChannelCache();
     // Re-apply Get Started on edits — covers channels created before this existed
     void setGetStartedButton(row.kind, creds).catch(() => {});
     const [agent] = await db.select({ name: agents.name }).from(agents).where(eq(agents.id, row.agentId)).limit(1);
@@ -152,6 +155,7 @@ export function channelApiRoutes(db: Db) {
     // Bindings reference channels without cascade — remove them first.
     await db.delete(channelBindings).where(eq(channelBindings.channelId, row.id));
     await db.delete(channels).where(eq(channels.id, row.id));
+    invalidateChannelCache();
     return c.json({ ok: true });
   });
 

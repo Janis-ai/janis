@@ -465,9 +465,21 @@ export async function sendRawFbMessage(
 }
 
 /** Find a channel by the webhook's object id (page_id or phone_number_id). */
+// Channel list cache — Meta fires a webhook per event per subscribed page,
+// including thousands of dead legacy pages that will never resolve. A short
+// TTL keeps new channels visible quickly while absorbing that noise.
+let channelListCache: { at: number; rows: ChannelRow[] } | null = null;
+const CHANNEL_CACHE_TTL_MS = 10_000;
+
+export function invalidateChannelCache() {
+  channelListCache = null;
+}
+
 export async function findChannelByObjectId(db: Db, objectId: string) {
-  const all = await db.select().from(channels);
-  return all.find((ch) => {
+  if (!channelListCache || Date.now() - channelListCache.at > CHANNEL_CACHE_TTL_MS) {
+    channelListCache = { at: Date.now(), rows: await db.select().from(channels) };
+  }
+  return channelListCache.rows.find((ch) => {
     const c = ch.credentials as ChannelCredentials;
     return c.page_id === objectId || c.phone_number_id === objectId;
   });
