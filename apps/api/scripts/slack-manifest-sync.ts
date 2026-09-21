@@ -106,9 +106,26 @@ m.oauth_config.scopes ??= {};
 m.settings ??= {};
 
 const existingScopes = new Set(m.oauth_config.scopes.bot ?? []);
-m.oauth_config.scopes.bot = [...existingScopes, ...REQUIRED_BOT_SCOPES.filter((s) => !existingScopes.has(s))];
+m.oauth_config.scopes.bot = [
+  ...existingScopes,
+  'commands', // required by the app's existing slash commands
+  ...REQUIRED_BOT_SCOPES.filter((s) => !existingScopes.has(s)),
+];
 
-const existingRedirects = new Set(m.oauth_config.redirect_urls ?? []);
+// v1-era leftovers fail modern validation — translate or drop:
+//   commands                → moved to bot scopes above
+//   bot                     → v2 expresses it via features.bot_user
+//   chat:write:user         → user scope 'chat:write'
+//   files:write:user        → user scope 'files:write'
+const userScopes = (m.oauth_config.scopes.user ?? [])
+  .filter((s) => s !== 'bot' && s !== 'commands')
+  .map((s) => (s === 'chat:write:user' ? 'chat:write' : s === 'files:write:user' ? 'files:write' : s));
+m.oauth_config.scopes.user = [...new Set(userScopes)];
+
+// http:// redirect URLs are rejected — the https equivalents already exist
+const existingRedirects = new Set(
+  (m.oauth_config.redirect_urls ?? []).filter((u) => u.startsWith('https://')),
+);
 if (!existingRedirects.has(REDIRECT_URL)) {
   m.oauth_config.redirect_urls = [...existingRedirects, REDIRECT_URL];
 }
@@ -135,6 +152,7 @@ const diff = (label: string, b: unknown, a: unknown) => {
 
 console.log(`Slack app ${APP_ID} manifest sync → ${API_ORIGIN}\n`);
 diff('bot scopes', before.oauth_config?.scopes?.bot, m.oauth_config.scopes.bot);
+diff('user scopes', before.oauth_config?.scopes?.user, m.oauth_config.scopes.user);
 diff('redirect_urls', before.oauth_config?.redirect_urls, m.oauth_config.redirect_urls);
 diff('event_subscriptions', before.settings?.event_subscriptions, m.settings.event_subscriptions);
 diff('interactivity', before.settings?.interactivity, m.settings.interactivity);
@@ -154,8 +172,20 @@ if (oldEventsUrl && oldEventsUrl !== EVENTS_URL) {
   console.log(`\n⚠️  event_subscriptions.request_url was ${oldEventsUrl} — repointing diverts those events to the new API.`);
 }
 
+// Preflight — update rejects the whole manifest on any invalid field
+const v = await slackApi('apps.manifest.validate', {
+  app_id: APP_ID,
+  manifest: JSON.stringify(m),
+});
+if (!v.ok) {
+  console.error('\nValidation failed:');
+  console.error(JSON.stringify(v.errors, null, 2));
+  process.exit(1);
+}
+console.log('\nValidation: clean.');
+
 if (!APPLY) {
-  console.log('\nDry run — pass --apply to write.');
+  console.log('Dry run — pass --apply to write.');
   process.exit(0);
 }
 
