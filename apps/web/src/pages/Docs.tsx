@@ -67,14 +67,15 @@ export default function Docs() {
 
       <h2>Quickstart — the agent template</h2>
       <p className="muted" style={{ lineHeight: 1.6 }}>
-        <span className="mono">@janis/agent-template</span> is a runnable reference
-        agent: it polls its console-managed config, answers user messages with any
-        OpenAI-compatible LLM, and honors takeover. Run it as-is or fork it.
+        <span className="mono">janis-agent</span> is a runnable reference
+        agent in a single Docker image: it polls its console-managed config,
+        answers user messages with any OpenAI-compatible LLM, and honors
+        takeover. Run it as-is or fork the source as your starting point.
       </p>
-      <Code>{`JANIS_API_KEY=jk_live_... LLM_API_KEY=sk-... npx @janis/agent-template`}</Code>
+      <Code>{`docker run -e JANIS_API_KEY=jk_live_... -e LLM_API_KEY=sk-... \\
+  -p 9798:9798 ghcr.io/mnatha/janis-agent`}</Code>
       <p className="muted" style={{ lineHeight: 1.6 }}>
         Get the key from the agent's Connection tab → Generate API key (shown once).
-        Then set your agent's webhook URL (console → Agents → your agent →
         Then set your agent's webhook URL (console → Agents → your agent →
         Connection) to <span className="mono">https://your-host:9798/webhook</span>.
         Without <span className="mono">LLM_API_KEY</span> every message hands off to a
@@ -84,8 +85,8 @@ export default function Docs() {
       <h2>Reporting to Janis</h2>
       <p className="muted" style={{ lineHeight: 1.6 }}>
         Authenticate every call with <span className="mono">Authorization: Bearer
-        &lt;agent api key&gt;</span>. The SDK (<span className="mono">npm i
-        @janis/sdk</span>) wraps all of it:
+        &lt;agent api key&gt;</span>. Plain HTTPS works everywhere; for Node agents the
+        SDK (<span className="mono">@janis/sdk</span> — coming to npm) wraps all of it:
       </p>
       <Code>{`import { Janis } from '@janis/sdk';
 const janis = new Janis({ apiKey: process.env.JANIS_API_KEY });

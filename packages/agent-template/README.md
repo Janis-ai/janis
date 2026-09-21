@@ -12,7 +12,8 @@ over, it goes quiet.
 ## Run it
 
 ```bash
-JANIS_API_KEY=jk_live_... LLM_API_KEY=sk-... npx @janis/agent-template
+docker run -e JANIS_API_KEY=jk_live_... -e LLM_API_KEY=sk-... \
+  -p 9798:9798 ghcr.io/mnatha/janis-agent
 ```
 
 Then set your agent's **webhook_url** (Agents → your agent → Connection) to

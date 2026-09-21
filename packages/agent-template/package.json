@@ -4,9 +4,15 @@
   "description": "Janis-ready LLM agent — boots from Janis config, honors takeover, serves hosted channels",
   "license": "MIT",
   "type": "module",
-  "bin": { "janis-agent": "./dist/index.js" },
-  "files": ["dist"],
-  "publishConfig": { "access": "public" },
+  "bin": {
+    "janis-agent": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
@@ -19,6 +25,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "esbuild": "^0.28.2",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }

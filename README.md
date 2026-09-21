@@ -89,15 +89,19 @@ relays to the end user.
 
 ## Agent template + hosted channels
 
-`@janis/agent-template` is a runnable, config-driven support agent: it polls
+The agent template is a runnable, config-driven support agent: it polls
 `GET /v1/config` for its system prompt/knowledge/tone (edited per-agent in the
 console), answers `message.user` webhooks, drafts suggestions, and honors
 takeover.
 
-    JANIS_API_KEY=jk_live_... LLM_API_KEY=sk-... npm run start -w packages/agent-template
+    docker run -e JANIS_API_KEY=jk_live_... -e LLM_API_KEY=sk-... \
+      -p 9798:9798 ghcr.io/mnatha/janis-agent
 
+Locally: `JANIS_API_KEY=jk_live_... npm run start -w packages/agent-template`.
 Set the agent's `webhook_url` to the template's `/webhook`. It also serves
-`POST /chat` for local testing without a channel.
+`POST /chat` for local testing without a channel. The image is built by
+`.github/workflows/agent-image.yml` from `packages/agent-template/Dockerfile`
+(repo-root context — workspace deps are bundled, no npm publish needed).
 
 **Hosted channels** (Integrations page): Messenger, Instagram DMs, and WhatsApp
 Business via one Meta webhook — `{API}/channels/meta/webhook`. Janis owns the
