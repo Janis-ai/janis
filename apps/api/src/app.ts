@@ -27,7 +27,7 @@ import { digestRoutes } from './routes/digests.js';
 import { reportRoutes } from './routes/reports.js';
 import { slackApiRoutes, slackPublicRoutes } from './routes/slack.js';
 import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
-import { metaApiRoutes } from './routes/meta.js';
+import { metaApiRoutes, metaPublicRoutes } from './routes/meta.js';
 import { onboardingRoutes } from './routes/onboarding.js';
 import { billingRoutes, stripeWebhookRoutes } from './routes/billing.js';
 import { workspaceRoutes } from './routes/workspace.js';
@@ -72,6 +72,7 @@ export function createApp(db: Db) {
   app.use('/slack/interactions', rateLimit({ scope: 'slack', windowMs: 60_000, max: 120 }));
   app.use('/channels/meta/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));
   app.use('/messenger/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));
+  app.use('/meta/*', rateLimit({ scope: 'meta-cb', windowMs: 60_000, max: 60 }));
   app.use('/billing/stripe-webhook', rateLimit({ scope: 'stripe', windowMs: 60_000, max: 60 }));
   // Web-chat: visitors poll while the widget is open (~20/min); posts are stricter.
   app.use('/chat/*', rateLimit({ scope: 'chat-read', windowMs: 60_000, max: 120, methods: ['GET'] }));
@@ -84,6 +85,7 @@ export function createApp(db: Db) {
   app.route('/billing/stripe-webhook', stripeWebhookRoutes(db)); // Stripe-signed
   app.route('/chat', webchatRoutes(db)); // embeddable web-chat widget
   app.route('/messenger', legacyWebhookRoutes(db)); // legacy Meta app path (webhook.janis.ai)
+  app.route('/meta', metaPublicRoutes(db)); // Meta-signed: data-deletion + deauthorize callbacks
   // Legacy npm-SDK transcript/detectIntent API (api.janis.ai) — clientkey-auth'd.
   app.use('/api/v1/*', rateLimit({ scope: 'legacy-api', windowMs: 60_000, max: 300 }));
   app.route('/api/v1', legacyApiRoutes(db));

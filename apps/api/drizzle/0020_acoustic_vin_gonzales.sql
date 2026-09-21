@@ -1,0 +1,1 @@
+ALTER TABLE "meta_connections" ADD COLUMN "meta_user_id" text;

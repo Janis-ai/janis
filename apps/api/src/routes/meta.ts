@@ -1,12 +1,12 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { and, eq } from 'drizzle-orm';
-import { randomBytes } from 'node:crypto';
+import { and, eq, inArray } from 'drizzle-orm';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channels, metaConnections } from '../db/schema.js';
+import { agents, channelBindings, channels, metaConnections } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toChannel } from '../lib/serializers.js';
 import { setGetStartedButton, type ChannelCredentials } from '../lib/channels.js';
@@ -147,11 +147,16 @@ export function metaApiRoutes(db: Db) {
     const userToken = long?.access_token ?? tok.access_token;
 
     // Persist the long-lived user token so the asset picker survives reloads.
+    // /me gives the app-scoped user id that data-deletion callbacks use.
+    const me = await graph<{ id?: string }>('/me?fields=id', userToken);
     const workspaceId = c.get('workspaceId');
     await db
       .insert(metaConnections)
-      .values({ workspaceId, userToken })
-      .onConflictDoUpdate({ target: metaConnections.workspaceId, set: { userToken } });
+      .values({ workspaceId, userToken, metaUserId: me?.id ?? null })
+      .onConflictDoUpdate({
+        target: metaConnections.workspaceId,
+        set: { userToken, metaUserId: me?.id ?? null },
+      });
 
     const assets = await discoverAssets(userToken);
     if (!assets) return back('Meta token rejected — try connecting again');
@@ -306,6 +311,103 @@ export function metaApiRoutes(db: Db) {
     void setGetStartedButton(body.kind, credentials).catch(() => {});
 
     return c.json({ channel: toChannel(row, agent.name) }, 201);
+  });
+
+  return app;
+}
+
+// ---- Meta platform callbacks (public, app-secret signed) ----
+
+const B64 = (s: string) => s.replace(/-/g, '+').replace(/_/g, '/');
+
+/** Verify a Meta signed_request (`b64url(sig).b64url(payload)`) and decode it. */
+function parseSignedRequest(raw: string, secret: string): { user_id?: string } | null {
+  const [sig, payload] = raw.split('.');
+  if (!sig || !payload) return null;
+  const got = Buffer.from(B64(sig), 'base64');
+  const expected = createHmac('sha256', secret).update(payload).digest();
+  if (got.length !== expected.length || !timingSafeEqual(got, expected)) return null;
+  try {
+    return JSON.parse(Buffer.from(B64(payload), 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+const META_KINDS = ['messenger', 'instagram', 'whatsapp'] as const;
+
+/**
+ * Drop everything a Meta user's authorization produced: the stored user token,
+ * and the Meta channels (with their conversation bindings) it created. Agent
+ * transcripts stay — they belong to the workspace, not the Meta user.
+ */
+async function deleteMetaUserData(db: Db, metaUserId: string) {
+  const [conn] = await db
+    .select()
+    .from(metaConnections)
+    .where(eq(metaConnections.metaUserId, metaUserId))
+    .limit(1);
+  if (!conn) return;
+
+  const metaChannels = await db
+    .select({ id: channels.id })
+    .from(channels)
+    .where(and(eq(channels.workspaceId, conn.workspaceId), inArray(channels.kind, [...META_KINDS])));
+  const ids = metaChannels.map((ch) => ch.id);
+  if (ids.length) {
+    await db.delete(channelBindings).where(inArray(channelBindings.channelId, ids));
+    await db.delete(channels).where(inArray(channels.id, ids));
+  }
+  await db.delete(metaConnections).where(eq(metaConnections.workspaceId, conn.workspaceId));
+}
+
+// Issued confirmation codes — deletions run synchronously, so every issued
+// code is already 'completed' by the time the status page is fetched.
+const deletionCodes = new Map<string, number>();
+setInterval(() => {
+  const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+  for (const [k, t] of deletionCodes) if (t < cutoff) deletionCodes.delete(k);
+}, 3600_000).unref();
+
+/** Public Meta callbacks mounted at /meta (no session — signed_request authed). */
+export function metaPublicRoutes(db: Db) {
+  const app = new Hono();
+
+  const handleSignedRequest = async (c: Context) => {
+    if (!env.metaAppSecret) return c.json({ error: 'Meta app not configured' }, 400);
+    const body = await c.req.parseBody();
+    const parsed =
+      typeof body.signed_request === 'string'
+        ? parseSignedRequest(body.signed_request, env.metaAppSecret)
+        : null;
+    if (!parsed?.user_id) return c.json({ error: 'invalid signed_request' }, 400);
+    return parsed.user_id;
+  };
+
+  // Data Deletion Callback — Meta POSTs when a user requests deletion.
+  app.post('/data-deletion', async (c) => {
+    const userId = await handleSignedRequest(c);
+    if (typeof userId !== 'string') return userId; // error response
+    await deleteMetaUserData(db, userId);
+    const code = `jd_${randomBytes(8).toString('hex')}`;
+    deletionCodes.set(code, Date.now());
+    return c.json({
+      url: `${env.apiOrigin}/meta/data-deletion/status?code=${code}`,
+      confirmation_code: code,
+    });
+  });
+
+  app.get('/data-deletion/status', (c) => {
+    const code = c.req.query('code');
+    return c.json({ status: code && deletionCodes.has(code) ? 'completed' : 'not_found' });
+  });
+
+  // Deauthorize Callback — Meta POSTs when a user removes the app.
+  app.post('/deauthorize', async (c) => {
+    const userId = await handleSignedRequest(c);
+    if (typeof userId !== 'string') return userId;
+    await deleteMetaUserData(db, userId);
+    return c.json({ ok: true });
   });
 
   return app;

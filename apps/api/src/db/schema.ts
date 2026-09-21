@@ -177,6 +177,9 @@ export const metaConnections = pgTable('meta_connections', {
     .primaryKey()
     .references(() => workspaces.id),
   userToken: text('user_token').notNull(),
+  // App-scoped Meta user id — populated at OAuth time so data-deletion
+  // callbacks (which identify by user_id, not token) can find the workspace.
+  metaUserId: text('meta_user_id'),
   connectedAt: timestamp('connected_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
