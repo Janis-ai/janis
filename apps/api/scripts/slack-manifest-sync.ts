@@ -89,8 +89,11 @@ async function slackApi(method: string, params: Record<string, string>) {
     },
     body: new URLSearchParams(params).toString(),
   });
-  const data = (await res.json()) as { ok: boolean; error?: string; [k: string]: unknown };
-  if (!data.ok) throw new Error(`${method} failed: ${data.error}`);
+  const data = (await res.json()) as { ok: boolean; error?: string; errors?: unknown; [k: string]: unknown };
+  if (!data.ok) {
+    const detail = data.errors ? ` ${JSON.stringify(data.errors)}` : '';
+    throw new Error(`${method} failed: ${data.error}${detail}`);
+  }
   return data;
 }
 
@@ -111,11 +114,9 @@ m.oauth_config.scopes ??= {};
 m.settings ??= {};
 
 const existingScopes = new Set(m.oauth_config.scopes.bot ?? []);
-m.oauth_config.scopes.bot = [
-  ...existingScopes,
-  'commands', // required by the app's existing slash commands
-  ...REQUIRED_BOT_SCOPES.filter((s) => !existingScopes.has(s)),
-];
+existingScopes.add('commands'); // required by the app's slash commands
+for (const s of REQUIRED_BOT_SCOPES) existingScopes.add(s);
+m.oauth_config.scopes.bot = [...existingScopes];
 
 // v1-era leftovers fail modern validation — translate or drop:
 //   commands                → moved to bot scopes above
