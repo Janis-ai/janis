@@ -1,7 +1,9 @@
 import { Hono } from 'hono';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, channelBindings, channels, conversations } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations, messages } from '../db/schema.js';
+import { bus } from '../lib/bus.js';
+import { toMessage } from '../lib/serializers.js';
 import type { ChannelCredentials } from '../lib/channels.js';
 import { findChannelByObjectId } from '../lib/channels.js';
 import { isLegacyPaid, reportLegacyUsage } from '../lib/legacyBilling.js';
@@ -298,6 +300,56 @@ export function legacyApiRoutes(db: Db) {
       })
       .where(eq(agents.id, agent.id));
     return c.json({ response: { socket_id: socketId } });
+  });
+
+  // POST /api/v1/mirror — reverse direction of the forward above:
+  // wordhopapi calls this when a human replies via legacy Slack takeover
+  // (/send_chat_response) or pauses/resumes a channel (/api/v1/update_channel),
+  // so Postgres transcripts + conversation state stay complete.
+  app.post('/mirror', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const key = c.req.header('clientkey') ?? String(body?.client_key ?? '');
+    const agent = key ? await agentForKey(db, key) : null;
+    if (!agent) return c.json(REFUSED);
+
+    const channelId = String(body?.channel ?? body?.user ?? '');
+    if (!channelId) return c.json({ error: 'bad request' }, 400);
+    const channel = await channelFor(db, agent, body!);
+    if (!channel) return c.json({ error: 'no channel' }, 404);
+    const conv = await findOrCreateConv(db, agent, channel, channelId);
+
+    if (typeof body?.paused === 'boolean') {
+      const isHuman = conv.state === 'human';
+      if (body.paused !== isHuman && (body.paused || isHuman)) {
+        await db
+          .update(conversations)
+          .set({ state: body.paused ? 'human' : 'active' })
+          .where(eq(conversations.id, conv.id));
+      }
+    }
+
+    const text = typeof body?.text === 'string' ? body.text : '';
+    if (text) {
+      const [message] = await db
+        .insert(messages)
+        .values({
+          conversationId: conv.id,
+          direction: 'human',
+          text,
+          payload: { via: 'legacy-takeover' },
+        })
+        .returning();
+      await db
+        .update(conversations)
+        .set({
+          lastMessageAt: message.createdAt,
+          lastMessagePreview: text.slice(0, 140),
+          lastMessageDirection: 'human',
+        })
+        .where(eq(conversations.id, conv.id));
+      bus.publish(agent.workspaceId, { type: 'message', data: toMessage(message) });
+    }
+    return c.json({ ok: true });
   });
 
   // Everything else the old api.janis.ai exposed (/unknown, /human,

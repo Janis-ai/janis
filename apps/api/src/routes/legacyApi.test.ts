@@ -232,6 +232,27 @@ describe('legacy /api/v1 SDK endpoints', () => {
     ).toBe(true);
   });
 
+  it('mirror stores legacy takeover replies as human messages', async () => {
+    vi.stubGlobal('fetch', stubFetches());
+    const res = await post('/mirror', {
+      channel: PSID,
+      text: 'human here via slack',
+      paused: true,
+    });
+    expect(res.status).toBe(200);
+    const [c2] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(c2.state).toBe('human');
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    const human = msgs.filter((m) => m.direction === 'human');
+    expect(human).toHaveLength(1);
+    expect(human[0].text).toBe('human here via slack');
+    expect((human[0].payload as { via?: string }).via).toBe('legacy-takeover');
+    // unpause mirrors back
+    await post('/mirror', { channel: PSID, paused: false });
+    const [c3] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(c3.state).toBe('active');
+  });
+
   it('update_bot_socket_id stores the socket on the agent', async () => {
     vi.stubGlobal('fetch', stubFetches());
     const res = await post('/update_bot_socket_id', { socket_id: 'sock123' });

@@ -190,16 +190,27 @@ export function channelWebhookRoutes(db: Db) {
     }
     const msgs = parseMetaWebhook(JSON.parse(raw));
     let handled = 0;
+    let legacyOwned = false;
     for (const msg of msgs) {
       const channel = await findChannelByObjectId(db, msg.objectId);
       if (channel) {
         await handleChannelMessage(db, channel, msg);
         handled++;
+        // Channel belongs to a legacy-imported agent — the event also goes
+        // to the legacy stack so Mongo transcripts + Slack takeovers work.
+        const [a] = await db
+          .select({ metadata: agents.metadata })
+          .from(agents)
+          .where(eq(agents.id, channel.agentId))
+          .limit(1);
+        if ((a?.metadata as Record<string, unknown> | null)?.legacy_client_key)
+          legacyOwned = true;
       }
     }
     // Legacy coexistence: while old and new Janis share the Meta app, relay
-    // events for pages we don't own to the old system (raw body + signature).
-    if (env.metaLegacyWebhookUrl && handled < msgs.length) {
+    // events for pages we don't own — or pages whose bots still live in the
+    // legacy dashboard/Slack — to the old system (raw body + signature).
+    if (env.metaLegacyWebhookUrl && (handled < msgs.length || legacyOwned)) {
       fetch(env.metaLegacyWebhookUrl, {
         method: 'POST',
         headers: {
