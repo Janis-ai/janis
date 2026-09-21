@@ -77,6 +77,7 @@ button, input, select, textarea { font: inherit; }
   font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
 }
 .badge.needs_human { background: #7c2d12; color: #fdba74; }
+.badge.warn { background: #713f12; color: #fde047; }
 .badge.human { background: var(--accent-dim); color: var(--accent); }
 .badge.active { background: #14532d; color: var(--ok); }
 .badge.archived { background: var(--panel-2); color: var(--muted); }

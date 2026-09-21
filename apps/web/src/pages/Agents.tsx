@@ -80,10 +80,15 @@ export default function Agents() {
                   {' · '}
                   {agent.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
                   {channels.length > 0 && ` · ${channels.map((c) => c.name).join(', ')}`}
+                  {!agent.hosted && !agent.webhook_url && (
+                    <div style={{ color: '#fde047', marginTop: 2 }}>
+                      Not reachable — no webhook URL and not hosted by Janis. Inbound messages will go unanswered.
+                    </div>
+                  )}
                 </div>
               </div>
-              <span className={`badge ${agent.hosted ? 'active' : ''}`}>
-                {agent.hosted ? 'hosted' : 'external'}
+              <span className={`badge ${agent.hosted ? 'active' : agent.webhook_url ? '' : 'warn'}`}>
+                {agent.hosted ? 'hosted' : agent.webhook_url ? 'external' : 'unreachable'}
               </span>
               <button
                 className="btn danger"

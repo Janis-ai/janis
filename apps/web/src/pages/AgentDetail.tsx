@@ -141,8 +141,8 @@ function AgentEditor({ agent }: { agent: Agent }) {
               name.trim() && name.trim() !== agent.name && update.mutate({ name: name.trim() })
             }
           />
-          <span className={`badge ${agent.hosted ? 'active' : ''}`}>
-            {agent.hosted ? 'hosted' : 'external'}
+          <span className={`badge ${agent.hosted ? 'active' : agent.webhook_url ? '' : 'warn'}`}>
+            {agent.hosted ? 'hosted' : agent.webhook_url ? 'external' : 'unreachable'}
           </span>
           <button className="btn primary" disabled={update.isPending} onClick={saveAll}>
             {update.isPending ? 'Saving…' : savedFlash ? 'Saved ✓' : 'Save'}
@@ -610,6 +610,11 @@ function ConnectionTab({
           </div>
         ) : (
           <>
+            {!agent.webhook_url && !webhookUrl && (
+              <div style={{ color: '#fde047', marginBottom: 8 }}>
+                No webhook URL set — inbound messages on connected channels will be stored but go unanswered.
+              </div>
+            )}
             <label>Webhook URL (receives takeover + human messages, HMAC-signed)</label>
             <div className="row">
               <input

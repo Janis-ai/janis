@@ -351,7 +351,10 @@ export default function Integrations() {
       {data && data.channels.length > 0 && (
         <h2 className="section-title">Connected channels</h2>
       )}
-      {data?.channels.map((ch) => (
+      {data?.channels.map((ch) => {
+        const chAgent = agents?.agents.find((a) => a.id === ch.agent_id);
+        const dead = chAgent && !chAgent.hosted && !chAgent.webhook_url;
+        return (
         <div key={ch.id} id={`ch-${ch.id}`} className="card channel-card">
           <div className="row">
             <strong className="grow">{ch.name}</strong>
@@ -360,9 +363,16 @@ export default function Integrations() {
           </div>
           <div className="muted" style={{ marginTop: 6 }}>
             Answered by <strong>{ch.agent_name}</strong>
+            {dead && <span className="badge warn" style={{ marginLeft: 6 }}>agent unreachable</span>}
             {ch.meta.page_id && <> · page {ch.meta.page_id}</>}
             {ch.meta.phone_number_id && <> · {ch.meta.phone_number_id}</>}
           </div>
+          {dead && (
+            <div style={{ color: '#fde047', marginTop: 6, fontSize: 13 }}>
+              {ch.agent_name} has no webhook URL and isn't hosted by Janis — inbound messages on this
+              channel go unanswered. Fix it on the agent's page.
+            </div>
+          )}
           {ch.meta.chat_url && (
             <div style={{ marginTop: 6 }}>
               <a href={ch.meta.chat_url} target="_blank" rel="noreferrer">
@@ -394,7 +404,8 @@ export default function Integrations() {
           </details>
           )}
         </div>
-      ))}
+        );
+      })}
       {data && data.channels.length === 0 && !connectId && (
         <Empty>No channels connected yet.</Empty>
       )}
