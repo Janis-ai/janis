@@ -69,7 +69,7 @@ export const agents = pgTable('agents', {
   webhookUrl: text('webhook_url'),
   webhookSecret: text('webhook_secret'),
   hosted: boolean('hosted').notNull().default(false), // Janis runs the agent in-process
-  autoResumeMinutes: integer('auto_resume_minutes'), // auto-release human takeover after N min
+  autoResumeMinutes: integer('auto_resume_minutes').default(10), // auto-release human takeover after N min (null = never)
   // Behavior config for template-based agents: {system_prompt, knowledge[], tone}
   config: jsonb('config').notNull().default({}),
   lastSeenAt: timestamp('last_seen_at', { withTimezone: true }), // last ingest event

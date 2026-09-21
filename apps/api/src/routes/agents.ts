@@ -79,7 +79,7 @@ export function agentRoutes(db: Db) {
         webhookSecret: generateWebhookSecret(),
         webhookUrl: body.webhook_url ?? null,
         hosted: body.hosted ?? false,
-        autoResumeMinutes: body.auto_resume_minutes ?? null,
+        autoResumeMinutes: body.auto_resume_minutes ?? 10,
       })
       .returning();
     return c.json({ agent: toAgent(row) }, 201);
