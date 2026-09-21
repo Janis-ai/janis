@@ -33,6 +33,7 @@ import { billingRoutes, stripeWebhookRoutes } from './routes/billing.js';
 import { workspaceRoutes } from './routes/workspace.js';
 import { webchatRoutes } from './routes/webchat.js';
 import { legacyWebhookRoutes } from './routes/legacy.js';
+import { legacyApiRoutes } from './routes/legacyApi.js';
 
 export function createApp(db: Db) {
   const app = new Hono();
@@ -83,6 +84,9 @@ export function createApp(db: Db) {
   app.route('/billing/stripe-webhook', stripeWebhookRoutes(db)); // Stripe-signed
   app.route('/chat', webchatRoutes(db)); // embeddable web-chat widget
   app.route('/messenger', legacyWebhookRoutes(db)); // legacy Meta app path (webhook.janis.ai)
+  // Legacy npm-SDK transcript/detectIntent API (api.janis.ai) — clientkey-auth'd.
+  app.use('/api/v1/*', rateLimit({ scope: 'legacy-api', windowMs: 60_000, max: 300 }));
+  app.route('/api/v1', legacyApiRoutes(db));
 
   // Embed script for the web-chat widget — plain JS, cacheable.
   const widgetJs = readFileSync(
