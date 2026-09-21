@@ -4,6 +4,7 @@ import { agents, alerts, conversations, messages, users } from '../db/schema.js'
 import { bus } from '../lib/bus.js';
 import { mirrorToSlack, updateSlackAlert } from '../lib/slack.js';
 import { channelBindingFor, deliverToChannel, releaseThreadControl, takeThreadControl } from '../lib/channels.js';
+import { emitChannelUpdate } from '../lib/legacySocket.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
 
@@ -74,6 +75,9 @@ export async function takeover(
   void (async () => {
     const b = await channelBindingFor(db, conversationId);
     if (b) await takeThreadControl(b.channel, b.platformUserId);
+    // SDK bots learn pause state over their socket; /in responses only
+    // carry it lazily on the next inbound message.
+    if (b) await emitChannelUpdate(agent, b.platformUserId, true);
   })();
   // Status note, not transcript — italic so it reads as a system line in Slack
   void mirrorToSlack(db, conversationId, ':raising_hand:', `_${user.name} took over_`);
@@ -246,6 +250,7 @@ export async function resume(
   void (async () => {
     const b = await channelBindingFor(db, conversationId);
     if (b) await releaseThreadControl(b.channel, b.platformUserId);
+    if (b) await emitChannelUpdate(agent, b.platformUserId, false);
   })();
   void mirrorToSlack(
     db,

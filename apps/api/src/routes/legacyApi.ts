@@ -203,9 +203,28 @@ export function legacyApiRoutes(db: Db) {
     return c.text('OK');
   });
 
-  // POST /api/v1/update_bot_socket_id — socket server isn't ported; accept
-  // and discard so the SDK's startup call doesn't error.
-  app.post('/update_bot_socket_id', (c) => c.json({ ok: true }));
+  // POST /api/v1/update_bot_socket_id — the SDK registers its socket.io id
+  // (from wordhop-socket-server) on connect/reconnect; we store it on the
+  // agent so operator replies and channel updates can be pushed to the bot.
+  app.post('/update_bot_socket_id', async (c) => {
+    const agent = await agentForKey(db, c.req.header('clientkey') ?? '');
+    if (!agent) return c.json(REFUSED);
+
+    const body = (await c.req.json().catch(() => null)) as { socket_id?: unknown } | null;
+    const socketId = typeof body?.socket_id === 'string' ? body.socket_id : null;
+    if (!socketId) return c.json({ error: 'bad request' }, 400);
+
+    await db
+      .update(agents)
+      .set({
+        metadata: {
+          ...(agent.metadata as Record<string, unknown>),
+          legacy_socket_id: socketId,
+        },
+      })
+      .where(eq(agents.id, agent.id));
+    return c.json({ response: { socket_id: socketId } });
+  });
 
   return app;
 }

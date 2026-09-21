@@ -193,4 +193,32 @@ describe('legacy /api/v1 SDK endpoints', () => {
     const res = await post('/in', { text: 'anyone?', channel: PSID, user: PSID, mid: 'mid.in.2' });
     expect(await res.json()).toEqual({ paused: true, id: PSID });
   });
+
+  it('update_bot_socket_id stores the socket on the agent', async () => {
+    vi.stubGlobal('fetch', stubFetches());
+    const res = await post('/update_bot_socket_id', { socket_id: 'sock123' });
+    expect(res.status).toBe(200);
+    const [a] = await db.select().from(agents).where(eq(agents.name, 'SdkBot'));
+    expect((a.metadata as { legacy_socket_id?: string }).legacy_socket_id).toBe('sock123');
+  });
+
+  it('operator replies reach a socket-registered bot via POST /send', async () => {
+    const fetchMock = stubFetches();
+    vi.stubGlobal('fetch', fetchMock);
+    const { deliverToChannel } = await import('../lib/channels.js');
+    await deliverToChannel(db, conv.id, 'operator says hi');
+    const send = fetchMock.mock.calls.find((c) =>
+      String(c[0]).includes('wordhop-socket-server.herokuapp.com/send'),
+    );
+    expect(send).toBeTruthy();
+    const body = JSON.parse(String(send![1]?.body));
+    expect(body.socket_id).toBe('sock123');
+    expect(body.message_type).toBe('chat response');
+    expect(body.message.text).toBe('operator says hi');
+    expect(body.recipient.id).toBe(PSID);
+    // and NOT via graph.facebook.com — socket is the delivery path
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('graph.facebook.com'))).toBe(
+      false,
+    );
+  });
 });

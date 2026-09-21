@@ -2,8 +2,9 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import type { UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { channelBindings, channels } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations } from '../db/schema.js';
 import { env } from '../env.js';
+import { emitChatResponse } from './legacySocket.js';
 
 type ChannelRow = typeof channels.$inferSelect;
 
@@ -423,12 +424,21 @@ export async function deliverToChannel(
   opts?: SendOptions,
 ): Promise<void> {
   const [row] = await db
-    .select({ binding: channelBindings, channel: channels })
+    .select({ binding: channelBindings, channel: channels, conv: conversations })
     .from(channelBindings)
     .innerJoin(channels, eq(channelBindings.channelId, channels.id))
+    .innerJoin(conversations, eq(channelBindings.conversationId, conversations.id))
     .where(eq(channelBindings.conversationId, conversationId))
     .limit(1);
   if (!row || (!text.trim() && !attachments?.length)) return;
+  // Self-hosted SDK bots receive operator/agent messages over their
+  // registered socket — the channel binding is transcript bookkeeping only.
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(eq(agents.id, row.conv.agentId))
+    .limit(1);
+  if (agent && (await emitChatResponse(agent, row.binding.platformUserId, text))) return;
   await sendChannelMessage(row.channel, row.binding.platformUserId, text, attachments, opts).catch(() => {});
 }
 

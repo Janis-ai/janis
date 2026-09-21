@@ -41,6 +41,10 @@ export const env = {
   // Legacy Janis webhook receiver — while both systems share the Meta app,
   // events for pages we don't own are forwarded here verbatim.
   metaLegacyWebhookUrl: process.env.META_LEGACY_WEBHOOK_URL ?? '',
+  // wordhop-socket-server relay (POST /send) — pushes chat-response and
+  // channel-update events to self-hosted SDK bots that registered a socket.
+  legacySocketUrl:
+    process.env.JANIS_SOCKET_SERVER_URL ?? 'https://wordhop-socket-server.herokuapp.com',
   // billing — custom rate card JSON {"model":{"input":n,"output":n}} ($/1M tokens)
   llmPrices: (() => {
     try {
