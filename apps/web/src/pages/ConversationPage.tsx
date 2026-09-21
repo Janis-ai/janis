@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Attachment, Conversation, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
-import { Avatar, channelLabel, displayName, StateBadge } from '../components/bits';
+import { Avatar, channelLabel, displayName, fmtTime, StateBadge } from '../components/bits';
 import Composer from '../components/Composer';
 
 const WHO: Record<Message['direction'], string> = {
@@ -213,10 +213,24 @@ export default function ConversationPage() {
                 <div className="who">
                   {who}
                   {m.direction === 'out' && m.payload.via === 'operator' ? ' (via operator)' : ''}
-                  {isInternal ? (m.payload.teach ? ' 🧠 taught the agent' : ' 🔒 internal') : ''}
+                  {isInternal
+                    ? m.payload.teach
+                      ? ' 🧠 taught the agent'
+                      : m.payload.event
+                        ? ` ⚡ ${String(m.payload.event)}`
+                        : ' 🔒 internal'
+                    : ''}
+                  <span className="time" title={new Date(m.created_at).toLocaleString()}>
+                    {fmtTime(m.created_at)}
+                  </span>
                 </div>
               )}
               {m.text}
+              {isSystem && !isInternal && (
+                <span className="time" title={new Date(m.created_at).toLocaleString()}>
+                  {' '}· {fmtTime(m.created_at)}
+                </span>
+              )}
               {m.flags.help_requested && m.payload.summary ? (
                 <div className="muted" style={{ marginTop: 4 }}>
                   {String(m.payload.summary)}

@@ -133,6 +133,8 @@ button, input, select, textarea { font: inherit; }
   max-width: 90%; color: var(--muted); font-style: italic; font-size: 13px; text-align: center;
 }
 .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.msg .who .time { margin-left: 6px; }
+.msg .time { opacity: 0.75; }
 
 .composer { display: flex; gap: 8px; margin-top: 12px; }
 .composer input { flex: 1; }

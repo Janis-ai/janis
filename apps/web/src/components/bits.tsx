@@ -72,3 +72,18 @@ export function timeAgo(iso: string | null): string {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 }
+
+/** Absolute timestamp for transcript lines: "2:34 PM" today,
+ * "Sep 19, 2:34 PM" older (year appended when it differs). */
+export function fmtTime(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return time;
+  const date = d.toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+    ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),
+  });
+  return `${date}, ${time}`;
+}
