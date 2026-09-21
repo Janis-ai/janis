@@ -156,9 +156,21 @@ export default function Integrations() {
   return (
     <>
       <h1 className="page-title">Integrations</h1>
-      <div className="muted" style={{ marginBottom: 16 }}>
-        Connect your Facebook, Instagram, or WhatsApp business — Janis hosts the webhook and
-        relays messages to your agent. During a human takeover the agent is cut off at the pipe.
+      <div className="lede">
+        <p>Where your agent answers:</p>
+        <ul>
+          <li>
+            <strong>Messenger, Instagram, WhatsApp</strong> — connect your Meta business;
+            Janis hosts the webhook.
+          </li>
+          <li>
+            <strong>Web chat</strong> — an embeddable widget for your own site.
+          </li>
+        </ul>
+        <p className="muted">
+          Messages relay to your agent only while it owns the conversation — during a human
+          takeover it's cut off at the pipe.
+        </p>
       </div>
 
       {metaError && <div className="error" style={{ marginBottom: 12 }}>Meta connect failed: {metaError}</div>}
