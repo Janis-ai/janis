@@ -16,3 +16,7 @@ apps/api/uploads/
 
 # legacy bot migration exports contain live credentials
 legacy-bots*.json
+
+# migration artifacts (contain slack team ids/tokens)
+migrated-teams.json
+slack-integrations.json
