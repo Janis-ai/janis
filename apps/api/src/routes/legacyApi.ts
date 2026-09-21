@@ -6,6 +6,7 @@ import type { ChannelCredentials } from '../lib/channels.js';
 import { findChannelByObjectId } from '../lib/channels.js';
 import { isLegacyPaid, reportLegacyUsage } from '../lib/legacyBilling.js';
 import { detectIntentV1, type LegacyContext, type ServiceAccount } from '../lib/dialogflow.js';
+import { env } from '../env.js';
 import { loadSecretsMap } from '../lib/secrets.js';
 import { processEvents } from '../services/ingest.js';
 
@@ -128,6 +129,44 @@ async function storeMessage(
   }
 }
 
+/**
+ * Mirror a request to wordhopapi so the legacy pipeline keeps working:
+ * Mongo transcripts (legacy dashboard), channel paused state (takeovers),
+ * and the POST to wordhop-slack that mirrors messages into customer Slack
+ * channels. Returns null when forwarding is disabled or unreachable.
+ */
+async function forwardToLegacy(
+  path: string,
+  method: string,
+  reqHeaders: Headers,
+  body: string | null,
+): Promise<Response | null> {
+  if (!env.legacyApiUrl) return null;
+  const headers = new Headers();
+  reqHeaders.forEach((v, k) => {
+    if (!/^(host|connection|content-length|cf-|x-forwarded)/i.test(k)) headers.set(k, v);
+  });
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8_000);
+  try {
+    return await fetch(`${env.legacyApiUrl}/api/v1${path}`, {
+      method,
+      headers,
+      body: method === 'GET' || method === 'HEAD' ? undefined : (body ?? undefined),
+      signal: ctrl.signal,
+    });
+  } catch (err) {
+    console.warn('legacy forward failed', path, (err as Error).message);
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function isLegacyAgent(agent: AgentRow): boolean {
+  return !!(agent.metadata as Record<string, unknown> | null)?.legacy_client_key;
+}
+
 async function dfConfig(agent: AgentRow) {
   const dfCfg = (agent.config as { dialogflow?: { project?: string; lang?: string } } | null)
     ?.dialogflow;
@@ -144,9 +183,19 @@ export function legacyApiRoutes(db: Db) {
     const agent = await agentForKey(db, c.req.header('clientkey') ?? '');
     if (!agent || !(await isLegacyPaid(agent))) return c.json(REFUSED);
 
-    const msg = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const rawBody = await c.req.text();
+    const msg = (() => { try { return JSON.parse(rawBody); } catch { return null; } })() as Record<
+      string,
+      unknown
+    > | null;
     const channelId = String(msg?.channel ?? msg?.user ?? '');
     if (!msg || !channelId) return c.json({ error: 'bad request' }, 400);
+
+    // Mirror into legacy in parallel — must be awaited: Cloud Run throttles
+    // CPU between requests, so fire-and-forget fetches may never complete.
+    const fwd = isLegacyAgent(agent)
+      ? forwardToLegacy('/in', 'POST', c.req.raw.headers, rawBody)
+      : null;
 
     const channel = await channelFor(db, agent, msg);
     if (!channel) return c.json({ error: 'no channel' }, 404);
@@ -154,6 +203,22 @@ export function legacyApiRoutes(db: Db) {
 
     await storeMessage(db, agent, conv, 'in', msg);
     void reportLegacyUsage(db, agent, conv);
+
+    // The forwarded response carries Mongo's channel state — the
+    // authoritative paused flag for Slack/dashboard takeovers.
+    let paused = conv.state === 'human';
+    if (fwd) {
+      const fwdJson = (await fwd.then((r) => r?.json().catch(() => null))) as {
+        paused?: unknown;
+      } | null;
+      if (typeof fwdJson?.paused === 'boolean') paused = fwdJson.paused;
+    }
+    if (paused !== (conv.state === 'human') && (paused || conv.state === 'human')) {
+      await db
+        .update(conversations)
+        .set({ state: paused ? 'human' : 'active' })
+        .where(eq(conversations.id, conv.id));
+    }
 
     if (c.req.header('detectintent')) {
       // Caller already ran DF itself and passed the reply through — echo it
@@ -183,7 +248,7 @@ export function legacyApiRoutes(db: Db) {
       return c.json([{ ...msg, ...(reply ? { reply } : {}) }]);
     }
 
-    return c.json({ paused: conv.state === 'human', id: channelId });
+    return c.json({ paused, id: channelId });
   });
 
   // POST /api/v1/out — log the bot's outbound reply. Legacy answered 'OK'
@@ -192,7 +257,15 @@ export function legacyApiRoutes(db: Db) {
     const agent = await agentForKey(db, c.req.header('clientkey') ?? '');
     if (!agent || !(await isLegacyPaid(agent))) return c.json(REFUSED);
 
-    const msg = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const rawBody = await c.req.text();
+    const fwd = isLegacyAgent(agent)
+      ? forwardToLegacy('/out', 'POST', c.req.raw.headers, rawBody)
+      : null;
+
+    const msg = (() => { try { return JSON.parse(rawBody); } catch { return null; } })() as Record<
+      string,
+      unknown
+    > | null;
     const channelId = String(msg?.channel ?? msg?.user ?? '');
     if (!msg || !channelId) return c.json({ error: 'bad request' }, 400);
 
@@ -200,6 +273,7 @@ export function legacyApiRoutes(db: Db) {
     if (!channel) return c.json({ error: 'no channel' }, 404);
     const conv = await findOrCreateConv(db, agent, channel, channelId);
     await storeMessage(db, agent, conv, 'out', msg);
+    await fwd; // ensure the mirror completes before we respond
     return c.text('OK');
   });
 
@@ -224,6 +298,29 @@ export function legacyApiRoutes(db: Db) {
       })
       .where(eq(agents.id, agent.id));
     return c.json({ response: { socket_id: socketId } });
+  });
+
+  // Everything else the old api.janis.ai exposed (/unknown, /human,
+  // /customalert, /channel_state, /transcribe, /get_profile, …) is proxied
+  // to wordhopapi verbatim — those endpoints drive legacy alerts/takeovers
+  // and have no Postgres-side equivalent yet.
+  app.all('/*', async (c) => {
+    const key = c.req.header('clientkey');
+    if (!key || !env.legacyApiUrl) return c.json(REFUSED);
+    const agent = await agentForKey(db, key);
+    // Native (non-legacy) agents have no counterpart upstream.
+    if (agent && !isLegacyAgent(agent)) return c.json({ error: 'not found' }, 404);
+
+    const path =
+      (c.req.path.replace(/^\/api\/v1/, '') || '/') + new URL(c.req.url).search;
+    const body =
+      c.req.raw.method === 'GET' || c.req.raw.method === 'HEAD' ? null : await c.req.text();
+    const res = await forwardToLegacy(path, c.req.raw.method, c.req.raw.headers, body);
+    if (!res) return c.json(REFUSED);
+    return new Response(res.body, {
+      status: res.status,
+      headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
+    });
   });
 
   return app;

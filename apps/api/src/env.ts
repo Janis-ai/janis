@@ -45,6 +45,10 @@ export const env = {
   // channel-update events to self-hosted SDK bots that registered a socket.
   legacySocketUrl:
     process.env.JANIS_SOCKET_SERVER_URL ?? 'https://wordhop-socket-server.herokuapp.com',
+  // Legacy wordhopapi base URL — legacy-SDK traffic is mirrored here so the
+  // old dashboard (Mongo transcripts) and wordhop-slack takeovers keep
+  // working during the migration. Empty disables forwarding (dev/tests).
+  legacyApiUrl: process.env.WORDHOP_API_URL ?? '',
   // billing — custom rate card JSON {"model":{"input":n,"output":n}} ($/1M tokens)
   llmPrices: (() => {
     try {

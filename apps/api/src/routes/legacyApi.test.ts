@@ -106,6 +106,8 @@ beforeAll(async () => {
     credentials: { page_id: 'PGSDK', access_token: 'tok' },
   });
 
+  const { env } = await import('../env.js');
+  env.legacyApiUrl = 'https://legacy.test';
   const { legacyApiRoutes } = await import('./legacyApi.js');
   app = legacyApiRoutes(db) as Hono;
 });
@@ -192,6 +194,42 @@ describe('legacy /api/v1 SDK endpoints', () => {
     await db.update(conversations).set({ state: 'human' }).where(eq(conversations.id, conv.id));
     const res = await post('/in', { text: 'anyone?', channel: PSID, user: PSID, mid: 'mid.in.2' });
     expect(await res.json()).toEqual({ paused: true, id: PSID });
+  });
+
+  it('relays the forwarded paused flag and mirrors takeover state', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.startsWith('https://legacy.test/api/v1/'))
+        return new Response(JSON.stringify({ paused: true, id: PSID }), { status: 200 });
+      return stubFetches()(url, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await db.update(conversations).set({ state: 'active' }).where(eq(conversations.id, conv.id));
+    const res = await post('/in', { text: 'yo', channel: PSID, user: PSID, mid: 'mid.in.3' });
+    expect(await res.json()).toEqual({ paused: true, id: PSID });
+    const [c2] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(c2.state).toBe('human');
+    // upstream saw the same path + clientkey
+    const fwdCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/api/v1/in'));
+    expect(String((fwdCall![1]?.headers as Headers)?.get?.('clientkey'))).toBe(CLIENT_KEY);
+  });
+
+  it('proxies unported /api/v1 paths to wordhopapi verbatim', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string | URL) => {
+      if (String(url).startsWith('https://legacy.test/api/v1/'))
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      return new Response('{}', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await post('/customalert', { text: 'help me' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]) === 'https://legacy.test/api/v1/customalert'),
+    ).toBe(true);
   });
 
   it('update_bot_socket_id stores the socket on the agent', async () => {
