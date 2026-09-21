@@ -22,6 +22,8 @@
  *   - socket_mode, token_rotation, org_deploy: UNTOUCHED
  */
 
+/// <reference types="node" />
+
 export {};
 
 const APP_ID = process.env.SLACK_APP_ID ?? 'A15NCEA7K';
