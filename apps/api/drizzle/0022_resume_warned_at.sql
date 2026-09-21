@@ -1,0 +1,1 @@
+ALTER TABLE "conversations" ADD COLUMN "resume_warned_at" timestamp with time zone;

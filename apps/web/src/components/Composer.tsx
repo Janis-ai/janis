@@ -17,15 +17,17 @@ export default function Composer({
   sendAs,
   setSendAs,
   showModeSelect,
+  canTeach,
   sending,
 }: {
   value: string;
   onChange: (v: string) => void;
   onSend: (attachments: Attachment[]) => void;
   onResume?: () => void;
-  sendAs: 'human' | 'agent';
-  setSendAs: (m: 'human' | 'agent') => void;
+  sendAs: 'human' | 'agent' | 'note' | 'teach';
+  setSendAs: (m: 'human' | 'agent' | 'note' | 'teach') => void;
   showModeSelect: boolean;
+  canTeach?: boolean;
   sending: boolean;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -138,7 +140,11 @@ export default function Composer({
           placeholder={
             sendAs === 'agent'
               ? 'Message the agent will deliver…'
-              : 'Reply as a human… (Enter sends, Shift+Enter for newline)'
+              : sendAs === 'note'
+                ? 'Internal note — teammates only…'
+                : sendAs === 'teach'
+                  ? 'Teach the agent a fact it should always know…'
+                  : 'Reply as a human… (Enter sends, Shift+Enter for newline)'
           }
         />
 
@@ -156,9 +162,11 @@ export default function Composer({
             onChange={(e) => e.target.files && void uploadFiles(e.target.files)}
           />
           {showModeSelect && (
-            <select value={sendAs} onChange={(e) => setSendAs(e.target.value as 'human' | 'agent')}>
+            <select value={sendAs} onChange={(e) => setSendAs(e.target.value as 'human' | 'agent' | 'note' | 'teach')}>
               <option value="human">as human</option>
               <option value="agent">via agent</option>
+              <option value="note">🔒 internal note</option>
+              {canTeach && <option value="teach">🧠 teach agent</option>}
             </select>
           )}
           <span className="grow" />

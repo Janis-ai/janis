@@ -139,6 +139,73 @@ describe('sweepAutoResume', () => {
 
     expect(await sweepAutoResume(db)).toBe(0);
   });
+
+  it('warns inside the lead window, once, then resumes on expiry', async () => {
+    const conv = await makeConversation('ar-warn');
+    await takeover(db, admin.workspaceId, conv.id, admin);
+    // 30m window, warn lead = 60s → warned once humanSince is older than 29m
+    await backdateHumanSince(conv.id, 29.5 * MIN);
+
+    expect(await sweepAutoResume(db)).toBe(0); // warned, not resumed
+    const [warned] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(warned.state).toBe('human');
+    expect(warned.resumeWarnedAt).not.toBeNull();
+
+    // second sweep in the same window does not re-stamp the warning
+    const stamp = warned.resumeWarnedAt!.getTime();
+    await sweepAutoResume(db);
+    const [still] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(still.resumeWarnedAt!.getTime()).toBe(stamp);
+
+    // past expiry → resumed, warning cleared
+    await backdateHumanSince(conv.id, 31 * MIN);
+    expect(await sweepAutoResume(db)).toBe(1);
+    const [after] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(after.state).toBe('active');
+    expect(after.resumeWarnedAt).toBeNull();
+  });
+
+  it('re-arms the warning after new human activity extends the window', async () => {
+    const conv = await makeConversation('ar-rearm');
+    await takeover(db, admin.workspaceId, conv.id, admin);
+    await backdateHumanSince(conv.id, 29.5 * MIN);
+    await sweepAutoResume(db);
+    const [first] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(first.resumeWarnedAt).not.toBeNull();
+
+    // operator replies → clock resets; simulate the *new* window reaching its
+    // warn point: resumeWarnedAt must be older than humanSince (warning issued
+    // before the last human activity = stale)
+    await humanReply(db, admin.workspaceId, conv.id, admin, 'one more thing');
+    await db
+      .update(conversations)
+      .set({
+        humanSince: new Date(Date.now() - 29.5 * MIN),
+        resumeWarnedAt: new Date(Date.now() - 29.6 * MIN),
+      })
+      .where(eq(conversations.id, conv.id));
+    await sweepAutoResume(db);
+    const [second] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(second.state).toBe('human');
+    expect(second.resumeWarnedAt!.getTime()).toBeGreaterThan(
+      first.resumeWarnedAt!.getTime(),
+    );
+  });
 });
 
 describe('sweepSla', () => {

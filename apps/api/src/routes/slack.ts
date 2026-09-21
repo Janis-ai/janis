@@ -18,7 +18,7 @@ import {
   verifySlackSignature,
 } from '../lib/slack.js';
 import { fetchAvatar } from '../lib/avatar.js';
-import { agentSend, humanReply, resume, takeover, TakeoverError } from '../services/takeover.js';
+import { agentSend, humanReply, internalNote, resume, takeover, TakeoverError, teachAgent } from '../services/takeover.js';
 
 const SCOPES = [
   'chat:write',
@@ -256,10 +256,27 @@ export function slackPublicRoutes(db: Db) {
     if (!conv || conv.state === 'archived') return c.json({ ok: true });
 
     try {
-      // `/agent <text>` delivers as the agent; anything else is the operator.
+      // Thread vocabulary:
+      //   /note <text> | note: <text>   → internal operator note (never sent to customer)
+      //   /teach <text> | teach: <text> → append to agent knowledge (admin only)
+      //   /agent <text>                 → deliver as the agent
+      //   anything else                 → human reply to the customer
+      const noteText = /^(?:\/note\s+|note:\s*)(.+)$/is.exec(ev.text)?.[1]?.trim();
+      const teachText = /^(?:\/teach\s+|teach:\s*)(.+)$/is.exec(ev.text)?.[1]?.trim();
       const asAgent = ev.text.startsWith('/agent ');
-      const text = asAgent ? ev.text.slice('/agent '.length).trim() : ev.text;
+      const text = asAgent ? ev.text.slice('/agent '.length).trim() : noteText ?? teachText ?? ev.text;
       if (!text) return c.json({ ok: true });
+
+      // Teach is permission-gated: members can reply and leave notes but only
+      // admins may change what the agent knows.
+      if (teachText !== undefined && user.role !== 'admin') {
+        await slackApi(found.installation.botToken, 'chat.postMessage', {
+          channel: ev.channel,
+          thread_ts: ev.thread_ts,
+          text: `:no_entry: <@${ev.user}> only workspace admins can teach the agent`,
+        }).catch(() => {});
+        return c.json({ ok: true });
+      }
 
       // Replace the raw reply with a styled transcript entry. The delete
       // only succeeds if the bot may remove users' messages — otherwise the
@@ -271,7 +288,11 @@ export function slackPublicRoutes(db: Db) {
         .then((r) => r.ok)
         .catch(() => false);
 
-      if (asAgent) {
+      if (noteText !== undefined) {
+        await internalNote(db, found.installation.workspaceId, conv.id, user, text, !deleted);
+      } else if (teachText !== undefined) {
+        await teachAgent(db, found.installation.workspaceId, conv.id, user, text, !deleted);
+      } else if (asAgent) {
         await agentSend(db, found.installation.workspaceId, conv.id, user, text, undefined, !deleted);
       } else {
         // Replying in the thread takes over implicitly if the agent still owns it

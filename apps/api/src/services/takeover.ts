@@ -53,7 +53,7 @@ export async function takeover(
 
   const [updated] = await db
     .update(conversations)
-    .set({ state: 'human', assigneeId: user.id, humanSince: new Date() })
+    .set({ state: 'human', assigneeId: user.id, humanSince: new Date(), resumeWarnedAt: null })
     .where(eq(conversations.id, conversationId))
     .returning();
 
@@ -221,6 +221,108 @@ export async function agentSend(
   return message;
 }
 
+/**
+ * Internal note — visible to workspace operators (and mirrored into the Slack
+ * thread) but never delivered to the end user. This is the operator-to-operator
+ * channel: teammates can discuss a live conversation inline. Does NOT reset
+ * the auto-resume clock — internal chatter must not hold a takeover open.
+ */
+export async function internalNote(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  user: UserRow,
+  text: string,
+  viaSlack = false,
+): Promise<typeof messages.$inferSelect> {
+  const { conversation } = await getConversationForWorkspace(
+    db,
+    workspaceId,
+    conversationId,
+  );
+  if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
+
+  const [message] = await db
+    .insert(messages)
+    .values({
+      conversationId,
+      direction: 'human',
+      authorId: user.id,
+      text,
+      payload: { internal: true, via: viaSlack ? 'slack' : 'web' },
+    })
+    .returning();
+
+  await db
+    .update(conversations)
+    .set({
+      lastMessageAt: message.createdAt,
+      lastMessagePreview: `🔒 ${text.slice(0, 137)}`,
+      lastMessageDirection: 'human',
+    })
+    .where(eq(conversations.id, conversationId));
+
+  bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
+  if (!viaSlack) {
+    void mirrorToSlack(db, conversationId, ':lock:', `_${user.name} (internal note):_ ${text}`);
+  }
+  return message;
+}
+
+/**
+ * Teach the agent from a conversation thread — appends a fact to the agent's
+ * knowledge base and records an auditable internal note. Admin-only (enforced
+ * by callers). Returns the new knowledge entry count.
+ */
+export async function teachAgent(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  user: UserRow,
+  text: string,
+  viaSlack = false,
+): Promise<{ message: typeof messages.$inferSelect; knowledgeCount: number }> {
+  const { conversation, agent } = await getConversationForWorkspace(
+    db,
+    workspaceId,
+    conversationId,
+  );
+  if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
+  const engine = (agent.config as { engine?: string } | null)?.engine;
+  if (engine === 'monitor' || engine === 'dialogflow') {
+    throw new TakeoverError('teach only applies to hosted agents', 400);
+  }
+
+  const cfg = (agent.config ?? {}) as { knowledge?: string[] };
+  const knowledge = [...(cfg.knowledge ?? []), text];
+  await db
+    .update(agents)
+    .set({ config: { ...cfg, knowledge } })
+    .where(eq(agents.id, agent.id));
+
+  const [message] = await db
+    .insert(messages)
+    .values({
+      conversationId,
+      direction: 'human',
+      authorId: user.id,
+      text: `Taught the agent: ${text}`,
+      payload: { internal: true, teach: true, via: viaSlack ? 'slack' : 'web' },
+    })
+    .returning();
+
+  bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
+  if (!viaSlack) {
+    void mirrorToSlack(
+      db,
+      conversationId,
+      ':brain:',
+      `_${user.name} taught the agent:_ ${text}`,
+    );
+  }
+  return { message, knowledgeCount: knowledge.length };
+}
+
 /** Release back to the agent: conversation → 'active', agent notified. */
 export async function resume(
   db: Db,
@@ -237,7 +339,7 @@ export async function resume(
 
   const [updated] = await db
     .update(conversations)
-    .set({ state: 'active', assigneeId: null, humanSince: null })
+    .set({ state: 'active', assigneeId: null, humanSince: null, resumeWarnedAt: null })
     .where(eq(conversations.id, conversationId))
     .returning();
 

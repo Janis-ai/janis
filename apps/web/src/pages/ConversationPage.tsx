@@ -20,7 +20,7 @@ export default function ConversationPage() {
   const { data: users } = useUsers();
   const { data: me } = useMe();
   const [draft, setDraft] = useState('');
-  const [sendAs, setSendAs] = useState<'human' | 'agent'>('human');
+  const [sendAs, setSendAs] = useState<'human' | 'agent' | 'note' | 'teach'>('human');
   const [error, setError] = useState('');
   const qc = useQueryClient();
   const invalidate = useInvalidateConversations();
@@ -131,7 +131,7 @@ export default function ConversationPage() {
 
   const reply = useMutation({
     mutationFn: ({ text, attachments }: { text: string; attachments: Attachment[] }) =>
-      api(`/api/conversations/${id}/${sendAs === 'agent' ? 'agent-send' : 'reply'}`, {
+      api(`/api/conversations/${id}/${sendAs === 'agent' ? 'agent-send' : sendAs === 'note' ? 'note' : sendAs === 'teach' ? 'teach' : 'reply'}`, {
         method: 'POST',
         body: JSON.stringify({ text, attachments }),
       }),
@@ -158,7 +158,8 @@ export default function ConversationPage() {
   const agent = agents?.agents.find((a) => a.id === c.agent_id);
   const assignee = users?.users.find((u) => u.id === c.assignee_id);
   const openAlerts = alerts.filter((a) => a.status === 'open');
-  const canSend = c.state === 'human' || sendAs === 'agent';
+  const canSend = c.state === 'human' || sendAs === 'agent' || sendAs === 'note' || sendAs === 'teach';
+  const canTeach = me?.user.role === 'admin';
 
   const send = (attachments: Attachment[]) => {
     reply.mutate({ text: draft, attachments });
@@ -198,7 +199,8 @@ export default function ConversationPage() {
 
         <div className="transcript">
           {messages.map((m) => {
-            const isSystem = m.flags.failure || m.flags.help_requested || m.flags.custom_alert;
+            const isInternal = m.payload.internal === true;
+            const isSystem = m.flags.failure || m.flags.help_requested || m.flags.custom_alert || isInternal;
             const who =
               m.direction === 'in'
                 ? c.user_profile.name ?? WHO.in
@@ -207,10 +209,11 @@ export default function ConversationPage() {
                   : users?.users.find((u) => u.id === m.author)?.name ?? WHO.human;
             return (
             <div key={m.id} className={`msg ${isSystem ? 'system' : m.direction}`}>
-              {!isSystem && (
+              {(!isSystem || isInternal) && (
                 <div className="who">
                   {who}
                   {m.direction === 'out' && m.payload.via === 'operator' ? ' (via operator)' : ''}
+                  {isInternal ? (m.payload.teach ? ' 🧠 taught the agent' : ' 🔒 internal') : ''}
                 </div>
               )}
               {m.text}
@@ -299,7 +302,8 @@ export default function ConversationPage() {
               onResume={c.state === 'human' ? () => act.mutate('resume') : undefined}
               sendAs={sendAs}
               setSendAs={setSendAs}
-              showModeSelect={c.state === 'human'}
+              showModeSelect={true}
+              canTeach={canTeach}
               sending={reply.isPending}
             />
             {c.state !== 'human' && (
@@ -312,6 +316,10 @@ export default function ConversationPage() {
               <>
                 <button className="btn primary" onClick={() => act.mutate('takeover')}>Take over</button>
                 <button className="btn" onClick={() => { setSendAs('agent'); }}>Send via agent</button>
+                <button className="btn" onClick={() => { setSendAs('note'); }}>🔒 Internal note</button>
+                {canTeach && (
+                  <button className="btn" onClick={() => { setSendAs('teach'); }}>🧠 Teach agent</button>
+                )}
                 <button className="btn danger" onClick={() => act.mutate('archive')}>Archive</button>
               </>
             )}

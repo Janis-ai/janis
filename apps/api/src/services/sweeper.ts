@@ -1,11 +1,11 @@
-import { and, desc, eq, isNotNull, lt, ne } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alertRules, alerts, conversations } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { inactivityThresholds } from '../lib/rules.js';
 import { toAlert } from '../lib/serializers.js';
-import { postSlackAlert } from '../lib/slack.js';
+import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
 
 /**
@@ -32,7 +32,13 @@ export async function sweepAutoResume(db: Db): Promise<number> {
     .where(isNotNull(agents.autoResumeMinutes));
   let fired = 0;
   for (const agent of agentRows) {
-    const cutoff = new Date(Date.now() - agent.autoResumeMinutes! * 60_000);
+    const windowMs = agent.autoResumeMinutes! * 60_000;
+    const cutoff = new Date(Date.now() - windowMs);
+    // Warn shortly before the takeover expires (legacy warningSent). Lead is
+    // 60s or half the window, whichever is shorter.
+    const warnCutoff = new Date(cutoff.getTime() + Math.min(60_000, windowMs / 2));
+
+    // Expired takeovers → resume (resume() clears resumeWarnedAt)
     const stale = await db
       .select()
       .from(conversations)
@@ -46,6 +52,40 @@ export async function sweepAutoResume(db: Db): Promise<number> {
     for (const conv of stale) {
       await resume(db, agent.workspaceId, conv.id, null);
       fired++;
+    }
+
+    // Inside the warning window, not yet warned for this humanSince → warn.
+    // resumeWarnedAt < humanSince re-arms the warning when operator activity
+    // pushes the clock out again.
+    const due = await db
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.agentId, agent.id),
+          eq(conversations.state, 'human'),
+          lt(conversations.humanSince, warnCutoff),
+          or(
+            isNull(conversations.resumeWarnedAt),
+            lt(conversations.resumeWarnedAt, conversations.humanSince),
+          ),
+        ),
+      );
+    for (const conv of due) {
+      await db
+        .update(conversations)
+        .set({ resumeWarnedAt: new Date() })
+        .where(eq(conversations.id, conv.id));
+      const remainingMin = Math.max(
+        1,
+        Math.round((conv.humanSince!.getTime() + windowMs - Date.now()) / 60_000),
+      );
+      void mirrorToSlack(
+        db,
+        conv.id,
+        ':hourglass_flowing_sand:',
+        `_takeover auto-resumes in ~${remainingMin}m — reply in this thread to keep control_`,
+      );
     }
   }
   return fired;

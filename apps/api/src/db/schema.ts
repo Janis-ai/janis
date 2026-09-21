@@ -97,6 +97,7 @@ export const conversations = pgTable(
       enum: ['in', 'out', 'human'],
     }),
     humanSince: timestamp('human_since', { withTimezone: true }), // last human-side activity during takeover (auto-resume clock)
+    resumeWarnedAt: timestamp('resume_warned_at', { withTimezone: true }), // pre-resume warning posted to Slack (legacy warningSent)
     isStarred: boolean('is_starred').notNull().default(false),
     isUnread: boolean('is_unread').notNull().default(false),
     // Rolling agent memory: everything before summaryUpTo is folded into

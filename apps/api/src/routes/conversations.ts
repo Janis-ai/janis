@@ -20,9 +20,11 @@ import {
   agentSend,
   getConversationForWorkspace,
   humanReply,
+  internalNote,
   resume,
   takeover,
   TakeoverError,
+  teachAgent,
 } from '../services/takeover.js';
 import { requestSuggestion } from '../services/suggestions.js';
 import { fetchAvatar } from '../lib/avatar.js';
@@ -223,6 +225,48 @@ export function conversationRoutes(db: Db) {
         body.attachments,
       );
       return c.json({ message: toMessage(msg) }, 201);
+    } catch (err) {
+      if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+  });
+
+  // Internal note — operators only, never delivered to the end user
+  app.post('/:id/note', zValidator('json', replyBody), async (c) => {
+    try {
+      const body = c.req.valid('json');
+      if (!body.text.trim()) return c.json({ error: 'note text is required' }, 400);
+      const msg = await internalNote(
+        db,
+        c.get('workspaceId'),
+        c.req.param('id'),
+        c.get('user'),
+        body.text,
+      );
+      return c.json({ message: toMessage(msg) }, 201);
+    } catch (err) {
+      if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+  });
+
+  // Teach the agent from the thread — admin only
+  app.post('/:id/teach', zValidator('json', replyBody), async (c) => {
+    try {
+      const user = c.get('user');
+      if (user.role !== 'admin') {
+        return c.json({ error: 'only admins can teach the agent' }, 403);
+      }
+      const body = c.req.valid('json');
+      if (!body.text.trim()) return c.json({ error: 'teach text is required' }, 400);
+      const { message, knowledgeCount } = await teachAgent(
+        db,
+        c.get('workspaceId'),
+        c.req.param('id'),
+        user,
+        body.text,
+      );
+      return c.json({ message: toMessage(message), knowledge_count: knowledgeCount }, 201);
     } catch (err) {
       if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
       throw err;
