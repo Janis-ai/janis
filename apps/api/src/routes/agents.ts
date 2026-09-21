@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentSecrets, conversations, knowledgeFiles, webhookDeliveries } from '../db/schema.js';
+import { agents, agentSecrets, conversations, knowledgeFiles, webhookDeliveries, workspaces } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { generateApiKey, generateWebhookSecret } from '../lib/crypto.js';
 import { deliverWebhook } from '../lib/webhooks.js';
@@ -44,6 +44,32 @@ export function agentRoutes(db: Db) {
 
   app.post('/', zValidator('json', createAgent), async (c) => {
     const body = c.req.valid('json');
+    // Agency children ride on the parent's plan but can't grow the fleet —
+    // new agents need a subscription of their own (or the parent's help).
+    const [ws] = await db
+      .select({
+        parentWorkspaceId: workspaces.parentWorkspaceId,
+        parentContact: workspaces.parentContact,
+        stripeSubscriptionId: workspaces.stripeSubscriptionId,
+      })
+      .from(workspaces)
+      .where(eq(workspaces.id, c.get('workspaceId')))
+      .limit(1);
+    if (ws?.parentWorkspaceId && !ws.stripeSubscriptionId) {
+      const [parent] = await db
+        .select({ name: workspaces.name })
+        .from(workspaces)
+        .where(eq(workspaces.id, ws.parentWorkspaceId))
+        .limit(1);
+      return c.json(
+        {
+          error: `This account is covered by ${parent?.name ?? 'an agency plan'}. Contact ${ws.parentContact ?? 'your account administrator'} to add agents, or subscribe to your own plan.`,
+          covered_by: parent?.name,
+          contact: ws.parentContact,
+        },
+        402,
+      );
+    }
     const [row] = await db
       .insert(agents)
       .values({

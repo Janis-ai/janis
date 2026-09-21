@@ -69,7 +69,19 @@ export function billingRoutes(db: Db) {
       }
     }
 
-    const plan = planFor(ws?.plan);
+    // Agency child: report the parent's plan and who to contact for changes.
+    let coveredBy: { name?: string; contact?: string } | null = null;
+    let planKey = ws?.plan;
+    if (ws?.parentWorkspaceId && !ws.stripeSubscriptionId) {
+      const [parent] = await db
+        .select({ name: workspaces.name, plan: workspaces.plan })
+        .from(workspaces)
+        .where(eq(workspaces.id, ws.parentWorkspaceId))
+        .limit(1);
+      planKey = parent?.plan ?? planKey;
+      coveredBy = { name: parent?.name, contact: ws.parentContact ?? undefined };
+    }
+    const plan = planFor(planKey);
 
     const [llm] = await db
       .select({
@@ -126,11 +138,12 @@ export function billingRoutes(db: Db) {
         purchasable: Boolean(env.stripePrices[key]),
       })),
       plan: {
-        key: ws?.plan ?? 'free',
+        key: ws?.stripeSubscriptionId ? (ws?.plan ?? 'free') : (planKey ?? 'free'),
         name: plan.name,
         base_cents: plan.baseCents,
         included_messages: plan.includedMessages,
         capped: plan.overagePer1kCents === null,
+        covered_by: coveredBy,
       },
       messages: {
         used: messagesUsed,

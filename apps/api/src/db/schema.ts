@@ -10,6 +10,7 @@ import {
   index,
   integer,
   customType,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
@@ -22,6 +23,13 @@ export const workspaces = pgTable('workspaces', {
   plan: text('plan').notNull().default('free'), // key into PLANS rate map
   stripeCustomerId: text('stripe_customer_id'),
   stripeSubscriptionId: text('stripe_subscription_id'),
+  // Agency sub-account: inherits plan/caps from the parent workspace and may
+  // not add agents until it buys a plan of its own. parent_contact is the
+  // human-facing "who to ask for more" string shown in the UI.
+  parentWorkspaceId: uuid('parent_workspace_id').references(
+    (): AnyPgColumn => workspaces.id,
+  ),
+  parentContact: text('parent_contact'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

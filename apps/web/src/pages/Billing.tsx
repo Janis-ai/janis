@@ -20,6 +20,7 @@ interface BillingSummary {
     base_cents: number;
     included_messages: number;
     capped: boolean;
+    covered_by?: { name?: string; contact?: string } | null;
   };
   messages: { used: number; included: number; overage: number; overage_cents: number };
   tokens: { prompt: number; completion: number; total: number };
@@ -119,6 +120,17 @@ export default function Billing() {
 
       {upgraded && data?.plan.key === 'free' && (
         <div className="card muted">Checkout complete — waiting for Stripe to confirm…</div>
+      )}
+      {data?.plan.covered_by && (
+        <div className="card muted">
+          Your account is covered by <strong>{data.plan.covered_by.name ?? 'an agency plan'}</strong>
+          {data.plan.covered_by.contact && (
+            <>
+              {' '}— contact <strong>{data.plan.covered_by.contact}</strong> to add agents or make changes
+            </>
+          )}
+          . You can also subscribe to a plan of your own below.
+        </div>
       )}
       {error && <div className="error">{error}</div>}
       {notice && <div className="card muted">{notice}</div>}

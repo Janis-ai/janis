@@ -148,6 +148,13 @@
       "when": 1789976941935,
       "tag": "0020_acoustic_vin_gonzales",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789994707460,
+      "tag": "0021_clammy_the_fury",
+      "breakpoints": true
     }
   ]
 }

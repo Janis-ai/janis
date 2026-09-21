@@ -106,11 +106,28 @@ export async function messageCap(db: Db, workspaceId: string): Promise<CapStatus
   const hit = capCache.get(workspaceId);
   if (hit && hit.exp > Date.now()) return hit.status;
   const [ws] = await db
-    .select({ plan: workspaces.plan, stripeCustomerId: workspaces.stripeCustomerId })
+    .select({
+      plan: workspaces.plan,
+      stripeCustomerId: workspaces.stripeCustomerId,
+      parentWorkspaceId: workspaces.parentWorkspaceId,
+      stripeSubscriptionId: workspaces.stripeSubscriptionId,
+    })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
-  let plan = planFor(ws?.plan);
+  // Agency child: caps/features ride on the parent's plan — flipping the
+  // parent flips every child in the same breath. The child's own message
+  // count still drives `used`; only the rate card is inherited.
+  let planKey = ws?.plan;
+  if (ws?.parentWorkspaceId && !ws?.stripeSubscriptionId) {
+    const [parent] = await db
+      .select({ plan: workspaces.plan })
+      .from(workspaces)
+      .where(eq(workspaces.id, ws.parentWorkspaceId))
+      .limit(1);
+    planKey = parent?.plan ?? planKey;
+  }
+  let plan = planFor(planKey);
   const used = await messagesInPeriod(db, workspaceId);
   let capped = plan.overagePer1kCents === null && used >= plan.includedMessages;
   if (capped && ws?.stripeCustomerId) {
