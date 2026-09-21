@@ -36,6 +36,12 @@ interface LegacyBot {
   takeover_timeout?: number;
   secondary_receiver_id?: string;
   manychat_token?: string;
+  stripe?: {
+    customer_id?: string;
+    subscription_id?: string;
+    plan?: string;
+    meter_item_id?: string;
+  };
 }
 
 const args = process.argv.slice(2);
@@ -133,8 +139,13 @@ for (const rec of records) {
   let agent = existingAgents.find(
     (a) => (a.metadata as { legacy_client_key?: string })?.legacy_client_key === rec.client_key,
   );
+  const metadata = {
+    legacy_client_key: rec.client_key,
+    migrated_from: 'wordhopapi',
+    ...(rec.stripe ? { legacy_stripe: rec.stripe } : {}),
+  };
   if (agent) {
-    await db.update(agents).set({ name: rec.name, hosted: true, config }).where(eq(agents.id, agent.id));
+    await db.update(agents).set({ name: rec.name, hosted: true, config, metadata }).where(eq(agents.id, agent.id));
   } else {
     [agent] = await db
       .insert(agents)
@@ -143,7 +154,7 @@ for (const rec of records) {
         name: rec.name,
         hosted: true,
         config,
-        metadata: { legacy_client_key: rec.client_key, migrated_from: 'wordhopapi' },
+        metadata,
       })
       .returning();
     existingAgents.push(agent);

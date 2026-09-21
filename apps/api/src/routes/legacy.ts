@@ -12,6 +12,7 @@ import { env } from '../env.js';
 import { detectIntentChain, type LegacyContext, type ServiceAccount } from '../lib/dialogflow.js';
 import { buildChatfuelPayload, buildManychatPayload } from '../lib/legacyFormat.js';
 import { loadSecretsMap } from '../lib/secrets.js';
+import { reportLegacyUsage } from '../lib/legacyBilling.js';
 
 const PAGE_INBOX_TAG = 'page-inbox-takeover';
 const DF_PAUSE_TAG = 'df-pause';
@@ -451,6 +452,10 @@ async function runFallback(
     );
     const result = res?.result;
     if (!result) return empty;
+
+    // legacy metered billing — one DF turn = one usage record, same spot as
+    // wordhopapi's incrementUsageRecords (post-apirequest)
+    void reportLegacyUsage(db, agent, conv);
 
     const out = flavor === 'manychat' ? buildManychatPayload(result) : buildChatfuelPayload(result);
 

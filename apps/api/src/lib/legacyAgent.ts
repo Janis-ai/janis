@@ -5,6 +5,7 @@ import { processEvents } from '../services/ingest.js';
 import { loadSecretsMap } from './secrets.js';
 import { detectIntent, type ServiceAccount } from './dialogflow.js';
 import { sendRawFbMessage } from './channels.js';
+import { reportLegacyUsage } from './legacyBilling.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -55,6 +56,7 @@ export async function runLegacyReply(
 
   try {
     const r = await detectIntent(dfCfg.project, conv.id, text, dfCfg.lang ?? 'en', sa);
+    void reportLegacyUsage(db, agent, conv);
     if (r.isFallback) {
       await emit([
         { type: 'failure', conversation_id: externalId, reason: `dialogflow fallback — no intent matched "${text.slice(0, 120)}"` },

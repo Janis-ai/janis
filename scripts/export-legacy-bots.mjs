@@ -53,6 +53,25 @@ const keys = [
 ].filter(Boolean);
 console.error(`slack_integrations matched: ${payerDocs.length}, client_keys: ${keys.length}`);
 
+// client_key → legacy Stripe linkage, so migrated bots keep reporting metered
+// usage to the subscription they were sold on.
+const billingByKey = {};
+for (const d of payerDocs) {
+  const sc = d.stripe_customer ?? {};
+  const sub = (sc.subscriptions?.data ?? []).find((s) => s.status === 'active' || s.status === 'trialing');
+  const metered = (sub?.items?.data ?? []).find((i) => i.plan?.usage_type === 'metered');
+  for (const b of d.bot_subscriptions ?? []) {
+    if (b.client_key && !billingByKey[b.client_key]) {
+      billingByKey[b.client_key] = {
+        customer_id: sc.id,
+        subscription_id: sub?.id ?? null,
+        plan: sub?.plan?.nickname ?? null,
+        meter_item_id: metered?.id ?? null,
+      };
+    }
+  }
+}
+
 const bots = await db
   .collection('bots')
   .find({ client_key: { $in: keys } })
@@ -88,6 +107,7 @@ const records = bots.map((b) => ({
   takeover_timeout: b.takeover_timeout,
   secondary_receiver_id: b.secondary_receiver_id,
   manychat_token: b.manychat_token,
+  stripe: billingByKey[b.client_key],
 }));
 
 const json = JSON.stringify(records, null, 1);
