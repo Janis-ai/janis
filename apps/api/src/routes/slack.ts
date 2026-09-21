@@ -195,6 +195,9 @@ export function slackPublicRoutes(db: Db) {
         teamId: data.team.id,
         botToken: data.access_token,
         installerUserId: userId || null,
+        // a re-install of a migrated workspace keeps the cutover flag — the
+        // fresh granular token upgrades scopes without handing traffic back
+        migrated: existing?.migrated ?? false,
       })
       .returning();
 
@@ -341,6 +344,8 @@ export function slackPublicRoutes(db: Db) {
     const payload = JSON.parse(payloadParam) as {
       type: string;
       user?: { id: string };
+      team?: { id?: string };
+      team_id?: string;
       response_url?: string;
       actions?: { action_id: string; value?: string }[];
     };
@@ -355,7 +360,20 @@ export function slackPublicRoutes(db: Db) {
       payload.type === 'block_actions' &&
       (payload.actions?.length ?? 0) > 0 &&
       payload.actions!.every((a) => a.action_id?.startsWith('janis_'));
-    if (!isOurs) return forwardToLegacySlack(raw);
+    if (!isOurs) {
+      // Cutover flag: migrated teams are owned by us — legacy is stood down,
+      // so forwarding would double-handle (or dead-click) legacy payloads.
+      const teamId = payload.team?.id ?? payload.team_id;
+      if (teamId) {
+        const [inst] = await db
+          .select({ migrated: slackInstallations.migrated })
+          .from(slackInstallations)
+          .where(eq(slackInstallations.teamId, teamId))
+          .limit(1);
+        if (inst?.migrated) return c.json({ ok: true });
+      }
+      return forwardToLegacySlack(raw);
+    }
 
     if (!payload.user) return c.json({ ok: true });
     const action = payload.actions![0];
@@ -529,7 +547,12 @@ export function slackPublicRoutes(db: Db) {
     if (!inst) return forwardToLegacySlack(raw);
 
     const user = await slackUserToMember(db, inst, slackUserId);
-    if (!user) return forwardToLegacySlack(raw);
+    if (!user) {
+      if (inst.migrated) {
+        return c.json({ response_type: 'ephemeral', text: ':warning: your Slack user is not a Janis operator' });
+      }
+      return forwardToLegacySlack(raw);
+    }
 
     const candidates = await db
       .select({ conv: conversations })
@@ -551,7 +574,17 @@ export function slackPublicRoutes(db: Db) {
       command === '/pause'
         ? (candidates.find((r) => r.conv.state === 'human')?.conv ?? candidates[0]?.conv)
         : candidates.find((r) => r.conv.state === 'human')?.conv;
-    if (!target) return forwardToLegacySlack(raw); // nothing of ours → maybe legacy
+    if (!target) {
+      // Migrated teams are fully ours — legacy is stood down, so an
+      // unresolvable channel gets a private warning instead of a forward.
+      if (inst.migrated) {
+        return c.json({
+          response_type: 'ephemeral',
+          text: ':warning: no active Janis conversation is linked to this channel',
+        });
+      }
+      return forwardToLegacySlack(raw); // nothing of ours → maybe legacy
+    }
 
     const displayName =
       (target.userProfile as { name?: string } | null)?.name ?? target.externalId;

@@ -111,6 +111,27 @@ describe('interactions fan-out', () => {
     }
   });
 
+  it('acks migrated teams without forwarding to legacy', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Migrated WS' }).returning();
+    await db.insert(slackInstallations).values({
+      workspaceId: ws.id,
+      teamId: 'T_MIG',
+      botToken: 'xoxb-mig',
+      migrated: true,
+    });
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response('', { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    const payload = JSON.stringify({
+      type: 'interactive_message',
+      team: { id: 'T_MIG' },
+      user: { id: 'U1' },
+      actions: [{ name: 'training_yes' }],
+    });
+    const res = await signedPost(`payload=${encodeURIComponent(payload)}`);
+    expect(res.status).toBe(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('acks when the legacy endpoint is unreachable', async () => {
     const payload = JSON.stringify({ type: 'dialog_submission', user: { id: 'U1' } });
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
@@ -192,5 +213,29 @@ describe('slash commands', () => {
     const res = await command({ command: '/pause', channel_id: 'C1', team_id: 'T_UNKNOWN', user_id: 'U1', text: '' });
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it('migrated teams get an ephemeral warning instead of a legacy forward', async () => {
+    await db
+      .update(slackInstallations)
+      .set({ migrated: true })
+      .where(eq(slackInstallations.teamId, 'T_NEW'));
+    try {
+      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response('', { status: 200 })));
+      vi.stubGlobal('fetch', fetchMock);
+      const res = await command({ command: '/pause', channel_id: 'C_NOPE', team_id: 'T_NEW', user_id: 'U_OP', text: '' });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.text).toContain('no active Janis conversation');
+      // only users.info — never the legacy relay
+      expect(
+        fetchMock.mock.calls.every((c) => String(c[0]) !== 'https://legacy-slack.test/slack/receive'),
+      ).toBe(true);
+    } finally {
+      await db
+        .update(slackInstallations)
+        .set({ migrated: false })
+        .where(eq(slackInstallations.teamId, 'T_NEW'));
+    }
   });
 });

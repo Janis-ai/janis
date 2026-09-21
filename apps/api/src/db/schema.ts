@@ -202,6 +202,9 @@ export const slackInstallations = pgTable('slack_installations', {
   botToken: text('bot_token').notNull(),
   alertChannelId: text('alert_channel_id'),
   installerUserId: uuid('installer_user_id').references(() => users.id),
+  // true once a legacy wordhop-slack team is cut over: the token was imported
+  // from Mongo and we own the team's Slack traffic — never fan out to legacy.
+  migrated: boolean('migrated').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

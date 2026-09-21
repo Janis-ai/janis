@@ -176,6 +176,13 @@
       "when": 1790009651302,
       "tag": "0024_pause_minutes",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790012629258,
+      "tag": "0025_slack_migrated",
+      "breakpoints": true
     }
   ]
 }
