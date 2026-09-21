@@ -154,5 +154,16 @@ if (!APPLY) {
   process.exit(0);
 }
 
-await slackApi('apps.manifest.update', { app_id: APP_ID, manifest: JSON.stringify(m) });
+const updated = await slackApi('apps.manifest.update', {
+  app_id: APP_ID,
+  manifest: JSON.stringify(m),
+});
 console.log('\nApplied.');
+// True when scope changes mean existing installs must re-authorize to get the
+// new permissions — expected here since we add scopes. Legacy installs keep
+// working on their current tokens; re-auth is only needed for the new scopes.
+if (updated.permissions_updated) {
+  console.log(
+    '⚠️  permissions_updated: existing installs need re-authorization to gain the new scopes (their current tokens keep working).',
+  );
+}
