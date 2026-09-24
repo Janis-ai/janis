@@ -42,6 +42,7 @@ interface BillingSummary {
     tokens: number;
     llm_calls: number;
     cost_cents: number;
+    byok: boolean;
   }[];
 }
 
@@ -257,7 +258,10 @@ export default function Billing() {
             )}
             {data.by_agent.map((a) => (
               <div key={a.agent_id ?? 'none'} className="row" style={{ marginTop: 6 }}>
-                <span className="grow">{a.agent_name}</span>
+                <span className="grow">
+                  {a.agent_name}
+                  {a.byok && <span className="muted"> · own key</span>}
+                </span>
                 <span className="muted">{a.llm_calls} calls · {a.tokens.toLocaleString()} tokens</span>
                 <span className="mono" style={{ width: 80, textAlign: 'right' }}>{usd(a.cost_cents)}</span>
               </div>
@@ -269,7 +273,9 @@ export default function Billing() {
             On a capped plan the bot stops answering past the limit and new inbound
             messages are dropped — not transcribed — until the next billing period or an upgrade.
             LLM tokens are metered on calls Janis makes (hosted agents, suggestions) and passed
-            through at cost + {data.costs.margin_pct}%.
+            through at cost + {data.costs.margin_pct}%. Agents configured with their own LLM key
+            run on your provider account — tokens still appear here for visibility, billed at $0.
+            Janis never marks up your token spend.
           </div>
         </>
       )}

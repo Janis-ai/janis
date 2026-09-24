@@ -717,7 +717,7 @@ function ToolsTab({
         <span className="mono">{'{{secrets.NAME}}'}</span> in tool URLs and headers
       </label>
       <Secrets agentId={agentId} />
-      <label>LLM (OpenAI-compatible — leave blank to use server env)</label>
+      <label>LLM (OpenAI-compatible — your own key bills $0 Janis LLM fees; blank uses Janis's metered key)</label>
       <input
         placeholder="API key (sk-…)"
         value={cfg.llm?.api_key ?? ''}

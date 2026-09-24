@@ -179,7 +179,8 @@ export default function Landing() {
         <h2>Simple pricing</h2>
         <p className="muted" style={{ textAlign: 'center', margin: '0 0 24px' }}>
           Every plan includes the console, unlimited seats and channels, alerts, and digests.
-          You pay for messages — not seats. Exact LLM token usage is metered and shown in Billing.
+          You pay for messages — not seats. LLM tokens run at cost + margin on our platform
+          key — or bring your own key and the LLM line drops to $0.
         </p>
         <div className="landing-grid four">
           {PRICING.map((p) => (
@@ -199,6 +200,11 @@ export default function Landing() {
         </div>
         <p className="landing-fine">
           On Free we stop ingesting messages at the cap — upgrade any time to resume instantly.
+        </p>
+        <p className="landing-fine">
+          Bring your own OpenAI-compatible LLM key (OpenAI, Gemini, …): tokens run on your
+          provider account and Janis bills $0 for them — no markup, ever. You'll still see
+          exact token counts in Billing.
         </p>
       </section>
 

@@ -174,6 +174,9 @@ export function billingRoutes(db: Db) {
         tokens: r.promptTokens + r.completionTokens,
         llm_calls: r.events,
         cost_cents: Math.round((Number(r.costMicros) / 10_000) * 100) / 100,
+        // Janis-billed calls always price positive — zero cost means the
+        // agent ran on the customer's own key.
+        byok: r.events > 0 && Number(r.costMicros) === 0,
       })),
     });
   });
