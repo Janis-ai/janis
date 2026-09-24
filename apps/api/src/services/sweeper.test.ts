@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alerts, conversations, users, workspaces } from '../db/schema.js';
+import { agents, alerts, conversations, memberships, users, workspaces } from '../db/schema.js';
 import { generateApiKey, hashPassword } from '../lib/crypto.js';
 import { processEvents } from './ingest.js';
 import { takeover, humanReply, agentSend } from './takeover.js';
@@ -27,14 +27,18 @@ beforeAll(async () => {
     await db
       .insert(users)
       .values({
-        workspaceId: ws.id,
         email: 'a@b.c',
         name: 'A',
-        role: 'admin',
         passwordHash: await hashPassword('password123'),
       })
       .returning()
   )[0];
+  await db.insert(memberships).values({
+    userId: admin.id,
+    workspaceId: ws.id,
+    role: 'admin',
+    acceptedAt: new Date(),
+  });
   const { hash, preview } = generateApiKey();
   agent = (
     await db
@@ -71,7 +75,7 @@ async function backdateHumanSince(id: string, msAgo: number) {
 describe('sweepAutoResume', () => {
   it('resumes a human takeover idle past auto_resume_minutes', async () => {
     const conv = await makeConversation('ar-idle');
-    await takeover(db, admin.workspaceId, conv.id, admin);
+    await takeover(db, agent.workspaceId, conv.id, admin);
     await backdateHumanSince(conv.id, 31 * MIN);
 
     expect(await sweepAutoResume(db)).toBe(1);
@@ -87,7 +91,7 @@ describe('sweepAutoResume', () => {
 
   it('keeps a takeover under the threshold', async () => {
     const conv = await makeConversation('ar-fresh');
-    await takeover(db, admin.workspaceId, conv.id, admin);
+    await takeover(db, agent.workspaceId, conv.id, admin);
     await backdateHumanSince(conv.id, 5 * MIN);
 
     expect(await sweepAutoResume(db)).toBe(0);
@@ -101,10 +105,10 @@ describe('sweepAutoResume', () => {
 
   it('human reply resets the auto-resume clock', async () => {
     const conv = await makeConversation('ar-reply');
-    await takeover(db, admin.workspaceId, conv.id, admin);
+    await takeover(db, agent.workspaceId, conv.id, admin);
     await backdateHumanSince(conv.id, 60 * MIN); // would resume if clock were stale
 
-    await humanReply(db, admin.workspaceId, conv.id, admin, 'still here');
+    await humanReply(db, agent.workspaceId, conv.id, admin, 'still here');
 
     expect(await sweepAutoResume(db)).toBe(0);
     const [after] = await db
@@ -117,10 +121,10 @@ describe('sweepAutoResume', () => {
 
   it('send-via-agent resets the clock while in human mode', async () => {
     const conv = await makeConversation('ar-agentsend');
-    await takeover(db, admin.workspaceId, conv.id, admin);
+    await takeover(db, agent.workspaceId, conv.id, admin);
     await backdateHumanSince(conv.id, 60 * MIN);
 
-    await agentSend(db, admin.workspaceId, conv.id, admin, 'agent says hi');
+    await agentSend(db, agent.workspaceId, conv.id, admin, 'agent says hi');
 
     expect(await sweepAutoResume(db)).toBe(0);
     const [after] = await db
@@ -142,7 +146,7 @@ describe('sweepAutoResume', () => {
 
   it('warns inside the lead window, once, then resumes on expiry', async () => {
     const conv = await makeConversation('ar-warn');
-    await takeover(db, admin.workspaceId, conv.id, admin);
+    await takeover(db, agent.workspaceId, conv.id, admin);
     // 30m window, warn lead = 60s → warned once humanSince is older than 29m
     await backdateHumanSince(conv.id, 29.5 * MIN);
 
@@ -176,7 +180,7 @@ describe('sweepAutoResume', () => {
 
   it('re-arms the warning after new human activity extends the window', async () => {
     const conv = await makeConversation('ar-rearm');
-    await takeover(db, admin.workspaceId, conv.id, admin);
+    await takeover(db, agent.workspaceId, conv.id, admin);
     await backdateHumanSince(conv.id, 29.5 * MIN);
     await sweepAutoResume(db);
     const [first] = await db
@@ -188,7 +192,7 @@ describe('sweepAutoResume', () => {
     // operator replies → clock resets; simulate the *new* window reaching its
     // warn point: resumeWarnedAt must be older than humanSince (warning issued
     // before the last human activity = stale)
-    await humanReply(db, admin.workspaceId, conv.id, admin, 'one more thing');
+    await humanReply(db, agent.workspaceId, conv.id, admin, 'one more thing');
     await db
       .update(conversations)
       .set({
@@ -209,7 +213,7 @@ describe('sweepAutoResume', () => {
 
   it('honors a per-conversation pause_minutes override', async () => {
     const conv = await makeConversation('ar-override');
-    await takeover(db, admin.workspaceId, conv.id, admin);
+    await takeover(db, agent.workspaceId, conv.id, admin);
     // agent default is 30m; override to 60m → a 31m-old takeover stays human
     await db
       .update(conversations)
@@ -223,7 +227,7 @@ describe('sweepAutoResume', () => {
 
   it('pause_minutes -1 never auto-resumes or warns', async () => {
     const conv = await makeConversation('ar-forever');
-    await takeover(db, admin.workspaceId, conv.id, admin);
+    await takeover(db, agent.workspaceId, conv.id, admin);
     await db
       .update(conversations)
       .set({ pauseMinutes: -1 })
@@ -242,7 +246,7 @@ describe('sweepSla', () => {
       await db
         .insert(agents)
         .values({
-          workspaceId: admin.workspaceId,
+          workspaceId: agent.workspaceId,
           name: 'SLA Bot',
           apiKeyHash: generateApiKey().hash,
           apiKeyPreview: 'sla',
@@ -292,7 +296,7 @@ describe('auto_assign', () => {
       await db
         .insert(agents)
         .values({
-          workspaceId: admin.workspaceId,
+          workspaceId: agent.workspaceId,
           name: 'Assign Bot',
           apiKeyHash: generateApiKey().hash,
           apiKeyPreview: 'asg',

@@ -104,6 +104,39 @@ describe('handleChannelMessage dedup', () => {
   });
 });
 
+describe('internal test channels', () => {
+  it('namespaces externalId so an operator test thread never collides with their visitor thread', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [ws] = await db.insert(workspaces).values({ name: 'NS' }).returning();
+    const { hash, preview } = generateApiKey();
+    const [a] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'NsBot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    const [real] = await db
+      .insert(channels)
+      .values({ workspaceId: ws.id, agentId: a.id, kind: 'webchat', name: 'Site', credentials: {} })
+      .returning();
+    const [test] = await db
+      .insert(channels)
+      .values({ workspaceId: ws.id, agentId: a.id, kind: 'webchat', name: 'Test', credentials: { internal: true } })
+      .returning();
+
+    // Same signed-in operator, same agent, two channels — before namespacing
+    // both resolved to `webchat:u:<id>` and the second insert died on
+    // conversations_agent_external (surfaced as "Not delivered" in the rail).
+    const user = { id: 'user-ns-1', name: 'Op', verified: true, via: 'session' as const };
+    await handleChannelMessage(db, real, { objectId: '', senderId: 'vis-ns', text: 'hi', user });
+    await handleChannelMessage(db, test, { objectId: '', senderId: 'vis-ns', text: 'test ping', user });
+
+    const convs = await db.select().from(conversations).where(eq(conversations.agentId, a.id));
+    expect(convs.map((c) => c.externalId).sort()).toEqual([
+      `webchat:test:${test.id}:u:user-ns-1`,
+      'webchat:u:user-ns-1',
+    ]);
+  });
+});
+
 describe('hard cap', () => {
   it('drops capped inbound before storage, alerting once per conversation', async () => {
     // Fresh workspace so the 60s cap cache from other tests can't interfere.

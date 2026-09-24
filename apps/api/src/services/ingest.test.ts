@@ -6,7 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import type { IngestEvent } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alertRules, alerts, conversations, messages, users, workspaces } from '../db/schema.js';
+import { agents, alertRules, alerts, conversations, memberships, messages, users, workspaces } from '../db/schema.js';
 import { generateApiKey, hashPassword } from '../lib/crypto.js';
 import { processEvents } from './ingest.js';
 import { takeover, humanReply, resume } from './takeover.js';
@@ -27,14 +27,18 @@ beforeAll(async () => {
     await db
       .insert(users)
       .values({
-        workspaceId: ws.id,
         email: 'a@b.c',
         name: 'A',
-        role: 'admin',
         passwordHash: await hashPassword('password123'),
       })
       .returning()
   )[0];
+  await db.insert(memberships).values({
+    userId: admin.id,
+    workspaceId: ws.id,
+    role: 'admin',
+    acceptedAt: new Date(),
+  });
   const { hash, preview } = generateApiKey();
   agent = (
     await db
@@ -95,12 +99,49 @@ describe('processEvents', () => {
     expect(openAlerts).toHaveLength(1);
 
     // once a human takes over, handoff requests no longer reply
-    await takeover(db, admin.workspaceId, conv.id, admin);
+    await takeover(db, agent.workspaceId, conv.id, admin);
     await processEvents(db, agent, [
       { type: 'handoff_request', conversation_id: 'c5', reason: 'post-takeover' },
     ]);
     const msgs3 = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
     expect(msgs3.filter((m) => m.text?.includes('human teammate'))).toHaveLength(2);
+  });
+
+  it('handoff_cancelled drops needs_human back to active and resolves open alerts', async () => {
+    await processEvents(db, agent, [
+      { type: 'handoff_request', conversation_id: 'cc1', reason: 'stuck' },
+    ]);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'cc1'));
+    expect(conv.state).toBe('needs_human');
+
+    const results = await processEvents(db, agent, [
+      { type: 'handoff_cancelled', conversation_id: 'cc1', reason: 'customer said no thanks' },
+    ]);
+    expect(results[0].conversation_state).toBe('active');
+    const open = await db
+      .select()
+      .from(alerts)
+      .where(and(eq(alerts.conversationId, conv.id), eq(alerts.status, 'open')));
+    expect(open).toHaveLength(0);
+  });
+
+  it('handoff_cancelled never releases a human takeover', async () => {
+    await processEvents(db, agent, [
+      { type: 'handoff_request', conversation_id: 'cc2', reason: 'stuck' },
+    ]);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'cc2'));
+    await takeover(db, agent.workspaceId, conv.id, admin);
+
+    const results = await processEvents(db, agent, [
+      { type: 'handoff_cancelled', conversation_id: 'cc2', reason: 'customer said no thanks' },
+    ]);
+    expect(results[0].conversation_state).toBe('human');
   });
 
   it('re-alerts on a repeat handoff once the open alert is 5+ min old', async () => {
@@ -226,7 +267,7 @@ describe('takeover lifecycle', () => {
       .where(eq(conversations.externalId, 'c4'));
     void r;
 
-    const taken = await takeover(db, admin.workspaceId, conv.id, admin);
+    const taken = await takeover(db, agent.workspaceId, conv.id, admin);
     expect(taken.state).toBe('human');
 
     // agent sees paused=true on next ingest
@@ -235,10 +276,10 @@ describe('takeover lifecycle', () => {
     ]);
     expect(results[0].paused).toBe(true);
 
-    const msg = await humanReply(db, admin.workspaceId, conv.id, admin, 'I am here');
+    const { message: msg } = await humanReply(db, agent.workspaceId, conv.id, admin, 'I am here');
     expect(msg.direction).toBe('human');
 
-    const resumed = await resume(db, admin.workspaceId, conv.id, admin);
+    const resumed = await resume(db, agent.workspaceId, conv.id, admin);
     expect(resumed.state).toBe('active');
   });
 
@@ -268,7 +309,7 @@ describe('takeover lifecycle', () => {
       .select()
       .from(conversations)
       .where(eq(conversations.externalId, 'c1'));
-    await expect(humanReply(db, admin.workspaceId, conv.id, admin, 'hi')).rejects.toThrow(
+    await expect(humanReply(db, agent.workspaceId, conv.id, admin, 'hi')).rejects.toThrow(
       'take over',
     );
   });

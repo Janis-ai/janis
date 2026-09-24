@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alertRules } from '../db/schema.js';
-import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toAlertRule } from '../lib/serializers.js';
 
 const ruleConfig = z.object({
@@ -53,7 +53,7 @@ export function ruleRoutes(db: Db) {
     return c.json({ rules: rows.map((r) => toAlertRule(r.rule)) });
   });
 
-  app.post('/', zValidator('json', createRule), async (c) => {
+  app.post('/', adminOnly, zValidator('json', createRule), async (c) => {
     const body = c.req.valid('json');
     if (!(await ownsAgent(db, c.get('workspaceId'), body.agent_id))) {
       return c.json({ error: 'agent not found' }, 404);
@@ -65,7 +65,7 @@ export function ruleRoutes(db: Db) {
     return c.json({ rule: toAlertRule(row) }, 201);
   });
 
-  app.patch('/:id', zValidator('json', updateRule), async (c) => {
+  app.patch('/:id', adminOnly, zValidator('json', updateRule), async (c) => {
     if (!(await ownsRule(db, c.get('workspaceId'), c.req.param('id')))) {
       return c.json({ error: 'not found' }, 404);
     }
@@ -77,7 +77,7 @@ export function ruleRoutes(db: Db) {
     return c.json({ rule: toAlertRule(row) });
   });
 
-  app.delete('/:id', async (c) => {
+  app.delete('/:id', adminOnly, async (c) => {
     if (!(await ownsRule(db, c.get('workspaceId'), c.req.param('id')))) {
       return c.json({ error: 'not found' }, 404);
     }

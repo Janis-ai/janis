@@ -30,7 +30,7 @@ export default function Login() {
   const qc = useQueryClient();
   const providers = useQuery({
     queryKey: ['auth-providers'],
-    queryFn: () => api<{ google: boolean; slack: boolean }>('/auth/providers'),
+    queryFn: () => api<{ google: boolean; slack: boolean; password: boolean }>('/auth/providers'),
     staleTime: Infinity,
   });
 
@@ -48,6 +48,7 @@ export default function Login() {
 
   const oauthError = params.get('error');
   const anyProvider = providers.data?.google || providers.data?.slack;
+  const passwordLogin = providers.data?.password;
 
   return (
     <div className="login-wrap">
@@ -68,15 +69,24 @@ export default function Login() {
                 <SlackLogo /> Continue with Slack
               </a>
             )}
-            <div className="oauth-divider"><span>or continue with email</span></div>
+            {passwordLogin && <div className="oauth-divider"><span>or continue with email</span></div>}
           </div>
         )}
-        <label>Email</label>
-        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required style={{ width: '100%' }} />
-        <label>Password</label>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ width: '100%' }} />
+        {passwordLogin && (
+          <>
+            <label>Email</label>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required style={{ width: '100%' }} />
+            <label>Password</label>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ width: '100%' }} />
+          </>
+        )}
         {(error || oauthError) && <div className="error">{error || oauthError}</div>}
-        <button className="btn primary" style={{ width: '100%', marginTop: 20 }}>Sign in</button>
+        {passwordLogin && (
+          <button className="btn primary" style={{ width: '100%', marginTop: 20 }}>Sign in</button>
+        )}
+        {providers.data && !anyProvider && !passwordLogin && (
+          <div className="muted">Sign-in is not configured on this server.</div>
+        )}
       </form>
     </div>
   );

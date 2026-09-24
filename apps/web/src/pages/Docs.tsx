@@ -1,4 +1,8 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useMe } from '../api/hooks';
+import { api } from '../api/client';
+import { SiteFooter } from '../components/bits';
 
 const INBOUND = [
   ['POST /v1/events', 'Batch-ingest events (below). The SDK wraps this — every call returns per-event results including paused.'],
@@ -13,6 +17,8 @@ const EVENTS = [
   ['message_out', 'A reply your agent sent', 'conversation_id, text, payload?'],
   ['failure', 'Your agent failed to handle something — fires an alert', 'conversation_id, reason?, payload?'],
   ['handoff_request', 'Explicitly ask a human to take over', 'conversation_id, reason?'],
+  ['handoff_offer', 'Agent offered a human — alerts operators without escalating', 'conversation_id, reason?'],
+  ['handoff_cancelled', 'Customer declined a human — drops needs_human back to the agent and resolves open alerts', 'conversation_id, reason?'],
   ['custom_alert', 'Fire a custom alert (e.g. refund_requested)', 'conversation_id, alert_type, text?'],
 ];
 
@@ -45,15 +51,59 @@ function Table({ head, rows }: { head: string[]; rows: string[][] }) {
 }
 
 function Code({ children }: { children: string }) {
-  return <pre className="docs-code">{children}</pre>;
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(children);
+    } catch {
+      // clipboard API needs a secure context — fall back for older setups
+      const ta = document.createElement('textarea');
+      ta.value = children;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div className="docs-code-wrap">
+      <button className="docs-copy" onClick={copy} title="Copy to clipboard" aria-label="Copy code">
+        {copied ? '✓' : '⧉'}
+      </button>
+      <pre className="docs-code">{children}</pre>
+    </div>
+  );
 }
 
 export default function Docs() {
+  const { data } = useMe();
+  const signOut = async () => {
+    await api('/auth/logout', { method: 'POST' });
+    window.location.href = '/';
+  };
   return (
     <div className="landing" style={{ maxWidth: 760 }}>
       <nav className="landing-nav">
         <Link to="/"><img className="landing-logo" src="/img/janis-top.png" alt="Janis" /></Link>
-        <Link to="/login" className="btn">Sign in</Link>
+        {data ? (
+          <span className="row" style={{ gap: 8 }}>
+            <Link to="/conversations" className="btn primary">Open console</Link>
+            <a
+              className="btn"
+              href="/login"
+              onClick={(e) => {
+                e.preventDefault();
+                void signOut();
+              }}
+            >
+              Sign out
+            </a>
+          </span>
+        ) : (
+          <Link to="/login" className="btn">Sign in</Link>
+        )}
       </nav>
 
       <h1>Agent API &amp; BYOK</h1>
@@ -152,12 +202,7 @@ app.post('/janis/webhook', (req, res) => {
         shouldn't answer.
       </p>
 
-      <footer className="landing-footer muted" style={{ marginTop: 48 }}>
-        <span>© {new Date().getFullYear()} Janis</span>
-        <Link to="/">Home</Link>
-        <Link to="/privacy">Privacy Policy</Link>
-        <Link to="/terms">Terms of Service</Link>
-      </footer>
+      <SiteFooter style={{ marginTop: 48 }} />
     </div>
   );
 }

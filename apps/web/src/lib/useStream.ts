@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { typingBus } from './typingBus';
 
 export interface StreamAlert {
   id: string;
@@ -31,6 +32,14 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
     source.addEventListener('message', refresh);
     source.addEventListener('conversation', refresh);
     source.addEventListener('suggestion', refresh);
+    // Visitor typing — ephemeral; routed to the open chat, never a refetch.
+    source.addEventListener('typing', (e) => {
+      try {
+        typingBus.publish(JSON.parse((e as MessageEvent).data));
+      } catch {
+        // malformed payload — ignore
+      }
+    });
     source.addEventListener('alert', (e) => {
       refresh();
       if (onAlert) {

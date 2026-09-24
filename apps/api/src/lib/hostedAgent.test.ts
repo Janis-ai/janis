@@ -1,11 +1,11 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, conversations, messages, uploads, workspaces } from '../db/schema.js';
-import { fileAnalysisAllowed, transcriptFor } from './hostedAgent.js';
+import { blessedUrlsFor, extractLearns, fileAnalysisAllowed, guardReplyLinks, transcriptFor } from './hostedAgent.js';
 
 let db: Db;
 let convId: string;
@@ -112,5 +112,120 @@ describe('fileAnalysisAllowed', () => {
     expect(await fileAnalysisAllowed(db, free.id)).toBe(false);
     const [unset] = await db.insert(workspaces).values({ name: 'Unset' }).returning();
     expect(await fileAnalysisAllowed(db, unset.id)).toBe(false); // unknown plan → free
+  });
+});
+
+describe('guardReplyLinks', () => {
+  const blessed = ['https://app.janis.ai/agents', 'https://janis.ai/pricing'];
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(new Response(null, { status: 404 })); // default: dead link
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('keeps URLs verbatim from the blessed set', async () => {
+    const r = await guardReplyLinks('Add one at https://app.janis.ai/agents.', blessed);
+    expect(r.text).toBe('Add one at https://app.janis.ai/agents.');
+    expect(r.fixed).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps deep links on a blessed domain', async () => {
+    const r = await guardReplyLinks('see https://app.janis.ai/settings?x=1', blessed);
+    expect(r.text).toContain('https://app.janis.ai/settings?x=1');
+  });
+
+  it('swaps a corrupted domain when the path matches a blessed URL', async () => {
+    const r = await guardReplyLinks('Go to https://app.native.ai/agents to add one.', blessed);
+    expect(r.text).toBe('Go to https://app.janis.ai/agents to add one.');
+    expect(r.fixed).toEqual(['https://app.native.ai/agents']);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('maps a bare corrupted domain to the first blessed origin', async () => {
+    const r = await guardReplyLinks('visit https://native.ai', blessed);
+    expect(r.text).toBe('visit https://app.janis.ai/');
+    expect(r.fixed).toHaveLength(1);
+  });
+
+  it('strips invented URLs that do not resolve', async () => {
+    const r = await guardReplyLinks('Check https://evil.example.com/steal for details.', blessed);
+    expect(r.text).toBe('Check for details.');
+    expect(r.stripped).toEqual(['https://evil.example.com/steal']);
+  });
+
+  it('passes an unblessed link that actually resolves', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+    const r = await guardReplyLinks(
+      'listen https://music.apple.com/us/search?term=bobby',
+      blessed,
+    );
+    expect(r.text).toContain('https://music.apple.com/us/search?term=bobby');
+    expect(r.verified).toEqual(['https://music.apple.com/us/search?term=bobby']);
+  });
+
+  it('keeps but flags a link that cannot be verified', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 403 }));
+    const r = await guardReplyLinks('see https://blocked.example/x', blessed);
+    expect(r.text).toContain('https://blocked.example/x');
+    expect(r.unverified).toHaveLength(1);
+  });
+
+  it('strips private-network targets without fetching', async () => {
+    const r = await guardReplyLinks('hit http://169.254.169.254/latest/meta', blessed);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(r.stripped).toEqual(['http://169.254.169.254/latest/meta']);
+  });
+
+  it('unwraps markdown links emptied by a strip', async () => {
+    const r = await guardReplyLinks('see [this page](https://bogus.io/deep/path) now', blessed);
+    expect(r.text).toBe('see this page now');
+  });
+
+  it('blesses customer-shared links, tool endpoints, and config domains', async () => {
+    const agent = {
+      config: {
+        allowed_link_domains: ['ups.com'],
+        tools: [{ name: 'lookup', url: 'https://api.shop.example/lookup', method: 'GET' }],
+      },
+    } as never;
+    const urls = blessedUrlsFor(agent, 'prompt https://app.janis.ai/agents', [
+      { role: 'user', content: 'my tracking link https://tracking.ups.com/1Z999' },
+    ]);
+    // customer-shared link echoes back fine
+    expect(
+      (await guardReplyLinks('your tracking: https://tracking.ups.com/1Z999', urls)).stripped,
+    ).toHaveLength(0);
+    // config-blessed domain (tool return values) and the tool's own origin pass
+    expect((await guardReplyLinks('see https://ups.com/hub/1Z999', urls)).stripped).toHaveLength(0);
+    expect(
+      (await guardReplyLinks('via https://api.shop.example/item/5', urls)).stripped,
+    ).toHaveLength(0);
+    // subdomains of a blessed domain count; lookalikes get checked (dead → strip)
+    expect(
+      (await guardReplyLinks('via https://static.api.shop.example/img.png', urls)).stripped,
+    ).toHaveLength(0);
+    expect(
+      (await guardReplyLinks('no https://notshop.example/x', urls)).stripped,
+    ).toHaveLength(1);
+    // but an invented link is still caught
+    expect((await guardReplyLinks('bad https://evil.io/x', urls)).stripped).toHaveLength(1);
+  });
+});
+
+describe('extractLearns', () => {
+  it('strips LEARN lines from the reply and returns them', () => {
+    const r = extractLearns('Here is your answer.\nLEARN: returns are 30 days\nlearn: see /returns');
+    expect(r.text).toBe('Here is your answer.');
+    expect(r.learns).toEqual(['returns are 30 days', 'see /returns']);
+  });
+
+  it('leaves plain replies untouched', () => {
+    const r = extractLearns('Nothing to learn here.');
+    expect(r.text).toBe('Nothing to learn here.');
+    expect(r.learns).toHaveLength(0);
   });
 });

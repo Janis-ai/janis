@@ -23,6 +23,7 @@ export async function resolveGreeting(
   channel: ChannelRow,
   agent: AgentRow | null | undefined,
   gen: (a: AgentRow, channelName?: string) => Promise<string | null> = generateGreeting,
+  opts: { background?: boolean } = {},
 ): Promise<string | null> {
   const cfg = (agent?.config ?? {}) as AgentConfig;
   if (cfg.greeting_enabled === false) return null;
@@ -32,6 +33,17 @@ export async function resolveGreeting(
   if (agent?.hosted) {
     const hit = generatedCache.get(channel.id);
     if (hit && Date.now() - hit.at < GENERATED_TTL_MS) return hit.text;
+    // Cold cache + background: generate off-path and serve the default now so
+    // bootstrap/first-message never block on an LLM call. The next request
+    // gets the generated greeting once the cache warms.
+    if (opts.background) {
+      void gen(agent, channel.name)
+        .then((text) => {
+          if (text) generatedCache.set(channel.id, { text, at: Date.now() });
+        })
+        .catch(() => {});
+      return DEFAULT_GREETING;
+    }
     const text = await gen(agent, channel.name).catch(() => null);
     if (text) {
       generatedCache.set(channel.id, { text, at: Date.now() });

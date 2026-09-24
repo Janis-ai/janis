@@ -2,11 +2,13 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, messages, users } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
-import { mirrorToSlack, slackNotice, updateSlackAlert } from '../lib/slack.js';
-import { channelBindingFor, deliverToChannel, releaseThreadControl, takeThreadControl } from '../lib/channels.js';
+import { mirrorToSlack, setSlackThreadStatus, slackNotice, updateSlackAlert } from '../lib/slack.js';
+import { channelBindingFor, deliverToChannel, releaseThreadControl, takeThreadControl, type ChannelDelivery } from '../lib/channels.js';
 import { emitChannelUpdate } from '../lib/legacySocket.js';
+import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
+import { env } from '../env.js';
 
 type UserRow = typeof users.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -35,6 +37,15 @@ export async function getConversationForWorkspace(
     throw new TakeoverError('conversation not found', 404);
   }
   return row;
+}
+
+/** Identity exposed on customer-facing surfaces (agent webhooks — an external
+ * agent may render it to end users). display_name wins, else first name; a
+ * show_identity opt-out withholds the name entirely. Internal surfaces
+ * (console, Slack) keep the real account name. */
+function customerOperator(u: UserRow): { id: string; name: string } {
+  if (u.showIdentity === false) return { id: u.id, name: 'Operator' };
+  return { id: u.id, name: u.displayName || u.name.split(' ')[0] || u.name };
 }
 
 /** Human takes over: conversation → 'human', open alerts resolved, agent notified. */
@@ -102,7 +113,7 @@ export async function takeover(
   await deliverWebhook(db, agent, 'human.takeover', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
-    operator: { id: user.id, name: user.name },
+    operator: customerOperator(user),
   });
   return updated;
 }
@@ -116,7 +127,8 @@ export async function humanReply(
   text: string,
   attachments?: { name: string; url: string; type: string; size: number }[],
   viaSlack = false,
-): Promise<typeof messages.$inferSelect> {
+  slackTs?: string, // originating slack message ts — dedupe key on redelivery
+): Promise<{ message: typeof messages.$inferSelect; delivery: ChannelDelivery }> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
     workspaceId,
@@ -134,7 +146,10 @@ export async function humanReply(
       direction: 'human',
       authorId: user.id,
       text,
-      payload: attachments?.length ? { attachments } : {},
+      payload: {
+        ...(attachments?.length ? { attachments } : {}),
+        ...(slackTs ? { slack_ts: slackTs } : {}),
+      },
     })
     .returning();
 
@@ -148,27 +163,58 @@ export async function humanReply(
     })
     .where(eq(conversations.id, conversationId));
 
+  // A customer-visible reply ends both indicators — the agent's outstanding
+  // run is moot and the operator just sent what they were typing.
+  clearAgentWorking(conversationId);
+  clearOperatorTyping(conversationId);
+  void setSlackThreadStatus(db, conversationId, null);
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
   if (!viaSlack) {
     void mirrorToSlack(db, conversationId, `:bust_in_silhouette: *${user.name}:*`, text, {
-      identity: { username: `${user.name} (operator)` },
+      identity: {
+        username: `${user.name} (operator)`,
+        icon_url: user.avatarUrl ? `${env.apiOrigin}${user.avatarUrl}` : undefined,
+      },
     });
   }
   // If the conv went 'human' without an explicit takeover (DF action, Page
   // Inbox, stop-chat), we may not hold the thread yet — claim it before send.
-  void (async () => {
+  // Awaited so the caller learns the real delivery outcome: Meta rejects
+  // sends outside the 24h window and the console must not mark those
+  // "Delivered".
+  const delivery = await (async () => {
     const b = await channelBindingFor(db, conversationId);
     if (b) await takeThreadControl(b.channel, b.platformUserId);
-    await deliverToChannel(db, conversationId, text, attachments, { messageId: message.id }); // hosted channel: human → end user
+    // Customer-facing identity for the reply: Messenger renders it as a real
+    // Persona (name + avatar), text-only channels get an inline name prefix,
+    // and show_identity opt-out keeps the reply anonymous everywhere.
+    const senderName =
+      user.showIdentity === false
+        ? undefined
+        : user.displayName || user.name.split(' ')[0] || user.name;
+    return deliverToChannel(db, conversationId, text, attachments, {
+      messageId: message.id,
+      senderName,
+      senderId: senderName ? user.id : undefined,
+      senderAvatar: senderName ? user.avatarUrl : undefined,
+    }); // hosted channel: human → end user
   })();
+  if (!delivery.delivered) {
+    void mirrorToSlack(
+      db,
+      conversationId,
+      ':warning:',
+      `_Delivery to the customer failed:_ ${delivery.error ?? 'unknown error'}`,
+    );
+  }
   await deliverWebhook(db, agent, 'message.human', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
     text,
-    operator: { id: user.id, name: user.name },
+    operator: customerOperator(user),
     payload: attachments?.length ? { attachments } : undefined,
   });
-  return message;
+  return { message, delivery };
 }
 
 /**
@@ -184,7 +230,8 @@ export async function agentSend(
   text: string,
   attachments?: { name: string; url: string; type: string; size: number }[],
   viaSlack = false,
-): Promise<typeof messages.$inferSelect> {
+  slackTs?: string,
+): Promise<{ message: typeof messages.$inferSelect; delivery: ChannelDelivery }> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
     workspaceId,
@@ -199,7 +246,11 @@ export async function agentSend(
       direction: 'out',
       authorId: user.id,
       text,
-      payload: { via: 'operator', ...(attachments?.length ? { attachments } : {}) },
+      payload: {
+        via: 'operator',
+        ...(attachments?.length ? { attachments } : {}),
+        ...(slackTs ? { slack_ts: slackTs } : {}),
+      },
     })
     .returning();
 
@@ -213,27 +264,41 @@ export async function agentSend(
     })
     .where(eq(conversations.id, conversationId));
 
+  // Same as humanReply — the visitor got a message, so no more dots.
+  clearAgentWorking(conversationId);
+  clearOperatorTyping(conversationId);
+  void setSlackThreadStatus(db, conversationId, null);
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
   if (!viaSlack) {
     void mirrorToSlack(db, conversationId, `:robot_face: *${user.name}* (via agent):`, text, {
       identity: { username: `${agent.name} (agent)` },
     });
   }
-  void (async () => {
+  // Awaited so the caller learns the real delivery outcome — same as
+  // humanReply; a Meta rejection must surface, not mark "Delivered".
+  const delivery = await (async () => {
     const b = await channelBindingFor(db, conversationId);
     if (b) await takeThreadControl(b.channel, b.platformUserId);
-    await deliverToChannel(db, conversationId, text, attachments, { messageId: message.id }); // hosted channel: send to end user
+    return deliverToChannel(db, conversationId, text, attachments, { messageId: message.id }); // hosted channel: send to end user
   })();
+  if (!delivery.delivered) {
+    void mirrorToSlack(
+      db,
+      conversationId,
+      ':warning:',
+      `_Delivery to the customer failed:_ ${delivery.error ?? 'unknown error'}`,
+    );
+  }
   await deliverWebhook(db, agent, 'agent.send', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
     text,
-    operator: { id: user.id, name: user.name },
+    operator: customerOperator(user),
     payload: attachments?.length
       ? { via: 'operator', attachments }
       : { via: 'operator' },
   });
-  return message;
+  return { message, delivery };
 }
 
 /**
@@ -249,6 +314,7 @@ export async function internalNote(
   user: UserRow,
   text: string,
   viaSlack = false,
+  slackTs?: string,
 ): Promise<typeof messages.$inferSelect> {
   const { conversation } = await getConversationForWorkspace(
     db,
@@ -264,7 +330,7 @@ export async function internalNote(
       direction: 'human',
       authorId: user.id,
       text,
-      payload: { internal: true, via: viaSlack ? 'slack' : 'web' },
+      payload: { internal: true, via: viaSlack ? 'slack' : 'web', ...(slackTs ? { slack_ts: slackTs } : {}) },
     })
     .returning();
 
@@ -296,6 +362,7 @@ export async function teachAgent(
   user: UserRow,
   text: string,
   viaSlack = false,
+  slackTs?: string,
 ): Promise<{ message: typeof messages.$inferSelect; knowledgeCount: number }> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
@@ -322,7 +389,7 @@ export async function teachAgent(
       direction: 'human',
       authorId: user.id,
       text: `Taught the agent: ${text}`,
-      payload: { internal: true, teach: true, via: viaSlack ? 'slack' : 'web' },
+      payload: { internal: true, teach: true, via: viaSlack ? 'slack' : 'web', ...(slackTs ? { slack_ts: slackTs } : {}) },
     })
     .returning();
 
@@ -391,7 +458,7 @@ export async function resume(
   await deliverWebhook(db, agent, 'human.resume', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
-    operator: user ? { id: user.id, name: user.name } : undefined,
+    operator: user ? customerOperator(user) : undefined,
   });
   return updated;
 }

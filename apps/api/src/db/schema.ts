@@ -33,26 +33,62 @@ export const workspaces = pgTable('workspaces', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const users = pgTable('users', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  workspaceId: uuid('workspace_id')
-    .notNull()
-    .references(() => workspaces.id),
-  email: text('email').notNull().unique(),
-  name: text('name').notNull(),
-  passwordHash: text('password_hash'), // null for OAuth-only accounts
-  role: text('role', { enum: ['admin', 'member'] }).notNull().default('member'),
-  // {push, email} — which channels alert this user when agents need a human
-  notifyPrefs: jsonb('notify_prefs').notNull().default({ push: true, email: true }),
-  slackUserId: text('slack_user_id'), // resolved via users.lookupByEmail — cached for alert @mentions
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: text('email').notNull().unique(),
+    name: text('name').notNull(),
+    passwordHash: text('password_hash'), // null for OAuth-only accounts
+    // {push, email} — which channels alert this user when agents need a human
+    notifyPrefs: jsonb('notify_prefs').notNull().default({ push: true, email: true }),
+    slackUserId: text('slack_user_id'), // resolved via users.lookupByEmail — cached for alert @mentions
+    // Customer-facing operator identity on chats that show it — display_name
+    // falls back to the account's first name when unset.
+    displayName: text('display_name'),
+    avatarUrl: text('avatar_url'),
+    // per-operator opt-out — even on channels with show_operator enabled,
+    // their replies stay anonymous
+    showIdentity: boolean('show_identity').notNull().default(true),
+    // last workspace the user was active in — restored on next login
+    lastWorkspaceId: uuid('last_workspace_id').references(() => workspaces.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // case-insensitive email uniqueness — entry points normalize, this is the
+  // backstop so 'Foo@x' and 'foo@x' can never become two accounts
+  (t) => [uniqueIndex('users_email_ci').on(sql`lower(${t.email})`)],
+);
+
+/** Workspace membership — a user can belong to many workspaces; the role
+ * lives on the membership. acceptedAt null = invited, not yet accepted. */
+export const memberships = pgTable(
+  'memberships',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    role: text('role', { enum: ['admin', 'member'] }).notNull().default('member'),
+    invitedBy: uuid('invited_by').references(() => users.id),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('memberships_user_workspace').on(t.userId, t.workspaceId)],
+);
 
 export const sessions = pgTable('sessions', {
   id: text('id').primaryKey(), // sha256 of the bearer token
   userId: uuid('user_id')
     .notNull()
     .references(() => users.id),
+  // which of the user's workspaces this session is acting in — a user with
+  // multiple memberships can switch without logging out
+  workspaceId: uuid('workspace_id').references(() => workspaces.id),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -69,6 +105,9 @@ export const agents = pgTable('agents', {
   webhookUrl: text('webhook_url'),
   webhookSecret: text('webhook_secret'),
   hosted: boolean('hosted').notNull().default(false), // Janis runs the agent in-process
+  // Slack channel override for this agent's alerts — null routes to the
+  // installation's workspace-wide alert channel
+  slackChannelId: text('slack_channel_id'),
   autoResumeMinutes: integer('auto_resume_minutes').default(10), // auto-release human takeover after N min (null = never)
   // Behavior config for template-based agents: {system_prompt, knowledge[], tone}
   config: jsonb('config').notNull().default({}),
@@ -126,7 +165,7 @@ export const messages = pgTable(
     payload: jsonb('payload').notNull().default({}),
     flags: jsonb('flags')
       .notNull()
-      .default({ failure: false, help_requested: false, custom_alert: false }),
+      .default({ failure: false, help_requested: false, custom_alert: false, handoff_offer: false }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -147,7 +186,7 @@ export const alerts = pgTable(
       .notNull()
       .references(() => conversations.id),
     type: text('type', {
-      enum: ['failure', 'help_request', 'custom', 'inactivity', 'keyword', 'sla'],
+      enum: ['failure', 'help_request', 'handoff_offer', 'custom', 'inactivity', 'keyword', 'sla'],
     }).notNull(),
     detail: text('detail'),
     status: text('status', { enum: ['open', 'acknowledged', 'resolved'] })
@@ -202,6 +241,11 @@ export const slackInstallations = pgTable('slack_installations', {
   botToken: text('bot_token').notNull(),
   alertChannelId: text('alert_channel_id'),
   installerUserId: uuid('installer_user_id').references(() => users.id),
+  // Slack user token granted at install (user_scope=chat:write) — lets us
+  // delete the installer's own thread replies so styled mirrors replace them
+  // (bot tokens can only delete messages the bot itself posted).
+  installerSlackUserId: text('installer_slack_user_id'),
+  installerUserToken: text('installer_user_token'),
   // true once a legacy wordhop-slack team is cut over: the token was imported
   // from Mongo and we own the team's Slack traffic — never fan out to legacy.
   migrated: boolean('migrated').notNull().default(false),
@@ -357,6 +401,30 @@ export const agentSecrets = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('agent_secrets_agent_name').on(t.agentId, t.name)],
+);
+
+// OAuth connections powering agent tools — server-to-server providers mint
+// and cache access tokens here (client_id/secret stay encrypted, tokens are
+// refreshed on demand). Tools reference {{secrets.CONN_<PROVIDER>_TOKEN}}.
+export const agentConnections = pgTable(
+  'agent_connections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    provider: text('provider').notNull(), // 'zendesk-oauth' | 'salesforce' | …
+    label: text('label'), // subdomain/instance host, for display
+    credentialsEnc: text('credentials_enc').notNull(), // encrypted JSON {host, client_id, client_secret}
+    accessTokenEnc: text('access_token_enc'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('agent_connections_agent_provider').on(t.agentId, t.provider)],
 );
 
 export const webhookDeliveries = pgTable('webhook_deliveries', {

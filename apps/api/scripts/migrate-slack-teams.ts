@@ -44,8 +44,9 @@ const opt = (name: string) => {
 };
 const file = opt('file');
 const apply = args.includes('--apply');
+const teamFilter = (opt('team') ?? '').split(',').filter(Boolean); // --team T…[,T…]
 if (!file) {
-  console.error('usage: --file slack-integrations.json [--apply]');
+  console.error('usage: --file slack-integrations.json [--team T…[,T…]] [--apply]');
   process.exit(1);
 }
 
@@ -65,6 +66,7 @@ const migratedTeamIds: string[] = [];
 const skipped: { team: string; reason: string }[] = [];
 
 for (const integ of integrations) {
+  if (teamFilter.length && !teamFilter.includes(integ.team_id)) continue;
   const label = `${integ.team_domain ?? '?'} (${integ.team_id})`;
 
   // workspace: majority owner of the team's subscribed bots
@@ -121,11 +123,13 @@ for (const integ of integrations) {
   let instId: string;
   let alertChannelId: string | null;
   if (existing) {
+    // Keep the existing token — a fresh OAuth install already carries the
+    // granular scope set; overwriting it with the legacy bot:basic token
+    // would be a downgrade. The import token is only for teams with no install.
     await db
       .update(slackInstallations)
       .set({
         workspaceId,
-        botToken: integ.bot_access_token,
         installerUserId: installer?.id ?? existing.installerUserId,
         migrated: true,
       })

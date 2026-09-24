@@ -1,16 +1,18 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, sql, type SQLWrapper } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import {
   agents,
   alerts,
   conversations,
+  memberships,
   messages,
   slackInstallations,
   slackThreads,
   users,
 } from '../db/schema.js';
+import { workspaceMembers } from './members.js';
 import { env } from '../env.js';
 
 type Installation = typeof slackInstallations.$inferSelect;
@@ -24,8 +26,10 @@ export async function slackApi<T = Record<string, unknown>>(
   token: string,
   method: string,
   body: Record<string, unknown>,
+  query?: Record<string, string>,
 ): Promise<T & { ok: boolean; error?: string }> {
-  const res = await fetch(`${SLACK_API}/${method}`, {
+  const url = query ? `${SLACK_API}/${method}?${new URLSearchParams(query)}` : `${SLACK_API}/${method}`;
+  const res = await fetch(url, {
     method: 'POST',
     // charset is required — without it Slack silently ignores the JSON body
     // on most methods (chat.postMessage tolerates it; users.*, conversations.*
@@ -91,6 +95,110 @@ export async function getInstallation(
     .where(eq(slackInstallations.workspaceId, workspaceId))
     .limit(1);
   return row;
+}
+
+/** All channels the bot can see — follows conversations.list pagination
+ * (a single 200-limit page drops channels in bigger workspaces).
+ * exclude_archived goes on the QUERY STRING — Slack ignores it in a JSON
+ * body — and we still filter is_archived client-side as a backstop: legacy
+ * workspaces carry thousands of archived channels. */
+export async function listSlackChannels(
+  botToken: string,
+): Promise<{ id: string; name: string }[]> {
+  const out: { id: string; name: string }[] = [];
+  let cursor: string | undefined;
+  do {
+    const res: {
+      channels?: { id: string; name: string; is_archived?: boolean }[];
+      response_metadata?: { next_cursor?: string };
+    } & { ok: boolean; error?: string } = await slackApi(
+      botToken,
+      'conversations.list',
+      {},
+      {
+        types: 'public_channel,private_channel',
+        exclude_archived: 'true',
+        limit: '200',
+        ...(cursor ? { cursor } : {}),
+      },
+    );
+    if (!res.ok) break;
+    for (const c of res.channels ?? []) {
+      if (!c.is_archived) out.push({ id: c.id, name: c.name });
+    }
+    cursor = res.response_metadata?.next_cursor || undefined;
+  } while (cursor && out.length < 2000);
+  return out;
+}
+
+/** Slack channel names: lowercase letters/digits/dash/underscore, ≤80 chars. */
+export function sanitizeChannelName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+/** Create a Slack channel. On name_taken retries with a short suffix unless
+ * retryOnTaken is false — user-initiated creates want the collision surfaced
+ * so they can pick another name, not a silent -x3yz rename. */
+export async function createSlackChannel(
+  inst: Installation,
+  name: string,
+  opts: { suffix?: string; retryOnTaken?: boolean } = {},
+): Promise<{ channel?: { id: string; name: string }; error?: string }> {
+  const { suffix = '', retryOnTaken = true } = opts;
+  const res = await slackApi<{ channel: { id: string; name: string } }>(
+    inst.botToken,
+    'conversations.create',
+    { name: `${name}${suffix}` },
+  ).catch(() => null);
+  if (res?.ok) return { channel: res.channel };
+  if (res?.error === 'name_taken' && retryOnTaken && !suffix) {
+    return createSlackChannel(inst, name.slice(0, 74), {
+      suffix: `-${Math.random().toString(36).slice(2, 6)}`,
+      retryOnTaken,
+    });
+  }
+  console.error('slack conversations.create failed:', res?.error);
+  return { error: res?.error ?? 'request failed' };
+}
+
+/** Fetch one channel — conversations.info takes its param on the QUERY
+ * STRING; in a JSON body Slack answers "missing required field: channel". */
+export async function slackChannelInfo(
+  botToken: string,
+  channelId: string,
+): Promise<{ id: string; name: string; isArchived: boolean } | null> {
+  const res = await slackApi<{ channel: { id: string; name: string; is_archived?: boolean } }>(
+    botToken,
+    'conversations.info',
+    {},
+    { channel: channelId },
+  ).catch(() => null);
+  return res?.ok
+    ? { id: res.channel.id, name: res.channel.name, isArchived: !!res.channel.is_archived }
+    : null;
+}
+
+/** Where this agent's alerts post — its own channel if set, else the
+ * workspace-wide alert channel. */
+export async function alertChannelFor(
+  db: Db,
+  inst: Installation,
+  agentId: string | null | undefined,
+): Promise<string | null> {
+  if (agentId) {
+    const [agent] = await db
+      .select({ slackChannelId: agents.slackChannelId })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .limit(1);
+    if (agent?.slackChannelId) return agent.slackChannelId;
+  }
+  return inst.alertChannelId;
 }
 
 /** Post a plain message to the workspace's alert channel (or a thread). */
@@ -222,12 +330,14 @@ async function memberToSlackUser(
     .limit(1);
   if (!member) return null;
   if (member.slackUserId) return member.slackUserId;
+  // lookupByEmail ignores JSON bodies — the email must go on the query string.
   const res = await slackApi<{ user: { id: string } }>(
     inst.botToken,
     'users.lookupByEmail',
+    {},
     { email: member.email },
   ).catch(() => null);
-  const slackId = res?.ok ? res.user.id : null;
+  const slackId = res?.ok && res.user ? res.user.id : null;
   if (slackId) {
     await db.update(users).set({ slackUserId: slackId }).where(eq(users.id, member.id));
   }
@@ -245,12 +355,9 @@ async function alertMention(
   conv: ConversationRow,
 ): Promise<{ text: string; slackUserId: string | null; dmIds: string[] }> {
   if (!conv.assigneeId) {
-    const members = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.workspaceId, inst.workspaceId));
+    const members = await workspaceMembers(db, inst.workspaceId);
     const ids = (
-      await Promise.all(members.map((m) => memberToSlackUser(db, inst, m.id)))
+      await Promise.all(members.map((m) => memberToSlackUser(db, inst, m.user.id)))
     ).filter((x): x is string => !!x);
     if (ids.length && ids.length <= 8) {
       return { text: ids.map((id) => `<@${id}>`).join(' ') + ' ', slackUserId: null, dmIds: ids };
@@ -299,13 +406,65 @@ export async function inviteWorkspaceMembers(
   inst: Installation,
   channelId: string,
 ): Promise<void> {
-  const members = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.workspaceId, inst.workspaceId));
+  const members = await workspaceMembers(db, inst.workspaceId);
   for (const m of members) {
-    const sid = await memberToSlackUser(db, inst, m.id);
+    const sid = await memberToSlackUser(db, inst, m.user.id);
     if (sid) await ensureInAlertChannel(inst, sid, channelId);
+  }
+}
+
+/** Every channel Janis posts alerts to in this workspace: the workspace
+ * alert channel plus each agent's own override channel. */
+async function janisAlertChannels(db: Db, inst: Installation): Promise<string[]> {
+  const ids = new Set<string>();
+  if (inst.alertChannelId) ids.add(inst.alertChannelId);
+  const rows = await db
+    .select({ ch: agents.slackChannelId })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, inst.workspaceId), isNotNull(agents.slackChannelId)));
+  for (const r of rows) if (r.ch) ids.add(r.ch);
+  return [...ids];
+}
+
+/** A newly-accepted member gets invited into every Janis alert channel —
+ * thread replies and buttons only reach channel members. */
+export async function syncMemberToAlertChannels(
+  db: Db,
+  workspaceId: string,
+  userId: string,
+): Promise<void> {
+  const inst = await getInstallation(db, workspaceId);
+  if (!inst) return;
+  const sid = await memberToSlackUser(db, inst, userId);
+  if (!sid) return;
+  for (const ch of await janisAlertChannels(db, inst)) {
+    await ensureInAlertChannel(inst, sid, ch);
+  }
+}
+
+/** A removed member gets kicked out of every Janis alert channel. The user
+ * row survives workspace removal, so memberToSlackUser still resolves. */
+export async function removeMemberFromAlertChannels(
+  db: Db,
+  workspaceId: string,
+  userId: string,
+): Promise<void> {
+  const inst = await getInstallation(db, workspaceId);
+  if (!inst) return;
+  const sid = await memberToSlackUser(db, inst, userId);
+  if (!sid) return;
+  for (const ch of await janisAlertChannels(db, inst)) {
+    const kick = () =>
+      slackApi(inst.botToken, 'conversations.kick', { channel: ch, user: sid }).catch(() => null);
+    let res = await kick();
+    // Bot must be a channel member to kick — join first on public channels.
+    if (res?.error === 'not_in_channel') {
+      await slackApi(inst.botToken, 'conversations.join', { channel: ch }).catch(() => null);
+      res = await kick();
+    }
+    if (res && !res.ok && !['not_in_channel', 'cant_kick_self'].includes(res.error ?? '')) {
+      console.error('slack kick failed:', res.error);
+    }
   }
 }
 
@@ -350,7 +509,9 @@ export async function postSlackAlert(
   opts: { reply?: boolean } = {},
 ): Promise<void> {
   const inst = await getInstallation(db, workspaceId);
-  if (!inst?.alertChannelId) return;
+  if (!inst) return;
+  const channelId = await alertChannelFor(db, inst, agent.id);
+  if (!channelId) return;
 
   const [existing] = await db
     .select()
@@ -365,10 +526,7 @@ export async function postSlackAlert(
   // unresolvable → @here: the assignee is paged via Janis push/email anyway.
   const { text: mention, slackUserId, dmIds } = await alertMention(db, inst, conv);
   const dmTargets = new Set(dmIds);
-  if (
-    slackUserId &&
-    !(await ensureInAlertChannel(inst, slackUserId, inst.alertChannelId))
-  ) {
+  if (slackUserId && !(await ensureInAlertChannel(inst, slackUserId, channelId))) {
     dmTargets.add(slackUserId);
   }
 
@@ -395,7 +553,7 @@ export async function postSlackAlert(
   }
 
   const res = await slackApi<{ channel: string; ts: string }>(inst.botToken, 'chat.postMessage', {
-    channel: inst.alertChannelId,
+    channel: channelId,
     text: summary,
     blocks: alertBlocks(conv, agent, alert, mention),
   });
@@ -481,8 +639,15 @@ async function seedSlackThread(
     if (!m.text) continue;
     // Flagged notes (handoff/failure/custom alert) are internal system lines
     // — italic, from the app itself, not attributed to a participant.
-    const f = m.flags as { failure?: boolean; help_requested?: boolean; custom_alert?: boolean } | null;
-    const isSystemNote = Boolean(f?.failure || f?.help_requested || f?.custom_alert);
+    const f = m.flags as {
+      failure?: boolean;
+      help_requested?: boolean;
+      custom_alert?: boolean;
+      handoff_offer?: boolean;
+    } | null;
+    const isSystemNote = Boolean(
+      f?.failure || f?.help_requested || f?.custom_alert || f?.handoff_offer,
+    );
     // Role suffixes keep same-named participants (e.g. agent and customer
     // both "Michael Nathanson") from collapsing into a single header.
     const identity = isSystemNote
@@ -607,6 +772,52 @@ export async function mirrorToSlack(
   }
 }
 
+// assistant.threads.setStatus dedupe — Slack keeps a status ~2min and
+// auto-clears it when the app posts in the thread, so re-set the same
+// status at most every 90s and only call the clear API when we set one.
+const lastThreadStatus = new Map<string, { status: string; at: number }>();
+
+/** Mirror typing state into the conversation's Slack thread using Slack's
+ * assistant status API ("is typing…" / "is thinking…" under the app name).
+ * Works on plain chat:write — no assistant:write needed. Pass null to clear.
+ * Deduped: pings repeat every few seconds while composing, and mirrored
+ * replies auto-clear the status Slack-side, so this is cheap. Never throws. */
+export async function setSlackThreadStatus(
+  db: Db,
+  conversationId: string,
+  status: string | null,
+): Promise<void> {
+  try {
+    const last = lastThreadStatus.get(conversationId);
+    if (status === null) {
+      if (!last) return; // nothing was set — nothing to clear
+      lastThreadStatus.delete(conversationId);
+    } else {
+      if (last && last.status === status && Date.now() - last.at < 90_000) return;
+    }
+    const [thread] = await db
+      .select({ slackThreads, installation: slackInstallations })
+      .from(slackThreads)
+      .innerJoin(slackInstallations, eq(slackThreads.installationId, slackInstallations.id))
+      .where(eq(slackThreads.conversationId, conversationId))
+      .limit(1);
+    if (!thread) return;
+    const res = await slackApi(thread.installation.botToken, 'assistant.threads.setStatus', {
+      channel_id: thread.slackThreads.channelId,
+      thread_ts: thread.slackThreads.ts,
+      status: status ?? '',
+    });
+    if (res.ok) {
+      if (status !== null) lastThreadStatus.set(conversationId, { status, at: Date.now() });
+    } else {
+      lastThreadStatus.delete(conversationId);
+      console.error('slack thread status failed:', res.error);
+    }
+  } catch (err) {
+    console.error('slack thread status failed:', err);
+  }
+}
+
 /** Post a lifecycle notice (takeover/resume) into the conversation's Slack
  * thread. If the conversation never escalated it has no thread — post the
  * notice to the alert channel top-level and adopt it as the thread anchor so
@@ -635,9 +846,11 @@ export async function slackNotice(
     return;
   }
   const inst = await getInstallation(db, workspaceId);
-  if (!inst?.alertChannelId) return;
+  if (!inst) return;
+  const channelId = await alertChannelFor(db, inst, conv.agentId);
+  if (!channelId) return;
   const res = await slackApi<{ channel: string; ts: string }>(inst.botToken, 'chat.postMessage', {
-    channel: inst.alertChannelId,
+    channel: channelId,
     text: `${label} ${text} — \`${conv.externalId}\``,
   });
   if (!res.ok) {
@@ -667,14 +880,34 @@ export async function findThread(db: Db, channelId: string, threadTs: string) {
 }
 
 /**
- * Map a Slack user to a Janis member: fetch their email from Slack and match
- * on users.email in the installation's workspace. Falls back to the installer.
+ * Map a Slack user to a Janis member — ONLY by verified identity: the stored
+ * users.slackUserId link, or their Slack profile email matched against
+ * accepted workspace members (which then caches the link). No fallback: an
+ * unresolvable Slack user must NOT act as the installer or an admin.
  */
 export async function slackUserToMember(
   db: Db,
   inst: Installation,
   slackUserId: string,
 ): Promise<UserRow | undefined> {
+  const memberWhere = (pred: SQLWrapper) =>
+    db
+      .select({ user: users })
+      .from(memberships)
+      .innerJoin(users, eq(memberships.userId, users.id))
+      .where(
+        and(
+          eq(memberships.workspaceId, inst.workspaceId),
+          pred,
+          isNotNull(memberships.acceptedAt),
+        ),
+      )
+      .limit(1);
+
+  // Fast path — identity linked on a previous lookup.
+  const [linked] = await memberWhere(eq(users.slackUserId, slackUserId));
+  if (linked) return linked.user;
+
   const info = await slackApi<{ user: { profile?: { email?: string } } }>(
     inst.botToken,
     'users.info',
@@ -682,21 +915,12 @@ export async function slackUserToMember(
   ).catch(() => null);
   const email = info?.ok ? info.user?.profile?.email : undefined;
   if (email) {
-    const [member] = await db
-      .select()
-      .from(users)
-      .where(and(eq(users.workspaceId, inst.workspaceId), eq(users.email, email)))
-      .limit(1);
-    if (member) return member;
+    const [member] = await memberWhere(eq(users.email, email));
+    if (member) {
+      // Cache the link so future actions skip the users.info call.
+      await db.update(users).set({ slackUserId }).where(eq(users.id, member.user.id));
+      return member.user;
+    }
   }
-  if (inst.installerUserId) {
-    const [installer] = await db.select().from(users).where(eq(users.id, inst.installerUserId));
-    return installer;
-  }
-  const [anyAdmin] = await db
-    .select()
-    .from(users)
-    .where(and(eq(users.workspaceId, inst.workspaceId), eq(users.role, 'admin')))
-    .limit(1);
-  return anyAdmin;
+  return undefined;
 }

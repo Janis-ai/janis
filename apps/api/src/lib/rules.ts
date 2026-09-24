@@ -32,6 +32,13 @@ export function evaluateEvent(event: IngestEvent, rules: RuleRow[]): TriggeredAl
         triggered.push({ type: 'help_request', detail: event.reason ?? 'Agent requested handoff' });
       }
       break;
+    case 'handoff_offer':
+      // Offers ride the handoff rule toggle — a workspace that disabled
+      // handoff alerts doesn't want offer alerts either.
+      if (alwaysFire || ruleOn('handoff_request')) {
+        triggered.push({ type: 'handoff_offer', detail: event.reason ?? 'Agent offered a human' });
+      }
+      break;
     case 'custom_alert':
       if (alwaysFire || ruleOn('custom_alert')) {
         triggered.push({ type: 'custom', detail: event.alert_type });

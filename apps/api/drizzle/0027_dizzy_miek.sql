@@ -1,0 +1,2 @@
+ALTER TABLE "messages" ALTER COLUMN "flags" SET DEFAULT '{"failure":false,"help_requested":false,"custom_alert":false,"handoff_offer":false}'::jsonb;--> statement-breakpoint
+ALTER TABLE "agents" ADD COLUMN "slack_channel_id" text;

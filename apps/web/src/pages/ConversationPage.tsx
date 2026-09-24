@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { Attachment, Conversation, Message } from '@janis/shared';
+import type { Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
 import { Avatar, channelLabel, displayName, fmtTime, StateBadge } from '../components/bits';
 import Composer from '../components/Composer';
+import { typingBus } from '../lib/typingBus';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -13,8 +14,26 @@ const WHO: Record<Message['direction'], string> = {
   human: 'Operator',
 };
 
+// Optimistic outbound entries — render immediately, reconcile against the
+// server's echoed row once the post-send refetch lands (same model the
+// webchat widget uses).
+interface OutEntry {
+  localId: string;
+  text: string;
+  attachments: Attachment[];
+  mode: 'human' | 'agent' | 'note' | 'teach';
+  status: 'pending' | 'failed' | 'delivered';
+  /** channel rejection reason when the send was stored but not delivered */
+  error?: string;
+  /** false when the channel says retrying can't help (closed 24h window) */
+  retryable?: boolean;
+  ts: number;
+}
+
 export default function ConversationPage() {
   const { id = '' } = useParams();
+  const [searchParams] = useSearchParams();
+  const jumpMsg = searchParams.get('msg'); // search-result deep link
   const { data, error: loadError } = useConversation(id);
   const { data: agents } = useAgents();
   const { data: users } = useUsers();
@@ -25,10 +44,200 @@ export default function ConversationPage() {
   const qc = useQueryClient();
   const invalidate = useInvalidateConversations();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  // stay glued to the bottom while the user is near it — attachments loading
+  // late (images) grow the transcript, so we re-snap whenever they render
+  const stickRef = useRef(true);
+  const snapToBottom = (behavior: ScrollBehavior = 'auto') => {
+    if (stickRef.current) bottomRef.current?.scrollIntoView({ behavior });
+  };
 
+  // Optimistic outbound entries + which one currently owns the receipt.
+  const [outbox, setOutbox] = useState<OutEntry[]>([]);
+  const outboxRef = useRef<OutEntry[]>([]);
+  const setOb = (fn: (o: OutEntry[]) => OutEntry[]) => {
+    outboxRef.current = fn(outboxRef.current);
+    setOutbox(outboxRef.current);
+  };
+  const receiptFor = useRef<string | null>(null); // localId
+
+  // Visitor typing pings — routed here by useStream via typingBus; the dots
+  // expire unless another ping keeps them alive. Agent pings (a dispatched
+  // message.user awaiting reply) are a real state, not a burst — they hold
+  // until a reply lands, with a long safety timer matching the server TTL.
+  const [visitorTyping, setVisitorTyping] = useState(false);
+  const [agentTyping, setAgentTyping] = useState(false);
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const agentTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(
+    () =>
+      typingBus.subscribe((p) => {
+        if (p.conversation_id !== id) return;
+        if (p.kind === 'agent') {
+          setAgentTyping(true);
+          clearTimeout(agentTimer.current);
+          agentTimer.current = setTimeout(() => setAgentTyping(false), 90_000);
+          return;
+        }
+        setVisitorTyping(true);
+        clearTimeout(typingTimer.current);
+        typingTimer.current = setTimeout(() => setVisitorTyping(false), 4500);
+      }),
+    [id],
+  );
+
+  // A fresh reply ends the agent-working dots — the reply is on screen, so
+  // the indicator's job is done. Keyed on the non-'in' count: the inbound
+  // visitor message that TRIGGERED the work lands at dispatch time too, and
+  // its refetch must not wipe the flag the typing ping just set.
+  const replyCount = (data?.messages ?? []).filter((m) => m.direction !== 'in').length;
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [data?.messages.length]);
+    setAgentTyping(false);
+    clearTimeout(agentTimer.current);
+  }, [replyCount]);
+  // Same for "visitor is typing" — a stored inbound means they sent, not
+  // that they're still composing.
+  const inboundCount = (data?.messages ?? []).length - replyCount;
+  useEffect(() => {
+    setVisitorTyping(false);
+    clearTimeout(typingTimer.current);
+  }, [inboundCount]);
+
+  // First paint per conversation snaps instantly — a smooth scroll across a
+  // long transcript crawls and gets interrupted by refetches. Later arrivals
+  // scroll smoothly. The mount effect runs before the fetch resolves, so
+  // don't record the snap until messages actually exist — otherwise the real
+  // first paint is treated as incremental and smooth-scrolls the whole list.
+  const snappedFor = useRef('');
+  useEffect(() => {
+    if (!data?.messages.length) return;
+    const initial = snappedFor.current !== id;
+    snappedFor.current = id;
+    // jump windows clear stickRef, so this is a no-op until "Jump to latest"
+    snapToBottom(initial ? 'auto' : 'smooth');
+  }, [data?.messages.length, outbox.length, visitorTyping, agentTyping, id]);
+
+  // History back-fill — the initial query returns the latest page; scrolling
+  // to the top fetches the page before the oldest rendered message and
+  // prepends it, holding the scroll position steady.
+  const [older, setOlder] = useState<Message[]>([]);
+  const [olderHasMore, setOlderHasMore] = useState<boolean | null>(null); // null = server flag
+  const [fetchingOlder, setFetchingOlder] = useState(false);
+  const pendingAdjust = useRef<{ prevHeight: number; prevTop: number } | null>(null);
+  // ?msg=<id> deep link — a message-anchored slice replaces the transcript;
+  // scrolling pages outward in both directions until it meets the live tail.
+  const [win, setWin] = useState<{
+    msgs: Message[];
+    hasMoreBefore: boolean;
+    hasMoreAfter: boolean;
+  } | null>(null);
+  const [fetchingNewer, setFetchingNewer] = useState(false);
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const jumpedFor = useRef('');
+  const olderFor = useRef('');
+  if (olderFor.current !== id) {
+    olderFor.current = id;
+    setOlder([]);
+    setOlderHasMore(null);
+    setWin(null);
+    jumpedFor.current = '';
+  }
+  const hasMore = win ? win.hasMoreBefore : (olderHasMore ?? data?.messages_has_more ?? false);
+
+  const loadOlder = async () => {
+    const oldest = win
+      ? win.msgs[0]?.created_at
+      : (older[0]?.created_at ?? data?.messages[0]?.created_at);
+    if (!hasMore || fetchingOlder || !oldest) return;
+    setFetchingOlder(true);
+    const el = transcriptRef.current;
+    const prevHeight = el?.scrollHeight ?? 0;
+    const prevTop = el?.scrollTop ?? 0;
+    try {
+      const d = await api<{ messages: Message[]; has_more: boolean }>(
+        `/api/conversations/${id}/messages?before=${encodeURIComponent(oldest)}`,
+      );
+      const known = new Set(
+        [...(win?.msgs ?? []), ...older, ...(data?.messages ?? [])].map((m) => m.id),
+      );
+      const fresh = d.messages.filter((m) => !known.has(m.id));
+      if (fresh.length) pendingAdjust.current = { prevHeight, prevTop };
+      if (win) {
+        setWin((w) => w && { ...w, msgs: [...fresh, ...w.msgs], hasMoreBefore: d.has_more });
+      } else {
+        if (fresh.length) setOlder((cur) => [...fresh, ...cur]);
+        setOlderHasMore(d.has_more);
+      }
+    } catch {
+      /* next scroll-to-top retries */
+    } finally {
+      setFetchingOlder(false);
+    }
+  };
+
+  // Forward paging — only meaningful inside a jump window; fetches the chunk
+  // after the newest loaded row until the window catches the live tail.
+  const loadNewer = async () => {
+    const newest = win?.msgs[win.msgs.length - 1]?.created_at;
+    if (!win?.hasMoreAfter || fetchingNewer || !newest) return;
+    setFetchingNewer(true);
+    try {
+      const d = await api<{ messages: Message[]; has_more: boolean }>(
+        `/api/conversations/${id}/messages?after=${encodeURIComponent(newest)}`,
+      );
+      const known = new Set(win.msgs.map((m) => m.id));
+      const fresh = d.messages.filter((m) => !known.has(m.id));
+      setWin((w) => w && { ...w, msgs: [...w.msgs, ...fresh], hasMoreAfter: d.has_more });
+    } catch {
+      /* next bottom-scroll retries */
+    } finally {
+      setFetchingNewer(false);
+    }
+  };
+
+  // Consume the ?msg= deep link once per conversation+target: if the hit is
+  // already in the loaded pages just scroll to it, otherwise fetch the
+  // centered window and render that instead of the latest page.
+  useEffect(() => {
+    if (!jumpMsg || !data) return;
+    const key = `${id}:${jumpMsg}`;
+    if (jumpedFor.current === key) return;
+    jumpedFor.current = key;
+    if ([...older, ...data.messages].some((m) => m.id === jumpMsg)) {
+      stickRef.current = false;
+      setHighlight(jumpMsg);
+      return;
+    }
+    void api<{ messages: Message[]; has_more: boolean; has_more_after: boolean }>(
+      `/api/conversations/${id}/messages?around=${encodeURIComponent(jumpMsg)}`,
+    )
+      .then((d) => {
+        if (!d.messages.length) return;
+        stickRef.current = false;
+        setWin({ msgs: d.messages, hasMoreBefore: d.has_more, hasMoreAfter: d.has_more_after });
+        setHighlight(jumpMsg);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpMsg, data, id]);
+
+  // Center the target and flash it briefly once rendered.
+  useLayoutEffect(() => {
+    if (!highlight) return;
+    transcriptRef.current
+      ?.querySelector(`[data-mid="${highlight}"]`)
+      ?.scrollIntoView({ block: 'center' });
+    const t = setTimeout(() => setHighlight(null), 2800);
+    return () => clearTimeout(t);
+  }, [highlight, win]);
+
+  useLayoutEffect(() => {
+    const el = transcriptRef.current;
+    if (el && pendingAdjust.current) {
+      el.scrollTop = pendingAdjust.current.prevTop + (el.scrollHeight - pendingAdjust.current.prevHeight);
+      pendingAdjust.current = null;
+    }
+  }, [older, win]);
 
   const refresh = () => {
     invalidate();
@@ -48,6 +257,7 @@ export default function ConversationPage() {
     mutationFn: (body: {
       tags?: string[];
       assignee_id?: string | null;
+      state?: 'active' | 'needs_human' | 'archived';
       is_starred?: boolean;
       is_unread?: boolean;
     }) =>
@@ -92,6 +302,27 @@ export default function ConversationPage() {
     onError: (e) => setError(e.message),
   });
 
+  // Status control — routes each target through the endpoint that owns its
+  // side effects: takeover claims the channel thread, resume releases it,
+  // PATCH handles plain flag changes (and resolves open alerts on 'active').
+  const setState = (target: ConversationState) => {
+    if (!data || target === data.conversation.state) return;
+    if (target === 'human') act.mutate('takeover');
+    else if (target === 'active' && data.conversation.state === 'human') act.mutate('resume');
+    else patch.mutate({ state: target });
+  };
+
+  // Operator typing ping — the widget/rail show visitor-side dots. Only
+  // customer-facing modes ping; internal notes and teaches must not leak
+  // operator activity to the visitor.
+  const typingPingAt = useRef(0);
+  const pingTyping = () => {
+    if (sendAs !== 'human' && sendAs !== 'agent') return;
+    if (Date.now() - typingPingAt.current < 2500) return;
+    typingPingAt.current = Date.now();
+    void api(`/api/conversations/${id}/typing`, { method: 'POST' }).catch(() => {});
+  };
+
   const [suggestOpen, setSuggestOpen] = useState(false);
 
   const suggest = useMutation({
@@ -129,15 +360,80 @@ export default function ConversationPage() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['conversation', id] }),
   });
 
-  const reply = useMutation({
-    mutationFn: ({ text, attachments }: { text: string; attachments: Attachment[] }) =>
-      api(`/api/conversations/${id}/${sendAs === 'agent' ? 'agent-send' : sendAs === 'note' ? 'note' : sendAs === 'teach' ? 'teach' : 'reply'}`, {
+  const send = (attachments: Attachment[], retryOf?: OutEntry) => {
+    const mode = retryOf?.mode ?? sendAs;
+    const entry: OutEntry =
+      retryOf ??
+      {
+        localId: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text: draft,
+        attachments,
+        mode,
+        status: 'pending',
+        ts: Date.now(),
+      };
+    setOb((o) =>
+      retryOf ? o.map((x) => (x.localId === retryOf.localId ? { ...x, status: 'pending' } : x)) : [...o, entry],
+    );
+    const endpoint =
+      mode === 'agent' ? 'agent-send' : mode === 'note' ? 'note' : mode === 'teach' ? 'teach' : 'reply';
+    api<{ delivery?: { delivered: boolean; error?: string; retryable?: boolean } }>(
+      `/api/conversations/${id}/${endpoint}`,
+      {
         method: 'POST',
-        body: JSON.stringify({ text, attachments }),
-      }),
-    onSuccess: () => { setDraft(''); setError(''); void qc.invalidateQueries({ queryKey: ['conversation', id] }); },
-    onError: (e) => setError(e.message),
-  });
+        body: JSON.stringify({ text: entry.text, attachments: entry.attachments }),
+      },
+    )
+      .then((res) => {
+        // The message row is stored either way, but "Delivered" is only
+        // honest once the channel accepted the send — a Meta rejection
+        // (e.g. the closed 24h window) reports the real error.
+        if (res?.delivery && !res.delivery.delivered) {
+          setOb((o) =>
+            o.map((x) =>
+              x.localId === entry.localId
+                ? {
+                    ...x,
+                    status: 'failed',
+                    error: res.delivery!.error ?? 'the channel rejected the send',
+                    retryable: res.delivery!.retryable,
+                  }
+                : x,
+            ),
+          );
+          setError('');
+          void qc.invalidateQueries({ queryKey: ['conversation', id] });
+          return;
+        }
+        setOb((o) => o.map((x) => (x.localId === entry.localId ? { ...x, status: 'delivered' } : x)));
+        receiptFor.current = entry.localId;
+        if (!retryOf) setDraft('');
+        setError('');
+        void qc.invalidateQueries({ queryKey: ['conversation', id] });
+      })
+      .catch((e) => {
+        setOb((o) => o.map((x) => (x.localId === entry.localId ? { ...x, status: 'failed' } : x)));
+        setError(e.message);
+      });
+  };
+
+  // Re-attempt delivery of a stored message the channel rejected — resends
+  // the same row rather than duplicating it in the transcript.
+  const resending = useRef(new Set<string>());
+  const resend = async (messageId: string) => {
+    if (resending.current.has(messageId)) return;
+    resending.current.add(messageId);
+    try {
+      // a failed resend re-stamps delivery_error on the row — the bubble's
+      // own error line updates on refetch, no page-level error needed
+      await api(`/api/conversations/${id}/messages/${messageId}/resend`, { method: 'POST' });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'resend failed');
+    } finally {
+      resending.current.delete(messageId);
+      void qc.invalidateQueries({ queryKey: ['conversation', id] });
+    }
+  };
 
   if (loadError instanceof ApiError && loadError.status === 404) {
     return (
@@ -146,7 +442,7 @@ export default function ConversationPage() {
       </div>
     );
   }
-  if (!data) return <div className="muted">Loading…</div>;
+  if (!data) return <div className="muted">Loading conversation…</div>;
   const { conversation: c, messages, alerts, suggestions } = data;
   const p = c.user_profile ?? {};
   const name = displayName(c);
@@ -161,9 +457,32 @@ export default function ConversationPage() {
   const canSend = c.state === 'human' || sendAs === 'agent' || sendAs === 'note' || sendAs === 'teach';
   const canTeach = me?.user.role === 'admin';
 
-  const send = (attachments: Attachment[]) => {
-    reply.mutate({ text: draft, attachments });
-  };
+  // Reconcile: an outbox entry drops once its server echo lands in the
+  // refetched transcript; the receipt follows whichever bubble — optimistic
+  // or echo — is the newest confirmed send.
+  const echoFor = new Map<string, Message>();
+  const echoIds = new Set<string>();
+  // In a jump window the latest page isn't rendered — match echoes against
+  // the window instead so a fresh send doesn't vanish from view.
+  const echoPool = win ? win.msgs : messages;
+  for (const o of outbox) {
+    const echo = echoPool.find(
+      (m) =>
+        m.direction !== 'in' &&
+        m.text === o.text &&
+        !echoIds.has(m.id) &&
+        Math.abs(Date.parse(m.created_at) - o.ts) < 60_000,
+    );
+    if (echo) {
+      echoIds.add(echo.id);
+      echoFor.set(o.localId, echo);
+    }
+  }
+  const visibleOutbox = outbox.filter((o) => !echoFor.has(o.localId));
+  const items = [
+    ...(win ? win.msgs : [...older, ...messages]).map((m) => ({ key: m.id, ts: Date.parse(m.created_at), kind: 'msg' as const, m })),
+    ...visibleOutbox.map((o) => ({ key: o.localId, ts: o.ts, kind: 'out' as const, o })),
+  ].sort((a, b) => a.ts - b.ts);
 
   return (
     <div className="conv-layout">
@@ -197,10 +516,79 @@ export default function ConversationPage() {
           </div>
         )}
 
-        <div className="transcript">
-          {messages.map((m) => {
+        <div
+          className="transcript"
+          ref={transcriptRef}
+          onScroll={() => {
+            const el = transcriptRef.current;
+            if (!el) return;
+            const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+            stickRef.current = nearBottom;
+            if (el.scrollTop < 60) void loadOlder();
+            if (nearBottom && win?.hasMoreAfter) void loadNewer();
+          }}
+        >
+          {fetchingOlder && <div className="muted" style={{ textAlign: 'center', fontSize: 12, padding: '8px 0' }}>Loading earlier messages…</div>}
+          {items.map((item) => {
+            if (item.kind === 'out') {
+              const o = item.o;
+              return (
+                <Fragment key={o.localId}>
+                  <div
+                    className={`msg ${o.mode === 'human' ? 'human' : 'out'} ${o.status === 'pending' ? 'pending' : ''} ${o.status === 'failed' ? 'failed' : ''}`}
+                    onClick={
+                      o.status === 'failed' && o.retryable !== false
+                        ? () => send(o.attachments, o)
+                        : undefined
+                    }
+                  >
+                    <div className="who">
+                      {me?.user.name ?? WHO.human}
+                      {o.mode === 'note' ? ' 🔒 internal' : o.mode === 'teach' ? ' 🧠 taught the agent' : ''}
+                      <span className="time">{fmtTime(new Date(o.ts).toISOString())}</span>
+                    </div>
+                    {o.text}
+                    {o.attachments.map((a, i) => (
+                      <div key={i}>
+                        {a.type.startsWith('image/') ? (
+                          <a href={a.url} target="_blank" rel="noreferrer">
+                            <img
+                              src={a.url}
+                              alt={a.name}
+                              style={{ maxWidth: 220, borderRadius: 8, marginTop: 6 }}
+                              onLoad={() => snapToBottom()}
+                            />
+                          </a>
+                        ) : (
+                          <a href={a.url} target="_blank" rel="noreferrer" className="attach-chip">
+                            📎 {a.name}
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {o.localId === receiptFor.current &&
+                    o.status === 'delivered' &&
+                    (o.mode === 'human' || o.mode === 'agent') && (
+                      <div className="receipt">Delivered</div>
+                    )}
+                  {o.status === 'failed' && (
+                    <div
+                      className="receipt receipt-fail"
+                      onClick={
+                        o.retryable !== false ? () => send(o.attachments, o) : undefined
+                      }
+                    >
+                      Not delivered{o.error ? ` — ${o.error}` : ''}
+                      {o.retryable !== false ? ' · tap to retry' : ''}
+                    </div>
+                  )}
+                </Fragment>
+              );
+            }
+            const m = item.m;
             const isInternal = m.payload.internal === true;
-            const isSystem = m.flags.failure || m.flags.help_requested || m.flags.custom_alert || isInternal;
+            const isSystem = m.flags.failure || m.flags.help_requested || m.flags.custom_alert || m.flags.handoff_offer || m.flags.handoff_cancelled || isInternal;
             const who =
               m.direction === 'in'
                 ? c.user_profile.name ?? WHO.in
@@ -208,7 +596,12 @@ export default function ConversationPage() {
                   ? agent?.name ?? WHO.out
                   : users?.users.find((u) => u.id === m.author)?.name ?? WHO.human;
             return (
-            <div key={m.id} className={`msg ${isSystem ? 'system' : m.direction}`}>
+            <>
+            <div
+              key={m.id}
+              data-mid={m.id}
+              className={`msg ${isSystem ? 'system' : m.direction}${highlight === m.id ? ' msg-hit' : ''}`}
+            >
               {(!isSystem || isInternal) && (
                 <div className="who">
                   {who}
@@ -240,7 +633,12 @@ export default function ConversationPage() {
                 <div key={i}>
                   {a.type.startsWith('image/') ? (
                     <a href={a.url} target="_blank" rel="noreferrer">
-                      <img src={a.url} alt={a.name} style={{ maxWidth: 220, borderRadius: 8, marginTop: 6 }} />
+                      <img
+                        src={a.url}
+                        alt={a.name}
+                        style={{ maxWidth: 220, borderRadius: 8, marginTop: 6 }}
+                        onLoad={() => snapToBottom()}
+                      />
                     </a>
                   ) : (
                     <a href={a.url} target="_blank" rel="noreferrer" className="attach-chip">
@@ -250,8 +648,51 @@ export default function ConversationPage() {
                 </div>
               ))}
             </div>
+            {receiptFor.current && echoFor.get(receiptFor.current)?.id === m.id && (
+              <div className="receipt">Delivered</div>
+            )}
+            {typeof m.payload.delivery_error === 'string' && m.payload.delivery_error && (
+              <div
+                className="receipt receipt-fail"
+                onClick={
+                  m.payload.delivery_retryable !== false
+                    ? () => void resend(m.id)
+                    : undefined
+                }
+              >
+                Not delivered — {String(m.payload.delivery_error)}
+                {m.payload.delivery_retryable !== false ? ' · tap to retry' : ''}
+              </div>
+            )}
+            </>
             );
           })}
+          {visitorTyping && (
+            <div className="msg in conv-typing">
+              <span className="dot" /><span className="dot" /><span className="dot" />
+            </div>
+          )}
+          {agentTyping && (
+            <div className="msg out conv-typing">
+              <span className="dot" /><span className="dot" /><span className="dot" />
+            </div>
+          )}
+          {fetchingNewer && <div className="muted" style={{ textAlign: 'center', fontSize: 12, padding: '8px 0' }}>Loading newer messages…</div>}
+          {win && (
+            <button
+              className="btn jump-latest"
+              onClick={() => {
+                setWin(null);
+                setOlder([]);
+                setOlderHasMore(null);
+                stickRef.current = true;
+                void qc.invalidateQueries({ queryKey: ['conversation', id] });
+                setTimeout(() => bottomRef.current?.scrollIntoView(), 80);
+              }}
+            >
+              ↓ Jump to latest
+            </button>
+          )}
           <div ref={bottomRef} />
         </div>
 
@@ -311,14 +752,17 @@ export default function ConversationPage() {
           <>
             <Composer
               value={draft}
-              onChange={setDraft}
+              onChange={(v) => {
+                setDraft(v);
+                pingTyping();
+              }}
               onSend={send}
               onResume={c.state === 'human' ? () => act.mutate('resume') : undefined}
               sendAs={sendAs}
               setSendAs={setSendAs}
               showModeSelect={true}
               canTeach={canTeach}
-              sending={reply.isPending}
+              sending={outbox.some((o) => o.status === 'pending')}
             />
             {c.state !== 'human' && (
               <button className="btn" style={{ marginTop: 8 }} onClick={() => setSendAs('human')}>Cancel</button>
@@ -381,6 +825,21 @@ export default function ConversationPage() {
               <div>Auto-resume after {agent.auto_resume_minutes}m</div>
             )}
           </div>
+        </div>
+
+        <div className="card">
+          <strong>Status</strong>
+          <select
+            style={{ width: '100%', marginTop: 8 }}
+            value={c.state}
+            disabled={act.isPending || patch.isPending}
+            onChange={(e) => setState(e.target.value as ConversationState)}
+          >
+            <option value="active">Agent</option>
+            <option value="needs_human" disabled={c.state === 'archived'}>Needs human</option>
+            <option value="human" disabled={c.state === 'archived'}>Human</option>
+            <option value="archived">Archived</option>
+          </select>
         </div>
 
         <div className="card">

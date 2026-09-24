@@ -29,6 +29,7 @@ import { slackApiRoutes, slackPublicRoutes } from './routes/slack.js';
 import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 import { metaApiRoutes, metaPublicRoutes } from './routes/meta.js';
 import { onboardingRoutes } from './routes/onboarding.js';
+import { toolTemplateRoutes } from './routes/toolTemplates.js';
 import { billingRoutes, stripeWebhookRoutes } from './routes/billing.js';
 import { workspaceRoutes } from './routes/workspace.js';
 import { webchatRoutes } from './routes/webchat.js';
@@ -104,6 +105,7 @@ export function createApp(db: Db) {
 
   const api = new Hono();
   api.route('/agents', agentRoutes(db));
+  api.route('/tool-templates', toolTemplateRoutes(db));
   api.route('/conversations', conversationRoutes(db));
   api.route('/alerts', alertRoutes(db));
   api.route('/rules', ruleRoutes(db));

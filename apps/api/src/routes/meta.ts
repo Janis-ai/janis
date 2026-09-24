@@ -7,7 +7,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import { agents, channelBindings, channels, metaConnections } from '../db/schema.js';
-import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toChannel } from '../lib/serializers.js';
 import { setGetStartedButton, type ChannelCredentials } from '../lib/channels.js';
 
@@ -111,7 +111,7 @@ export function metaApiRoutes(db: Db) {
 
   // Step 1: kick off Meta OAuth. Session cookie (SameSite=Lax) survives the
   // top-level redirect back from facebook.com.
-  app.get('/connect', (c) => {
+  app.get('/connect', adminOnly, (c) => {
     if (!env.metaAppId || !env.metaAppSecret) {
       return c.json({ error: 'Meta app not configured (META_APP_ID/META_APP_SECRET)' }, 400);
     }
@@ -126,7 +126,7 @@ export function metaApiRoutes(db: Db) {
   });
 
   // Step 2: exchange code → long-lived user token → discover assets.
-  app.get('/callback', async (c) => {
+  app.get('/callback', adminOnly, async (c) => {
     const back = (msg: string) => c.redirect(`${env.webOrigin}/integrations?meta_error=${encodeURIComponent(msg)}`);
     const sent = c.req.query('state');
     const stored = getCookie(c, STATE_COOKIE);
@@ -193,7 +193,7 @@ export function metaApiRoutes(db: Db) {
   });
 
   // Forget the stored Meta connection (e.g. to switch accounts).
-  app.delete('/session', async (c) => {
+  app.delete('/session', adminOnly, async (c) => {
     await db
       .delete(metaConnections)
       .where(eq(metaConnections.workspaceId, c.get('workspaceId')));
@@ -219,7 +219,7 @@ export function metaApiRoutes(db: Db) {
   });
 
   // Step 4: link a discovered asset to an agent → channel + webhook subscribe.
-  app.post('/link', zValidator('json', linkBody), async (c) => {
+  app.post('/link', adminOnly, zValidator('json', linkBody), async (c) => {
     const body = c.req.valid('json');
     const p = pending.get(body.connect_id);
     if (!p || p.expiresAt < Date.now() || p.workspaceId !== c.get('workspaceId')) {

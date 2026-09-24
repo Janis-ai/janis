@@ -342,6 +342,148 @@ describe('sendChannelMessage quick replies', () => {
   });
 });
 
+describe('messenger personas', () => {
+  const ch = (personas?: Record<string, { id: string; name: string; avatar: string }>) =>
+    ({
+      id: 'ch1',
+      kind: 'messenger',
+      credentials: { access_token: 'tok', page_id: 'PG1', personas },
+    }) as typeof channels.$inferSelect;
+
+  // drizzle's update().set().where() chain resolves to a thenable — the only
+  // surface resolvePersona touches.
+  const fakeDb = {
+    update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+  } as never;
+
+  const sender = {
+    senderId: 'u1',
+    senderName: 'Bob',
+    senderAvatar: 'https://janis.test/av.png',
+  };
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('creates a persona and sends with persona_id, no text prefix', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes('/personas')) {
+        return new Response(JSON.stringify({ id: 'PERSONA1' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ message_id: 'm.1' }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await sendChannelMessage(ch(), 'PSID1', 'hi there', undefined, sender, fakeDb);
+    expect(res?.mid).toBe('m.1');
+    const personaCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/personas'));
+    expect(JSON.parse(String(personaCall![1]?.body))).toEqual({
+      name: 'Bob',
+      profile_picture_url: 'https://janis.test/av.png',
+    });
+    const sendBody = JSON.parse(String(fetchMock.mock.calls.at(-1)![1]?.body));
+    expect(sendBody.persona_id).toBe('PERSONA1');
+    expect(sendBody.message.text).toBe('hi there');
+  });
+
+  it('reuses a cached persona when name and avatar are unchanged', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ message_id: 'm.2' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const channel = ch({ u1: { id: 'P9', name: 'Bob', avatar: 'https://janis.test/av.png' } });
+    await sendChannelMessage(channel, 'PSID1', 'hi', undefined, sender, fakeDb);
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/personas'))).toBe(false);
+    expect(JSON.parse(String(fetchMock.mock.calls.at(-1)![1]?.body)).persona_id).toBe('P9');
+  });
+
+  it('falls back to the inline name prefix without an avatar', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ message_id: 'm.3' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await sendChannelMessage(ch(), 'PSID1', 'hi', undefined, { ...sender, senderAvatar: null }, fakeDb);
+    const sendBody = JSON.parse(String(fetchMock.mock.calls.at(-1)![1]?.body));
+    expect(sendBody.persona_id).toBeUndefined();
+    expect(sendBody.message.text).toBe('Bob: hi');
+  });
+});
+
+describe('sendChannelMessage delivery results', () => {
+  const ch = (kind: string) =>
+    ({
+      kind,
+      credentials: { access_token: 'tok', page_id: 'PG1', phone_number_id: 'PN1' },
+    }) as typeof channels.$inferSelect;
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('reports the Meta error body with a 24h-window hint (error 10/2018278)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: 'This person is not available right now.',
+            type: 'OAuthException',
+            code: 10,
+            error_subcode: 2018278,
+          },
+        }),
+        { status: 400 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await sendChannelMessage(ch('messenger'), 'PSID1', 'still there?');
+    expect(res?.mid).toBeNull();
+    expect(res?.error).toContain('This person is not available right now');
+    expect(res?.error).toContain('10/2018278');
+    expect(res?.error).toContain('24-hour messaging window');
+    expect(res?.retryable).toBe(false); // closed window — retry re-fails
+  });
+
+  it('returns the wamid on WhatsApp success and the error on rejection', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ messages: [{ id: 'wamid.abc' }] }), { status: 200 }),
+      ),
+    );
+    const ok = await sendChannelMessage(ch('whatsapp'), '1555', 'hi');
+    expect(ok).toEqual({ mid: 'wamid.abc', error: null, retryable: true });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: { message: 'Re-engagement message', code: 131047 },
+          }),
+          { status: 400 },
+        ),
+      ),
+    );
+    const bad = await sendChannelMessage(ch('whatsapp'), '1555', 'hi');
+    expect(bad?.mid).toBeNull();
+    expect(bad?.error).toContain('131047');
+    expect(bad?.error).toContain('24-hour messaging window');
+    expect(bad?.retryable).toBe(false);
+  });
+
+  it('flags transient HTTP failures as retryable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 502 })));
+    const res = await sendChannelMessage(ch('messenger'), 'PSID1', 'hi');
+    expect(res?.mid).toBeNull();
+    expect(res?.retryable).toBe(true);
+  });
+
+  it('surfaces a missing access token as an error, and null for webchat', async () => {
+    const noToken = { kind: 'messenger', credentials: {} } as typeof channels.$inferSelect;
+    const res = await sendChannelMessage(noToken, 'PSID1', 'hi');
+    expect(res?.error).toContain('access token');
+    expect(res?.retryable).toBe(false);
+    expect(await sendChannelMessage(ch('webchat'), 'v1', 'hi')).toBeNull();
+  });
+});
+
 describe('verifyMetaSignature', () => {
   it('accepts a valid sha256 signature and rejects bad ones', () => {
     const body = '{"a":1}';

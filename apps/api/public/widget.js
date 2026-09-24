@@ -33,12 +33,91 @@
     qrsEl: null,     // quick-reply chip row (suggested prompts)
     typingEl: null,
     typingTimer: null,
+    agentWorking: false, // visitor sent, awaiting the agent's reply
+    opTyping: null,    // {name|null} — operator composing in the console
+    agentTyping: false, // server-side "message.user dispatched, no reply yet"
     convState: 'agent',
     emojiOpen: false,
+    user: null,      // host-asserted identity via Janis.identify()
+    participant: null, // server-resolved thread owner — switches on sign-in
+    lastTypingPing: 0,
+    loaded: false, // composer stays disabled until the first transcript fetch
+    greeted: false, // greeting waits for the first poll to confirm an empty thread
+    loadStart: 0, // first-poll start — keeps the loading row perceptible
+    lastAuthor: null, // consecutive same-operator bubbles share one label
+    hasMore: false, // older transcript pages exist (scroll up to back-fill)
+    oldestTs: null, // created_at of the oldest rendered message — before cursor
+    loadingMore: false,
+  };
+
+  // Public API — the embedding site identifies its logged-in user:
+  //   Janis.identify({ id, name, email, sig })
+  // `sig` is HMAC-SHA256 of "id|email|name" with the channel's identity
+  // secret — compute it server-side so identity can't be forged client-side.
+  // Call with no args to clear identity (e.g. on logout).
+  window.Janis = window.Janis || {};
+  window.Janis.identify = function (u) {
+    state.user = u && (u.id || u.email || u.name) ? u : null;
+    fetch(API + '/chat/' + TOKEN + '/identify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: visitor, user: state.user || {} }),
+    }).catch(function () {});
   };
 
   var EMOJIS = ('😀 😄 😁 🙂 😉 😊 😍 🤩 😘 😜 🤪 😎 🤔 😅 😂 🤣 😢 😭 😮 😴' +
     ' 👍 👎 🙏 👏 🙌 🤝 💪 ✌️ 🤞 👋 👀 💬 ❤️ 💚 💙 💜 🖤 🤍 💯 ✅ 🎉 🔥 ⭐ 💡 📎 ❓').split(' ');
+
+  // Render [label](url) markdown links and bare https:// URLs as anchors.
+  // DOM nodes only — never innerHTML — so message text can't inject markup.
+  function linkify(span, text) {
+    var re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>()]+)/g;
+    var last = 0;
+    var m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) span.appendChild(document.createTextNode(text.slice(last, m.index)));
+      var parts = splitTrail(m[2] || m[3]);
+      if (!parts[0]) {
+        // nothing left after trimming — emit the raw match as text
+        span.appendChild(document.createTextNode(m[0]));
+      } else {
+        var a = document.createElement('a');
+        a.href = parts[0];
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = m[1] || parts[0];
+        span.appendChild(a);
+        if (parts[1]) span.appendChild(document.createTextNode(parts[1]));
+      }
+      last = re.lastIndex;
+    }
+    if (last < text.length) span.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  // Sentence punctuation glued to a URL — "see https://x.com/a." should link
+  // the URL, not the period. Closers are only stripped when unbalanced, so
+  // https://x.com/f_(b) keeps its parens while "(see https://x.com)" doesn't
+  // eat the bracket. Returns [cleanUrl, trailingText].
+  function splitTrail(u) {
+    var trail = '';
+    var pairs = { ')': '(', ']': '[', '}': '{' };
+    while (u.length) {
+      var c = u.charAt(u.length - 1);
+      if ('.,;:!?\'"'.indexOf(c) >= 0) {
+        trail = c + trail;
+        u = u.slice(0, -1);
+        continue;
+      }
+      var open = pairs[c];
+      if (open && u.split(c).length - 1 > u.split(open).length - 1) {
+        trail = c + trail;
+        u = u.slice(0, -1);
+        continue;
+      }
+      break;
+    }
+    return [u, trail];
+  }
 
   function el(tag, styles, attrs) {
     var e = document.createElement(tag);
@@ -73,12 +152,21 @@
     '#janis-expand{background:none;border:none;color:#fff;cursor:pointer;font-size:16px;padding:4px;opacity:.85;line-height:1}' +
     '#janis-expand:hover{opacity:1}' +
     '#janis-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;background:#f9fafb}' +
+    '#janis-panel *{scrollbar-width:thin;scrollbar-color:#d1d5db transparent}' +
+    '#janis-panel *::-webkit-scrollbar{width:6px;height:6px}' +
+    '#janis-panel *::-webkit-scrollbar-track{background:transparent}' +
+    '#janis-panel *::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:3px}' +
+    '#janis-panel *::-webkit-scrollbar-thumb:hover{background:#9ca3af}' +
     '.janis-msg{max-width:80%;padding:8px 12px;border-radius:12px;line-height:1.4;word-wrap:break-word;white-space:pre-wrap}' +
     '.janis-msg.in{align-self:flex-end;background:var(--janis-accent);color:#fff;border-bottom-right-radius:4px}' +
     '.janis-msg.out,.janis-msg.human{align-self:flex-start;background:#e5e7eb;color:#1f2937;border-bottom-left-radius:4px}' +
+    '.janis-msg a{color:inherit;text-decoration:underline;word-break:break-all}' +
     '.janis-msg.human{background:#dbeafe}' +
-    '.janis-msg.typing{display:inline-flex;gap:4px;align-items:center;padding:12px 14px}' +
-    '.janis-dot{width:6px;height:6px;border-radius:50%;background:#9ca3af;animation:janis-blink 1.2s infinite ease-in-out}' +
+    '.janis-author{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#1e40af;margin-bottom:2px}' +
+    '.janis-author-img{width:16px;height:16px;border-radius:50%;margin:0!important;max-width:16px!important;max-height:16px!important}' +
+    '.janis-msg.typing{display:inline-flex;flex-direction:column;align-items:flex-start;gap:3px;padding:8px 14px}' +
+    '.janis-dots{display:inline-flex;gap:4px;align-items:center;padding:3px 0}' +
+    '.janis-dot{width:6px;height:6px;border-radius:50%;background:#6b7280;animation:janis-blink 1.2s infinite ease-in-out}' +
     '.janis-dot:nth-child(2){animation-delay:.15s}' +
     '.janis-dot:nth-child(3){animation-delay:.3s}' +
     '@keyframes janis-blink{0%,80%,100%{opacity:.25}40%{opacity:1}}' +
@@ -107,7 +195,9 @@
     'resize:none;font-family:inherit;line-height:1.35;max-height:110px;overflow-y:auto}' +
     '#janis-send{border:none;align-self:stretch;padding:0 16px;cursor:pointer;color:#fff;font-weight:600;background:var(--janis-accent)}' +
     '#janis-file{display:none}' +
-    '#janis-power{text-align:center;font-size:11px;color:#9ca3af;padding:4px;background:#fff}';
+    '#janis-power{text-align:center;font-size:11px;color:#9ca3af;padding:4px;background:#fff}' +
+    '.janis-loading{text-align:center;color:#9ca3af;font-size:12px;padding:18px 0}' +
+    '#janis-form :disabled{opacity:.55;cursor:default}';
   document.head.appendChild(css);
 
   // ---- DOM ----------------------------------------------------------------
@@ -138,6 +228,29 @@
   var emojiGrid = panel.querySelector('#janis-emoji');
   var fileInput = panel.querySelector('#janis-file');
   var expandBtn = panel.querySelector('#janis-expand');
+  var sendBtn = panel.querySelector('#janis-send');
+  var clipBtn = panel.querySelector('#janis-clip');
+  var smileBtn = panel.querySelector('#janis-smile');
+
+  // ---- transcript loading gate ----------------------------------------------
+  // The composer stays disabled until the first poll resolves (or fails) —
+  // sending into an unloaded transcript could race the history render.
+  var loadingEl = el('div', {}, { class: 'janis-loading' });
+  loadingEl.textContent = 'Loading conversation…';
+  msgs.appendChild(loadingEl);
+  input.disabled = true;
+  sendBtn.disabled = true;
+  clipBtn.disabled = true;
+  smileBtn.disabled = true;
+  function markLoaded() {
+    if (state.loaded) return;
+    state.loaded = true;
+    loadingEl.remove();
+    input.disabled = false;
+    sendBtn.disabled = false;
+    clipBtn.disabled = false;
+    smileBtn.disabled = false;
+  }
 
   // ---- rendering ----------------------------------------------------------
   function addAttachmentNode(parent, a) {
@@ -153,23 +266,113 @@
     }
   }
 
-  // Typing indicator — shown after the server receives a visitor message,
-  // cleared when an agent/human reply lands (or a safety timeout fires).
-  function hideTyping() {
-    if (state.typingEl) { state.typingEl.remove(); state.typingEl = null; }
-    if (state.typingTimer) { clearTimeout(state.typingTimer); state.typingTimer = null; }
-  }
-
-  function showTyping() {
-    if (state.typingEl || state.convState === 'human' || state.convState === 'archived') return;
+  // Typing indicator — two drivers share one dots bubble: the agent working
+  // after a visitor send (agentWorking, suppressed once a human owns the
+  // thread) and an operator composing in the console (opTyping, polled).
+  // Always bare dots — the sender's name/avatar belongs on the reply itself,
+  // not on the indicator. Cleared when a reply lands or the timeout fires.
+  function renderTyping() {
+    var want = state.agentWorking || state.agentTyping || !!state.opTyping;
+    if (!want) {
+      if (state.typingEl) { state.typingEl.remove(); state.typingEl = null; }
+      return;
+    }
+    if (state.typingEl) {
+      msgs.scrollTop = msgs.scrollHeight;
+      return;
+    }
     var d = el('div', {}, { class: 'janis-msg out typing' });
-    d.appendChild(el('span', {}, { class: 'janis-dot' }));
-    d.appendChild(el('span', {}, { class: 'janis-dot' }));
-    d.appendChild(el('span', {}, { class: 'janis-dot' }));
+    var dots = el('span', {}, { class: 'janis-dots' });
+    dots.appendChild(el('span', {}, { class: 'janis-dot' }));
+    dots.appendChild(el('span', {}, { class: 'janis-dot' }));
+    dots.appendChild(el('span', {}, { class: 'janis-dot' }));
+    d.appendChild(dots);
     msgs.appendChild(d);
     msgs.scrollTop = msgs.scrollHeight;
     state.typingEl = d;
-    state.typingTimer = setTimeout(hideTyping, 45000);
+  }
+
+  function hideTyping() {
+    state.agentWorking = false;
+    state.agentTyping = false;
+    state.opTyping = null;
+    if (state.typingTimer) { clearTimeout(state.typingTimer); state.typingTimer = null; }
+    renderTyping();
+  }
+
+  function showTyping() {
+    if (state.convState === 'human' || state.convState === 'archived') return;
+    state.agentWorking = true;
+    renderTyping();
+    if (state.typingTimer) clearTimeout(state.typingTimer);
+    state.typingTimer = setTimeout(function () {
+      state.agentWorking = false;
+      renderTyping();
+    }, 45000);
+  }
+
+  // The server resolves which participant a poll belongs to; a switch (anon
+  // → signed-in, or logout) means the rendered bubbles, dedupe set and
+  // after-cursor all belong to the old thread — reset and fetch it fresh.
+  function resetTranscript() {
+    msgs.innerHTML = '';
+    state.seen = {};
+    state.lastTs = null;
+    state.lastAuthor = null;
+    state.hasMore = false;
+    state.oldestTs = null;
+    state.loadingMore = false;
+    state.outbox = [];
+    state.deliveredEl = null;
+    hideTyping();
+    if (state.qrsEl) { state.qrsEl.remove(); state.qrsEl = null; }
+    state.greeted = false; // let the fresh poll decide whether the greeting belongs
+  }
+
+  // Bubble construction shared by append (new messages) and prepend
+  // (scroll-up history back-fill). Stamps data-author so a prepended page
+  // can dedupe the author label at the seam with existing messages.
+  function buildMsgEl(m) {
+    var d = el('div', {}, { class: 'janis-msg ' + m.direction });
+    d.className = 'janis-msg ' + (m.direction === 'in' ? 'in' : m.direction === 'human' ? 'human' : 'out');
+    // Operator identity on human replies — the label shows once per run of
+    // consecutive same-author bubbles, not on every message.
+    var authorKey = m.direction === 'human' ? 'h:' + ((m.author && m.author.name) || '') : m.direction;
+    var sameAuthor = state.lastAuthor === authorKey;
+    state.lastAuthor = authorKey;
+    d.setAttribute('data-author', authorKey);
+    if (m.created_at) d.setAttribute('data-real', '1'); // synthetic greeting stays unmarked
+    // Sender label opens each run — an operator's name/avatar on human
+    // replies, the agent's name/logo on its own messages. One label per
+    // consecutive run, not every bubble.
+    var label = null;
+    var avatar = null;
+    if (m.direction === 'human' && m.author && m.author.name) {
+      label = m.author.name;
+      avatar = m.author.avatar;
+    } else if (m.direction === 'out' && state.config && state.config.agent_name) {
+      label = state.config.agent_name;
+      avatar = state.config.logo_url;
+    }
+    if (label && !sameAuthor) {
+      var who = el('div', {}, { class: 'janis-author' });
+      if (avatar) {
+        // relative paths (e.g. /uploads/…) live on the API origin,
+        // not the host page's — resolve them the same way attachments do
+        var avSrc = /^https?:\/\//.test(avatar) ? avatar : API + avatar;
+        var av = el('img', {}, { class: 'janis-author-img', src: avSrc, alt: '' });
+        who.appendChild(av);
+      }
+      who.appendChild(document.createTextNode(label));
+      d.appendChild(who);
+    }
+    if (m.text) {
+      var span = document.createElement('span');
+      linkify(span, m.text);
+      d.appendChild(span);
+    }
+    (m.attachments || []).forEach(function (a) { addAttachmentNode(d, a); });
+    return d;
   }
 
   function addMsg(m) {
@@ -178,20 +381,69 @@
       state.seen[m.id] = 1;
     }
     if (m.direction !== 'in') hideTyping();
-    var d = el('div', {}, { class: 'janis-msg ' + m.direction });
-    d.className = 'janis-msg ' + (m.direction === 'in' ? 'in' : m.direction === 'human' ? 'human' : 'out');
-    if (m.text) {
-      var span = document.createElement('span');
-      span.textContent = m.text;
-      d.appendChild(span);
-    }
-    (m.attachments || []).forEach(function (a) { addAttachmentNode(d, a); });
+    // A visitor message means any pending prompt was answered — drop the chips.
+    if (m.direction === 'in') clearChips();
+    var d = buildMsgEl(m);
     msgs.appendChild(d);
+    // Per-message tappable choices (e.g. "Yes, get a human" on an offer).
+    if (m.direction !== 'in' && m.quick_replies && m.quick_replies.length) {
+      renderChips(m.quick_replies);
+    }
     if (state.qrsEl) msgs.appendChild(state.qrsEl); // keep chips under the newest bubble
     msgs.scrollTop = msgs.scrollHeight;
     if (m.created_at && (!state.lastTs || m.created_at > state.lastTs)) state.lastTs = m.created_at;
+    if (m.created_at && (!state.oldestTs || m.created_at < state.oldestTs)) state.oldestTs = m.created_at;
     return d;
   }
+
+  // Older history back-fill — the initial poll returns only the latest page;
+  // scrolling to the top pulls the previous page and prepends it while
+  // holding the scroll position steady.
+  function loadOlder() {
+    if (!state.hasMore || state.loadingMore || !state.oldestTs) return;
+    state.loadingMore = true;
+    var spinner = el('div', {}, { class: 'janis-loading' });
+    spinner.textContent = 'Loading earlier messages…';
+    msgs.insertBefore(spinner, msgs.firstChild);
+    fetch(API + '/chat/' + TOKEN + '/messages?visitor_id=' + encodeURIComponent(visitor) +
+        '&before=' + encodeURIComponent(state.oldestTs))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        spinner.remove();
+        if (!d || !d.messages.length) { state.hasMore = !!(d && d.has_more); return; }
+        var prevHeight = msgs.scrollHeight;
+        var prevTop = msgs.scrollTop;
+        var firstEl = msgs.querySelector('[data-real]');
+        var seamKey = firstEl ? firstEl.getAttribute('data-author') : null;
+        var savedAuthor = state.lastAuthor;
+        state.lastAuthor = null; // fresh runs within the prepended page
+        var lastKey = null;
+        d.messages.forEach(function (m) {
+          if (m.id) {
+            if (state.seen[m.id]) return;
+            state.seen[m.id] = 1;
+          }
+          var b = buildMsgEl(m);
+          msgs.insertBefore(b, firstEl);
+          lastKey = b.getAttribute('data-author');
+        });
+        state.lastAuthor = savedAuthor;
+        // Seam dedupe — if the page's last author matches the bubble that was
+        // already first, that bubble's label is now mid-run; drop it.
+        if (firstEl && seamKey && seamKey === lastKey) {
+          var lbl = firstEl.querySelector('.janis-author');
+          if (lbl) lbl.remove();
+        }
+        state.hasMore = !!d.has_more;
+        state.oldestTs = d.messages[0].created_at;
+        msgs.scrollTop = prevTop + (msgs.scrollHeight - prevHeight);
+      })
+      .catch(function () { spinner.remove(); })
+      .finally(function () { state.loadingMore = false; });
+  }
+  msgs.addEventListener('scroll', function () {
+    if (msgs.scrollTop < 40 && state.loaded) loadOlder();
+  });
 
   // Optimistic send: bubble renders instantly, swaps for the server echo when it arrives.
   function sendPayload(entry) {
@@ -237,7 +489,7 @@
   }
 
   function sendText(text) {
-    var entry = addPending({ visitor_id: visitor, text: text, attachments: [] }, []);
+    var entry = addPending({ visitor_id: visitor, text: text, user: state.user || undefined, attachments: [] }, []);
     sendPayload(entry);
   }
 
@@ -295,29 +547,84 @@
   function poll() {
     if (state.pollBusy) return state.pollPromise || Promise.resolve();
     state.pollBusy = true;
+    if (!state.loadStart) state.loadStart = Date.now();
     var url = API + '/chat/' + TOKEN + '/messages?visitor_id=' + encodeURIComponent(visitor);
     if (state.lastTs) url += '&after=' + encodeURIComponent(state.lastTs);
+    // the signed claim rides the poll — for a real Janis user the transcript
+    // is keyed on the user, not the visitor id, so identity must travel too
+    if (state.user) {
+      url += '&u_id=' + encodeURIComponent(state.user.id || '') +
+        '&u_name=' + encodeURIComponent(state.user.name || '') +
+        '&u_email=' + encodeURIComponent(state.user.email || '') +
+        '&u_sig=' + encodeURIComponent(state.user.sig || '');
+    }
     state.pollPromise = fetch(url).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
-      state.pollBusy = false;
-      if (!d) return;
-      state.convState = d.state;
-      d.messages.forEach(function (m) {
-        var i = m.direction === 'in' ? state.outbox.findIndex(function (o) {
-          return o.text === m.text ||
-            (o.payload.attachments.length > 0 && (m.attachments || []).length > 0);
-        }) : -1;
-        if (i >= 0) {
-          var o = state.outbox.splice(i, 1)[0];
-          o.el.classList.remove('pending'); // promoted: server echo confirms delivery
-          if (o.statusEl) o.statusEl.remove();
-          showDelivered(o); // receipt moves to the newest confirmed bubble
-          if (m.id) state.seen[m.id] = 1;
-          if (m.created_at && (!state.lastTs || m.created_at > state.lastTs)) state.lastTs = m.created_at;
-          return;
+      // The first fetch usually lands in <100ms — without a floor the
+      // loading row never paints and history reads as popping in raw.
+      var delay = Math.max(0, 500 - (Date.now() - state.loadStart));
+      return new Promise(function (res) { setTimeout(res, delay); }).then(function () {
+        state.pollBusy = false;
+        markLoaded();
+        if (!d) return;
+        if (d.participant && state.participant !== d.participant) {
+          // identity switched threads — discard this response (fetched with the
+          // old thread's cursor) and re-poll the new thread from scratch. The
+          // first poll just records the participant (state starts null) — no
+          // reset, or we'd wipe the greeting.
+          var changed = state.participant !== null;
+          state.participant = d.participant;
+          if (changed) {
+            resetTranscript();
+            return poll();
+          }
         }
-        addMsg(m);
+        state.convState = d.state;
+        if (d.has_more !== undefined) state.hasMore = d.has_more;
+        if (!state.greeted) {
+          // first poll resolved — only kick off the greeting once we know the
+          // transcript is actually empty, so history doesn't get a greeting header
+          state.greeted = true;
+          if (!d.messages.length && !state.outbox.length) {
+            if (state.config && state.config.greeting) {
+              addMsg({ direction: 'out', text: state.config.greeting, created_at: null });
+            }
+            if (state.config && state.config.quick_replies && state.config.quick_replies.length) {
+              renderChips(state.config.quick_replies);
+            }
+          }
+        }
+        var gotReply = false;
+        d.messages.forEach(function (m) {
+          var i = m.direction === 'in' ? state.outbox.findIndex(function (o) {
+            return o.text === m.text ||
+              (o.payload.attachments.length > 0 && (m.attachments || []).length > 0);
+          }) : -1;
+          if (i >= 0) {
+            var o = state.outbox.splice(i, 1)[0];
+            o.el.classList.remove('pending'); // promoted: server echo confirms delivery
+            if (o.statusEl) o.statusEl.remove();
+            showDelivered(o); // receipt moves to the newest confirmed bubble
+            if (m.id) state.seen[m.id] = 1;
+            if (m.created_at && (!state.lastTs || m.created_at > state.lastTs)) state.lastTs = m.created_at;
+            return;
+          }
+          if (m.direction !== 'in') gotReply = true;
+          addMsg(m);
+        });
+        // A fresh reply means whoever was typing stopped — clear both flags
+        // outright rather than re-asserting stale ones; a still-typing
+        // operator re-marks on their next ping and a working agent re-flags
+        // on the next poll.
+        if (gotReply) {
+          state.opTyping = null;
+          state.agentTyping = false;
+        } else {
+          state.opTyping = d.operator_typing || null;
+          state.agentTyping = !!d.agent_typing;
+        }
+        renderTyping();
       });
-    }).catch(function () { state.pollBusy = false; });
+    }).catch(function () { state.pollBusy = false; markLoaded(); });
     return state.pollPromise;
   }
 
@@ -347,7 +654,18 @@
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 110) + 'px';
   }
-  input.addEventListener('input', autoresize);
+  // Typing pings — throttled; the console shows "visitor is typing" dots.
+  function sendTyping() {
+    var now = Date.now();
+    if (now - state.lastTypingPing < 2500) return;
+    state.lastTypingPing = now;
+    fetch(API + '/chat/' + TOKEN + '/typing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: visitor }),
+    }).catch(function () {});
+  }
+  input.addEventListener('input', function () { autoresize(); sendTyping(); });
   input.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -414,6 +732,7 @@
   // ---- send ---------------------------------------------------------------
   form.onsubmit = function (e) {
     e.preventDefault();
+    if (!state.loaded) return;
     var text = input.value.trim();
     var ready = state.pending.filter(function (a) { return !a.uploading; });
     if (!text && ready.length === 0) return;
@@ -423,7 +742,7 @@
     state.pending = state.pending.filter(function (a) { return a.uploading; });
     renderPending();
     var atts = ready.map(function (a) { return { name: a.name, url: a.url, type: a.type, size: a.size }; });
-    var entry = addPending({ visitor_id: visitor, text: text, attachments: atts }, atts);
+    var entry = addPending({ visitor_id: visitor, text: text, user: state.user || undefined, attachments: atts }, atts);
     sendPayload(entry);
   };
 
@@ -463,8 +782,6 @@
       bubble.classList.add('janis-left');
       panel.classList.add('janis-left');
     }
-    if (cfg.greeting) addMsg({ direction: 'out', text: cfg.greeting, created_at: null });
-    if (cfg.quick_replies && cfg.quick_replies.length) renderChips(cfg.quick_replies);
     if (state.open) setOpen(true);
   }).catch(function () {});
 })();

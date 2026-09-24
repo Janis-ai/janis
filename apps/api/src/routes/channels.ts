@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import { agents, channelBindings, channels } from '../db/schema.js';
-import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import {
   findChannelByObjectId,
   invalidateChannelCache,
@@ -45,6 +45,12 @@ const patchChannel = z.object({
       logo_url: z.string().url().max(500).or(z.literal('')).optional(),
     })
     .optional(),
+  // webchat: HMAC key for signed visitor identity (Janis.identify sig); '' clears
+  identity_secret: z.string().max(200).optional(),
+  // webchat: show operator name/avatar on human replies — off by default
+  show_operator: z.boolean().optional(),
+  // reassign which agent answers this channel
+  agent_id: z.string().uuid().optional(),
 });
 
 /** Console endpoints mounted at /api/channels (session auth). */
@@ -59,10 +65,28 @@ export function channelApiRoutes(db: Db) {
       .innerJoin(agents, eq(channels.agentId, agents.id))
       .where(eq(channels.workspaceId, c.get('workspaceId')));
     await Promise.all(rows.map((r) => resolveChatIdentity(db, r.channel)));
-    return c.json({ channels: rows.map((r) => toChannel(r.channel, r.agentName)) });
+    // Internal test-chat channels ride the real /chat pipeline but aren't
+    // integrations — keep them out of the console list.
+    return c.json({
+      channels: rows
+        .filter((r) => !(r.channel.credentials as ChannelCredentials).internal)
+        .map((r) => toChannel(r.channel, r.agentName)),
+    });
   });
 
-  app.post('/', zValidator('json', createChannel), async (c) => {
+  app.get('/:id', async (c) => {
+    const [row] = await db
+      .select({ channel: channels, agentName: agents.name })
+      .from(channels)
+      .innerJoin(agents, eq(channels.agentId, agents.id))
+      .where(and(eq(channels.id, c.req.param('id')), eq(channels.workspaceId, c.get('workspaceId'))))
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    await resolveChatIdentity(db, row.channel);
+    return c.json({ channel: toChannel(row.channel, row.agentName) });
+  });
+
+  app.post('/', adminOnly, zValidator('json', createChannel), async (c) => {
     const body = c.req.valid('json');
     const [agent] = await db
       .select({ id: agents.id, name: agents.name })
@@ -106,7 +130,7 @@ export function channelApiRoutes(db: Db) {
     return c.json({ channel: toChannel(row, agent.name) }, 201);
   });
 
-  app.patch('/:id', zValidator('json', patchChannel), async (c) => {
+  app.patch('/:id', adminOnly, zValidator('json', patchChannel), async (c) => {
     const body = c.req.valid('json');
     const [row] = await db
       .select()
@@ -117,8 +141,27 @@ export function channelApiRoutes(db: Db) {
     if (body.branding && row.kind !== 'webchat') {
       return c.json({ error: 'branding applies to webchat channels' }, 400);
     }
+    if (body.identity_secret !== undefined && row.kind !== 'webchat') {
+      return c.json({ error: 'identity_secret applies to webchat channels' }, 400);
+    }
+    if (body.show_operator !== undefined && row.kind !== 'webchat') {
+      return c.json({ error: 'show_operator applies to webchat channels' }, 400);
+    }
+    if (body.agent_id) {
+      const [target] = await db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.id, body.agent_id), eq(agents.workspaceId, c.get('workspaceId'))))
+        .limit(1);
+      if (!target) return c.json({ error: 'agent not found' }, 404);
+    }
 
     const creds = { ...(row.credentials as ChannelCredentials) };
+    if (body.identity_secret !== undefined) {
+      if (body.identity_secret === '') delete creds.identity_secret;
+      else creds.identity_secret = body.identity_secret;
+    }
+    if (body.show_operator !== undefined) creds.show_operator = body.show_operator;
     if (body.branding) {
       const b = body.branding;
       for (const key of ['title', 'subtitle', 'greeting', 'accent', 'logo_url'] as const) {
@@ -135,7 +178,11 @@ export function channelApiRoutes(db: Db) {
     }
     const [updated] = await db
       .update(channels)
-      .set({ name: body.name ?? row.name, credentials: creds })
+      .set({
+        name: body.name ?? row.name,
+        credentials: creds,
+        ...(body.agent_id ? { agentId: body.agent_id } : {}),
+      })
       .where(eq(channels.id, row.id))
       .returning();
     invalidateChannelCache();
@@ -145,7 +192,7 @@ export function channelApiRoutes(db: Db) {
     return c.json({ channel: toChannel(updated, agent?.name ?? '') });
   });
 
-  app.delete('/:id', async (c) => {
+  app.delete('/:id', adminOnly, async (c) => {
     const [row] = await db
       .select({ id: channels.id })
       .from(channels)

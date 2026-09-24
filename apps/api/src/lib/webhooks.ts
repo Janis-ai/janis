@@ -5,6 +5,9 @@ import { agents, alerts, webhookDeliveries } from '../db/schema.js';
 import { signWebhookPayload } from './crypto.js';
 import { runHostedEvent } from './hostedAgent.js';
 import { messageCap } from './plans.js';
+import { bus } from './bus.js';
+import { setSlackThreadStatus } from './slack.js';
+import { markAgentWorking } from './typingState.js';
 
 const RETRY_DELAYS_MS = [0, 1_000, 5_000, 15_000];
 
@@ -70,6 +73,20 @@ export async function deliverWebhook(
     .insert(webhookDeliveries)
     .values({ agentId: agent.id, type, payload })
     .returning();
+
+  // The agent is about to work — flag the conversation so widgets and the
+  // console can render dots. Ingest clears it when a reply lands; the TTL
+  // is the safety net for an agent that never answers. Set before dispatch
+  // so even a fast hosted reply can't outrun it.
+  const workingConv = (data as { janis_conversation_id?: string }).janis_conversation_id;
+  if (type === 'message.user' && workingConv) {
+    markAgentWorking(workingConv);
+    bus.publish(agent.workspaceId, {
+      type: 'typing',
+      data: { conversation_id: workingConv, name: agent.name, kind: 'agent' },
+    });
+    void setSlackThreadStatus(db, workingConv, `${agent.name} is thinking…`);
+  }
 
   // Hosted agents run in-process — no HTTP round-trip, nothing to sign.
   if (agent.hosted) {

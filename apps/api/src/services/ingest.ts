@@ -7,18 +7,19 @@ import {
   alerts,
   conversations,
   messages,
-  users,
   workspaces,
 } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
 import { enrichHandoff } from '../lib/handoff.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { evaluateEvent } from '../lib/rules.js';
-import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
+import { mirrorToSlack, postSlackAlert, setSlackThreadStatus } from '../lib/slack.js';
+import { workspaceMembers } from '../lib/members.js';
 import { deliverToChannel, type AttachmentRef } from '../lib/channels.js';
 import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
 import { METER_MESSAGES, reportMeter } from '../lib/stripe.js';
 import { messageCap } from '../lib/plans.js';
+import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -50,15 +51,29 @@ export async function processEvents(
   // Hard-capped plan (free tier over its included volume): customer messages
   // are dropped before storage — nothing is transcribed, metered, or mirrored.
   const cap = await messageCap(db, agent.workspaceId);
+  // Conversations that already got a real reply in this batch — a canned
+  // handoff notice on top of the agent's own "a human is coming" text is
+  // redundant noise for the customer.
+  const repliedInBatch = new Set<string>();
 
   for (const event of events) {
     if (cap.capped && event.type === 'message_in') continue;
     const conv = await findOrCreateConversation(db, agent, event);
     const alertIds: string[] = [];
+    const newAlertTypes: string[] = [];
 
     // Store a message row for events that carry conversational content
     const message = await insertEventMessage(db, conv.id, event);
     if (message) {
+      // Any stored message ends the typing indicators for this thread: an
+      // inbound means the visitor sent (no longer composing), a reply means
+      // the agent/operator answered. The dedupe makes the Slack clear a
+      // no-op unless a status was actually set.
+      if (message.direction !== 'in') {
+        clearAgentWorking(conv.id);
+        clearOperatorTyping(conv.id);
+      }
+      void setSlackThreadStatus(db, conv.id, null);
       reportMeter(stripeCustomerId, METER_MESSAGES, 1);
       bus.publish(agent.workspaceId, { type: 'message', data: toMessage(message) });
       if (message.text) {
@@ -66,10 +81,26 @@ export async function processEvents(
           failure?: boolean;
           help_requested?: boolean;
           custom_alert?: boolean;
+          handoff_offer?: boolean;
+          handoff_cancelled?: boolean;
         };
-        if (flags.failure || flags.help_requested || flags.custom_alert) {
+        if (
+          flags.failure ||
+          flags.help_requested ||
+          flags.custom_alert ||
+          flags.handoff_offer ||
+          flags.handoff_cancelled
+        ) {
           // Internal notes are system messages in Slack, not agent transcript lines
-          const icon = flags.failure ? ':warning:' : flags.help_requested ? ':raising_hand:' : ':rotating_light:';
+          const icon = flags.failure
+            ? ':warning:'
+            : flags.help_requested
+              ? ':raising_hand:'
+              : flags.handoff_offer
+                ? ':question:'
+                : flags.handoff_cancelled
+                  ? ':arrow_backward:'
+                  : ':rotating_light:';
           void mirrorToSlack(db, conv.id, icon, `_${message.text}_`);
         } else {
           const label = message.direction === 'in' ? ':busts_in_silhouette: *user:*' : ':robot_face: *agent:*';
@@ -79,12 +110,17 @@ export async function processEvents(
         // never internal notes (failures/handoffs/alerts), which are also 'out'.
         // payload.delivered marks replies already sent raw by the caller
         // (legacy Dialogflow payload.facebook passthrough).
+        if (event.type === 'message_out') repliedInBatch.add(conv.id);
         if (
           event.type === 'message_out' &&
           !(message.payload as { delivered?: boolean } | undefined)?.delivered
         ) {
           const atts = (message.payload as { attachments?: AttachmentRef[] } | undefined)?.attachments;
-          void deliverToChannel(db, conv.id, message.text, atts, { messageId: message.id });
+          const qrs = (message.payload as { quick_replies?: string[] } | undefined)?.quick_replies;
+          void deliverToChannel(db, conv.id, message.text, atts, {
+            messageId: message.id,
+            quickReplies: qrs,
+          });
         }
       }
     }
@@ -142,6 +178,7 @@ export async function processEvents(
         .values({ conversationId: conv.id, type: triggered.type, detail: triggered.detail })
         .returning();
       alertIds.push(alert.id);
+      newAlertTypes.push(alert.type);
       bus.publish(agent.workspaceId, {
         type: 'alert',
         data: { ...toAlert(alert), notification: await alertNotification(db, alert, conv, agent) },
@@ -158,10 +195,20 @@ export async function processEvents(
       pendingNotifies.push(await alertNotification(db, alert, conv, agent));
     }
 
-    // State transitions: alerts escalate to needs_human unless a human owns it
+    // State transitions: alerts escalate to needs_human unless a human owns
+    // it — except 'failure' (agent may recover) and 'handoff_offer' (customer
+    // hasn't confirmed they want a human). Both still page operators.
     let state = conv.state;
-    if (alertIds.length > 0 && state === 'active') state = 'needs_human';
+    if (
+      newAlertTypes.some((t) => t !== 'failure' && t !== 'handoff_offer') &&
+      state === 'active'
+    )
+      state = 'needs_human';
     if (event.type === 'handoff_request' && state === 'active') state = 'needs_human';
+    // Customer declined a human (or retracted the request) — drop a pending
+    // escalation back to the agent. 'human'/'archived' are untouched: a
+    // human who took over owns the release decision.
+    if (event.type === 'handoff_cancelled' && state === 'needs_human') state = 'active';
 
     const preview = eventText(event);
     const [updated] = await db
@@ -186,6 +233,19 @@ export async function processEvents(
         type: 'conversation',
         data: { id: updated.id, state: updated.state },
       });
+    }
+
+    // A declined handoff also closes whatever was paging for it — same
+    // resolution sweep as an operator manually returning it to the agent.
+    if (event.type === 'handoff_cancelled') {
+      const resolved = await db
+        .update(alerts)
+        .set({ status: 'resolved' })
+        .where(and(eq(alerts.conversationId, conv.id), eq(alerts.status, 'open')))
+        .returning();
+      for (const a of resolved) {
+        bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(a) });
+      }
     }
 
     // Escalation routing: auto-assign fresh handoffs to the least-loaded
@@ -223,11 +283,13 @@ export async function processEvents(
       );
     }
 
-    // Handing off — tell the end user a human is joining. Every request gets
-    // a reply until a human actually takes over (needs_human doesn't pause
-    // the agent); config.handoff_message overrides, '' disables.
+    // Handing off — tell the end user a human is joining, unless the agent's
+    // own reply in this batch already said so. Every request gets a reply
+    // until a human actually takes over (needs_human doesn't pause the
+    // agent); config.handoff_message overrides, '' disables.
     if (
       event.type === 'handoff_request' &&
+      !repliedInBatch.has(conv.id) &&
       updated.state !== 'human' &&
       updated.state !== 'archived'
     ) {
@@ -300,6 +362,8 @@ async function insertEventMessage(db: Db, conversationId: string, event: IngestE
       failure: event.type === 'failure',
       help_requested: event.type === 'handoff_request',
       custom_alert: event.type === 'custom_alert',
+      handoff_offer: event.type === 'handoff_offer',
+      handoff_cancelled: event.type === 'handoff_cancelled',
     },
     ...(event.timestamp ? { createdAt: new Date(event.timestamp) } : {}),
   };
@@ -360,6 +424,14 @@ function eventText(event: IngestEvent): string | undefined {
       return event.text ?? event.reason;
     case 'handoff_request':
       return event.reason ? `Handoff requested: ${event.reason}` : 'Handoff requested';
+    case 'handoff_offer':
+      return event.reason
+        ? `Offered a human: ${event.reason}`
+        : 'Agent offered a human teammate';
+    case 'handoff_cancelled':
+      return event.reason
+        ? `Declined a human: ${event.reason}`
+        : 'Customer declined a human — staying with the agent';
     case 'custom_alert':
       return event.text ?? `Alert: ${event.alert_type}`;
   }
@@ -372,12 +444,9 @@ async function autoAssign(
   agent: AgentRow,
   conv: ConversationRow,
 ): Promise<string | undefined> {
-  const members = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.workspaceId, agent.workspaceId));
+  const members = await workspaceMembers(db, agent.workspaceId);
   if (!members.length) return undefined;
-  const loads = new Map(members.map((m) => [m.id, 0]));
+  const loads = new Map(members.map((m) => [m.user.id, 0]));
   const open = await db
     .select({ assignee: conversations.assigneeId, n: sql<number>`count(*)::int` })
     .from(conversations)

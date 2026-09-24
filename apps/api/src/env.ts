@@ -17,10 +17,28 @@ export const env = {
   emailFrom: process.env.JANIS_EMAIL_FROM ?? 'Janis <alerts@janis.ai>',
   seedAdminEmail: process.env.SEED_ADMIN_EMAIL ?? 'admin@janis.local',
   seedAdminPassword: process.env.SEED_ADMIN_PASSWORD ?? 'janis-admin',
+  // Email+password sign-in — OAuth is the product login; password auth stays
+  // on outside production so the seed admin and tests can log in.
+  // ALLOW_PASSWORD_LOGIN=1 force-enables it anywhere.
+  passwordLogin:
+    process.env.NODE_ENV !== 'production' || process.env.ALLOW_PASSWORD_LOGIN === '1',
   // Janis-side suggestion generation (OpenAI-compatible chat completions)
   llmApiKey: process.env.JANIS_LLM_API_KEY ?? '',
+  // Webchat channel id for the "Ask Janis" console rail — the concierge agent
+  // that answers product questions inside the app. Empty hides the rail.
+  supportChannelId: process.env.JANIS_SUPPORT_CHANNEL_ID ?? '',
+  // The Janis operator workspace — gates the account_status builtin tool so
+  // only our own concierge agent can look up a signed-in user's plan.
+  operatorWorkspaceId: process.env.JANIS_OPERATOR_WORKSPACE_ID ?? '',
   llmBaseUrl: process.env.JANIS_LLM_BASE_URL ?? 'https://api.openai.com/v1',
   llmModel: process.env.JANIS_LLM_MODEL ?? 'gpt-4o-mini',
+  // Second model tried when the primary keeps failing on 429/5xx/timeouts
+  // (e.g. Gemini flash-lite demand spikes). Empty = no fallback.
+  llmFallbackModel: process.env.JANIS_LLM_FALLBACK_MODEL ?? '',
+  // Janis-side Brave Search key powering the built-in web_search tool — lets
+  // hosted agents search without the customer configuring a connection.
+  // Empty = the tool is hidden from the catalog and never offered to the LLM.
+  searchApiKey: process.env.JANIS_SEARCH_API_KEY ?? '',
   slackClientId: process.env.SLACK_CLIENT_ID ?? '',
   slackClientSecret: process.env.SLACK_CLIENT_SECRET ?? '',
   slackSigningSecret: process.env.SLACK_SIGNING_SECRET ?? '',

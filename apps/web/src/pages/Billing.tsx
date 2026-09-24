@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
+import { useMe } from '../api/hooks';
 
 interface BillingSummary {
   period: string;
@@ -47,6 +48,8 @@ interface BillingSummary {
 const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 export default function Billing() {
+  const { data: me } = useMe();
+  const isAdmin = me?.user.role === 'admin';
   const [period, setPeriod] = useState(() => new Date().toISOString().slice(0, 7));
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -164,7 +167,7 @@ export default function Billing() {
                     </div>
                     {current ? (
                       <div className="muted" style={{ marginTop: 10 }}>Current plan</div>
-                    ) : p.key === 'free' ? (
+                    ) : !isAdmin ? null : p.key === 'free' ? (
                       <button className="btn" style={{ marginTop: 10 }} onClick={() => void downgrade()}>
                         Downgrade
                       </button>
@@ -183,11 +186,16 @@ export default function Billing() {
                 );
               })}
             </div>
-            {data.stripe_enabled && data.has_billing_account && (
+            {data.stripe_enabled && data.has_billing_account && isAdmin && (
               <div style={{ marginTop: 12 }}>
                 <button className="btn" onClick={() => void portal()}>
                   Manage payment method &amp; invoices
                 </button>
+              </div>
+            )}
+            {!isAdmin && (
+              <div className="muted" style={{ marginTop: 12 }}>
+                Plan changes are managed by workspace admins.
               </div>
             )}
           </div>

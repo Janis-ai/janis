@@ -13,6 +13,7 @@ import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
 import Reports from './pages/Reports';
 import Integrations from './pages/Integrations';
+import ChannelEdit from './pages/ChannelEdit';
 import Billing from './pages/Billing';
 import Settings from './pages/Settings';
 
@@ -102,6 +103,7 @@ export default function App() {
           <Route path="/agents/:id" element={<AgentDetail />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/integrations" element={<Integrations />} />
+          <Route path="/integrations/:channelId" element={<ChannelEdit />} />
           <Route path="/billing" element={<Billing />} />
           <Route path="/settings" element={<Settings />} />
         </Route>

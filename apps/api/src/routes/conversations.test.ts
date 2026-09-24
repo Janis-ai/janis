@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, conversations, messages, sessions, users, workspaces } from '../db/schema.js';
+import { agents, alerts, conversations, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { generateApiKey, generateSessionToken, hashPassword } from '../lib/crypto.js';
 import { conversationRoutes } from './conversations.js';
 import { takeover } from '../services/takeover.js';
@@ -37,23 +37,23 @@ beforeAll(async () => {
   const [admin] = await db
     .insert(users)
     .values({
-      workspaceId: ws.id,
       email: 'admin@x.c',
       name: 'Admin',
-      role: 'admin',
       passwordHash: await hashPassword('password123'),
     })
     .returning();
   const [member] = await db
     .insert(users)
     .values({
-      workspaceId: ws.id,
       email: 'member@x.c',
       name: 'Member',
-      role: 'member',
       passwordHash: await hashPassword('password123'),
     })
     .returning();
+  await db.insert(memberships).values([
+    { userId: admin.id, workspaceId: ws.id, role: 'admin', acceptedAt: new Date() },
+    { userId: member.id, workspaceId: ws.id, role: 'member', acceptedAt: new Date() },
+  ]);
   adminCookie = await seedSession(admin.id);
   memberCookie = await seedSession(member.id);
 
@@ -149,5 +149,99 @@ describe('teach', () => {
     expect((after.config as { knowledge: string[] }).knowledge).not.toContain(
       'should not learn this',
     );
+  });
+});
+
+describe('signal filters', () => {
+  const list = (state: string, cookie = adminCookie) =>
+    app
+      .request(`/api/conversations?state=${state}`, { headers: { cookie } })
+      .then((r) => r.json())
+      .then((b: { conversations: { id: string }[] }) => b.conversations.map((c) => c.id));
+
+  it('handoff_offer filters to conversations with an open handoff-offer alert', async () => {
+    const offered = await makeConversation('offered');
+    const plain = await makeConversation('plain');
+    await db
+      .insert(alerts)
+      .values({ conversationId: offered.id, type: 'handoff_offer' });
+    // a resolved offer shouldn't count
+    const stale = await makeConversation('stale');
+    await db
+      .insert(alerts)
+      .values({ conversationId: stale.id, type: 'handoff_offer', status: 'resolved' });
+
+    expect(await list('handoff_offer')).toContain(offered.id);
+    expect(await list('handoff_offer')).not.toContain(plain.id);
+    expect(await list('handoff_offer')).not.toContain(stale.id);
+  });
+
+  it('failure filters to conversations with an open failure alert', async () => {
+    const failing = await makeConversation('failing');
+    await db.insert(alerts).values({ conversationId: failing.id, type: 'failure' });
+    expect(await list('failure')).toContain(failing.id);
+    expect(await list('failure')).not.toContain((await makeConversation('fine')).id);
+  });
+});
+
+describe('message windows', () => {
+  const get = (path: string, cookie = adminCookie) =>
+    app.request(`/api/conversations${path}`, { headers: { cookie } });
+
+  it('?around returns a window centered on the target', async () => {
+    const conv = await makeConversation('around-conv');
+    const t0 = Date.now() - 200 * 60_000;
+    const ids: string[] = [];
+    for (let i = 0; i < 200; i++) {
+      const [m] = await db
+        .insert(messages)
+        .values({
+          conversationId: conv.id,
+          direction: i % 2 ? 'out' : 'in',
+          text: `m${i}`,
+          createdAt: new Date(t0 + i * 60_000),
+        })
+        .returning();
+      ids.push(m.id);
+    }
+    const res = await get(`/${conv.id}/messages?around=${ids[100]}`);
+    expect(res.status).toBe(200);
+    const d = await res.json();
+    const texts = d.messages.map((m: { text: string }) => m.text);
+    expect(texts).toContain('m100');
+    expect(texts[0]).toBe('m40');
+    expect(texts[texts.length - 1]).toBe('m159');
+    expect(d.has_more).toBe(true);
+    expect(d.has_more_after).toBe(true);
+  });
+
+  it('?after pages forward toward the tail', async () => {
+    const conv = await makeConversation('after-conv');
+    const t0 = Date.now() - 50 * 60_000;
+    for (let i = 0; i < 50; i++) {
+      await db.insert(messages).values({
+        conversationId: conv.id,
+        direction: 'in',
+        text: `a${i}`,
+        createdAt: new Date(t0 + i * 60_000),
+      });
+    }
+    const res = await get(`/${conv.id}/messages?after=${encodeURIComponent(new Date(t0 + 39 * 60_000).toISOString())}`);
+    const d = await res.json();
+    expect(d.messages.map((m: { text: string }) => m.text)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `a${40 + i}`),
+    );
+    expect(d.has_more).toBe(false);
+  });
+
+  it('?around 404s for a message in another conversation', async () => {
+    const conv = await makeConversation('around-404');
+    const [m] = await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'x' })
+      .returning();
+    const other = await makeConversation('around-other');
+    const res = await get(`/${other.id}/messages?around=${m.id}`);
+    expect(res.status).toBe(404);
   });
 });

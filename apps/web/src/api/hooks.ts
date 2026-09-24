@@ -17,7 +17,14 @@ import { api, ApiError } from './client';
 export function useMe() {
   return useQuery({
     queryKey: ['me'],
-    queryFn: () => api<{ user: WorkspaceUser; workspace: { id: string; name: string } }>('/auth/me'),
+    queryFn: () =>
+      api<{
+        user: WorkspaceUser;
+        workspace: { id: string; name: string } | null;
+        workspaces: { id: string; name: string; role: 'admin' | 'member' }[];
+        invites: { id: string; workspace_name: string }[];
+        support_channel_id: string | null;
+      }>('/auth/me'),
     retry: false,
     staleTime: 60_000,
   });
@@ -48,6 +55,7 @@ export function useConversation(id: string) {
       api<{
         conversation: Conversation;
         messages: Message[];
+        messages_has_more?: boolean;
         alerts: Alert[];
         suggestions: Suggestion[];
       }>(`/api/conversations/${id}`),

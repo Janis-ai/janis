@@ -16,6 +16,7 @@ import {
   digests,
   knowledgeFiles,
   agentSecrets,
+  memberships,
   messages,
   metaConnections,
   pushSubscriptions,
@@ -42,6 +43,7 @@ const counts = async () =>
     [
       workspaces,
       users,
+      memberships,
       sessions,
       agents,
       conversations,
@@ -75,13 +77,17 @@ beforeAll(async () => {
   const [admin] = await db
     .insert(users)
     .values({
-      workspaceId: ws.id,
       email: 'a@b.c',
       name: 'Admin',
-      role: 'admin',
       passwordHash: await hashPassword('password123'),
     })
     .returning();
+  await db.insert(memberships).values({
+    userId: admin.id,
+    workspaceId: ws.id,
+    role: 'admin',
+    acceptedAt: new Date(),
+  });
   const { token, id } = generateSessionToken();
   await db
     .insert(sessions)
@@ -143,8 +149,14 @@ describe('DELETE /api/workspace', () => {
     const [ws2] = await db.insert(workspaces).values({ name: 'Other' }).returning();
     const [member] = await db
       .insert(users)
-      .values({ workspaceId: ws2.id, email: 'm@b.c', name: 'M', role: 'member', passwordHash: 'x' })
+      .values({ email: 'm@b.c', name: 'M', passwordHash: 'x' })
       .returning();
+    await db.insert(memberships).values({
+      userId: member.id,
+      workspaceId: ws2.id,
+      role: 'member',
+      acceptedAt: new Date(),
+    });
     const { token, id } = generateSessionToken();
     await db
       .insert(sessions)
@@ -161,12 +173,16 @@ describe('DELETE /api/workspace', () => {
   it('deletes the workspace and all attached rows', async () => {
     const res = await app.request('/api/workspace', { method: 'DELETE', headers: { Cookie: cookie } });
     expect(res.status).toBe(200);
-    // every table except the untouched second workspace's users/sessions
+    // every table except the untouched second workspace's rows — user rows
+    // survive now (accounts are global; only memberships are scoped)
     const remaining = await counts();
     expect(remaining[0]).toBe(1); // workspaces: only ws2
-    expect(remaining[1]).toBe(1); // users: only member
-    expect(remaining[2]).toBe(1); // sessions: only member's
-    expect(remaining.slice(3)).toEqual(Array(18).fill(0));
+    expect(remaining[1]).toBe(2); // users: admin + member rows both survive
+    expect(remaining[2]).toBe(1); // memberships: only member's on ws2
+    expect(remaining[3]).toBe(1); // sessions: only member's (admin's was pointed at ws)
+    const rest = remaining.slice(4);
+    expect(rest[5]).toBe(1); // pushSubscriptions: user-scoped, survives with the user
+    expect(rest.filter((_, i) => i !== 5)).toEqual(Array(17).fill(0));
     expect((await db.select().from(workspaces).where(eq(workspaces.id, wsId))).length).toBe(0);
   });
 });

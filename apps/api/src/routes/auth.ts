@@ -2,29 +2,52 @@ import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq, gt } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { Context } from 'hono';
 import type { Db } from '../db/client.js';
-import { sessions, users, workspaces } from '../db/schema.js';
+import { memberships, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken, sha256, verifyPassword } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { toWorkspaceUser } from '../lib/serializers.js';
+import { syncMemberToAlertChannels } from '../lib/slack.js';
 import { env } from '../env.js';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const OAUTH_STATE_COOKIE = 'janis_oauth_state';
 
-const credentials = z.object({ email: z.string().email(), password: z.string().min(1) });
+const credentials = z.object({
+  email: z.string().trim().toLowerCase().email(),
+  password: z.string().min(1),
+});
 
 export function authRoutes(db: Db) {
   const app = new Hono();
 
-  const issueSession = async (c: Context, userId: string) => {
+  /** The workspace a new session should open in: the last one the user was
+   * active in (when its membership is still accepted), else their first. */
+  const initialWorkspace = async (userId: string) => {
+    const mems = await db
+      .select()
+      .from(memberships)
+      .where(and(eq(memberships.userId, userId), isNotNull(memberships.acceptedAt)));
+    const [u] = await db
+      .select({ lastWorkspaceId: users.lastWorkspaceId })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    return (
+      mems.find((m) => m.workspaceId === u?.lastWorkspaceId) ?? mems[0]
+    )?.workspaceId ?? null;
+  };
+
+  const issueSession = async (c: Context, userId: string, workspaceId?: string) => {
     const { token, id } = generateSessionToken();
+    const wsId = workspaceId ?? (await initialWorkspace(userId));
     await db.insert(sessions).values({
       id,
       userId,
+      workspaceId: wsId,
       expiresAt: new Date(Date.now() + SESSION_TTL_MS),
     });
     setCookie(c, SESSION_COOKIE, token, {
@@ -36,6 +59,9 @@ export function authRoutes(db: Db) {
   };
 
   app.post('/login', zValidator('json', credentials), async (c) => {
+    if (!env.passwordLogin) {
+      return c.json({ error: 'password sign-in is disabled — use Google or Slack' }, 403);
+    }
     const { email, password } = c.req.valid('json');
     const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
     if (!user?.passwordHash || !(await verifyPassword(password, user.passwordHash))) {
@@ -56,18 +82,176 @@ export function authRoutes(db: Db) {
     const token = getCookie(c, SESSION_COOKIE);
     if (!token) return c.json({ error: 'unauthenticated' }, 401);
     const [row] = await db
-      .select({ user: users, workspace: workspaces })
+      .select({ user: users, session: sessions })
       .from(sessions)
       .innerJoin(users, eq(sessions.userId, users.id))
-      .innerJoin(workspaces, eq(users.workspaceId, workspaces.id))
       .where(and(eq(sessions.id, sha256(token)), gt(sessions.expiresAt, new Date())))
       .limit(1);
     if (!row) return c.json({ error: 'unauthenticated' }, 401);
+
+    const mems = await db
+      .select({ membership: memberships, workspace: workspaces })
+      .from(memberships)
+      .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
+      .where(eq(memberships.userId, row.user.id));
+    const active =
+      mems.find(
+        (m) => m.membership.acceptedAt && m.membership.workspaceId === row.session.workspaceId,
+      ) ?? mems.find((m) => m.membership.acceptedAt);
+
     return c.json({
-      user: toWorkspaceUser(row.user),
-      workspace: { id: row.workspace.id, name: row.workspace.name },
+      user: toWorkspaceUser(row.user, active?.membership.role ?? 'member'),
+      workspace: active ? { id: active.workspace.id, name: active.workspace.name } : null,
+      workspaces: mems
+        .filter((m) => m.membership.acceptedAt)
+        .map((m) => ({
+          id: m.workspace.id,
+          name: m.workspace.name,
+          role: m.membership.role,
+        })),
+      invites: mems
+        .filter((m) => !m.membership.acceptedAt)
+        .map((m) => ({ id: m.membership.id, workspace_name: m.workspace.name })),
+      support_channel_id: env.supportChannelId || null,
     });
   });
+
+  // Switch the session's active workspace (must hold an accepted membership).
+  app.post(
+    '/switch',
+    zValidator('json', z.object({ workspace_id: z.string() })),
+    async (c) => {
+      const token = getCookie(c, SESSION_COOKIE);
+      if (!token) return c.json({ error: 'unauthenticated' }, 401);
+      const sessionId = sha256(token);
+      const [session] = await db
+        .select()
+        .from(sessions)
+        .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
+        .limit(1);
+      if (!session) return c.json({ error: 'unauthenticated' }, 401);
+      const [mem] = await db
+        .select()
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, session.userId),
+            eq(memberships.workspaceId, c.req.valid('json').workspace_id),
+            isNotNull(memberships.acceptedAt),
+          ),
+        )
+        .limit(1);
+      if (!mem) return c.json({ error: 'not a member of that workspace' }, 403);
+      await db
+        .update(sessions)
+        .set({ workspaceId: mem.workspaceId })
+        .where(eq(sessions.id, sessionId));
+      await db
+        .update(users)
+        .set({ lastWorkspaceId: mem.workspaceId })
+        .where(eq(users.id, session.userId));
+      return c.json({ ok: true });
+    },
+  );
+
+  /** Session lookup for the identity routes below — these must work for a
+   * user whose memberships are all pending (no active workspace yet), so they
+   * can't sit behind sessionAuth. */
+  const sessionUser = async (c: Context) => {
+    const token = getCookie(c, SESSION_COOKIE);
+    if (!token) return null;
+    const [row] = await db
+      .select({ user: users, session: sessions })
+      .from(sessions)
+      .innerJoin(users, eq(sessions.userId, users.id))
+      .where(and(eq(sessions.id, sha256(token)), gt(sessions.expiresAt, new Date())))
+      .limit(1);
+    return row ?? null;
+  };
+
+  // Accept a pending invite — joins the workspace and points the session at
+  // it when the session has no active workspace yet.
+  app.post('/invites/:id/accept', async (c) => {
+    const row = await sessionUser(c);
+    if (!row) return c.json({ error: 'unauthenticated' }, 401);
+    const [mem] = await db
+      .update(memberships)
+      .set({ acceptedAt: new Date() })
+      .where(
+        and(
+          eq(memberships.id, c.req.param('id')),
+          eq(memberships.userId, row.user.id),
+          isNull(memberships.acceptedAt),
+        ),
+      )
+      .returning();
+    if (!mem) return c.json({ error: 'not found' }, 404);
+    if (!row.session.workspaceId) {
+      await db
+        .update(sessions)
+        .set({ workspaceId: mem.workspaceId })
+        .where(eq(sessions.id, row.session.id));
+    }
+    await db
+      .update(users)
+      .set({ lastWorkspaceId: mem.workspaceId })
+      .where(eq(users.id, row.user.id));
+    // Slack connected → the new member joins every Janis alert channel.
+    void syncMemberToAlertChannels(db, mem.workspaceId, row.user.id).catch((e) =>
+      console.error('slack member sync failed:', e),
+    );
+    return c.json({ ok: true });
+  });
+
+  // Decline a pending invite — removes the membership entirely.
+  app.post('/invites/:id/decline', async (c) => {
+    const row = await sessionUser(c);
+    if (!row) return c.json({ error: 'unauthenticated' }, 401);
+    const [mem] = await db
+      .delete(memberships)
+      .where(
+        and(
+          eq(memberships.id, c.req.param('id')),
+          eq(memberships.userId, row.user.id),
+          isNull(memberships.acceptedAt),
+        ),
+      )
+      .returning();
+    if (!mem) return c.json({ error: 'not found' }, 404);
+    return c.json({ ok: true });
+  });
+
+  // Create a workspace — the caller becomes its admin and the session
+  // switches to it. Serves both the agency "add a client workspace" flow and
+  // a memberless user starting fresh.
+  app.post(
+    '/workspaces',
+    zValidator('json', z.object({ name: z.string().min(1).max(120) })),
+    async (c) => {
+      const row = await sessionUser(c);
+      if (!row) return c.json({ error: 'unauthenticated' }, 401);
+      const [ws] = await db
+        .insert(workspaces)
+        .values({ name: c.req.valid('json').name, plan: env.defaultPlan })
+        .returning();
+      await db.insert(memberships).values({
+        userId: row.user.id,
+        workspaceId: ws.id,
+        role: 'admin',
+        invitedBy: row.user.id,
+        acceptedAt: new Date(),
+      });
+      await db
+        .update(sessions)
+        .set({ workspaceId: ws.id })
+        .where(eq(sessions.id, row.session.id));
+      await db
+        .update(users)
+        .set({ lastWorkspaceId: ws.id })
+        .where(eq(users.id, row.user.id));
+      return c.json({ workspace: { id: ws.id, name: ws.name } }, 201);
+    },
+  );
 
   // ---- OAuth (Google + Slack OpenID Connect) ----
 
@@ -75,11 +259,13 @@ export function authRoutes(db: Db) {
     c.json({
       google: Boolean(env.googleClientId && env.googleClientSecret),
       slack: Boolean(env.slackClientId && env.slackClientSecret),
+      password: env.passwordLogin,
     }),
   );
 
   /** Existing user by verified provider email, else provision workspace+admin. */
-  const findOrProvisionUser = async (email: string, name: string) => {
+  const findOrProvisionUser = async (rawEmail: string, name: string) => {
+    const email = rawEmail.trim().toLowerCase();
     const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
     if (existing) return existing;
     const [ws] = await db
@@ -88,8 +274,11 @@ export function authRoutes(db: Db) {
       .returning();
     const [user] = await db
       .insert(users)
-      .values({ workspaceId: ws.id, email, name: name || email, role: 'admin' })
+      .values({ email, name: name || email })
       .returning();
+    await db
+      .insert(memberships)
+      .values({ userId: user.id, workspaceId: ws.id, role: 'admin', acceptedAt: new Date() });
     return user;
   };
 

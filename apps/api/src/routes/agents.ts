@@ -4,16 +4,34 @@ import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentSecrets, conversations, knowledgeFiles, webhookDeliveries, workspaces } from '../db/schema.js';
-import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { agents, agentConnections, agentSecrets, channels, conversations, knowledgeFiles, webhookDeliveries, workspaces } from '../db/schema.js';
+import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { generateApiKey, generateWebhookSecret } from '../lib/crypto.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
-import { detectKnowledgeGaps, draftKnowledgeEntry } from '../services/knowledgeGaps.js';
+import {
+  detectKnowledgeGaps,
+  draftKnowledgeEntry,
+  gapsCacheFresh,
+  listLearnNotes,
+  markGapsAdded,
+  readGapsCache,
+  recheckGaps,
+} from '../services/knowledgeGaps.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
 import { processEvents } from '../services/ingest.js';
 import { toAgent } from '../lib/serializers.js';
+import { invalidateChannelCache } from '../lib/channels.js';
+import { TOOL_TEMPLATES } from '../lib/toolTemplates.js';
+import { connectionToken } from '../lib/connections.js';
+import {
+  createSlackChannel,
+  getInstallation,
+  inviteWorkspaceMembers,
+  sanitizeChannelName,
+  slackChannelInfo,
+} from '../lib/slack.js';
 
 const createAgent = z.object({
   name: z.string().min(1).max(120),
@@ -26,6 +44,8 @@ const updateAgent = z.object({
   webhook_url: z.string().url().nullable().optional(),
   hosted: z.boolean().optional(),
   auto_resume_minutes: z.number().min(1).max(10080).nullable().optional(),
+  // null clears the override back to the workspace alert channel
+  slack_channel_id: z.string().nullable().optional(),
   config: AgentConfig.optional(),
 });
 
@@ -42,7 +62,7 @@ export function agentRoutes(db: Db) {
     return c.json({ agents: rows.map(toAgent) });
   });
 
-  app.post('/', zValidator('json', createAgent), async (c) => {
+  app.post('/', adminOnly, zValidator('json', createAgent), async (c) => {
     const body = c.req.valid('json');
     // Agency children ride on the parent's plan but can't grow the fleet —
     // new agents need a subscription of their own (or the parent's help).
@@ -82,11 +102,37 @@ export function agentRoutes(db: Db) {
         autoResumeMinutes: body.auto_resume_minutes ?? 10,
       })
       .returning();
+    // Give the agent its own Slack alert channel (#janis-{name}) when the
+    // workspace is connected — best-effort: failures just fall back to the
+    // workspace channel.
+    const inst = await getInstallation(db, c.get('workspaceId'));
+    if (inst) {
+      const slug = sanitizeChannelName(`janis-${row.name}`) || 'janis-agent';
+      const { channel } = await createSlackChannel(inst, slug);
+      if (channel) {
+        await db
+          .update(agents)
+          .set({ slackChannelId: channel.id })
+          .where(eq(agents.id, row.id));
+        row.slackChannelId = channel.id;
+        void inviteWorkspaceMembers(db, inst, channel.id);
+      }
+    }
     return c.json({ agent: toAgent(row) }, 201);
   });
 
-  app.patch('/:id', zValidator('json', updateAgent), async (c) => {
+  app.patch('/:id', adminOnly, zValidator('json', updateAgent), async (c) => {
     const body = c.req.valid('json');
+    // A non-null override must be a real channel — otherwise alerts would
+    // silently fail to post.
+    const inst = body.slack_channel_id
+      ? await getInstallation(db, c.get('workspaceId'))
+      : undefined;
+    if (body.slack_channel_id && inst) {
+      const info = await slackChannelInfo(inst.botToken, body.slack_channel_id);
+      if (!info) return c.json({ error: 'channel not found in Slack' }, 400);
+      if (info.isArchived) return c.json({ error: 'that channel is archived' }, 400);
+    }
     const [row] = await db
       .update(agents)
       .set({
@@ -96,15 +142,22 @@ export function agentRoutes(db: Db) {
         ...(body.auto_resume_minutes !== undefined
           ? { autoResumeMinutes: body.auto_resume_minutes }
           : {}),
+        ...(body.slack_channel_id !== undefined
+          ? { slackChannelId: body.slack_channel_id }
+          : {}),
         ...(body.config !== undefined ? { config: body.config } : {}),
       })
       .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
       .returning();
     if (!row) return c.json({ error: 'not found' }, 404);
+    // New alert channel → every member needs to be in it to see/act on alerts.
+    if (body.slack_channel_id && inst) {
+      void inviteWorkspaceMembers(db, inst, body.slack_channel_id);
+    }
     return c.json({ agent: toAgent(row) });
   });
 
-  app.post('/:id/rotate-key', async (c) => {
+  app.post('/:id/rotate-key', adminOnly, async (c) => {
     const { key, hash, preview } = generateApiKey();
     const [row] = await db
       .update(agents)
@@ -115,7 +168,7 @@ export function agentRoutes(db: Db) {
     return c.json({ agent: toAgent(row), api_key: key });
   });
 
-  app.post('/:id/rotate-webhook-secret', async (c) => {
+  app.post('/:id/rotate-webhook-secret', adminOnly, async (c) => {
     const secret = generateWebhookSecret();
     const [row] = await db
       .update(agents)
@@ -126,7 +179,7 @@ export function agentRoutes(db: Db) {
     return c.json({ agent: toAgent(row), webhook_secret: secret });
   });
 
-  app.post('/:id/webhook-test', async (c) => {
+  app.post('/:id/webhook-test', adminOnly, async (c) => {
     const [row] = await db
       .select()
       .from(agents)
@@ -144,8 +197,45 @@ export function agentRoutes(db: Db) {
     return c.json({ ok: true });
   });
 
+  // Get-or-create the console test-chat channel — a webchat channel flagged
+  // internal so it stays out of Integrations, but messages ride the real
+  // /chat pipeline (ingest → agent → reply), so testing exercises exactly
+  // what a visitor would hit, including handoffs. Any member may test.
+  app.post('/:id/test-channel', async (c) => {
+    const [agent] = await db
+      .select({ id: agents.id, name: agents.name })
+      .from(agents)
+      .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
+      .limit(1);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const [existing] = await db
+      .select({ id: channels.id })
+      .from(channels)
+      .where(
+        and(
+          eq(channels.agentId, agent.id),
+          eq(channels.kind, 'webchat'),
+          sql`${channels.credentials}->>'internal' = 'true'`,
+        ),
+      )
+      .limit(1);
+    if (existing) return c.json({ channel_id: existing.id, agent_name: agent.name });
+    const [ch] = await db
+      .insert(channels)
+      .values({
+        workspaceId: c.get('workspaceId'),
+        agentId: agent.id,
+        kind: 'webchat',
+        name: `Test — ${agent.name}`,
+        credentials: { internal: true },
+      })
+      .returning();
+    invalidateChannelCache();
+    return c.json({ channel_id: ch.id, agent_name: agent.name }, 201);
+  });
+
   // Reveal the webhook secret (needed to verify signatures agent-side)
-  app.get('/:id/webhook-secret', async (c) => {
+  app.get('/:id/webhook-secret', adminOnly, async (c) => {
     const [row] = await db
       .select({ webhookSecret: agents.webhookSecret })
       .from(agents)
@@ -255,7 +345,7 @@ export function agentRoutes(db: Db) {
     });
   });
 
-  app.post('/:id/knowledge', async (c) => {
+  app.post('/:id/knowledge', adminOnly, async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
 
@@ -309,16 +399,40 @@ export function agentRoutes(db: Db) {
   // Knowledge-gap loop: clusters of conversations where the agent asked for a
   // human — the recurring questions it's failing on. Operator drafts → edits →
   // approves; approved entries land in config.knowledge (prompt-visible).
+  // Detection is cached on the agent (gaps_cache): recompute only when stale
+  // or explicitly refreshed — otherwise every page load re-rolled the LLM
+  // merge and the gap list visibly flickered.
+  const computeAndCacheGaps = async (agent: typeof agents.$inferSelect) => {
+    const gaps = await detectKnowledgeGaps(db, agent.id);
+    const cache = { at: new Date().toISOString(), gaps };
+    await db
+      .update(agents)
+      .set({
+        config: { ...((agent.config ?? {}) as Record<string, unknown>), gaps_cache: cache },
+      })
+      .where(eq(agents.id, agent.id));
+    return cache;
+  };
+
   app.get('/:id/knowledge-gaps', async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
-    const gaps = await detectKnowledgeGaps(db, agent.id);
-    return c.json({ gaps });
+    const cached = readGapsCache(agent.config);
+    const cache = gapsCacheFresh(cached) ? cached! : await computeAndCacheGaps(agent);
+    const learnings = await listLearnNotes(db, agent.id);
+    return c.json({ gaps: cache.gaps, learnings, computed_at: cache.at });
+  });
+
+  // Force a fresh detection run — the operator's "Refresh" button.
+  app.post('/:id/knowledge-gaps/refresh', adminOnly, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const cache = await computeAndCacheGaps(agent);
+    return c.json({ gaps: cache.gaps, computed_at: cache.at });
   });
 
   app.post(
-    '/:id/knowledge-gaps/draft',
-    zValidator(
+    '/:id/knowledge-gaps/draft', adminOnly, zValidator(
       'json',
       z.object({
         questions: z.array(z.string().min(1)).min(1).max(10),
@@ -334,10 +448,39 @@ export function agentRoutes(db: Db) {
     },
   );
 
+  // Re-check clusters against the current knowledge base — the LLM marks
+  // questions the agent can now handle; covered clusters are dismissed so
+  // they stop surfacing.
+  app.post('/:id/knowledge-gaps/recheck', adminOnly, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    // Audit the same clusters the operator sees — the cached set, not a fresh roll.
+    const clusters = readGapsCache(agent.config)?.gaps ?? (await computeAndCacheGaps(agent)).gaps;
+    const covered = await recheckGaps(db, agent, clusters);
+    if (covered.length) {
+      const cfg = (agent.config ?? {}) as Record<string, unknown> & {
+        dismissed_gaps?: string[];
+      };
+      const dismissed = new Set(cfg.dismissed_gaps ?? []);
+      for (const k of covered) {
+        dismissed.add(k);
+        // store every phrasing too — a reclustered group keeps all dismissed
+        // variants and stays hidden until a genuinely new phrasing appears
+        for (const q of clusters.find((cl) => cl.key === k)?.questions ?? []) {
+          dismissed.add(q.toLowerCase().slice(0, 60));
+        }
+      }
+      await db
+        .update(agents)
+        .set({ config: { ...cfg, dismissed_gaps: [...dismissed] } })
+        .where(eq(agents.id, agent.id));
+    }
+    return c.json({ covered });
+  });
+
   // Approve an entry — append to config.knowledge without clobbering other keys.
   app.post(
-    '/:id/knowledge-gaps',
-    zValidator('json', z.object({ entry: z.string().min(1).max(2000) })),
+    '/:id/knowledge-gaps', adminOnly, zValidator('json', z.object({ entry: z.string().min(1).max(2000) })),
     async (c) => {
       const agent = await ownedAgent(c);
       if (!agent) return c.json({ error: 'not found' }, 404);
@@ -345,9 +488,13 @@ export function agentRoutes(db: Db) {
       const entry = c.req.valid('json').entry.trim();
       const knowledge = cfg.knowledge ?? [];
       if (!knowledge.includes(entry)) knowledge.push(entry);
+      // Keep the cached gap set stable — only its "added" flags move, so the
+      // page shows the approved cluster as covered instead of re-rolling.
+      const cache = readGapsCache(agent.config);
+      const gaps_cache = cache ? { ...cache, gaps: markGapsAdded(cache.gaps, knowledge) } : undefined;
       const [updated] = await db
         .update(agents)
-        .set({ config: { ...cfg, knowledge } })
+        .set({ config: { ...cfg, knowledge, ...(gaps_cache ? { gaps_cache } : {}) } })
         .where(eq(agents.id, agent.id))
         .returning();
       return c.json({ agent: toAgent(updated) });
@@ -375,7 +522,7 @@ export function agentRoutes(db: Db) {
     value: z.string().min(1).max(4096),
   });
 
-  app.put('/:id/secrets', zValidator('json', secretBody), async (c) => {
+  app.put('/:id/secrets', adminOnly, zValidator('json', secretBody), async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const { name, value } = c.req.valid('json');
@@ -404,7 +551,7 @@ export function agentRoutes(db: Db) {
     return c.json({ secret: { name: row.name, created_at: row.createdAt.toISOString() } });
   });
 
-  app.delete('/:id/secrets/:name', async (c) => {
+  app.delete('/:id/secrets/:name', adminOnly, async (c) => {
     if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
     const [row] = await db
       .delete(agentSecrets)
@@ -419,7 +566,106 @@ export function agentRoutes(db: Db) {
     return c.json({ ok: true });
   });
 
-  app.delete('/:id/knowledge/:fileId', async (c) => {
+  // Predefined connections — install a catalog template's tools + store its
+  // credentials as agent secrets in one shot. Tools merge by name so
+  // reinstalling updates rather than duplicating.
+  app.post(
+    '/:id/tools/install', adminOnly, zValidator(
+      'json',
+      z.object({
+        template: z.string(),
+        fields: z.record(z.string(), z.string()).default({}),
+      }),
+    ),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const { template, fields } = c.req.valid('json');
+      const tpl = TOOL_TEMPLATES.find((t) => t.id === template);
+      if (!tpl) return c.json({ error: 'unknown template' }, 404);
+      const missing = tpl.fields.filter((f) => !fields[f.key]?.trim()).map((f) => f.label);
+      if (missing.length) return c.json({ error: `missing: ${missing.join(', ')}` }, 400);
+
+      // OAuth templates: store the credentials and mint a token now so a bad
+      // client_id/secret fails at connect time, not during a conversation.
+      if (tpl.connection) {
+        const { provider } = tpl.connection;
+        const creds = tpl.connection.credentials(fields);
+        const [conn] = await db
+          .insert(agentConnections)
+          .values({
+            agentId: agent.id,
+            workspaceId: agent.workspaceId,
+            provider,
+            label: tpl.connection.label(fields),
+            credentialsEnc: encryptSecret(JSON.stringify(creds)),
+          })
+          .onConflictDoUpdate({
+            target: [agentConnections.agentId, agentConnections.provider],
+            set: {
+              label: tpl.connection.label(fields),
+              credentialsEnc: encryptSecret(JSON.stringify(creds)),
+              accessTokenEnc: null,
+              expiresAt: null,
+              updatedAt: new Date(),
+            },
+          })
+          .returning();
+        try {
+          await connectionToken(db, conn);
+        } catch (err) {
+          await db.delete(agentConnections).where(eq(agentConnections.id, conn.id));
+          return c.json(
+            { error: `could not authenticate with ${tpl.name}: ${(err as Error).message}` },
+            400,
+          );
+        }
+      }
+
+      for (const [name, value] of Object.entries(tpl.secrets(fields))) {
+        const err = await upsertAgentSecret(db, agent.id, agent.workspaceId, name, value);
+        if (err) return c.json({ error: err }, 409);
+      }
+      const cfg = (agent.config ?? {}) as AgentConfig;
+      const names = new Set(tpl.tools.map((t) => t.name));
+      const tools = [...(cfg.tools ?? []).filter((t) => !names.has(t.name)), ...tpl.tools];
+      const [updated] = await db
+        .update(agents)
+        .set({ config: { ...cfg, tools } })
+        .where(eq(agents.id, agent.id))
+        .returning();
+      return c.json({ agent: toAgent(updated) });
+    },
+  );
+
+  // Remove a template's tools; secrets stay (they may be shared with custom tools).
+  app.delete('/:id/tools/:template', adminOnly, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const tpl = TOOL_TEMPLATES.find((t) => t.id === c.req.param('template'));
+    if (!tpl) return c.json({ error: 'unknown template' }, 404);
+    if (tpl.connection) {
+      await db
+        .delete(agentConnections)
+        .where(
+          and(
+            eq(agentConnections.agentId, agent.id),
+            eq(agentConnections.provider, tpl.connection.provider),
+          ),
+        );
+    }
+    const cfg = (agent.config ?? {}) as AgentConfig;
+    const names = new Set(tpl.tools.map((t) => t.name));
+    const tools = (cfg.tools ?? []).filter((t) => !names.has(t.name));
+    const [updated] = await db
+      .update(agents)
+      .set({ config: { ...cfg, tools } })
+      .where(eq(agents.id, agent.id))
+      .returning();
+    return c.json({ agent: toAgent(updated) });
+  });
+
+  app.delete('/:id/knowledge/:fileId', adminOnly, async (c) => {
     if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
     const [row] = await db
       .delete(knowledgeFiles)
@@ -431,7 +677,7 @@ export function agentRoutes(db: Db) {
     return c.json({ ok: true });
   });
 
-  app.delete('/:id', async (c) => {
+  app.delete('/:id', adminOnly, async (c) => {
     const [row] = await db
       .delete(agents)
       .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
@@ -441,4 +687,34 @@ export function agentRoutes(db: Db) {
   });
 
   return app;
+}
+
+/** Insert or rotate an agent secret. Returns an error string on the cap. */
+async function upsertAgentSecret(
+  db: Db,
+  agentId: string,
+  workspaceId: string,
+  name: string,
+  value: string,
+): Promise<string | null> {
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(agentSecrets)
+    .where(eq(agentSecrets.agentId, agentId));
+  const [existing] = await db
+    .select({ id: agentSecrets.id })
+    .from(agentSecrets)
+    .where(and(eq(agentSecrets.agentId, agentId), eq(agentSecrets.name, name)))
+    .limit(1);
+  if (!existing && count >= 50) return 'secret limit reached (50)';
+  const valueEnc = encryptSecret(value);
+  if (existing) {
+    await db
+      .update(agentSecrets)
+      .set({ valueEnc, updatedAt: new Date() })
+      .where(eq(agentSecrets.id, existing.id));
+  } else {
+    await db.insert(agentSecrets).values({ workspaceId, agentId, name, valueEnc });
+  }
+  return null;
 }

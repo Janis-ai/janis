@@ -39,6 +39,7 @@ export function toAgent(row: Row<typeof agents>): Agent {
     has_webhook_secret: Boolean(row.webhookSecret),
     hosted: row.hosted,
     auto_resume_minutes: row.autoResumeMinutes,
+    slack_channel_id: row.slackChannelId ?? null,
     config: (row.config ?? {}) as AgentConfig,
     last_seen_at: iso(row.lastSeenAt),
     api_key_preview: row.apiKeyPreview,
@@ -80,6 +81,8 @@ export function toMessage(row: Row<typeof messages>): Message {
     failure?: boolean;
     help_requested?: boolean;
     custom_alert?: boolean;
+    handoff_offer?: boolean;
+    handoff_cancelled?: boolean;
   };
   return {
     id: row.id,
@@ -92,6 +95,8 @@ export function toMessage(row: Row<typeof messages>): Message {
       failure: Boolean(flags.failure),
       help_requested: Boolean(flags.help_requested),
       custom_alert: Boolean(flags.custom_alert),
+      handoff_offer: Boolean(flags.handoff_offer),
+      handoff_cancelled: Boolean(flags.handoff_cancelled),
     },
     created_at: iso(row.createdAt)!,
   };
@@ -140,6 +145,8 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     position?: 'left' | 'right';
     logo_url?: string;
     quick_replies?: string[];
+    identity_secret?: string;
+    show_operator?: boolean;
   };
   return {
     id: row.id,
@@ -153,6 +160,8 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
       verify_token: creds.verify_token ?? '',
       via: creds.via === 'oauth' || creds.via === 'manual' ? creds.via : undefined,
       chat_url: channelChatUrl(row),
+      identity_secret: row.kind === 'webchat' ? creds.identity_secret : undefined,
+      show_operator: row.kind === 'webchat' ? creds.show_operator === true : undefined,
       branding:
         row.kind === 'webchat'
           ? {
@@ -195,17 +204,24 @@ export function toSuggestion(row: Row<typeof suggestions>): Suggestion {
   };
 }
 
-export function toWorkspaceUser(row: Row<typeof users>): WorkspaceUser {
+export function toWorkspaceUser(
+  row: Row<typeof users>,
+  role: 'admin' | 'member' = 'member',
+): WorkspaceUser {
   const prefs = (row.notifyPrefs ?? {}) as { push?: boolean; email?: boolean; sound?: boolean };
   return {
     id: row.id,
     email: row.email,
     name: row.name,
-    role: row.role,
+    role,
+    status: 'active' as const, // overridden to 'invited' by the members list
     notify: {
       push: prefs.push !== false,
       email: prefs.email !== false,
       sound: prefs.sound !== false,
     },
+    display_name: row.displayName,
+    avatar_url: row.avatarUrl,
+    show_identity: row.showIdentity !== false,
   };
 }

@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
-import type { Channel } from '@janis/shared';
-import { useAgents, useChannels } from '../api/hooks';
-import { Empty } from '../components/bits';
+import type { Agent, Channel } from '@janis/shared';
+import { useAgents, useChannels, useMe } from '../api/hooks';
+import { CodeBlock, Empty } from '../components/bits';
 
 interface PendingAssets {
   pages: { id: string; name: string; instagram: { id: string; username?: string } | null }[];
@@ -31,6 +31,8 @@ function parseReplies(text: string): string[] {
 export default function Integrations() {
   const { data } = useChannels();
   const { data: agents } = useAgents();
+  const { data: me } = useMe();
+  const isAdmin = me?.user.role === 'admin';
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const metaError = params.get('meta_error') ?? '';
@@ -85,6 +87,19 @@ export default function Integrations() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
     onError: (e) => setError(e.message),
   });
+
+  // Deep link — /integrations?channel=<id> scrolls to and flashes the card
+  // (Edit on the agent's Integrations tab lands here)
+  const focusChannel = params.get('channel');
+  useEffect(() => {
+    if (!focusChannel || !data) return;
+    const el = document.getElementById(`ch-${focusChannel}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('flash');
+    const t = setTimeout(() => el.classList.remove('flash'), 2400);
+    return () => clearTimeout(t);
+  }, [focusChannel, data]);
 
   const [form, setForm] = useState({
     kind: 'messenger' as 'messenger' | 'instagram' | 'whatsapp',
@@ -152,6 +167,36 @@ export default function Integrations() {
         .map((v) => [v, ch.id] as const),
     ),
   );
+
+  // Members get a read-only view — wiring, credentials, and removal are admin actions.
+  if (me && !isAdmin) {
+    return (
+      <>
+        <h1 className="page-title">Integrations</h1>
+        <div className="card">
+          {data?.channels.length ? (
+            data.channels.map((ch) => (
+              <div key={ch.id} className="row" style={{ marginTop: 8 }}>
+                <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
+                <strong className="grow">{ch.name}</strong>
+                <span className="muted">{ch.agent_name}</span>
+                {ch.meta.chat_url && (
+                  <a href={ch.meta.chat_url} target="_blank" rel="noreferrer" className="btn">
+                    Open ↗
+                  </a>
+                )}
+              </div>
+            ))
+          ) : (
+            <div className="muted">No integrations connected.</div>
+          )}
+          <div className="muted" style={{ marginTop: 12 }}>
+            Integrations are managed by workspace admins.
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -351,61 +396,9 @@ export default function Integrations() {
       {data && data.channels.length > 0 && (
         <h2 className="section-title">Connected channels</h2>
       )}
-      {data?.channels.map((ch) => {
-        const chAgent = agents?.agents.find((a) => a.id === ch.agent_id);
-        const dead = chAgent && !chAgent.hosted && !chAgent.webhook_url;
-        return (
-        <div key={ch.id} id={`ch-${ch.id}`} className="card channel-card">
-          <div className="row">
-            <strong className="grow">{ch.name}</strong>
-            <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
-            <button className="btn danger" onClick={() => remove.mutate(ch.id)}>Remove</button>
-          </div>
-          <div className="muted" style={{ marginTop: 6 }}>
-            Answered by <strong>{ch.agent_name}</strong>
-            {dead && <span className="badge warn" style={{ marginLeft: 6 }}>agent unreachable</span>}
-            {ch.meta.page_id && <> · page {ch.meta.page_id}</>}
-            {ch.meta.phone_number_id && <> · {ch.meta.phone_number_id}</>}
-          </div>
-          {dead && (
-            <div style={{ color: '#fde047', marginTop: 6, fontSize: 13 }}>
-              {ch.agent_name} has no webhook URL and isn't hosted by Janis — inbound messages on this
-              channel go unanswered. Fix it on the agent's page.
-            </div>
-          )}
-          {ch.meta.chat_url && (
-            <div style={{ marginTop: 6 }}>
-              <a href={ch.meta.chat_url} target="_blank" rel="noreferrer">
-                Open chat as a customer ↗
-              </a>
-            </div>
-          )}
-          {ch.kind === 'webchat' && (
-            <>
-              <details className="webhook-details" open>
-                <summary>Embed code — paste before &lt;/body&gt; on your site</summary>
-                <pre className="mono" style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
-{`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
-                </pre>
-              </details>
-              <details className="webhook-details" style={{ marginTop: 8 }}>
-                <summary>Appearance — branding for the embedded widget</summary>
-                <WebchatBranding channel={ch} />
-              </details>
-            </>
-          )}
-          {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && (
-          <details className="webhook-details">
-            <summary>Webhook details</summary>
-            <div className="mono" style={{ marginTop: 6 }}>
-              <div>URL: {apiOrigin}/channels/meta/webhook</div>
-              <div>Verify token: {ch.meta.verify_token}</div>
-            </div>
-          </details>
-          )}
-        </div>
-        );
-      })}
+      {data?.channels.map((ch) => (
+        <ChannelCard key={ch.id} ch={ch} agents={agents?.agents ?? []} />
+      ))}
       {data && data.channels.length === 0 && !connectId && (
         <Empty>No channels connected yet.</Empty>
       )}
@@ -482,7 +475,172 @@ export default function Integrations() {
   );
 }
 
+/** A single connected channel — rendered in the list below and standalone on
+ *  /integrations/:id, which skips the Meta session queries entirely. */
+export function ChannelCard({
+  ch,
+  agents,
+  deletedTo = '/integrations',
+  standalone = false,
+}: {
+  ch: Channel;
+  agents: Agent[];
+  /** Where to land after Remove — the standalone editor passes its back target. */
+  deletedTo?: string;
+  /** Standalone /integrations/:id hides the Edit permalink — you're already there. */
+  standalone?: boolean;
+}) {
+  const qc = useQueryClient();
+  const nav = useNavigate();
+  const apiOrigin =
+    window.location.hostname === 'localhost' ? 'http://localhost:8787' : window.location.origin;
+  const chAgent = agents.find((a) => a.id === ch.agent_id);
+  const dead = chAgent && !chAgent.hosted && !chAgent.webhook_url;
+  const reassign = useMutation({
+    mutationFn: (agent_id: string) =>
+      api(`/api/channels/${ch.id}`, { method: 'PATCH', body: JSON.stringify({ agent_id }) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', ch.id] });
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: () => api(`/api/channels/${ch.id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      nav(deletedTo);
+    },
+  });
+  return (
+    <div id={`ch-${ch.id}`} className="card channel-card">
+      <div className="row">
+        <strong className="grow">{ch.name}</strong>
+        <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
+        {!standalone && (
+          <Link to={`/integrations/${ch.id}`} className="btn">Edit</Link>
+        )}
+        <button className="btn danger" onClick={() => remove.mutate()}>Remove</button>
+      </div>
+      <div className="muted" style={{ marginTop: 6 }}>
+        Answered by{' '}
+        <select
+          value={ch.agent_id}
+          onChange={(e) => reassign.mutate(e.target.value)}
+          disabled={reassign.isPending}
+        >
+          {agents.map((a) => (
+            <option key={a.id} value={a.id}>{a.name}</option>
+          ))}
+        </select>
+        {dead && <span className="badge warn" style={{ marginLeft: 6 }}>agent unreachable</span>}
+        {ch.meta.page_id && <> · page {ch.meta.page_id}</>}
+        {ch.meta.phone_number_id && <> · {ch.meta.phone_number_id}</>}
+      </div>
+      {dead && (
+        <div style={{ color: '#fde047', marginTop: 6, fontSize: 13 }}>
+          {ch.agent_name} has no webhook URL and isn't hosted by Janis — inbound messages on this
+          channel go unanswered. Fix it on the agent's page.
+        </div>
+      )}
+      {ch.meta.chat_url && (
+        <div style={{ marginTop: 6 }}>
+          <a href={ch.meta.chat_url} target="_blank" rel="noreferrer">
+            Open chat as a customer ↗
+          </a>
+        </div>
+      )}
+      {ch.kind === 'webchat' && (
+        <>
+          <CodeBlock
+            title="Embed — paste before </body> on your site"
+            code={`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
+          />
+          <WebchatIdentity channel={ch} />
+          <details className="webhook-details" style={{ marginTop: 8 }}>
+            <summary>Appearance — branding for the embedded widget</summary>
+            <WebchatBranding channel={ch} />
+          </details>
+        </>
+      )}
+      {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && (
+      <details className="webhook-details">
+        <summary>Webhook details</summary>
+        <div className="mono" style={{ marginTop: 6 }}>
+          <div>URL: {apiOrigin}/channels/meta/webhook</div>
+          <div>Verify token: {ch.meta.verify_token}</div>
+        </div>
+      </details>
+      )}
+    </div>
+  );
+}
+
 /** Webchat widget appearance editor — PATCHes display config on the channel. */
+/** Visitor identity for the webchat widget: unsigned claims vs HMAC-signed
+ *  identity, and the channel's signing secret. */
+function WebchatIdentity({ channel }: { channel: Channel }) {
+  const qc = useQueryClient();
+  const [secret, setSecret] = useState(channel.meta.identity_secret ?? '');
+  const [msg, setMsg] = useState('');
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/channels/${channel.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ identity_secret: secret.trim() }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      setMsg(secret.trim() ? 'Saved — signed identity is now enabled.' : 'Cleared — signed identity disabled.');
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),
+  });
+  const generate = () => {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    setSecret([...bytes].map((b) => b.toString(16).padStart(2, '0')).join(''));
+    setMsg('Generated — Save to activate.');
+  };
+  return (
+    <div style={{ marginTop: 14 }}>
+      <strong style={{ fontSize: 13 }}>Identify logged-in visitors</strong>
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+        Anonymous by default. If your site has accounts, tell the widget who the visitor is — the
+        agent sees their name/email/account id instead of asking. To mark the identity{' '}
+        <em>verified</em> (required before the agent trusts the account id for lookups), sign it on
+        your server with the secret below — never in browser JavaScript.
+      </div>
+      <CodeBlock
+        title="Your server — sign the identity (Node.js)"
+        code={`const sig = crypto.createHmac('sha256', IDENTITY_SECRET)
+  .update(\`\${user.id}|\${user.email}|\${user.name}\`)
+  .digest('hex');
+// send sig to the page with the rest of the user payload`}
+      />
+      <CodeBlock
+        title="Your page — after the widget script"
+        code={`Janis.identify({ id: user.id, name: user.name, email: user.email, sig });
+// or unsigned (self-reported name/email only):
+Janis.identify({ id: user.id, name: user.name, email: user.email });`}
+      />
+      <div className="row" style={{ marginTop: 8 }}>
+        <input
+          className="grow mono"
+          placeholder="Identity signing secret (optional)"
+          value={secret}
+          onChange={(e) => setSecret(e.target.value)}
+        />
+        <button className="btn" type="button" onClick={generate}>Generate</button>
+        <button className="btn" disabled={save.isPending} onClick={() => save.mutate()}>Save</button>
+      </div>
+      {msg && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
+      {channel.meta.identity_secret && secret !== channel.meta.identity_secret && (
+        <div className="muted" style={{ fontSize: 12 }}>unsaved changes — the widget still uses the stored secret</div>
+      )}
+    </div>
+  );
+}
+
 function WebchatBranding({ channel }: { channel: Channel }) {
   const qc = useQueryClient();
   const b = channel.meta.branding ?? {};

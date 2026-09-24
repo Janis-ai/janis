@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceUser } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
 import { getPushSubscription, subscribeToPush, unsubscribeFromPush, markPushDisabled, PUSH_CHANGE_EVENT } from '../lib/push';
 import { installAvailable, isIOS, isStandalone, onInstallStateChange, promptInstall } from '../lib/install';
+import { SlackChannelSelect } from '../components/SlackChannelSelect';
 
 export default function Settings() {
   const { data: me } = useMe();
@@ -13,7 +14,12 @@ export default function Settings() {
   const { data: slackChannels } = useSlackChannels(!!slack?.connected);
   const { data: savedReplies } = useSavedReplies();
   const qc = useQueryClient();
-  const [form, setForm] = useState({ email: '', name: '', password: '' });
+  const [form, setForm] = useState({ email: '', name: '' });
+  const { data: providers } = useQuery({
+    queryKey: ['auth-providers'],
+    queryFn: () => api<{ google: boolean; slack: boolean; password: boolean }>('/auth/providers'),
+    staleTime: Infinity,
+  });
   const [reply, setReply] = useState({ title: '', body: '' });
   const [error, setError] = useState('');
   const [pushMsg, setPushMsg] = useState('');
@@ -35,12 +41,13 @@ export default function Settings() {
       ? 'Slack connected — pick an alert channel below.'
       : '',
   );
+  const [alertChannelName, setAlertChannelName] = useState('janis-alerts');
 
   const addUser = useMutation({
-    mutationFn: (body: typeof form) =>
+    mutationFn: (body: { email: string; name?: string }) =>
       api('/api/users', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => {
-      setForm({ email: '', name: '', password: '' });
+      setForm({ email: '', name: '' });
       setError('');
       void qc.invalidateQueries({ queryKey: ['users'] });
     },
@@ -65,6 +72,34 @@ export default function Settings() {
       api('/api/slack/channel', { method: 'PATCH', body: JSON.stringify({ channel_id: channelId }) }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['slackStatus'] }),
   });
+  const createChannel = useMutation({
+    mutationFn: (name: string) =>
+      api<{ channel: { id: string; name: string } }>('/api/slack/channel', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: (res) => {
+      // Select the new channel immediately — Slack's conversations.list can
+      // lag on freshly created channels, so don't wait for the refetch to
+      // show it picked (that lag is what made "create & use" look broken).
+      qc.setQueryData<{ connected: boolean; alert_channel_id: string | null }>(
+        ['slackStatus'],
+        (old) => (old ? { ...old, alert_channel_id: res.channel.id } : old),
+      );
+      qc.setQueryData<{ channels: { id: string; name: string }[] }>(
+        ['slackChannels'],
+        (old) => ({
+          channels: old?.channels.some((ch) => ch.id === res.channel.id)
+            ? old.channels
+            : [...(old?.channels ?? []), res.channel],
+        }),
+      );
+      void qc.invalidateQueries({ queryKey: ['slackStatus'] });
+      void qc.invalidateQueries({ queryKey: ['slackChannels'] });
+      setSlackMsg(`Created #${res.channel.name} — alerts now post there.`);
+    },
+    onError: (e) => setSlackMsg(e.message),
+  });
 
   const testSlack = useMutation({
     mutationFn: () => api('/api/slack/test', { method: 'POST' }),
@@ -88,6 +123,18 @@ export default function Settings() {
     onError: (e) => setError(e.message),
   });
 
+  const setPassword = useMutation({
+    mutationFn: (body: { current?: string; new: string }) =>
+      api('/api/users/me', { method: 'PATCH', body: JSON.stringify({ password: body }) }),
+    onSuccess: () => {
+      setPw({ current: '', next: '' });
+      setPwMsg('Password updated.');
+    },
+    onError: (e) => setPwMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+  const [pw, setPw] = useState({ current: '', next: '' });
+  const [pwMsg, setPwMsg] = useState('');
+
   const setNotify = useMutation({
     mutationFn: (notify: { push?: boolean; email?: boolean; sound?: boolean }) =>
       api<{ user: WorkspaceUser }>('/api/users/me', {
@@ -99,6 +146,47 @@ export default function Settings() {
         old ? { ...old, user: d.user } : old,
       ),
   });
+
+  // Operator identity shown to customers on channels with "show operator
+  // name" enabled — display name defaults to the first name when blank.
+  const [profile, setProfile] = useState({ display_name: '', avatar_url: '' });
+  const [profileMsg, setProfileMsg] = useState('');
+  const meId = me?.user.id;
+  useEffect(() => {
+    if (meId) {
+      setProfile({
+        display_name: me?.user.display_name ?? '',
+        avatar_url: me?.user.avatar_url ?? '',
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meId]);
+  const saveProfile = useMutation({
+    mutationFn: (body: { display_name?: string | null; avatar_url?: string | null; show_identity?: boolean }) =>
+      api<{ user: WorkspaceUser }>('/api/users/me', {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (d) => {
+      qc.setQueryData<{ user: WorkspaceUser; workspace: unknown }>(['me'], (old) =>
+        old ? { ...old, user: d.user } : old,
+      );
+      setProfileMsg('Profile saved.');
+    },
+    onError: (e) => setProfileMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+  const uploadAvatar = async (file: File) => {
+    setProfileMsg('Uploading…');
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/uploads', { method: 'POST', body: fd, credentials: 'include' });
+    if (res.ok) {
+      const att = (await res.json()) as { url: string };
+      saveProfile.mutate({ avatar_url: att.url });
+    } else {
+      setProfileMsg('Upload failed.');
+    }
+  };
 
   const addReply = useMutation({
     mutationFn: (body: typeof reply) =>
@@ -146,7 +234,73 @@ export default function Settings() {
 
       <div className="card">
         <strong>Workspace</strong>
-        <div className="muted" style={{ marginTop: 6 }}>{me?.workspace.name}</div>
+        <div className="muted" style={{ marginTop: 6 }}>{me?.workspace?.name}</div>
+      </div>
+
+      <div className="card">
+        <strong>Profile</strong>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          Shown to customers on webchat channels that enable "show operator name". Leave the
+          display name blank to use your first name ({me?.user.name.split(' ')[0] ?? '—'}).
+        </div>
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            saveProfile.mutate({ display_name: profile.display_name.trim() || null });
+          }}
+        >
+          <input
+            style={{ maxWidth: 240 }}
+            placeholder={me?.user.name.split(' ')[0] ?? 'display name'}
+            value={profile.display_name}
+            onChange={(e) => setProfile({ ...profile, display_name: e.target.value })}
+            maxLength={80}
+          />
+          <button className="btn" disabled={saveProfile.isPending}>Save</button>
+          <span className="grow" />
+          <label className="btn" style={{ cursor: 'pointer' }}>
+            {profile.avatar_url ? 'Change avatar' : 'Upload avatar'}
+            <input
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => e.target.files?.[0] && void uploadAvatar(e.target.files[0])}
+            />
+          </label>
+          {profile.avatar_url && (
+            <>
+              <img
+                src={profile.avatar_url}
+                alt="avatar"
+                style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }}
+              />
+              <button
+                type="button"
+                className="btn danger"
+                onClick={() => {
+                  setProfile({ ...profile, avatar_url: '' });
+                  saveProfile.mutate({ avatar_url: null });
+                }}
+              >
+                Remove
+              </button>
+            </>
+          )}
+        </form>
+        {profileMsg && <div className="muted" style={{ marginTop: 8 }}>{profileMsg}</div>}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 14 }}>
+          <input
+            type="checkbox"
+            checked={me?.user.show_identity !== false}
+            disabled={saveProfile.isPending}
+            onChange={(e) => saveProfile.mutate({ show_identity: e.target.checked })}
+          />
+          Show my name &amp; avatar to customers
+          <span className="muted" style={{ fontSize: 12 }}>
+            — unchecked, your replies stay anonymous even on enabled channels
+          </span>
+        </label>
       </div>
 
       <div className="card">
@@ -198,6 +352,46 @@ export default function Settings() {
         )}
       </div>
 
+      {providers?.password && (
+      <div className="card">
+        <strong>Password</strong>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          Change the password you sign in with. If your account was created via Google/Slack
+          sign-in, leave the current password blank to set your first one.
+        </div>
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setPwMsg('');
+            setPassword.mutate({
+              ...(pw.current ? { current: pw.current } : {}),
+              new: pw.next,
+            });
+          }}
+        >
+          <input
+            type="password"
+            placeholder="current password"
+            autoComplete="current-password"
+            value={pw.current}
+            onChange={(e) => setPw({ ...pw, current: e.target.value })}
+          />
+          <input
+            type="password"
+            placeholder="new password (min 8)"
+            autoComplete="new-password"
+            minLength={8}
+            required
+            value={pw.next}
+            onChange={(e) => setPw({ ...pw, next: e.target.value })}
+          />
+          <button className="btn" disabled={setPassword.isPending}>Change</button>
+        </form>
+        {pwMsg && <div className="muted" style={{ marginTop: 8 }}>{pwMsg}</div>}
+      </div>
+      )}
+
       <InstallCard />
 
       <div className="card">
@@ -206,18 +400,55 @@ export default function Settings() {
           Alerts post to a Slack channel with Take over / Resume buttons; replying in the thread
           talks to the end user.
         </div>
-        {slack?.connected ? (
+        {me?.user.role !== 'admin' ? (
+          <div className="muted">
+            {slack?.connected
+              ? `Connected — alerts post to ${slackChannels?.channels.find((ch) => ch.id === slack.alert_channel_id)?.name ? `#${slackChannels.channels.find((ch) => ch.id === slack.alert_channel_id)!.name}` : 'the alert channel'}. Managed by admins.`
+              : 'Not connected. Managed by workspace admins.'}
+          </div>
+        ) : slack?.connected ? (
           <>
-            <div className="row">
-              <select
-                value={slack.alert_channel_id ?? ''}
-                onChange={(e) => e.target.value && setSlackChannel.mutate(e.target.value)}
+            {!slack.alert_channel_id && (
+              <div
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  marginBottom: 10,
+                }}
               >
-                <option value="">Pick alert channel…</option>
-                {slackChannels?.channels.map((ch) => (
-                  <option key={ch.id} value={ch.id}>#{ch.name}</option>
-                ))}
-              </select>
+                <div style={{ marginBottom: 8 }}>
+                  No alert channel yet. Create a dedicated channel for Janis alerts —
+                  you can rename it:
+                </div>
+                <div className="row">
+                  <input
+                    style={{ width: 200 }}
+                    value={alertChannelName}
+                    onChange={(e) => setAlertChannelName(e.target.value)}
+                    placeholder="janis-alerts"
+                  />
+                  <button
+                    className="btn primary"
+                    disabled={!alertChannelName.trim() || createChannel.isPending}
+                    onClick={() => createChannel.mutate(alertChannelName.trim())}
+                  >
+                    {createChannel.isPending ? 'Creating…' : 'Create channel'}
+                  </button>
+                  <span className="muted">or pick an existing channel below</span>
+                </div>
+              </div>
+            )}
+            <div className="row">
+              <SlackChannelSelect
+                channels={slackChannels?.channels}
+                value={slack.alert_channel_id ?? ''}
+                busy={setSlackChannel.isPending || createChannel.isPending}
+                onPick={(id) => id && setSlackChannel.mutate(id)}
+                onCreate={async (name) => {
+                  await createChannel.mutateAsync(name);
+                }}
+              />
               <button className="btn" onClick={() => testSlack.mutate()}>Send test</button>
               <button className="btn danger" onClick={() => disconnectSlack.mutate()}>Disconnect</button>
             </div>
@@ -273,9 +504,19 @@ export default function Settings() {
 
       <div className="card">
         <strong>Team</strong>
+        <div className="muted" style={{ margin: '6px 0 4px', fontSize: 13 }}>
+          <strong>Admins</strong> manage agents, integrations, billing, and the team.{' '}
+          <strong>Members</strong> work the inbox — reply, take over, assign, and set
+          conversation status.
+        </div>
         {users?.users.map((u) => (
           <div key={u.id} className="row muted" style={{ marginTop: 8 }}>
-            <span className="grow">{u.name} · {u.email}</span>
+            <span className="grow">
+              {u.name} · {u.email}
+              {u.status === 'invited' && (
+                <span className="badge" style={{ marginLeft: 8 }}>invited</span>
+              )}
+            </span>
             {me?.user.role === 'admin' && u.id !== me.user.id ? (
               <>
                 <select value={u.role} onChange={(e) => setRole.mutate({ id: u.id, role: e.target.value })}>
@@ -294,15 +535,21 @@ export default function Settings() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              addUser.mutate(form);
+              addUser.mutate({
+                email: form.email,
+                ...(form.name ? { name: form.name } : {}),
+              });
             }}
           >
-            <label>Add teammate</label>
+            <label>Invite teammate</label>
             <div className="row">
-              <input placeholder="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+              <input placeholder="name (optional)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <input placeholder="email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
-              <input placeholder="password (min 8)" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required minLength={8} />
-              <button className="btn">Add</button>
+              <button className="btn">Invite</button>
+            </div>
+            <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>
+              They sign in with Google or Slack using this email — the invite shows as an
+              accept/decline banner when they land.
             </div>
           </form>
         )}
@@ -321,9 +568,9 @@ export default function Settings() {
             disabled={deleteWorkspace.isPending}
             onClick={() => {
               const name = window.prompt(
-                `Type the workspace name (${me.workspace.name}) to confirm deletion:`,
+                `Type the workspace name (${me.workspace?.name}) to confirm deletion:`,
               );
-              if (name === me.workspace.name) deleteWorkspace.mutate();
+              if (name === me.workspace?.name) deleteWorkspace.mutate();
               else if (name !== null) setError('Workspace name did not match — nothing deleted.');
             }}
           >

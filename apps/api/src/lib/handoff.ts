@@ -17,8 +17,14 @@ const HANDOFF_BRIEF_SYSTEM =
 
 function line(m: { direction: string; text: string | null; flags: unknown }): string | null {
   if (!m.text) return null;
-  const f = m.flags as { failure?: boolean; help_requested?: boolean; custom_alert?: boolean };
+  const f = m.flags as {
+    failure?: boolean;
+    help_requested?: boolean;
+    custom_alert?: boolean;
+    handoff_offer?: boolean;
+  };
   if (f?.failure || f?.help_requested || f?.custom_alert) return '(passed to a human teammate)';
+  if (f?.handoff_offer) return '(offered a human teammate — awaiting their reply)';
   if (m.direction === 'human') return `human operator: ${m.text}`;
   return m.direction === 'in' ? `customer: ${m.text}` : `agent: ${m.text}`;
 }

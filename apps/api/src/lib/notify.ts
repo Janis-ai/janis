@@ -3,6 +3,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { channelBindings, channels, pushSubscriptions, users } from '../db/schema.js';
+import { workspaceMembers } from './members.js';
 import { env } from '../env.js';
 
 let configured = false;
@@ -26,6 +27,7 @@ interface NotifyPrefs {
 const ALERT_TITLES: Record<string, string> = {
   failure: 'Agent failure',
   help_request: 'Handoff requested',
+  handoff_offer: 'Agent offered a human',
   custom: 'Alert',
   inactivity: 'Inactive conversation',
   keyword: 'Keyword match',
@@ -127,12 +129,9 @@ export async function notifyWorkspace(
   notification: { title: string; body: string; url?: string },
   opts: { userIds?: string[] } = {},
 ): Promise<void> {
-  const members = (
-    await db
-      .select({ id: users.id, email: users.email, notifyPrefs: users.notifyPrefs })
-      .from(users)
-      .where(eq(users.workspaceId, workspaceId))
-  ).filter((m) => !opts.userIds || opts.userIds.includes(m.id));
+  const members = (await workspaceMembers(db, workspaceId))
+    .map((m) => m.user)
+    .filter((m) => !opts.userIds || opts.userIds.includes(m.id));
   if (members.length === 0) return;
 
   const pushUserIds = members

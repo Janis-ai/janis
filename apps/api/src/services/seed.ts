@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, users, workspaces } from '../db/schema.js';
+import { agents, memberships, users, workspaces } from '../db/schema.js';
 import { env } from '../env.js';
 import { generateApiKey, generateWebhookSecret, hashPassword } from '../lib/crypto.js';
 
@@ -16,12 +16,19 @@ export async function ensureSeed(db: Db): Promise<void> {
     .insert(workspaces)
     .values({ name: 'Default', plan: env.defaultPlan })
     .returning();
-  await db.insert(users).values({
+  const [admin] = await db
+    .insert(users)
+    .values({
+      email: env.seedAdminEmail,
+      name: 'Admin',
+      passwordHash: await hashPassword(env.seedAdminPassword),
+    })
+    .returning();
+  await db.insert(memberships).values({
+    userId: admin.id,
     workspaceId: workspace.id,
-    email: env.seedAdminEmail,
-    name: 'Admin',
     role: 'admin',
-    passwordHash: await hashPassword(env.seedAdminPassword),
+    acceptedAt: new Date(),
   });
 
   const { key, hash, preview } = generateApiKey();

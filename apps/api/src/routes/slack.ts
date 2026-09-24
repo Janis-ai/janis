@@ -1,35 +1,53 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { and, desc, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, conversations, slackInstallations, slackThreads, suggestions } from '../db/schema.js';
+import { agents, conversations, messages, slackInstallations, slackThreads, suggestions } from '../db/schema.js';
 import { env } from '../env.js';
-import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { runHostedEvent } from '../lib/hostedAgent.js';
 import {
+  createSlackChannel,
   findThread,
   getInstallation,
   inviteWorkspaceMembers,
+  listSlackChannels,
   postSlackMessage,
+  sanitizeChannelName,
   slackApi,
+  slackChannelInfo,
   slackUserToMember,
   verifyAvatarSig,
   verifySlackSignature,
 } from '../lib/slack.js';
 import { fetchAvatar } from '../lib/avatar.js';
+import { membershipFor } from '../lib/members.js';
 import { agentSend, humanReply, internalNote, resume, takeover, TakeoverError, teachAgent } from '../services/takeover.js';
 
+// channel:ts → processed-at. Slack's overlapping event subscriptions deliver
+// the same user message twice in parallel; this collapses them in-process.
+// (payload.slack_ts covers retries that outlive a restart.)
+const recentSlackEvents = new Map<string, number>();
+
+// Keep in sync with REQUIRED_BOT_SCOPES in scripts/slack-manifest-sync.ts —
+// the history scopes are what actually deliver the message.* event
+// subscriptions to an install; the manifest declares them, this requests them.
 const SCOPES = [
   'chat:write',
   'chat:write.public',
   'chat:write.customize', // per-message username/avatar in transcript mirrors
   'channels:read',
+  'channels:history', // required for message.channels delivery
   'groups:read',
+  'groups:history', // required for message.groups delivery
   'channels:manage', // invite assignees into the public alert channel
   'channels:join', // bot joins the public alert channel before inviting
   'groups:write', // same for private alert channels
   'im:write', // DM pointer when an assignee can't be invited
+  'im:history', // required for message.im delivery
+  'mpim:history', // required for message.mpim delivery
+  'commands', // slash commands (/pause, /resume)
   'users:read',
   'users:read.email',
 ].join(',');
@@ -38,6 +56,10 @@ function oauthUrl(state: string) {
   const params = new URLSearchParams({
     client_id: env.slackClientId,
     scope: SCOPES,
+    // installer's user token — chat:write lets us delete their own thread
+    // replies (bots can't touch other users' messages) so styled mirrors
+    // can replace them
+    user_scope: 'chat:write',
     redirect_uri: `${env.apiOrigin}/slack/oauth/callback`,
     state,
   });
@@ -60,26 +82,37 @@ export function slackApiRoutes(db: Db) {
   });
 
   // Navigate here in the browser (top-level GET → session cookie is sent).
-  app.get('/install', (c) => {
+  app.get('/install', adminOnly, (c) => {
     if (!env.slackClientId) return c.json({ error: 'SLACK_CLIENT_ID not configured' }, 503);
     const state = `${c.get('workspaceId')}:${c.get('user').id}`;
     return c.redirect(oauthUrl(state));
   });
 
   app.get('/channels', async (c) => {
-    const inst = await getInstallation(db, c.get('workspaceId'));
+    const workspaceId = c.get('workspaceId');
+    const inst = await getInstallation(db, workspaceId);
     if (!inst) return c.json({ channels: [] });
-    const res = await slackApi<{ channels: { id: string; name: string }[] }>(
-      inst.botToken,
-      'conversations.list',
-      { types: 'public_channel,private_channel', limit: 200 },
-    );
-    return c.json({ channels: res.ok ? res.channels : [] });
+    const channels = await listSlackChannels(inst.botToken);
+    // conversations.list can omit freshly created channels for a while —
+    // resolve any selected channels that are missing so the picker shows
+    // them instead of snapping back to "Pick alert channel…".
+    const selected = new Set<string>();
+    if (inst.alertChannelId) selected.add(inst.alertChannelId);
+    const agentRows = await db
+      .select({ channelId: agents.slackChannelId })
+      .from(agents)
+      .where(eq(agents.workspaceId, workspaceId));
+    for (const a of agentRows) if (a.channelId) selected.add(a.channelId);
+    const listed = new Set(channels.map((ch) => ch.id));
+    for (const id of [...selected].filter((id) => !listed.has(id)).slice(0, 10)) {
+      const info = await slackChannelInfo(inst.botToken, id);
+      if (info) channels.push({ id: info.id, name: info.name });
+    }
+    return c.json({ channels });
   });
 
   app.patch(
-    '/channel',
-    zValidator('json', z.object({ channel_id: z.string().min(1) })),
+    '/channel', adminOnly, zValidator('json', z.object({ channel_id: z.string().min(1) })),
     async (c) => {
       const inst = await getInstallation(db, c.get('workspaceId'));
       if (!inst) return c.json({ error: 'slack not connected' }, 404);
@@ -93,7 +126,60 @@ export function slackApiRoutes(db: Db) {
     },
   );
 
-  app.post('/test', async (c) => {
+  // Create a dedicated channel (e.g. #janis-alerts) and point alerts at it —
+  // better than asking customers to repurpose #general. With agent_id the new
+  // channel becomes that agent's own alert channel instead of the workspace
+  // default.
+  app.post(
+    '/channel', adminOnly, zValidator(
+      'json',
+      z.object({ name: z.string().min(1).max(80), agent_id: z.string().optional() }),
+    ),
+    async (c) => {
+      const inst = await getInstallation(db, c.get('workspaceId'));
+      if (!inst) return c.json({ error: 'slack not connected' }, 404);
+      const { name: rawName, agent_id: agentId } = c.req.valid('json');
+      const name = sanitizeChannelName(rawName);
+      if (!name) return c.json({ error: 'invalid channel name' }, 400);
+      if (agentId) {
+        const [agent] = await db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(and(eq(agents.id, agentId), eq(agents.workspaceId, inst.workspaceId)))
+          .limit(1);
+        if (!agent) return c.json({ error: 'agent not found' }, 404);
+      }
+      // The user typed this name — surface collisions instead of silently
+      // creating #name-x3yz so they can rename in the dialog.
+      const { channel, error: createErr } = await createSlackChannel(inst, name, {
+        retryOnTaken: false,
+      });
+      if (!channel) {
+        const msg =
+          createErr === 'name_taken'
+            ? `#${name} is already taken — pick another name`
+            : createErr === 'missing_scope'
+              ? `slack: ${createErr} — reconnect Slack to grant channel-creation permission`
+              : `slack: ${createErr}`;
+        return c.json({ error: msg }, 400);
+      }
+      if (agentId) {
+        await db
+          .update(agents)
+          .set({ slackChannelId: channel.id })
+          .where(eq(agents.id, agentId));
+      } else {
+        await db
+          .update(slackInstallations)
+          .set({ alertChannelId: channel.id })
+          .where(eq(slackInstallations.id, inst.id));
+      }
+      void inviteWorkspaceMembers(db, inst, channel.id);
+      return c.json({ ok: true, channel });
+    },
+  );
+
+  app.post('/test', adminOnly, async (c) => {
     const workspaceId = c.get('workspaceId');
     const posted = await postSlackMessage(
       db,
@@ -104,7 +190,7 @@ export function slackApiRoutes(db: Db) {
     return c.json({ ok: true });
   });
 
-  app.delete('/', async (c) => {
+  app.delete('/', adminOnly, async (c) => {
     const inst = await getInstallation(db, c.get('workspaceId'));
     if (!inst) return c.json({ ok: true });
     await db.delete(slackThreads).where(eq(slackThreads.installationId, inst.id));
@@ -174,6 +260,7 @@ export function slackPublicRoutes(db: Db) {
       error?: string;
       access_token?: string;
       team?: { id: string };
+      authed_user?: { id: string; access_token?: string };
     };
     if (!data.ok || !data.access_token || !data.team) {
       return c.text(`slack oauth failed: ${data.error ?? 'unknown'}`, 400);
@@ -195,28 +282,28 @@ export function slackPublicRoutes(db: Db) {
         teamId: data.team.id,
         botToken: data.access_token,
         installerUserId: userId || null,
+        installerSlackUserId: data.authed_user?.id ?? null,
+        installerUserToken: data.authed_user?.access_token ?? null,
         // a re-install of a migrated workspace keeps the cutover flag — the
         // fresh granular token upgrades scopes without handing traffic back
         migrated: existing?.migrated ?? false,
       })
       .returning();
 
-    // Pick a sensible default alert channel
-    const channels = await slackApi<{ channels: { id: string; name: string }[] }>(
-      inst.botToken,
-      'conversations.list',
-      { types: 'public_channel,private_channel', limit: 200 },
-    );
-    const pick =
-      channels.ok &&
-      (channels.channels.find((ch) => /janis/i.test(ch.name)) ??
-        channels.channels.find((ch) => ch.name === 'general'));
-    if (pick) {
+    // Default to an existing Janis channel — #janis-alerts first, then any
+    // janis-* match. When none exists we leave it unset: Settings prompts
+    // the admin to confirm creating one (or pick an existing channel)
+    // rather than silently provisioning inside an OAuth redirect.
+    const channels = await listSlackChannels(inst.botToken);
+    const channelId =
+      channels.find((ch) => ch.name === 'janis-alerts')?.id ??
+      channels.find((ch) => /janis/i.test(ch.name))?.id;
+    if (channelId) {
       await db
         .update(slackInstallations)
-        .set({ alertChannelId: pick.id })
+        .set({ alertChannelId: channelId })
         .where(eq(slackInstallations.id, inst.id));
-      void inviteWorkspaceMembers(db, inst, pick.id);
+      void inviteWorkspaceMembers(db, inst, channelId);
     }
 
     return c.redirect(`${env.webOrigin}/settings?slack=connected`);
@@ -271,10 +358,30 @@ export function slackPublicRoutes(db: Db) {
     }
     if (ev.bot_id || ev.subtype) return c.json({ ok: true });
 
+    // Slack redelivers the same message when subscriptions overlap (e.g.
+    // message.channels + message.groups) — the copies arrive ~100ms apart
+    // and raced straight through to duplicate transcript rows. The mark is
+    // taken synchronously before any await so parallel deliveries collide.
+    const evKey = `${ev.channel}:${ev.ts}`;
+    if (recentSlackEvents.has(evKey)) return c.json({ ok: true });
+    recentSlackEvents.set(evKey, Date.now());
+    for (const [k, t] of recentSlackEvents) {
+      if (Date.now() - t > 10 * 60 * 1000) recentSlackEvents.delete(k);
+    }
+
     const found = await findThread(db, ev.channel, ev.thread_ts);
     if (!found) return c.json({ ok: true });
     const user = await slackUserToMember(db, found.installation, ev.user);
-    if (!user) return c.json({ ok: true });
+    if (!user) {
+      // Channel member but not a Janis operator — tell them why nothing
+      // happened rather than silently dropping the reply.
+      await slackApi(found.installation.botToken, 'chat.postMessage', {
+        channel: ev.channel,
+        thread_ts: ev.thread_ts,
+        text: `:no_entry: <@${ev.user}> isn't a member of this Janis workspace — ask an admin to invite them`,
+      }).catch(() => {});
+      return c.json({ ok: true });
+    }
 
     const [conv] = await db
       .select()
@@ -283,12 +390,33 @@ export function slackPublicRoutes(db: Db) {
       .limit(1);
     if (!conv || conv.state === 'archived') return c.json({ ok: true });
 
+    // Durable dedupe — a stored row carrying this slack_ts means the event
+    // was already ingested (covers retries after a deploy/restart, which the
+    // in-memory map can't see).
+    const [dup] = await db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conv.id),
+          sql`payload->>'slack_ts' = ${ev.ts}`,
+        ),
+      )
+      .limit(1);
+    if (dup) return c.json({ ok: true });
+
     try {
       // Thread vocabulary:
+      //   /pause [N|forever]            → take over / extend the human window
+      //   /resume                       → hand back to the agent
       //   /note <text> | note: <text>   → internal operator note (never sent to customer)
       //   /teach <text> | teach: <text> → append to agent knowledge (admin only)
       //   /agent <text>                 → deliver as the agent
       //   anything else                 → human reply to the customer
+      // Slack can't invoke app slash commands inside threads — typed /pause
+      // arrives as literal text, so parse it here with exact thread context.
+      const isPause = /^\/pause\b/i.test(ev.text);
+      const isResume = /^\/resume\b/i.test(ev.text);
       const noteText = /^(?:\/note\s+|note:\s*)(.+)$/is.exec(ev.text)?.[1]?.trim();
       const teachText = /^(?:\/teach\s+|teach:\s*)(.+)$/is.exec(ev.text)?.[1]?.trim();
       const asAgent = ev.text.startsWith('/agent ');
@@ -297,7 +425,11 @@ export function slackPublicRoutes(db: Db) {
 
       // Teach is permission-gated: members can reply and leave notes but only
       // admins may change what the agent knows.
-      if (teachText !== undefined && user.role !== 'admin') {
+      const teachMembership =
+        teachText !== undefined
+          ? await membershipFor(db, user.id, found.installation.workspaceId)
+          : undefined;
+      if (teachText !== undefined && teachMembership?.role !== 'admin') {
         await slackApi(found.installation.botToken, 'chat.postMessage', {
           channel: ev.channel,
           thread_ts: ev.thread_ts,
@@ -306,28 +438,78 @@ export function slackPublicRoutes(db: Db) {
         return c.json({ ok: true });
       }
 
-      // Replace the raw reply with a styled transcript entry. The delete
-      // only succeeds if the bot may remove users' messages — otherwise the
-      // raw message stays and the mirror is skipped so nothing duplicates.
-      const deleted = await slackApi(found.installation.botToken, 'chat.delete', {
+      // Replace the raw reply with a styled transcript entry. Bot tokens can
+      // only delete the bot's own messages — for anyone else's we need their
+      // user token (granted via user_scope at install). Without one the raw
+      // message stays and the mirror is skipped so nothing duplicates.
+      const deleteToken =
+        ev.user === found.installation.installerSlackUserId && found.installation.installerUserToken
+          ? found.installation.installerUserToken
+          : found.installation.botToken;
+      const deleted = await slackApi(deleteToken, 'chat.delete', {
         channel: ev.channel,
         ts: ev.ts,
       })
         .then((r) => r.ok)
         .catch(() => false);
 
-      if (noteText !== undefined) {
-        await internalNote(db, found.installation.workspaceId, conv.id, user, text, !deleted);
+      if (isPause || isResume) {
+        if (isPause) {
+          const arg = ev.text.replace(/^\/pause\b/i, '').trim();
+          let minutes: number | undefined;
+          if (/^(unlimited|forever|infinity)$/i.test(arg)) minutes = -1;
+          else if (arg) {
+            const n = parseInt(arg, 10);
+            if (Number.isFinite(n) && n > 0) minutes = n;
+          }
+          if (conv.state !== 'human') {
+            await takeover(db, found.installation.workspaceId, conv.id, user);
+          }
+          await db
+            .update(conversations)
+            .set({
+              humanSince: new Date(), // operator intent refreshes the window
+              resumeWarnedAt: null,
+              ...(minutes !== undefined ? { pauseMinutes: minutes } : {}),
+            })
+            .where(eq(conversations.id, conv.id));
+          const span =
+            minutes === -1
+              ? 'until resumed manually'
+              : minutes !== undefined
+                ? `for ${minutes}m`
+                : 'for the agent default';
+          await slackApi(found.installation.botToken, 'chat.postMessage', {
+            channel: ev.channel,
+            thread_ts: ev.thread_ts,
+            text: `:pause_button: <@${ev.user}> paused this conversation ${span}`,
+          }).catch(() => {});
+        } else if (conv.state === 'human') {
+          await resume(db, found.installation.workspaceId, conv.id, user);
+          await slackApi(found.installation.botToken, 'chat.postMessage', {
+            channel: ev.channel,
+            thread_ts: ev.thread_ts,
+            text: `:arrow_forward: <@${ev.user}> resumed the agent`,
+          }).catch(() => {});
+        } else {
+          await slackApi(found.installation.botToken, 'chat.postMessage', {
+            channel: ev.channel,
+            thread_ts: ev.thread_ts,
+            text: `:information_source: the agent already owns this conversation`,
+          }).catch(() => {});
+        }
+      } else if (noteText !== undefined) {
+        await internalNote(db, found.installation.workspaceId, conv.id, user, text, !deleted, ev.ts);
       } else if (teachText !== undefined) {
-        await teachAgent(db, found.installation.workspaceId, conv.id, user, text, !deleted);
+        await teachAgent(db, found.installation.workspaceId, conv.id, user, text, !deleted, ev.ts);
       } else if (asAgent) {
-        await agentSend(db, found.installation.workspaceId, conv.id, user, text, undefined, !deleted);
+        await agentSend(db, found.installation.workspaceId, conv.id, user, text, undefined, !deleted, ev.ts);
       } else {
         // Replying in the thread takes over implicitly if the agent still owns it
         if (conv.state !== 'human') {
           await takeover(db, found.installation.workspaceId, conv.id, user);
         }
-        await humanReply(db, found.installation.workspaceId, conv.id, user, text, undefined, !deleted);
+        await humanReply(db, found.installation.workspaceId, conv.id, user, text, undefined, !deleted, ev.ts);
       }
     } catch (err) {
       if (!(err instanceof TakeoverError)) throw err;
@@ -407,7 +589,20 @@ export function slackPublicRoutes(db: Db) {
       .limit(1);
     if (!inst) return c.json({ ok: true });
     const user = await slackUserToMember(db, inst, payload.user.id);
-    if (!user) return c.json({ ok: true });
+    if (!user) {
+      // Ephemeral denial via response_url — visible only to the clicker.
+      if (payload.response_url) {
+        await fetch(payload.response_url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            response_type: 'ephemeral',
+            text: ":no_entry: you're not a member of this Janis workspace — ask an admin to invite you",
+          }),
+        }).catch(() => {});
+      }
+      return c.json({ ok: true });
+    }
 
     const [conv] = await db
       .select()

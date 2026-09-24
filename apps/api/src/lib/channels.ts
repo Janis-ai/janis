@@ -5,6 +5,8 @@ import type { Db } from '../db/client.js';
 import { agents, channelBindings, channels, conversations, messages } from '../db/schema.js';
 import { env } from '../env.js';
 import { emitChatResponse } from './legacySocket.js';
+import { bus } from './bus.js';
+import { toMessage } from './serializers.js';
 
 type ChannelRow = typeof channels.$inferSelect;
 
@@ -31,6 +33,18 @@ export interface ChannelCredentials {
   position?: 'left' | 'right'; // webchat: which corner the launcher sits in
   logo_url?: string; // webchat: header/bubble logo image
   quick_replies?: string[]; // tappable prompts — webchat chips; reply buttons on Meta greetings
+  // webchat: HMAC-SHA256 key for host-signed identity assertions — when set,
+  // a `sig` on the widget's user payload proves the host vouched for it
+  identity_secret?: string;
+  // webchat: legacy flag — operator identity is now governed by each
+  // operator's show_identity profile setting; this field is ignored
+  show_operator?: boolean;
+  // webchat: console test-chat channel — works through the real /chat
+  // pipeline but is hidden from the Integrations channel list
+  internal?: boolean;
+  // messenger: cached Meta Persona ids per operator user id — recreated
+  // when the operator's display name or avatar changes
+  personas?: Record<string, { id: string; name: string; avatar: string }>;
 }
 
 export interface AttachmentRef {
@@ -49,6 +63,19 @@ export interface InboundMessage {
   /** platform message id (mid / wamid) — dedups the same event arriving via webhook + relay */
   messageId?: string;
   name?: string;
+  /** Identity asserted by the embedding host (webchat): session-authenticated
+   *  or HMAC-signed payloads carry verified=true; anything else is a claim.
+   *  `via` marks where the identity came from. `janisUser` is set when a
+   *  verified claim's id is a real Janis user — those re-key the conversation
+   *  onto the user exactly like a session identity does. */
+  user?: {
+    id?: string;
+    name?: string;
+    email?: string;
+    verified?: boolean;
+    via?: 'session' | 'claim';
+    janisUser?: boolean;
+  };
   attachments?: AttachmentRef[];
 }
 
@@ -229,6 +256,55 @@ function absoluteAttachmentUrl(ref: AttachmentRef): string {
   return ref.url.startsWith('http') ? ref.url : `${env.apiOrigin}${ref.url}`;
 }
 
+/** Result of a push-channel send attempt. `mid` is the platform message id
+ *  when the channel accepted it; `error` is the operator-readable failure
+ *  when the channel rejected it. A null result from sendChannelMessage means
+ *  the channel has no push at all (webchat — the widget polls). */
+export interface SendResult {
+  mid: string | null;
+  error: string | null;
+  /** false when retrying deterministically re-fails — a closed 24h window or
+   *  a dead token won't fix itself until the underlying state changes */
+  retryable: boolean;
+}
+
+/** Format a Meta Graph API error body for operators, and classify whether a
+ *  retry can succeed. Adds a hint when the failure is the closed 24-hour
+ *  messaging window — the common case: Messenger code 10/subcode 2018278, or
+ *  551 "person isn't available"; WhatsApp 131047 "re-engagement required" /
+ *  131026 undeliverable. Auth/permission errors (190, 200-range) are
+ *  permanent until the channel is reconnected; rate limits and 5xx are
+ *  retryable. */
+function metaError(data: unknown, status: number): { text: string; retryable: boolean } {
+  const e = (data as
+    | { error?: { message?: string; code?: number; error_subcode?: number } }
+    | null)?.error;
+  if (!e?.message) {
+    return { text: `Meta rejected the send (HTTP ${status})`, retryable: status >= 500 };
+  }
+  const code = e.code ?? 0;
+  const sub = e.error_subcode ? `/${e.error_subcode}` : '';
+  const windowClosed =
+    code === 551 ||
+    code === 131047 ||
+    code === 131026 ||
+    e.error_subcode === 2018278 ||
+    e.error_subcode === 2018001;
+  const permanent =
+    windowClosed ||
+    code === 190 || // access token expired/invalid
+    code === 10 || // permission denied — covers the subcode'd window error too
+    (code >= 200 && code < 300);
+  return {
+    text:
+      `Meta rejected the send (error ${code || status}${sub}): ${e.message}` +
+      (windowClosed
+        ? ' — the 24-hour messaging window has likely closed; the customer must message again first (on WhatsApp, send an approved template)'
+        : ''),
+    retryable: !permanent,
+  };
+}
+
 export interface SendOptions {
   /** Suggested replies — tappable buttons on Messenger/IG quick replies and
    * WhatsApp interactive buttons. 20-char titles; WhatsApp shows max 3. */
@@ -236,25 +312,90 @@ export interface SendOptions {
   /** Message row to stamp with Meta's message_id after a successful send —
    * lets the webhook echo of our own delivery be deduped by mid. */
   messageId?: string;
+  /** Operator display name prefixed on human replies for text-only channels
+   * ("*Bob:* hi" on WhatsApp). On Messenger it names the Persona instead. */
+  senderName?: string;
+  /** Operator user id — Messenger resolves/caches a Persona per operator. */
+  senderId?: string;
+  /** Operator avatar — Personas require a profile picture URL; without one
+   * the message falls back to the inline name prefix. */
+  senderAvatar?: string | null;
 }
 
 /** Send a message (text and/or attachments) to a platform user through the channel's credentials. */
+/** Resolve the operator's Messenger Persona — reuse the cached id while the
+ * name/avatar match, otherwise create a fresh one and persist it on the
+ * channel credentials. Returns null when no avatar exists (Personas require
+ * a profile picture) or Meta refuses — callers fall back to a text prefix. */
+async function resolvePersona(
+  db: Db,
+  channel: ChannelRow,
+  creds: ChannelCredentials,
+  opts: SendOptions,
+): Promise<string | null> {
+  const key = opts.senderId!;
+  const name = opts.senderName!.slice(0, 50);
+  const avatar = opts.senderAvatar
+    ? opts.senderAvatar.startsWith('http')
+      ? opts.senderAvatar
+      : `${env.apiOrigin}${opts.senderAvatar}`
+    : null;
+  if (!avatar) return null;
+  const cached = creds.personas?.[key];
+  if (cached && cached.name === name && cached.avatar === avatar) return cached.id;
+  try {
+    const res = await fetch(`${GRAPH}/me/personas?access_token=${creds.access_token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, profile_picture_url: avatar }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const data = (await res.json().catch(() => null)) as { id?: string } | null;
+    if (!res.ok || !data?.id) return cached?.id ?? null;
+    const personas = { ...(creds.personas ?? {}), [key]: { id: data.id, name, avatar } };
+    creds.personas = personas;
+    await db
+      .update(channels)
+      .set({ credentials: { ...creds } })
+      .where(eq(channels.id, channel.id))
+      .catch(() => {});
+    return data.id;
+  } catch {
+    return cached?.id ?? null;
+  }
+}
+
 export async function sendChannelMessage(
   channel: ChannelRow,
   platformUserId: string,
   text: string,
   attachments?: AttachmentRef[],
   opts?: SendOptions,
-): Promise<string | null> {
+  db?: Db,
+): Promise<SendResult | null> {
   // webchat has no push channel — the widget polls for new messages
   if (channel.kind === 'webchat') return null;
   const creds = channel.credentials as ChannelCredentials;
-  if (!creds.access_token) return null;
+  if (!creds.access_token) {
+    return {
+      mid: null,
+      error: 'channel has no access token — reconnect it under Integrations',
+      retryable: false,
+    };
+  }
   const atts = attachments ?? [];
+  // Operator attribution on human replies — Meta renders the sender as the
+  // page/business, so the name goes inline in the text instead.
+  const named =
+    opts?.senderName && text.trim()
+      ? channel.kind === 'whatsapp'
+        ? `*${opts.senderName}:* ${text}`
+        : `${opts.senderName}: ${text}`
+      : text;
   const qrs = (opts?.quickReplies ?? []).map((t) => t.trim().slice(0, 20)).filter(Boolean);
-  try {
-    if (channel.kind === 'whatsapp') {
-      const send = async (body: unknown) => {
+  if (channel.kind === 'whatsapp') {
+    const send = async (body: unknown): Promise<SendResult> => {
+      try {
         const res = await fetch(`${GRAPH}/${creds.phone_number_id}/messages`, {
           method: 'POST',
           headers: {
@@ -262,80 +403,150 @@ export async function sendChannelMessage(
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(body),
+          signal: AbortSignal.timeout(15_000),
         });
-        return res.ok;
-      };
-      let ok = true;
-      if (text.trim()) {
-        const buttons = qrs.slice(0, 3).map((title, i) => ({
-          type: 'reply',
-          reply: { id: `qr_${i}`, title },
-        }));
-        ok = await send(
-          buttons.length
-            ? {
-                messaging_product: 'whatsapp',
-                to: platformUserId,
-                type: 'interactive',
-                interactive: { type: 'button', body: { text }, action: { buttons } },
-              }
-            : { messaging_product: 'whatsapp', to: platformUserId, type: 'text', text: { body: text } },
-        );
+        const data = (await res.json().catch(() => null)) as
+          | { messages?: { id?: string }[] }
+          | null;
+        if (!res.ok) {
+          const e = metaError(data, res.status);
+          return { mid: null, error: e.text, retryable: e.retryable };
+        }
+        return { mid: data?.messages?.[0]?.id ?? null, error: null, retryable: true };
+      } catch (e) {
+        return {
+          mid: null,
+          error: `WhatsApp send failed: ${e instanceof Error ? e.message : e}`,
+          retryable: true,
+        };
       }
-      for (const a of atts) {
-        const kind = mediaKind(a.type, true);
-        ok = (await send({
-          messaging_product: 'whatsapp',
-          to: platformUserId,
-          type: kind,
-          [kind]: {
-            link: absoluteAttachmentUrl(a),
-            ...(kind === 'document' ? { filename: a.name } : {}),
-          },
-        })) && ok;
+    };
+    let mid: string | null = null;
+    let error: string | null = null;
+    let retryable = true;
+    if (named.trim()) {
+      const buttons = qrs.slice(0, 3).map((title, i) => ({
+        type: 'reply',
+        reply: { id: `qr_${i}`, title },
+      }));
+      const r = await send(
+        buttons.length
+          ? {
+              messaging_product: 'whatsapp',
+              to: platformUserId,
+              type: 'interactive',
+              interactive: { type: 'button', body: { text: named }, action: { buttons } },
+            }
+          : { messaging_product: 'whatsapp', to: platformUserId, type: 'text', text: { body: named } },
+      );
+      mid = r.mid ?? mid;
+      if (r.error && !error) {
+        error = r.error;
+        retryable = r.retryable;
       }
-      return null;
     }
-    // messenger / instagram — page access token. Meta echoes our sends back
-    // as webhook events; the returned message_id is stamped on the stored
-    // row so midSeen can recognise the echo.
-    const send = async (message: unknown): Promise<string | null> => {
+    for (const a of atts) {
+      const kind = mediaKind(a.type, true);
+      const r = await send({
+        messaging_product: 'whatsapp',
+        to: platformUserId,
+        type: kind,
+        [kind]: {
+          link: absoluteAttachmentUrl(a),
+          ...(kind === 'document' ? { filename: a.name } : {}),
+        },
+      });
+      mid = r.mid ?? mid;
+      if (r.error && !error) {
+        error = r.error;
+        retryable = r.retryable;
+      }
+    }
+    return { mid, error, retryable };
+  }
+  // messenger / instagram — page access token. Meta echoes our sends back
+  // as webhook events; the returned message_id is stamped on the stored
+  // row so midSeen can recognise the echo.
+  // Messenger renders real per-message identity via Personas (name + avatar
+  // annotate the bubble); Instagram/WhatsApp keep the inline name prefix.
+  let personaId =
+    channel.kind === 'messenger' && db && opts?.senderId && opts?.senderName
+      ? await resolvePersona(db, channel, creds, opts)
+      : null;
+  const send = async (message: unknown): Promise<SendResult> => {
+    try {
       const res = await fetch(`${GRAPH}/me/messages?access_token=${creds.access_token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recipient: { id: platformUserId }, message }),
+        body: JSON.stringify({
+          recipient: { id: platformUserId },
+          message,
+          ...(personaId ? { persona_id: personaId } : {}),
+        }),
+        signal: AbortSignal.timeout(15_000),
       });
-      if (!res.ok) return null;
       const data = (await res.json().catch(() => null)) as { message_id?: string } | null;
-      return data?.message_id ?? null;
-    };
-    let mid: string | null = null;
-    if (text.trim()) {
-      mid = await send(
-        qrs.length
-          ? {
-              text,
-              quick_replies: qrs.slice(0, 13).map((title) => ({
-                content_type: 'text',
-                title,
-                payload: title,
-              })),
-            }
-          : { text },
-      );
+      if (!res.ok) {
+        const e = metaError(data, res.status);
+        return { mid: null, error: e.text, retryable: e.retryable };
+      }
+      return { mid: data?.message_id ?? null, error: null, retryable: true };
+    } catch (e) {
+      return {
+        mid: null,
+        error: `Meta send failed: ${e instanceof Error ? e.message : e}`,
+        retryable: true,
+      };
     }
-    for (const a of atts) {
-      mid = (await send({
-        attachment: {
-          type: mediaKind(a.type, false),
-          payload: { url: absoluteAttachmentUrl(a), is_reusable: true },
-        },
-      })) ?? mid;
+  };
+  const textMessage = (body: string) =>
+    qrs.length
+      ? {
+          text: body,
+          quick_replies: qrs.slice(0, 13).map((title) => ({
+            content_type: 'text',
+            title,
+            payload: title,
+          })),
+        }
+      : { text: body };
+  let mid: string | null = null;
+  let error: string | null = null;
+  let retryable = true;
+  if ((personaId ? text : named).trim()) {
+    const r = await send(textMessage(personaId ? text : named));
+    if (!r.mid && personaId) {
+      // persona deleted or rejected server-side — plain prefixed send
+      personaId = null;
+      const retry = await send(textMessage(named));
+      mid = retry.mid;
+      const e = retry.error ?? r.error;
+      if (e) {
+        error = e;
+        retryable = retry.error !== null ? retry.retryable : r.retryable;
+      }
+    } else {
+      mid = r.mid;
+      if (r.error) {
+        error = r.error;
+        retryable = r.retryable;
+      }
     }
-    return mid;
-  } catch {
-    return null;
   }
+  for (const a of atts) {
+    const r = await send({
+      attachment: {
+        type: mediaKind(a.type, false),
+        payload: { url: absoluteAttachmentUrl(a), is_reusable: true },
+      },
+    });
+    mid = r.mid ?? mid;
+    if (r.error && !error) {
+      error = r.error;
+      retryable = r.retryable;
+    }
+  }
+  return { mid, error, retryable };
 }
 
 /** Channel binding for a conversation — channel row + the platform user id. */
@@ -422,6 +633,38 @@ export async function sendChannelTyping(channel: ChannelRow, platformUserId: str
   } catch {}
 }
 
+/** What the push channel did with a send attempt. `delivered` is true only
+ *  when delivery is actually known — the platform returned a message id, the
+ *  SDK socket acknowledged it, or the channel has no push (webchat polls, so
+ *  storing the row IS the delivery). `error` carries the operator-readable
+ *  failure (e.g. Meta's closed 24-hour window) for the console receipt. */
+export interface ChannelDelivery {
+  delivered: boolean;
+  error?: string;
+  /** false when retrying can't succeed until state changes (closed 24h
+   *  window, dead token) — the console hides the retry affordance */
+  retryable?: boolean;
+}
+
+/** Stamp the delivery outcome onto the stored message row and republish it
+ *  so open console views update without waiting for a refetch. */
+async function stampDelivery(
+  db: Db,
+  workspaceId: string | undefined,
+  messageId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const [upd] = await db
+    .update(messages)
+    .set({ payload: sql`payload || ${JSON.stringify(patch)}::jsonb` })
+    .where(eq(messages.id, messageId))
+    .returning()
+    .catch(() => []);
+  if (upd && workspaceId) {
+    bus.publish(workspaceId, { type: 'message', data: toMessage(upd) });
+  }
+}
+
 /** Deliver a message (text and/or attachments) to the end user if the conversation is bound to a hosted channel. */
 export async function deliverToChannel(
   db: Db,
@@ -429,7 +672,7 @@ export async function deliverToChannel(
   text: string,
   attachments?: AttachmentRef[],
   opts?: SendOptions,
-): Promise<void> {
+): Promise<ChannelDelivery> {
   const [row] = await db
     .select({ binding: channelBindings, channel: channels, conv: conversations })
     .from(channelBindings)
@@ -437,7 +680,7 @@ export async function deliverToChannel(
     .innerJoin(conversations, eq(channelBindings.conversationId, conversations.id))
     .where(eq(channelBindings.conversationId, conversationId))
     .limit(1);
-  if (!row || (!text.trim() && !attachments?.length)) return;
+  if (!row || (!text.trim() && !attachments?.length)) return { delivered: true };
   // Self-hosted SDK bots receive operator/agent messages over their
   // registered socket — the channel binding is transcript bookkeeping only.
   const [agent] = await db
@@ -445,17 +688,33 @@ export async function deliverToChannel(
     .from(agents)
     .where(eq(agents.id, row.conv.agentId))
     .limit(1);
-  if (agent && (await emitChatResponse(agent, row.binding.platformUserId, text))) return;
-  const mid = await sendChannelMessage(row.channel, row.binding.platformUserId, text, attachments, opts).catch(
-    () => null,
-  );
-  if (mid && opts?.messageId) {
-    await db
-      .update(messages)
-      .set({ payload: sql`payload || ${JSON.stringify({ mid })}::jsonb` })
-      .where(eq(messages.id, opts.messageId))
-      .catch(() => {});
+  if (agent && (await emitChatResponse(agent, row.binding.platformUserId, text))) {
+    if (opts?.messageId) {
+      await stampDelivery(db, agent.workspaceId, opts.messageId, { delivered: true });
+    }
+    return { delivered: true };
   }
+  const result = await sendChannelMessage(row.channel, row.binding.platformUserId, text, attachments, opts, db).catch(
+    (e) => ({ mid: null, error: `send failed: ${e instanceof Error ? e.message : e}`, retryable: true }),
+  );
+  // null = no push channel (webchat) — the widget pulls on its next poll
+  if (!result) return { delivered: true };
+  if (opts?.messageId) {
+    const patch: Record<string, unknown> = {};
+    if (result.mid) patch.mid = result.mid;
+    if (result.error) {
+      patch.delivery_error = result.error;
+      patch.delivery_retryable = result.retryable;
+    } else {
+      patch.delivered = true; // channel accepted — clears a stale error on resend
+      patch.delivery_error = null;
+      patch.delivery_retryable = null;
+    }
+    await stampDelivery(db, agent?.workspaceId, opts.messageId, patch);
+  }
+  return result.error
+    ? { delivered: false, error: result.error, retryable: result.retryable }
+    : { delivered: true };
 }
 
 /**

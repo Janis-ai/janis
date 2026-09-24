@@ -11,21 +11,20 @@ import {
   digests,
   knowledgeFiles,
   agentSecrets,
+  memberships,
   messages,
   metaConnections,
-  pushSubscriptions,
   savedReplies,
   sessions,
   slackInstallations,
   slackThreads,
   suggestions,
   usageEvents,
-  users,
   webhookDeliveries,
   workspaces,
 } from '../db/schema.js';
 import { stripe } from '../lib/stripe.js';
-import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
 export function workspaceRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
@@ -33,8 +32,7 @@ export function workspaceRoutes(db: Db) {
 
   // DELETE /api/workspace — permanently remove the workspace and every row
   // attached to it (no FK cascades, so children go first). Admin only.
-  app.delete('/', async (c) => {
-    if (c.get('user').role !== 'admin') return c.json({ error: 'admin required' }, 403);
+  app.delete('/', adminOnly, async (c) => {
     const workspaceId = c.get('workspaceId');
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
     if (!ws) return c.json({ error: 'not found' }, 404);
@@ -62,9 +60,7 @@ export function workspaceRoutes(db: Db) {
             .where(inArray(conversations.agentId, agentIds))
         ).map((r) => r.id)
       : [];
-    const userIds = (
-      await db.select({ id: users.id }).from(users).where(eq(users.workspaceId, workspaceId))
-    ).map((r) => r.id);
+    // (users are workspace-independent now — memberships, not user rows, go)
 
     if (convIds.length) {
       await db.delete(messages).where(inArray(messages.conversationId, convIds));
@@ -93,11 +89,10 @@ export function workspaceRoutes(db: Db) {
     await db.delete(metaConnections).where(eq(metaConnections.workspaceId, workspaceId));
     await db.delete(savedReplies).where(eq(savedReplies.workspaceId, workspaceId));
     await db.delete(digests).where(eq(digests.workspaceId, workspaceId));
-    if (userIds.length) {
-      await db.delete(pushSubscriptions).where(inArray(pushSubscriptions.userId, userIds));
-      await db.delete(sessions).where(inArray(sessions.userId, userIds));
-      await db.delete(users).where(inArray(users.id, userIds));
-    }
+    // user rows survive — they may hold memberships elsewhere. Only the
+    // workspace's memberships and the sessions pointed at it go.
+    await db.delete(memberships).where(eq(memberships.workspaceId, workspaceId));
+    await db.delete(sessions).where(eq(sessions.workspaceId, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
 
     return c.json({ ok: true });

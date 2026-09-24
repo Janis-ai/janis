@@ -1,11 +1,13 @@
-import { and, asc, desc, eq, gt, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, lte } from 'drizzle-orm';
 import type { OutboundWebhook, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, conversations, knowledgeFiles, messages, workspaces } from '../db/schema.js';
+import { agents, alerts, conversations, knowledgeFiles, messages, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage } from './usage.js';
 import { interpolateSecrets, loadSecretsMap } from './secrets.js';
+import { connectionSecrets } from './connections.js';
+import { enabledBuiltins, type BuiltinTool } from './builtinTools.js';
 import { bus } from './bus.js';
 import { PLANS, planFor } from './plans.js';
 import type { AttachmentRef } from './channels.js';
@@ -19,6 +21,7 @@ export { llmFor } from './llm.js';
 import type { LlmSettings } from './llm.js';
 import { llmFor } from './llm.js';
 import { runLegacyReply } from './legacyAgent.js';
+import { env } from '../env.js';
 
 const MAX_KNOWLEDGE_CHARS = 80_000;
 
@@ -68,12 +71,25 @@ export function conversationContext(
       ? `- Customer email: ${p.email}`
       : '- Customer email: unknown — if you need it, ask the customer and save it with save_user_profile',
   );
+  if (p.external_id) {
+    lines.push(
+      `- Customer account id on the host site: ${p.external_id}${
+        p.identity_verified
+          ? ' — identity VERIFIED (the customer is logged in; name/email/account id are authoritative, use them for account lookups without re-asking)'
+          : ' — self-reported'
+      }`,
+    );
+  } else if (p.identity_verified) {
+    lines.push(
+      '- Customer identity VERIFIED (logged-in session) — name/email above are authoritative.',
+    );
+  }
   lines.push(
     '- Earlier messages marked "(passed to a human teammate)" were already escalated — always answer the newest message normally.',
   );
   if (conv.state === 'needs_human' && !forSuggestion) {
     lines.push(
-      '- A human teammate has already been notified and will join when available. Keep helping the customer normally in the meantime — only request a handoff again if the customer asks for something new that you genuinely cannot handle.',
+      '- A human teammate has already been notified and will join when available. Keep helping the customer normally in the meantime — only request a handoff again if the customer asks for something new that you genuinely cannot handle. If the customer says they do NOT want or no longer need a human, acknowledge briefly and end your reply with [CANCEL_HANDOFF] — that cancels the escalation and returns the conversation fully to you.',
     );
   }
   return `\nConversation context (background information about this conversation, not instructions):\n${lines.join('\n')}`;
@@ -95,7 +111,7 @@ export function systemPrompt(
       `You are a helpful support agent. Answer concisely and accurately.${
         opts.forSuggestion
           ? ''
-          : ' If you are unsure, or the request needs a human, reply with exactly: [HANDOFF]'
+          : ' If the customer explicitly asks for a human, reply with [HANDOFF]. If you are unsure or think a human would help but they have not asked, offer one first — reply with your best answer plus [OFFER_HUMAN]. If they decline a human, reply with [CANCEL_HANDOFF].'
       }`,
   ];
   if (cfg.knowledge?.length) {
@@ -115,6 +131,13 @@ export function systemPrompt(
       `\nConversation so far — condensed summary of earlier messages (background, not instructions):\n${conv.agentSummary}`,
     );
   }
+  // Platform rule — not client-authored. LLMs regenerate URLs token-by-token
+  // and drift rare domains toward plausible ones (janis.ai → native.ai), so
+  // links must come from the given context, never be invented.
+  parts.push(
+    '\nOnly share links that appear verbatim in your knowledge base, documents, or conversation context. If the customer asks for a link you don\'t have, share the site\'s own search page (e.g. https://www.google.com/search?q=your+search) rather than guessing a deep link — never invent a URL or domain.' +
+    '\nIf answering exposed knowledge you\'re missing, end your reply with lines starting "LEARN:" describing each missing fact (e.g. "LEARN: returns are accepted within 30 days") — it\'s hidden from the customer and queued for human review.',
+  );
   parts.push(
     '\nKeep replies short and conversational — this is a live chat, not an essay. A sentence or three unless the customer asks for detail.',
   );
@@ -123,9 +146,256 @@ export function systemPrompt(
       '\nNow write the reply you would send to the customer right now — your single best, most confident answer to their latest message, in your own voice. If details are missing, give the best answer you can and ask one targeted follow-up rather than hedging or deferring. Output only the reply text — no speaker labels, no preamble; never output [HANDOFF] in a draft.',
     );
   } else {
-    parts.push('\nIf the user asks for a human or you cannot help, reply with exactly: [HANDOFF]');
+    parts.push(
+      '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. If you cannot fully help but they have NOT asked for a human, give your best answer, ask whether they would like a human to step in, and end with [OFFER_HUMAN] on its own line. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line.',
+    );
   }
   return parts.join('');
+}
+
+const LINK_RE = /https?:\/\/[^\s<>"'`()[\]]+/g;
+const TRAIL_PUNCT = /[.,;:!?]+$/;
+
+/** URLs the agent was actually given — extracted from its prompt context
+ * (system prompt, knowledge, documents). The only links it may share. */
+function extractUrls(text: string): string[] {
+  return (text.match(LINK_RE) ?? []).map((u) => u.replace(TRAIL_PUNCT, ''));
+}
+
+/** Everything a reply may legitimately link to: URLs in the agent's prompt
+ * context (system prompt, knowledge, docs) plus URLs that appeared in the
+ * conversation itself — customer-shared links and tool outputs are valid to
+ * relay. Tool endpoint origins are blessed too, and `allowed_link_domains`
+ * in agent config covers links a client's backend returns (tracking URLs,
+ * booking links) that never appear verbatim in context. */
+export function blessedUrlsFor(agent: AgentRow, prompt: string, history: ChatMsg[]): string[] {
+  const urls = extractUrls(prompt);
+  for (const m of history) urls.push(...extractUrls(contentText(m.content)));
+  for (const t of toolsFor(agent)) urls.push(t.url);
+  const cfg = (agent.config ?? {}) as { allowed_link_domains?: string[] };
+  for (const d of cfg.allowed_link_domains ?? []) urls.push(`https://${d}/`);
+  return urls;
+}
+
+const LINK_CHECK_TIMEOUT_MS = 4_000;
+
+/** Only public http(s) hosts may be fetch-checked — emitted URLs are model
+ * output, i.e. untrusted input for a server-side request (SSRF). */
+function publiclyFetchable(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    const h = u.hostname;
+    if (h.includes(':')) return false; // ipv6 literal — block outright
+    if (['localhost', '127.0.0.1', '0.0.0.0'].includes(h)) return false;
+    if (h.endsWith('.local') || h.endsWith('.internal') || h.endsWith('.localhost')) return false;
+    const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (m) {
+      const a = +m[1];
+      const b = +m[2];
+      if (
+        a === 0 || a === 10 || a === 127 || a >= 224 ||
+        (a === 100 && b >= 64 && b <= 127) ||
+        (a === 169 && b === 254) ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168)
+      ) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type LinkVerdict = 'ok' | 'dead' | 'unknown';
+
+/** Fetch-check a URL the model emitted that isn't in context. HEAD first,
+ * GET fallback. 'ok' resolves, 'dead' is definitively broken (DNS failure,
+ * 4xx/5xx, private host), 'unknown' can't be told apart (bot-blocked,
+ * timed out, refused — often datacenter-IP filtering). */
+async function checkUrl(raw: string): Promise<LinkVerdict> {
+  if (!publiclyFetchable(raw)) return 'dead';
+  for (const method of ['HEAD', 'GET'] as const) {
+    try {
+      const res = await fetch(raw, {
+        method,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(LINK_CHECK_TIMEOUT_MS),
+        headers: { 'user-agent': 'Janis-LinkCheck/1.0 (+https://janis.ai)' },
+      });
+      await res.body?.cancel().catch(() => {});
+      if (method === 'HEAD' && (res.status === 405 || res.status === 501)) continue;
+      if (res.status < 400) return 'ok';
+      if (res.status === 403 || res.status === 429) return 'unknown';
+      return 'dead';
+    } catch (e) {
+      const code = (e as { cause?: { code?: string } }).cause?.code;
+      if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'dead'; // no such domain
+      return 'unknown'; // refused/reset/timeout — could be IP filtering
+    }
+  }
+  return 'unknown';
+}
+
+export interface LinkGuardResult {
+  text: string;
+  fixed: string[];
+  stripped: string[];
+  verified: string[];
+  unverified: string[];
+}
+
+/** Output guard for generated replies. Per emitted URL:
+ *  1. On a blessed host (or subdomain) → pass.
+ *  2. Unblessed host but the path matches a blessed URL → domain corruption;
+ *     swap the origin (app.native.ai/x → app.janis.ai/x).
+ *  3. Otherwise fetch-check it — a legit external link resolves and passes;
+ *     a hallucinated dead link is stripped; unverifiable links pass but get
+ *     flagged so operators can audit. */
+export async function guardReplyLinks(
+  text: string,
+  blessedUrls: string[],
+): Promise<LinkGuardResult> {
+  const blessed: { origin: string; host: string; path: string }[] = [];
+  for (const raw of blessedUrls) {
+    try {
+      const u = new URL(raw);
+      blessed.push({ origin: u.origin, host: u.host, path: u.pathname });
+    } catch {
+      // malformed entry in knowledge — not usable as a blessing
+    }
+  }
+  const tidy = (s: string) =>
+    s
+      .replace(/\[([^\]]*)\]\(\s*\)/g, '$1') // markdown link emptied by a strip
+      .replace(/ {2,}/g, ' ')
+      .replace(/ +([.,;:!?])/g, '$1');
+  const isBlessed = (u: URL) =>
+    blessed.some((b) => u.host === b.host || u.host.endsWith(`.${b.host}`));
+  const repairTarget = (u: URL) =>
+    blessed.find((b) => b.path === u.pathname) ?? (u.pathname === '/' ? blessed[0] : undefined);
+
+  // Pass 1: collect the unblessed, unrepairable URLs needing a fetch-check.
+  const toCheck = new Set<string>();
+  for (const m of text.matchAll(LINK_RE)) {
+    const clean = m[0].replace(TRAIL_PUNCT, '');
+    try {
+      const u = new URL(clean);
+      if (!isBlessed(u) && !repairTarget(u)) toCheck.add(clean);
+    } catch {
+      // unparseable — left as-is below
+    }
+  }
+  const verdicts = new Map<string, LinkVerdict>();
+  await Promise.all(
+    [...toCheck].map(async (u) => verdicts.set(u, await checkUrl(u))),
+  );
+
+  // Pass 2: rewrite.
+  const fixed: string[] = [];
+  const stripped: string[] = [];
+  const verified: string[] = [];
+  const unverified: string[] = [];
+  const out = text.replace(LINK_RE, (match) => {
+    const clean = match.replace(TRAIL_PUNCT, '');
+    const trail = match.slice(clean.length);
+    let u: URL;
+    try {
+      u = new URL(clean);
+    } catch {
+      return match;
+    }
+    if (isBlessed(u)) return match;
+    const target = repairTarget(u);
+    if (target) {
+      fixed.push(match);
+      return `${target.origin}${u.pathname === '/' ? '/' : u.pathname}${u.search}${u.hash}${trail}`;
+    }
+    const v = verdicts.get(clean) ?? 'unknown';
+    if (v === 'ok') {
+      verified.push(clean);
+      return match;
+    }
+    if (v === 'unknown') {
+      unverified.push(clean);
+      return match;
+    }
+    stripped.push(match);
+    return trail;
+  });
+  return { text: tidy(out), fixed, stripped, verified, unverified };
+}
+
+/** "LEARN: …" lines the agent emits to self-report a knowledge gap — stripped
+ * from the customer-facing reply, returned for the message payload so the
+ * knowledge-gaps UI can surface them for approval. */
+export function extractLearns(text: string): { text: string; learns: string[] } {
+  const learns: string[] = [];
+  const out = text
+    .split('\n')
+    .filter((line) => {
+      const m = line.trim().match(/^LEARN:\s*(.+)$/i);
+      if (m) {
+        learns.push(m[1].trim());
+        return false;
+      }
+      return true;
+    })
+    .join('\n');
+  return { text: out.trim(), learns };
+}
+
+const LINK_GUARD_RETRY =
+  'Your previous draft included links that do not work — they were removed, so the reply now points at nothing. ' +
+  'Rewrite it: only share a URL that appears in your context, or the site’s own search page ' +
+  '(e.g. https://www.google.com/search?q=your+search) — never guess a deep link. ' +
+  'If you have no link to share, tell the customer where to look instead.';
+
+/** complete() + link guard; if the guard stripped dead links, give the model
+ * one retry with an explanation so the rewrite doesn't promise a link that
+ * isn't there. Token counts are summed across both calls. */
+async function generateReply(
+  llm: LlmSettings,
+  prompt: string,
+  msgs: { role: string; content: string | ContentPart[] }[],
+  blessedUrls: string[],
+  tools: ToolDef[],
+  secrets: Record<string, string>,
+  ctx: AgentRunContext | undefined,
+  builtins: BuiltinTool[] = [],
+  onStall?: () => void,
+): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number }> {
+  const first = await complete(llm, prompt, msgs, tools, secrets, ctx, builtins, onStall);
+  const draft = first.text;
+  if (!draft) {
+    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, fixed: [], stripped: [], verified: [], unverified: [] };
+  }
+  const guard = await guardReplyLinks(draft, blessedUrls);
+  if (!guard.stripped.length) {
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, ...guard };
+  }
+  const retry = await complete(
+    llm,
+    prompt,
+    [
+      ...msgs,
+      { role: 'assistant', content: draft },
+      { role: 'user', content: LINK_GUARD_RETRY },
+    ],
+    tools,
+    secrets,
+    ctx,
+    builtins,
+  ).catch(() => null);
+  if (!retry?.text) {
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, ...guard };
+  }
+  const g2 = await guardReplyLinks(retry.text, blessedUrls);
+  return {
+    promptTokens: first.promptTokens + retry.promptTokens,
+    completionTokens: first.completionTokens + retry.completionTokens,
+    ...g2,
+  };
 }
 
 interface ToolDef {
@@ -159,6 +429,16 @@ function toolUrlAllowed(raw: string): boolean {
 }
 
 const MAX_TOOL_RESPONSE = 8_000;
+
+function jsonArg(v: string): unknown {
+  const t = v.trim();
+  if (!t.startsWith('{') && !t.startsWith('[')) return v;
+  try {
+    return JSON.parse(t);
+  } catch {
+    return v;
+  }
+}
 
 async function callTool(
   tool: ToolDef,
@@ -199,6 +479,12 @@ async function callTool(
     );
     if ([...qs].length) url += (url.includes('?') ? '&' : '?') + qs.toString();
   }
+  // POST bodies: params are declared type:string, so the model supplies
+  // nested structures as JSON text — parse object/array-looking values so
+  // APIs get real objects (HubSpot properties, Zendesk ticket), not strings.
+  const postBody = Object.fromEntries(
+    Object.entries(rest).map(([k, v]) => [k, typeof v === 'string' ? jsonArg(v) : v]),
+  );
   const res = await fetch(url, {
     method: tool.method,
     headers: {
@@ -206,7 +492,7 @@ async function callTool(
       ...(tool.method === 'POST' ? { 'content-type': 'application/json' } : {}),
       ...headers,
     },
-    ...(tool.method === 'POST' ? { body: JSON.stringify(rest) } : {}),
+    ...(tool.method === 'POST' ? { body: JSON.stringify(postBody) } : {}),
     signal: AbortSignal.timeout(10_000),
   });
   const body = (await res.text()).slice(0, MAX_TOOL_RESPONSE);
@@ -323,6 +609,8 @@ async function complete(
   tools: ToolDef[] = [],
   secrets: Record<string, string> = {},
   ctx?: AgentRunContext,
+  builtins: BuiltinTool[] = [],
+  onStall?: () => void,
 ): Promise<Completion> {
   const empty = { text: null, promptTokens: 0, completionTokens: 0 };
   if (!llm.apiKey) return empty;
@@ -340,6 +628,21 @@ async function complete(
             Object.entries(t.params ?? {}).map(([k, d]) => [k, { type: 'string', description: d }]),
           ),
           required: Object.keys(t.params ?? {}),
+        },
+      },
+    })),
+    // Server-side builtins (web_search, …) — enabled per agent, run in-process
+    ...builtins.map((b) => ({
+      type: 'function',
+      function: {
+        name: b.name,
+        description: b.description,
+        parameters: {
+          type: 'object',
+          properties: Object.fromEntries(
+            Object.entries(b.params ?? {}).map(([k, d]) => [k, { type: 'string', description: d }]),
+          ),
+          required: Object.keys(b.params ?? {}),
         },
       },
     })),
@@ -374,45 +677,70 @@ async function complete(
     // Retry network timeouts and transient upstream errors (429 / 5xx —
     // Gemini flash often 503s "model overloaded"). 4xx is our problem:
     // surface it immediately instead of retrying an identical bad request.
-    let res!: Response;
+    let res: Response | undefined;
+    let lastErr: unknown;
     let flattenedTools = false;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        res = await fetch(`${llm.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${llm.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: llm.model,
-            max_tokens: 400,
-            messages: msgs,
-            ...(toolsSchema ? { tools: toolsSchema } : {}),
-          }),
-          signal: AbortSignal.timeout(25_000),
-        });
-      } catch (err) {
-        if (attempt === 2) throw err;
-        continue;
+    // Retry network timeouts and transient upstream errors (429 / 5xx —
+    // Gemini flash often 503s "model overloaded"), then fall back to
+    // JANIS_LLM_FALLBACK_MODEL if the primary keeps failing.
+    const models =
+      env.llmFallbackModel && env.llmFallbackModel !== llm.model
+        ? [llm.model, env.llmFallbackModel]
+        : [llm.model];
+    for (const model of models) {
+      res = undefined;
+      if (model !== models[0]) onStall?.();
+      // 15s is generous for a chat completion — a hung connection never
+      // resolves, so fail fast and retry onto a fresh socket with jitter.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          res = await fetch(`${llm.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              authorization: `Bearer ${llm.apiKey}`,
+            },
+            body: JSON.stringify({
+              model,
+              max_tokens: 400,
+              messages: msgs,
+              ...(toolsSchema ? { tools: toolsSchema } : {}),
+            }),
+            signal: AbortSignal.timeout(15_000),
+          });
+        } catch (err) {
+          lastErr = err;
+          res = undefined;
+          if (attempt === 3) break;
+          onStall?.();
+          await new Promise((r) => setTimeout(r, 400 + Math.random() * 600));
+          continue;
+        }
+        if (res.ok) break;
+        // Gemini 3 requires echoed thought_signatures on functionCall parts;
+        // when the shim omits one, the round-trip is a permanent 400. Flatten
+        // the tool turns into a plain assistant note and retry once.
+        if (
+          res.status === 400 &&
+          !flattenedTools &&
+          msgs.some((m) => m.tool_calls || m.role === 'tool')
+        ) {
+          flattenToolHistory(msgs);
+          flattenedTools = true;
+          continue;
+        }
+        if (res.status < 500 && res.status !== 429) break;
+        if (attempt < 3) {
+          onStall?.();
+          await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        }
       }
-      if (res.ok) break;
-      // Gemini 3 requires echoed thought_signatures on functionCall parts;
-      // when the shim omits one, the round-trip is a permanent 400. Flatten
-      // the tool turns into a plain assistant note and retry once.
-      if (
-        res.status === 400 &&
-        !flattenedTools &&
-        msgs.some((m) => m.tool_calls || m.role === 'tool')
-      ) {
-        flattenToolHistory(msgs);
-        flattenedTools = true;
-        continue;
-      }
-      if (res.status < 500 && res.status !== 429) break;
-      if (attempt < 2) await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+      if (res?.ok) break;
+      // A 4xx won't heal on another model — stop falling over.
+      if (res && res.status < 500 && res.status !== 429) break;
     }
-    if (!res.ok) {
+    if (!res?.ok) {
+      if (!res) throw lastErr instanceof Error ? lastErr : new Error('LLM request failed');
       // The provider's error body carries the real reason (bad field,
       // context limit, overloaded model) — keep it so failure notes are
       // diagnosable instead of a bare status code.
@@ -445,15 +773,21 @@ async function complete(
     msgs.push({ ...(msg as ChatMsg), role: 'assistant' });
     for (const call of calls) {
       const tool = tools.find((t) => t.name === call.function.name);
+      const builtin = builtins.find((b) => b.name === call.function.name);
       let result: string;
       try {
         const args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
         result =
           call.function.name === SAVE_PROFILE_TOOL && ctx
             ? await saveUserProfile(ctx, args)
-            : tool
-              ? await callTool(tool, args, secrets)
-              : `error: unknown tool ${call.function.name}`;
+            : builtin
+              ? await builtin.run(
+                  Object.fromEntries(Object.entries(args).map(([k, v]) => [k, String(v)])),
+                  ctx,
+                )
+              : tool
+                ? await callTool(tool, args, secrets)
+                : `error: unknown tool ${call.function.name}`;
       } catch (err) {
         result = `error: ${err instanceof Error ? err.message : 'tool failed'}`;
       }
@@ -476,12 +810,27 @@ function summaryLine(m: {
   payload?: unknown;
 }): string | null {
   if (!m.text) return null;
-  const f = m.flags as { failure?: boolean; help_requested?: boolean; custom_alert?: boolean };
+  const f = m.flags as {
+    failure?: boolean;
+    help_requested?: boolean;
+    custom_alert?: boolean;
+    handoff_offer?: boolean;
+    handoff_cancelled?: boolean;
+  };
   if (f?.failure || f?.help_requested || f?.custom_alert) {
     return '(passed to a human teammate)';
   }
+  if (f?.handoff_offer) {
+    return '(a human teammate was offered — awaiting the customer\'s reply)';
+  }
+  if (f?.handoff_cancelled) {
+    return '(the customer declined a human — staying with the agent)';
+  }
   if ((m.payload as { via?: string } | undefined)?.via === 'handoff') {
     return '(the customer was told a human teammate is joining)';
+  }
+  if ((m.payload as { via?: string } | undefined)?.via === 'status') {
+    return '(a status update was sent to the customer)';
   }
   if (m.direction === 'human') return `human operator: ${m.text}`;
   return (m.direction === 'in' ? `customer: ${m.text}` : `agent: ${m.text}`) + attachmentNote(m.payload);
@@ -670,7 +1019,12 @@ export async function transcriptFor(
 
   const out: { role: string; content: string | ContentPart[] }[] = [];
   for (const m of rows) {
-    const f = m.flags as { failure?: boolean; help_requested?: boolean; custom_alert?: boolean };
+    const f = m.flags as {
+      failure?: boolean;
+      help_requested?: boolean;
+      custom_alert?: boolean;
+      handoff_offer?: boolean;
+    };
     // Internal notes (failures/handoffs/alerts) must not be fed verbatim —
     // the model parrots them. But dropping them entirely leaves the
     // triggering request looking unanswered, so the model hands off again
@@ -679,11 +1033,25 @@ export async function transcriptFor(
       out.push({ role: 'assistant', content: '(passed to a human teammate)' });
       continue;
     }
+    if (f?.handoff_offer) {
+      out.push({
+        role: 'assistant',
+        content:
+          "(a human teammate was offered — if the customer declines, end your reply with [CANCEL_HANDOFF])",
+      });
+      continue;
+    }
     // Courtesy notices go verbatim into history and make the model think
     // handoff is the standing state — it then re-escalates trivial
     // follow-ups. A marker conveys the fact without the phrasing.
     if ((m.payload as { via?: string })?.via === 'handoff') {
       out.push({ role: 'assistant', content: '(the customer was told a human teammate is joining)' });
+      continue;
+    }
+    // Stall notes verbatim would teach the model to greet delays it didn't
+    // cause — a marker keeps the fact without the phrasing.
+    if ((m.payload as { via?: string })?.via === 'status') {
+      out.push({ role: 'assistant', content: '(a status update was sent to the customer)' });
       continue;
     }
     const atts = m.direction === 'in' ? attachmentsOf(m.payload) : [];
@@ -764,15 +1132,25 @@ export async function runHostedEvent(
     void foldConversationMemory(db, agent, conv, llm);
     const history = await transcriptFor(db, convId, await fileAnalysisAllowed(db, agent.workspaceId));
     const docs = await loadKnowledgeDocs(db, agent.id);
-    const secrets = await loadSecretsMap(db, agent.id);
+    const secrets = {
+      ...(await loadSecretsMap(db, agent.id)),
+      ...(await connectionSecrets(db, agent.id)),
+    };
     const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId };
-    const result = await complete(
+    const prompt = systemPrompt(agent, docs, conv, { forSuggestion: true });
+    const blessedUrls = blessedUrlsFor(agent, prompt, history);
+    const result = await generateReply(
       llm,
-      systemPrompt(agent, docs, conv, { forSuggestion: true }),
+      prompt,
       history,
+      blessedUrls,
       toolsFor(agent),
       secrets,
       ctx,
+      enabledBuiltins(
+        ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
+        agent.workspaceId,
+      ),
     ).catch(() => null);
     if (result) {
       await recordLlmUsage(db, {
@@ -789,7 +1167,7 @@ export async function runHostedEvent(
     const stripLabel = (t?: string | null) =>
       t?.replace(/^\s*\(?(human operator|operator|agent|assistant)\)?\s*[:\-–—]\s*/i, '') ?? undefined;
     let draft = stripLabel(result?.text);
-    if (draft?.includes('[HANDOFF]')) draft = undefined;
+    if (draft && /\[(HANDOFF|OFFER_HUMAN|CANCEL_HANDOFF)\]/.test(draft)) draft = undefined;
 
     if (!draft) {
       // Escalated conversations prime the model to emit [HANDOFF] no matter
@@ -800,7 +1178,7 @@ export async function runHostedEvent(
       const retry = lastCustomerMsg
         ? await complete(
             llm,
-            systemPrompt(agent, docs, conv, { forSuggestion: true }),
+            prompt,
             [
               {
                 role: 'user',
@@ -823,13 +1201,18 @@ export async function runHostedEvent(
         });
       }
       draft = stripLabel(retry?.text);
-      if (draft?.includes('[HANDOFF]')) draft = undefined;
+      if (draft && /\[(HANDOFF|OFFER_HUMAN|CANCEL_HANDOFF)\]/.test(draft)) draft = undefined;
     }
 
     const text =
       draft ??
       'I want to make sure we get this right — let me look into it and follow up shortly.';
-    await storeSuggestion(db, convId, text, 'agent');
+    await storeSuggestion(
+      db,
+      convId,
+      extractLearns((await guardReplyLinks(text, blessedUrls)).text).text,
+      'agent',
+    );
     return;
   }
 
@@ -856,6 +1239,65 @@ export async function runHostedEvent(
     return;
   }
 
+  // Serialize replies per conversation — overlapping runs each answer the
+  // same unanswered message, producing double replies. A message landing
+  // mid-run marks pending and coalesces into one follow-up pass that sees
+  // the fresh transcript.
+  const run = convRuns.get(convId) ?? { running: false, pending: false };
+  convRuns.set(convId, run);
+  if (run.running) {
+    run.pending = true;
+    return;
+  }
+  run.running = true;
+  try {
+    do {
+      run.pending = false;
+      // Re-check ownership — a human may have taken over mid-run.
+      const [fresh] = await db
+        .select({ state: conversations.state })
+        .from(conversations)
+        .where(eq(conversations.id, convId))
+        .limit(1);
+      if (!fresh || fresh.state === 'human' || fresh.state === 'archived') break;
+      await replyAsHostedAgent(db, agent, conv);
+    } while (run.pending);
+  } finally {
+    run.running = false;
+    convRuns.delete(convId);
+  }
+}
+
+const convRuns = new Map<string, { running: boolean; pending: boolean }>();
+
+// Interim line while the LLM call is being retried — buys goodwill during a
+// provider stall instead of leaving the customer staring at silence.
+const STALL_LINES = [
+  'Still working on that for you — one moment.',
+  'On it — just taking a little longer than usual.',
+  'Hang tight, still looking into that.',
+];
+
+// Final failure: offer a human rather than auto-escalating — the customer
+// chooses, and a "yes" lands as a normal turn the agent can hand off on.
+const FAILURE_LINES = [
+  "I'm having trouble answering that properly right now — would you like me to get a human?",
+  "I can't give you a good answer just yet. Want me to bring in a human teammate?",
+  'Sorry — something went wrong on my end. Should I get a human to help?',
+];
+
+const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
+
+// Tappable yes/no attached to every "want a human?" offer — webchat chips,
+// native quick replies on Meta channels.
+const OFFER_CHOICES = ['Yes, get a human', 'No thanks'];
+
+async function replyAsHostedAgent(
+  db: Db,
+  agent: AgentRow,
+  conv: ConversationRow,
+): Promise<void> {
+  const convId = conv.id;
   const externalId = conv.externalId;
   const t0 = Date.now();
   const emit = (e: Parameters<typeof processEvents>[2]) => processEvents(db, agent, e);
@@ -869,16 +1311,43 @@ export async function runHostedEvent(
     console.log(`[files] conv=${convId} analysis=${fileAnalysis}`);
     const history = await transcriptFor(db, convId, fileAnalysis);
     const docs = await loadKnowledgeDocs(db, agent.id);
-    const secrets = await loadSecretsMap(db, agent.id);
+    const secrets = {
+      ...(await loadSecretsMap(db, agent.id)),
+      ...(await connectionSecrets(db, agent.id)),
+    };
     const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId };
-    const { text: reply, promptTokens, completionTokens } = await complete(
+    const prompt = systemPrompt(agent, docs, conv);
+    const blessedUrls = blessedUrlsFor(agent, prompt, history);
+    let stalled = false;
+    const onStall = () => {
+      if (stalled) return;
+      stalled = true;
+      void emit([
+        {
+          type: 'message_out',
+          conversation_id: externalId,
+          text: pick(STALL_LINES),
+          payload: { via: 'status' },
+        },
+      ]);
+    };
+    const gen = await generateReply(
       llm,
-      systemPrompt(agent, docs, conv),
+      prompt,
       history,
+      blessedUrls,
       toolsFor(agent),
       secrets,
       ctx,
+      enabledBuiltins(
+        ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
+        agent.workspaceId,
+      ),
+      onStall,
     );
+    const { text: guardedReply, promptTokens, completionTokens } = gen;
+    const { text: reply, learns } = extractLearns(guardedReply);
+    const learnFlag = learns.length ? { learn: learns } : {};
     if (promptTokens || completionTokens) {
       await recordLlmUsage(db, {
         workspaceId: agent.workspaceId,
@@ -895,20 +1364,127 @@ export async function runHostedEvent(
       ]);
       return;
     }
+    if (gen.fixed.length || gen.stripped.length || gen.unverified.length) {
+      console.warn(
+        `[hosted] link guard conv=${convId} fixed=${gen.fixed.length} stripped=${gen.stripped.length} verified=${gen.verified.length} unverified=${gen.unverified.length}`,
+      );
+    }
+    const linkFlag = {
+      ...(gen.fixed.length || gen.stripped.length || gen.verified.length || gen.unverified.length
+        ? {
+            link_guard: {
+              fixed: gen.fixed,
+              stripped: gen.stripped,
+              verified: gen.verified,
+              unverified: gen.unverified,
+            },
+          }
+        : {}),
+      ...learnFlag,
+    };
+    // A tapped "No thanks" chip is an explicit decline — de-escalate even if
+    // the model forgets (or misfires [HANDOFF] on) the tag. Only fires while
+    // an escalation is actually pending: needs_human or an open handoff alert.
+    const lastCustomerText = contentText(
+      [...history].reverse().find((m) => m.role === 'user')?.content ?? null,
+    )
+      ?.trim()
+      .toLowerCase();
+    const declineTapped =
+      lastCustomerText === 'no thanks' &&
+      (conv.state === 'needs_human' ||
+        !!(await db
+          .select({ id: alerts.id })
+          .from(alerts)
+          .where(
+            and(
+              eq(alerts.conversationId, convId),
+              eq(alerts.status, 'open'),
+              inArray(alerts.type, ['help_request', 'handoff_offer']),
+            ),
+          )
+          .limit(1))[0]);
+    if (declineTapped || reply.includes('[CANCEL_HANDOFF]')) {
+      // Customer declined a human — deliver the reply and de-escalate any
+      // pending handoff/offer back to the agent.
+      const partial = reply.replace(/\[CANCEL_HANDOFF\]/g, '').trim();
+      const events: Parameters<typeof processEvents>[2] = [];
+      if (partial) {
+        events.push({
+          type: 'message_out',
+          conversation_id: externalId,
+          text: partial,
+          payload: { via: 'hosted', ...linkFlag },
+        });
+      }
+      events.push({
+        type: 'handoff_cancelled',
+        conversation_id: externalId,
+        reason: 'customer declined a human',
+      });
+      await emit(events);
+      return;
+    }
     if (reply.includes('[HANDOFF]')) {
-      await emit([
-        { type: 'handoff_request', conversation_id: externalId, reason: 'agent signalled handoff' },
-      ]);
+      // The model may pair the tag with a partial answer — deliver it so the
+      // customer gets more than the bare "human is on the way" notice, then
+      // still flag the handoff.
+      const partial = reply.replace(/\[HANDOFF\]/g, '').trim();
+      const events: Parameters<typeof processEvents>[2] = [];
+      if (partial) {
+        events.push({
+          type: 'message_out',
+          conversation_id: externalId,
+          text: partial,
+          payload: { via: 'hosted', ...linkFlag },
+        });
+      }
+      events.push({
+        type: 'handoff_request',
+        conversation_id: externalId,
+        reason: 'agent signalled handoff',
+      });
+      await emit(events);
+      return;
+    }
+    if (reply.includes('[OFFER_HUMAN]')) {
+      // Agent thinks a human would help but the customer hasn't asked —
+      // deliver the reply (which should include the offer question) and
+      // fire a non-escalating handoff_offer alert so operators can peek.
+      const partial = reply.replace(/\[OFFER_HUMAN\]/g, '').trim();
+      const events: Parameters<typeof processEvents>[2] = [];
+      if (partial) {
+        events.push({
+          type: 'message_out',
+          conversation_id: externalId,
+          text: partial,
+          payload: { via: 'hosted', quick_replies: OFFER_CHOICES, ...linkFlag },
+        });
+      }
+      events.push({
+        type: 'handoff_offer',
+        conversation_id: externalId,
+        reason: 'agent offered a human — awaiting customer reply',
+      });
+      await emit(events);
       return;
     }
     await emit([
-      { type: 'message_out', conversation_id: externalId, text: reply, payload: { via: 'hosted' } },
+      { type: 'message_out', conversation_id: externalId, text: reply, payload: { via: 'hosted', ...linkFlag } },
     ]);
     console.log(`[hosted] ${agent.name} replied in ${Date.now() - t0}ms`);
   } catch (err) {
+    // Agent errored — alert operators (failure alert) and offer the customer a
+    // human, but don't seize the conversation: it stays 'active' so the agent
+    // answers the next message if the provider recovers.
     await emit([
       { type: 'failure', conversation_id: externalId, reason: err instanceof Error ? err.message : 'generation failed' },
-      { type: 'handoff_request', conversation_id: externalId, reason: 'agent error — needs a human' },
+      {
+        type: 'message_out',
+        conversation_id: externalId,
+        text: pick(FAILURE_LINES),
+        payload: { via: 'hosted', quick_replies: OFFER_CHOICES },
+      },
     ]);
   }
 }

@@ -26,6 +26,7 @@ export type MessageDirection = z.infer<typeof MessageDirection>;
 export const AlertType = z.enum([
   'failure', // agent reported an error / couldn't handle
   'help_request', // user explicitly asked for a human
+  'handoff_offer', // agent offered a human — customer hasn't confirmed yet
   'custom', // agent-defined custom alert
   'sla', // needs_human went unclaimed past the agent's SLA — re-alert/escalation
   'inactivity', // conversation went quiet while awaiting agent
@@ -99,6 +100,18 @@ export const HandoffRequestEvent = z.object({
   ...eventBase,
 });
 
+export const HandoffOfferEvent = z.object({
+  type: z.literal('handoff_offer'),
+  reason: z.string().optional(),
+  ...eventBase,
+});
+
+export const HandoffCancelledEvent = z.object({
+  type: z.literal('handoff_cancelled'),
+  reason: z.string().optional(),
+  ...eventBase,
+});
+
 export const CustomAlertEvent = z.object({
   type: z.literal('custom_alert'),
   alert_type: z.string().min(1).max(64),
@@ -112,6 +125,8 @@ export const IngestEvent = z.discriminatedUnion('type', [
   MessageOutEvent,
   FailureEvent,
   HandoffRequestEvent,
+  HandoffOfferEvent,
+  HandoffCancelledEvent,
   CustomAlertEvent,
 ]);
 export type IngestEvent = z.infer<typeof IngestEvent>;
@@ -168,6 +183,9 @@ export const AgentConfig = z.object({
       }),
     )
     .optional(),
+  // hosted agents only — server-side built-in tools by name (e.g.
+  // 'web_search'). Unlike `tools` these run in-process — no URL or secrets.
+  builtin_tools: z.array(z.string()).optional(),
   // escalation: re-alert when a handoff stays unclaimed past N minutes
   sla_minutes: z.number().min(1).max(1440).optional(),
   // routing: assign handoffs to the least-loaded workspace member
@@ -200,6 +218,10 @@ export const AgentConfig = z.object({
       takeover_timeout: z.number().min(1).max(1440).optional(),
     })
     .optional(),
+  // knowledge-gap UI: dismissed "LEARN:" self-reports and gap clusters stay
+  // hidden by key
+  dismissed_learnings: z.array(z.string().max(400)).optional(),
+  dismissed_gaps: z.array(z.string().max(400)).optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 
@@ -235,6 +257,8 @@ export const Agent = z.object({
   has_webhook_secret: z.boolean(),
   hosted: z.boolean(), // Janis runs the agent in-process (no webhook needed)
   auto_resume_minutes: z.number().nullable(),
+  // Slack channel override for this agent's alerts — null = workspace channel
+  slack_channel_id: z.string().nullable(),
   config: AgentConfig,
   last_seen_at: z.string().nullable(), // last ingest event received
   api_key_preview: z.string().nullable(), // null until a key is generated; full key shown once on generate/rotate
@@ -257,6 +281,11 @@ export const Channel = z.object({
     verify_token: z.string(),
     via: z.enum(['oauth', 'manual']).optional(),
     chat_url: z.string().optional(), // where a customer opens a chat with this channel
+    // webchat: shared secret for HMAC-signed visitor identity — visible to
+    // workspace members (like verify_token), never to widget visitors
+    identity_secret: z.string().optional(),
+    // webchat: show operator name/avatar on human replies — off by default
+    show_operator: z.boolean().optional(),
     // webchat widget appearance — display config only, never secrets
     branding: z
       .object({
@@ -305,6 +334,8 @@ export const Message = z.object({
     failure: z.boolean(),
     help_requested: z.boolean(),
     custom_alert: z.boolean(),
+    handoff_offer: z.boolean(),
+    handoff_cancelled: z.boolean(),
   }),
   created_at: z.string(),
 });
@@ -384,14 +415,46 @@ export const AgentSecretMeta = z.object({
 });
 export type AgentSecretMeta = z.infer<typeof AgentSecretMeta>;
 
+// Predefined tool connections — the public catalog view. The server keeps
+// the full ToolDefs + secret-derivation logic; clients only see fields and
+// tool previews.
+export const ToolTemplateField = z.object({
+  key: z.string(),
+  label: z.string(),
+  placeholder: z.string().optional(),
+  help: z.string().optional(),
+});
+export type ToolTemplateField = z.infer<typeof ToolTemplateField>;
+
+export const ToolTemplateInfo = z.object({
+  id: z.string(),
+  name: z.string(),
+  category: z.string(),
+  blurb: z.string(),
+  docs_url: z.string().optional(),
+  // 'oauth' templates mint client-credentials tokens onto agent_connections
+  auth: z.enum(['secrets', 'oauth']).optional(),
+  fields: z.array(ToolTemplateField),
+  tools: z.array(z.object({ name: z.string(), description: z.string() })),
+});
+export type ToolTemplateInfo = z.infer<typeof ToolTemplateInfo>;
+
 export const WorkspaceUser = z.object({
   id: z.string(),
   email: z.string(),
   name: z.string(),
   role: z.enum(['admin', 'member']),
+  // 'invited' = pending membership they haven't accepted yet
+  status: z.enum(['active', 'invited']).default('active'),
   notify: z
     .object({ push: z.boolean(), email: z.boolean(), sound: z.boolean() })
     .default({ push: true, email: true, sound: true }),
+  // What customers see on operator replies when the channel shows operator
+  // identity — defaults to the account's first name and no avatar.
+  display_name: z.string().nullable().optional(),
+  avatar_url: z.string().nullable().optional(),
+  // false = stay anonymous even on channels with show_operator enabled
+  show_identity: z.boolean().optional(),
 });
 export type WorkspaceUser = z.infer<typeof WorkspaceUser>;
 
@@ -448,5 +511,19 @@ export const StreamEvent = z.discriminatedUnion('type', [
     data: Alert.extend({ notification: NotificationPayload.optional() }),
   }),
   z.object({ type: z.literal('suggestion'), data: Suggestion }),
+  // Ephemeral typing pings — 'visitor' for a customer composing, 'agent'
+  // for a dispatched message.user the agent hasn't answered yet. Clients
+  // show them transiently and never persist them.
+  z.object({
+    type: z.literal('typing'),
+    data: z.object({
+      conversation_id: z.string(),
+      name: z.string().optional(),
+      kind: z.enum(['visitor', 'agent']).optional(),
+      // the typer's Janis account when session-bound — lets the console
+      // suppress visitor dots for your own rail/test-chat typing
+      user_id: z.string().nullable().optional(),
+    }),
+  }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEvent>;

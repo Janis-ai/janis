@@ -1,43 +1,47 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
 import { useMe } from '../api/hooks';
 import { api } from '../api/client';
+import { SiteFooter } from '../components/bits';
 
 const FEATURES = [
   {
     icon: '/img/home-connect.png',
-    title: 'Connect every channel',
-    body: 'Facebook, Instagram, WhatsApp, and Slack in a couple of clicks. Your customers message where they already are — you see it all in one place.',
+    title: 'Every channel, one inbox',
+    body: 'Messenger, Instagram, WhatsApp, Slack, and web chat — unified, searchable, triageable.',
   },
   {
     icon: '/img/home-deploy.png',
     title: 'Hosted or bring-your-own',
-    body: 'Run your agent inside Janis with your knowledge base, or keep the agent you built and connect it with a webhook. Oversight works the same either way.',
+    body: 'Run your agent inside Janis, or keep the one you built and connect it with a webhook.',
   },
   {
     icon: '/img/home-delight.png',
-    title: 'Delight around the clock',
-    body: 'The agent answers instantly, 24/7. When it can’t, a human joins with full context — the customer never repeats themselves.',
-  },
-];
-
-const VALUES = [
-  {
-    icon: '/img/value-reduce.png',
-    title: 'Cut support costs',
-    body: 'The agent absorbs the volume; your team only touches conversations that need judgment. Pay for exactly the tokens you use — no per-seat pricing games.',
+    title: 'Take over from Slack',
+    body: 'Escalations arrive with an AI brief — reply in-thread, run it with /pause, /resume, /note, /teach.',
   },
   {
     icon: '/img/value-boost.png',
-    title: 'Boost coverage',
-    body: 'Every message gets an answer — at 3pm and 3am. Escalations come with an AI-written brief, so nobody starts cold.',
+    title: 'Every rescue teaches the agent',
+    body: 'Recurring escalations cluster into knowledge gaps — Janis drafts the fix, you approve.',
   },
   {
     icon: '/img/value-delight.png',
-    title: 'Delight customers',
-    body: 'No dead ends, no “sorry, I can’t help with that.” A person steps in the moment it matters — then the agent picks right back up.',
+    title: 'A handoff that feels human',
+    body: 'Typing indicators, receipts, operator personas — customers see a person, not a broken bot.',
   },
+  {
+    icon: '/img/value-reduce.png',
+    title: 'Know what it costs, always',
+    body: 'Per-message pricing, token usage metered to the cent, unlimited seats and channels.',
+  },
+];
+
+const DIFFERENT: [string, string, string][] = [
+  ['Your agent', 'Rebuild it on their bot platform', 'Keep yours — or use ours'],
+  ['The handoff', 'A bolted-on escape hatch', 'The core of the product'],
+  ['When the AI fails', 'A dashboard shows you where', 'Janis drafts the fix for you'],
+  ['Pricing', 'Per seat, per teammate', 'Per message + metered tokens'],
 ];
 
 // Mirrors apps/api/src/lib/plans.ts — keep in sync until plans are exposed via a public endpoint.
@@ -49,29 +53,38 @@ const PRICING = [
 ];
 
 const STEPS = [
-  ['Connect', 'Link your channels and your agent — hosted on Janis or your own.'],
-  ['Agent answers', 'Customers get instant replies with your knowledge base behind it.'],
-  ['Human steps in', 'When the agent is stuck, the alert lands in Slack with the full transcript. Take over in one click.'],
-  ['Hand it back', 'Resolve, resume the agent, and the thread keeps flowing. Nothing is lost.'],
+  ['Connect', 'Link your channels and your agent — hosted on Janis or your own webhook.'],
+  ['Agent answers', 'Instant replies grounded in your knowledge base, 24/7.'],
+  ['Human steps in', 'Slack alert with an AI brief — reply in-thread and you’re talking to the customer.'],
+  ['Hand it back', 'Resume the agent; the exchange becomes training data.'],
 ];
 
 /** Public landing page — also satisfies the OAuth consent screen home URL. */
 export default function Landing() {
   const { data } = useMe();
-  const qc = useQueryClient();
   const cta = data ? { to: '/conversations', label: 'Open console' } : { to: '/login', label: 'Get started' };
   const signOut = async () => {
     await api('/auth/logout', { method: 'POST' });
-    await qc.invalidateQueries({ queryKey: ['me'] });
+    window.location.href = '/';
   };
 
-  // Dogfood the web-chat widget on the marketing site. Absolute URL so the
-  // prod widget works from the dev server too (/chat/* is open CORS).
+  // Dogfood the web-chat widget on the marketing site. Same-origin so the
+  // visitor's Janis session (when logged in) identifies them automatically;
+  // on top of that we fetch a signed identity and hand it to the widget.
   useEffect(() => {
+    const TOKEN = '7595ffbd-6b87-47ef-8b97-9228eb28042c';
     const s = document.createElement('script');
-    s.src = 'https://janis-api-696050206949.us-east1.run.app/widget.js';
-    s.setAttribute('data-janis-token', '7595ffbd-6b87-47ef-8b97-9228eb28042c');
+    s.src = '/widget.js';
+    s.setAttribute('data-janis-token', TOKEN);
     s.async = true;
+    s.onload = () => {
+      fetch(`/chat/${TOKEN}/identity`, { credentials: 'include' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((id) => {
+          if (id?.sig) (window as unknown as { Janis?: { identify: (u: unknown) => void } }).Janis?.identify(id);
+        })
+        .catch(() => {});
+    };
     document.body.appendChild(s);
     return () => {
       s.remove();
@@ -91,9 +104,9 @@ export default function Landing() {
       <section className="landing-hero">
         <h1>Your AI agent has a help button.</h1>
         <p>
-          Janis watches your customer conversations on Messenger, Instagram, WhatsApp, and
-          Slack — and hands them to a human the moment your agent gets stuck. Answers 24/7,
-          people when it matters.
+          Janis is the oversight layer for AI agents. It answers your customers on
+          Messenger, Instagram, WhatsApp, Slack, and web chat — hands off to a human
+          when it matters, and learns from every rescue.
         </p>
         <div className="row" style={{ justifyContent: 'center', gap: 12 }}>
           <Link className="btn primary lg" to={cta.to}>{cta.label}</Link>
@@ -138,14 +151,28 @@ export default function Landing() {
         </div>
       </section>
 
-      <section className="landing-grid">
-        {VALUES.map((v) => (
-          <div key={v.title} className="card landing-card">
-            <img src={v.icon} alt="" className="landing-icon" />
-            <strong>{v.title}</strong>
-            <p className="muted">{v.body}</p>
-          </div>
-        ))}
+      <section className="landing-steps">
+        <h2>Why Janis is different</h2>
+        <div className="landing-compare">
+          <table className="docs-table">
+          <thead>
+            <tr>
+              <th />
+              <th>Typical AI support tools</th>
+              <th>Janis</th>
+            </tr>
+          </thead>
+          <tbody>
+            {DIFFERENT.map(([aspect, them, ours]) => (
+              <tr key={aspect}>
+                <td><strong>{aspect}</strong></td>
+                <td className="muted">{them}</td>
+                <td>{ours}</td>
+              </tr>
+            ))}
+          </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="landing-pricing">
@@ -181,13 +208,7 @@ export default function Landing() {
         <Link className="btn primary lg" to={cta.to}>{cta.label}</Link>
       </section>
 
-      <footer className="landing-footer muted">
-        <img src="/img/janis-top.png" alt="Janis" style={{ height: 20, opacity: 0.8 }} />
-        <span>© {new Date().getFullYear()} Janis</span>
-        <Link to="/docs">Developer docs</Link>
-        <Link to="/privacy">Privacy Policy</Link>
-        <Link to="/terms">Terms of Service</Link>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

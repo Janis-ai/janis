@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { SiteFooter } from '../components/bits';
 
 const PRIVACY = `Last updated: September 2026
 
@@ -70,12 +71,7 @@ function Doc({ title, body }: { title: string; body: string }) {
           <p key={i} className="muted" style={{ lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{block}</p>
         ),
       )}
-      <footer className="landing-footer muted" style={{ marginTop: 48 }}>
-        <span>© {new Date().getFullYear()} Janis</span>
-        <Link to="/">Home</Link>
-        {title !== 'Privacy Policy' && <Link to="/privacy">Privacy Policy</Link>}
-        {title !== 'Terms of Service' && <Link to="/terms">Terms of Service</Link>}
-      </footer>
+      <SiteFooter style={{ marginTop: 48 }} />
     </div>
   );
 }

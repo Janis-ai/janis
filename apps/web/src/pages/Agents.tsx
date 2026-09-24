@@ -3,11 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Agent } from '@janis/shared';
 import { api } from '../api/client';
-import { useAgents, useChannels } from '../api/hooks';
+import { useAgents, useChannels, useMe } from '../api/hooks';
 import { timeAgo } from '../components/bits';
 
 export default function Agents() {
   const { data } = useAgents();
+  const { data: me } = useMe();
+  const isAdmin = me?.user.role === 'admin';
   const { data: channelsData } = useChannels();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -41,6 +43,7 @@ export default function Agents() {
     <>
       <h1 className="page-title">Agents</h1>
 
+      {isAdmin && (
       <form
         className="row"
         onSubmit={(e) => {
@@ -60,6 +63,7 @@ export default function Agents() {
         </select>
         <button className="btn primary">Create agent</button>
       </form>
+      )}
 
       {error && <div className="error">{error}</div>}
 
@@ -90,15 +94,17 @@ export default function Agents() {
               <span className={`badge ${agent.hosted ? 'active' : agent.webhook_url ? '' : 'warn'}`}>
                 {agent.hosted ? 'hosted' : agent.webhook_url ? 'external' : 'unreachable'}
               </span>
-              <button
-                className="btn danger"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (confirm(`Delete agent "${agent.name}"?`)) removeAgent.mutate(agent.id);
-                }}
-              >
-                Delete
-              </button>
+              {isAdmin && (
+                <button
+                  className="btn danger"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm(`Delete agent "${agent.name}"?`)) removeAgent.mutate(agent.id);
+                  }}
+                >
+                  Delete
+                </button>
+              )}
             </div>
           );
         })}

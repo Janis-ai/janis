@@ -5,7 +5,33 @@ import { useConversations, useAgents, useSearch } from '../api/hooks';
 import { Avatar, channelLabel, displayName, Empty, StateBadge, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 
-const STATES = ['', 'needs_human', 'human', 'active', 'unread', 'starred', 'archived'] as const;
+/** Filter options grouped by kind — values map to the `state` list param.
+ * Labels match the conversation detail Status dropdown (Agent = agent-driven). */
+const STATE_GROUPS: { label: string; options: [value: string, label: string][] }[] = [
+  {
+    label: 'State',
+    options: [
+      ['needs_human', 'Needs human'],
+      ['human', 'Human'],
+      ['active', 'Agent'],
+      ['archived', 'Archived'],
+    ],
+  },
+  {
+    label: 'Signals',
+    options: [
+      ['handoff_offer', 'Handoff offered'],
+      ['failure', 'Errors'],
+    ],
+  },
+  {
+    label: 'Flags',
+    options: [
+      ['unread', 'Unread'],
+      ['starred', 'Starred'],
+    ],
+  },
+];
 
 /** useState persisted to localStorage — filters survive navigation. */
 function useSticky<T>(key: string, initial: T): [T, (v: T) => void] {
@@ -94,7 +120,13 @@ export default function Conversations() {
         />
         <select value={state} onChange={(e) => setState(e.target.value)}>
           <option value="">All states</option>
-          {STATES.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
+          {STATE_GROUPS.map((g) => (
+            <optgroup key={g.label} label={g.label}>
+              {g.options.map(([v, l]) => (
+                <option key={v} value={v}>{l}</option>
+              ))}
+            </optgroup>
+          ))}
         </select>
         <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
           <option value="">All agents</option>
@@ -115,8 +147,8 @@ export default function Conversations() {
               <strong>Message hits</strong>
               {hits.messages.slice(0, 20).map((m) => (
                 <div key={m.id} className="muted" style={{ marginTop: 6 }}>
-                  <Link to={`/conversations/${m.conversation_id}`}>
-                    {m.flags.help_requested || m.flags.failure || m.flags.custom_alert
+                  <Link to={`/conversations/${m.conversation_id}?msg=${m.id}`}>
+                    {m.flags.help_requested || m.flags.failure || m.flags.custom_alert || m.flags.handoff_offer || m.flags.handoff_cancelled
                       ? '⚙️'
                       : m.direction === 'in' ? '👤' : m.direction === 'out' ? '🤖' : '🧑'} {m.text}
                   </Link>

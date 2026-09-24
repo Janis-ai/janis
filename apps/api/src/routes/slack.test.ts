@@ -6,10 +6,12 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, conversations, slackInstallations, slackThreads, users, workspaces } from '../db/schema.js';
+import { agents, conversations, memberships, messages, sessions, slackInstallations, slackThreads, users, workspaces } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
-import { generateApiKey } from '../lib/crypto.js';
-import { slackPublicRoutes } from './slack.js';
+import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
+import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
+import { slackApiRoutes, slackPublicRoutes } from './slack.js';
+import { removeMemberFromAlertChannels, syncMemberToAlertChannels } from '../lib/slack.js';
 import { env } from '../env.js';
 
 let app: Hono;
@@ -148,8 +150,14 @@ describe('slash commands', () => {
     const [ws] = await db.insert(workspaces).values({ name: 'WS' }).returning();
     const [admin] = await db
       .insert(users)
-      .values({ workspaceId: ws.id, email: 'op@x.c', name: 'Op', role: 'admin' })
+      .values({ email: 'op@x.c', name: 'Op', slackUserId: 'U_OP' })
       .returning();
+    await db.insert(memberships).values({
+      userId: admin.id,
+      workspaceId: ws.id,
+      role: 'admin',
+      acceptedAt: new Date(),
+    });
     const { hash, preview } = generateApiKey();
     const [agent] = await db
       .insert(agents)
@@ -237,5 +245,450 @@ describe('slash commands', () => {
         .set({ migrated: false })
         .where(eq(slackInstallations.teamId, 'T_NEW'));
     }
+  });
+});
+
+describe('slack member resolution', () => {
+  let convId: string;
+  let memberId: string;
+  let emailMemberId: string;
+
+  const event = (user: string, text = 'hello') =>
+    signedPost(
+      JSON.stringify({
+        type: 'event_callback',
+        event: {
+          type: 'message',
+          channel: 'CEV',
+          thread_ts: '9.0',
+          ts: `9.${Math.random().toString(36).slice(2, 6)}`,
+          user,
+          text,
+        },
+      }),
+      '/slack/events',
+    );
+
+  /** users.info resolves `email` for everyone; write methods all succeed. */
+  const stubFor = (email: string | null) =>
+    vi.fn().mockImplementation(async (url: string | URL) => {
+      const u = String(url);
+      const ok = (b: unknown) =>
+        new Response(JSON.stringify({ ok: true, ...(b as object) }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      if (u.includes('users.info')) {
+        return email
+          ? ok({ user: { profile: { email } } })
+          : new Response(JSON.stringify({ ok: false, error: 'user_not_found' }));
+      }
+      if (u.includes('chat.delete')) return new Response(JSON.stringify({ ok: false }));
+      return ok({});
+    });
+
+  beforeAll(async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Ev WS' }).returning();
+    const [linked] = await db
+      .insert(users)
+      .values({ email: 'linked@x.c', name: 'Linked', slackUserId: 'U_LINKED' })
+      .returning();
+    memberId = linked.id;
+    const [emailOnly] = await db
+      .insert(users)
+      .values({ email: 'emailonly@x.c', name: 'EmailOnly' })
+      .returning();
+    emailMemberId = emailOnly.id;
+    for (const uid of [memberId, emailMemberId]) {
+      await db.insert(memberships).values({
+        userId: uid,
+        workspaceId: ws.id,
+        role: 'member',
+        acceptedAt: new Date(),
+      });
+    }
+    const { hash, preview } = generateApiKey();
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'EvBot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'ev-conv' })
+      .returning();
+    convId = conv.id;
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_EV', botToken: 'xoxb-ev', installerUserId: memberId })
+      .returning();
+    await db
+      .insert(slackThreads)
+      .values({ conversationId: conv.id, installationId: inst.id, channelId: 'CEV', ts: '9.0' });
+  });
+
+  it('a stored slackUserId resolves without any users.info call', async () => {
+    const fetchMock = stubFor(null); // would fail the lookup if it were attempted
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await event('U_LINKED');
+    expect(res.status).toBe(200);
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('users.info'))).toBe(false);
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    expect(conv.state).toBe('human'); // implicit takeover — the reply landed
+  });
+
+  it('an unmatched Slack user is denied — no takeover, denial posted in thread', async () => {
+    await db
+      .update(conversations)
+      .set({ state: 'active', assigneeId: null })
+      .where(eq(conversations.id, convId));
+    const fetchMock = stubFor('stranger@elsewhere.c');
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await event('U_STRANGER');
+    expect(res.status).toBe(200);
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    expect(conv.state).toBe('active'); // nothing happened
+    // and the denial was posted back into the thread
+    const denial = fetchMock.mock.calls.find(
+      (c) => String(c[0]).includes('chat.postMessage') && String(c[1]?.body).includes(':no_entry:'),
+    );
+    expect(denial).toBeTruthy();
+    expect(String(denial![1]?.body)).toContain('9.0'); // threaded
+  });
+
+  it('double-delivered events (overlapping subscriptions) ingest once', async () => {
+    await db
+      .update(conversations)
+      .set({ state: 'active', assigneeId: null })
+      .where(eq(conversations.id, convId));
+    const fetchMock = stubFor(null);
+    vi.stubGlobal('fetch', fetchMock);
+    // Slack fires the same message twice ~100ms apart when subscriptions
+    // overlap — fire two truly parallel copies plus a delayed third.
+    const payload = JSON.stringify({
+      type: 'event_callback',
+      event: { type: 'message', channel: 'CEV', thread_ts: '9.0', ts: '9.777', user: 'U_LINKED', text: 'once only' },
+    });
+    const [r1, r2] = await Promise.all([
+      signedPost(payload, '/slack/events'),
+      signedPost(payload, '/slack/events'),
+    ]);
+    const r3 = await signedPost(payload, '/slack/events');
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    expect(r3.status).toBe(200);
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, convId));
+    const ingested = rows.filter((m) => (m.payload as { slack_ts?: string })?.slack_ts === '9.777');
+    expect(ingested.length).toBe(1);
+    expect(ingested[0].text).toBe('once only');
+  });
+
+  it('typed /pause in a thread pauses that conversation instead of replying', async () => {
+    await db
+      .update(conversations)
+      .set({ state: 'active', assigneeId: null, pauseMinutes: null })
+      .where(eq(conversations.id, convId));
+    const fetchMock = stubFor(null);
+    vi.stubGlobal('fetch', fetchMock);
+    // Slack can't invoke slash commands inside threads — the literal text
+    // arrives as a message and must not reach the customer.
+    const res = await event('U_LINKED', '/pause 30');
+    expect(res.status).toBe(200);
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    expect(conv.state).toBe('human');
+    expect(conv.pauseMinutes).toBe(30);
+    const rows = await db.select().from(messages).where(eq(messages.conversationId, convId));
+    expect(rows.some((m) => m.text === '/pause 30')).toBe(false);
+    const confirm = fetchMock.mock.calls.find(
+      (c) => String(c[0]).includes('chat.postMessage') && String(c[1]?.body).includes('paused this conversation'),
+    );
+    expect(confirm).toBeTruthy();
+  });
+
+  it('typed /resume in a thread hands the conversation back to the agent', async () => {
+    await db
+      .update(conversations)
+      .set({ state: 'human', assigneeId: memberId })
+      .where(eq(conversations.id, convId));
+    const fetchMock = stubFor(null);
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await event('U_LINKED', '/resume');
+    expect(res.status).toBe(200);
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    expect(conv.state).not.toBe('human');
+    const rows = await db.select().from(messages).where(eq(messages.conversationId, convId));
+    expect(rows.some((m) => m.text === '/resume')).toBe(false);
+  });
+
+  it('email match resolves and caches the slackUserId link', async () => {
+    await db
+      .update(conversations)
+      .set({ state: 'active', assigneeId: null })
+      .where(eq(conversations.id, convId));
+    const fetchMock = stubFor('emailonly@x.c');
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await event('U_EMAIL1');
+    expect(res.status).toBe(200);
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    expect(conv.state).toBe('human');
+    const [u] = await db.select().from(users).where(eq(users.id, emailMemberId));
+    expect(u.slackUserId).toBe('U_EMAIL1');
+  });
+
+  it('unmatched button clicks get an ephemeral denial via response_url', async () => {
+    await db
+      .update(conversations)
+      .set({ state: 'active', assigneeId: null })
+      .where(eq(conversations.id, convId));
+    const fetchMock = stubFor('nobody@elsewhere.c');
+    vi.stubGlobal('fetch', fetchMock);
+    const payload = JSON.stringify({
+      type: 'block_actions',
+      user: { id: 'U_STRANGER2' },
+      response_url: 'https://hooks.slack.test/resp1',
+      actions: [{ action_id: 'janis_takeover', value: convId }],
+    });
+    const res = await signedPost(`payload=${encodeURIComponent(payload)}`);
+    expect(res.status).toBe(200);
+    const denial = fetchMock.mock.calls.find((c) => String(c[0]) === 'https://hooks.slack.test/resp1');
+    expect(denial).toBeTruthy();
+    expect(String(denial![1]?.body)).toContain('ephemeral');
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    expect(conv.state).toBe('active'); // takeover denied — state untouched
+  });
+});
+
+describe('channel management', () => {
+  let api: Hono;
+  let cookie: string;
+  let wsId: string;
+
+  const slackOk = (body: unknown) =>
+    new Response(JSON.stringify({ ok: true, ...(body as object) }), {
+      headers: { 'content-type': 'application/json' },
+    });
+
+  /** Stub fetch: conversations.list returns `listed`, conversations.info
+   * resolves from `known`, conversations.create honors `create`. */
+  const stubSlack = (
+    listed: { id: string; name: string }[],
+    known: Record<string, string>,
+    create: { ok: boolean; channel?: { id: string; name: string }; error?: string },
+  ) => {
+    const mock = vi.fn().mockImplementation(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes('conversations.list')) {
+        return slackOk({ channels: listed.map((ch) => ({ ...ch, is_archived: false })) });
+      }
+      if (u.includes('conversations.info')) {
+        const id = new URLSearchParams(u.split('?')[1]).get('channel')!;
+        const name = known[id];
+        return name
+          ? slackOk({ channel: { id, name, is_archived: false } })
+          : new Response(JSON.stringify({ ok: false, error: 'channel_not_found' }));
+      }
+      if (u.includes('conversations.create')) {
+        return new Response(JSON.stringify(create));
+      }
+      return slackOk({});
+    });
+    vi.stubGlobal('fetch', mock);
+    return mock;
+  };
+
+  const req = (path: string, init: RequestInit = {}) =>
+    api.request(path, {
+      ...init,
+      headers: { 'content-type': 'application/json', cookie, ...(init.headers ?? {}) },
+    });
+
+  beforeAll(async () => {
+    api = new Hono().route('/api/slack', slackApiRoutes(db));
+    const [ws] = await db.insert(workspaces).values({ name: 'Slack WS' }).returning();
+    wsId = ws.id;
+    const [admin] = await db
+      .insert(users)
+      .values({ email: 'slack-admin@x.c', name: 'Admin' })
+      .returning();
+    await db.insert(memberships).values({
+      userId: admin.id,
+      workspaceId: wsId,
+      role: 'admin',
+      acceptedAt: new Date(),
+    });
+    const { token, id } = generateSessionToken();
+    await db.insert(sessions).values({
+      id,
+      userId: admin.id,
+      workspaceId: wsId,
+      expiresAt: new Date(Date.now() + 86400_000),
+    });
+    cookie = `${SESSION_COOKIE}=${token}`;
+    await db.insert(slackInstallations).values({
+      workspaceId: wsId,
+      teamId: 'T_CH',
+      botToken: 'xoxb-ch',
+      installerUserId: admin.id,
+      alertChannelId: 'CSEL',
+    });
+    const { hash, preview } = generateApiKey();
+    await db.insert(agents).values({
+      workspaceId: wsId,
+      name: 'Ch Agent',
+      apiKeyHash: hash,
+      apiKeyPreview: preview,
+      slackChannelId: 'CAGENT',
+    });
+  });
+
+  it('merges selected channels missing from conversations.list', async () => {
+    // Slack's list lags on new channels — the workspace alert channel and the
+    // agent's channel are resolved via conversations.info and appended.
+    stubSlack([{ id: 'CGEN', name: 'general' }], {
+      CSEL: 'janis-alerts-7ipo',
+      CAGENT: 'janis-ch-agent',
+    });
+    const res = await req('/api/slack/channels');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.channels).toContainEqual({ id: 'CSEL', name: 'janis-alerts-7ipo' });
+    expect(body.channels).toContainEqual({ id: 'CAGENT', name: 'janis-ch-agent' });
+    expect(body.channels).toContainEqual({ id: 'CGEN', name: 'general' });
+  });
+
+  it('sends conversations.list params on the query string', async () => {
+    const mock = stubSlack([], { CSEL: 'sel', CAGENT: 'ag' });
+    await req('/api/slack/channels');
+    const listCall = mock.mock.calls.find((c) => String(c[0]).includes('conversations.list'));
+    expect(String(listCall?.[0])).toContain('exclude_archived=true');
+    expect(String(listCall?.[0])).toContain('types=public_channel');
+  });
+
+  it('POST /channel creates and selects the channel', async () => {
+    stubSlack([], {}, { ok: true, channel: { id: 'CNEW', name: 'janis-alerts' } });
+    const res = await req('/api/slack/channel', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'janis-alerts' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.channel).toEqual({ id: 'CNEW', name: 'janis-alerts' });
+    const [inst] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.workspaceId, wsId));
+    expect(inst.alertChannelId).toBe('CNEW');
+    await db
+      .update(slackInstallations)
+      .set({ alertChannelId: 'CSEL' })
+      .where(eq(slackInstallations.workspaceId, wsId));
+  });
+
+  it('POST /channel surfaces name_taken instead of a silent suffix', async () => {
+    const mock = stubSlack([], {}, { ok: false, error: 'name_taken' });
+    const res = await req('/api/slack/channel', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'janis-alerts' }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain('already taken');
+    // exactly one create call — no retry renaming the user's choice
+    expect(mock.mock.calls.filter((c) => String(c[0]).includes('conversations.create'))).toHaveLength(1);
+  });
+
+  it('PATCH /channel updates the alert channel', async () => {
+    stubSlack([], { CSEL: 'sel' });
+    const res = await req('/api/slack/channel', {
+      method: 'PATCH',
+      body: JSON.stringify({ channel_id: 'CGEN' }),
+    });
+    expect(res.status).toBe(200);
+    const [inst] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.workspaceId, wsId));
+    expect(inst.alertChannelId).toBe('CGEN');
+    await db
+      .update(slackInstallations)
+      .set({ alertChannelId: 'CSEL' })
+      .where(eq(slackInstallations.workspaceId, wsId));
+  });
+});
+
+describe('member channel sync', () => {
+  let wsId: string;
+  let memberId: string;
+
+  beforeAll(async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Sync WS' }).returning();
+    wsId = ws.id;
+    const [member] = await db
+      .insert(users)
+      .values({ email: 'synced@x.c', name: 'Synced', slackUserId: 'U_SYNC' })
+      .returning();
+    memberId = member.id;
+    await db.insert(memberships).values({
+      userId: member.id,
+      workspaceId: ws.id,
+      role: 'member',
+      acceptedAt: new Date(),
+    });
+    await db.insert(slackInstallations).values({
+      workspaceId: ws.id,
+      teamId: 'T_SYNC',
+      botToken: 'xoxb-sync',
+      alertChannelId: 'C_MAIN',
+    });
+    const { hash, preview } = generateApiKey();
+    await db.insert(agents).values({
+      workspaceId: ws.id,
+      name: 'OverrideBot',
+      apiKeyHash: hash,
+      apiKeyPreview: preview,
+      slackChannelId: 'C_AGENT',
+    });
+  });
+
+  const callsFor = (fetchMock: ReturnType<typeof vi.fn>, method: string) =>
+    fetchMock.mock.calls
+      .filter((c) => String(c[0]).includes(method))
+      .map((c) => JSON.parse(String(c[1]?.body ?? '{}')));
+
+  it('syncMemberToAlertChannels invites the member to every janis channel', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await syncMemberToAlertChannels(db, wsId, memberId);
+    const invites = callsFor(fetchMock, 'conversations.invite');
+    expect(invites.map((b) => b.channel).sort()).toEqual(['C_AGENT', 'C_MAIN']);
+    expect(invites.every((b) => b.users === 'U_SYNC')).toBe(true);
+  });
+
+  it('removeMemberFromAlertChannels kicks the member from every janis channel', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await removeMemberFromAlertChannels(db, wsId, memberId);
+    const kicks = callsFor(fetchMock, 'conversations.kick');
+    expect(kicks.map((b) => b.channel).sort()).toEqual(['C_AGENT', 'C_MAIN']);
+    expect(kicks.every((b) => b.user === 'U_SYNC')).toBe(true);
+  });
+
+  it('no-ops when the member has no slack identity', async () => {
+    const [unlinked] = await db
+      .insert(users)
+      .values({ email: 'noslack@x.c', name: 'NoSlack' })
+      .returning();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response('{"ok":false,"error":"users_not_found"}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await syncMemberToAlertChannels(db, wsId, unlinked.id);
+    // only the users.lookupByEmail attempt — no invites
+    expect(callsFor(fetchMock, 'conversations.invite')).toHaveLength(0);
   });
 });

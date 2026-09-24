@@ -6,7 +6,7 @@ import { billingConfig, currentPeriod } from '../lib/billing.js';
 import { invalidateCapCache, messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
 import { planForPrice, stripe } from '../lib/stripe.js';
 import { env } from '../env.js';
-import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
 /** The stored Stripe customer may have been created under the other mode
  *  (test vs live) — verify it exists under the active key, else re-create. */
@@ -180,7 +180,7 @@ export function billingRoutes(db: Db) {
 
   // PATCH /api/billing/plan {plan} — admin-only override (support/dev tool)
   app.patch('/plan', async (c) => {
-    if (c.get('user').role !== 'admin') return c.json({ error: 'admin only' }, 403);
+    if (c.get('role') !== 'admin') return c.json({ error: 'admin only' }, 403);
     const { plan } = (await c.req.json()) as { plan?: string };
     if (!plan || !PLANS[plan]) {
       return c.json({ error: `unknown plan — one of ${Object.keys(PLANS).join(', ')}` }, 400);
@@ -194,7 +194,7 @@ export function billingRoutes(db: Db) {
   });
 
   // POST /api/billing/checkout {plan} → Stripe Checkout Session URL
-  app.post('/checkout', async (c) => {
+  app.post('/checkout', adminOnly, async (c) => {
     const s = stripe();
     if (!s) return c.json({ error: 'billing not configured' }, 400);
     const { plan } = (await c.req.json()) as { plan?: string };
@@ -229,7 +229,7 @@ export function billingRoutes(db: Db) {
   // POST /api/billing/downgrade — back to free. Cancels the Stripe
   // subscription at period end when one exists (the deleted webhook flips
   // the plan then); workspaces with no subscription flip immediately.
-  app.post('/downgrade', async (c) => {
+  app.post('/downgrade', adminOnly, async (c) => {
     const workspaceId = c.get('workspaceId');
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
     if (!ws) return c.json({ error: 'not found' }, 404);
@@ -255,7 +255,7 @@ export function billingRoutes(db: Db) {
   });
 
   // POST /api/billing/portal → Stripe Customer Portal URL (cards, invoices, cancel)
-  app.post('/portal', async (c) => {
+  app.post('/portal', adminOnly, async (c) => {
     const s = stripe();
     if (!s) return c.json({ error: 'billing not configured' }, 400);
     const workspaceId = c.get('workspaceId');

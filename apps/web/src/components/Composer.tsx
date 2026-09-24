@@ -38,12 +38,13 @@ export default function Composer({
   const [uploading, setUploading] = useState(false);
   const { data: savedReplies } = useSavedReplies();
 
-  // autosize: grow with content up to ~8 lines
+  // autosize: grow with content up to ~8 lines; no scrollbar until it overflows
   useEffect(() => {
     const t = taRef.current;
     if (!t) return;
     t.style.height = 'auto';
     t.style.height = Math.min(t.scrollHeight, 180) + 'px';
+    t.style.overflowY = t.scrollHeight > 180 ? 'auto' : 'hidden';
   }, [value]);
 
   const insertEmoji = (emoji: string) => {
