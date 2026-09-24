@@ -174,12 +174,16 @@ export const AgentConfig = z.object({
       z.object({
         name: z.string(),
         description: z.string(),
-        method: z.enum(['GET', 'POST']).default('GET'),
+        method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).default('GET'),
         url: z.string(),
         // static headers (auth etc.) — secrets stay server-side
         headers: z.record(z.string(), z.string()).optional(),
         // JSON-schema-ish params the model fills: {order_id: 'order number'}
         params: z.record(z.string(), z.string()).optional(),
+        // POST/PUT/PATCH body encoding — 'form' for APIs like Stripe
+        bodyFormat: z.enum(['json', 'form']).optional(),
+        // mutating tools park as pending actions until a teammate decides
+        approval: z.boolean().optional(),
       }),
     )
     .optional(),
