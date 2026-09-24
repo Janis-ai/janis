@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { channelBindings, channels, conversations } from '../db/schema.js';
 import { fetchPlatformProfile } from './channels.js';
+import { getUpload } from './uploads.js';
 
 type ConversationRow = typeof conversations.$inferSelect;
 
@@ -24,6 +25,19 @@ export async function fetchAvatar(
 
   const profile = (conv.userProfile ?? {}) as { picture_url?: string; id?: string };
   if (!profile.picture_url) return null;
+
+  // Janis-local avatars (a signed-in user's /uploads/ image on a webchat
+  // thread) live in the uploads table — serve the row, not an HTTP self-call.
+  if (profile.picture_url.startsWith('/uploads/')) {
+    const row = await getUpload(db, profile.picture_url.slice('/uploads/'.length));
+    if (!row) return null;
+    const bytes = row.data.buffer.slice(
+      row.data.byteOffset,
+      row.data.byteOffset + row.data.byteLength,
+    ) as ArrayBuffer;
+    cache.set(conv.id, { bytes, type: row.type, exp: Date.now() + TTL_MS });
+    return { bytes, type: row.type };
+  }
 
   let res = await fetch(profile.picture_url, {
     signal: AbortSignal.timeout(8_000),

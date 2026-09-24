@@ -43,6 +43,9 @@ function baseProfile(channel: ChannelRow, msg: InboundMessage): UserProfile {
     // as anything the visitor types, so claims are fine.
     ...(msg.user?.verified && msg.user.id ? { external_id: msg.user.id } : {}),
     ...(msg.user?.email ? { email: msg.user.email } : {}),
+    // Verified Janis identities carry the user's own avatar — picture_url is
+    // the field every avatar surface (console, Slack) already reads.
+    ...(msg.user?.avatarUrl ? { picture_url: msg.user.avatarUrl } : {}),
     ...(msg.user ? { identity_verified: msg.user.verified === true } : {}),
   };
 }

@@ -98,7 +98,14 @@ async function resolveIdentity(
       .where(and(eq(sessions.id, sha256(token)), gt(sessions.expiresAt, new Date())))
       .limit(1);
     if (row) {
-      return { id: row.user.id, name: row.user.name, email: row.user.email, verified: true, via: 'session' };
+      return {
+        id: row.user.id,
+        name: row.user.name,
+        email: row.user.email,
+        verified: true,
+        via: 'session',
+        avatarUrl: row.user.avatarUrl ?? undefined,
+      };
     }
   }
   if (!claim) return undefined;
@@ -108,13 +115,15 @@ async function resolveIdentity(
   // of a session identity (the /identity endpoint vends exactly this) — it
   // binds the conversation to the user the same way.
   let janisUser = false;
+  let avatarUrl: string | undefined;
   if (verified && claim.id && UUID_RE.test(claim.id)) {
     const [u] = await db
-      .select({ id: users.id })
+      .select({ id: users.id, avatarUrl: users.avatarUrl })
       .from(users)
       .where(eq(users.id, claim.id))
       .limit(1);
     janisUser = Boolean(u);
+    avatarUrl = u?.avatarUrl ?? undefined;
   }
   return {
     id: claim.id,
@@ -123,6 +132,7 @@ async function resolveIdentity(
     verified,
     via: 'claim',
     janisUser,
+    avatarUrl,
   };
 }
 
@@ -221,6 +231,7 @@ export function webchatRoutes(db: Db) {
       const patch = {
         ...(resolved.name ? { name: resolved.name } : {}),
         ...(resolved.email ? { email: resolved.email } : {}),
+        ...(resolved.avatarUrl ? { picture_url: resolved.avatarUrl } : {}),
         ...(resolved.verified && resolved.id ? { external_id: resolved.id } : {}),
         identity_verified: resolved.verified === true,
       };

@@ -75,6 +75,9 @@ export interface InboundMessage {
     verified?: boolean;
     via?: 'session' | 'claim';
     janisUser?: boolean;
+    /** Janis-local avatar path (/uploads/…) when the identity resolves to a
+     *  real Janis user — becomes the conversation's picture_url. */
+    avatarUrl?: string;
   };
   attachments?: AttachmentRef[];
 }

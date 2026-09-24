@@ -410,6 +410,42 @@ describe('webchat authenticated identity', () => {
     expect(p.identity_verified).toBe(true);
   });
 
+  it('stores the session user\'s avatar as the conversation picture_url', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [u] = await db.select().from(users).where(eq(users.email, 'owner@janis.test'));
+    await db.update(users).set({ avatarUrl: '/uploads/av-owner.png' }).where(eq(users.id, u.id));
+    const res = await postWithUser(
+      { text: 'avatar hello' },
+      { cookie: 'janis_session=tok-abc' },
+    );
+    expect(res.status).toBe(200);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, `webchat:u:${u.id}`))
+      .limit(1);
+    expect((conv?.userProfile as Record<string, unknown>)?.picture_url).toBe('/uploads/av-owner.png');
+    // and the avatar endpoint serves the upload row through fetchAvatar
+    const { storeUpload } = await import('../lib/uploads.js');
+    const { fetchAvatar } = await import('../lib/avatar.js');
+    const stored = await storeUpload(db, {
+      name: 'av-owner.png',
+      type: 'image/png',
+      data: Buffer.from('png-bytes'),
+    });
+    await db
+      .update(users)
+      .set({ avatarUrl: stored.url })
+      .where(eq(users.id, u.id));
+    await db
+      .update(conversations)
+      .set({ userProfile: { ...(conv!.userProfile as object), picture_url: stored.url } })
+      .where(eq(conversations.id, conv!.id));
+    const av = await fetchAvatar(db, { ...conv!, userProfile: { ...(conv!.userProfile as object), picture_url: stored.url } });
+    expect(av?.type).toBe('image/png');
+    expect(Buffer.from(av!.bytes).toString()).toBe('png-bytes');
+  });
+
   it('binds a session user\'s conversation to the user, not the visitor', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     const [u] = await db.select().from(users).where(eq(users.email, 'owner@janis.test'));
