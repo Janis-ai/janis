@@ -8,7 +8,6 @@ import { emitChannelUpdate } from '../lib/legacySocket.js';
 import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
-import { env } from '../env.js';
 
 type UserRow = typeof users.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -170,11 +169,10 @@ export async function humanReply(
   void setSlackThreadStatus(db, conversationId, null);
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
   if (!viaSlack) {
-    void mirrorToSlack(db, conversationId, `:bust_in_silhouette: *${user.name}:*`, text, {
-      identity: {
-        username: `${user.name} (operator)`,
-        icon_url: user.avatarUrl ? `${env.apiOrigin}${user.avatarUrl}` : undefined,
-      },
+    // Slack-side the reply wears the agent's face — the same masquerade the
+    // customer sees, matching how the seeded transcript renders operators.
+    void mirrorToSlack(db, conversationId, `:bust_in_silhouette: *${agent.name} (operator):*`, text, {
+      direction: 'human',
     });
   }
   // If the conv went 'human' without an explicit takeover (DF action, Page
@@ -271,7 +269,7 @@ export async function agentSend(
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
   if (!viaSlack) {
     void mirrorToSlack(db, conversationId, `:robot_face: *${user.name}* (via agent):`, text, {
-      identity: { username: `${agent.name} (agent)` },
+      direction: 'out',
     });
   }
   // Awaited so the caller learns the real delivery outcome — same as

@@ -510,6 +510,50 @@ describe('slack member resolution', () => {
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
     expect(conv.state).toBe('active'); // takeover denied — state untouched
   });
+
+  it('deletes the raw reply with the installer token and reposts as the agent', async () => {
+    await db
+      .update(slackInstallations)
+      .set({ installerUserToken: 'xoxp-inst' })
+      .where(eq(slackInstallations.teamId, 'T_EV'));
+    await db
+      .update(conversations)
+      .set({ state: 'active', assigneeId: null })
+      .where(eq(conversations.id, convId));
+    const calls: { url: string; auth?: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(
+        async (url: string | URL, init?: { body?: string; headers?: Record<string, string> }) => {
+          const u = String(url);
+          calls.push({ url: u, auth: init?.headers?.Authorization, body: init?.body ? JSON.parse(init.body) : {} });
+          return new Response(JSON.stringify({ ok: true }), {
+            headers: { 'content-type': 'application/json' },
+          });
+        },
+      ),
+    );
+    try {
+      const res = await event('U_LINKED', 'operator reply text');
+      expect(res.status).toBe(200);
+      await new Promise((r) => setTimeout(r, 50)); // mirror is fire-and-forget
+      // the delete ran under the installer's user token, not the bot token —
+      // only a user token can delete someone else's message
+      const del = calls.find((c) => c.url.includes('chat.delete'));
+      expect(del?.auth).toBe('Bearer xoxp-inst');
+      // and the reposted message wears the agent's face
+      const repost = calls.find(
+        (c) => c.url.includes('chat.postMessage') && c.body.username === 'EvBot (operator)',
+      );
+      expect(repost?.body.thread_ts).toBe('9.0');
+      expect(repost?.body.text).toBe('operator reply text');
+    } finally {
+      await db
+        .update(slackInstallations)
+        .set({ installerUserToken: null })
+        .where(eq(slackInstallations.teamId, 'T_EV'));
+    }
+  });
 });
 
 describe('channel management', () => {

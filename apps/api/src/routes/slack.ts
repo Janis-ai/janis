@@ -439,13 +439,12 @@ export function slackPublicRoutes(db: Db) {
       }
 
       // Replace the raw reply with a styled transcript entry. Bot tokens can
-      // only delete the bot's own messages — for anyone else's we need their
-      // user token (granted via user_scope at install). Without one the raw
+      // only delete the bot's own messages — for anyone else's we need the
+      // installer's user token (user_scope=chat:write at install): it deletes
+      // whatever that user could delete in Slack, which for a workspace
+      // admin is everyone's messages. When no token can delete it the raw
       // message stays and the mirror is skipped so nothing duplicates.
-      const deleteToken =
-        ev.user === found.installation.installerSlackUserId && found.installation.installerUserToken
-          ? found.installation.installerUserToken
-          : found.installation.botToken;
+      const deleteToken = found.installation.installerUserToken ?? found.installation.botToken;
       const deleted = await slackApi(deleteToken, 'chat.delete', {
         channel: ev.channel,
         ts: ev.ts,

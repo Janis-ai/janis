@@ -5,6 +5,8 @@ import type { Db } from '../db/client.js';
 import {
   agents,
   alerts,
+  channelBindings,
+  channels,
   conversations,
   memberships,
   messages,
@@ -634,6 +636,7 @@ async function seedSlackThread(
   };
   const customerName = profile.name ?? friendlyName(conv.externalId);
   const avatar = profile.picture_url ? slackAvatarUrl(conv.id) : null;
+  const agentIcon = await agentIconFor(db, conv.id);
 
   const [{ count }] = await db
     .select({ count: sql<number>`count(*)::int` })
@@ -667,8 +670,8 @@ async function seedSlackThread(
       : m.direction === 'in'
         ? { username: `${customerName} (customer)`, icon_url: avatar ?? undefined }
         : m.direction === 'human'
-          ? { username: `${m.author ?? 'operator'} (operator)` }
-          : { username: `${agent.name} (agent)` };
+          ? { username: `${agent.name} (operator)`, icon_url: agentIcon }
+          : { username: `${agent.name} (agent)`, icon_url: agentIcon };
     const res2 = await slackApi(inst.botToken, 'chat.postMessage', {
       channel,
       thread_ts: threadTs,
@@ -719,7 +722,22 @@ export async function updateSlackAlert(
   }
 }
 
-/** Mirror a console-originated message into the conversation's Slack thread.
+/** The agent's face for reposted/mirrored messages — the conversation's
+ * channel logo (the same image the widget shows as the agent avatar),
+ * absolutized for Slack. */
+async function agentIconFor(db: Db, conversationId: string): Promise<string | undefined> {
+  const [bind] = await db
+    .select({ creds: channels.credentials })
+    .from(channelBindings)
+    .innerJoin(channels, eq(channelBindings.channelId, channels.id))
+    .where(eq(channelBindings.conversationId, conversationId))
+    .limit(1);
+  const logo = (bind?.creds as { logo_url?: string } | null)?.logo_url;
+  if (!logo) return undefined;
+  return /^https?:\/\//.test(logo) ? logo : `${env.apiOrigin}${logo}`;
+}
+
+/** Mirror a console-originated message into the conversation's Slack threads.
  * opts.identity overrides the sender attribution (username/icon) so mirrored
  * messages match the seeded transcript style; opts.direction derives it. */
 export async function mirrorToSlack(
@@ -748,15 +766,25 @@ export async function mirrorToSlack(
         name?: string;
         picture_url?: string;
       };
-      identity =
-        opts.direction === 'in'
-          ? {
-              username: `${profile.name ?? friendlyName(row.conv.externalId)} (customer)`,
-              icon_url: profile.picture_url ? slackAvatarUrl(conversationId) ?? undefined : undefined,
-            }
-          : opts.direction === 'out'
-            ? { username: `${row.agent.name} (agent)` }
-            : {};
+      if (opts.direction === 'in') {
+        identity = {
+          username: `${profile.name ?? friendlyName(row.conv.externalId)} (customer)`,
+          icon_url: profile.picture_url ? slackAvatarUrl(conversationId) ?? undefined : undefined,
+        };
+      } else if (opts.direction === 'out') {
+        identity = {
+          username: `${row.agent.name} (agent)`,
+          icon_url: await agentIconFor(db, conversationId),
+        };
+      } else if (opts.direction === 'human') {
+        // Operator replies wear the agent's face in the thread — same
+        // masquerade the customer sees, so the Slack transcript reads
+        // like the customer transcript.
+        identity = {
+          username: `${row.agent.name} (operator)`,
+          icon_url: await agentIconFor(db, conversationId),
+        };
+      }
     }
   }
 
