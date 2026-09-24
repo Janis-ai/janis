@@ -484,6 +484,36 @@ export default function ConversationPage() {
     ...visibleOutbox.map((o) => ({ key: o.localId, ts: o.ts, kind: 'out' as const, o })),
   ].sort((a, b) => a.ts - b.ts);
 
+  // A .who label opens each run of consecutive same-sender messages;
+  // system/internal lines always break the run so the next real message
+  // re-introduces its author.
+  const senderKey = (it: (typeof items)[number]): string => {
+    if (it.kind === 'out') return `o:${it.o.mode}`;
+    const m = it.m;
+    const sys =
+      m.payload.internal === true ||
+      m.flags.failure ||
+      m.flags.help_requested ||
+      m.flags.custom_alert ||
+      m.flags.handoff_offer ||
+      m.flags.handoff_cancelled;
+    return sys ? `sys:${m.id}` : `m:${m.direction}:${m.author ?? ''}`;
+  };
+  // "Delivered" rides under the newest message known to have reached the
+  // customer — payload.delivered covers push and pull-model channels, the
+  // echo match covers a just-sent row whose stamp hasn't landed.
+  let lastDeliveredIdx = -1;
+  items.forEach((it, i) => {
+    if (
+      it.kind === 'msg' &&
+      it.m.direction !== 'in' &&
+      (it.m.payload.delivered === true ||
+        (receiptFor.current !== null && echoFor.get(receiptFor.current)?.id === it.m.id))
+    ) {
+      lastDeliveredIdx = i;
+    }
+  });
+
   return (
     <div className="conv-layout">
       <div className="conv-main">
@@ -529,7 +559,8 @@ export default function ConversationPage() {
           }}
         >
           {fetchingOlder && <div className="muted" style={{ textAlign: 'center', fontSize: 12, padding: '8px 0' }}>Loading earlier messages…</div>}
-          {items.map((item) => {
+          {items.map((item, i) => {
+            const showWho = i === 0 || senderKey(items[i - 1]) !== senderKey(item);
             if (item.kind === 'out') {
               const o = item.o;
               return (
@@ -542,11 +573,13 @@ export default function ConversationPage() {
                         : undefined
                     }
                   >
-                    <div className="who">
-                      {me?.user.name ?? WHO.human}
-                      {o.mode === 'note' ? ' 🔒 internal' : o.mode === 'teach' ? ' 🧠 taught the agent' : ''}
-                      <span className="time">{fmtTime(new Date(o.ts).toISOString())}</span>
-                    </div>
+                    {showWho && (
+                      <div className="who">
+                        {me?.user.name ?? WHO.human}
+                        {o.mode === 'note' ? ' 🔒 internal' : o.mode === 'teach' ? ' 🧠 taught the agent' : ''}
+                        <span className="time">{fmtTime(new Date(o.ts).toISOString())}</span>
+                      </div>
+                    )}
                     {o.text}
                     {o.attachments.map((a, i) => (
                       <div key={i}>
@@ -604,7 +637,7 @@ export default function ConversationPage() {
               data-mid={m.id}
               className={`msg ${isSystem ? 'system' : m.direction}${highlight === m.id ? ' msg-hit' : ''}`}
             >
-              {(!isSystem || isInternal) && (
+              {(!isSystem || isInternal) && showWho && (
                 <div className="who">
                   {m.direction === 'in' && c.has_avatar && (
                     <img className="who-avatar" src={`/api/conversations/${c.id}/avatar`} alt="" />
@@ -656,7 +689,7 @@ export default function ConversationPage() {
                 </div>
               ))}
             </div>
-            {receiptFor.current && echoFor.get(receiptFor.current)?.id === m.id && (
+            {i === lastDeliveredIdx && (
               <div className="receipt">Delivered</div>
             )}
             {typeof m.payload.delivery_error === 'string' && m.payload.delivery_error && (

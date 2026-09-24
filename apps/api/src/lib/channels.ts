@@ -697,8 +697,16 @@ export async function deliverToChannel(
   const result = await sendChannelMessage(row.channel, row.binding.platformUserId, text, attachments, opts, db).catch(
     (e) => ({ mid: null, error: `send failed: ${e instanceof Error ? e.message : e}`, retryable: true }),
   );
-  // null = no push channel (webchat) — the widget pulls on its next poll
-  if (!result) return { delivered: true };
+  // null = no push channel (webchat) — the widget pulls on its next poll.
+  // Stamp it anyway so the transcript knows the message made it to the
+  // channel — the console's "Delivered" receipt follows it regardless of
+  // where the reply was sent from.
+  if (!result) {
+    if (opts?.messageId) {
+      await stampDelivery(db, agent?.workspaceId, opts.messageId, { delivered: true });
+    }
+    return { delivered: true };
+  }
   if (opts?.messageId) {
     const patch: Record<string, unknown> = {};
     if (result.mid) patch.mid = result.mid;
