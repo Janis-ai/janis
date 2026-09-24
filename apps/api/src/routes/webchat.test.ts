@@ -298,6 +298,96 @@ describe('webchat widget endpoints', () => {
     expect(last.text).toContain('note.txt');
   });
 
+  it('surfaces approval cards on internal test channels but never on embeds', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [ws] = await db.select().from(workspaces).limit(1);
+    const [agent] = await db.select().from(agents).limit(1);
+    const [internalChannel] = await db
+      .insert(channels)
+      .values({
+        workspaceId: ws.id,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Ask Janis',
+        credentials: { internal: true },
+      })
+      .returning();
+
+    const visitor = 'vis_internaltest99';
+    await app.request(`/chat/${internalChannel.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: visitor, text: 'refund my order' }),
+    });
+    const first = await app.request(
+      `/chat/${internalChannel.id}/messages?visitor_id=${visitor}`,
+    );
+    const convId = (await first.json()).conversation_id as string;
+    expect(convId).toBeTruthy();
+
+    // Mirrors requestToolApproval's row shape.
+    await db.insert(messages).values([
+      {
+        conversationId: convId,
+        direction: 'human',
+        text: 'approval requested — stripe_create_refund',
+        flags: { action_request: true },
+        payload: {
+          internal: true,
+          event: 'approval requested',
+          action: {
+            id: 'act-1',
+            tool: 'stripe_create_refund',
+            args: { charge_id: 'ch_1' },
+            status: 'pending',
+          },
+        },
+      },
+      {
+        conversationId: convId,
+        direction: 'human',
+        text: 'operator-only note',
+        payload: { internal: true },
+      },
+    ]);
+
+    const poll = await app.request(
+      `/chat/${internalChannel.id}/messages?visitor_id=${visitor}`,
+    );
+    const msgs = (await poll.json()).messages;
+    const card = msgs.find((m: { action?: { tool?: string } }) => m.action?.tool);
+    expect(card.action).toMatchObject({
+      id: 'act-1',
+      tool: 'stripe_create_refund',
+      status: 'pending',
+    });
+    // internal rows without an action payload stay hidden even on test rails
+    expect(msgs.some((m: { text: string }) => m.text === 'operator-only note')).toBe(false);
+
+    // The same row shape on a public embed channel never leaks.
+    await post('also refund mine', 'vis_embeddedchan1');
+    const [extConv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'webchat:vis_embeddedchan1'))
+      .limit(1);
+    await db.insert(messages).values({
+      conversationId: extConv.id,
+      direction: 'human',
+      text: 'approval requested — stripe_create_refund',
+      flags: { action_request: true },
+      payload: {
+        internal: true,
+        action: { id: 'act-2', tool: 'stripe_create_refund', args: {}, status: 'pending' },
+      },
+    });
+    const extPoll = await app.request(
+      `/chat/${channelId}/messages?visitor_id=vis_embeddedchan1`,
+    );
+    const extMsgs = (await extPoll.json()).messages;
+    expect(extMsgs.some((m: { action?: unknown }) => m.action)).toBe(false);
+  });
+
   it('rejects uploads with a bad visitor id and foreign attachment urls', async () => {
     const fd = new FormData();
     fd.append('visitor_id', 'x');

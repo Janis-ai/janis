@@ -26,6 +26,14 @@ interface ChatMsg {
   attachments?: Attachment[];
   quick_replies?: string[];
   author?: { name: string; avatar: string | null };
+  action?: {
+    id: string;
+    tool: string;
+    args: Record<string, unknown>;
+    status: string;
+    decided_by?: string;
+    result?: string;
+  };
 }
 
 interface OutEntry {
@@ -483,6 +491,28 @@ export function AskJanis({
     void send(text, ready.map((p) => ({ name: p.name, url: p.url!, type: p.type!, size: p.size! })));
   };
 
+  const [deciding, setDeciding] = useState<string | null>(null);
+  const decide = async (msgId: string, actionId: string, decision: 'approved' | 'denied') => {
+    if (deciding) return;
+    setDeciding(actionId);
+    try {
+      await api(`/api/actions/${actionId}/decide`, {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+      });
+      // Optimistically resolve the card; the next poll lands the real row.
+      setMsgs((ms) =>
+        ms.map((m) =>
+          m.id === msgId && m.action ? { ...m, action: { ...m.action, status: decision } } : m,
+        ),
+      );
+      showTyping();
+      void poll();
+    } finally {
+      setDeciding(null);
+    }
+  };
+
   const deliveredEntry = [...outbox].reverse().find((o) => o.status === 'delivered');
 
   return (
@@ -548,6 +578,38 @@ export function AskJanis({
                   </div>
                 )}
                 {linkify(item.m.text, navigate)}
+                {item.m.action && (
+                  <div className="action-card">
+                    <div className="mono" style={{ fontSize: 12 }}>
+                      {item.m.action.tool}
+                    </div>
+                    <pre className="action-args">{JSON.stringify(item.m.action.args, null, 2)}</pre>
+                    {item.m.action.status === 'pending' ? (
+                      <div className="row" style={{ marginTop: 6 }}>
+                        <button
+                          className="btn primary sm"
+                          disabled={deciding === item.m.action.id}
+                          onClick={() => void decide(item.m.id, item.m.action!.id, 'approved')}
+                        >
+                          Approve &amp; run
+                        </button>
+                        <button
+                          className="btn sm"
+                          disabled={deciding === item.m.action.id}
+                          onClick={() => void decide(item.m.id, item.m.action!.id, 'denied')}
+                        >
+                          Deny
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                        {item.m.action.status === 'approved' ? '✅ approved' : '⛔ denied'}
+                        {item.m.action.decided_by ? ` by ${item.m.action.decided_by}` : ''}
+                        {item.m.action.result ? ` — ${item.m.action.result}` : ''}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <AttachmentNodes atts={item.m.attachments ?? []} />
               </div>
             ) : (

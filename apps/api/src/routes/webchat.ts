@@ -404,7 +404,9 @@ export function webchatRoutes(db: Db) {
           // renders its own greeting from the bootstrap — don't double it.
           // payload.internal covers operator-only rows (takeover/resume/notes)
           // — they carry the author's real name and must never reach visitors.
-          const p = m.payload as { via?: string; internal?: boolean } | undefined;
+          const p = m.payload as
+            | { via?: string; internal?: boolean; action?: unknown }
+            | undefined;
           return (
             !f.failure &&
             !f.help_requested &&
@@ -412,7 +414,10 @@ export function webchatRoutes(db: Db) {
             !f.handoff_offer &&
             !f.handoff_cancelled &&
             (internal || p?.via !== 'greeting') &&
-            !p?.internal
+            // Approval cards reach the internal test rail (Ask Janis) so an
+            // operator can exercise a gated tool end-to-end; every other
+            // internal row stays operator-side.
+            (!p?.internal || (internal && !!p?.action))
           );
         })
         .map((m) => ({
@@ -422,6 +427,11 @@ export function webchatRoutes(db: Db) {
         created_at: m.created_at.toISOString(),
         attachments: (m.payload as { attachments?: unknown[] } | undefined)?.attachments,
         quick_replies: (m.payload as { quick_replies?: string[] } | undefined)?.quick_replies,
+        // approval card payload — serialized only for internal test channels;
+        // external embeds must never see tool args (refund amounts, order ids)
+        ...(internal
+          ? { action: (m.payload as { action?: unknown } | undefined)?.action }
+          : {}),
         // operator identity on human replies — gated by each operator's
         // show_identity profile setting, not a per-channel flag
         ...(m.direction === 'human' && m.author_id && authors.has(m.author_id)
