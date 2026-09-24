@@ -1225,9 +1225,9 @@ export async function runHostedEvent(
     .from(conversations)
     .where(eq(conversations.id, convId))
     .limit(1);
-  // Only a human takeover (or archive) silences the agent — needs_human
-  // is a flag for attention, not a pause
-  if (!conv || conv.state === 'human' || conv.state === 'archived') return;
+  // Only a human takeover silences the agent — needs_human is a flag for
+  // attention, archived is inbox organization; neither pauses replies.
+  if (!conv || conv.state === 'human') return;
 
   // Legacy engines: migrated wordhopapi bots. 'monitor' bots (Chatfuel-era —
   // the bot platform replies on its own) never answer; 'dialogflow' bots
@@ -1259,7 +1259,7 @@ export async function runHostedEvent(
         .from(conversations)
         .where(eq(conversations.id, convId))
         .limit(1);
-      if (!fresh || fresh.state === 'human' || fresh.state === 'archived') break;
+      if (!fresh || fresh.state === 'human') break;
       await replyAsHostedAgent(db, agent, conv);
     } while (run.pending);
   } finally {

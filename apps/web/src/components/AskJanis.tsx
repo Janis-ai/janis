@@ -222,7 +222,7 @@ export function AskJanis({
     typingTimer.current = null;
   };
   const showTyping = () => {
-    if (convState === 'human' || convState === 'archived') return;
+    if (convState === 'human') return;
     setTyping(true);
     if (typingTimer.current) clearTimeout(typingTimer.current);
     typingTimer.current = setTimeout(hideTyping, 45_000);

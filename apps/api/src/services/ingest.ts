@@ -198,13 +198,16 @@ export async function processEvents(
     // State transitions: alerts escalate to needs_human unless a human owns
     // it — except 'failure' (agent may recover) and 'handoff_offer' (customer
     // hasn't confirmed they want a human). Both still page operators.
+    // Archived conversations escalate too — an escalation unarchives: the
+    // thread resurfaces in the inbox as needs_human.
     let state = conv.state;
     if (
       newAlertTypes.some((t) => t !== 'failure' && t !== 'handoff_offer') &&
-      state === 'active'
+      (state === 'active' || state === 'archived')
     )
       state = 'needs_human';
-    if (event.type === 'handoff_request' && state === 'active') state = 'needs_human';
+    if (event.type === 'handoff_request' && (state === 'active' || state === 'archived'))
+      state = 'needs_human';
     // Customer declined a human (or retracted the request) — drop a pending
     // escalation back to the agent. 'human'/'archived' are untouched: a
     // human who took over owns the release decision.

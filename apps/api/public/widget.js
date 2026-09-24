@@ -301,7 +301,7 @@
   }
 
   function showTyping() {
-    if (state.convState === 'human' || state.convState === 'archived') return;
+    if (state.convState === 'human') return;
     state.agentWorking = true;
     renderTyping();
     if (state.typingTimer) clearTimeout(state.typingTimer);

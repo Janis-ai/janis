@@ -300,7 +300,7 @@ export function agentRoutes(db: Db) {
         .from(conversations)
         .where(and(eq(conversations.agentId, agent.id), eq(conversations.externalId, externalId)))
         .limit(1);
-      if (conv && conv.state !== 'human' && conv.state !== 'archived') {
+      if (conv && conv.state !== 'human') {
         await deliverWebhook(db, agent, 'message.user', {
           conversation_id: externalId,
           janis_conversation_id: conv.id,

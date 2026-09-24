@@ -423,9 +423,11 @@ export async function handleChannelMessage(
     throw err;
   }
 
-  // Forward to the agent unless a human owns it — needs_human is just a flag.
+  // Forward to the agent unless a human owns it — needs_human is just a
+  // flag, and archived is inbox organization, not a mute: archived threads
+  // still get answered, they just stay out of the inbox until escalation.
   const state = result?.conversation_state ?? conv.state;
-  if (state !== 'human' && state !== 'archived' && (agent.webhookUrl || agent.hosted)) {
+  if (state !== 'human' && (agent.webhookUrl || agent.hosted)) {
     void sendChannelTyping(channel, msg.senderId);
     await deliverWebhook(db, agent, 'message.user', {
       conversation_id: externalId,

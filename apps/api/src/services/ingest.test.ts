@@ -107,6 +107,24 @@ describe('processEvents', () => {
     expect(msgs3.filter((m) => m.text?.includes('human teammate'))).toHaveLength(2);
   });
 
+  it('escalation on an archived conversation unarchives it to needs_human', async () => {
+    await processEvents(db, agent, [{ type: 'message_in', conversation_id: 'c-arch', text: 'hi' }]);
+    await db
+      .update(conversations)
+      .set({ state: 'archived' })
+      .where(eq(conversations.externalId, 'c-arch'));
+
+    const results = await processEvents(db, agent, [
+      { type: 'handoff_request', conversation_id: 'c-arch', reason: 'stuck' },
+    ]);
+    expect(results[0].conversation_state).toBe('needs_human');
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c-arch'));
+    expect(conv.state).toBe('needs_human');
+  });
+
   it('handoff_cancelled drops needs_human back to active and resolves open alerts', async () => {
     await processEvents(db, agent, [
       { type: 'handoff_request', conversation_id: 'cc1', reason: 'stuck' },

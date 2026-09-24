@@ -7,6 +7,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import {
   agents,
+  channelBindings,
   channels,
   conversations,
   messages,
@@ -101,6 +102,33 @@ describe('handleChannelMessage dedup', () => {
     });
     const deliveries = await db.select().from(webhookDeliveries);
     expect(deliveries).toHaveLength(2);
+  });
+});
+
+describe('archived conversations', () => {
+  it('still dispatches to the agent — archive is inbox organization, not a mute', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'messenger:PSID-ARCH', state: 'archived' })
+      .returning();
+    await db
+      .insert(channelBindings)
+      .values({ channelId: channel.id, conversationId: conv.id, platformUserId: 'PSID-ARCH' });
+    await handleChannelMessage(db, channel, {
+      objectId: 'PG1',
+      senderId: 'PSID-ARCH',
+      text: 'still there?',
+      messageId: 'mid.arch',
+    });
+    // other tests in this file dispatch too — count this conversation's
+    const deliveries = (await db.select().from(webhookDeliveries)).filter(
+      (d) => (d.payload as { janis_conversation_id?: string }).janis_conversation_id === conv.id,
+    );
+    expect(deliveries).toHaveLength(1);
+    // stays archived — the visitor was answered, the thread just stays hidden
+    const [fresh] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(fresh.state).toBe('archived');
   });
 });
 
