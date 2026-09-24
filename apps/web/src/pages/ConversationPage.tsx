@@ -486,9 +486,13 @@ export default function ConversationPage() {
 
   // A .who label opens each run of consecutive same-sender messages;
   // system/internal lines always break the run so the next real message
-  // re-introduces its author.
+  // re-introduces its author. Outbox entries key like the stored rows they
+  // become so a pending send groups with its own stack.
   const senderKey = (it: (typeof items)[number]): string => {
-    if (it.kind === 'out') return `o:${it.o.mode}`;
+    if (it.kind === 'out') {
+      if (it.o.mode === 'note' || it.o.mode === 'teach') return `sys:${it.o.localId}`;
+      return `m:${it.o.mode === 'agent' ? 'out' : 'human'}:${me?.user.id ?? ''}`;
+    }
     const m = it.m;
     const sys =
       m.payload.internal === true ||
@@ -499,19 +503,19 @@ export default function ConversationPage() {
       m.flags.handoff_cancelled;
     return sys ? `sys:${m.id}` : `m:${m.direction}:${m.author ?? ''}`;
   };
-  // "Delivered" rides under the newest message known to have reached the
-  // customer — payload.delivered covers push and pull-model channels, the
-  // echo match covers a just-sent row whose stamp hasn't landed.
+  // Exactly one "Delivered", under the newest item known to have reached
+  // the customer — payload.delivered covers push and pull-model channels,
+  // the echo match covers a stored row whose stamp hasn't landed, and a
+  // delivered outbox bubble counts while its echo is still in flight.
   let lastDeliveredIdx = -1;
   items.forEach((it, i) => {
-    if (
-      it.kind === 'msg' &&
-      it.m.direction !== 'in' &&
-      (it.m.payload.delivered === true ||
-        (receiptFor.current !== null && echoFor.get(receiptFor.current)?.id === it.m.id))
-    ) {
-      lastDeliveredIdx = i;
-    }
+    const delivered =
+      it.kind === 'msg'
+        ? it.m.direction !== 'in' &&
+          (it.m.payload.delivered === true ||
+            (receiptFor.current !== null && echoFor.get(receiptFor.current)?.id === it.m.id))
+        : (it.o.mode === 'human' || it.o.mode === 'agent') && it.o.status === 'delivered';
+    if (delivered) lastDeliveredIdx = i;
   });
 
   return (
@@ -600,11 +604,9 @@ export default function ConversationPage() {
                       </div>
                     ))}
                   </div>
-                  {o.localId === receiptFor.current &&
-                    o.status === 'delivered' &&
-                    (o.mode === 'human' || o.mode === 'agent') && (
-                      <div className="receipt">Delivered</div>
-                    )}
+                  {i === lastDeliveredIdx && (
+                    <div className="receipt">Delivered</div>
+                  )}
                   {o.status === 'failed' && (
                     <div
                       className="receipt receipt-fail"
