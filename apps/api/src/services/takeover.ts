@@ -169,11 +169,20 @@ export async function humanReply(
   void setSlackThreadStatus(db, conversationId, null);
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
   if (!viaSlack) {
-    // Slack-side the reply wears the agent's face — the same masquerade the
-    // customer sees, matching how the seeded transcript renders operators.
-    void mirrorToSlack(db, conversationId, `:bust_in_silhouette: *${agent.name} (operator):*`, text, {
-      direction: 'human',
-    });
+    // Operators who opted to show their identity appear as themselves in
+    // Slack too; the rest wear the agent's face — the same masquerade the
+    // customer sees.
+    const opName =
+      user.showIdentity === false
+        ? null
+        : user.displayName || user.name.split(' ')[0] || user.name;
+    void mirrorToSlack(
+      db,
+      conversationId,
+      `:bust_in_silhouette: *${opName ?? agent.name} (operator):*`,
+      text,
+      { direction: 'human', operator: user },
+    );
   }
   // If the conv went 'human' without an explicit takeover (DF action, Page
   // Inbox, stop-chat), we may not hold the thread yet — claim it before send.

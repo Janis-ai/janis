@@ -589,12 +589,14 @@ export default function ConversationPage() {
             const m = item.m;
             const isInternal = m.payload.internal === true;
             const isSystem = m.flags.failure || m.flags.help_requested || m.flags.custom_alert || m.flags.handoff_offer || m.flags.handoff_cancelled || isInternal;
+            const authorUser =
+              m.direction === 'human' ? users?.users.find((u) => u.id === m.author) : undefined;
             const who =
               m.direction === 'in'
                 ? c.user_profile.name ?? WHO.in
                 : m.direction === 'out'
                   ? agent?.name ?? WHO.out
-                  : users?.users.find((u) => u.id === m.author)?.name ?? WHO.human;
+                  : authorUser?.name ?? WHO.human;
             return (
             <>
             <div
@@ -604,6 +606,12 @@ export default function ConversationPage() {
             >
               {(!isSystem || isInternal) && (
                 <div className="who">
+                  {m.direction === 'in' && c.has_avatar && (
+                    <img className="who-avatar" src={`/api/conversations/${c.id}/avatar`} alt="" />
+                  )}
+                  {authorUser?.avatar_url && (
+                    <img className="who-avatar" src={authorUser.avatar_url} alt="" />
+                  )}
                   {who}
                   {m.direction === 'out' && m.payload.via === 'operator' ? ' (via operator)' : ''}
                   {isInternal

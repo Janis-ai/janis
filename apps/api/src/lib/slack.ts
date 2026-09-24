@@ -623,6 +623,9 @@ async function seedSlackThread(
       direction: messages.direction,
       text: messages.text,
       author: users.name,
+      authorDisplayName: users.displayName,
+      authorAvatarUrl: users.avatarUrl,
+      authorShowIdentity: users.showIdentity,
       flags: messages.flags,
     })
     .from(messages)
@@ -665,12 +668,21 @@ async function seedSlackThread(
     );
     // Role suffixes keep same-named participants (e.g. agent and customer
     // both "Michael Nathanson") from collapsing into a single header.
-    const identity = isSystemNote
+    const identity: { username?: string; icon_url?: string } = isSystemNote
       ? {}
       : m.direction === 'in'
         ? { username: `${customerName} (customer)`, icon_url: avatar ?? undefined }
         : m.direction === 'human'
-          ? { username: `${agent.name} (operator)`, icon_url: agentIcon }
+          ? operatorIdentity(
+              agent.name,
+              {
+                name: m.author,
+                displayName: m.authorDisplayName,
+                avatarUrl: m.authorAvatarUrl,
+                showIdentity: m.authorShowIdentity,
+              },
+              agentIcon,
+            )
           : { username: `${agent.name} (agent)`, icon_url: agentIcon };
     const res2 = await slackApi(inst.botToken, 'chat.postMessage', {
       channel,
@@ -722,6 +734,31 @@ export async function updateSlackAlert(
   }
 }
 
+/** Operator identity for transcript rendering — honors their show_identity
+ * pref: their profile display name + avatar when they opted to show them to
+ * customers, the agent's masquerade when not. Avatar falls back to the
+ * agent icon so the thread keeps a consistent face. */
+function operatorIdentity(
+  agentName: string,
+  u: {
+    name?: string | null;
+    displayName?: string | null;
+    avatarUrl?: string | null;
+    showIdentity?: boolean | null;
+  } | null | undefined,
+  agentIcon: string | undefined,
+): { username: string; icon_url?: string } {
+  const name =
+    u?.showIdentity === false
+      ? null
+      : (u?.displayName ?? u?.name?.split(' ')[0] ?? u?.name ?? null);
+  if (!name) return { username: `${agentName} (operator)`, icon_url: agentIcon };
+  return {
+    username: `${name} (operator)`,
+    icon_url: u?.avatarUrl ? `${env.apiOrigin}${u.avatarUrl}` : agentIcon,
+  };
+}
+
 /** The agent's face for reposted/mirrored messages — the conversation's
  * channel logo (the same image the widget shows as the agent avatar),
  * absolutized for Slack. */
@@ -748,6 +785,7 @@ export async function mirrorToSlack(
   opts: {
     direction?: 'in' | 'out' | 'human';
     identity?: { username?: string; icon_url?: string };
+    operator?: UserRow; // direction 'human' — resolves show_identity prefs
   } = {},
 ): Promise<void> {
   const threads = await threadsForConversation(db, conversationId);
@@ -777,13 +815,14 @@ export async function mirrorToSlack(
           icon_url: await agentIconFor(db, conversationId),
         };
       } else if (opts.direction === 'human') {
-        // Operator replies wear the agent's face in the thread — same
-        // masquerade the customer sees, so the Slack transcript reads
-        // like the customer transcript.
-        identity = {
-          username: `${row.agent.name} (operator)`,
-          icon_url: await agentIconFor(db, conversationId),
-        };
+        // Operators who opted to show their identity appear as themselves;
+        // the rest wear the agent's face — the same masquerade the
+        // customer sees, so the thread reads like the customer transcript.
+        identity = operatorIdentity(
+          row.agent.name,
+          opts.operator,
+          await agentIconFor(db, conversationId),
+        );
       }
     }
   }

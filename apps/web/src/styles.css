@@ -227,6 +227,7 @@ button, input, select, textarea { font: inherit; }
   max-width: 90%; color: var(--muted); font-style: italic; font-size: 13px; text-align: center;
 }
 .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.msg .who .who-avatar { width: 14px; height: 14px; border-radius: 50%; object-fit: cover; margin-right: 4px; vertical-align: -2px; }
 .msg .who .time { margin-left: 6px; }
 .msg .time { opacity: 0.75; }
 .msg.pending { opacity: 0.6; }

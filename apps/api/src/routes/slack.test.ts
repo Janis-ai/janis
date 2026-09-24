@@ -541,17 +541,27 @@ describe('slack member resolution', () => {
       // only a user token can delete someone else's message
       const del = calls.find((c) => c.url.includes('chat.delete'));
       expect(del?.auth).toBe('Bearer xoxp-inst');
-      // and the reposted message wears the agent's face
+      // show_identity defaults on → the repost carries the operator's name
       const repost = calls.find(
-        (c) => c.url.includes('chat.postMessage') && c.body.username === 'EvBot (operator)',
+        (c) => c.url.includes('chat.postMessage') && c.body.username === 'Linked (operator)',
       );
       expect(repost?.body.thread_ts).toBe('9.0');
       expect(repost?.body.text).toBe('operator reply text');
+      // opted out → the agent masquerade returns
+      await db.update(users).set({ showIdentity: false }).where(eq(users.id, memberId));
+      calls.length = 0;
+      await event('U_LINKED', 'anonymous reply');
+      await new Promise((r) => setTimeout(r, 50));
+      const masked = calls.find(
+        (c) => c.url.includes('chat.postMessage') && c.body.username === 'EvBot (operator)',
+      );
+      expect(masked?.body.text).toBe('anonymous reply');
     } finally {
       await db
         .update(slackInstallations)
         .set({ installerUserToken: null })
         .where(eq(slackInstallations.teamId, 'T_EV'));
+      await db.update(users).set({ showIdentity: true }).where(eq(users.id, memberId));
     }
   });
 });
