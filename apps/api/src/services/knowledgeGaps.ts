@@ -499,6 +499,7 @@ async function llmChat(
       model: llm.model,
       promptTokens: json.usage?.prompt_tokens ?? 0,
       completionTokens: json.usage?.completion_tokens ?? 0,
+      byok: llm.byok,
     }).catch(() => {});
     return json.choices?.[0]?.message?.content?.trim() ?? null;
   } catch {

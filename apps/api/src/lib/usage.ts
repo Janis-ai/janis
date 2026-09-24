@@ -14,10 +14,15 @@ export async function recordLlmUsage(
     model?: string | null;
     promptTokens: number;
     completionTokens: number;
+    /** Call ran on the customer's own LLM key/endpoint — tokens are recorded
+     *  for visibility, but there is no Janis-side cost to bill. */
+    byok?: boolean;
   },
 ): Promise<void> {
   try {
-    const costMicros = llmCostMicros(args.model, args.promptTokens, args.completionTokens);
+    const costMicros = args.byok
+      ? 0
+      : llmCostMicros(args.model, args.promptTokens, args.completionTokens);
     await db.insert(usageEvents).values({
       workspaceId: args.workspaceId,
       agentId: args.agentId ?? null,

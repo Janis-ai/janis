@@ -1102,6 +1102,7 @@ async function foldConversationMemory(
         model: llm.model,
         promptTokens: mem.promptTokens,
         completionTokens: mem.completionTokens,
+        byok: llm.byok,
       });
     }
   } catch {
@@ -1160,6 +1161,7 @@ export async function runHostedEvent(
         model: llm.model,
         promptTokens: result.promptTokens,
         completionTokens: result.completionTokens,
+        byok: llm.byok,
       });
     }
     // The model sometimes mimics the transcript's speaker labels
@@ -1198,6 +1200,7 @@ export async function runHostedEvent(
           model: llm.model,
           promptTokens: retry.promptTokens,
           completionTokens: retry.completionTokens,
+          byok: llm.byok,
         });
       }
       draft = stripLabel(retry?.text);
@@ -1356,6 +1359,7 @@ async function replyAsHostedAgent(
         model: llm.model,
         promptTokens,
         completionTokens,
+        byok: llm.byok,
       });
     }
     if (!reply) {
