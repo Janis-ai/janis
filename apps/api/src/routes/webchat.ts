@@ -14,7 +14,6 @@ import { resolveGreeting } from '../lib/greeting.js';
 import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
 import { adoptVisitorConversation, handleChannelMessage } from '../services/channelIngress.js';
 import { bus } from '../lib/bus.js';
-import { setSlackThreadStatus } from '../lib/slack.js';
 import { agentWorking, operatorTyping } from '../lib/typingState.js';
 
 /**
@@ -469,8 +468,6 @@ export function webchatRoutes(db: Db) {
                 : null,
           },
         });
-        // mirror the typing state into the Slack thread, if one exists
-        void setSlackThreadStatus(db, conv.id, `${name || 'Visitor'} is typing…`);
       }
       return c.json({ ok: true });
     },

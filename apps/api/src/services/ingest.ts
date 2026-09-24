@@ -65,15 +65,15 @@ export async function processEvents(
     // Store a message row for events that carry conversational content
     const message = await insertEventMessage(db, conv.id, event);
     if (message) {
-      // Any stored message ends the typing indicators for this thread: an
-      // inbound means the visitor sent (no longer composing), a reply means
-      // the agent/operator answered. The dedupe makes the Slack clear a
-      // no-op unless a status was actually set.
+      // Any stored reply — agent answer, failure note, handoff, operator
+      // message — ends the typing indicators for this thread: the agent is
+      // no longer working on it and a delivered reply can't still be typing.
+      // A second inbound mid-work keeps "is thinking" live — correct.
       if (message.direction !== 'in') {
         clearAgentWorking(conv.id);
         clearOperatorTyping(conv.id);
+        void setSlackThreadStatus(db, conv.id, null);
       }
-      void setSlackThreadStatus(db, conv.id, null);
       reportMeter(stripeCustomerId, METER_MESSAGES, 1);
       bus.publish(agent.workspaceId, { type: 'message', data: toMessage(message) });
       if (message.text) {

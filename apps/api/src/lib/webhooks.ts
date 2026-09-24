@@ -85,7 +85,10 @@ export async function deliverWebhook(
       type: 'typing',
       data: { conversation_id: workingConv, name: agent.name, kind: 'agent' },
     });
-    void setSlackThreadStatus(db, workingConv, `${agent.name} is thinking…`);
+    // Slack renders the status under the app name ("Janis is thinking…") —
+    // only the agent-working case is truthful here; visitor/operator typing
+    // would misattribute, so it stays out of Slack.
+    void setSlackThreadStatus(db, workingConv, 'is thinking…');
   }
 
   // Hosted agents run in-process — no HTTP round-trip, nothing to sign.

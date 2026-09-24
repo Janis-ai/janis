@@ -29,7 +29,6 @@ import {
 } from '../services/takeover.js';
 import { requestSuggestion } from '../services/suggestions.js';
 import { fetchAvatar } from '../lib/avatar.js';
-import { setSlackThreadStatus } from '../lib/slack.js';
 import { markOperatorTyping } from '../lib/typingState.js';
 import {
   channelBindingFor,
@@ -438,8 +437,6 @@ export function conversationRoutes(db: Db) {
         ? null
         : user.displayName || user.name.split(' ')[0] || user.name;
     markOperatorTyping(owned.id, name);
-    // Mirror into the Slack thread — shows the room a human is on it.
-    void setSlackThreadStatus(db, owned.id, `${name || 'An operator'} is typing…`);
     return c.json({ ok: true });
   });
 

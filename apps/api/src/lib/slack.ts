@@ -772,47 +772,68 @@ export async function mirrorToSlack(
   }
 }
 
-// assistant.threads.setStatus dedupe — Slack keeps a status ~2min and
+// assistant.threads.setStatus bookkeeping — Slack keeps a status ~2min and
 // auto-clears it when the app posts in the thread, so re-set the same
-// status at most every 90s and only call the clear API when we set one.
-const lastThreadStatus = new Map<string, { status: string; at: number }>();
+// status at most every 90s and arm a self-clear so a status can't outlive
+// the work it describes.
+const lastThreadStatus = new Map<string, { status: string; at: number; timer: NodeJS.Timeout }>();
 
-/** Mirror typing state into the conversation's Slack thread using Slack's
- * assistant status API ("is typing…" / "is thinking…" under the app name).
- * Works on plain chat:write — no assistant:write needed. Pass null to clear.
- * Deduped: pings repeat every few seconds while composing, and mirrored
- * replies auto-clear the status Slack-side, so this is cheap. Never throws. */
+async function applyThreadStatus(db: Db, conversationId: string, status: string | null): Promise<boolean> {
+  const [thread] = await db
+    .select({ slackThreads, installation: slackInstallations })
+    .from(slackThreads)
+    .innerJoin(slackInstallations, eq(slackThreads.installationId, slackInstallations.id))
+    .where(eq(slackThreads.conversationId, conversationId))
+    .limit(1);
+  if (!thread) return false;
+  const res = await slackApi(thread.installation.botToken, 'assistant.threads.setStatus', {
+    channel_id: thread.slackThreads.channelId,
+    thread_ts: thread.slackThreads.ts,
+    status: status ?? '',
+  });
+  if (!res.ok) console.error('slack thread status failed:', res.error);
+  return res.ok;
+}
+
+function armStatusExpiry(db: Db, conversationId: string, expireMs: number) {
+  return setTimeout(() => {
+    lastThreadStatus.delete(conversationId);
+    void applyThreadStatus(db, conversationId, null).catch(() => {});
+  }, expireMs);
+}
+
+/** Mirror "the app is working" into the conversation's Slack thread via
+ * Slack's assistant status API — rendered under the app name, so only use
+ * it when Janis itself is doing the work (agent processing); it can't
+ * attribute a visitor's or operator's typing. Works on plain chat:write.
+ * Pass null to clear. Self-clears after expireMs so it can't get stuck.
+ * Never throws. */
 export async function setSlackThreadStatus(
   db: Db,
   conversationId: string,
   status: string | null,
+  expireMs = 95_000,
 ): Promise<void> {
   try {
     const last = lastThreadStatus.get(conversationId);
+    if (last) clearTimeout(last.timer);
     if (status === null) {
-      if (!last) return; // nothing was set — nothing to clear
       lastThreadStatus.delete(conversationId);
-    } else {
-      if (last && last.status === status && Date.now() - last.at < 90_000) return;
+      if (last) await applyThreadStatus(db, conversationId, null);
+      return;
     }
-    const [thread] = await db
-      .select({ slackThreads, installation: slackInstallations })
-      .from(slackThreads)
-      .innerJoin(slackInstallations, eq(slackThreads.installationId, slackInstallations.id))
-      .where(eq(slackThreads.conversationId, conversationId))
-      .limit(1);
-    if (!thread) return;
-    const res = await slackApi(thread.installation.botToken, 'assistant.threads.setStatus', {
-      channel_id: thread.slackThreads.channelId,
-      thread_ts: thread.slackThreads.ts,
-      status: status ?? '',
+    if (last && last.status === status && Date.now() - last.at < 90_000) {
+      // already live — just push the self-clear out
+      last.timer = armStatusExpiry(db, conversationId, expireMs);
+      return;
+    }
+    const ok = await applyThreadStatus(db, conversationId, status);
+    if (!ok) return;
+    lastThreadStatus.set(conversationId, {
+      status,
+      at: Date.now(),
+      timer: armStatusExpiry(db, conversationId, expireMs),
     });
-    if (res.ok) {
-      if (status !== null) lastThreadStatus.set(conversationId, { status, at: Date.now() });
-    } else {
-      lastThreadStatus.delete(conversationId);
-      console.error('slack thread status failed:', res.error);
-    }
   } catch (err) {
     console.error('slack thread status failed:', err);
   }
