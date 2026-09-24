@@ -315,6 +315,15 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 5px
 textarea:disabled { opacity: .55; }
 .ask-loading { text-align: center; font-size: 12px; padding: 18px 0; }
 .btn + .btn { margin-left: 8px; }
+.btn.sm { padding: 5px 12px; font-size: 13px; }
+.action-card {
+  margin-top: 6px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--panel-2); max-width: 420px;
+}
+.action-args {
+  margin: 6px 0 0; font-size: 11px; white-space: pre-wrap; word-break: break-word;
+  max-height: 140px; overflow-y: auto; color: var(--muted);
+}
 
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .grow { flex: 1; min-width: 0; }

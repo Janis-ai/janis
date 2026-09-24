@@ -435,7 +435,9 @@ export const ToolTemplateInfo = z.object({
   // 'oauth' templates mint client-credentials tokens onto agent_connections
   auth: z.enum(['secrets', 'oauth']).optional(),
   fields: z.array(ToolTemplateField),
-  tools: z.array(z.object({ name: z.string(), description: z.string() })),
+  tools: z.array(
+    z.object({ name: z.string(), description: z.string(), approval: z.boolean().optional() }),
+  ),
 });
 export type ToolTemplateInfo = z.infer<typeof ToolTemplateInfo>;
 

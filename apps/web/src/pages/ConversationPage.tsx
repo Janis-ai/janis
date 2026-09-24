@@ -325,6 +325,16 @@ export default function ConversationPage() {
 
   const [suggestOpen, setSuggestOpen] = useState(false);
 
+  const decide = useMutation({
+    mutationFn: ({ actionId, decision }: { actionId: string; decision: 'approved' | 'denied' }) =>
+      api(`/api/actions/${actionId}/decide`, {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['conversation', id] }),
+    onError: (e) => setError(e.message),
+  });
+
   const suggest = useMutation({
     mutationFn: () => api(`/api/conversations/${id}/suggest`, { method: 'POST' }),
     onSuccess: () => { setError(''); void qc.invalidateQueries({ queryKey: ['conversation', id] }); },
@@ -672,6 +682,44 @@ export default function ConversationPage() {
                   {String(m.payload.summary)}
                 </div>
               ) : null}
+              {(() => {
+                const act = m.payload.action as
+                  | { id: string; tool: string; args: Record<string, unknown>; status: string; decided_by?: string; result?: string }
+                  | undefined;
+                if (!act) return null;
+                return (
+                  <div className="action-card">
+                    <div className="mono" style={{ fontSize: 12 }}>
+                      {act.tool}
+                    </div>
+                    <pre className="action-args">{JSON.stringify(act.args, null, 2)}</pre>
+                    {act.status === 'pending' ? (
+                      <div className="row" style={{ marginTop: 6 }}>
+                        <button
+                          className="btn primary sm"
+                          disabled={decide.isPending}
+                          onClick={() => decide.mutate({ actionId: act.id, decision: 'approved' })}
+                        >
+                          Approve & run
+                        </button>
+                        <button
+                          className="btn sm"
+                          disabled={decide.isPending}
+                          onClick={() => decide.mutate({ actionId: act.id, decision: 'denied' })}
+                        >
+                          Deny
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                        {act.status === 'approved' ? '✅ approved' : '⛔ denied'}
+                        {act.decided_by ? ` by ${act.decided_by}` : ''}
+                        {act.result ? ` — ${act.result}` : ''}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               {(m.payload.attachments as Attachment[] | undefined)?.map((a, i) => (
                 <div key={i}>
                   {a.type.startsWith('image/') ? (

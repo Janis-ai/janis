@@ -15,6 +15,7 @@ import { authRoutes } from './routes/auth.js';
 import { v1Routes } from './routes/v1.js';
 import { agentRoutes } from './routes/agents.js';
 import { conversationRoutes } from './routes/conversations.js';
+import { actionRoutes } from './routes/actions.js';
 import { alertRoutes } from './routes/alerts.js';
 import { ruleRoutes } from './routes/rules.js';
 import { streamRoutes } from './routes/stream.js';
@@ -107,6 +108,7 @@ export function createApp(db: Db) {
   api.route('/agents', agentRoutes(db));
   api.route('/tool-templates', toolTemplateRoutes(db));
   api.route('/conversations', conversationRoutes(db));
+  api.route('/actions', actionRoutes(db));
   api.route('/alerts', alertRoutes(db));
   api.route('/rules', ruleRoutes(db));
   api.route('/stream', streamRoutes(db));

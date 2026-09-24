@@ -3,10 +3,11 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, conversations, messages, slackInstallations, slackThreads, suggestions } from '../db/schema.js';
+import { agents, conversations, messages, pendingActions, slackInstallations, slackThreads, suggestions } from '../db/schema.js';
 import { env } from '../env.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { runHostedEvent } from '../lib/hostedAgent.js';
+import { decidePendingAction } from '../lib/approvals.js';
 import {
   createSlackChannel,
   findThread,
@@ -560,6 +561,20 @@ export function slackPublicRoutes(db: Db) {
     const action = payload.actions![0];
     let convId = action.value;
     if (!convId) return c.json({ ok: true });
+    // Approval buttons carry the pending_action id — resolve the conversation
+    // through it
+    if (
+      action.action_id === 'janis_approve_action' ||
+      action.action_id === 'janis_deny_action'
+    ) {
+      const [act] = await db
+        .select({ conversationId: pendingActions.conversationId })
+        .from(pendingActions)
+        .where(eq(pendingActions.id, convId))
+        .limit(1);
+      convId = act?.conversationId;
+      if (!convId) return c.json({ ok: true });
+    }
     // Send carries the suggestion id — resolve the conversation through it
     if (
       action.action_id === 'janis_send_suggestion' ||
@@ -615,6 +630,35 @@ export function slackPublicRoutes(db: Db) {
     try {
       if (action.action_id === 'janis_takeover') {
         await takeover(db, inst.workspaceId, convId, user);
+      } else if (
+        action.action_id === 'janis_approve_action' ||
+        action.action_id === 'janis_deny_action'
+      ) {
+        const approve = action.action_id === 'janis_approve_action';
+        const decided = await decidePendingAction(
+          db,
+          action.value!,
+          { id: user.id, name: user.name ?? 'teammate' },
+          approve,
+        );
+        if ((decided === 'not-pending' || !decided) && payload.response_url) {
+          await fetch(payload.response_url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              response_type: 'ephemeral',
+              text: ':warning: that action was already decided',
+            }),
+          }).catch(() => {});
+        } else if (decided && decided !== 'not-pending') {
+          // Resume the agent so it can tell the customer the outcome.
+          void runHostedEvent(db, decided.agent, {
+            type: 'message.user',
+            conversation_id: decided.conv.externalId,
+            janis_conversation_id: decided.conv.id,
+            timestamp: new Date().toISOString(),
+          }).catch(() => {});
+        }
       } else if (action.action_id === 'janis_resume') {
         await resume(db, inst.workspaceId, convId, user);
       } else if (

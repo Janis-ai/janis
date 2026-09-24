@@ -673,7 +673,7 @@ function ToolsTab({
       <ReadOnly off={!isAdmin}>
       <label>Connections — predefined services the agent can call</label>
       <Connections cfg={cfg} setCfg={setCfg} agentId={agentId} />
-      <label>Tools — client APIs the agent can call (JSON array, GET/POST, {'{param}'} URL placeholders)</label>
+      <label>Tools — client APIs the agent can call (JSON array, GET/POST/PUT/PATCH/DELETE, {'{param}'} URL placeholders, "approval": true gates a call behind teammate sign-off)</label>
       <textarea
         rows={4}
         className="mono"
@@ -812,6 +812,16 @@ function Connections({
             <span className="badge" style={{ marginLeft: 'auto' }}>{t.category}</span>
           </div>
           <div className="muted" style={{ fontSize: 12, margin: '8px 0 10px' }}>{t.blurb}</div>
+          <div className="muted" style={{ fontSize: 11, margin: '0 0 10px', lineHeight: 1.7 }}>
+            {t.tools.map((x) => (
+              <div key={x.name}>
+                <span className="mono">{x.name}</span>
+                {x.approval && (
+                  <span className="badge" style={{ marginLeft: 6 }}>needs approval</span>
+                )}
+              </div>
+            ))}
+          </div>
           {openId === t.id ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {t.fields.map((f) => (

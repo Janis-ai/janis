@@ -10,6 +10,7 @@ import {
   conversations,
   memberships,
   messages,
+  pendingActions,
   slackInstallations,
   slackThreads,
   users,
@@ -516,6 +517,91 @@ async function threadsForConversation(db: Db, conversationId: string) {
  * registered and keeps receiving mirrors, so operators can reply in any of
  * them. Deduped handoffs (opts.reply) echo into all live threads.
  */
+/**
+ * Post an approval card for a gated tool call into every live thread —
+ * Approve/Deny buttons carry the pending_action id.
+ */
+export async function postSlackActionRequest(
+  db: Db,
+  conv: ConversationRow,
+  agent: typeof agents.$inferSelect,
+  action: typeof pendingActions.$inferSelect,
+): Promise<void> {
+  const threads = await threadsForConversation(db, conv.id);
+  if (!threads.length) return;
+  const argsText = JSON.stringify(action.args, null, 2).slice(0, 800);
+  const text = `:lock: *Approval needed* — \`${action.toolName}\`\n\`\`\`${argsText}\`\`\``;
+  const blocks = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `:lock: *Approval needed* — agent *${agent.name}* wants to run \`${action.toolName}\`\n\`\`\`${argsText}\`\`\``,
+      },
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          action_id: 'janis_approve_action',
+          text: { type: 'plain_text', text: 'Approve & run' },
+          style: 'primary',
+          value: action.id,
+        },
+        {
+          type: 'button',
+          action_id: 'janis_deny_action',
+          text: { type: 'plain_text', text: 'Deny' },
+          style: 'danger',
+          value: action.id,
+        },
+      ],
+    },
+  ];
+  const posts: { channelId: string; ts: string }[] = [];
+  for (const t of threads) {
+    const res = await slackApi<{ channel: string; ts: string }>(
+      t.installation.botToken,
+      'chat.postMessage',
+      { channel: t.slackThreads.channelId, thread_ts: t.slackThreads.ts, text, blocks },
+    );
+    if (res.ok && res.ts) posts.push({ channelId: res.channel ?? t.slackThreads.channelId, ts: res.ts });
+  }
+  if (posts.length) {
+    await db
+      .update(pendingActions)
+      .set({ slackPosts: posts })
+      .where(eq(pendingActions.id, action.id));
+  }
+}
+
+/** After a decision, rewrite every posted card to show the outcome. */
+export async function resolveSlackActionCards(
+  db: Db,
+  action: typeof pendingActions.$inferSelect,
+  approved: boolean,
+  decidedByName: string,
+): Promise<void> {
+  const posts = (action.slackPosts ?? []) as { channelId: string; ts: string }[];
+  if (!posts.length) return;
+  const threads = await threadsForConversation(db, action.conversationId);
+  const preview = action.result ? `\n\`\`\`${action.result.slice(0, 400)}\`\`\`` : '';
+  const text = approved
+    ? `:white_check_mark: *${decidedByName} approved* \`${action.toolName}\` — executed${preview}`
+    : `:no_entry_sign: *${decidedByName} denied* \`${action.toolName}\``;
+  for (const p of posts) {
+    const t = threads.find((x) => x.slackThreads.channelId === p.channelId);
+    if (!t) continue;
+    await slackApi(t.installation.botToken, 'chat.update', {
+      channel: p.channelId,
+      ts: p.ts,
+      text,
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }],
+    }).catch(() => {});
+  }
+}
+
 export async function postSlackAlert(
   db: Db,
   workspaceId: string,

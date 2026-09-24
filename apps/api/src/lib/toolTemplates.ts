@@ -3,10 +3,14 @@ import type { ToolTemplateInfo } from '@janis/shared';
 interface CatalogTool {
   name: string;
   description: string;
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   url: string;
   headers?: Record<string, string>;
   params?: Record<string, string>;
+  /** 'form' = application/x-www-form-urlencoded (Stripe); default JSON. */
+  bodyFormat?: 'json' | 'form';
+  /** Mutating/money-moving calls — the agent proposes, a teammate approves. */
+  approval?: boolean;
 }
 
 export interface ToolTemplate {
@@ -37,7 +41,7 @@ export function templateInfo(t: ToolTemplate): ToolTemplateInfo {
   return {
     ...rest,
     auth: connection ? 'oauth' : 'secrets',
-    tools: tools.map(({ name, description }) => ({ name, description })),
+    tools: tools.map(({ name, description, approval }) => ({ name, description, approval })),
   };
 }
 
@@ -60,7 +64,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         key: 'token',
         label: 'Admin API access token',
         placeholder: 'e.g. shpat_…',
-        help: 'Shopify admin → Settings → Apps and sales channels → Develop apps (enable app development if prompted) → Create an app → Admin API scopes: read_orders → Install app → API credentials → copy the Admin API access token.',
+        help: 'Shopify admin → Settings → Apps and sales channels → Develop apps (enable app development if prompted) → Create an app → Admin API scopes: read_orders + write_orders (write covers cancels/draft orders/tags) → Install app → API credentials → copy the Admin API access token.',
       },
     ],
     secrets: (f) => ({
@@ -84,6 +88,40 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders.json?status=any&limit=5&fields=id,name,order_number,email,financial_status,fulfillment_status,total_price,currency,created_at&email={email}',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         params: { email: 'customer email address' },
+      },
+      {
+        name: 'shopify_cancel_order',
+        description:
+          'Cancel a Shopify order by its numeric order id (from shopify_lookup_order). Money-moving — needs a teammate to approve.',
+        method: 'POST',
+        approval: true,
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders/{order_id}/cancel.json',
+        headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        params: { order_id: 'numeric Shopify order id (not the #number) from shopify_lookup_order' },
+      },
+      {
+        name: 'shopify_create_draft_order',
+        description:
+          'Create a Shopify draft order (custom sale, phone order, invoice). Needs a teammate to approve.',
+        method: 'POST',
+        approval: true,
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/draft_orders.json',
+        headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        params: {
+          draft_order:
+            'JSON object, e.g. {"line_items":[{"title":"…","price":"19.99","quantity":1}],"email":"customer@email.com","note":"…"}',
+        },
+      },
+      {
+        name: 'shopify_update_order_tags',
+        description: 'Set the tags on a Shopify order by numeric order id (from shopify_lookup_order).',
+        method: 'PUT',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders/{order_id}.json',
+        headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        params: {
+          order_id: 'numeric Shopify order id',
+          order: 'JSON object, e.g. {"id":123,"tags":"vip, follow-up"} — tags is a comma-separated string',
+        },
       },
     ],
   },
@@ -131,6 +169,18 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         params: {
           properties:
             'JSON object, e.g. {"subject":"Refund request","content":"…","hs_ticket_priority":"HIGH"}',
+        },
+      },
+      {
+        name: 'hubspot_update_contact',
+        description: 'Update properties on a HubSpot contact — phone, lifecycle stage, notes.',
+        method: 'PATCH',
+        url: 'https://api.hubapi.com/crm/v3/objects/contacts/{contact_id}',
+        headers: { authorization: 'Bearer {{secrets.HUBSPOT_TOKEN}}' },
+        params: {
+          contact_id: 'HubSpot contact id from hubspot_get_contact or hubspot_search_contacts',
+          properties:
+            'JSON object of properties to update, e.g. {"phone":"+1…","lifecyclestage":"customer"}',
         },
       },
     ],
@@ -326,7 +376,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         key: 'restricted_key',
         label: 'Restricted API key',
         placeholder: 'e.g. rk_live_…',
-        help: 'Dashboard → Developers → API keys → Create restricted key (asks for 2FA) → grant Read on Customers and Charges.',
+        help: 'Dashboard → Developers → API keys → Create restricted key (asks for 2FA) → grant Read on Customers and Charges; add Write on Refunds and Subscriptions if you want the agent to propose those actions.',
       },
     ],
     secrets: (f) => ({ STRIPE_RESTRICTED_KEY: f.restricted_key.trim() }),
@@ -346,6 +396,34 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://api.stripe.com/v1/charges?customer={customer_id}&limit=5',
         headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
         params: { customer_id: 'Stripe customer id, e.g. cus_…' },
+      },
+      {
+        name: 'stripe_create_refund',
+        description:
+          'Refund a Stripe charge or payment intent. Money-moving — needs a teammate to approve.',
+        method: 'POST',
+        bodyFormat: 'form',
+        approval: true,
+        url: 'https://api.stripe.com/v1/refunds',
+        headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
+        params: {
+          charge: 'charge id ch_… from stripe_customer_charges (or use payment_intent instead)',
+          amount: 'refund amount in cents — pass the charge\'s full amount for a full refund',
+        },
+      },
+      {
+        name: 'stripe_cancel_subscription',
+        description:
+          'Cancel a Stripe subscription at the end of the paid period. Needs a teammate to approve.',
+        method: 'POST',
+        bodyFormat: 'form',
+        approval: true,
+        url: 'https://api.stripe.com/v1/subscriptions/{subscription_id}',
+        headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
+        params: {
+          subscription_id: 'subscription id sub_…',
+          cancel_at_period_end: 'always "true" — cancels at period end, not immediately',
+        },
       },
     ],
   },

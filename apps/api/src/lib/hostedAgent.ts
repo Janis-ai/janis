@@ -5,13 +5,15 @@ import { agents, alerts, conversations, knowledgeFiles, messages, workspaces } f
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage } from './usage.js';
-import { interpolateSecrets, loadSecretsMap } from './secrets.js';
+import { loadSecretsMap } from './secrets.js';
 import { connectionSecrets } from './connections.js';
 import { enabledBuiltins, type BuiltinTool } from './builtinTools.js';
 import { bus } from './bus.js';
 import { PLANS, planFor } from './plans.js';
 import type { AttachmentRef } from './channels.js';
 import { getUpload } from './uploads.js';
+import { callTool, toolsFor, type ToolDef } from './toolExec.js';
+import { requestToolApproval } from './approvals.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -398,111 +400,16 @@ async function generateReply(
   };
 }
 
-interface ToolDef {
-  name: string;
-  description: string;
-  method: 'GET' | 'POST';
-  url: string;
-  headers?: Record<string, string>;
-  params?: Record<string, string>;
-}
-
-function toolsFor(agent: AgentRow): ToolDef[] {
-  const cfg = (agent.config ?? {}) as { tools?: ToolDef[] };
-  return (cfg.tools ?? []).filter((t) => t.name && t.url);
-}
-
-/**
- * SSRF guard: https to anywhere; http only to localhost (dev stubs).
- * Client-supplied URLs are called server-side, so this matters.
- */
-function toolUrlAllowed(raw: string): boolean {
-  try {
-    const u = new URL(raw);
-    if (u.protocol === 'https:') return true;
-    return (
-      u.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(u.hostname)
-    );
-  } catch {
-    return false;
-  }
-}
-
-const MAX_TOOL_RESPONSE = 8_000;
-
-function jsonArg(v: string): unknown {
-  const t = v.trim();
-  if (!t.startsWith('{') && !t.startsWith('[')) return v;
-  try {
-    return JSON.parse(t);
-  } catch {
-    return v;
-  }
-}
-
-async function callTool(
-  tool: ToolDef,
-  args: Record<string, unknown>,
-  secrets: Record<string, string> = {},
-): Promise<string> {
-  // Secrets expand first — LLM-supplied args can never inject {{secrets.*}}
-  // placeholders, and arg values never get a second expansion pass.
-  const missing = [
-    ...new Set(
-      [tool.url, ...Object.values(tool.headers ?? {})]
-        .flatMap((s) => [...s.matchAll(/\{\{secrets\.([A-Za-z0-9_]+)\}\}/g)].map((m) => m[1]))
-        .filter((n) => !(n in secrets)),
-    ),
-  ];
-  if (missing.length) {
-    return `error: tool needs secrets not configured on this agent: ${missing.join(', ')}`;
-  }
-  let url = interpolateSecrets(tool.url, secrets);
-  const headers = tool.headers
-    ? Object.fromEntries(
-        Object.entries(tool.headers).map(([k, v]) => [k, interpolateSecrets(v, secrets)]),
-      )
-    : undefined;
-  const used = new Set<string>();
-  for (const key of Object.keys(args)) {
-    if (url.includes(`{${key}}`)) {
-      url = url.replaceAll(`{${key}}`, encodeURIComponent(String(args[key])));
-      used.add(key);
-    }
-  }
-  if (!toolUrlAllowed(url)) return 'error: tool URL not allowed';
-  const rest = Object.fromEntries(Object.entries(args).filter(([k]) => !used.has(k)));
-
-  if (tool.method === 'GET') {
-    const qs = new URLSearchParams(
-      Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, String(v)])),
-    );
-    if ([...qs].length) url += (url.includes('?') ? '&' : '?') + qs.toString();
-  }
-  // POST bodies: params are declared type:string, so the model supplies
-  // nested structures as JSON text — parse object/array-looking values so
-  // APIs get real objects (HubSpot properties, Zendesk ticket), not strings.
-  const postBody = Object.fromEntries(
-    Object.entries(rest).map(([k, v]) => [k, typeof v === 'string' ? jsonArg(v) : v]),
-  );
-  const res = await fetch(url, {
-    method: tool.method,
-    headers: {
-      accept: 'application/json',
-      ...(tool.method === 'POST' ? { 'content-type': 'application/json' } : {}),
-      ...headers,
-    },
-    ...(tool.method === 'POST' ? { body: JSON.stringify(postBody) } : {}),
-    signal: AbortSignal.timeout(10_000),
-  });
-  const body = (await res.text()).slice(0, MAX_TOOL_RESPONSE);
-  return res.ok ? body : `error: HTTP ${res.status} ${body.slice(0, 300)}`;
-}
+export type { ToolDef } from './toolExec.js';
 
 export interface AgentRunContext {
   db: Db;
   convId: string;
   workspaceId: string;
+  /** Needed for gated (approval) tools — they create pending_actions rows. */
+  agent?: AgentRow;
+  /** Suggestion drafting — gated tools describe intent, never create approvals. */
+  suggesting?: boolean;
 }
 
 const SAVE_PROFILE_TOOL = 'save_user_profile';
@@ -786,7 +693,11 @@ async function complete(
                   ctx,
                 )
               : tool
-                ? await callTool(tool, args, secrets)
+                ? tool.approval && ctx?.agent
+                  ? ctx.suggesting
+                    ? 'approval_required: this action needs a human teammate to approve it before it runs — describe it in the suggestion rather than claiming it was done'
+                    : await requestToolApproval(ctx.db, ctx.agent, ctx.convId, tool, args)
+                  : await callTool(tool, args, secrets)
                 : `error: unknown tool ${call.function.name}`;
       } catch (err) {
         result = `error: ${err instanceof Error ? err.message : 'tool failed'}`;
@@ -816,7 +727,11 @@ function summaryLine(m: {
     custom_alert?: boolean;
     handoff_offer?: boolean;
     handoff_cancelled?: boolean;
+    action_request?: boolean;
+    action_result?: boolean;
   };
+  if (f?.action_request) return '(an action was submitted for teammate approval)';
+  if (f?.action_result) return `(${m.text})`;
   if (f?.failure || f?.help_requested || f?.custom_alert) {
     return '(passed to a human teammate)';
   }
@@ -1024,7 +939,18 @@ export async function transcriptFor(
       help_requested?: boolean;
       custom_alert?: boolean;
       handoff_offer?: boolean;
+      action_request?: boolean;
+      action_result?: boolean;
     };
+    // Approval cards/results read as bracketed context, not operator chatter.
+    if (f?.action_request) {
+      out.push({ role: 'assistant', content: '(an action was submitted for teammate approval)' });
+      continue;
+    }
+    if (f?.action_result) {
+      out.push({ role: 'assistant', content: `(${m.text})` });
+      continue;
+    }
     // Internal notes (failures/handoffs/alerts) must not be fed verbatim —
     // the model parrots them. But dropping them entirely leaves the
     // triggering request looking unanswered, so the model hands off again
@@ -1137,7 +1063,7 @@ export async function runHostedEvent(
       ...(await loadSecretsMap(db, agent.id)),
       ...(await connectionSecrets(db, agent.id)),
     };
-    const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId };
+    const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId, agent, suggesting: true };
     const prompt = systemPrompt(agent, docs, conv, { forSuggestion: true });
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     const result = await generateReply(
@@ -1318,7 +1244,7 @@ async function replyAsHostedAgent(
       ...(await loadSecretsMap(db, agent.id)),
       ...(await connectionSecrets(db, agent.id)),
     };
-    const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId };
+    const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId, agent };
     const prompt = systemPrompt(agent, docs, conv);
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;

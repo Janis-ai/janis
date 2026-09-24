@@ -265,6 +265,39 @@ export const suggestions = pgTable('suggestions', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Agent tool calls that mutate customer data — the agent proposes, a human
+// approves/denies, then the call executes (or not) and the agent continues.
+export const pendingActions = pgTable('pending_actions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
+  agentId: uuid('agent_id')
+    .notNull()
+    .references(() => agents.id),
+  conversationId: uuid('conversation_id')
+    .notNull()
+    .references(() => conversations.id),
+  // The transcript row carrying the approval card — its payload.action.status
+  // is updated on decide so the card resolves in place.
+  messageId: uuid('message_id').references(() => messages.id),
+  toolName: text('tool_name').notNull(),
+  // Snapshot of the tool definition + args at request time — approval executes
+  // exactly what the operator saw, not whatever the config has drifted to.
+  tool: jsonb('tool').notNull(),
+  args: jsonb('args').notNull(),
+  status: text('status', { enum: ['pending', 'approved', 'denied'] })
+    .notNull()
+    .default('pending'),
+  result: text('result'),
+  decidedById: uuid('decided_by_id').references(() => users.id),
+  decidedByName: text('decided_by_name'),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  // Slack card locations [{channelId, ts}] — updated in place on decide.
+  slackPosts: jsonb('slack_posts'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const savedReplies = pgTable('saved_replies', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id')
