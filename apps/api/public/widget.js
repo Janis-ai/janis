@@ -197,7 +197,11 @@
     '#janis-file{display:none}' +
     '#janis-power{text-align:center;font-size:11px;color:#9ca3af;padding:4px;background:#fff}' +
     '.janis-loading{text-align:center;color:#9ca3af;font-size:12px;padding:18px 0}' +
-    '#janis-form :disabled{opacity:.55;cursor:default}';
+    '#janis-form :disabled{opacity:.55;cursor:default}' +
+    // iOS Safari zooms the whole page when a focused field is under 16px —
+    // keep the input at 16px on touch devices so opening the widget doesn't
+    // blow up the host site's layout.
+    '@media (pointer:coarse){#janis-input{font-size:16px}}';
   document.head.appendChild(css);
 
   // ---- DOM ----------------------------------------------------------------
@@ -636,7 +640,12 @@
     state.open = open;
     panel.classList.toggle('open', open);
     localStorage.setItem(LS_OPEN, open ? '1' : '0');
-    if (open) { poll(); if (!state.timer) state.timer = setInterval(poll, 3000); input.focus(); }
+    if (open) {
+      poll();
+      if (!state.timer) state.timer = setInterval(poll, 3000);
+      // Auto-focus pops the on-screen keyboard on mobile — let them tap in.
+      if (typeof matchMedia !== 'function' || !matchMedia('(pointer:coarse)').matches) input.focus();
+    }
     else if (state.timer) { clearInterval(state.timer); state.timer = null; }
   }
   bubble.onclick = function () { setOpen(!state.open); };
