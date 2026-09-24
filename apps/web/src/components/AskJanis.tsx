@@ -492,9 +492,11 @@ export function AskJanis({
   };
 
   const [deciding, setDeciding] = useState<string | null>(null);
+  const [actError, setActError] = useState('');
   const decide = async (msgId: string, actionId: string, decision: 'approved' | 'denied') => {
     if (deciding) return;
     setDeciding(actionId);
+    setActError('');
     try {
       await api(`/api/actions/${actionId}/decide`, {
         method: 'POST',
@@ -508,6 +510,8 @@ export function AskJanis({
       );
       showTyping();
       void poll();
+    } catch (e) {
+      setActError(e instanceof Error ? e.message : 'decision failed');
     } finally {
       setDeciding(null);
     }
@@ -584,6 +588,11 @@ export function AskJanis({
                       {item.m.action.tool}
                     </div>
                     <pre className="action-args">{JSON.stringify(item.m.action.args, null, 2)}</pre>
+                    {actError && item.m.action.status === 'pending' && (
+                      <div className="muted" style={{ color: '#c0392b', fontSize: 12, marginTop: 4 }}>
+                        {actError}
+                      </div>
+                    )}
                     {item.m.action.status === 'pending' ? (
                       <div className="row" style={{ marginTop: 6 }}>
                         <button

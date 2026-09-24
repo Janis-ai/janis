@@ -6,12 +6,13 @@ import type { Db } from '../db/client.js';
 import { pendingActions } from '../db/schema.js';
 import { decidePendingAction } from '../lib/approvals.js';
 import { runHostedEvent } from '../lib/hostedAgent.js';
-import type { SessionEnv } from '../middleware/sessionAuth.js';
+import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
 const decideBody = z.object({ decision: z.enum(['approved', 'denied']) });
 
 export function actionRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
+  app.use('/*', sessionAuth(db));
 
   // POST /api/actions/:id/decide — approve or deny a gated tool call. Any
   // workspace member may decide (same bar as takeover).
