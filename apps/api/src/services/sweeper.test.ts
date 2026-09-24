@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alerts, conversations, memberships, users, workspaces } from '../db/schema.js';
+import { agents, alerts, conversations, memberships, messages, users, workspaces } from '../db/schema.js';
 import { generateApiKey, hashPassword } from '../lib/crypto.js';
 import { processEvents } from './ingest.js';
 import { takeover, humanReply, agentSend } from './takeover.js';
@@ -157,6 +157,18 @@ describe('sweepAutoResume', () => {
       .where(eq(conversations.id, conv.id));
     expect(warned.state).toBe('human');
     expect(warned.resumeWarnedAt).not.toBeNull();
+    // the warning also lands in the transcript as an internal event row —
+    // the Janis-side equivalent of the Slack thread message
+    const notes = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    const warning = notes.find(
+      (m) => (m.payload as { event?: string })?.event === 'auto-resume warning',
+    );
+    expect(warning).toBeTruthy();
+    expect(warning!.text).toContain('auto-resumes in ~1m');
+    expect((warning!.payload as { internal?: boolean }).internal).toBe(true);
 
     // second sweep in the same window does not re-stamp the warning
     const stamp = warned.resumeWarnedAt!.getTime();

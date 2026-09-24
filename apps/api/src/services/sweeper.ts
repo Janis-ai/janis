@@ -1,10 +1,10 @@
 import { and, desc, eq, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alertRules, alerts, conversations } from '../db/schema.js';
+import { agents, alertRules, alerts, conversations, messages } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { inactivityThresholds } from '../lib/rules.js';
-import { toAlert } from '../lib/serializers.js';
+import { toAlert, toMessage } from '../lib/serializers.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
 
@@ -65,6 +65,18 @@ export async function sweepAutoResume(db: Db): Promise<number> {
         1,
         Math.round((conv.humanSince.getTime() + windowMs - now) / 60_000),
       );
+      // Same warning in the Janis transcript — an internal event row like
+      // takeover/resume notices, never sent to the customer.
+      const [note] = await db
+        .insert(messages)
+        .values({
+          conversationId: conv.id,
+          direction: 'human',
+          text: `takeover auto-resumes in ~${remainingMin}m — reply to keep control`,
+          payload: { internal: true, event: 'auto-resume warning' },
+        })
+        .returning();
+      bus.publish(agent.workspaceId, { type: 'message', data: toMessage(note) });
       void mirrorToSlack(
         db,
         conv.id,
