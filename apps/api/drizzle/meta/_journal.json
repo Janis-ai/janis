@@ -239,6 +239,13 @@
       "when": 1790188244564,
       "tag": "0033_illegal_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790263661276,
+      "tag": "0034_flimsy_silver_surfer",
+      "breakpoints": true
     }
   ]
 }

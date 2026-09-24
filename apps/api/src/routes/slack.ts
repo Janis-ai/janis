@@ -763,12 +763,19 @@ export function slackPublicRoutes(db: Db) {
       .orderBy(desc(conversations.lastMessageAt))
       .limit(20);
 
+    // A conv with several alert threads in this channel joins once per
+    // thread row — dedupe so it can't crowd out other conversations.
+    const seen = new Set<string>();
+    const convs = candidates
+      .map((r) => r.conv)
+      .filter((conv) => (seen.has(conv.id) ? false : (seen.add(conv.id), true)));
+
     // /pause: prefer the live takeover (re-pause updates duration), else the
     // most recent conversation. /resume only makes sense on a human conv.
     const target =
       command === '/pause'
-        ? (candidates.find((r) => r.conv.state === 'human')?.conv ?? candidates[0]?.conv)
-        : candidates.find((r) => r.conv.state === 'human')?.conv;
+        ? (convs.find((c) => c.state === 'human') ?? convs[0])
+        : convs.find((c) => c.state === 'human');
     if (!target) {
       // Migrated teams are fully ours — legacy is stood down, so an
       // unresolvable channel gets a private warning instead of a forward.

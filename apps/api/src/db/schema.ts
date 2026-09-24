@@ -286,20 +286,26 @@ export const digests = pgTable('digests', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// Slack thread ↔ conversation mapping for threaded takeover
-export const slackThreads = pgTable('slack_threads', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  conversationId: uuid('conversation_id')
-    .notNull()
-    .references(() => conversations.id)
-    .unique(),
-  installationId: uuid('installation_id')
-    .notNull()
-    .references(() => slackInstallations.id),
-  channelId: text('channel_id').notNull(),
-  ts: text('ts').notNull(), // slack message timestamp = thread id
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+// Slack thread ↔ conversation mapping for threaded takeover. A conversation
+// can own many alert threads — every registered thread stays live (mirrors
+// fan out to all of them, replies in any of them route back), so nothing an
+// operator sees ever goes dead.
+export const slackThreads = pgTable(
+  'slack_threads',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id),
+    installationId: uuid('installation_id')
+      .notNull()
+      .references(() => slackInstallations.id),
+    channelId: text('channel_id').notNull(),
+    ts: text('ts').notNull(), // slack message timestamp = thread id
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('slack_threads_channel_ts').on(t.channelId, t.ts)],
+);
 
 // Messaging channels hosted by Janis (Meta: Messenger / Instagram / WhatsApp).
 // Janis owns the platform webhook; inbound messages are forwarded to the agent

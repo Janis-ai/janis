@@ -493,13 +493,26 @@ async function dmAlertPointer(
   if (!res.ok) console.error('slack dm post failed:', res.error);
 }
 
+/** All live Slack threads for a conversation, newest first, each joined to
+ * its installation. A conversation accumulates one thread per alert and all
+ * of them stay live forever: mirrors fan out to every thread and replies in
+ * any of them route back via findThread — so nothing an operator sees ever
+ * goes dead or out of sync. */
+async function threadsForConversation(db: Db, conversationId: string) {
+  return db
+    .select({ slackThreads, installation: slackInstallations })
+    .from(slackThreads)
+    .innerJoin(slackInstallations, eq(slackThreads.installationId, slackInstallations.id))
+    .where(eq(slackThreads.conversationId, conversationId))
+    .orderBy(desc(slackThreads.createdAt));
+}
+
 /**
- * Post an alert into Slack with action buttons and record the thread so
- * subsequent messages mirror into it. A NEW alert always posts a fresh
- * channel message — after a takeover/resume cycle a new escalation must
- * be a new top-level alert, not a buried reply — but the conversation's
- * thread row never repoints: the first thread stays canonical forever so
- * it never dies. Deduped handoffs (opts.reply) stay in the thread.
+ * Post an alert into Slack with action buttons and register its thread.
+ * A NEW alert always posts a fresh top-level channel message and gets its
+ * own seeded thread — but every previous thread for the conversation stays
+ * registered and keeps receiving mirrors, so operators can reply in any of
+ * them. Deduped handoffs (opts.reply) echo into all live threads.
  */
 export async function postSlackAlert(
   db: Db,
@@ -514,11 +527,7 @@ export async function postSlackAlert(
   const channelId = await alertChannelFor(db, inst, agent.id);
   if (!channelId) return;
 
-  const [existing] = await db
-    .select()
-    .from(slackThreads)
-    .where(eq(slackThreads.conversationId, conv.id))
-    .limit(1);
+  const existing = await threadsForConversation(db, conv.id);
 
   // Routing: assigned → invite them into the alert channel (idempotent) and
   // @mention; if they can't be invited, DM a pointer instead. Unassigned →
@@ -542,14 +551,18 @@ export async function postSlackAlert(
     for (const id of dmTargets) void dmAlertPointer(inst, id, text);
   };
 
-  if (existing && opts.reply) {
-    const res = await slackApi(inst.botToken, 'chat.postMessage', {
-      channel: existing.channelId,
-      thread_ts: existing.ts,
-      text: summary,
-    });
-    if (!res.ok) console.error('slack thread reply failed:', res.error);
-    else dmAll(existing.channelId, existing.ts);
+  if (existing.length && opts.reply) {
+    // Deduped alert — echo into every live thread so followers of any of
+    // them see the repeat.
+    for (const t of existing) {
+      const res = await slackApi(t.installation.botToken, 'chat.postMessage', {
+        channel: t.slackThreads.channelId,
+        thread_ts: t.slackThreads.ts,
+        text: summary,
+      });
+      if (!res.ok) console.error('slack thread reply failed:', res.error);
+    }
+    dmAll(existing[0].slackThreads.channelId, existing[0].slackThreads.ts);
     return;
   }
 
@@ -559,28 +572,11 @@ export async function postSlackAlert(
     blocks: alertBlocks(conv, agent, alert, mention),
   });
   if (res.ok) {
-    if (existing) {
-      // Fresh alert, same thread — the canonical thread row stays put so
-      // mirrored replies and thread interactions keep working there forever.
-      // Links point at it, the escalation echoes into it (thread followers
-      // get the bump), and a signpost on the alert's own thread keeps
-      // replies from landing in a dead one.
-      dmAll(existing.channelId, existing.ts);
-      const echo = await slackApi(inst.botToken, 'chat.postMessage', {
-        channel: existing.channelId,
-        thread_ts: existing.ts,
-        text: summary,
-      });
-      if (!echo.ok) console.error('slack thread reply failed:', echo.error);
-      await slackApi(inst.botToken, 'chat.postMessage', {
-        channel: res.channel,
-        thread_ts: res.ts,
-        text: `_This conversation continues in the <https://slack.com/app_redirect?channel=${existing.channelId}&message=${existing.ts}|existing thread> — reply there, not here._`,
-      });
-      return;
-    }
-    dmAll(res.channel, res.ts);
-    const [inserted] = await db
+    // Register the new thread, then mark the boundary in every older
+    // thread: they resume mirroring from here, and anything that arrived
+    // while they weren't being mirrored (or before this conv got its
+    // threads) lives in Janis.
+    await db
       .insert(slackThreads)
       .values({
         conversationId: conv.id,
@@ -588,13 +584,18 @@ export async function postSlackAlert(
         channelId: res.channel,
         ts: res.ts,
       })
-      .onConflictDoNothing({ target: slackThreads.conversationId })
-      .returning();
-    if (!inserted) {
-      // Another alert won the race for this conversation's thread row —
-      // its seeded thread stays canonical.
-      return;
+      .onConflictDoNothing();
+    for (const t of existing) {
+      const marker = await slackApi(t.installation.botToken, 'chat.postMessage', {
+        channel: t.slackThreads.channelId,
+        thread_ts: t.slackThreads.ts,
+        text:
+          `${summary}\n_Re-escalated — mirroring resumes below; ` +
+          `anything missed lives in <${env.webOrigin}/conversations/${conv.id}|Janis>._`,
+      });
+      if (!marker.ok) console.error('slack thread reply failed:', marker.error);
     }
+    dmAll(res.channel, res.ts);
     await seedSlackThread(db, inst, res.channel, res.ts, conv, agent);
   } else {
     console.error('slack alert post failed:', res.error);
@@ -698,27 +699,24 @@ export async function updateSlackAlert(
   conv: ConversationRow,
   agent: typeof agents.$inferSelect,
 ): Promise<void> {
-  const [thread] = await db
-    .select({ slackThreads, installation: slackInstallations })
-    .from(slackThreads)
-    .innerJoin(slackInstallations, eq(slackThreads.installationId, slackInstallations.id))
-    .where(eq(slackThreads.conversationId, conv.id))
-    .limit(1);
-  if (!thread) return;
+  const threads = await threadsForConversation(db, conv.id);
+  if (!threads.length) return;
   const [alert] = await db
     .select()
     .from(alerts)
     .where(eq(alerts.conversationId, conv.id))
     .orderBy(desc(alerts.createdAt))
     .limit(1);
-  const { text: mention } = await alertMention(db, thread.installation, conv);
-  const res = await slackApi(thread.installation.botToken, 'chat.update', {
-    channel: thread.slackThreads.channelId,
-    ts: thread.slackThreads.ts,
-    text: `${mention}alert — ${conv.externalId}`,
-    blocks: alertBlocks(conv, agent, alert ?? { type: 'help_request', detail: null }, mention),
-  });
-  if (!res.ok) console.error('slack alert update failed:', res.error);
+  for (const t of threads) {
+    const { text: mention } = await alertMention(db, t.installation, conv);
+    const res = await slackApi(t.installation.botToken, 'chat.update', {
+      channel: t.slackThreads.channelId,
+      ts: t.slackThreads.ts,
+      text: `${mention}alert — ${conv.externalId}`,
+      blocks: alertBlocks(conv, agent, alert ?? { type: 'help_request', detail: null }, mention),
+    });
+    if (!res.ok) console.error('slack alert update failed:', res.error);
+  }
 }
 
 /** Mirror a console-originated message into the conversation's Slack thread.
@@ -734,13 +732,8 @@ export async function mirrorToSlack(
     identity?: { username?: string; icon_url?: string };
   } = {},
 ): Promise<void> {
-  const [thread] = await db
-    .select({ slackThreads, installation: slackInstallations })
-    .from(slackThreads)
-    .innerJoin(slackInstallations, eq(slackThreads.installationId, slackInstallations.id))
-    .where(eq(slackThreads.conversationId, conversationId))
-    .limit(1);
-  if (!thread) return;
+  const threads = await threadsForConversation(db, conversationId);
+  if (!threads.length) return;
 
   let identity: { username?: string; icon_url?: string } = opts.identity ?? {};
   if (!opts.identity && opts.direction) {
@@ -767,19 +760,21 @@ export async function mirrorToSlack(
     }
   }
 
-  const res = await slackApi(thread.installation.botToken, 'chat.postMessage', {
-    channel: thread.slackThreads.channelId,
-    thread_ts: thread.slackThreads.ts,
-    text,
-    ...identity,
-  });
-  if (!res.ok) {
-    // Install predates chat:write.customize — keep the labeled text form.
-    await slackApi(thread.installation.botToken, 'chat.postMessage', {
-      channel: thread.slackThreads.channelId,
-      thread_ts: thread.slackThreads.ts,
-      text: `${label} ${text}`,
+  for (const t of threads) {
+    const res = await slackApi(t.installation.botToken, 'chat.postMessage', {
+      channel: t.slackThreads.channelId,
+      thread_ts: t.slackThreads.ts,
+      text,
+      ...identity,
     });
+    if (!res.ok) {
+      // Install predates chat:write.customize — keep the labeled text form.
+      await slackApi(t.installation.botToken, 'chat.postMessage', {
+        channel: t.slackThreads.channelId,
+        thread_ts: t.slackThreads.ts,
+        text: `${label} ${text}`,
+      });
+    }
   }
 }
 
@@ -790,20 +785,19 @@ export async function mirrorToSlack(
 const lastThreadStatus = new Map<string, { status: string; at: number; timer: NodeJS.Timeout }>();
 
 async function applyThreadStatus(db: Db, conversationId: string, status: string | null): Promise<boolean> {
-  const [thread] = await db
-    .select({ slackThreads, installation: slackInstallations })
-    .from(slackThreads)
-    .innerJoin(slackInstallations, eq(slackThreads.installationId, slackInstallations.id))
-    .where(eq(slackThreads.conversationId, conversationId))
-    .limit(1);
-  if (!thread) return false;
-  const res = await slackApi(thread.installation.botToken, 'assistant.threads.setStatus', {
-    channel_id: thread.slackThreads.channelId,
-    thread_ts: thread.slackThreads.ts,
-    status: status ?? '',
-  });
-  if (!res.ok) console.error('slack thread status failed:', res.error);
-  return res.ok;
+  const threads = await threadsForConversation(db, conversationId);
+  if (!threads.length) return false;
+  let ok = false;
+  for (const t of threads) {
+    const res = await slackApi(t.installation.botToken, 'assistant.threads.setStatus', {
+      channel_id: t.slackThreads.channelId,
+      thread_ts: t.slackThreads.ts,
+      status: status ?? '',
+    });
+    if (!res.ok) console.error('slack thread status failed:', res.error);
+    ok = ok || res.ok;
+  }
+  return ok;
 }
 
 function armStatusExpiry(db: Db, conversationId: string, expireMs: number) {
@@ -862,19 +856,16 @@ export async function slackNotice(
   label: string,
   text: string,
 ): Promise<void> {
-  const [thread] = await db
-    .select({ slackThreads, installation: slackInstallations })
-    .from(slackThreads)
-    .innerJoin(slackInstallations, eq(slackThreads.installationId, slackInstallations.id))
-    .where(eq(slackThreads.conversationId, conv.id))
-    .limit(1);
-  if (thread) {
-    const res = await slackApi(thread.installation.botToken, 'chat.postMessage', {
-      channel: thread.slackThreads.channelId,
-      thread_ts: thread.slackThreads.ts,
-      text: `${label} ${text}`,
-    });
-    if (!res.ok) console.error('slack notice failed:', res.error);
+  const threads = await threadsForConversation(db, conv.id);
+  if (threads.length) {
+    for (const t of threads) {
+      const res = await slackApi(t.installation.botToken, 'chat.postMessage', {
+        channel: t.slackThreads.channelId,
+        thread_ts: t.slackThreads.ts,
+        text: `${label} ${text}`,
+      });
+      if (!res.ok) console.error('slack notice failed:', res.error);
+    }
     return;
   }
   const inst = await getInstallation(db, workspaceId);
@@ -897,7 +888,7 @@ export async function slackNotice(
       channelId: res.channel,
       ts: res.ts,
     })
-    .onConflictDoNothing({ target: slackThreads.conversationId });
+    .onConflictDoNothing();
 }
 
 /** Look up the Slack thread for a channel+thread_ts pair. */

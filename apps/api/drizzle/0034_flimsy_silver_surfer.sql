@@ -1,0 +1,2 @@
+ALTER TABLE "slack_threads" DROP CONSTRAINT "slack_threads_conversation_id_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "slack_threads_channel_ts" ON "slack_threads" USING btree ("channel_id","ts");

@@ -521,10 +521,13 @@ describe('webchat authenticated identity', () => {
       body: JSON.stringify({ visitor_id: VIS, text: 'merged with slack threads' }),
     });
     expect(res.status).toBe(200);
+    // a conversation can own many live Slack threads — the anonymous
+    // visitor's thread repoints onto the merged conversation, nothing is
+    // dropped
     const threads = await db.select().from(slackThreads);
-    expect(threads).toHaveLength(1);
-    expect(threads[0].conversationId).toBe(uConv.id);
-    expect(threads[0].ts).toBe('111.222');
+    expect(threads).toHaveLength(2);
+    expect(threads.every((t) => t.conversationId === uConv.id)).toBe(true);
+    expect(threads.map((t) => t.ts).sort()).toEqual(['111.222', '333.444']);
     const poll = await app.request(`/chat/${channelId}/messages?visitor_id=${VIS}`, {
       headers: { cookie: 'janis_session=tok-abc' },
     });
@@ -535,7 +538,7 @@ describe('webchat authenticated identity', () => {
     // remove the install — later tests' single-use Response stubs break if
     // mirrorToSlack keeps firing
     await new Promise((r) => setTimeout(r, 50));
-    await db.delete(slackThreads).where(eq(slackThreads.id, threads[0].id));
+    await db.delete(slackThreads).where(eq(slackThreads.conversationId, uConv.id));
     await db.delete(slackInstallations).where(eq(slackInstallations.id, inst.id));
   });
 

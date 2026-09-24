@@ -11,7 +11,7 @@ import { eq } from 'drizzle-orm';
 import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { slackApiRoutes, slackPublicRoutes } from './slack.js';
-import { postSlackAlert, removeMemberFromAlertChannels, syncMemberToAlertChannels } from '../lib/slack.js';
+import { findThread, mirrorToSlack, postSlackAlert, removeMemberFromAlertChannels, syncMemberToAlertChannels } from '../lib/slack.js';
 import { env } from '../env.js';
 
 let app: Hono;
@@ -207,9 +207,10 @@ describe('slash commands', () => {
     expect(conv.pauseMinutes).toBeNull();
   });
 
-  it('a fresh alert on a conversation keeps its canonical thread', async () => {
-    // the seeded thread row (ts 1.0) must stay canonical — a second alert
-    // posts a new channel message but never repoints the row
+  it('a fresh alert opens a new seeded thread; the old one stays live', async () => {
+    // every alert registers its own thread row — the second alert posts a
+    // fresh top-level message, marks the resume boundary in the old thread,
+    // and both threads keep receiving mirrors and routing replies
     await db
       .update(slackInstallations)
       .set({ alertChannelId: 'CALERT' })
@@ -233,12 +234,30 @@ describe('slash commands', () => {
     const posts = calls.filter((c) => c.url.includes('chat.postMessage'));
     // fresh top-level alert in the channel…
     expect(posts.some((p) => p.body.channel === 'CALERT' && !p.body.thread_ts)).toBe(true);
-    // …the escalation echoed into the canonical thread…
-    expect(posts.some((p) => p.body.thread_ts === '1.0')).toBe(true);
-    // …and a signpost on the alert's own (dead) thread pointing back
+    // …the resume-boundary marker in the old thread…
+    expect(
+      posts.some(
+        (p) =>
+          p.body.thread_ts === '1.0' &&
+          String(p.body.text).includes('mirroring resumes below'),
+      ),
+    ).toBe(true);
+    // …and the new thread got seeded + the pointer post (thread_ts 9.9 /
+    // top-level pointer)
     expect(posts.some((p) => p.body.thread_ts === '9.9')).toBe(true);
-    const [row] = await db.select().from(slackThreads).where(eq(slackThreads.conversationId, convId));
-    expect(row.ts).toBe('1.0');
+    // two rows now — the old thread is still registered, not repointed
+    const rows = await db.select().from(slackThreads).where(eq(slackThreads.conversationId, convId));
+    expect(rows.map((r) => r.ts).sort()).toEqual(['1.0', '9.9']);
+    // and both still resolve to this conversation
+    expect((await findThread(db, 'CALERT', '1.0'))?.thread.conversationId).toBe(convId);
+    expect((await findThread(db, 'CALERT', '9.9'))?.thread.conversationId).toBe(convId);
+    // mirrors fan out to both
+    calls.length = 0;
+    await mirrorToSlack(db, convId, 'x', 'hello again', { direction: 'out' });
+    const mirrored = calls.filter(
+      (c) => c.url.includes('chat.postMessage') && c.body.text === 'hello again',
+    );
+    expect(new Set(mirrored.map((m) => m.body.thread_ts))).toEqual(new Set(['1.0', '9.9']));
   });
 
   it('forwards to legacy when the channel has no mapped conversations', async () => {

@@ -126,20 +126,10 @@ export async function adoptVisitorConversation(
     for (const t of [messages, alerts, suggestions, usageEvents] as const) {
       await db.update(t).set({ conversationId: uId }).where(eq(t.conversationId, vId));
     }
-    // slack_threads is unique per conversation — when the user thread already
-    // has a Slack link, the visitor's orphaned row can't be re-pointed and
-    // goes away with its conversation (replies on the old Slack thread have
-    // no conversation to land in anyway).
-    const [uThread] = await db
-      .select({ id: slackThreads.id })
-      .from(slackThreads)
-      .where(eq(slackThreads.conversationId, uId))
-      .limit(1);
-    if (uThread) {
-      await db.delete(slackThreads).where(eq(slackThreads.conversationId, vId));
-    } else {
-      await db.update(slackThreads).set({ conversationId: uId }).where(eq(slackThreads.conversationId, vId));
-    }
+    // A conversation can own many Slack threads and all of them stay live —
+    // repoint every one of the anonymous visitor's threads onto the merged
+    // user conversation so replies there keep routing.
+    await db.update(slackThreads).set({ conversationId: uId }).where(eq(slackThreads.conversationId, vId));
     await db.delete(channelBindings).where(eq(channelBindings.id, vb.binding.id));
     await db.delete(conversations).where(eq(conversations.id, vId));
 
