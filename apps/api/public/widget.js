@@ -771,13 +771,15 @@
           ? cfg.agent_name + ' · replies in seconds'
           : '';
     if (cfg.logo_url) {
+      // Uploaded logos are /uploads/… paths on the API origin, not the host page's.
+      var logoSrc = /^https?:\/\//.test(cfg.logo_url) ? cfg.logo_url : API + cfg.logo_url;
       var logo = document.createElement('img');
       logo.className = 'janis-logo';
-      logo.src = cfg.logo_url;
+      logo.src = logoSrc;
       logo.alt = '';
       panel.querySelector('#janis-head').insertBefore(logo, panel.querySelector('#janis-head').firstChild);
       var bub = document.createElement('img');
-      bub.src = cfg.logo_url;
+      bub.src = logoSrc;
       bub.alt = '';
       bubble.textContent = '';
       bubble.appendChild(bub);

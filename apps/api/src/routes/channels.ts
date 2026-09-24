@@ -42,7 +42,10 @@ const patchChannel = z.object({
       quick_replies: z.array(z.string().min(1).max(120)).max(8).optional(),
       accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).or(z.literal('')).optional(),
       position: z.enum(['left', 'right']).optional(),
-      logo_url: z.string().url().max(500).or(z.literal('')).optional(),
+      // absolute http(s) url or an uploaded image path; '' clears
+      logo_url: z
+        .union([z.literal(''), z.string().url().max(500), z.string().regex(/^\/uploads\//).max(500)])
+        .optional(),
     })
     .optional(),
   // webchat: HMAC key for signed visitor identity (Janis.identify sig); '' clears

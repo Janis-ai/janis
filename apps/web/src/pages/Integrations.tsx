@@ -654,6 +654,19 @@ function WebchatBranding({ channel }: { channel: Channel }) {
     quick_replies: (b.quick_replies ?? []).join(', '),
   });
   const [msg, setMsg] = useState('');
+  const uploadLogo = async (file: File) => {
+    setMsg('Uploading…');
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/uploads', { method: 'POST', body: fd, credentials: 'include' });
+    if (res.ok) {
+      const att = (await res.json()) as { url: string };
+      setF((cur) => ({ ...cur, logo_url: att.url }));
+      setMsg('Logo uploaded — save appearance to apply.');
+    } else {
+      setMsg('Upload failed.');
+    }
+  };
   const save = useMutation({
     mutationFn: () =>
       api(`/api/channels/${channel.id}`, {
@@ -716,11 +729,39 @@ function WebchatBranding({ channel }: { channel: Channel }) {
         value={f.greeting}
         onChange={(e) => setF({ ...f, greeting: e.target.value })}
       />
-      <input
-        placeholder="Logo image URL — header + bubble icon (optional)"
-        value={f.logo_url}
-        onChange={(e) => setF({ ...f, logo_url: e.target.value })}
-      />
+      <div className="row">
+        <input
+          className="grow"
+          placeholder="Logo image URL — header + bubble icon (optional)"
+          value={f.logo_url}
+          onChange={(e) => setF({ ...f, logo_url: e.target.value })}
+        />
+        <label className="btn" style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          Upload image
+          <input
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void uploadLogo(file);
+              e.target.value = '';
+            }}
+          />
+        </label>
+      </div>
+      {f.logo_url && (
+        <div className="row">
+          <img
+            src={f.logo_url}
+            alt="logo preview"
+            style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', border: '1px solid var(--border, #ddd)' }}
+          />
+          <button type="button" className="btn" onClick={() => setF({ ...f, logo_url: '' })}>
+            Remove logo
+          </button>
+        </div>
+      )}
       <input
         placeholder="Quick replies — comma-separated (optional, e.g. Pricing, Support, Book demo)"
         value={f.quick_replies}
