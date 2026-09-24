@@ -496,9 +496,10 @@ async function dmAlertPointer(
 /**
  * Post an alert into Slack with action buttons and record the thread so
  * subsequent messages mirror into it. A NEW alert always posts a fresh
- * channel message and claims the conversation's thread row — after a
- * takeover/resume cycle a new escalation must be a new top-level alert,
- * not a buried reply. Deduped handoffs (opts.reply) stay in the thread.
+ * channel message — after a takeover/resume cycle a new escalation must
+ * be a new top-level alert, not a buried reply — but the conversation's
+ * thread row never repoints: the first thread stays canonical forever so
+ * it never dies. Deduped handoffs (opts.reply) stay in the thread.
  */
 export async function postSlackAlert(
   db: Db,
@@ -558,17 +559,27 @@ export async function postSlackAlert(
     blocks: alertBlocks(conv, agent, alert, mention),
   });
   if (res.ok) {
-    dmAll(res.channel, res.ts);
     if (existing) {
-      // Point mirroring/interactions at the current escalation thread, then
-      // seed it — a fresh top-level alert still needs its transcript.
-      await db
-        .update(slackThreads)
-        .set({ channelId: res.channel, ts: res.ts })
-        .where(eq(slackThreads.id, existing.id));
-      await seedSlackThread(db, inst, res.channel, res.ts, conv, agent);
+      // Fresh alert, same thread — the canonical thread row stays put so
+      // mirrored replies and thread interactions keep working there forever.
+      // Links point at it, the escalation echoes into it (thread followers
+      // get the bump), and a signpost on the alert's own thread keeps
+      // replies from landing in a dead one.
+      dmAll(existing.channelId, existing.ts);
+      const echo = await slackApi(inst.botToken, 'chat.postMessage', {
+        channel: existing.channelId,
+        thread_ts: existing.ts,
+        text: summary,
+      });
+      if (!echo.ok) console.error('slack thread reply failed:', echo.error);
+      await slackApi(inst.botToken, 'chat.postMessage', {
+        channel: res.channel,
+        thread_ts: res.ts,
+        text: `_This conversation continues in the <https://slack.com/app_redirect?channel=${existing.channelId}&message=${existing.ts}|existing thread> — reply there, not here._`,
+      });
       return;
     }
+    dmAll(res.channel, res.ts);
     const [inserted] = await db
       .insert(slackThreads)
       .values({

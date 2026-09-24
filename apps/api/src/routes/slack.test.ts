@@ -6,12 +6,12 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, conversations, memberships, messages, sessions, slackInstallations, slackThreads, users, workspaces } from '../db/schema.js';
+import { agents, alerts, conversations, memberships, messages, sessions, slackInstallations, slackThreads, users, workspaces } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { slackApiRoutes, slackPublicRoutes } from './slack.js';
-import { removeMemberFromAlertChannels, syncMemberToAlertChannels } from '../lib/slack.js';
+import { postSlackAlert, removeMemberFromAlertChannels, syncMemberToAlertChannels } from '../lib/slack.js';
 import { env } from '../env.js';
 
 let app: Hono;
@@ -205,6 +205,40 @@ describe('slash commands', () => {
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
     expect(conv.state).toBe('active');
     expect(conv.pauseMinutes).toBeNull();
+  });
+
+  it('a fresh alert on a conversation keeps its canonical thread', async () => {
+    // the seeded thread row (ts 1.0) must stay canonical — a second alert
+    // posts a new channel message but never repoints the row
+    await db
+      .update(slackInstallations)
+      .set({ alertChannelId: 'CALERT' })
+      .where(eq(slackInstallations.teamId, 'T_NEW'));
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+        calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+        return new Response('{"ok":true,"channel":"CALERT","ts":"9.9"}', { status: 200 });
+      }),
+    );
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    const [agent] = await db.select().from(agents).where(eq(agents.id, conv.agentId));
+    const [alert] = await db
+      .insert(alerts)
+      .values({ conversationId: conv.id, type: 'help_request', detail: 're-escalated' })
+      .returning();
+    await postSlackAlert(db, agent.workspaceId, conv, agent, alert);
+
+    const posts = calls.filter((c) => c.url.includes('chat.postMessage'));
+    // fresh top-level alert in the channel…
+    expect(posts.some((p) => p.body.channel === 'CALERT' && !p.body.thread_ts)).toBe(true);
+    // …the escalation echoed into the canonical thread…
+    expect(posts.some((p) => p.body.thread_ts === '1.0')).toBe(true);
+    // …and a signpost on the alert's own (dead) thread pointing back
+    expect(posts.some((p) => p.body.thread_ts === '9.9')).toBe(true);
+    const [row] = await db.select().from(slackThreads).where(eq(slackThreads.conversationId, convId));
+    expect(row.ts).toBe('1.0');
   });
 
   it('forwards to legacy when the channel has no mapped conversations', async () => {
