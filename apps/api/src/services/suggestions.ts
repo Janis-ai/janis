@@ -5,7 +5,7 @@ import { bus } from '../lib/bus.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toSuggestion } from '../lib/serializers.js';
 import { recordLlmUsage } from '../lib/usage.js';
-import { env } from '../env.js';
+import { llmFor, type LlmSettings } from '../lib/llm.js';
 import type { users } from '../db/schema.js';
 import { TakeoverError } from './takeover.js';
 
@@ -16,8 +16,8 @@ type ConvRow = typeof conversations.$inferSelect;
 /**
  * Ask for a suggested reply. If the agent has a webhook configured we send it
  * `suggestion.request` — the agent knows its own model and context, and POSTs
- * the result to /v1/suggestions. Otherwise fall back to a Janis-side LLM call
- * when JANIS_LLM_API_KEY is set.
+ * the result to /v1/suggestions. Otherwise fall back to the agent's LLM
+ * settings (its own key when BYOK, else the platform key).
  */
 export async function requestSuggestion(
   db: Db,
@@ -41,21 +41,23 @@ export async function requestSuggestion(
     return { mode: 'agent' };
   }
 
-  const result = await generateWithLlm(db, conv);
+  const llm = llmFor(agent);
+  const result = await generateWithLlm(db, conv, llm);
   if (result) {
     await recordLlmUsage(db, {
       workspaceId: agent.workspaceId,
       agentId: agent.id,
       conversationId: conv.id,
-      model: env.llmModel,
+      model: llm.model,
       promptTokens: result.promptTokens,
       completionTokens: result.completionTokens,
+      byok: llm.byok,
     });
   }
   const text = result?.text;
   if (!text) {
     throw new TakeoverError(
-      'no suggestion source — set the agent webhook_url or JANIS_LLM_API_KEY',
+      'no suggestion source — set the agent webhook_url or configure an LLM',
       400,
     );
   }
@@ -92,8 +94,9 @@ export async function storeSuggestion(
 async function generateWithLlm(
   db: Db,
   conv: ConvRow,
+  llm: LlmSettings,
 ): Promise<{ text: string; promptTokens: number; completionTokens: number } | null> {
-  if (!env.llmApiKey) return null;
+  if (!llm.apiKey) return null;
   const recent = await db
     .select()
     .from(messages)
@@ -107,14 +110,14 @@ async function generateWithLlm(
     .join('\n');
 
   try {
-    const res = await fetch(`${env.llmBaseUrl}/chat/completions`, {
+    const res = await fetch(`${llm.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${env.llmApiKey}`,
+        authorization: `Bearer ${llm.apiKey}`,
       },
       body: JSON.stringify({
-        model: env.llmModel,
+        model: llm.model,
         max_tokens: 300,
         messages: [
           {

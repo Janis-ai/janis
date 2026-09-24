@@ -37,7 +37,7 @@ npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod)
 - apps/api/.env runs LIVE mode (sk_live + live price ids). Test-mode equivalents are kept alongside as `*_TEST` vars — swap them back for local billing work.
 - Live webhook endpoint we_1UHwWgLuGzRk7fCQQpisSIEG → https://app.janis.ai/billing/stripe-webhook (created via API 2026-09; the old janis.ai endpoint was disabled and deleted). Test mode has its own endpoint at janis.ai. Local dev uses `stripe listen --api-key $STRIPE_SECRET_KEY_TEST --forward-to localhost:8787/billing/stripe-webhook` (the whsec it prints goes in STRIPE_WEBHOOK_SECRET_TEST).
 - Customer Portal configured on both modes: card updates, invoice history, immediate cancel.
-- Meters (both modes): janis.messages (1 per stored message) and janis.llm_micros (billed micro-USD incl. margin per LLM call). Metered prices: test starter/pro/scale = price_1UFwMP…gq7Q/…XxYp/…HBJcnK, llm = price_1UFwMQ…C8tOE; live starter/pro/scale = price_1UFwMR…HYZq/…Zjls/…TkO, llm = price_1UFwMT…ion8. Checkout adds the plan's metered price + LLM price as extra line items.
+- Meters (both modes): janis.messages (1 per stored message) and janis.llm_micros (billed micro-USD incl. margin per LLM call). BYOK agents (config.llm.api_key or base_url set) record usage events at costMicros=0 — never metered. Metered prices: test starter/pro/scale = price_1UFwMP…gq7Q/…XxYp/…HBJcnK, llm = price_1UFwMQ…C8tOE; live starter/pro/scale = price_1UFwMR…HYZq/…Zjls/…TkO, llm = price_1UFwMT…ion8. Checkout adds the plan's metered price + LLM price as extra line items.
 - .env edits do NOT trigger tsx watch reloads — restart the API after changing env.
 
 ## Deploy (Cloud Run)
