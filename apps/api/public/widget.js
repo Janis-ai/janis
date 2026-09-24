@@ -381,13 +381,14 @@
       state.seen[m.id] = 1;
     }
     if (m.direction !== 'in') hideTyping();
-    // A visitor message means any pending prompt was answered — drop the chips.
-    if (m.direction === 'in') clearChips();
     var d = buildMsgEl(m);
     msgs.appendChild(d);
-    // Per-message tappable choices (e.g. "Yes, get a human" on an offer).
+    // Chips belong to the message that offered them — a visitor send or any
+    // newer message without its own quick replies retires the offer.
     if (m.direction !== 'in' && m.quick_replies && m.quick_replies.length) {
       renderChips(m.quick_replies);
+    } else {
+      clearChips();
     }
     if (state.qrsEl) msgs.appendChild(state.qrsEl); // keep chips under the newest bubble
     msgs.scrollTop = msgs.scrollHeight;
@@ -604,6 +605,7 @@
             o.el.classList.remove('pending'); // promoted: server echo confirms delivery
             if (o.statusEl) o.statusEl.remove();
             showDelivered(o); // receipt moves to the newest confirmed bubble
+            clearChips(); // the visitor's own send answers any pending offer
             if (m.id) state.seen[m.id] = 1;
             if (m.created_at && (!state.lastTs || m.created_at > state.lastTs)) state.lastTs = m.created_at;
             return;
@@ -611,6 +613,8 @@
           if (m.direction !== 'in') gotReply = true;
           addMsg(m);
         });
+        // A pending offer is moot once a human owns the conversation.
+        if (state.convState === 'human') clearChips();
         // A fresh reply means whoever was typing stopped — clear both flags
         // outright rather than re-asserting stale ones; a still-typing
         // operator re-marks on their next ping and a working agent re-flags

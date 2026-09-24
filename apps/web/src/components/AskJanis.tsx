@@ -306,9 +306,14 @@ export function AskJanis({
       if (fresh.length) {
         setMsgs((cur) => [...cur, ...fresh]);
         if (gotReply) hideTyping();
-        if (fresh.some((m) => m.direction === 'in')) setChips(null);
-        const qr = [...fresh].reverse().find((m) => m.direction !== 'in' && m.quick_replies?.length);
-        if (qr?.quick_replies) setChips(qr.quick_replies);
+      }
+      // Chips belong to the newest message only — a visitor send (including
+      // an echo swallowed by the outbox match above) or any newer message
+      // without its own quick replies retires the offer.
+      const sawInbound = d.messages.some((m) => m.direction === 'in');
+      if (fresh.length || sawInbound) {
+        const last = fresh[fresh.length - 1];
+        setChips(last && last.direction !== 'in' && last.quick_replies?.length ? last.quick_replies : null);
       }
       setOpTyping(gotReply ? null : d.operator_typing ? (d.operator_typing.name ?? '') : null);
       setAgentTyping(gotReply ? false : !!d.agent_typing);
@@ -572,7 +577,7 @@ export function AskJanis({
             </span>
           </div>
         )}
-        {(chips ?? (!loaded || msgs.length ? null : cfg?.quick_replies ?? null))?.length ? (
+        {convState !== 'human' && (chips ?? (!loaded || msgs.length ? null : cfg?.quick_replies ?? null))?.length ? (
           <div className="ask-qrs">
             {(chips ?? cfg?.quick_replies ?? []).map((q) => (
               <button key={q} className="btn" onClick={() => void send(q, [])}>{q}</button>
