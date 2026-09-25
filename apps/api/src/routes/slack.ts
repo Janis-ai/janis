@@ -19,6 +19,7 @@ import {
   slackApi,
   slackChannelInfo,
   slackUserToMember,
+  teamDomainFor,
   verifyAvatarSig,
   verifySlackSignature,
 } from '../lib/slack.js';
@@ -290,6 +291,10 @@ export function slackPublicRoutes(db: Db) {
         migrated: existing?.migrated ?? false,
       })
       .returning();
+
+    // Cache the workspace subdomain (auth.test url) so thread deep links
+    // are built on the workspace's own host from the first alert.
+    await teamDomainFor(db, inst).catch(() => null);
 
     // Default to an existing Janis channel — #janis-alerts first, then any
     // janis-* match. When none exists we leave it unset: Settings prompts

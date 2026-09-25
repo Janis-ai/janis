@@ -281,6 +281,13 @@
       "when": 1790310642473,
       "tag": "0039_slack-thread-drop-last-reply",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1790310951759,
+      "tag": "0040_slack-team-domain",
+      "breakpoints": true
     }
   ]
 }

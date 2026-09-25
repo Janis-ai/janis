@@ -170,7 +170,7 @@ describe('slash commands', () => {
     convId = conv.id;
     const [inst] = await db
       .insert(slackInstallations)
-      .values({ workspaceId: ws.id, teamId: 'T_NEW', botToken: 'xoxb-test', installerUserId: admin.id })
+      .values({ workspaceId: ws.id, teamId: 'T_NEW', teamDomain: 'janis-ai', botToken: 'xoxb-test', installerUserId: admin.id })
       .returning();
     await db
       .insert(slackThreads)
@@ -250,7 +250,7 @@ describe('slash commands', () => {
       .flatMap((b) => b.elements ?? [])
       .find((e) => e.action_id === 'janis_view_thread');
     expect(threadBtn?.url).toBe(
-      'https://app.slack.com/client/T_NEW/CALERT/thread/CALERT-1.0',
+      'https://janis-ai.slack.com/client/T_NEW/CALERT/thread/CALERT-1.0',
     );
     expect(calls.some((c) => c.url.includes('chat.getPermalink'))).toBe(false);
     // nothing posted into the thread, and no new thread registered

@@ -259,6 +259,9 @@ export const slackInstallations = pgTable('slack_installations', {
     .notNull()
     .references(() => workspaces.id),
   teamId: text('team_id').notNull(),
+  // workspace subdomain (janis-ai) — resolved via auth.test; used to build
+  // client deep links on the workspace's own host
+  teamDomain: text('team_domain'),
   botToken: text('bot_token').notNull(),
   alertChannelId: text('alert_channel_id'),
   installerUserId: uuid('installer_user_id').references(() => users.id),

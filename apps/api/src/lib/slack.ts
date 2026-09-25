@@ -611,13 +611,38 @@ export async function resolveSlackActionCards(
   }
 }
 
+/** The workspace's slack.com subdomain — read from the installation row,
+ * resolved once via auth.test (no extra scope: it returns the workspace
+ * url) and cached back onto the row. Null when Slack won't say — callers
+ * fall back to app.slack.com, which routes by team id anyway. */
+export async function teamDomainFor(db: Db, inst: Installation): Promise<string | null> {
+  if (inst.teamDomain) return inst.teamDomain;
+  const res = await slackApi<{ url?: string }>(inst.botToken, 'auth.test', {}).catch(() => null);
+  const host = res?.ok && res.url ? new URL(res.url).hostname : '';
+  const domain = host.endsWith('.slack.com') ? host.slice(0, -'.slack.com'.length) : null;
+  if (domain) {
+    await db
+      .update(slackInstallations)
+      .set({ teamDomain: domain })
+      .where(eq(slackInstallations.id, inst.id));
+  }
+  return domain;
+}
+
 /** A link that opens the thread panel WITHOUT moving the channel's scroll
- * position — the app.slack.com/client/.../thread/ route opens the right
- * pane directly (the HTTPS form of slack://channel?…&thread_ts=…), unlike
- * archives permalinks which jump the channel to the anchor. Built from
- * locally-stored ids, so it needs no Slack API call. */
-function threadLink(teamId: string, channelId: string, threadTs: string): string {
-  return `https://app.slack.com/client/${teamId}/${channelId}/thread/${channelId}-${threadTs}`;
+ * position — the <workspace>.slack.com/client/.../thread/ route opens the
+ * right pane directly (the HTTPS form of slack://channel?…&thread_ts=…),
+ * unlike archives permalinks which jump the channel to the anchor.
+ * app.slack.com is the fallback host and works identically. */
+async function threadLink(
+  db: Db,
+  inst: Installation,
+  channelId: string,
+  threadTs: string,
+): Promise<string> {
+  const domain = await teamDomainFor(db, inst);
+  const host = domain ? `${domain}.slack.com` : 'app.slack.com';
+  return `https://${host}/client/${inst.teamId}/${channelId}/thread/${channelId}-${threadTs}`;
 }
 
 /**
@@ -670,8 +695,9 @@ export async function postSlackAlert(
     // of anchoring a parallel one. Store where the card landed so
     // updateSlackAlert can refresh its buttons.
     const t = existing[0];
-    const link = threadLink(
-      t.installation.teamId,
+    const link = await threadLink(
+      db,
+      t.installation,
       t.slackThreads.channelId,
       t.slackThreads.ts,
     );
@@ -711,7 +737,7 @@ export async function postSlackAlert(
         ts: res.ts,
       })
       .onConflictDoNothing();
-    dmAll(threadLink(inst.teamId, res.channel, res.ts));
+    dmAll(await threadLink(db, inst, res.channel, res.ts));
     await seedSlackThread(db, inst, res.channel, res.ts, conv, agent);
   } else {
     console.error('slack alert post failed:', res.error);
