@@ -213,6 +213,7 @@ export function agentRoutes(db: Db) {
                 signal: AbortSignal.timeout(8000),
               });
               if (!res.ok) {
+                console.warn(`metered /models failed for ${a.vendor}: ${res.status}`);
                 return {
                   vendor: a.vendor,
                   base_url: a.baseUrl,
@@ -230,11 +231,13 @@ export function agentRoutes(db: Db) {
                   .sort(),
               };
             } catch (e) {
+              const msg = e instanceof Error ? e.message : 'fetch failed';
+              console.warn(`metered /models failed for ${a.vendor}: ${msg}`);
               return {
                 vendor: a.vendor,
                 base_url: a.baseUrl,
                 models: [] as string[],
-                error: `${a.vendor}: ${e instanceof Error ? e.message : 'fetch failed'}`,
+                error: `${a.vendor}: ${msg}`,
               };
             }
           }),

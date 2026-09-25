@@ -1152,8 +1152,9 @@ function LlmCard({
       if (r.accounts) {
         setMeteredAccounts(r.accounts);
         if (r.default_model) setMeteredDefault(r.default_model);
-        const errs = r.accounts.map((a) => a.error).filter(Boolean);
-        if (errs.length) setModelsMsg(`couldn't list models: ${errs.join(' · ')}`);
+        // provider errors are operator-side (bad key, no credits) — logged
+        // server-side, never shown to customers; errored vendors' models
+        // are simply absent from the picker
       } else {
         setLiveModels(r.models ?? []);
         if (r.error) setModelsMsg(`couldn't list models: ${r.error}`);
@@ -1251,6 +1252,7 @@ function LlmCard({
     // correctly, and the runtime refuses it anyway
     const priced = (o: ModelOption) => catalogRateFor(o.id) != null;
     for (const acc of meteredAccounts ?? []) {
+      if (acc.error) continue; // unreachable account — its models can't run
       // 'default' (unknown base_url) and 'openrouter' (routes all vendors)
       // accounts expose the whole catalog
       const vend =
