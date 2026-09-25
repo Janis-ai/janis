@@ -9,6 +9,9 @@ export interface StreamAlert {
   detail: string | null;
   status: string;
   created_at: string;
+  /** Alert went out before its notification payload was ready (handoff
+   * brief still generating) — the enriched republish carries the toast. */
+  pending?: boolean;
   /** The same payload push/email send — the toast renders it verbatim. */
   notification?: { title: string; body: string; url?: string };
 }

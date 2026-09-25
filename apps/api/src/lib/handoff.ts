@@ -107,6 +107,7 @@ export async function enrichHandoff(
   try {
     const summary = await summarizeHandoff(db, agent, conv, reason).catch(() => null);
 
+    let alertPublished = false;
     if (summary) {
       const payload = { ...(note.payload as Record<string, unknown>), summary };
       await db.update(messages).set({ payload }).where(eq(messages.id, note.id));
@@ -125,6 +126,7 @@ export async function enrichHandoff(
             type: 'alert',
             data: { ...toAlert(a), notification: await alertNotification(db, a, conv, agent) },
           });
+          alertPublished = true;
         }
       }
     }
@@ -132,6 +134,14 @@ export async function enrichHandoff(
     if (isNewAlert && alertId) {
       const [alert] = await db.select().from(alerts).where(eq(alerts.id, alertId)).limit(1);
       if (!alert) return;
+      if (!alertPublished) {
+        // The create event went out pending enrichment — with no brief the
+        // in-app toast still needs its notification payload.
+        bus.publish(agent.workspaceId, {
+          type: 'alert',
+          data: { ...toAlert(alert), notification: await alertNotification(db, alert, conv, agent) },
+        });
+      }
       void postSlackAlert(db, agent.workspaceId, conv, agent, alert);
       void notifyWorkspace(
         db,

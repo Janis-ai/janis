@@ -185,9 +185,19 @@ export async function processEvents(
       if (!created) continue;
       alertIds.push(alert.id);
       newAlertTypes.push(alert.type);
+      // Handoff toasts wait for the AI brief — enrichHandoff republishes
+      // with the same payload push/email get. Firing a toast now off the
+      // raw reason would read as a second alert for the same message.
+      const enrichPending = triggered.type === 'help_request';
       bus.publish(agent.workspaceId, {
         type: 'alert',
-        data: { ...toAlert(alert), notification: await alertNotification(db, alert, conv, agent) },
+        data: {
+          ...toAlert(alert),
+          notification: enrichPending
+            ? undefined
+            : await alertNotification(db, alert, conv, agent),
+          ...(enrichPending ? { pending: true } : {}),
+        },
       });
       if (triggered.type === 'help_request') {
         // handoff alerts notify after the "what does the customer need"

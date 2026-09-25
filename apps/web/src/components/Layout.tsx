@@ -134,8 +134,9 @@ export default function Layout() {
   const onAlert = useCallback(
     (alert: StreamAlert) => {
       // resolved-alert republishes (takeover/resolve) refresh queries only —
-      // they must not pop a "needs attention" toast
-      if (alert.status !== 'open') return;
+      // they must not pop a "needs attention" toast. `pending` alerts fire
+      // their toast when enrichment republishes with the real payload.
+      if (alert.status !== 'open' || alert.pending) return;
       // One toast per conversation+issue — enrichment republishes, re-alert
       // bumps, and (rare) duplicate alert rows all update the same toast
       // rather than stacking. If it expired, the republish re-shows it.

@@ -204,6 +204,27 @@ export async function alertChannelFor(
   return inst.alertChannelId;
 }
 
+/** Post to a channel; if the bot isn't a member yet (e.g. a freshly-created
+ * alert channel), join it and retry once — Slack answers not_in_channel
+ * rather than posting for non-members even with chat:write.public. */
+async function postChannelMessage(
+  inst: Installation,
+  channelId: string,
+  body: Record<string, unknown>,
+): Promise<{ ok: boolean; channel?: string; ts?: string; error?: string }> {
+  const post = () =>
+    slackApi<{ channel?: string; ts?: string }>(inst.botToken, 'chat.postMessage', {
+      channel: channelId,
+      ...body,
+    });
+  let res = await post();
+  if (!res.ok && (res.error === 'not_in_channel' || res.error === 'channel_not_found')) {
+    await slackApi(inst.botToken, 'conversations.join', { channel: channelId }).catch(() => null);
+    res = await post();
+  }
+  return res;
+}
+
 /** Post a plain message to the workspace's alert channel (or a thread). */
 export async function postSlackMessage(
   db: Db,
@@ -214,8 +235,7 @@ export async function postSlackMessage(
   const inst = await getInstallation(db, workspaceId);
   const channel = opts.channelId ?? inst?.alertChannelId;
   if (!inst || !channel) return null;
-  const res = await slackApi<{ channel: string; ts: string }>(inst.botToken, 'chat.postMessage', {
-    channel,
+  const res = await postChannelMessage(inst, channel, {
     text,
     ...(opts.threadTs ? { thread_ts: opts.threadTs } : {}),
   });
@@ -717,15 +737,10 @@ export async function postSlackAlert(
       t.slackThreads.ts,
       t.slackThreads.lastReplyTs ?? undefined,
     );
-    const res = await slackApi<{ channel: string; ts: string }>(
-      t.installation.botToken,
-      'chat.postMessage',
-      {
-        channel: t.slackThreads.channelId,
-        text: summary,
-        blocks: alertBlocks(conv, agent, alert, mention, link),
-      },
-    );
+    const res = await postChannelMessage(t.installation, t.slackThreads.channelId, {
+      text: summary,
+      blocks: alertBlocks(conv, agent, alert, mention, link),
+    });
     if (!res.ok || !res.ts) {
       console.error('slack alert post failed:', res.error);
       return;
@@ -738,12 +753,11 @@ export async function postSlackAlert(
     return;
   }
 
-  const res = await slackApi<{ channel: string; ts: string }>(inst.botToken, 'chat.postMessage', {
-    channel: channelId,
+  const res = await postChannelMessage(inst, channelId, {
     text: summary,
     blocks: alertBlocks(conv, agent, alert, mention),
   });
-  if (res.ok) {
+  if (res.ok && res.channel && res.ts) {
     await db
       .insert(slackThreads)
       .values({
@@ -1125,11 +1139,10 @@ export async function slackNotice(
   if (!inst) return;
   const channelId = await alertChannelFor(db, inst, conv.agentId);
   if (!channelId) return;
-  const res = await slackApi<{ channel: string; ts: string }>(inst.botToken, 'chat.postMessage', {
-    channel: channelId,
+  const res = await postChannelMessage(inst, channelId, {
     text: `${label} ${text} — \`${conv.externalId}\``,
   });
-  if (!res.ok) {
+  if (!res.ok || !res.channel || !res.ts) {
     console.error('slack notice failed:', res.error);
     return;
   }
