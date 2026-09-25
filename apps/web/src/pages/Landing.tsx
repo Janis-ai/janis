@@ -1,10 +1,25 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMe } from '../api/hooks';
 import { api } from '../api/client';
 import { SiteFooter } from '../components/bits';
 
 const FEATURES = [
+  {
+    icon: '/img/value-delight.png',
+    title: 'AI proposes, you approve',
+    body: 'Refunds, order changes, subscription edits — the agent drafts the action, a teammate approves it in one click, and the customer never sees the seam.',
+  },
+  {
+    icon: '/img/value-boost.png',
+    title: 'Every rescue teaches the agent',
+    body: 'Recurring escalations cluster into knowledge gaps — Janis drafts the fix, you approve, and the same question never reaches a human twice.',
+  },
+  {
+    icon: '/img/home-delight.png',
+    title: 'Take over from Slack',
+    body: 'Escalations arrive with an AI brief — reply in-thread, run it with /pause, /resume, /note, /teach.',
+  },
   {
     icon: '/img/home-connect.png',
     title: 'Every channel, one inbox',
@@ -16,48 +31,93 @@ const FEATURES = [
     body: 'Run your agent inside Janis, or keep the one you built and connect it with a webhook.',
   },
   {
-    icon: '/img/home-delight.png',
-    title: 'Take over from Slack',
-    body: 'Escalations arrive with an AI brief — reply in-thread, run it with /pause, /resume, /note, /teach.',
-  },
-  {
-    icon: '/img/value-boost.png',
-    title: 'Every rescue teaches the agent',
-    body: 'Recurring escalations cluster into knowledge gaps — Janis drafts the fix, you approve.',
-  },
-  {
-    icon: '/img/value-delight.png',
-    title: 'A handoff that feels human',
-    body: 'Typing indicators, receipts, operator personas — customers see a person, not a broken bot.',
-  },
-  {
     icon: '/img/value-reduce.png',
     title: 'Know what it costs, always',
     body: 'Per-message pricing, token usage metered to the cent, unlimited seats and channels.',
   },
 ];
 
+const DEPLOY_ON = ['Web chat', 'Messenger', 'Instagram', 'WhatsApp', 'Slack'];
+// Mirrors the toolTemplates catalog — keep in sync.
+const ACT_IN = ['Shopify', 'Stripe', 'HubSpot', 'Zendesk', 'Salesforce', 'Cal.com'];
+
 const DIFFERENT: [string, string, string][] = [
   ['Your agent', 'Rebuild it on their bot platform', 'Keep yours — or use ours'],
   ['The handoff', 'A bolted-on escape hatch', 'The core of the product'],
+  ['When the AI needs to act', 'Executes unsupervised — or can’t', 'A human approves the action first'],
   ['When the AI fails', 'A dashboard shows you where', 'Janis drafts the fix for you'],
   ['Pricing', 'Per seat, per teammate', 'Per message + metered tokens'],
 ];
 
 // Mirrors apps/api/src/lib/plans.ts — keep in sync until plans are exposed via a public endpoint.
 const PRICING = [
-  { name: 'Free', price: '$0', msgs: '250 messages/mo', note: 'Hard cap at the limit — never a surprise bill', cta: 'Start free' },
-  { name: 'Starter', price: '$29', msgs: '2,000 messages/mo', note: 'then $8 per 1,000' },
-  { name: 'Pro', price: '$99', msgs: '20,000 messages/mo', note: 'then $5 per 1,000', featured: true },
-  { name: 'Scale', price: '$299', msgs: '100,000 messages/mo', note: 'then $3 per 1,000' },
+  { name: 'Free', price: '$0', msgs: '250 messages included / month', note: 'Hard cap at the limit — never a surprise bill', cta: 'Start free' },
+  { name: 'Starter', price: '$29', msgs: '2,000 messages included / month', note: 'then $8 per additional 1,000 messages' },
+  { name: 'Pro', price: '$99', msgs: '20,000 messages included / month', note: 'then $5 per additional 1,000 messages', featured: true },
+  { name: 'Scale', price: '$299', msgs: '100,000 messages included / month', note: 'then $3 per additional 1,000 messages' },
 ];
 
-const STEPS = [
-  ['Connect', 'Link your channels and your agent — hosted on Janis or your own webhook.'],
-  ['Agent answers', 'Instant replies grounded in your knowledge base, 24/7.'],
-  ['Human steps in', 'Slack alert with an AI brief — reply in-thread and you’re talking to the customer.'],
-  ['Hand it back', 'Resume the agent; the exchange becomes training data.'],
+type Beat =
+  | { kind: 'in' | 'out'; text: string }
+  | { kind: 'card' }
+  | { kind: 'flip' } // invisible beat — the card resolves before the agent replies
+  | { kind: 'note'; text: string };
+
+const SCRIPT: Beat[] = [
+  { kind: 'in', text: 'Can I get a refund on my order?' },
+  { kind: 'out', text: 'Absolutely — let me put that through for you.' },
+  { kind: 'card' },
+  { kind: 'flip' },
+  { kind: 'out', text: 'Done — your refund for $49.00 is on its way. Anything else?' },
+  { kind: 'note', text: 'The customer saw a seamless conversation. A teammate approved the action in one click.' },
 ];
+
+const STEP_MS = 1700;
+const HOLD_MS = 6000;
+
+/** Scripted replay of the approval flow — loops forever. */
+function DemoStrip() {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(
+      () => setStep((s) => (s >= SCRIPT.length ? 0 : s + 1)),
+      step >= SCRIPT.length ? HOLD_MS : STEP_MS,
+    );
+    return () => clearTimeout(t);
+  }, [step]);
+
+  const approved = step >= 4; // card flips to approved when the agent confirms
+  return (
+    <div className="demo-window">
+      <div className="demo-header">
+        <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
+        <span className="demo-title">Customer · Web chat</span>
+      </div>
+      <div className="demo-body">
+        {SCRIPT.slice(0, step).map((b, i) =>
+          b.kind === 'card' ? (
+            <div key={i} className={`demo-card${approved ? ' approved' : ''}`}>
+              <div className="demo-card-tool">propose_refund</div>
+              <div className="demo-card-args">order #1042 · $49.00</div>
+              {approved ? (
+                <div className="demo-card-done">✓ Approved by Mike — ran successfully</div>
+              ) : (
+                <div className="demo-card-btns">
+                  <span className="demo-btn primary">Approve &amp; run</span>
+                  <span className="demo-btn">Deny</span>
+                </div>
+              )}
+            </div>
+          ) : b.kind === 'note' ? (
+            <div key={i} className="demo-note">{b.text}</div>
+          ) : b.kind === 'flip' ? null : (
+            <div key={i} className={`demo-msg ${b.kind}`}>{b.text}</div>
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
 
 /** Public landing page — also satisfies the OAuth consent screen home URL. */
 export default function Landing() {
@@ -102,11 +162,12 @@ export default function Landing() {
       </header>
 
       <section className="landing-hero">
-        <h1>Your AI agent has a help button.</h1>
+        <h1>AI and your team, working together.</h1>
         <p>
-          Janis is the oversight layer for AI agents. It answers your customers on
-          Messenger, Instagram, WhatsApp, Slack, and web chat — hands off to a human
-          when it matters, and learns from every rescue.
+          Janis answers your customers 24/7 on Messenger, Instagram, WhatsApp,
+          Slack, and web chat — and hands off to your team when it matters.
+          Your AI proposes the refund; a human approves it. The customer never
+          sees the seam.
         </p>
         <div className="row" style={{ justifyContent: 'center', gap: 12 }}>
           <Link className="btn primary lg" to={cta.to}>{cta.label}</Link>
@@ -128,6 +189,18 @@ export default function Landing() {
         <p className="landing-fine">Free plan available · No credit card required</p>
       </section>
 
+      <section className="landing-steps">
+        <h2>Watch the handoff happen</h2>
+        <p className="landing-sub">
+          AI drafts the action. A human approves it. The customer just sees a fast answer.
+        </p>
+        <DemoStrip />
+        <p className="landing-fine">
+          Try it for real — ask the Janis bot in the corner for a refund and watch
+          the approval card appear.
+        </p>
+      </section>
+
       <section className="landing-grid">
         {FEATURES.map((f) => (
           <div key={f.title} className="card landing-card">
@@ -139,15 +212,58 @@ export default function Landing() {
       </section>
 
       <section className="landing-steps">
-        <h2>How it works</h2>
-        <div className="landing-grid four">
-          {STEPS.map(([title, body], i) => (
-            <div key={title} className="landing-step">
-              <div className="landing-stepnum">{i + 1}</div>
-              <strong>{title}</strong>
-              <p className="muted">{body}</p>
+        <h2>Works with what you already use</h2>
+        <p className="landing-sub">
+          Deploy where your customers are. Let your agent act in the tools your team runs on.
+        </p>
+        <div className="chip-rows">
+          <div className="chip-row">
+            <span className="chip-label">Deploy on</span>
+            {DEPLOY_ON.map((n) => <span key={n} className="chip">{n}</span>)}
+          </div>
+          <div className="chip-row">
+            <span className="chip-label">Agent acts in</span>
+            {ACT_IN.map((n) => <span key={n} className="chip">{n}</span>)}
+          </div>
+        </div>
+        <p className="landing-fine">
+          Or connect your own agent — keep what you built, connect it with a webhook or the SDK.
+        </p>
+      </section>
+
+      <section className="landing-steps">
+        <h2>Your brand, not ours</h2>
+        <div className="landing-brand">
+          <div className="landing-brand-copy">
+            <p className="muted">
+              Colors, your logo, launcher position, greeting, suggested replies —
+              the chat bubble should look like it belongs on your site, because it
+              does. Agencies can put their client’s name on every conversation.
+            </p>
+          </div>
+          <div className="brand-mock">
+            <div className="brand-mock-head" style={{ background: '#f99157' }}>
+              <span className="brand-mock-dot" /> Acme Co · replies instantly
             </div>
-          ))}
+            <div className="brand-mock-body">
+              <div className="demo-msg out" style={{ background: '#f99157' }}>
+                Hi! How can we help today?
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="landing-steps">
+        <h2>Build once. Deploy everywhere.</h2>
+        <p className="landing-sub">
+          One agent — its knowledge, tone, tools, and escalation rules — answers
+          everywhere. Configure it once; Janis carries it to every channel.
+        </p>
+        <div className="omni">
+          <span className="chip strong">Your agent</span>
+          <span className="omni-arrow">→</span>
+          {DEPLOY_ON.map((n) => <span key={n} className="chip">{n}</span>)}
         </div>
       </section>
 

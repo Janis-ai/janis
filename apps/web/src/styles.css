@@ -598,6 +598,70 @@ details summary:hover { color: var(--text); }
 }
 .landing-cta { text-align: center; padding: 48px 16px 64px; }
 .landing-cta p { margin: 0 0 22px; }
+.landing-sub { color: var(--muted); text-align: center; max-width: 560px; margin: -8px auto 22px; line-height: 1.55; }
+
+/* Scripted approval demo — a fake chat window replaying the gated-tool flow */
+.demo-window {
+  max-width: 540px; margin: 0 auto 14px; border: 1px solid var(--border);
+  border-radius: 14px; overflow: hidden; background: var(--bg2, #14131a);
+  text-align: left;
+}
+.demo-header {
+  display: flex; align-items: center; gap: 6px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border); background: rgba(255,255,255,.02);
+}
+.demo-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
+.demo-title { margin-left: 8px; font-size: 12px; color: var(--muted); }
+.demo-body { padding: 16px; display: flex; flex-direction: column; gap: 10px; min-height: 300px; }
+.demo-msg {
+  max-width: 80%; padding: 9px 13px; border-radius: 14px; font-size: 14px; line-height: 1.45;
+  animation: demo-in .35s ease;
+}
+.demo-msg.in { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.demo-msg.out { align-self: flex-start; background: rgba(255,255,255,.07); border-bottom-left-radius: 4px; }
+.demo-card {
+  align-self: stretch; border: 1px solid var(--accent-dim); border-left: 3px solid var(--accent);
+  border-radius: 10px; padding: 10px 12px; background: rgba(91,33,182,.08);
+  animation: demo-in .35s ease; transition: border-color .3s;
+}
+.demo-card.approved { border-left-color: #34d399; }
+.demo-card-tool { font-family: var(--mono, monospace); font-size: 13px; font-weight: 600; }
+.demo-card-args { color: var(--muted); font-size: 12.5px; margin: 2px 0 8px; }
+.demo-card-btns { display: flex; gap: 8px; }
+.demo-btn {
+  font-size: 12.5px; padding: 5px 12px; border-radius: 7px;
+  border: 1px solid var(--border); color: var(--muted);
+}
+.demo-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.demo-card-done { color: #34d399; font-size: 13px; animation: demo-in .3s ease; }
+.demo-note {
+  align-self: center; text-align: center; color: var(--muted); font-size: 12.5px;
+  font-style: italic; max-width: 380px; animation: demo-in .5s ease; margin-top: 4px;
+}
+@keyframes demo-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* Integration chips + branding mock + omnichannel diagram */
+.chip-rows { display: flex; flex-direction: column; gap: 12px; max-width: 640px; margin: 0 auto 14px; }
+.chip-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
+.chip-label { font-size: 12px; color: var(--muted); width: 110px; text-align: right; margin-right: 4px; }
+.chip {
+  padding: 7px 14px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 13.5px; background: rgba(255,255,255,.03);
+}
+.chip.strong { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.omni { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; max-width: 680px; margin: 0 auto; }
+.omni-arrow { color: var(--muted); }
+.landing-brand { display: flex; gap: 28px; align-items: center; max-width: 720px; margin: 0 auto; flex-wrap: wrap; }
+.landing-brand-copy { flex: 1; min-width: 240px; }
+.brand-mock {
+  width: 250px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+  background: var(--bg2, #14131a); flex-shrink: 0; margin: 0 auto;
+}
+.brand-mock-head { padding: 9px 12px; font-size: 12.5px; font-weight: 600; color: #1a1a1a; display: flex; align-items: center; gap: 7px; }
+.brand-mock-dot { width: 8px; height: 8px; border-radius: 50%; background: #1a1a1a; opacity: .5; }
+.brand-mock-body { padding: 12px; }
+.brand-mock-body .demo-msg { font-size: 12.5px; color: #1a1a1a; }
+@media (max-width: 640px) { .chip-label { width: 100%; text-align: center; } }
 .landing-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; font-size: 13px; padding-top: 24px; border-top: 1px solid var(--border); }
 .landing-footer a { color: var(--muted); }
 @media (max-width: 560px) {

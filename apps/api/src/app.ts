@@ -104,6 +104,17 @@ export function createApp(db: Db) {
     }),
   );
 
+  // First-party echo for the demo concierge's gated propose_refund tool —
+  // returns the caller's own args so approve-and-run has something real to
+  // show without sending demo data to a third party. No storage, no secrets.
+  app.use('/demo/*', rateLimit({ scope: 'demo', windowMs: 60_000, max: 30, methods: ['POST'] }));
+  app.post('/demo/echo', async (c) => {
+    const len = Number(c.req.header('content-length') ?? 0);
+    if (len > 8192) return c.json({ error: 'payload too large' }, 413);
+    const body = await c.req.json().catch(() => null);
+    return c.json({ ok: true, received: body });
+  });
+
   const api = new Hono();
   api.route('/agents', agentRoutes(db));
   api.route('/tool-templates', toolTemplateRoutes(db));
