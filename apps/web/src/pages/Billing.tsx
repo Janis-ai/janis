@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useMe } from '../api/hooks';
+import { catalogForId, prettifyModelName } from '../lib/llmProviders';
 
 interface BillingSummary {
   period: string;
@@ -37,6 +38,7 @@ interface BillingSummary {
   by_agent: {
     agent_id: string | null;
     agent_name: string;
+    model: string | null;
     tokens: number;
     llm_calls: number;
     cost_cents: number;
@@ -253,12 +255,17 @@ export default function Billing() {
               <div className="muted">No metered LLM usage this period.</div>
             )}
             {data.by_agent.map((a) => (
-              <div key={a.agent_id ?? 'none'} className="row" style={{ marginTop: 6 }}>
+              <div key={`${a.agent_id ?? 'none'}:${a.model ?? ''}`} className="row" style={{ marginTop: 6 }}>
                 <span className="grow">
                   {a.agent_name}
+                  {a.model && (
+                    <span className="muted">
+                      {' '}· {catalogForId(a.model)?.name ?? prettifyModelName(a.model)}
+                    </span>
+                  )}
                   {a.byok && <span className="muted"> · own key</span>}
                 </span>
-                <span className="muted">{a.llm_calls} calls · {a.tokens.toLocaleString()} tokens</span>
+                <span className="muted">{a.llm_calls.toLocaleString()} calls · {a.tokens.toLocaleString()} tokens</span>
                 <span className="mono" style={{ width: 80, textAlign: 'right' }}>{usd(a.cost_cents)}</span>
               </div>
             ))}
@@ -268,8 +275,8 @@ export default function Billing() {
             Every stored message counts toward the plan — user, agent, and human replies alike.
             On a capped plan the bot stops answering past the limit and new inbound
             messages are dropped — not transcribed — until the next billing period or an upgrade.
-            LLM tokens are metered on calls Janis makes (hosted agents, suggestions) and passed
-            through at cost + {data.costs.margin_pct}%. Agents configured with their own LLM key
+            LLM tokens are metered on calls Janis makes (hosted agents, suggestions) and billed
+            per model at metered rates. Agents configured with their own LLM key
             run on your provider account — tokens still appear here for visibility, billed at $0.
             Janis never marks up your token spend.
           </div>

@@ -108,6 +108,7 @@ export function billingRoutes(db: Db) {
       .select({
         agentId: usageEvents.agentId,
         agentName: agents.name,
+        model: usageEvents.model,
         promptTokens: sql<number>`coalesce(sum(${usageEvents.promptTokens}), 0)::int`,
         completionTokens: sql<number>`coalesce(sum(${usageEvents.completionTokens}), 0)::int`,
         costMicros: sql<number>`coalesce(sum(${usageEvents.costMicros}), 0)::bigint`,
@@ -116,7 +117,7 @@ export function billingRoutes(db: Db) {
       .from(usageEvents)
       .leftJoin(agents, eq(usageEvents.agentId, agents.id))
       .where(and(eq(usageEvents.workspaceId, workspaceId), eq(usageEvents.period, period)))
-      .groupBy(usageEvents.agentId, agents.name);
+      .groupBy(usageEvents.agentId, agents.name, usageEvents.model);
 
     const [{ count: channelCount }] = await db
       .select({ count: sql<number>`count(*)::int` })
@@ -178,6 +179,7 @@ export function billingRoutes(db: Db) {
       by_agent: byAgent.map((r) => ({
         agent_id: r.agentId,
         agent_name: r.agentName ?? '(deleted)',
+        model: r.model,
         tokens: r.promptTokens + r.completionTokens,
         llm_calls: r.events,
         cost_cents:
