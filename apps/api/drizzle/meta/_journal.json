@@ -274,6 +274,13 @@
       "when": 1790310012315,
       "tag": "0038_slack-thread-last-reply",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1790310642473,
+      "tag": "0039_slack-thread-drop-last-reply",
+      "breakpoints": true
     }
   ]
 }

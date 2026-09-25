@@ -575,10 +575,7 @@ export async function postSlackActionRequest(
       'chat.postMessage',
       { channel: t.slackThreads.channelId, thread_ts: t.slackThreads.ts, text, blocks },
     );
-    if (res.ok && res.ts) {
-      posts.push({ channelId: res.channel ?? t.slackThreads.channelId, ts: res.ts });
-      await markThreadReply(db, t.slackThreads.channelId, t.slackThreads.ts, res.ts);
-    }
+    if (res.ok && res.ts) posts.push({ channelId: res.channel ?? t.slackThreads.channelId, ts: res.ts });
   }
   if (posts.length) {
     await db
@@ -614,50 +611,13 @@ export async function resolveSlackActionCards(
   }
 }
 
-/** Record the newest reply ts on a thread row — "View thread" permalinks
- * land on it. Slack ts are epoch-seconds.micros strings; a lexical guard
- * keeps an out-of-order post from rewinding it. */
-export async function markThreadReply(
-  db: Db,
-  channelId: string,
-  threadTs: string,
-  replyTs: string,
-): Promise<void> {
-  await db
-    .update(slackThreads)
-    .set({ lastReplyTs: replyTs })
-    .where(
-      and(
-        eq(slackThreads.channelId, channelId),
-        eq(slackThreads.ts, threadTs),
-        sql`(${slackThreads.lastReplyTs} is null or ${slackThreads.lastReplyTs} < ${replyTs})`,
-      ),
-    );
-}
-
-/** A link that opens the thread panel highlighting the latest reply —
- * getPermalink on the reply gives the archives URL; thread_ts/cid make
- * Slack open the panel (this is what "Copy link" on a reply produces —
- * app_redirect lands on the channel message without opening the panel).
- * replyTs falls back to the anchor when the thread has no replies yet. */
-async function threadPermalink(
-  token: string,
-  channelId: string,
-  threadTs: string,
-  replyTs?: string,
-): Promise<string> {
-  const target = replyTs ?? threadTs;
-  const res = await slackApi<{ permalink?: string }>(
-    token,
-    'chat.getPermalink',
-    {},
-    { channel: channelId, message_ts: target },
-  ).catch(() => null);
-  if (res?.ok && res.permalink) {
-    const sep = res.permalink.includes('?') ? '&' : '?';
-    return `${res.permalink}${sep}thread_ts=${threadTs}&cid=${channelId}`;
-  }
-  return `https://slack.com/app_redirect?channel=${channelId}&message=${target}`;
+/** A link that opens the thread panel WITHOUT moving the channel's scroll
+ * position — the app.slack.com/client/.../thread/ route opens the right
+ * pane directly (the HTTPS form of slack://channel?…&thread_ts=…), unlike
+ * archives permalinks which jump the channel to the anchor. Built from
+ * locally-stored ids, so it needs no Slack API call. */
+function threadLink(teamId: string, channelId: string, threadTs: string): string {
+  return `https://app.slack.com/client/${teamId}/${channelId}/thread/${channelId}-${threadTs}`;
 }
 
 /**
@@ -710,11 +670,10 @@ export async function postSlackAlert(
     // of anchoring a parallel one. Store where the card landed so
     // updateSlackAlert can refresh its buttons.
     const t = existing[0];
-    const link = await threadPermalink(
-      t.installation.botToken,
+    const link = threadLink(
+      t.installation.teamId,
       t.slackThreads.channelId,
       t.slackThreads.ts,
-      t.slackThreads.lastReplyTs ?? undefined,
     );
     const res = await slackApi<{ channel: string; ts: string }>(
       t.installation.botToken,
@@ -752,7 +711,7 @@ export async function postSlackAlert(
         ts: res.ts,
       })
       .onConflictDoNothing();
-    dmAll(await threadPermalink(inst.botToken, res.channel, res.ts));
+    dmAll(threadLink(inst.teamId, res.channel, res.ts));
     await seedSlackThread(db, inst, res.channel, res.ts, conv, agent);
   } else {
     console.error('slack alert post failed:', res.error);
@@ -796,18 +755,16 @@ async function seedSlackThread(
   const avatar = profile.picture_url ? slackAvatarUrl(conv.id) : null;
   const agentIcon = await agentIconFor(db, conv.id);
 
-  let lastReplyTs: string | undefined;
   const [{ count }] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(messages)
     .where(eq(messages.conversationId, conv.id));
   if (count > recent.length) {
-    const res = await slackApi<{ ts?: string }>(inst.botToken, 'chat.postMessage', {
+    await slackApi(inst.botToken, 'chat.postMessage', {
       channel,
       thread_ts: threadTs,
       text: `_Showing the last ${recent.length} of ${count} messages — <${env.webOrigin}/conversations/${conv.id}|full transcript in Janis>._`,
     });
-    if (res.ok && res.ts) lastReplyTs = res.ts;
   }
 
   for (const m of recent.reverse()) {
@@ -841,25 +798,21 @@ async function seedSlackThread(
               agentIcon,
             )
           : { username: `${agent.name} (agent)`, icon_url: agentIcon };
-    const res2 = await slackApi<{ ts?: string }>(inst.botToken, 'chat.postMessage', {
+    const res2 = await slackApi(inst.botToken, 'chat.postMessage', {
       channel,
       thread_ts: threadTs,
       text: isSystemNote ? `_${m.text}_` : m.text,
       ...identity,
     });
-    if (res2.ok && res2.ts) {
-      lastReplyTs = res2.ts;
-    } else if (!res2.ok && !isSystemNote) {
+    if (!res2.ok && !isSystemNote) {
       // Install predates chat:write.customize — fall back to a label.
-      const res3 = await slackApi<{ ts?: string }>(inst.botToken, 'chat.postMessage', {
+      await slackApi(inst.botToken, 'chat.postMessage', {
         channel,
         thread_ts: threadTs,
         text: `*${identity.username}:* ${m.text}`,
       });
-      if (res3.ok && res3.ts) lastReplyTs = res3.ts;
     }
   }
-  if (lastReplyTs) await markThreadReply(db, channel, threadTs, lastReplyTs);
   // One pointer to the thread per alert, right after it's seeded.
   await slackApi(inst.botToken, 'chat.postMessage', {
     channel,
@@ -1012,18 +965,13 @@ export async function mirrorToSlack(
       text,
       ...identity,
     });
-    if (res.ok && res.ts) {
-      await markThreadReply(db, t.slackThreads.channelId, t.slackThreads.ts, res.ts);
-    } else if (!res.ok) {
+    if (!res.ok) {
       // Install predates chat:write.customize — keep the labeled text form.
-      const res2 = await slackApi<{ ts?: string }>(t.installation.botToken, 'chat.postMessage', {
+      await slackApi(t.installation.botToken, 'chat.postMessage', {
         channel: t.slackThreads.channelId,
         thread_ts: t.slackThreads.ts,
         text: `${label} ${text}`,
       });
-      if (res2.ok && res2.ts) {
-        await markThreadReply(db, t.slackThreads.channelId, t.slackThreads.ts, res2.ts);
-      }
     }
   }
 }
@@ -1109,14 +1057,12 @@ export async function slackNotice(
   const threads = await threadsForConversation(db, conv.id);
   if (threads.length) {
     for (const t of threads) {
-      const res = await slackApi<{ ts?: string }>(t.installation.botToken, 'chat.postMessage', {
+      const res = await slackApi(t.installation.botToken, 'chat.postMessage', {
         channel: t.slackThreads.channelId,
         thread_ts: t.slackThreads.ts,
         text: `${label} ${text}`,
       });
-      if (res.ok && res.ts) {
-        await markThreadReply(db, t.slackThreads.channelId, t.slackThreads.ts, res.ts);
-      } else if (!res.ok) console.error('slack notice failed:', res.error);
+      if (!res.ok) console.error('slack notice failed:', res.error);
     }
     return;
   }
