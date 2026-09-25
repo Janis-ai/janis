@@ -292,6 +292,57 @@ describe('slash commands', () => {
     expect(btn2?.url).toContain('cid=CALERT');
   });
 
+  it('an alert re-anchors in the configured channel when the thread channel is dead', async () => {
+    // The canonical thread's channel is unreachable (deleted, or the bot was
+    // removed from a private one): the alert must not die with it — the dead
+    // rows prune and a fresh thread anchors in the configured alert channel.
+    await db
+      .update(slackThreads)
+      .set({ channelId: 'CDEAD' })
+      .where(eq(slackThreads.conversationId, convId));
+    await db
+      .update(slackInstallations)
+      .set({ alertChannelId: 'CALERT' })
+      .where(eq(slackInstallations.teamId, 'T_NEW'));
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+        calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+        if (String(url).includes('CDEAD') || (init?.body ?? '').includes('CDEAD')) {
+          return new Response('{"ok":false,"error":"channel_not_found"}', { status: 200 });
+        }
+        if (String(url).includes('conversations.open')) {
+          return new Response('{"ok":true,"channel":{"id":"D1"}}', { status: 200 });
+        }
+        if (String(url).includes('chat.getPermalink')) {
+          return new Response(
+            '{"ok":true,"permalink":"https://t.slack.com/archives/CALERT/p2000"}',
+            { status: 200 },
+          );
+        }
+        return new Response('{"ok":true,"channel":"CALERT","ts":"2.2"}', { status: 200 });
+      }),
+    );
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    const [agent] = await db.select().from(agents).where(eq(agents.id, conv.agentId));
+    const [alert] = await db
+      .insert(alerts)
+      .values({ conversationId: conv.id, type: 'custom', detail: 'again' })
+      .returning();
+    await postSlackAlert(db, agent.workspaceId, conv, agent, alert);
+
+    // the dead-channel thread row pruned; a fresh thread anchored in the
+    // configured alert channel
+    const rows = await db.select().from(slackThreads).where(eq(slackThreads.conversationId, convId));
+    expect(rows.map((r) => r.channelId)).toEqual(['CALERT']);
+    const posts = calls.filter((c) => c.url.includes('chat.postMessage'));
+    const anchor = posts.filter(
+      (p) => p.body.channel === 'CALERT' && !p.body.thread_ts && p.body.blocks,
+    );
+    expect(anchor.length).toBe(1);
+  });
+
   it('forwards to legacy when the channel has no mapped conversations', async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response('', { status: 200 })));
     vi.stubGlobal('fetch', fetchMock);

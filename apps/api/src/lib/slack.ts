@@ -22,6 +22,7 @@ type Installation = typeof slackInstallations.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
 type AlertRow = typeof alerts.$inferSelect;
 type UserRow = typeof users.$inferSelect;
+type SlackThreadRow = typeof slackThreads.$inferSelect;
 
 const SLACK_API = 'https://slack.com/api';
 
@@ -204,6 +205,41 @@ export async function alertChannelFor(
   return inst.alertChannelId;
 }
 
+/** Slack answers not_in_channel / channel_not_found when the bot can't use a
+ * channel — a public one it hasn't joined (recoverable via
+ * conversations.join) or a deleted/private one it can't see (dead for good). */
+const deadChannelError = (err?: string) => err === 'not_in_channel' || err === 'channel_not_found';
+
+/** Threads anchored in a channel the bot can no longer reach are dead weight:
+ * every mirror, status write and alert keeps erroring on them. Drop the rows
+ * so fan-out stops and the next alert re-anchors somewhere reachable. */
+async function pruneDeadThreads(db: Db, conversationId: string, channelId: string): Promise<void> {
+  await db
+    .delete(slackThreads)
+    .where(
+      and(eq(slackThreads.conversationId, conversationId), eq(slackThreads.channelId, channelId)),
+    )
+    .catch((err) => console.error('slack dead-thread prune failed:', err));
+}
+
+/** Any Slack call aimed at a channel — when the bot isn't a member, join it
+ * and retry once (freshly-created alert channels, re-adds). The channel id
+ * is read from body.channel / body.channel_id. */
+async function callInChannel<T>(
+  inst: Installation,
+  method: string,
+  body: Record<string, unknown>,
+): Promise<T & { ok: boolean; error?: string }> {
+  const channel = body.channel ?? body.channel_id;
+  const call = () => slackApi<T>(inst.botToken, method, body);
+  let res = await call();
+  if (!res.ok && typeof channel === 'string' && deadChannelError(res.error)) {
+    const join = await slackApi(inst.botToken, 'conversations.join', { channel }).catch(() => null);
+    if (join?.ok) res = await call();
+  }
+  return res;
+}
+
 /** Post to a channel; if the bot isn't a member yet (e.g. a freshly-created
  * alert channel), join it and retry once — Slack answers not_in_channel
  * rather than posting for non-members even with chat:write.public. */
@@ -212,15 +248,27 @@ async function postChannelMessage(
   channelId: string,
   body: Record<string, unknown>,
 ): Promise<{ ok: boolean; channel?: string; ts?: string; error?: string }> {
-  const post = () =>
-    slackApi<{ channel?: string; ts?: string }>(inst.botToken, 'chat.postMessage', {
-      channel: channelId,
-      ...body,
-    });
-  let res = await post();
-  if (!res.ok && (res.error === 'not_in_channel' || res.error === 'channel_not_found')) {
-    await slackApi(inst.botToken, 'conversations.join', { channel: channelId }).catch(() => null);
-    res = await post();
+  return callInChannel<{ channel?: string; ts?: string }>(inst, 'chat.postMessage', {
+    channel: channelId,
+    ...body,
+  });
+}
+
+/** Post into a live thread — same join+retry as postChannelMessage, then
+ * prune the thread rows when the channel turns out to be unreachable so the
+ * failure isn't repeated on every mirror, notice and status write. */
+async function postThreadMessage(
+  db: Db,
+  t: { slackThreads: SlackThreadRow; installation: Installation },
+  body: Record<string, unknown>,
+): Promise<{ ok: boolean; channel?: string; ts?: string; error?: string }> {
+  const res = await callInChannel<{ channel?: string; ts?: string }>(
+    t.installation,
+    'chat.postMessage',
+    { channel: t.slackThreads.channelId, thread_ts: t.slackThreads.ts, ...body },
+  );
+  if (!res.ok && deadChannelError(res.error)) {
+    await pruneDeadThreads(db, t.slackThreads.conversationId, t.slackThreads.channelId);
   }
   return res;
 }
@@ -590,11 +638,7 @@ export async function postSlackActionRequest(
   ];
   const posts: { channelId: string; ts: string }[] = [];
   for (const t of threads) {
-    const res = await slackApi<{ channel: string; ts: string }>(
-      t.installation.botToken,
-      'chat.postMessage',
-      { channel: t.slackThreads.channelId, thread_ts: t.slackThreads.ts, text, blocks },
-    );
+    const res = await postThreadMessage(db, t, { text, blocks });
     if (res.ok && res.ts) {
       posts.push({ channelId: res.channel ?? t.slackThreads.channelId, ts: res.ts });
       await markThreadReply(db, t.slackThreads.channelId, t.slackThreads.ts, res.ts);
@@ -625,12 +669,15 @@ export async function resolveSlackActionCards(
   for (const p of posts) {
     const t = threads.find((x) => x.slackThreads.channelId === p.channelId);
     if (!t) continue;
-    await slackApi(t.installation.botToken, 'chat.update', {
+    const res = await callInChannel(t.installation, 'chat.update', {
       channel: p.channelId,
       ts: p.ts,
       text,
       blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }],
-    }).catch(() => {});
+    }).catch(() => null);
+    if (res && !res.ok && deadChannelError(res.error)) {
+      await pruneDeadThreads(db, action.conversationId, p.channelId);
+    }
   }
 }
 
@@ -701,7 +748,7 @@ export async function postSlackAlert(
   const channelId = await alertChannelFor(db, inst, agent.id);
   if (!channelId) return;
 
-  const existing = await threadsForConversation(db, conv.id);
+  let existing = await threadsForConversation(db, conv.id);
 
   // Routing: assigned → invite them into the alert channel (idempotent) and
   // @mention; if they can't be invited, DM a pointer instead. Unassigned →
@@ -725,8 +772,8 @@ export async function postSlackAlert(
     for (const id of dmTargets) void dmAlertPointer(inst, id, text);
   };
 
-  if (existing.length) {
-    // The conversation already has its thread — post a fresh top-level alert
+  while (existing.length) {
+    // The conversation already has a thread — post a fresh top-level alert
     // for channel visibility, but link it into the canonical thread instead
     // of anchoring a parallel one. Store where the card landed so
     // updateSlackAlert can refresh its buttons.
@@ -741,16 +788,24 @@ export async function postSlackAlert(
       text: summary,
       blocks: alertBlocks(conv, agent, alert, mention, link),
     });
-    if (!res.ok || !res.ts) {
+    if (res.ok && res.ts) {
+      await db
+        .update(alerts)
+        .set({ slackTs: res.ts, slackChannelId: res.channel ?? t.slackThreads.channelId })
+        .where(eq(alerts.id, alert.id));
+      dmAll(link);
+      return;
+    }
+    if (!deadChannelError(res.error)) {
       console.error('slack alert post failed:', res.error);
       return;
     }
-    await db
-      .update(alerts)
-      .set({ slackTs: res.ts, slackChannelId: res.channel ?? t.slackThreads.channelId })
-      .where(eq(alerts.id, alert.id));
-    dmAll(link);
-    return;
+    // The canonical thread's channel is unreachable even after the join
+    // retry — deleted, or the bot was removed from a private one. Drop the
+    // dead rows and try the next thread; if none are left, fall through and
+    // anchor a fresh thread in the configured alert channel.
+    await pruneDeadThreads(db, conv.id, t.slackThreads.channelId);
+    existing = await threadsForConversation(db, conv.id);
   }
 
   const res = await postChannelMessage(inst, channelId, {
@@ -906,17 +961,21 @@ export async function updateSlackAlert(
       alert ?? { type: 'help_request', detail: null },
       mention,
     );
-    const res = await slackApi(t.installation.botToken, 'chat.update', {
+    const res = await callInChannel(t.installation, 'chat.update', {
       channel: t.slackThreads.channelId,
       ts: t.slackThreads.ts,
       text: `${mention}alert — ${conv.externalId}`,
       blocks,
     });
+    if (!res.ok && deadChannelError(res.error)) {
+      await pruneDeadThreads(db, t.slackThreads.conversationId, t.slackThreads.channelId);
+      continue;
+    }
     if (!res.ok) console.error('slack alert update failed:', res.error);
     // Alerts after the first land as replies in the thread — refresh that
     // card's buttons too, it isn't the anchor message.
     if (alert?.slackTs && alert.slackChannelId === t.slackThreads.channelId) {
-      const res2 = await slackApi(t.installation.botToken, 'chat.update', {
+      const res2 = await callInChannel(t.installation, 'chat.update', {
         channel: t.slackThreads.channelId,
         ts: alert.slackTs,
         text: `${mention}alert — ${conv.externalId}`,
@@ -1021,21 +1080,12 @@ export async function mirrorToSlack(
   }
 
   for (const t of threads) {
-    const res = await slackApi<{ ts?: string }>(t.installation.botToken, 'chat.postMessage', {
-      channel: t.slackThreads.channelId,
-      thread_ts: t.slackThreads.ts,
-      text,
-      ...identity,
-    });
+    const res = await postThreadMessage(db, t, { text, ...identity });
     if (res.ok && res.ts) {
       await markThreadReply(db, t.slackThreads.channelId, t.slackThreads.ts, res.ts);
-    } else if (!res.ok) {
+    } else if (!res.ok && !deadChannelError(res.error)) {
       // Install predates chat:write.customize — keep the labeled text form.
-      const res2 = await slackApi<{ ts?: string }>(t.installation.botToken, 'chat.postMessage', {
-        channel: t.slackThreads.channelId,
-        thread_ts: t.slackThreads.ts,
-        text: `${label} ${text}`,
-      });
+      const res2 = await postThreadMessage(db, t, { text: `${label} ${text}` });
       if (res2.ok && res2.ts) {
         await markThreadReply(db, t.slackThreads.channelId, t.slackThreads.ts, res2.ts);
       }
@@ -1054,11 +1104,15 @@ async function applyThreadStatus(db: Db, conversationId: string, status: string 
   if (!threads.length) return false;
   let ok = false;
   for (const t of threads) {
-    const res = await slackApi(t.installation.botToken, 'assistant.threads.setStatus', {
+    const res = await callInChannel(t.installation, 'assistant.threads.setStatus', {
       channel_id: t.slackThreads.channelId,
       thread_ts: t.slackThreads.ts,
       status: status ?? '',
     });
+    if (!res.ok && deadChannelError(res.error)) {
+      await pruneDeadThreads(db, t.slackThreads.conversationId, t.slackThreads.channelId);
+      continue;
+    }
     if (!res.ok) console.error('slack thread status failed:', res.error);
     ok = ok || res.ok;
   }
@@ -1124,14 +1178,10 @@ export async function slackNotice(
   const threads = await threadsForConversation(db, conv.id);
   if (threads.length) {
     for (const t of threads) {
-      const res = await slackApi<{ ts?: string }>(t.installation.botToken, 'chat.postMessage', {
-        channel: t.slackThreads.channelId,
-        thread_ts: t.slackThreads.ts,
-        text: `${label} ${text}`,
-      });
+      const res = await postThreadMessage(db, t, { text: `${label} ${text}` });
       if (res.ok && res.ts) {
         await markThreadReply(db, t.slackThreads.channelId, t.slackThreads.ts, res.ts);
-      } else if (!res.ok) console.error('slack notice failed:', res.error);
+      } else if (!res.ok && !deadChannelError(res.error)) console.error('slack notice failed:', res.error);
     }
     return;
   }
