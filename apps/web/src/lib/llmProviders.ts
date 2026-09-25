@@ -179,20 +179,32 @@ export function modelsForProvider(providerId: string): ModelOption[] {
   ];
 }
 
-/** Rate lookup by id for the picker hint — tries the raw id, then the
- *  provider-native id inside a `vendor/id` compound (OpenRouter style). */
+/** Rate lookup by id for the picker hint — tries the raw id, the
+ *  provider-native id inside a `vendor/id` compound (OpenRouter style),
+ *  then longest-prefix so 'gemini-3.5-flash-latest' inherits the
+ *  'gemini-3.5-flash' rate (the server's rateFor does the same). */
 export function catalogRateFor(id: string) {
   const direct = catalogModel(id);
-  if (direct) return direct.price ?? null;
-  const slash = id.indexOf('/');
-  if (slash > 0) return catalogModel(id.slice(slash + 1))?.price ?? null;
-  return null;
+  if (direct?.price) return direct.price;
+  const bare = id.slice(id.lastIndexOf('/') + 1);
+  const bareHit = bare !== id ? catalogModel(bare) : undefined;
+  if (bareHit?.price) return bareHit.price;
+  let best: { input: number; output: number } | null = null;
+  let bestLen = -1;
+  for (const m of MODEL_CATALOG) {
+    if (!m.price || m.id.length <= bestLen) continue;
+    if (id.startsWith(m.id) || bare.startsWith(m.id)) {
+      best = m.price;
+      bestLen = m.id.length;
+    }
+  }
+  return best;
 }
 
 /** Live /models lists include image/video/audio generators, embeddings,
  *  previews and tools — none of which can run a chat loop. Filter them. */
 const NON_CHAT =
-  /embed|imagen|image|veo|lyria|banana|sora|tts|audio|video|realtime|live-|aqa|deep-research|antigravity|robotics|computer-use|moderation|transcrib|whisper|dall-e|guard|shield|search|codey|text-(embedding|bison|unicorn)/i;
+  /embed|imagen|image|veo|lyria|banana|sora|tts|audio|video|realtime|live|aqa|deep-research|antigravity|robotics|computer-use|moderation|transcrib|whisper|dall-e|guard|shield|search|codey|text-(bison|unicorn)/i;
 
 /** Chat-model id families per vendor — live ids outside these are dropped. */
 const VENDOR_RX: Partial<Record<LlmVendor, RegExp>> = {
@@ -206,6 +218,39 @@ const VENDOR_RX: Partial<Record<LlmVendor, RegExp>> = {
   mistral: /^(mistral|magistral|codestral|pixtral|devstral|ministral)/i,
   nvidia: /^(nvidia\/|nemotron|llama)/i,
 };
+
+/** Best-effort display name for a live id the catalog doesn't know —
+ *  'gemini-3.1-flash-lite-preview' → 'Gemini 3.1 Flash Lite · preview'. */
+const KNOWN_TOKEN: Record<string, string> = {
+  gemini: 'Gemini', gpt: 'GPT', claude: 'Claude', grok: 'Grok', glm: 'GLM',
+  kimi: 'Kimi', llama: 'Llama', mistral: 'Mistral', magistral: 'Magistral',
+  codestral: 'Codestral', pixtral: 'Pixtral', devstral: 'Devstral',
+  ministral: 'Ministral', deepseek: 'DeepSeek', nemotron: 'Nemotron',
+  qwen: 'Qwen', nvidia: 'NVIDIA', flash: 'Flash', lite: 'Lite', pro: 'Pro',
+  ultra: 'Ultra', nano: 'Nano', mini: 'Mini', turbo: 'Turbo', it: 'IT',
+};
+
+export function prettifyModelName(id: string): string {
+  const bare = id.slice(id.lastIndexOf('/') + 1);
+  const suffixes: string[] = [];
+  const words = bare
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((tok) => {
+      const low = tok.toLowerCase();
+      if (['preview', 'latest', 'exp', 'experimental', 'beta', 'customtools'].includes(low)) {
+        suffixes.push(low === 'customtools' ? 'custom tools' : low);
+        return '';
+      }
+      if (KNOWN_TOKEN[low]) return KNOWN_TOKEN[low];
+      if (/^o\d/.test(low)) return low.toUpperCase(); // o1, o3, o4-mini…
+      if (/^\d/.test(low)) return low.toUpperCase(); // 3.1, 31b…
+      return low[0].toUpperCase() + low.slice(1);
+    })
+    .filter(Boolean);
+  const name = words.join(' ');
+  return suffixes.length ? `${name} · ${suffixes.join(', ')}` : name;
+}
 
 /** Normalize + filter raw /models ids into picker options. Gemini returns
  *  'models/gemini-…' — the strip is needed for both matching and the id we
@@ -231,7 +276,7 @@ export function filterLiveModels(providerId: string, ids: string[]): ModelOption
         if (NON_CHAT.test(id)) continue;
       }
     }
-    out.push({ id, name: cat?.name ?? id, vendor: cat?.vendor });
+    out.push({ id, name: cat?.name ?? prettifyModelName(id), vendor: cat?.vendor ?? p?.vendor });
   }
   return out;
 }
