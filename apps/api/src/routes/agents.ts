@@ -225,7 +225,8 @@ export function agentRoutes(db: Db) {
           .map((m) => m.id)
           .filter((s): s is string => Boolean(s))
           .sort();
-        return c.json({ models });
+        // base_url tells the UI which provider catalog applies to 'metered'
+        return c.json({ models, base_url: baseUrl });
       } catch (e) {
         return c.json({ models: [], error: e instanceof Error ? e.message : 'fetch failed' });
       }

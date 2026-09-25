@@ -1,7 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ModelOption } from '../lib/llmProviders';
 
-/** Searchable model dropdown — search box on top, pick-list rows with an
- *  optional right-side hint (price), checkmark on the selected value, and a
+/** Vendor badge glyphs for the picker rows — approximations of the brand
+ *  marks, colored per vendor. */
+const VENDOR_ICON: Record<string, { glyph: string; color: string }> = {
+  openai: { glyph: '◉', color: '#e6e9f0' },
+  anthropic: { glyph: '✳', color: '#d97757' },
+  google: { glyph: '✦', color: '#4b90ff' },
+  xai: { glyph: 'X', color: '#e6e9f0' },
+  deepseek: { glyph: '◆', color: '#4d6bfe' },
+  moonshot: { glyph: 'K', color: '#a88bff' },
+  zai: { glyph: 'Z', color: '#ffd34d' },
+  nvidia: { glyph: 'N', color: '#76b900' },
+  mistral: { glyph: 'M', color: '#ff7000' },
+  meta: { glyph: '∞', color: '#66a0ff' },
+};
+
+/** Searchable model dropdown — search box on top, rows with vendor icon +
+ *  display name + price hint, checkmark on the selected value, and a
  *  "Use '<typed>'" row so any model id can be entered freehand. */
 export function ModelPicker({
   value,
@@ -11,10 +27,10 @@ export function ModelPicker({
   hint,
 }: {
   value: string;
-  options: string[];
-  onChange: (m: string) => void;
+  options: ModelOption[];
+  onChange: (id: string) => void;
   disabled?: boolean;
-  hint?: (model: string) => string | null;
+  hint?: (id: string) => string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
@@ -38,11 +54,15 @@ export function ModelPicker({
 
   const needle = q.trim().toLowerCase();
   const filtered = needle
-    ? options.filter((m) => m.toLowerCase().includes(needle))
+    ? options.filter(
+        (m) =>
+          m.name.toLowerCase().includes(needle) || m.id.toLowerCase().includes(needle),
+      )
     : options;
+  const selected = options.find((m) => m.id === value);
 
-  const pick = (m: string) => {
-    onChange(m);
+  const pick = (id: string) => {
+    onChange(id);
     setOpen(false);
     setQ('');
   };
@@ -55,7 +75,12 @@ export function ModelPicker({
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
       >
-        <span className="model-picker-value">{value || 'Choose model…'}</span>
+        {selected?.vendor && (
+          <VendorMark vendor={selected.vendor} />
+        )}
+        <span className="model-picker-value">
+          {selected ? selected.name : value || 'Choose model…'}
+        </span>
         <span className="model-picker-chev">▾</span>
       </button>
       {open && (
@@ -69,29 +94,26 @@ export function ModelPicker({
               // Enter picks the top hit, or the typed id when nothing matches
               if (e.key === 'Enter' && needle) {
                 e.preventDefault();
-                pick(filtered[0] ?? q.trim());
+                pick(filtered[0]?.id ?? q.trim());
               }
             }}
           />
           <div className="model-picker-list">
             {filtered.map((m) => (
               <button
-                key={m}
+                key={m.id}
                 type="button"
-                className={`model-item${m === value ? ' active' : ''}`}
-                onClick={() => pick(m)}
+                className={`model-item${m.id === value ? ' active' : ''}`}
+                onClick={() => pick(m.id)}
               >
-                <span className="model-name">{m}</span>
-                {hint?.(m) && <span className="model-hint">{hint(m)}</span>}
-                {m === value && <span className="model-check">✓</span>}
+                {m.vendor && <VendorMark vendor={m.vendor} />}
+                <span className="model-name">{m.name}</span>
+                {hint?.(m.id) && <span className="model-hint">{hint(m.id)}</span>}
+                {m.id === value && <span className="model-check">✓</span>}
               </button>
             ))}
-            {needle && !filtered.some((m) => m === q.trim()) && (
-              <button
-                type="button"
-                className="model-item"
-                onClick={() => pick(q.trim())}
-              >
+            {needle && !filtered.some((m) => m.id === q.trim()) && (
+              <button type="button" className="model-item" onClick={() => pick(q.trim())}>
                 <span className="model-name">Use “{q.trim()}”</span>
               </button>
             )}
@@ -104,5 +126,15 @@ export function ModelPicker({
         </div>
       )}
     </div>
+  );
+}
+
+function VendorMark({ vendor }: { vendor: string }) {
+  const v = VENDOR_ICON[vendor];
+  if (!v) return null;
+  return (
+    <span className="model-vendor" style={{ color: v.color }}>
+      {v.glyph}
+    </span>
   );
 }

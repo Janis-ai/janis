@@ -1,15 +1,26 @@
+import {
+  MODEL_CATALOG,
+  OR_VENDOR_SLUG,
+  catalogModel,
+  type LlmVendor,
+} from '@janis/shared';
+
 /** BYOK LLM provider presets for the Engine tab. Every entry speaks the
  *  OpenAI-compatible chat-completions API, so hosted agents only need a
- *  base_url + key + model. `models` are curated fallbacks — the UI also
- *  fetches the live /models list once a key is present. */
+ *  base_url + key + model. Model options come from the shared catalog
+ *  (filtered by vendor) plus the endpoint's live /models list. */
 export interface LlmProvider {
   id: string;
   label: string;
   /** Fixed for real providers; empty on 'custom' (user edits base_url). */
   baseUrl?: string;
+  /** Catalog vendor whose models this endpoint serves; undefined = all
+   *  (OpenRouter) or none (custom). */
+  vendor?: LlmVendor;
+  /** Extra raw model ids not in the catalog (e.g. Groq's compound ids). */
+  extraModels?: string[];
   keyHint?: string;
   keyUrl?: string;
-  models: string[];
   oauth?: 'openrouter';
 }
 
@@ -20,38 +31,24 @@ export const LLM_PROVIDERS: LlmProvider[] = [
     id: 'openai',
     label: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1',
+    vendor: 'openai',
     keyHint: 'sk-…',
     keyUrl: 'https://platform.openai.com/api-keys',
-    models: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5', 'gpt-5-mini', 'gpt-4o', 'gpt-4o-mini'],
   },
   {
     id: 'anthropic',
     label: 'Anthropic',
     baseUrl: 'https://api.anthropic.com/v1',
+    vendor: 'anthropic',
     keyHint: 'sk-ant-…',
     keyUrl: 'https://console.anthropic.com/settings/keys',
-    models: [
-      'claude-opus-5-5',
-      'claude-fable-5-1',
-      'claude-fable-5',
-      'claude-opus-5',
-      'claude-sonnet-5',
-      'claude-sonnet-4-6',
-      'claude-haiku-4-5',
-    ],
   },
   {
     id: 'gemini',
     label: 'Google Gemini',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    vendor: 'google',
     keyUrl: 'https://aistudio.google.com/apikey',
-    models: [
-      'gemini-3.7-pro',
-      'gemini-3.7-flash',
-      'gemini-3.5-flash',
-      'gemini-3.5-flash-lite',
-      'gemini-2.5-pro',
-    ],
   },
   {
     id: 'openrouter',
@@ -60,33 +57,46 @@ export const LLM_PROVIDERS: LlmProvider[] = [
     keyHint: 'sk-or-v1-…',
     keyUrl: 'https://openrouter.ai/keys',
     oauth: 'openrouter',
-    models: [
-      'openai/gpt-6-sol',
-      'openai/gpt-6-luna',
-      'anthropic/claude-opus-5-5',
-      'anthropic/claude-fable-5-1',
-      'google/gemini-3.7-flash',
-      'x-ai/grok-4',
-      'deepseek/deepseek-chat-v3.2',
-      'meta-llama/llama-4-maverick',
-      'moonshotai/kimi-k2',
-    ],
   },
   {
     id: 'xai',
     label: 'xAI',
     baseUrl: 'https://api.x.ai/v1',
+    vendor: 'xai',
     keyHint: 'xai-…',
     keyUrl: 'https://console.x.ai',
-    models: ['grok-4', 'grok-4-fast', 'grok-3', 'grok-3-mini'],
   },
   {
     id: 'deepseek',
     label: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com',
+    vendor: 'deepseek',
     keyHint: 'sk-…',
     keyUrl: 'https://platform.deepseek.com/api_keys',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
+  },
+  {
+    id: 'moonshot',
+    label: 'Moonshot Kimi',
+    baseUrl: 'https://api.moonshot.ai/v1',
+    vendor: 'moonshot',
+    keyHint: 'sk-…',
+    keyUrl: 'https://platform.moonshot.ai/console/api-keys',
+  },
+  {
+    id: 'zai',
+    label: 'Z.ai GLM',
+    baseUrl: 'https://api.z.ai/api/paas/v4',
+    vendor: 'zai',
+    keyHint: '…',
+    keyUrl: 'https://z.ai/manage-apikey/apikey-list',
+  },
+  {
+    id: 'nvidia',
+    label: 'NVIDIA',
+    baseUrl: 'https://integrate.api.nvidia.com/v1',
+    vendor: 'nvidia',
+    keyHint: 'nvapi-…',
+    keyUrl: 'https://build.nvidia.com',
   },
   {
     id: 'groq',
@@ -94,9 +104,8 @@ export const LLM_PROVIDERS: LlmProvider[] = [
     baseUrl: 'https://api.groq.com/openai/v1',
     keyHint: 'gsk_…',
     keyUrl: 'https://console.groq.com/keys',
-    models: [
+    extraModels: [
       'openai/gpt-oss-120b',
-      'llama-3.3-70b-versatile',
       'meta-llama/llama-4-scout-17b-16e-instruct',
       'moonshotai/kimi-k2-instruct',
     ],
@@ -105,13 +114,12 @@ export const LLM_PROVIDERS: LlmProvider[] = [
     id: 'mistral',
     label: 'Mistral',
     baseUrl: 'https://api.mistral.ai/v1',
+    vendor: 'mistral',
     keyUrl: 'https://console.mistral.ai/api-keys',
-    models: ['mistral-large-latest', 'mistral-medium-latest', 'magistral-medium-latest', 'codestral-latest'],
   },
   {
     id: 'custom',
     label: 'Custom (OpenAI-compatible)',
-    models: [],
   },
 ];
 
@@ -134,4 +142,49 @@ export function detectProvider(llm?: {
     return hit?.id ?? 'custom';
   }
   return llm.api_key || llm.key_set ? 'openai' : undefined;
+}
+
+export interface ModelOption {
+  /** The id sent to the endpoint (vendor-prefixed for OpenRouter). */
+  id: string;
+  /** Display name — falls back to id for uncatalogued models. */
+  name: string;
+  vendor?: LlmVendor;
+}
+
+/** Catalog models a provider can serve. OpenRouter reaches every vendor via
+ *  `<slug>/<id>` ids (or the catalog's `or` override); vendors see their own;
+ *  custom endpoints get nothing (live /models + free text only). */
+export function modelsForProvider(providerId: string): ModelOption[] {
+  const p = providerFor(providerId);
+  if (!p) return [];
+  if (p.id === 'openrouter') {
+    return MODEL_CATALOG.map((m) => ({
+      id: m.or ?? `${OR_VENDOR_SLUG[m.vendor]}/${m.id}`,
+      name: m.name,
+      vendor: m.vendor,
+    }));
+  }
+  const cataloged = MODEL_CATALOG.filter((m) => m.vendor === p.vendor).map((m) => ({
+    id: m.id,
+    name: m.name,
+    vendor: m.vendor,
+  }));
+  const seen = new Set(cataloged.map((m) => m.id));
+  return [
+    ...cataloged,
+    ...(p.extraModels ?? [])
+      .filter((id) => !seen.has(id))
+      .map((id) => ({ id, name: catalogModel(id)?.name ?? id })),
+  ];
+}
+
+/** Rate lookup by id for the picker hint — tries the raw id, then the
+ *  provider-native id inside a `vendor/id` compound (OpenRouter style). */
+export function catalogRateFor(id: string) {
+  const direct = catalogModel(id);
+  if (direct) return direct.price ?? null;
+  const slash = id.indexOf('/');
+  if (slash > 0) return catalogModel(id.slice(slash + 1))?.price ?? null;
+  return null;
 }

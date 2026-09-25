@@ -15,7 +15,16 @@ import { timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { ModelPicker } from '../components/ModelPicker';
 import { railBus } from '../lib/railBus';
-import { LLM_PROVIDERS, METERED, detectProvider, providerFor } from '../lib/llmProviders';
+import {
+  LLM_PROVIDERS,
+  METERED,
+  catalogRateFor,
+  detectProvider,
+  modelsForProvider,
+  providerFor,
+  type ModelOption,
+} from '../lib/llmProviders';
+import { catalogModel } from '@janis/shared';
 import { connectOpenRouter, consumeOpenRouterResult } from '../lib/openrouterAuth';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert'] as const;
@@ -1075,6 +1084,9 @@ function LlmCard({
   const [liveModels, setLiveModels] = useState<string[]>([]);
   const [modelsMsg, setModelsMsg] = useState('');
   const [modelsBusy, setModelsBusy] = useState(false);
+  // which provider serves 'metered' — resolved from the models endpoint's
+  // returned base_url so the picker lists the right vendor's catalog
+  const [meteredProvider, setMeteredProvider] = useState<string | null>(null);
   const [rates, setRates] = useState<{
     rates: Record<string, { input: number; output: number }>;
     margin: number;
@@ -1114,7 +1126,7 @@ function LlmCard({
     setModelsBusy(true);
     setModelsMsg('');
     try {
-      const r = await api<{ models: string[]; error?: string }>(
+      const r = await api<{ models: string[]; error?: string; base_url?: string }>(
         `/api/agents/${agent.id}/llm-models`,
         {
           method: 'POST',
@@ -1126,6 +1138,9 @@ function LlmCard({
         },
       );
       setLiveModels(r.models);
+      if (providerId === METERED && r.base_url) {
+        setMeteredProvider(detectProvider({ base_url: r.base_url }) ?? 'custom');
+      }
       if (r.error) setModelsMsg(`couldn't list models: ${r.error}`);
       else if (!r.models.length) setModelsMsg('endpoint returned no models');
     } catch (e) {
@@ -1143,23 +1158,17 @@ function LlmCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerId]);
 
-  const resolveRate = (model?: string) => {
-    if (!rates || !model) return null;
-    const key = Object.keys(rates.rates).find(
-      (k) => k !== 'default' && model.startsWith(k),
-    );
-    return rates.rates[key ?? 'default'] ?? null;
-  };
   const usd = (n: number) => n.toFixed(2).replace(/\.?0+$/, '');
-  // What the row/footer should quote: metered → the customer's billed price;
-  // BYOK → the provider's list price (they bill it, not Janis).
-  const rateHint = (m: string) => {
-    const r = resolveRate(m);
-    if (!r) return null;
-    const f = providerId === METERED ? 1 + rates!.margin : 1;
-    return `$${usd(r.input * f)}/$${usd(r.output * f)} per 1M`;
+  const margin = rates?.margin ?? 0;
+  // Row hint: metered → the customer's billed price; BYOK → provider list
+  // price (they bill it, not Janis). Prices come from the shared catalog.
+  const rateHint = (id: string) => {
+    const p = catalogRateFor(id);
+    if (!p) return null;
+    const f = providerId === METERED ? 1 + margin : 1;
+    return `$${usd(p.input * f)}/$${usd(p.output * f)}`;
   };
-  const billedRate = resolveRate(llm.model);
+  const billedRate = llm.model ? catalogRateFor(llm.model) : null;
 
   const setLlm = (patch: Record<string, unknown>) =>
     setCfg({ ...cfg, llm: { ...cfg.llm, ...patch } });
@@ -1187,13 +1196,22 @@ function LlmCard({
     });
   };
 
-  const modelOptions = [
-    ...new Set(
-      [llm.model, ...(preset?.models ?? []), ...liveModels].filter((m): m is string =>
-        Boolean(m),
-      ),
-    ),
-  ];
+  // Options: the provider's catalog models (named + iconed), then any
+  // uncatalogued ids the live /models call returned, then the current value.
+  const effectiveProvider = providerId === METERED ? meteredProvider : providerId;
+  const modelOptions: ModelOption[] = effectiveProvider
+    ? modelsForProvider(effectiveProvider)
+    : [];
+  for (const id of liveModels) {
+    if (modelOptions.some((o) => o.id === id)) continue;
+    const bare = id.slice(id.lastIndexOf('/') + 1);
+    const c = catalogModel(id) ?? catalogModel(bare);
+    modelOptions.push({ id, name: c?.name ?? id, vendor: c?.vendor });
+  }
+  if (llm.model && !modelOptions.some((o) => o.id === llm.model)) {
+    const c = catalogModel(llm.model);
+    modelOptions.unshift({ id: llm.model, name: c?.name ?? llm.model, vendor: c?.vendor });
+  }
 
 
   return (
