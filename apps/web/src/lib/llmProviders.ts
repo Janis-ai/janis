@@ -2,6 +2,7 @@ import {
   MODEL_CATALOG,
   OR_VENDOR_SLUG,
   catalogModel,
+  isRateVariant,
   type CatalogModel,
   type LlmEffort,
   type LlmVendor,
@@ -148,7 +149,7 @@ export function catalogPrefixFor(id: string): CatalogModel | undefined {
   const bare = id.slice(id.lastIndexOf('/') + 1);
   let best: CatalogModel | undefined;
   for (const m of MODEL_CATALOG) {
-    if (id.startsWith(m.id) || bare.startsWith(m.id)) {
+    if (isRateVariant(id, m.id) || isRateVariant(bare, m.id)) {
       if (!best || m.id.length > best.id.length) best = m;
     }
   }
@@ -245,7 +246,7 @@ export function catalogRateFor(id: string) {
   let bestLen = -1;
   for (const m of MODEL_CATALOG) {
     if (!m.price || m.id.length <= bestLen) continue;
-    if (id.startsWith(m.id) || bare.startsWith(m.id)) {
+    if (isRateVariant(id, m.id) || isRateVariant(bare, m.id)) {
       best = m.price;
       bestLen = m.id.length;
     }
@@ -318,9 +319,11 @@ export function filterLiveModels(providerId: string, ids: string[]): ModelOption
     const id = raw.replace(/^models\//, '');
     const bare = id.slice(id.lastIndexOf('/') + 1);
     const cat = catalogModel(id) ?? catalogModel(bare);
-    // dated/live variants inherit the family's metadata (price, ctx,
-    // efforts) via longest-prefix — the exact id just isn't catalogued
-    const meta = cat ?? catalogPrefixFor(id);
+    // relabel variants (dates, -latest, -preview) inherit the family's
+    // metadata (price, ctx, efforts) — also fills gaps field-by-field for
+    // catalogued-but-unpriced entries; version bumps/tiers never inherit
+    const family = catalogPrefixFor(id);
+    const meta = cat ? { ...family, ...cat } : family;
     if (!cat) {
       if (!p) continue;
       if (p.id === 'custom') {

@@ -165,6 +165,24 @@ export function vendorForBaseUrl(baseUrl: string): LlmVendor | undefined {
   )?.[0];
 }
 
+/** Suffixes that relabel a model without making it a different SKU —
+ *  snapshot dates ('-20251001', '-2025-10-01'), preview/latest/exp/beta
+ *  aliases, instruct/customtools variants. Anything else after a catalog
+ *  prefix — a version bump ('kimi-k2.6', 'grok-4.6', '.1-flash') or a tier
+ *  ('-pro', '-mini') — is a *different model* with its own price and must
+ *  not silently inherit the family rate. */
+const VARIANT_SUFFIX =
+  /^(-(\d{8}|\d{6}|\d{4}-\d{2}-\d{2}|latest|preview|exp|beta|instruct|customtools)(-\w+)*)+$/i;
+
+/** True when `id` is a relabel of catalog `parent` (safe to inherit its
+ *  rate and metadata) — 'claude-haiku-4-5-20251001' of 'claude-haiku-4-5'.
+ *  Exact match ('' remainder) also true. */
+export function isRateVariant(id: string, parent: string): boolean {
+  if (!id.startsWith(parent)) return false;
+  const rest = id.slice(parent.length);
+  return rest === '' || VARIANT_SUFFIX.test(rest);
+}
+
 /** Effort level to send on the wire for `model`, or undefined when the
  *  param shouldn't be sent at all. Catalog models without `efforts` are
  *  non-reasoning (a stray reasoning_effort would 400); requested levels the

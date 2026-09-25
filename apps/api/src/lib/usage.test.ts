@@ -89,8 +89,20 @@ describe('rateFor', () => {
 
   it('dated variants hit their family prefix; unknown models get the default', () => {
     expect(rateFor('gemini-3.5-flash-lite-2026-07-21')).toEqual({ input: 0.3, output: 2.5 });
+    expect(rateFor('gemini-3.5-flash-latest')).toEqual({ input: 1.5, output: 9 });
+    expect(rateFor('claude-haiku-4-5-20251001')).toEqual({ input: 1, output: 5 });
     expect(rateFor('llama-local-70b')).toEqual({ input: 0.5, output: 1.5 });
     expect(rateFor(null)).toEqual({ input: 0.5, output: 1.5 });
+  });
+
+  it('version bumps and tier variants are a different SKU — no rate inheritance', () => {
+    // a newer version ('kimi-k2.6' vs 'kimi-k2') or a tier suffix ('-pro')
+    // is not a relabel: billing it at the family rate would silently
+    // under/over-charge. Unpriced catalog entries fall back to default.
+    expect(rateFor('kimi-k2.6')).toEqual({ input: 0.5, output: 1.5 });
+    expect(rateFor('grok-4.6')).toEqual({ input: 0.5, output: 1.5 });
+    expect(rateFor('gpt-5.5-pro-2026-04-23')).toEqual({ input: 0.5, output: 1.5 });
+    expect(rateFor('deepseek-v4.1-flash')).toEqual({ input: 0.5, output: 1.5 });
   });
 
   it('normalizes transport ids — models/ prefix and OpenRouter vendor/ compounds', () => {

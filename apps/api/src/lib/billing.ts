@@ -1,5 +1,5 @@
 import { env } from '../env.js';
-import { MODEL_CATALOG } from '@janis/shared';
+import { MODEL_CATALOG, isRateVariant } from '@janis/shared';
 
 // USD per 1M tokens — what WE pay providers (cost basis, margin added on top).
 // Derived from the shared MODEL_CATALOG (verified prices only); extend or
@@ -37,8 +37,10 @@ export function pricedRateFor(model: string | null | undefined) {
   const last = bare.slice(bare.lastIndexOf('/') + 1);
   for (const id of bare === last ? [bare] : [bare, last]) {
     if (custom?.[id]) return custom[id];
-    // match prefix so dated variants (gpt-4o-mini-2024-07-18) hit their family
-    const key = Object.keys(RATE_CARD).find((k) => k !== 'default' && id.startsWith(k));
+    // relabel variants (dates, -latest, -preview) hit their family rate —
+    // version bumps/tiers ('kimi-k2.6', '-pro') do NOT inherit: they're a
+    // different SKU, billed at their own verified rate or refused
+    const key = Object.keys(RATE_CARD).find((k) => k !== 'default' && isRateVariant(id, k));
     if (key) return RATE_CARD[key];
   }
   return undefined;
