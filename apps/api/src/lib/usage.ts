@@ -17,12 +17,23 @@ export async function recordLlmUsage(
     /** Call ran on the customer's own LLM key/endpoint — tokens are recorded
      *  for visibility, but there is no Janis-side cost to bill. */
     byok?: boolean;
+    /** The model the customer actually configured — fallback failover can
+     *  land on a pricier model (flash-lite → flash) and the customer never
+     *  picked it, so billed cost caps at their model's rate. A cheaper
+     *  fallback simply bills less. */
+    capModel?: string | null;
   },
 ): Promise<void> {
   try {
+    const served = llmCostMicros(args.model, args.promptTokens, args.completionTokens);
     const costMicros = args.byok
       ? 0
-      : llmCostMicros(args.model, args.promptTokens, args.completionTokens);
+      : Math.min(
+          served,
+          args.capModel
+            ? llmCostMicros(args.capModel, args.promptTokens, args.completionTokens)
+            : Infinity,
+        );
     // metered call on an unpriced model slipped past the llmFor guard
     // (e.g. JANIS_LLM_FALLBACK_MODEL) — billing at the default rate
     if (!args.byok && !pricedRateFor(args.model)) {

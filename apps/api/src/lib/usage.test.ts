@@ -46,6 +46,34 @@ describe('recordLlmUsage', () => {
     // tokens still tracked for the usage breakdown
     expect(byok.promptTokens).toBe(1_000_000);
   });
+
+  it('caps billed cost at the configured model — a pricier fallback never overcharges', async () => {
+    // served by gemini-3.5-flash ($1.50/$9.00) but configured flash-lite
+    // ($0.30/$2.50) — 1M+1M tokens bills at the lite rate, not $10.50
+    await recordLlmUsage(db, {
+      workspaceId: wsId,
+      model: 'gemini-3.5-flash',
+      capModel: 'gemini-3.5-flash-lite',
+      promptTokens: 1_000_000,
+      completionTokens: 1_000_000,
+    });
+    const rows = await db.select().from(usageEvents).where(eq(usageEvents.workspaceId, wsId));
+    const capped = rows[rows.length - 1];
+    expect(capped.costMicros).toBe(2_800_000);
+    // the row still shows which model actually served
+    expect(capped.model).toBe('gemini-3.5-flash');
+
+    // cheaper fallback → customer pays the cheaper rate, not the cap
+    await recordLlmUsage(db, {
+      workspaceId: wsId,
+      model: 'gemini-2.5-flash-lite',
+      capModel: 'gemini-3.7-pro',
+      promptTokens: 1_000_000,
+      completionTokens: 1_000_000,
+    });
+    const rows2 = await db.select().from(usageEvents).where(eq(usageEvents.workspaceId, wsId));
+    expect(rows2[rows2.length - 1].costMicros).toBe(500_000);
+  });
 });
 
 describe('rateFor', () => {
