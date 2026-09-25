@@ -13,6 +13,7 @@ import { api } from '../api/client';
 import { useAgents, useAlertRules, useChannels, useDeliveries, useMe, useSlackChannels, useSlackStatus } from '../api/hooks';
 import { timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
+import { ModelPicker } from '../components/ModelPicker';
 import { railBus } from '../lib/railBus';
 import { LLM_PROVIDERS, METERED, detectProvider, providerFor } from '../lib/llmProviders';
 import { connectOpenRouter, consumeOpenRouterResult } from '../lib/openrouterAuth';
@@ -1074,7 +1075,18 @@ function LlmCard({
   const [liveModels, setLiveModels] = useState<string[]>([]);
   const [modelsMsg, setModelsMsg] = useState('');
   const [modelsBusy, setModelsBusy] = useState(false);
-  const [rate, setRate] = useState<{ input: number; output: number; margin: number } | null>(null);
+  const [rates, setRates] = useState<{
+    rates: Record<string, { input: number; output: number }>;
+    margin: number;
+  } | null>(null);
+
+  useEffect(() => {
+    api<{ rates: Record<string, { input: number; output: number }>; margin: number }>(
+      '/api/billing/llm-rates',
+    )
+      .then(setRates)
+      .catch(() => {});
+  }, []);
 
   // An OpenRouter OAuth round-trip lands back on this page — pick up the key.
   useEffect(() => {
@@ -1131,21 +1143,23 @@ function LlmCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerId]);
 
-  // Metered mode: show what the chosen model actually bills per 1M tokens.
-  useEffect(() => {
-    if (providerId !== METERED || !llm.model) {
-      setRate(null);
-      return;
-    }
-    const t = setTimeout(() => {
-      api<{ input: number; output: number; margin: number }>(
-        `/api/billing/llm-rate?model=${encodeURIComponent(llm.model!)}`,
-      )
-        .then(setRate)
-        .catch(() => setRate(null));
-    }, 300);
-    return () => clearTimeout(t);
-  }, [providerId, llm.model]);
+  const resolveRate = (model?: string) => {
+    if (!rates || !model) return null;
+    const key = Object.keys(rates.rates).find(
+      (k) => k !== 'default' && model.startsWith(k),
+    );
+    return rates.rates[key ?? 'default'] ?? null;
+  };
+  const usd = (n: number) => n.toFixed(2).replace(/\.?0+$/, '');
+  // What the row/footer should quote: metered → the customer's billed price;
+  // BYOK → the provider's list price (they bill it, not Janis).
+  const rateHint = (m: string) => {
+    const r = resolveRate(m);
+    if (!r) return null;
+    const f = providerId === METERED ? 1 + rates!.margin : 1;
+    return `$${usd(r.input * f)}/$${usd(r.output * f)} per 1M`;
+  };
+  const billedRate = resolveRate(llm.model);
 
   const setLlm = (patch: Record<string, unknown>) =>
     setCfg({ ...cfg, llm: { ...cfg.llm, ...patch } });
@@ -1180,7 +1194,7 @@ function LlmCard({
       ),
     ),
   ];
-  const listId = `llm-models-${agent.id}`;
+
 
   return (
     <div className="card" style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1262,19 +1276,13 @@ function LlmCard({
       )}
 
       <div className="row">
-        <input
-          className="grow"
-          list={listId}
-          placeholder="Model — pick from the list or type"
+        <ModelPicker
           value={llm.model ?? ''}
+          options={modelOptions}
           disabled={!isAdmin}
-          onChange={(e) => setLlm({ model: e.target.value })}
+          onChange={(m) => setLlm({ model: m })}
+          hint={rateHint}
         />
-        <datalist id={listId}>
-          {modelOptions.map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
       </div>
 
       {modelsMsg && (
@@ -1284,10 +1292,12 @@ function LlmCard({
       )}
       <div className="muted" style={{ fontSize: 12 }}>
         {providerId === METERED
-          ? rate
-            ? `${llm.model} costs us $${rate.input}/1M in, $${rate.output}/1M out — you\u2019re billed $${(rate.input * (1 + rate.margin)).toFixed(2)}/$${(rate.output * (1 + rate.margin)).toFixed(2)} per 1M on your LLM meter (+${Math.round(rate.margin * 100)}% margin).`
-            : 'Tokens run on Janis\u2019s provider account, billed to your LLM meter at the model\u2019s cost + margin. Pick a model to see its rate.'
-          : 'Your key bills $0 Janis LLM fees. Keys are write-only — saved keys are never re-displayed.'}
+          ? billedRate && llm.model
+            ? `Billed $${usd(billedRate.input * (1 + (rates?.margin ?? 0)))} per 1M input / $${usd(billedRate.output * (1 + (rates?.margin ?? 0)))} per 1M output tokens on your LLM meter.`
+            : 'Runs on Janis\u2019s provider account — each model bills its own price to your LLM meter. Pick a model to see it.'
+          : billedRate && llm.model
+            ? `$0 Janis LLM fees — ${llm.model} bills ~$${usd(billedRate.input)}/$${usd(billedRate.output)} per 1M on your provider account. Keys are write-only.`
+            : 'Your key bills $0 Janis LLM fees. Keys are write-only — saved keys are never re-displayed.'}
       </div>
     </div>
   );

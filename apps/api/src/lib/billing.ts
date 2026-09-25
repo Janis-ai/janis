@@ -58,6 +58,11 @@ const RATE_CARD: Record<string, { input: number; output: number }> = {
   default: { input: 0.5, output: 1.5 },
 };
 
+/** The full card + margin, for UI rate display. */
+export function allRates() {
+  return { rates: RATE_CARD, margin: billingConfig.margin };
+}
+
 /** Resolve a model to its per-1M cost basis (prefix match → default). */
 export function rateFor(model: string | null | undefined) {
   if (!model) return RATE_CARD.default;
