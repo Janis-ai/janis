@@ -799,3 +799,101 @@ describe('member channel sync', () => {
     expect(callsFor(fetchMock, 'conversations.invite')).toHaveLength(0);
   });
 });
+
+describe('stale threads', () => {
+  let convId: string;
+
+  const event = (threadTs: string) =>
+    signedPost(
+      JSON.stringify({
+        type: 'event_callback',
+        event: {
+          type: 'message',
+          channel: 'CST',
+          thread_ts: threadTs,
+          ts: `${Date.now()}.${Math.random().toString(36).slice(2, 6)}`,
+          user: 'U_ST',
+          text: 'anyone there?',
+        },
+      }),
+      '/slack/events',
+    );
+
+  beforeAll(async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Stale WS' }).returning();
+    const [op] = await db
+      .insert(users)
+      .values({ email: 'st@x.c', name: 'St', slackUserId: 'U_ST' })
+      .returning();
+    await db.insert(memberships).values({
+      userId: op.id,
+      workspaceId: ws.id,
+      role: 'member',
+      acceptedAt: new Date(),
+    });
+    const { hash, preview } = generateApiKey();
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'StBot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'stale-conv' })
+      .returning();
+    convId = conv.id;
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_ST', botToken: 'xoxb-st', installerUserId: op.id })
+      .returning();
+    // six threads — only the four newest stay live
+    for (let i = 1; i <= 6; i++) {
+      await db.insert(slackThreads).values({
+        conversationId: conv.id,
+        installationId: inst.id,
+        channelId: 'CST',
+        ts: `${i}.0`,
+        createdAt: new Date(1_000_000 + i * 1000),
+      });
+    }
+  });
+
+  it('a reply in a stale thread gets bounced, not ingested', async () => {
+    const calls: { url: string; body: string }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string | URL, init?: { body?: string }) => {
+        calls.push({ url: String(url), body: String(init?.body ?? '') });
+        return new Response('{"ok":true,"channel":"CST","ts":"1.5"}', {
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+    const res = await event('2.0'); // 5th newest of 6 → stale
+    expect(res.status).toBe(200);
+    const bounce = calls.find(
+      (c) => c.url.includes('chat.postMessage') && c.body.includes('stale'),
+    );
+    expect(bounce).toBeTruthy();
+    expect(JSON.parse(bounce!.body).thread_ts).toBe('2.0');
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    expect(conv.state).toBe('active'); // no implicit takeover
+    expect(
+      (await db.select().from(messages).where(eq(messages.conversationId, convId))).length,
+    ).toBe(0);
+  });
+
+  it('a reply in a live thread still lands', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }),
+        ),
+    );
+    const res = await event('6.0');
+    expect(res.status).toBe(200);
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    expect(conv.state).toBe('human'); // implicit takeover happened
+  });
+});
