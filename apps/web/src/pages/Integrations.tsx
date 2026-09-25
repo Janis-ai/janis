@@ -644,6 +644,17 @@ Janis.identify({ id: user.id, name: user.name, email: user.email });`}
   );
 }
 
+// widget.js paints this accent when none is configured — the picker should
+// always show the color that's actually in effect, and <input type=color>
+// only renders a valid 6-digit hex (empty/invalid values show a blank box)
+const DEFAULT_ACCENT = '#5b21b6';
+const normHex = (v: string | undefined) => {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(v ?? '');
+  if (!m) return DEFAULT_ACCENT;
+  const h = m[1].toLowerCase();
+  return '#' + (h.length === 3 ? [...h].map((c) => c + c).join('') : h);
+};
+
 function WebchatBranding({ channel }: { channel: Channel }) {
   const qc = useQueryClient();
   const b = channel.meta.branding ?? {};
@@ -651,7 +662,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
     title: b.title ?? '',
     subtitle: b.subtitle ?? '',
     greeting: b.greeting ?? '',
-    accent: b.accent ?? '#5b21b6',
+    accent: normHex(b.accent),
     position: b.position ?? 'right',
     logo_url: b.logo_url ?? '',
     quick_replies: (b.quick_replies ?? []).join(', '),
