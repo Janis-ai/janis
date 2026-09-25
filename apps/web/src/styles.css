@@ -343,7 +343,7 @@ textarea:disabled { opacity: .55; }
 .model-picker-pop {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 40;
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-  box-shadow: 0 8px 30px rgba(0,0,0,.5); overflow: visible;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5); overflow: hidden;
   display: flex; flex-direction: column;
 }
 .model-picker-top { display: flex; gap: 6px; margin: 8px; }
@@ -352,7 +352,8 @@ textarea:disabled { opacity: .55; }
   width: auto; padding: 6px 8px; font-size: 12px; color: var(--muted);
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px;
 }
-.model-picker-list { max-height: 280px; overflow-y: auto; border-radius: 0 0 10px 10px; }
+.model-picker-body { display: flex; min-height: 0; }
+.model-picker-list { flex: 1; min-width: 0; max-height: 280px; overflow-y: auto; }
 .model-item {
   display: flex; align-items: center; gap: 8px; width: 100%;
   background: none; border: none; color: var(--text);
@@ -382,12 +383,12 @@ textarea:disabled { opacity: .55; }
   background: #fff; box-shadow: 0 0 4px rgba(0,0,0,.6);
 }
 .cost-meter.big .cost-meter-dot { width: 10px; height: 10px; }
-/* model detail panel — flyout on desktop, covers the sheet on mobile */
+/* model detail panel — docked right column on desktop, covers the sheet
+   on mobile. Never escapes the popover. */
 .model-detail {
-  display: none; position: absolute; left: calc(100% + 8px); top: 0;
-  width: 250px; padding: 14px; z-index: 41;
-  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-  box-shadow: 0 8px 30px rgba(0,0,0,.5);
+  display: none; width: 230px; flex: none; padding: 14px;
+  border-left: 1px solid var(--border);
+  overflow-y: auto; max-height: 320px;
 }
 .model-detail.pinned { display: block; }
 .model-detail-back { display: none; }
@@ -418,8 +419,8 @@ textarea:disabled { opacity: .55; }
   .model-picker-list { max-height: 46dvh; }
   /* detail covers the sheet; shown only when ⓘ pinned it */
   .model-detail {
-    left: 0; top: 0; right: 0; bottom: 0; width: auto;
-    overflow-y: auto; border-radius: 10px;
+    position: absolute; inset: 0; width: auto; max-height: none;
+    border-left: none; border-radius: 10px; background: var(--panel);
   }
   .model-detail-back {
     display: inline-block; background: none; border: none; cursor: pointer;

@@ -183,8 +183,9 @@ export function ModelPicker({
               <option value="name">Name</option>
             </select>
           </div>
-          <div className="model-picker-list">
-            {sorted.map((m) => {
+          <div className="model-picker-body">
+            <div className="model-picker-list">
+              {sorted.map((m) => {
               const pos = meterPos(m);
               return (
                 <button
@@ -222,18 +223,19 @@ export function ModelPicker({
                 no models — click Refresh to fetch the endpoint's list
               </div>
             )}
+            </div>
+            {detail && (
+              <DetailPanel
+                m={detail}
+                rateScale={rateScale}
+                meterPos={meterPos(detail)}
+                effort={detail.id === value ? effort : undefined}
+                onEffort={onEffort}
+                pinned={Boolean(pinnedId)}
+                onClose={() => setPinnedId(null)}
+              />
+            )}
           </div>
-          {detail && (
-            <DetailPanel
-              m={detail}
-              rateScale={rateScale}
-              meterPos={meterPos(detail)}
-              effort={detail.id === value ? effort : undefined}
-              onEffort={onEffort}
-              pinned={Boolean(pinnedId)}
-              onClose={() => setPinnedId(null)}
-            />
-          )}
         </div>
       )}
     </div>
