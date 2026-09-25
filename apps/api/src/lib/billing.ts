@@ -23,14 +23,20 @@ export function allRates() {
   return { rates: RATE_CARD, margin: billingConfig.margin };
 }
 
-/** Resolve a model to its per-1M cost basis (prefix match → default). */
-export function rateFor(model: string | null | undefined) {
-  if (!model) return RATE_CARD.default;
+/** Resolved per-1M cost basis, or undefined when the model has no verified
+ *  price — metered billing must refuse those rather than guess a rate. */
+export function pricedRateFor(model: string | null | undefined) {
+  if (!model) return undefined;
   const custom = env.llmPrices as Record<string, { input: number; output: number }> | undefined;
   if (custom?.[model]) return custom[model];
   // match prefix so dated variants (gpt-4o-mini-2024-07-18) hit their family
   const key = Object.keys(RATE_CARD).find((k) => k !== 'default' && model.startsWith(k));
-  return RATE_CARD[key ?? 'default'];
+  return key ? RATE_CARD[key] : undefined;
+}
+
+/** Resolve a model to its per-1M cost basis (prefix match → default). */
+export function rateFor(model: string | null | undefined) {
+  return pricedRateFor(model) ?? RATE_CARD.default;
 }
 
 /** Cost in USD-millionths for one completion. */

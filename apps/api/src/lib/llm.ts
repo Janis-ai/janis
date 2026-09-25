@@ -1,6 +1,7 @@
 import type { agents } from '../db/schema.js';
 import { env } from '../env.js';
 import { VENDOR_ENDPOINTS, catalogModel, vendorForBaseUrl, type LlmVendor } from '@janis/shared';
+import { pricedRateFor } from './billing.js';
 
 export interface LlmSettings {
   apiKey: string;
@@ -71,6 +72,13 @@ export function llmFor(agent: typeof agents.$inferSelect): LlmSettings {
     cfg.llm?.provider === 'janis' ||
     (!cfg.llm?.api_key && !cfg.llm?.base_url && !cfg.llm?.provider);
   if (metered) {
+    // No verified price = we can't bill correctly — refuse rather than fall
+    // back to a guessed default rate.
+    if (!pricedRateFor(model)) {
+      throw new Error(
+        `'${model}' has no metered rate — pick a priced model or switch this agent to BYOK`,
+      );
+    }
     const acc = meteredAccountFor(model);
     return {
       apiKey: acc?.apiKey ?? env.llmApiKey,

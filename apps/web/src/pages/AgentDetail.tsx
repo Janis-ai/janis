@@ -1239,10 +1239,13 @@ function LlmCard({
     if (!modelOptions.some((x) => x.id === o.id)) modelOptions.push(o);
   };
   if (mode === 'hosted') {
+    // metered shows only priced models — an unpriced model can't be billed
+    // correctly, and the runtime refuses it anyway
+    const priced = (o: ModelOption) => catalogRateFor(o.id) != null;
     for (const acc of meteredAccounts ?? []) {
       const vend = acc.vendor === 'default' ? undefined : (acc.vendor as LlmVendor);
-      for (const o of catalogOptions(vend ? [vend] : undefined)) push(o);
-      for (const o of filterLiveModels(providerForVendor(vend)?.id ?? 'custom', acc.models)) {
+      for (const o of catalogOptions(vend ? [vend] : undefined).filter(priced)) push(o);
+      for (const o of filterLiveModels(providerForVendor(vend)?.id ?? 'custom', acc.models).filter(priced)) {
         push(o);
       }
     }
