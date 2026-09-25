@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { and, eq, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, channels, usageEvents, workspaces } from '../db/schema.js';
-import { billingConfig, currentPeriod } from '../lib/billing.js';
+import { billingConfig, currentPeriod, rateFor } from '../lib/billing.js';
 import { invalidateCapCache, messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
 import { planForPrice, stripe } from '../lib/stripe.js';
 import { env } from '../env.js';
@@ -37,6 +37,13 @@ async function ensureStripeCustomer(
 export function billingRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
+
+  // GET /api/billing/llm-rate?model=x — the cost basis + margin a metered
+  // engine bills at, so the Engine tab can show real per-model prices.
+  app.get('/llm-rate', (c) => {
+    const r = rateFor(c.req.query('model') ?? '');
+    return c.json({ input: r.input, output: r.output, margin: billingConfig.margin });
+  });
 
   // GET /api/billing/summary?period=YYYY-MM — usage + estimated invoice
   app.get('/summary', async (c) => {

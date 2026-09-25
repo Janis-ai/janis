@@ -1074,6 +1074,7 @@ function LlmCard({
   const [liveModels, setLiveModels] = useState<string[]>([]);
   const [modelsMsg, setModelsMsg] = useState('');
   const [modelsBusy, setModelsBusy] = useState(false);
+  const [rate, setRate] = useState<{ input: number; output: number; margin: number } | null>(null);
 
   // An OpenRouter OAuth round-trip lands back on this page — pick up the key.
   useEffect(() => {
@@ -1129,6 +1130,22 @@ function LlmCard({
     else setLiveModels([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerId]);
+
+  // Metered mode: show what the chosen model actually bills per 1M tokens.
+  useEffect(() => {
+    if (providerId !== METERED || !llm.model) {
+      setRate(null);
+      return;
+    }
+    const t = setTimeout(() => {
+      api<{ input: number; output: number; margin: number }>(
+        `/api/billing/llm-rate?model=${encodeURIComponent(llm.model!)}`,
+      )
+        .then(setRate)
+        .catch(() => setRate(null));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [providerId, llm.model]);
 
   const setLlm = (patch: Record<string, unknown>) =>
     setCfg({ ...cfg, llm: { ...cfg.llm, ...patch } });
@@ -1267,7 +1284,9 @@ function LlmCard({
       )}
       <div className="muted" style={{ fontSize: 12 }}>
         {providerId === METERED
-          ? 'Tokens run on Janis\u2019s provider account, billed at cost + margin to your LLM meter. Pick a frontier model or keep the default.'
+          ? rate
+            ? `${llm.model} costs us $${rate.input}/1M in, $${rate.output}/1M out — you\u2019re billed $${(rate.input * (1 + rate.margin)).toFixed(2)}/$${(rate.output * (1 + rate.margin)).toFixed(2)} per 1M on your LLM meter (+${Math.round(rate.margin * 100)}% margin).`
+            : 'Tokens run on Janis\u2019s provider account, billed to your LLM meter at the model\u2019s cost + margin. Pick a model to see its rate.'
           : 'Your key bills $0 Janis LLM fees. Keys are write-only — saved keys are never re-displayed.'}
       </div>
     </div>
