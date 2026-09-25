@@ -1,7 +1,9 @@
 import type { agents } from '../db/schema.js';
 import { env } from '../env.js';
-import { VENDOR_ENDPOINTS, catalogModel, vendorForBaseUrl, type LlmVendor } from '@janis/shared';
+import { VENDOR_ENDPOINTS, OR_VENDOR_SLUG, catalogModel, vendorForBaseUrl, type LlmVendor } from '@janis/shared';
 import { pricedRateFor } from './billing.js';
+
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
 export interface LlmSettings {
   apiKey: string;
@@ -32,34 +34,54 @@ export function meteredAccounts(): MeteredAccount[] {
     apiKey: env.llmApiKey,
     baseUrl: env.llmBaseUrl.replace(/\/+$/, ''),
   });
-  for (const [vendor, a] of Object.entries(env.janisLlmProviders)) {
-    const baseUrl = (
-      a.base_url ||
-      VENDOR_ENDPOINTS[vendor as LlmVendor] ||
-      ''
-    ).replace(/\/+$/, '');
-    if (!a.api_key || !baseUrl) continue;
-    accs.push({ vendor, apiKey: a.api_key, baseUrl });
+  const upsert = (acc: MeteredAccount) => {
+    const i = accs.findIndex((a) => a.vendor === acc.vendor);
+    if (i >= 0) accs[i] = acc;
+    else accs.push(acc);
+  };
+  // <VENDOR>_LLM_API_KEY entries override the legacy pair on the same
+  // vendor; JANIS_LLM_PROVIDERS JSON overrides everything.
+  for (const source of [env.llmVendorKeys, env.janisLlmProviders]) {
+    for (const [vendor, a] of Object.entries(source)) {
+      const baseUrl = (
+        a.base_url ||
+        (vendor === 'openrouter' ? OPENROUTER_BASE_URL : VENDOR_ENDPOINTS[vendor as LlmVendor]) ||
+        ''
+      ).replace(/\/+$/, '');
+      if (!a.api_key || !baseUrl) continue;
+      upsert({ vendor, apiKey: a.api_key, baseUrl });
+    }
   }
   return accs;
 }
 
 /** The account that serves `model` on Janis's meter — matched by catalog
- *  vendor, else the default account. Throws when the model's vendor has no
- *  configured account (a Gemini key can't answer claude-*). */
+ *  vendor, else an OpenRouter account (routes every vendor by `vendor/id`),
+ *  else the default account for uncatalogued models. Throws when the
+ *  model's vendor has no configured account (a Gemini key can't answer
+ *  claude-*). */
 export function meteredAccountFor(model: string): MeteredAccount | undefined {
   const accs = meteredAccounts();
   if (!accs.length) return undefined;
   const bare = model.slice(model.lastIndexOf('/') + 1);
   const cat = catalogModel(model) ?? catalogModel(bare);
   if (!cat) return accs.find((a) => a.vendor === 'default') ?? accs[0];
-  const acc = accs.find((a) => a.vendor === cat.vendor);
+  const acc = accs.find((a) => a.vendor === cat.vendor) ?? accs.find((a) => a.vendor === 'openrouter');
   if (!acc) {
     throw new Error(
-      `Janis has no ${cat.vendor} provider account configured — add one via JANIS_LLM_PROVIDERS or switch this agent to BYOK`,
+      `Janis has no ${cat.vendor} provider account configured — set ${cat.vendor.toUpperCase()}_LLM_API_KEY/OPENROUTER_LLM_API_KEY or switch this agent to BYOK`,
     );
   }
   return acc;
+}
+
+/** OpenRouter ids are `vendor/model` compounds — translate a catalog id
+ *  when the serving account is OpenRouter. */
+export function meteredModelId(acc: MeteredAccount, model: string): string {
+  if (acc.vendor !== 'openrouter') return model;
+  const bare = model.slice(model.lastIndexOf('/') + 1);
+  const cat = catalogModel(model) ?? catalogModel(bare);
+  return cat ? (cat.or ?? `${OR_VENDOR_SLUG[cat.vendor]}/${cat.id}`) : model;
 }
 
 /** Per-agent LLM config with env fallback (OpenAI-compatible). */
@@ -83,7 +105,7 @@ export function llmFor(agent: typeof agents.$inferSelect): LlmSettings {
     return {
       apiKey: acc?.apiKey ?? env.llmApiKey,
       baseUrl: (acc?.baseUrl ?? env.llmBaseUrl).replace(/\/+$/, ''),
-      model,
+      model: acc ? meteredModelId(acc, model) : model,
       byok: false,
     };
   }

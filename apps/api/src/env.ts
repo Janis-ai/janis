@@ -51,6 +51,20 @@ export const env = {
       return {};
     }
   })(),
+  // Per-vendor metered keys: <VENDOR>_LLM_API_KEY (+ optional
+  // <VENDOR>_LLM_BASE_URL override). OPENROUTER_LLM_API_KEY makes one
+  // account serve every catalog model via vendor/id routing.
+  llmVendorKeys: (() => {
+    const out: Record<string, { api_key: string; base_url?: string }> = {};
+    for (const v of [
+      'openai', 'anthropic', 'google', 'xai', 'deepseek', 'moonshot',
+      'zai', 'nvidia', 'mistral', 'meta', 'openrouter',
+    ]) {
+      const key = process.env[`${v.toUpperCase()}_LLM_API_KEY`];
+      if (key) out[v] = { api_key: key, base_url: process.env[`${v.toUpperCase()}_LLM_BASE_URL`] };
+    }
+    return out;
+  })(),
   // Janis-side Brave Search key powering the built-in web_search tool — lets
   // hosted agents search without the customer configuring a connection.
   // Empty = the tool is hidden from the catalog and never offered to the LLM.

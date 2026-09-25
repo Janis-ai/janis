@@ -1243,9 +1243,15 @@ function LlmCard({
     // correctly, and the runtime refuses it anyway
     const priced = (o: ModelOption) => catalogRateFor(o.id) != null;
     for (const acc of meteredAccounts ?? []) {
-      const vend = acc.vendor === 'default' ? undefined : (acc.vendor as LlmVendor);
+      // 'default' (unknown base_url) and 'openrouter' (routes all vendors)
+      // accounts expose the whole catalog
+      const vend =
+        acc.vendor === 'default' || acc.vendor === 'openrouter'
+          ? undefined
+          : (acc.vendor as LlmVendor);
       for (const o of catalogOptions(vend ? [vend] : undefined).filter(priced)) push(o);
-      for (const o of filterLiveModels(providerForVendor(vend)?.id ?? 'custom', acc.models).filter(priced)) {
+      const liveProvider = acc.vendor === 'openrouter' ? 'openrouter' : (providerForVendor(vend)?.id ?? 'custom');
+      for (const o of filterLiveModels(liveProvider, acc.models).filter(priced)) {
         push(o);
       }
     }
