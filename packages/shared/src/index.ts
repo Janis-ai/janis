@@ -160,12 +160,15 @@ export const AgentConfig = z.object({
   system_prompt: z.string().optional(),
   knowledge: z.array(z.string()).optional(), // facts/snippets injected into the prompt
   tone: z.string().optional(),
-  // hosted agents only — per-agent LLM override (OpenAI-compatible)
+  // hosted agents only — per-agent LLM override (OpenAI-compatible).
+  // api_key is write-only: reads return key_set instead. null clears the key.
   llm: z
     .object({
-      api_key: z.string().optional(),
+      api_key: z.string().nullish(),
       base_url: z.string().optional(),
       model: z.string().optional(),
+      provider: z.string().optional(), // preset id ('openai', 'gemini', …) — UI metadata
+      key_set: z.boolean().optional(), // read marker — never accepted on write
     })
     .optional(),
   // hosted agents only — client systems the agent can call (POS/CRM/etc).

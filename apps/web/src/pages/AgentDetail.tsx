@@ -14,6 +14,8 @@ import { useAgents, useAlertRules, useChannels, useDeliveries, useMe, useSlackCh
 import { timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { railBus } from '../lib/railBus';
+import { LLM_PROVIDERS, METERED, detectProvider, providerFor } from '../lib/llmProviders';
+import { connectOpenRouter, consumeOpenRouterResult } from '../lib/openrouterAuth';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
@@ -1011,33 +1013,7 @@ function ConnectionTab({
         )}
       </div>
 
-      {agent.hosted && (
-      <div className="card" style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <label>LLM (OpenAI-compatible — your own key bills $0 Janis LLM fees; blank uses Janis's metered key)</label>
-        <input
-          placeholder="API key (sk-…)"
-          value={cfg.llm?.api_key ?? ''}
-          disabled={!isAdmin}
-          onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, api_key: e.target.value } })}
-        />
-        <div className="row">
-          <input
-            className="grow"
-            placeholder="Base URL (default https://api.openai.com/v1)"
-            value={cfg.llm?.base_url ?? ''}
-            disabled={!isAdmin}
-            onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, base_url: e.target.value } })}
-          />
-          <input
-            placeholder="Model"
-            style={{ width: 160 }}
-            value={cfg.llm?.model ?? ''}
-            disabled={!isAdmin}
-            onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, model: e.target.value } })}
-          />
-        </div>
-      </div>
-      )}
+      {agent.hosted && <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />}
 
       {!agent.hosted && (
       <div className="card" style={{ marginTop: 12 }}>
@@ -1078,6 +1054,225 @@ function ConnectionTab({
 }
 
 /* ---- shared subcomponents ---- */
+
+/** Hosted-agent LLM picker: Janis metered vs BYOK provider presets, with a
+ *  live /models dropdown and one-click OpenRouter connect (PKCE). */
+function LlmCard({
+  agent,
+  cfg,
+  setCfg,
+  isAdmin,
+}: {
+  agent: Agent;
+  cfg: AgentConfig;
+  setCfg: (c: AgentConfig) => void;
+  isAdmin: boolean;
+}) {
+  const llm = cfg.llm ?? {};
+  const providerId = llm.provider ?? detectProvider(llm) ?? METERED;
+  const preset = providerFor(providerId);
+  const [liveModels, setLiveModels] = useState<string[]>([]);
+  const [modelsMsg, setModelsMsg] = useState('');
+  const [modelsBusy, setModelsBusy] = useState(false);
+
+  // An OpenRouter OAuth round-trip lands back on this page — pick up the key.
+  useEffect(() => {
+    const r = consumeOpenRouterResult();
+    if (!r.key && !r.error) return;
+    if (r.key) {
+      setCfg({
+        ...cfg,
+        llm: {
+          ...cfg.llm,
+          provider: 'openrouter',
+          api_key: r.key,
+          base_url: providerFor('openrouter')?.baseUrl,
+        },
+      });
+      setModelsMsg('OpenRouter connected — click Save to apply.');
+    } else {
+      setModelsMsg(`OpenRouter connect failed: ${r.error}`);
+    }
+    // run once — cfg/setCfg identity churns on every keystroke
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const fetchModels = async () => {
+    setModelsBusy(true);
+    setModelsMsg('');
+    try {
+      const r = await api<{ models: string[]; error?: string }>(
+        `/api/agents/${agent.id}/llm-models`,
+        {
+          method: 'POST',
+          body: JSON.stringify(
+            providerId === METERED
+              ? { metered: true }
+              : { base_url: llm.base_url, api_key: llm.api_key || undefined },
+          ),
+        },
+      );
+      setLiveModels(r.models);
+      if (r.error) setModelsMsg(`couldn't list models: ${r.error}`);
+      else if (!r.models.length) setModelsMsg('endpoint returned no models');
+    } catch (e) {
+      setModelsMsg(`couldn't list models: ${e instanceof Error ? e.message : 'failed'}`);
+    } finally {
+      setModelsBusy(false);
+    }
+  };
+
+  // Populate the model list when we can authenticate (metered key, saved key,
+  // or a key typed into the draft).
+  useEffect(() => {
+    if (providerId === METERED || llm.api_key || llm.key_set) void fetchModels();
+    else setLiveModels([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerId]);
+
+  const setLlm = (patch: Record<string, unknown>) =>
+    setCfg({ ...cfg, llm: { ...cfg.llm, ...patch } });
+
+  const onProvider = (id: string) => {
+    if (id === METERED) {
+      // keep the BYOK fields around — switching back shouldn't lose the key
+      setLlm({ provider: METERED });
+      return;
+    }
+    const p = providerFor(id);
+    const sameEndpoint =
+      Boolean(p?.baseUrl) && p!.baseUrl === (cfg.llm?.base_url ?? '');
+    setCfg({
+      ...cfg,
+      llm: {
+        ...cfg.llm,
+        provider: id,
+        // 'custom' keeps whatever endpoint was there for editing
+        base_url: p?.baseUrl ?? cfg.llm?.base_url ?? '',
+        // a different endpoint needs its own key — null clears the stored one
+        ...(sameEndpoint ? {} : { api_key: null }),
+        key_set: undefined,
+      },
+    });
+  };
+
+  const modelOptions = [
+    ...new Set(
+      [llm.model, ...(preset?.models ?? []), ...liveModels].filter((m): m is string =>
+        Boolean(m),
+      ),
+    ),
+  ];
+  const listId = `llm-models-${agent.id}`;
+
+  return (
+    <div className="card" style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <label>LLM</label>
+      <div className="row">
+        <select
+          className="grow"
+          value={providerId}
+          disabled={!isAdmin}
+          onChange={(e) => onProvider(e.target.value)}
+        >
+          <option value={METERED}>Janis metered — billed to your plan's LLM meter</option>
+          <optgroup label="Your account — $0 Janis LLM fees">
+            {LLM_PROVIDERS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </optgroup>
+        </select>
+        {isAdmin && (
+          <button
+            className="btn"
+            disabled={modelsBusy}
+            onClick={() => void fetchModels()}
+            title="Fetch the live model list from the provider endpoint"
+          >
+            {modelsBusy ? 'Loading…' : 'Refresh models'}
+          </button>
+        )}
+      </div>
+
+      {providerId !== METERED && (
+        <>
+          <div className="row">
+            <input
+              className="grow"
+              type="password"
+              autoComplete="off"
+              placeholder={
+                llm.key_set
+                  ? 'Key saved — paste a new one to replace'
+                  : (preset?.keyHint ?? 'API key')
+              }
+              value={llm.api_key ?? ''}
+              disabled={!isAdmin}
+              onChange={(e) => setLlm({ api_key: e.target.value })}
+            />
+            {preset?.oauth === 'openrouter' && isAdmin && (
+              <button
+                className="btn"
+                onClick={() => void connectOpenRouter()}
+                title="Authorize Janis on OpenRouter — creates a key on your account"
+              >
+                Connect account
+              </button>
+            )}
+            {preset?.keyUrl && preset.oauth !== 'openrouter' && (
+              <a
+                href={preset.keyUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="muted"
+                style={{ whiteSpace: 'nowrap', alignSelf: 'center' }}
+              >
+                get a key ↗
+              </a>
+            )}
+          </div>
+          {providerId === 'custom' && (
+            <input
+              placeholder="Base URL (https://your-llm.example.com/v1)"
+              value={llm.base_url ?? ''}
+              disabled={!isAdmin}
+              onChange={(e) => setLlm({ base_url: e.target.value })}
+            />
+          )}
+        </>
+      )}
+
+      <div className="row">
+        <input
+          className="grow"
+          list={listId}
+          placeholder="Model — pick from the list or type"
+          value={llm.model ?? ''}
+          disabled={!isAdmin}
+          onChange={(e) => setLlm({ model: e.target.value })}
+        />
+        <datalist id={listId}>
+          {modelOptions.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+      </div>
+
+      {modelsMsg && (
+        <div className="muted" style={{ fontSize: 12 }}>
+          {modelsMsg}
+        </div>
+      )}
+      <div className="muted" style={{ fontSize: 12 }}>
+        {providerId === METERED
+          ? 'Tokens run on Janis\u2019s provider account, billed at cost + margin to your LLM meter. Pick a frontier model or keep the default.'
+          : 'Your key bills $0 Janis LLM fees. Keys are write-only — saved keys are never re-displayed.'}
+      </div>
+    </div>
+  );
+}
 
 interface KnowledgeFile {
   id: string;

@@ -30,6 +30,20 @@ type Row<T> = T extends { $inferSelect: infer S } ? S : never;
 const iso = (d: Date | string | null | undefined) =>
   d == null ? null : d instanceof Date ? d.toISOString() : d;
 
+/** LLM keys are write-only: strip api_key, replace with a key_set marker. */
+function scrubLlmKey(config: unknown): AgentConfig {
+  const cfg = { ...((config ?? {}) as Record<string, unknown>) };
+  const llm = cfg.llm as Record<string, unknown> | undefined;
+  if (llm) {
+    cfg.llm = {
+      ...llm,
+      api_key: undefined,
+      key_set: Boolean(llm.api_key),
+    };
+  }
+  return cfg as AgentConfig;
+}
+
 export function toAgent(row: Row<typeof agents>): Agent {
   return {
     id: row.id,
@@ -40,7 +54,7 @@ export function toAgent(row: Row<typeof agents>): Agent {
     hosted: row.hosted,
     auto_resume_minutes: row.autoResumeMinutes,
     slack_channel_id: row.slackChannelId ?? null,
-    config: (row.config ?? {}) as AgentConfig,
+    config: scrubLlmKey(row.config),
     last_seen_at: iso(row.lastSeenAt),
     api_key_preview: row.apiKeyPreview,
     metadata: (row.metadata ?? {}) as Record<string, unknown>,

@@ -7,6 +7,7 @@ import type { Db } from '../db/client.js';
 import { agents, agentConnections, agentSecrets, channels, conversations, knowledgeFiles, webhookDeliveries, workspaces } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { generateApiKey, generateWebhookSecret } from '../lib/crypto.js';
+import { env } from '../env.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
 import {
@@ -133,6 +134,23 @@ export function agentRoutes(db: Db) {
       if (!info) return c.json({ error: 'channel not found in Slack' }, 400);
       if (info.isArchived) return c.json({ error: 'that channel is archived' }, 400);
     }
+    let configToSave = body.config;
+    // llm.api_key is write-only — reads return key_set instead. Merge so a
+    // config save doesn't wipe the key: undefined/'' keep, null clears,
+    // a real string replaces.
+    if (body.config?.llm) {
+      const [existing] = await db
+        .select({ config: agents.config })
+        .from(agents)
+        .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
+        .limit(1);
+      const storedKey =
+        (((existing?.config ?? {}) as { llm?: { api_key?: string } }).llm?.api_key as string) ?? '';
+      const { key_set: _ignored, ...llm } = body.config.llm;
+      if (llm.api_key === null) delete llm.api_key;
+      else if (!llm.api_key) llm.api_key = storedKey || undefined;
+      configToSave = { ...body.config, llm };
+    }
     const [row] = await db
       .update(agents)
       .set({
@@ -145,7 +163,7 @@ export function agentRoutes(db: Db) {
         ...(body.slack_channel_id !== undefined
           ? { slackChannelId: body.slack_channel_id }
           : {}),
-        ...(body.config !== undefined ? { config: body.config } : {}),
+        ...(configToSave !== undefined ? { config: configToSave } : {}),
       })
       .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
       .returning();
@@ -156,6 +174,63 @@ export function agentRoutes(db: Db) {
     }
     return c.json({ agent: toAgent(row) });
   });
+
+  // Live model list from an OpenAI-compatible endpoint. metered (or no
+  // override) resolves env; otherwise fetches base_url/models with the
+  // caller's key — or the stored key when the endpoint matches what's saved.
+  // The env key is never sent to a non-env base_url.
+  app.post(
+    '/:id/llm-models',
+    adminOnly,
+    zValidator(
+      'json',
+      z.object({
+        base_url: z.string().optional(),
+        api_key: z.string().optional(),
+        metered: z.boolean().optional(),
+      }),
+    ),
+    async (c) => {
+      const body = c.req.valid('json');
+      let baseUrl = (body.base_url ?? '').replace(/\/+$/, '');
+      let apiKey = body.api_key ?? '';
+      if (body.metered || (!baseUrl && !apiKey)) {
+        baseUrl = env.llmBaseUrl.replace(/\/+$/, '');
+        apiKey = env.llmApiKey;
+      } else {
+        if (!/^https?:\/\//i.test(baseUrl)) {
+          return c.json({ models: [], error: 'base_url must be an http(s) URL' }, 400);
+        }
+        if (!apiKey) {
+          const [row] = await db
+            .select({ config: agents.config })
+            .from(agents)
+            .where(
+              and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))),
+            )
+            .limit(1);
+          const stored =
+            (((row?.config ?? {}) as { llm?: { api_key?: string; base_url?: string } }).llm) ?? {};
+          if (stored.base_url === body.base_url && stored.api_key) apiKey = stored.api_key;
+        }
+      }
+      try {
+        const res = await fetch(`${baseUrl}/models`, {
+          headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!res.ok) return c.json({ models: [], error: `provider returned ${res.status}` });
+        const data = (await res.json()) as { data?: { id?: string }[] };
+        const models = (data.data ?? [])
+          .map((m) => m.id)
+          .filter((s): s is string => Boolean(s))
+          .sort();
+        return c.json({ models });
+      } catch (e) {
+        return c.json({ models: [], error: e instanceof Error ? e.message : 'fetch failed' });
+      }
+    },
+  );
 
   app.post('/:id/rotate-key', adminOnly, async (c) => {
     const { key, hash, preview } = generateApiKey();

@@ -234,3 +234,109 @@ describe('tool template install', () => {
     ).toHaveLength(0);
   });
 });
+
+describe('llm config', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const newAgentId = async () => {
+    const res = await postAgent(parentCookie);
+    return (await res.json()).agent.id as string;
+  };
+  const patch = (id: string, config: unknown) =>
+    app.request(`/api/agents/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ config }),
+    });
+  const storedLlm = async (id: string) => {
+    const [row] = await db.select().from(schema.agents).where(eq(schema.agents.id, id));
+    return ((row.config as { llm?: Record<string, unknown> })?.llm ?? {}) as Record<
+      string,
+      unknown
+    >;
+  };
+
+  it('write-only key: reads return key_set, never the key', async () => {
+    const id = await newAgentId();
+    const res = await patch(id, {
+      llm: { provider: 'openai', api_key: 'sk-live-secret', model: 'gpt-6-sol' },
+    });
+    expect(res.status).toBe(200);
+    const { agent } = await res.json();
+    expect(agent.config.llm.api_key).toBeUndefined();
+    expect(agent.config.llm.key_set).toBe(true);
+    // …but the stored config keeps the real key for the hosted runtime
+    expect((await storedLlm(id)).api_key).toBe('sk-live-secret');
+  });
+
+  it('a config save without api_key preserves the stored key; null clears it', async () => {
+    const id = await newAgentId();
+    await patch(id, { llm: { provider: 'openai', api_key: 'sk-keep-me' } });
+    await patch(id, { llm: { provider: 'openai', model: 'gpt-6-luna' } });
+    expect((await storedLlm(id)).api_key).toBe('sk-keep-me');
+    expect((await storedLlm(id)).model).toBe('gpt-6-luna');
+    await patch(id, { llm: { provider: 'janis', api_key: null } });
+    const llm = await storedLlm(id);
+    expect(llm.api_key).toBeUndefined();
+    expect(llm.provider).toBe('janis');
+  });
+
+  it('llm-models lists models from the metered env endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: 'b-model' }, { id: 'a-model' }] }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const id = await newAgentId();
+    const res = await app.request(`/api/agents/${id}/llm-models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ metered: true }),
+    });
+    expect((await res.json()).models).toEqual(['a-model', 'b-model']);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.openai.com/v1/models',
+      expect.objectContaining({ headers: {} }),
+    );
+  });
+
+  it('llm-models never sends the env key to a custom endpoint — uses the stored key', async () => {
+    const id = await newAgentId();
+    await patch(id, {
+      llm: { provider: 'groq', base_url: 'https://api.groq.com/openai/v1', api_key: 'gsk_saved' },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'm1' }] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await app.request(`/api/agents/${id}/llm-models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      // caller sends only the endpoint — server should fill the saved key
+      body: JSON.stringify({ base_url: 'https://api.groq.com/openai/v1' }),
+    });
+    expect((await res.json()).models).toEqual(['m1']);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.groq.com/openai/v1/models',
+      expect.objectContaining({ headers: { authorization: 'Bearer gsk_saved' } }),
+    );
+  });
+
+  it('llm-models with an unknown endpoint and no key calls it unauthenticated', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const id = await newAgentId();
+    const res = await app.request(`/api/agents/${id}/llm-models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ base_url: 'https://llm.example.com/v1' }),
+    });
+    expect((await res.json()).error).toContain('401');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://llm.example.com/v1/models',
+      expect.objectContaining({ headers: {} }),
+    );
+  });
+});

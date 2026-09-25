@@ -16,6 +16,7 @@ import Integrations from './pages/Integrations';
 import ChannelEdit from './pages/ChannelEdit';
 import Billing from './pages/Billing';
 import Settings from './pages/Settings';
+import { finishOpenRouterCallback } from './lib/openrouterAuth';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -77,6 +78,15 @@ function PushDeepLink() {
   return null;
 }
 
+/** OpenRouter OAuth landing: exchange ?code, stash the key, bounce back to
+ * the agent page that started the flow (stored in sessionStorage). */
+function LlmCallback() {
+  useEffect(() => {
+    void finishOpenRouterCallback();
+  }, []);
+  return <div className="login-wrap muted">Connecting to OpenRouter…</div>;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -88,6 +98,7 @@ export default function App() {
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/terms" element={<Terms />} />
         <Route path="/docs" element={<Docs />} />
+        <Route path="/llm/callback" element={<LlmCallback />} />
         <Route
           element={
             <RequireAuth>
