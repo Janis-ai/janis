@@ -1,0 +1,1 @@
+ALTER TABLE "slack_threads" ADD COLUMN "last_reply_ts" text;

@@ -258,13 +258,38 @@ describe('slash commands', () => {
     const [stored] = await db.select().from(alerts).where(eq(alerts.id, alert.id));
     expect(stored.slackTs).toBe('9.9');
     expect(stored.slackChannelId).toBe('CALERT');
-    // mirrors keep landing in the thread
+    // mirrors keep landing in the thread — and each one becomes the
+    // permalink target (latest reply ts on the thread row)
     calls.length = 0;
     await mirrorToSlack(db, convId, 'x', 'hello again', { direction: 'out' });
     const mirrored = calls.filter(
       (c) => c.url.includes('chat.postMessage') && c.body.text === 'hello again',
     );
     expect(mirrored.map((m) => m.body.thread_ts)).toEqual(['1.0']);
+    const [thread] = await db
+      .select()
+      .from(slackThreads)
+      .where(eq(slackThreads.conversationId, convId));
+    expect(thread.lastReplyTs).toBe('9.9'); // the mock returns ts 9.9
+
+    // the next alert's "View thread" permalink targets the latest reply,
+    // not the anchor — still opening the panel via thread_ts on the anchor
+    calls.length = 0;
+    const [alert2] = await db
+      .insert(alerts)
+      .values({ conversationId: conv.id, type: 'failure', detail: 'again' })
+      .returning();
+    await postSlackAlert(db, agent.workspaceId, conv, agent, alert2);
+    const perm = calls.find((c) => c.url.includes('chat.getPermalink'));
+    expect(perm?.url).toContain('message_ts=9.9');
+    const posts2 = calls.filter((c) => c.url.includes('chat.postMessage'));
+    const topLevel2 = posts2.filter((p) => p.body.channel === 'CALERT' && !p.body.thread_ts);
+    const blocks2 = topLevel2[0].body.blocks as { elements?: { url?: string; action_id?: string }[] }[];
+    const btn2 = blocks2
+      .flatMap((b) => b.elements ?? [])
+      .find((e) => e.action_id === 'janis_view_thread');
+    expect(btn2?.url).toContain('thread_ts=1.0');
+    expect(btn2?.url).toContain('cid=CALERT');
   });
 
   it('forwards to legacy when the channel has no mapped conversations', async () => {

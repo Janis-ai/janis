@@ -356,6 +356,7 @@ export const slackThreads = pgTable(
       .references(() => slackInstallations.id),
     channelId: text('channel_id').notNull(),
     ts: text('ts').notNull(), // slack message timestamp = thread id
+    lastReplyTs: text('last_reply_ts'), // newest reply ts — permalink targets land here
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('slack_threads_channel_ts').on(t.channelId, t.ts)],

@@ -11,6 +11,7 @@ import { decidePendingAction } from '../lib/approvals.js';
 import {
   createSlackChannel,
   findThread,
+  markThreadReply,
   getInstallation,
   inviteWorkspaceMembers,
   listSlackChannels,
@@ -372,6 +373,10 @@ export function slackPublicRoutes(db: Db) {
 
     const found = await findThread(db, ev.channel, ev.thread_ts);
     if (!found) return c.json({ ok: true });
+    // Any user-authored reply is the thread's newest message — "View thread"
+    // permalinks point at lastReplyTs, so keep it current even for replies
+    // that end up dropped below (non-member, archived, commands).
+    await markThreadReply(db, ev.channel, ev.thread_ts, ev.ts).catch(() => {});
     const user = await slackUserToMember(db, found.installation, ev.user);
     if (!user) {
       // Channel member but not a Janis operator — tell them why nothing

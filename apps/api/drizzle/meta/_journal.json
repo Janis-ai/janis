@@ -267,6 +267,13 @@
       "when": 1790308555071,
       "tag": "0037_alert-slack-ts",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1790310012315,
+      "tag": "0038_slack-thread-last-reply",
+      "breakpoints": true
     }
   ]
 }
