@@ -239,7 +239,37 @@ export function channelWebhookRoutes(db: Db) {
     if (!verifyMetaSignature(env.metaAppSecret, raw, c.req.header('x-hub-signature-256'))) {
       return c.text('invalid signature', 401);
     }
-    const msgs = parseMetaWebhook(JSON.parse(raw));
+    const body = JSON.parse(raw);
+    // Diagnostic: handover metadata (take/pass/request_thread_control,
+    // app_roles) and standby items parse to nothing — log their shape so a
+    // misconfigured page shows up as events rather than silence.
+    for (const entry of (body.entry ?? []) as Record<string, unknown>[]) {
+      const standby = (entry.standby ?? []) as Record<string, unknown>[];
+      const feed = [
+        ...((entry.messaging ?? []) as Record<string, unknown>[]),
+        ...standby,
+      ];
+      const handover = feed.filter(
+        (m) =>
+          m.take_thread_control ||
+          m.request_thread_control ||
+          m.pass_thread_control ||
+          m.app_roles,
+      );
+      if (standby.length > 0 || handover.length > 0) {
+        const kinds = feed
+          .map((m) =>
+            Object.keys(m)
+              .filter((k) => !['sender', 'recipient', 'timestamp'].includes(k))
+              .join('/'),
+          )
+          .join(', ');
+        console.log(
+          `meta handover/standby: page=${String(entry.id)} standby=${standby.length} kinds=${kinds || '-'}`,
+        );
+      }
+    }
+    const msgs = parseMetaWebhook(body);
     let handled = 0;
     let legacyOwned = false;
     for (const msg of msgs) {
