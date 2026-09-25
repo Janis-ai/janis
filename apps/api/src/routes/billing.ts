@@ -128,11 +128,10 @@ export function billingRoutes(db: Db) {
     const overageCents =
       plan.overagePer1kCents === null ? 0 : Math.ceil(overage / 1000) * plan.overagePer1kCents;
 
-    // invoice: plan base (sell price) + message overage (sell rate) + channels
-    // (sell rate) + LLM pass-through at cost + margin
-    const llmCents = Number(llm.costMicros) / 10_000;
-    const channelCents = channelCount * billingConfig.channelCents;
-    const marginCents = Math.round(llmCents * billingConfig.margin);
+    // invoice: plan base + message overage + LLM usage billed (cost + margin,
+    // shown as one line). Channels are included in the plan — no per-channel fee.
+    const llmBilledCents =
+      Math.round((Number(llm.costMicros) / 10_000) * (1 + billingConfig.margin) * 100) / 100;
 
     return c.json({
       period,
@@ -172,19 +171,17 @@ export function billingRoutes(db: Db) {
       costs: {
         plan_cents: plan.baseCents,
         message_overage_cents: overageCents,
-        channel_cents: channelCents,
-        llm_cents: Math.round(llmCents * 100) / 100,
-        margin_cents: marginCents,
+        llm_cents: llmBilledCents,
         margin_pct: billingConfig.margin * 100,
-        total_cents:
-          plan.baseCents + overageCents + channelCents + Math.round(llmCents * 100) / 100 + marginCents,
+        total_cents: plan.baseCents + overageCents + llmBilledCents,
       },
       by_agent: byAgent.map((r) => ({
         agent_id: r.agentId,
         agent_name: r.agentName ?? '(deleted)',
         tokens: r.promptTokens + r.completionTokens,
         llm_calls: r.events,
-        cost_cents: Math.round((Number(r.costMicros) / 10_000) * 100) / 100,
+        cost_cents:
+          Math.round((Number(r.costMicros) / 10_000) * (1 + billingConfig.margin) * 100) / 100,
         // Janis-billed calls always price positive — zero cost means the
         // agent ran on the customer's own key.
         byok: r.events > 0 && Number(r.costMicros) === 0,

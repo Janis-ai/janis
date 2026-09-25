@@ -30,9 +30,7 @@ interface BillingSummary {
   costs: {
     plan_cents: number;
     message_overage_cents: number;
-    channel_cents: number;
     llm_cents: number;
-    margin_cents: number;
     margin_pct: number;
     total_cents: number;
   };
@@ -237,13 +235,11 @@ export default function Billing() {
               </span>
               <span className="mono">{usd(data.costs.message_overage_cents)}</span>
               <span className="muted">Channels ({data.channels_connected} connected)</span>
-              <span className="mono">{usd(data.costs.channel_cents)}</span>
+              <span className="muted">Included</span>
               <span className="muted">
-                LLM pass-through ({data.llm_calls} calls, {data.tokens.total.toLocaleString()} tokens)
+                LLM usage ({data.llm_calls.toLocaleString()} calls, {data.tokens.total.toLocaleString()} tokens)
               </span>
               <span className="mono">{usd(data.costs.llm_cents)}</span>
-              <span className="muted">LLM margin ({data.costs.margin_pct}%)</span>
-              <span className="mono">{usd(data.costs.margin_cents)}</span>
               <strong style={{ borderTop: '1px solid var(--border)' }}>Total</strong>
               <strong className="mono" style={{ borderTop: '1px solid var(--border)' }}>
                 {usd(data.costs.total_cents)}

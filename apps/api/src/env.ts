@@ -84,7 +84,7 @@ export const env = {
     }
   })(),
   // USD cents — per connected channel per month
-  billingChannelCents: Number(process.env.BILLING_CHANNEL_CENTS ?? 1000), // $10/channel
+
   billingMargin: Number(process.env.BILLING_MARGIN ?? 0.2),
   // plan assigned to new workspaces — 'free'|'starter'|'pro'|'scale'
   defaultPlan: process.env.DEFAULT_PLAN ?? 'free',
