@@ -1095,7 +1095,7 @@ export async function runHostedEvent(
     const stripLabel = (t?: string | null) =>
       t?.replace(/^\s*\(?(human operator|operator|agent|assistant)\)?\s*[:\-–—]\s*/i, '') ?? undefined;
     let draft = stripLabel(result?.text);
-    if (draft && /\[(HANDOFF|OFFER_HUMAN|CANCEL_HANDOFF)\]/.test(draft)) draft = undefined;
+    if (draft && CONTROL_TAG.test(draft)) draft = undefined;
 
     if (!draft) {
       // Escalated conversations prime the model to emit [HANDOFF] no matter
@@ -1130,7 +1130,7 @@ export async function runHostedEvent(
         });
       }
       draft = stripLabel(retry?.text);
-      if (draft && /\[(HANDOFF|OFFER_HUMAN|CANCEL_HANDOFF)\]/.test(draft)) draft = undefined;
+      if (draft && CONTROL_TAG.test(draft)) draft = undefined;
     }
 
     const text =
@@ -1198,6 +1198,22 @@ export async function runHostedEvent(
 }
 
 const convRuns = new Map<string, { running: boolean; pending: boolean }>();
+
+// Control tokens the model is told to append ([HANDOFF], [OFFER_HUMAN],
+// [CANCEL_HANDOFF]) — matched loosely because it misspells them ([HANDOF]
+// shipped to a customer verbatim, tag and all). Loose matching keeps the
+// escalation working AND strips the typo from the visible reply.
+const CONTROL_TAG = /\[(CANCEL[\s_-]*HANDOF+|OF+ER[\s_-]*HUM+AN+|HANDOF+)\]/i;
+const CONTROL_TAGS = new RegExp(CONTROL_TAG.source, 'gi');
+
+/** Split a control token out of the model's reply — null when absent. */
+export function controlTag(reply: string): { kind: 'handoff' | 'offer' | 'cancel'; partial: string } | null {
+  const m = reply.match(CONTROL_TAG);
+  if (!m) return null;
+  const t = m[0].toUpperCase();
+  const kind = t.includes('CANCEL') ? 'cancel' : t.includes('HUM') ? 'offer' : 'handoff';
+  return { kind, partial: reply.replace(CONTROL_TAGS, '').trim() };
+}
 
 // Interim line while the LLM call is being retried — buys goodwill during a
 // provider stall instead of leaving the customer staring at silence.
@@ -1334,10 +1350,12 @@ async function replyAsHostedAgent(
             ),
           )
           .limit(1))[0]);
-    if (declineTapped || reply.includes('[CANCEL_HANDOFF]')) {
+    const tag = controlTag(reply);
+    if (declineTapped || tag?.kind === 'cancel') {
       // Customer declined a human — deliver the reply and de-escalate any
-      // pending handoff/offer back to the agent.
-      const partial = reply.replace(/\[CANCEL_HANDOFF\]/g, '').trim();
+      // pending handoff/offer back to the agent. An explicit decline beats
+      // even a misfired [HANDOFF] in the same reply.
+      const partial = (tag?.partial ?? reply).trim();
       const events: Parameters<typeof processEvents>[2] = [];
       if (partial) {
         events.push({
@@ -1355,11 +1373,11 @@ async function replyAsHostedAgent(
       await emit(events);
       return;
     }
-    if (reply.includes('[HANDOFF]')) {
+    if (tag?.kind === 'handoff') {
       // The model may pair the tag with a partial answer — deliver it so the
       // customer gets more than the bare "human is on the way" notice, then
       // still flag the handoff.
-      const partial = reply.replace(/\[HANDOFF\]/g, '').trim();
+      const partial = tag.partial;
       const events: Parameters<typeof processEvents>[2] = [];
       if (partial) {
         events.push({
@@ -1377,11 +1395,11 @@ async function replyAsHostedAgent(
       await emit(events);
       return;
     }
-    if (reply.includes('[OFFER_HUMAN]')) {
+    if (tag?.kind === 'offer') {
       // Agent thinks a human would help but the customer hasn't asked —
       // deliver the reply (which should include the offer question) and
       // fire a non-escalating handoff_offer alert so operators can peek.
-      const partial = reply.replace(/\[OFFER_HUMAN\]/g, '').trim();
+      const partial = tag.partial;
       const events: Parameters<typeof processEvents>[2] = [];
       if (partial) {
         events.push({

@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, conversations, messages, uploads, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, extractLearns, fileAnalysisAllowed, guardReplyLinks, transcriptFor } from './hostedAgent.js';
+import { blessedUrlsFor, controlTag, extractLearns, fileAnalysisAllowed, guardReplyLinks, transcriptFor } from './hostedAgent.js';
 
 let db: Db;
 let convId: string;
@@ -213,6 +213,31 @@ describe('guardReplyLinks', () => {
     ).toHaveLength(1);
     // but an invented link is still caught
     expect((await guardReplyLinks('bad https://evil.io/x', urls)).stripped).toHaveLength(1);
+  });
+});
+
+describe('controlTag', () => {
+  it('detects misspelled handoff tokens and strips them', () => {
+    // prod incident: the model emitted [HANDOF] — exact-match parsing
+    // delivered the raw tag to the customer and skipped the escalation
+    const r = controlTag("I've alerted the team again. A human teammate will be with you shortly![HANDOF]");
+    expect(r?.kind).toBe('handoff');
+    expect(r?.partial).toBe("I've alerted the team again. A human teammate will be with you shortly!");
+  });
+
+  it('classifies each control token', () => {
+    expect(controlTag('bringing in a human [HANDOFF]')?.kind).toBe('handoff');
+    expect(controlTag('want me to ask? [OFFER_HUMAN]')?.kind).toBe('offer');
+    expect(controlTag('got it [CANCEL_HANDOFF]')?.kind).toBe('cancel');
+    // a cancel tag contains HANDOF — must not misclassify as handoff
+    expect(controlTag('ok [CANCEL_HANDOF]')?.kind).toBe('cancel');
+    expect(controlTag('ok [ofer human]')?.kind).toBe('offer');
+  });
+
+  it('returns null for plain replies and strips every occurrence', () => {
+    expect(controlTag('Just a normal answer.')).toBeNull();
+    expect(controlTag('[HANDOFF]').partial).toBe('');
+    expect(controlTag('a [HANDOF] b [handoff] c').partial).toBe('a  b  c');
   });
 });
 
