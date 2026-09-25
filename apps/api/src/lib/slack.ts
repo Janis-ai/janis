@@ -602,13 +602,40 @@ export async function resolveSlackActionCards(
   }
 }
 
+/** A link that opens the thread panel and highlights the anchor —
+ * chat.getPermalink returns the archives URL; thread_ts/cid make Slack open
+ * the thread (this is what "Copy link" on a reply produces — app_redirect
+ * lands on the channel message without opening the panel). */
+async function threadPermalink(
+  token: string,
+  channelId: string,
+  threadTs: string,
+): Promise<string> {
+  const res = await slackApi<{ permalink?: string }>(
+    token,
+    'chat.getPermalink',
+    {},
+    { channel: channelId, message_ts: threadTs },
+  ).catch(() => null);
+  if (res?.ok && res.permalink) {
+    const sep = res.permalink.includes('?') ? '&' : '?';
+    return `${res.permalink}${sep}thread_ts=${threadTs}&cid=${channelId}`;
+  }
+  return `https://slack.com/app_redirect?channel=${channelId}&message=${threadTs}`;
+}
+
+/**
+ * Post an alert into Slack with action buttons. A conversation gets ONE
+ * Slack thread: the first alert posts a top-level card that anchors it and
+ * is seeded with the transcript; every later alert lands as a reply in that
+ * thread so links always open the same place and nothing multiplies.
+ */
 export async function postSlackAlert(
   db: Db,
   workspaceId: string,
   conv: ConversationRow,
   agent: typeof agents.$inferSelect,
   alert: AlertRow,
-  opts: { reply?: boolean } = {},
 ): Promise<void> {
   const inst = await getInstallation(db, workspaceId);
   if (!inst) return;
@@ -632,25 +659,39 @@ export async function postSlackAlert(
     `${mention}:rotating_light: *${alert.type.replace('_', ' ')}* — agent *${agent.name}* · ` +
     `conversation \`${conv.externalId}\`\n${alert.detail ?? conv.lastMessagePreview ?? ''}`;
 
-  const dmAll = (channelId: string, ts: string) => {
+  const dmAll = async (channelId: string, ts: string) => {
+    const link = await threadPermalink(inst.botToken, channelId, ts);
     const text =
-      `${summary}\n<https://slack.com/app_redirect?channel=${channelId}&message=${ts}|View alert thread>` +
+      `${summary}\n<${link}|View alert thread>` +
       ` · <${env.webOrigin}/conversations/${conv.id}|Open in Janis>`;
     for (const id of dmTargets) void dmAlertPointer(inst, id, text);
   };
 
-  if (existing.length && opts.reply) {
-    // Deduped alert — echo into every live thread so followers of any of
-    // them see the repeat.
-    for (const t of existing) {
-      const res = await slackApi(t.installation.botToken, 'chat.postMessage', {
+  if (existing.length) {
+    // The conversation already has a thread — post the alert as a reply in
+    // the canonical (newest) one instead of starting a parallel thread.
+    const t = existing[0];
+    const res = await slackApi<{ channel: string; ts: string }>(
+      t.installation.botToken,
+      'chat.postMessage',
+      {
         channel: t.slackThreads.channelId,
         thread_ts: t.slackThreads.ts,
         text: summary,
-      });
-      if (!res.ok) console.error('slack thread reply failed:', res.error);
+        blocks: alertBlocks(conv, agent, alert, mention),
+      },
+    );
+    if (!res.ok || !res.ts) {
+      console.error('slack alert reply failed:', res.error);
+      return;
     }
-    dmAll(existing[0].slackThreads.channelId, existing[0].slackThreads.ts);
+    // Remember where the card landed so updateSlackAlert can refresh its
+    // buttons — the thread anchor belongs to an older alert.
+    await db
+      .update(alerts)
+      .set({ slackTs: res.ts, slackChannelId: res.channel ?? t.slackThreads.channelId })
+      .where(eq(alerts.id, alert.id));
+    await dmAll(t.slackThreads.channelId, t.slackThreads.ts);
     return;
   }
 
@@ -660,10 +701,6 @@ export async function postSlackAlert(
     blocks: alertBlocks(conv, agent, alert, mention),
   });
   if (res.ok) {
-    // Register the new thread, then mark the boundary in every older
-    // thread: they resume mirroring from here, and anything that arrived
-    // while they weren't being mirrored (or before this conv got its
-    // threads) lives in Janis.
     await db
       .insert(slackThreads)
       .values({
@@ -673,17 +710,7 @@ export async function postSlackAlert(
         ts: res.ts,
       })
       .onConflictDoNothing();
-    for (const t of existing) {
-      const marker = await slackApi(t.installation.botToken, 'chat.postMessage', {
-        channel: t.slackThreads.channelId,
-        thread_ts: t.slackThreads.ts,
-        text:
-          `${summary}\n_Re-escalated — mirroring resumes below; ` +
-          `anything missed lives in <${env.webOrigin}/conversations/${conv.id}|Janis>._`,
-      });
-      if (!marker.ok) console.error('slack thread reply failed:', marker.error);
-    }
-    dmAll(res.channel, res.ts);
+    await dmAll(res.channel, res.ts);
     await seedSlackThread(db, inst, res.channel, res.ts, conv, agent);
   } else {
     console.error('slack alert post failed:', res.error);
@@ -810,13 +837,30 @@ export async function updateSlackAlert(
     .limit(1);
   for (const t of threads) {
     const { text: mention } = await alertMention(db, t.installation, conv);
+    const blocks = alertBlocks(
+      conv,
+      agent,
+      alert ?? { type: 'help_request', detail: null },
+      mention,
+    );
     const res = await slackApi(t.installation.botToken, 'chat.update', {
       channel: t.slackThreads.channelId,
       ts: t.slackThreads.ts,
       text: `${mention}alert — ${conv.externalId}`,
-      blocks: alertBlocks(conv, agent, alert ?? { type: 'help_request', detail: null }, mention),
+      blocks,
     });
     if (!res.ok) console.error('slack alert update failed:', res.error);
+    // Alerts after the first land as replies in the thread — refresh that
+    // card's buttons too, it isn't the anchor message.
+    if (alert?.slackTs && alert.slackChannelId === t.slackThreads.channelId) {
+      const res2 = await slackApi(t.installation.botToken, 'chat.update', {
+        channel: t.slackThreads.channelId,
+        ts: alert.slackTs,
+        text: `${mention}alert — ${conv.externalId}`,
+        blocks,
+      });
+      if (!res2.ok) console.error('slack alert update failed:', res2.error);
+    }
   }
 }
 

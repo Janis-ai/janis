@@ -201,6 +201,11 @@ export const alerts = pgTable(
     status: text('status', { enum: ['open', 'acknowledged', 'resolved'] })
       .notNull()
       .default('open'),
+    // Where the alert card landed in Slack when it was posted as a reply in
+    // the conversation's canonical thread — lets updateSlackAlert refresh
+    // its buttons. Null when the alert IS the thread anchor (first alert).
+    slackTs: text('slack_ts'),
+    slackChannelId: text('slack_channel_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

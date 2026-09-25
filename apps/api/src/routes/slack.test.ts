@@ -207,10 +207,10 @@ describe('slash commands', () => {
     expect(conv.pauseMinutes).toBeNull();
   });
 
-  it('a fresh alert opens a new seeded thread; the old one stays live', async () => {
-    // every alert registers its own thread row — the second alert posts a
-    // fresh top-level message, marks the resume boundary in the old thread,
-    // and both threads keep receiving mirrors and routing replies
+  it('a second alert replies in the canonical thread instead of opening a new one', async () => {
+    // one thread per conversation — the alert card lands as a reply in the
+    // existing thread and its ts is stored on the alert so its buttons can
+    // be refreshed on takeover/resume
     await db
       .update(slackInstallations)
       .set({ alertChannelId: 'CALERT' })
@@ -220,6 +220,12 @@ describe('slash commands', () => {
       'fetch',
       vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
         calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+        if (String(url).includes('chat.getPermalink')) {
+          return new Response(
+            '{"ok":true,"permalink":"https://t.slack.com/archives/CALERT/p1000"}',
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
         return new Response('{"ok":true,"channel":"CALERT","ts":"9.9"}', { status: 200 });
       }),
     );
@@ -232,32 +238,23 @@ describe('slash commands', () => {
     await postSlackAlert(db, agent.workspaceId, conv, agent, alert);
 
     const posts = calls.filter((c) => c.url.includes('chat.postMessage'));
-    // fresh top-level alert in the channel…
-    expect(posts.some((p) => p.body.channel === 'CALERT' && !p.body.thread_ts)).toBe(true);
-    // …the resume-boundary marker in the old thread…
-    expect(
-      posts.some(
-        (p) =>
-          p.body.thread_ts === '1.0' &&
-          String(p.body.text).includes('mirroring resumes below'),
-      ),
-    ).toBe(true);
-    // …and the new thread got seeded + the pointer post (thread_ts 9.9 /
-    // top-level pointer)
-    expect(posts.some((p) => p.body.thread_ts === '9.9')).toBe(true);
-    // two rows now — the old thread is still registered, not repointed
+    // the alert is a reply in the existing thread — nothing top-level
+    expect(posts.some((p) => p.body.thread_ts === '1.0')).toBe(true);
+    expect(posts.some((p) => p.body.channel === 'CALERT' && !p.body.thread_ts)).toBe(false);
+    // no new thread registered
     const rows = await db.select().from(slackThreads).where(eq(slackThreads.conversationId, convId));
-    expect(rows.map((r) => r.ts).sort()).toEqual(['1.0', '9.9']);
-    // and both still resolve to this conversation
-    expect((await findThread(db, 'CALERT', '1.0'))?.thread.conversationId).toBe(convId);
-    expect((await findThread(db, 'CALERT', '9.9'))?.thread.conversationId).toBe(convId);
-    // mirrors fan out to both
+    expect(rows.map((r) => r.ts)).toEqual(['1.0']);
+    // the card's reply ts is stored for button refreshes
+    const [stored] = await db.select().from(alerts).where(eq(alerts.id, alert.id));
+    expect(stored.slackTs).toBe('9.9');
+    expect(stored.slackChannelId).toBe('CALERT');
+    // mirrors keep landing in the thread
     calls.length = 0;
     await mirrorToSlack(db, convId, 'x', 'hello again', { direction: 'out' });
     const mirrored = calls.filter(
       (c) => c.url.includes('chat.postMessage') && c.body.text === 'hello again',
     );
-    expect(new Set(mirrored.map((m) => m.body.thread_ts))).toEqual(new Set(['1.0', '9.9']));
+    expect(mirrored.map((m) => m.body.thread_ts)).toEqual(['1.0']);
   });
 
   it('forwards to legacy when the channel has no mapped conversations', async () => {

@@ -167,9 +167,9 @@ export async function processEvents(
               userIds: conv.assigneeId ? [conv.assigneeId] : undefined,
             });
           } else {
-            // Recent open alert — dedupe to a thread reply so a struggling
-            // agent doesn't spam the channel every message
-            void postSlackAlert(db, agent.workspaceId, conv, agent, open, { reply: true });
+            // Recent open alert — postSlackAlert replies in the existing
+            // thread, so a struggling agent doesn't spam the channel
+            void postSlackAlert(db, agent.workspaceId, conv, agent, open);
           }
         }
         continue;
