@@ -1,4 +1,4 @@
-# Janis — human oversight for AI agents
+# Janis — AI and humans working together
 
 Janis watches your AI agents so you don't have to. Agents report conversations
 over a tiny API; when something fails or a user asks for a human, Janis alerts

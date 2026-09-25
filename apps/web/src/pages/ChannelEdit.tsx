@@ -7,7 +7,7 @@ import { ChannelCard } from './Integrations';
 
 /** Standalone editor for one channel — loads just that channel plus the agent
  *  list, skipping the Meta session/status queries that make the full
- *  Integrations page shuffle while editing. */
+ *  Channels page shuffle while editing. */
 export default function ChannelEdit() {
   const { channelId } = useParams();
   const { data, isLoading, error } = useQuery({
@@ -17,10 +17,10 @@ export default function ChannelEdit() {
   const { data: agents } = useAgents();
   const { data: me } = useMe();
   // Entry points pass { from, label } so the back link returns where the
-  // operator came from (agent Integrations tab vs. the full list).
+  // operator came from (agent Channels tab vs. the full list).
   const back = (useLocation().state as { from?: string; label?: string } | null) ?? {};
   const backTo = back.from ?? '/integrations';
-  const backLabel = back.label ?? 'All integrations';
+  const backLabel = back.label ?? 'All channels';
 
   if (isLoading || !agents || !me) return <div className="muted">Loading…</div>;
   if (me.user.role !== 'admin') {
@@ -28,7 +28,7 @@ export default function ChannelEdit() {
       <>
         <Link to={backTo} className="muted">← {backLabel}</Link>
         <div className="muted" style={{ marginTop: 12 }}>
-          Integrations are managed by workspace admins.
+          Channels are managed by workspace admins.
         </div>
       </>
     );

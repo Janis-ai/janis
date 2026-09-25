@@ -13,7 +13,7 @@ export default defineConfig({
       manifest: {
         name: 'Janis — Human backup for AI agents',
         short_name: 'Janis',
-        description: 'Human oversight for AI agents',
+        description: 'AI and humans working together',
         theme_color: '#0f1117',
         background_color: '#0f1117',
         display: 'standalone',

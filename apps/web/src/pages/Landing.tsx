@@ -104,7 +104,7 @@ export default function Landing() {
       <section className="landing-hero">
         <h1>Your AI agent has a help button.</h1>
         <p>
-          Janis is the oversight layer for AI agents. It answers your customers on
+          AI and humans working together. Janis answers your customers on
           Messenger, Instagram, WhatsApp, Slack, and web chat — hands off to a human
           when it matters, and learns from every rescue.
         </p>

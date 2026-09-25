@@ -89,7 +89,7 @@ export default function Integrations() {
   });
 
   // Deep link — /integrations?channel=<id> scrolls to and flashes the card
-  // (Edit on the agent's Integrations tab lands here)
+  // (Edit on the agent's Channels tab lands here)
   const focusChannel = params.get('channel');
   useEffect(() => {
     if (!focusChannel || !data) return;
@@ -172,7 +172,7 @@ export default function Integrations() {
   if (me && !isAdmin) {
     return (
       <>
-        <h1 className="page-title">Integrations</h1>
+        <h1 className="page-title">Channels</h1>
         <div className="card">
           {data?.channels.length ? (
             data.channels.map((ch) => (
@@ -188,10 +188,10 @@ export default function Integrations() {
               </div>
             ))
           ) : (
-            <div className="muted">No integrations connected.</div>
+            <div className="muted">No channels connected.</div>
           )}
           <div className="muted" style={{ marginTop: 12 }}>
-            Integrations are managed by workspace admins.
+            Channels are managed by workspace admins.
           </div>
         </div>
       </>
@@ -200,7 +200,7 @@ export default function Integrations() {
 
   return (
     <>
-      <h1 className="page-title">Integrations</h1>
+      <h1 className="page-title">Channels</h1>
       <div className="lede">
         <p>Where your agent answers:</p>
         <ul>

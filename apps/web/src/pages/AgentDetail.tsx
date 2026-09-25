@@ -142,10 +142,10 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const channels = channelsData?.channels.filter((c) => c.agent_id === agent.id) ?? [];
   const tabs: { key: Tab; label: string }[] = [
     { key: 'connection', label: 'Connection' },
-    { key: 'integrations', label: 'Integrations' },
+    { key: 'integrations', label: 'Channels' },
     { key: 'behavior', label: 'Behavior' },
     { key: 'escalation', label: 'Escalation' },
-    ...(agent.hosted ? [{ key: 'tools' as Tab, label: 'Capabilities' }] : []),
+    ...(agent.hosted ? [{ key: 'tools' as Tab, label: 'Integrations' }] : []),
   ];
 
   const saveAll = () =>
@@ -324,12 +324,12 @@ function IntegrationsTab({
       {isAdmin && (
         <div style={{ marginTop: channels.length ? 12 : 8 }}>
           <Link to={`/integrations?agent=${agentId}`} className="btn">
-            + Add integration
+            + Add channel
           </Link>
         </div>
       )}
       <div className="muted" style={{ marginTop: 10 }}>
-        Channel settings (credentials, embed code, per-channel overrides) live on the Integrations page.
+        Channel settings (credentials, embed code, per-channel overrides) live on the Channels page.
       </div>
       <SlackAlerts agent={agent} />
     </div>
@@ -657,9 +657,10 @@ function ToolsTab({
   const [toolsError, setToolsError] = useState('');
   const [toolsDirty, setToolsDirty] = useState(false);
   const [toolsStale, setToolsStale] = useState(false);
+  const [showCustom, setShowCustom] = useState(false);
   const lastTools = useRef(cfg.tools);
 
-  // Re-sync the editor when cfg.tools changes externally (Connections
+  // Re-sync the editor when cfg.tools changes externally (template
   // install/remove) — otherwise the stale textarea overwrites them on blur.
   useEffect(() => {
     if (cfg.tools === lastTools.current) return;
@@ -671,9 +672,17 @@ function ToolsTab({
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
       <ReadOnly off={!isAdmin}>
-      <label>Connections — predefined services the agent can call</label>
-      <Connections cfg={cfg} setCfg={setCfg} agentId={agentId} />
-      <label>Tools — client APIs the agent can call (JSON array, GET/POST/PUT/PATCH/DELETE, {'{param}'} URL placeholders, "approval": true gates a call behind teammate sign-off)</label>
+      <label>Integrations — services the agent can act in</label>
+      <IntegrationCards
+        cfg={cfg}
+        setCfg={setCfg}
+        agentId={agentId}
+        customOpen={showCustom}
+        onToggleCustom={() => setShowCustom((v) => !v)}
+      />
+      {showCustom && (
+      <>
+      <label>Custom API actions — call any API (JSON array, GET/POST/PUT/PATCH/DELETE, {'{param}'} URL placeholders, "approval": true gates a call behind teammate sign-off)</label>
       <textarea
         rows={4}
         className="mono"
@@ -698,7 +707,7 @@ function ToolsTab({
       {toolsError && <div className="error">{toolsError}</div>}
       {toolsStale && (
         <div className="muted">
-          Tools changed via Connections — your JSON edits will overwrite them.{' '}
+          Tools changed via the integrations above — your JSON edits will overwrite them.{' '}
           <button
             className="btn"
             onClick={() => {
@@ -711,6 +720,8 @@ function ToolsTab({
             Discard my edits
           </button>
         </div>
+      )}
+      </>
       )}
       <label>
         Secrets — API credentials for tool calls; reference as{' '}
@@ -742,16 +753,20 @@ function ToolsTab({
   );
 }
 
-/** Predefined service catalog — installs a template's tools and stores its
+/** Integration catalog — installs a template's tools and stores its
  *  credentials as agent secrets in one click. */
-function Connections({
+function IntegrationCards({
   cfg,
   setCfg,
   agentId,
+  customOpen,
+  onToggleCustom,
 }: {
   cfg: AgentConfig;
   setCfg: (c: AgentConfig) => void;
   agentId: string;
+  customOpen: boolean;
+  onToggleCustom: () => void;
 }) {
   const qc = useQueryClient();
   const { data } = useQuery({
@@ -800,7 +815,6 @@ function Connections({
   };
 
   const templates = data?.templates ?? [];
-  if (!templates.length) return null;
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
@@ -874,6 +888,19 @@ function Connections({
           )}
         </div>
       ))}
+      <div className="card" style={{ padding: 14, margin: 0 }}>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <strong>Custom API action</strong>
+          <span className="badge" style={{ marginLeft: 'auto' }}>JSON</span>
+        </div>
+        <div className="muted" style={{ fontSize: 12, margin: '8px 0 10px' }}>
+          Call any API — describe the request as JSON. "approval": true gates it behind
+          teammate sign-off.
+        </div>
+        <button className="btn" onClick={onToggleCustom}>
+          {customOpen ? 'Hide editor' : 'Configure'}
+        </button>
+      </div>
     </div>
   );
 }
