@@ -2,6 +2,7 @@ import {
   MODEL_CATALOG,
   OR_VENDOR_SLUG,
   catalogModel,
+  type CatalogModel,
   type LlmEffort,
   type LlmVendor,
 } from '@janis/shared';
@@ -140,6 +141,20 @@ export function catalogForId(id: string) {
   return catalogModel(id) ?? catalogModel(id.slice(id.lastIndexOf('/') + 1));
 }
 
+/** Longest-prefix catalog match — dated/live variants like
+ *  'claude-haiku-4-5-20251001' or 'gemini-3.5-flash-latest' inherit their
+ *  family's price/ctx/efforts even though the exact id isn't catalogued. */
+export function catalogPrefixFor(id: string): CatalogModel | undefined {
+  const bare = id.slice(id.lastIndexOf('/') + 1);
+  let best: CatalogModel | undefined;
+  for (const m of MODEL_CATALOG) {
+    if (id.startsWith(m.id) || bare.startsWith(m.id)) {
+      if (!best || m.id.length > best.id.length) best = m;
+    }
+  }
+  return best;
+}
+
 /** Picker options straight from the catalog — optionally vendor-scoped. */
 export function catalogOptions(vendors?: LlmVendor[]): ModelOption[] {
   return MODEL_CATALOG.filter((m) => !vendors || vendors.includes(m.vendor)).map((m) => ({
@@ -268,8 +283,12 @@ const KNOWN_TOKEN: Record<string, string> = {
 };
 
 export function prettifyModelName(id: string): string {
-  const bare = id.slice(id.lastIndexOf('/') + 1);
-  const suffixes: string[] = [];
+  let bare = id.slice(id.lastIndexOf('/') + 1);
+  // dated variants: '-20251001' or '-2025-10-01' → a clean '· 2025-10-01'
+  const dateHit = bare.match(/-(\d{4})-?(\d{2})-?(\d{2})$/);
+  const dateSuffix = dateHit ? `${dateHit[1]}-${dateHit[2]}-${dateHit[3]}` : null;
+  if (dateHit) bare = bare.slice(0, -dateHit[0].length);
+  const suffixes: string[] = [...(dateSuffix ? [dateSuffix] : [])];
   const words = bare
     .split(/[-_]/)
     .filter(Boolean)
@@ -299,6 +318,9 @@ export function filterLiveModels(providerId: string, ids: string[]): ModelOption
     const id = raw.replace(/^models\//, '');
     const bare = id.slice(id.lastIndexOf('/') + 1);
     const cat = catalogModel(id) ?? catalogModel(bare);
+    // dated/live variants inherit the family's metadata (price, ctx,
+    // efforts) via longest-prefix — the exact id just isn't catalogued
+    const meta = cat ?? catalogPrefixFor(id);
     if (!cat) {
       if (!p) continue;
       if (p.id === 'custom') {
@@ -316,10 +338,10 @@ export function filterLiveModels(providerId: string, ids: string[]): ModelOption
     out.push({
       id,
       name: cat?.name ?? prettifyModelName(id),
-      vendor: cat?.vendor ?? p?.vendor,
-      ctx: cat?.ctx,
-      efforts: cat?.efforts,
-      price: cat?.price,
+      vendor: meta?.vendor ?? p?.vendor,
+      ctx: meta?.ctx,
+      efforts: meta?.efforts,
+      price: meta?.price,
     });
   }
   return out;

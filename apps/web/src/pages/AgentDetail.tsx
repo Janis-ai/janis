@@ -1245,10 +1245,11 @@ function LlmCard({
   const push = (o: ModelOption) => {
     if (!modelOptions.some((x) => x.id === o.id)) modelOptions.push(o);
   };
+  // Unpriced rows have no meter and can't show a breakdown — and on the
+  // metered side can't be billed correctly anyway. Custom endpoints are
+  // exempt: self-hosted models have no catalog price by definition.
+  const priced = (o: ModelOption) => catalogRateFor(o.id) != null;
   if (mode === 'hosted') {
-    // metered shows only priced models — an unpriced model can't be billed
-    // correctly, and the runtime refuses it anyway
-    const priced = (o: ModelOption) => catalogRateFor(o.id) != null;
     for (const acc of meteredAccounts ?? []) {
       if (acc.error) continue; // unreachable account — its models can't run
       // 'default' (unknown base_url) and 'openrouter' (routes all vendors)
@@ -1264,8 +1265,9 @@ function LlmCard({
       }
     }
   } else {
-    for (const o of catalogOptions()) push(o);
-    for (const o of filterLiveModels(providerId, liveModels)) push(o);
+    const keep = providerId === 'custom' ? () => true : priced;
+    for (const o of catalogOptions().filter(keep)) push(o);
+    for (const o of filterLiveModels(providerId, liveModels).filter(keep)) push(o);
   }
   if (effectiveModel && !modelOptions.some((o) => o.id === effectiveModel)) {
     const c = catalogForId(effectiveModel);
