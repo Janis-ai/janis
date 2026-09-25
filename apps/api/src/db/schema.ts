@@ -259,9 +259,6 @@ export const slackInstallations = pgTable('slack_installations', {
     .notNull()
     .references(() => workspaces.id),
   teamId: text('team_id').notNull(),
-  // workspace subdomain (janis-ai) — resolved via auth.test; used to build
-  // client deep links on the workspace's own host
-  teamDomain: text('team_domain'),
   botToken: text('bot_token').notNull(),
   alertChannelId: text('alert_channel_id'),
   installerUserId: uuid('installer_user_id').references(() => users.id),
@@ -359,6 +356,7 @@ export const slackThreads = pgTable(
       .references(() => slackInstallations.id),
     channelId: text('channel_id').notNull(),
     ts: text('ts').notNull(), // slack message timestamp = thread id
+    lastReplyTs: text('last_reply_ts'), // newest reply ts — permalink targets land here
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('slack_threads_channel_ts').on(t.channelId, t.ts)],

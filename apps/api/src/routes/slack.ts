@@ -14,12 +14,12 @@ import {
   getInstallation,
   inviteWorkspaceMembers,
   listSlackChannels,
+  markThreadReply,
   postSlackMessage,
   sanitizeChannelName,
   slackApi,
   slackChannelInfo,
   slackUserToMember,
-  teamDomainFor,
   verifyAvatarSig,
   verifySlackSignature,
 } from '../lib/slack.js';
@@ -292,10 +292,6 @@ export function slackPublicRoutes(db: Db) {
       })
       .returning();
 
-    // Cache the workspace subdomain (auth.test url) so thread deep links
-    // are built on the workspace's own host from the first alert.
-    await teamDomainFor(db, inst).catch(() => null);
-
     // Default to an existing Janis channel — #janis-alerts first, then any
     // janis-* match. When none exists we leave it unset: Settings prompts
     // the admin to confirm creating one (or pick an existing channel)
@@ -377,6 +373,10 @@ export function slackPublicRoutes(db: Db) {
 
     const found = await findThread(db, ev.channel, ev.thread_ts);
     if (!found) return c.json({ ok: true });
+    // Any user-authored reply is the thread's newest message — "View thread"
+    // permalinks point at lastReplyTs, so keep it current even for replies
+    // that end up dropped below (non-member, archived, commands).
+    await markThreadReply(db, ev.channel, ev.thread_ts, ev.ts).catch(() => {});
     const user = await slackUserToMember(db, found.installation, ev.user);
     if (!user) {
       // Channel member but not a Janis operator — tell them why nothing
