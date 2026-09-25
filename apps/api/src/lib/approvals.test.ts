@@ -2,11 +2,12 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import {
   agents,
+  alerts,
   conversations,
   memberships,
   messages,
@@ -170,5 +171,130 @@ describe('gated tool approvals', () => {
       .where(eq(pendingActions.conversationId, conv.id));
     await decidePendingAction(db, action.id, admin, false);
     expect(await decidePendingAction(db, action.id, admin, true)).toBe('not-pending');
+  });
+
+  const openApprovalAlerts = (convId: string) =>
+    db
+      .select()
+      .from(alerts)
+      .where(
+        and(
+          eq(alerts.conversationId, convId),
+          eq(alerts.type, 'approval_request'),
+          eq(alerts.status, 'open'),
+        ),
+      );
+
+  it('flags the conversation needs_human and opens an approval alert', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+    const conv = await makeConv('c-approval-flag');
+    await requestToolApproval(db, agent, conv.id, GATED, { order_id: 'o6' });
+
+    const [fresh] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(fresh.state).toBe('needs_human');
+
+    const open = await openApprovalAlerts(conv.id);
+    expect(open).toHaveLength(1);
+    expect(open[0].detail).toMatch(/refund_order/);
+  });
+
+  it('keeps a single alert across multiple pending actions', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+    const conv = await makeConv('c-approval-multi');
+    await requestToolApproval(db, agent, conv.id, GATED, { order_id: 'o7' });
+    await requestToolApproval(db, agent, conv.id, GATED, { order_id: 'o8' });
+    expect(await openApprovalAlerts(conv.id)).toHaveLength(1);
+  });
+
+  it('deciding the last pending action resolves the alert and unflags the conversation', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+    const conv = await makeConv('c-approval-resolve');
+    await requestToolApproval(db, agent, conv.id, GATED, { order_id: 'o9' });
+    const [action] = await db
+      .select()
+      .from(pendingActions)
+      .where(eq(pendingActions.conversationId, conv.id));
+
+    await decidePendingAction(db, action.id, admin, false);
+
+    expect(await openApprovalAlerts(conv.id)).toHaveLength(0);
+    const [fresh] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(fresh.state).toBe('active');
+  });
+
+  it('keeps the alert and flag while another action is still pending', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+    const conv = await makeConv('c-approval-part');
+    await requestToolApproval(db, agent, conv.id, GATED, { order_id: 'o10' });
+    await requestToolApproval(db, agent, conv.id, GATED, { order_id: 'o11' });
+    const [first] = await db
+      .select()
+      .from(pendingActions)
+      .where(eq(pendingActions.conversationId, conv.id))
+      .limit(1);
+
+    await decidePendingAction(db, first.id, admin, false);
+
+    expect(await openApprovalAlerts(conv.id)).toHaveLength(1);
+    const [fresh] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(fresh.state).toBe('needs_human');
+  });
+
+  it('stays needs_human after decide when another alert is still open', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+    const conv = await makeConv('c-approval-both');
+    await requestToolApproval(db, agent, conv.id, GATED, { order_id: 'o12' });
+    await db.insert(alerts).values({
+      conversationId: conv.id,
+      type: 'help_request',
+      detail: 'customer asked for a human',
+    });
+    const [action] = await db
+      .select()
+      .from(pendingActions)
+      .where(eq(pendingActions.conversationId, conv.id));
+
+    await decidePendingAction(db, action.id, admin, false);
+
+    expect(await openApprovalAlerts(conv.id)).toHaveLength(0);
+    const [fresh] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(fresh.state).toBe('needs_human');
+  });
+
+  it('does not steal a human-owned conversation', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+    const conv = await makeConv('c-approval-owned');
+    await db
+      .update(conversations)
+      .set({ state: 'human' })
+      .where(eq(conversations.id, conv.id));
+
+    await requestToolApproval(db, agent, conv.id, GATED, { order_id: 'o13' });
+    let [fresh] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(fresh.state).toBe('human');
+    expect(await openApprovalAlerts(conv.id)).toHaveLength(1);
+
+    const [action] = await db
+      .select()
+      .from(pendingActions)
+      .where(eq(pendingActions.conversationId, conv.id));
+    await decidePendingAction(db, action.id, admin, false);
+    [fresh] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(fresh.state).toBe('human');
   });
 });

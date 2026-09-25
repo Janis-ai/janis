@@ -32,6 +32,7 @@ const ALERT_TITLES: Record<string, string> = {
   inactivity: 'Inactive conversation',
   keyword: 'Keyword match',
   sla: 'SLA breach — still unclaimed',
+  approval_request: 'Approval requested',
 };
 
 const CHANNEL_LABELS: Record<string, string> = {

@@ -24,6 +24,7 @@ const ALERT_LABELS: Record<string, string> = {
   inactivity: 'Inactive conversation',
   keyword: 'Keyword match',
   sla: 'SLA breach — still unclaimed',
+  approval_request: 'Approval requested',
 };
 
 export default function Layout() {

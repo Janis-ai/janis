@@ -1,8 +1,9 @@
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, conversations, messages, pendingActions } from '../db/schema.js';
+import { agents, alerts, conversations, messages, pendingActions } from '../db/schema.js';
 import { bus } from './bus.js';
-import { toMessage } from './serializers.js';
+import { alertNotification, notifyWorkspace } from './notify.js';
+import { toAlert, toMessage } from './serializers.js';
 import { loadSecretsMap } from './secrets.js';
 import { connectionSecrets } from './connections.js';
 import { callTool, type ToolDef } from './toolExec.js';
@@ -80,6 +81,53 @@ export async function requestToolApproval(
     .where(eq(conversations.id, convId))
     .limit(1);
   if (conv) {
+    // A parked approval is as urgent as a handoff — flag the conversation and
+    // page operators through the standard alert pipeline so it surfaces in
+    // the attention tab, badges, toasts, push/email and the Slack channel.
+    const detail = `agent wants to run ${tool.name} — approve or deny in the conversation`;
+    const [openAlert] = await db
+      .select()
+      .from(alerts)
+      .where(
+        and(
+          eq(alerts.conversationId, convId),
+          eq(alerts.type, 'approval_request'),
+          eq(alerts.status, 'open'),
+        ),
+      )
+      .limit(1);
+    if (openAlert) {
+      // Another gated call while one is pending — keep the single alert but
+      // name the newest request.
+      await db.update(alerts).set({ detail }).where(eq(alerts.id, openAlert.id));
+    } else {
+      const [alert] = await db
+        .insert(alerts)
+        .values({ conversationId: convId, type: 'approval_request', detail })
+        .returning();
+      const notification = await alertNotification(db, alert, conv, agent);
+      bus.publish(agent.workspaceId, {
+        type: 'alert',
+        data: { ...toAlert(alert), notification },
+      });
+      void notifyWorkspace(db, agent.workspaceId, notification, {
+        userIds: conv.assigneeId ? [conv.assigneeId] : undefined,
+      });
+      const { postSlackAlert } = await import('./slack.js');
+      void postSlackAlert(db, agent.workspaceId, conv, agent, alert).catch(() => {});
+    }
+    // needs_human is an attention flag only — the agent still replies while
+    // the action awaits a decision. Human-owned threads stay human-owned.
+    if (conv.state === 'active' || conv.state === 'archived') {
+      await db
+        .update(conversations)
+        .set({ state: 'needs_human' })
+        .where(eq(conversations.id, convId));
+      bus.publish(agent.workspaceId, {
+        type: 'conversation',
+        data: { id: convId, state: 'needs_human' },
+      });
+    }
     const { postSlackActionRequest } = await import('./slack.js');
     await postSlackActionRequest(db, conv, agent, action).catch(() => {});
   }
@@ -192,6 +240,51 @@ export async function decidePendingAction(
 
   const { resolveSlackActionCards } = await import('./slack.js');
   await resolveSlackActionCards(db, updated, approve, decidedBy.name).catch(() => {});
+
+  // Nothing left awaiting a decision — close the approval alert. The
+  // needs_human flag drops back to active only when no other open alert
+  // still needs a human; a human-owned thread stays human-owned either way.
+  const [stillPending] = await db
+    .select({ id: pendingActions.id })
+    .from(pendingActions)
+    .where(
+      and(eq(pendingActions.conversationId, conv.id), eq(pendingActions.status, 'pending')),
+    )
+    .limit(1);
+  if (!stillPending) {
+    const resolved = await db
+      .update(alerts)
+      .set({ status: 'resolved' })
+      .where(
+        and(
+          eq(alerts.conversationId, conv.id),
+          eq(alerts.type, 'approval_request'),
+          eq(alerts.status, 'open'),
+        ),
+      )
+      .returning();
+    for (const a of resolved) {
+      bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(a) });
+    }
+    if (conv.state === 'needs_human') {
+      const [otherOpen] = await db
+        .select({ id: alerts.id })
+        .from(alerts)
+        .where(and(eq(alerts.conversationId, conv.id), eq(alerts.status, 'open')))
+        .limit(1);
+      if (!otherOpen) {
+        await db
+          .update(conversations)
+          .set({ state: 'active' })
+          .where(eq(conversations.id, conv.id));
+        conv.state = 'active';
+        bus.publish(agent.workspaceId, {
+          type: 'conversation',
+          data: { id: conv.id, state: 'active' },
+        });
+      }
+    }
+  }
 
   return { action: updated, conv, agent };
 }

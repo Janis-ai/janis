@@ -186,7 +186,16 @@ export const alerts = pgTable(
       .notNull()
       .references(() => conversations.id),
     type: text('type', {
-      enum: ['failure', 'help_request', 'handoff_offer', 'custom', 'inactivity', 'keyword', 'sla'],
+      enum: [
+        'failure',
+        'help_request',
+        'handoff_offer',
+        'custom',
+        'inactivity',
+        'keyword',
+        'sla',
+        'approval_request',
+      ],
     }).notNull(),
     detail: text('detail'),
     status: text('status', { enum: ['open', 'acknowledged', 'resolved'] })

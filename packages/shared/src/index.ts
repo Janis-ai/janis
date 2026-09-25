@@ -31,6 +31,7 @@ export const AlertType = z.enum([
   'sla', // needs_human went unclaimed past the agent's SLA — re-alert/escalation
   'inactivity', // conversation went quiet while awaiting agent
   'keyword', // a configured keyword/phrase was matched
+  'approval_request', // a gated tool call is parked awaiting teammate approval
 ]);
 export type AlertType = z.infer<typeof AlertType>;
 
