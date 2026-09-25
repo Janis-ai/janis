@@ -2,6 +2,7 @@ import {
   MODEL_CATALOG,
   OR_VENDOR_SLUG,
   catalogModel,
+  type LlmEffort,
   type LlmVendor,
 } from '@janis/shared';
 
@@ -145,6 +146,9 @@ export function catalogOptions(vendors?: LlmVendor[]): ModelOption[] {
     id: m.id,
     name: m.name,
     vendor: m.vendor,
+    ctx: m.ctx,
+    efforts: m.efforts,
+    price: m.price,
   }));
 }
 
@@ -171,6 +175,12 @@ export interface ModelOption {
   /** Display name — falls back to id for uncatalogued models. */
   name: string;
   vendor?: LlmVendor;
+  /** Context window tokens (catalog). */
+  ctx?: number;
+  /** Reasoning-effort levels the model accepts (catalog). */
+  efforts?: LlmEffort[];
+  /** Catalog price per 1M — drives the cost meter + detail breakdown. */
+  price?: { input: number; output: number; cached?: number };
 }
 
 /** Catalog models a provider can serve. OpenRouter reaches every vendor via
@@ -184,12 +194,18 @@ export function modelsForProvider(providerId: string): ModelOption[] {
       id: m.or ?? `${OR_VENDOR_SLUG[m.vendor]}/${m.id}`,
       name: m.name,
       vendor: m.vendor,
+      ctx: m.ctx,
+      efforts: m.efforts,
+      price: m.price,
     }));
   }
   const cataloged = MODEL_CATALOG.filter((m) => m.vendor === p.vendor).map((m) => ({
     id: m.id,
     name: m.name,
     vendor: m.vendor,
+    ctx: m.ctx,
+    efforts: m.efforts,
+    price: m.price,
   }));
   const seen = new Set(cataloged.map((m) => m.id));
   return [
@@ -297,7 +313,14 @@ export function filterLiveModels(providerId: string, ids: string[]): ModelOption
         if (NON_CHAT.test(id)) continue;
       }
     }
-    out.push({ id, name: cat?.name ?? prettifyModelName(id), vendor: cat?.vendor ?? p?.vendor });
+    out.push({
+      id,
+      name: cat?.name ?? prettifyModelName(id),
+      vendor: cat?.vendor ?? p?.vendor,
+      ctx: cat?.ctx,
+      efforts: cat?.efforts,
+      price: cat?.price,
+    });
   }
   return out;
 }

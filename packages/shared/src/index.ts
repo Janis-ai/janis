@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EFFORT_LEVELS } from './models.js';
 
 // ---------------------------------------------------------------------------
 // Enums / literals
@@ -167,6 +168,9 @@ export const AgentConfig = z.object({
       api_key: z.string().nullish(),
       base_url: z.string().optional(),
       model: z.string().optional(),
+      // reasoning effort for effort-capable models — sent as the provider's
+      // effort param (snapped to the levels the model supports)
+      effort: z.enum(EFFORT_LEVELS).optional(),
       provider: z.string().optional(), // preset id ('openai', 'gemini', …) — UI metadata
       key_set: z.boolean().optional(), // read marker — never accepted on write
     })

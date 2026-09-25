@@ -11,7 +11,8 @@ const RATE_CARD: Record<string, { input: number; output: number }> = {
     [...MODEL_CATALOG]
       .filter((m) => m.price)
       .sort((a, b) => b.id.length - a.id.length)
-      .map((m) => [m.id, m.price!]),
+      // billing only needs input/output — `cached` is for UI breakdowns
+      .map((m) => [m.id, { input: m.price!.input, output: m.price!.output }]),
   ),
   'o4-mini': { input: 1.1, output: 4.4 },
   // self-hosted (Ollama/vLLM/Groq unknown) — assume cheap

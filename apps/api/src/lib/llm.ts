@@ -12,6 +12,9 @@ export interface LlmSettings {
   /** Extra request headers the provider needs alongside Bearer auth
    *  (e.g. anthropic-version / anthropic-workspace-id). */
   headers?: Record<string, string>;
+  /** Reasoning effort from agent config — sent as the provider's effort
+   *  param when the serving model supports it (see effortFor). */
+  effort?: string;
   /** True when the agent runs on its own credentials/endpoint — tokens are
    *  paid to their provider, so Janis must not meter them at cost+margin. */
   byok: boolean;
@@ -108,13 +111,14 @@ export function meteredModelId(acc: MeteredAccount, model: string): string {
  *  account and translates the id for OpenRouter. Used by llmFor for the
  *  configured model and by the hosted retry loop for the fallback model,
  *  which may live on a different vendor account entirely. */
-export function meteredSettingsFor(model: string): LlmSettings {
+export function meteredSettingsFor(model: string, effort?: string): LlmSettings {
   const acc = meteredAccountFor(model);
   return {
     apiKey: acc?.apiKey ?? env.llmApiKey,
     baseUrl: (acc?.baseUrl ?? env.llmBaseUrl).replace(/\/+$/, ''),
     model: acc ? meteredModelId(acc, model) : model,
     headers: acc?.headers,
+    effort,
     byok: false,
   };
 }
@@ -122,7 +126,13 @@ export function meteredSettingsFor(model: string): LlmSettings {
 /** Per-agent LLM config with env fallback (OpenAI-compatible). */
 export function llmFor(agent: typeof agents.$inferSelect): LlmSettings {
   const cfg = (agent.config ?? {}) as {
-    llm?: { api_key?: string; base_url?: string; model?: string; provider?: string };
+    llm?: {
+      api_key?: string;
+      base_url?: string;
+      model?: string;
+      provider?: string;
+      effort?: string;
+    };
   };
   const model = cfg.llm?.model || env.llmModel;
   const metered =
@@ -136,7 +146,7 @@ export function llmFor(agent: typeof agents.$inferSelect): LlmSettings {
         `'${model}' has no metered rate — pick a priced model or switch this agent to BYOK`,
       );
     }
-    return meteredSettingsFor(model);
+    return meteredSettingsFor(model, cfg.llm?.effort);
   }
   // A custom endpoint without a key never gets ours — sending env.llmApiKey
   // to a customer-controlled base_url would leak it. Same for an explicit
@@ -145,6 +155,7 @@ export function llmFor(agent: typeof agents.$inferSelect): LlmSettings {
     apiKey: cfg.llm?.api_key ?? '',
     baseUrl: (cfg.llm?.base_url || env.llmBaseUrl).replace(/\/+$/, ''),
     model,
+    effort: cfg.llm?.effort,
     byok: Boolean(cfg.llm?.api_key) || Boolean(cfg.llm?.base_url || cfg.llm?.provider),
   };
 }

@@ -22,7 +22,7 @@ export type { LlmSettings } from './llm.js';
 export { llmFor } from './llm.js';
 import type { LlmSettings } from './llm.js';
 import { llmFor, meteredSettingsFor, OPENROUTER_BASE_URL } from './llm.js';
-import { catalogModel, vendorForBaseUrl, OR_VENDOR_SLUG } from '@janis/shared';
+import { catalogModel, vendorForBaseUrl, OR_VENDOR_SLUG, effortFor } from '@janis/shared';
 import { runLegacyReply } from './legacyAgent.js';
 import { env } from '../env.js';
 
@@ -602,7 +602,7 @@ async function complete(
     if (env.llmFallbackModel && env.llmFallbackModel !== llm.model) {
       if (!llm.byok) {
         try {
-          const fb = meteredSettingsFor(env.llmFallbackModel);
+          const fb = meteredSettingsFor(env.llmFallbackModel, llm.effort);
           if (fb.model !== llm.model) candidates.push(fb);
         } catch {
           // fallback's vendor has no account — no fallback
@@ -624,6 +624,16 @@ async function complete(
     for (const cand of candidates) {
       res = undefined;
       if (cand !== candidates[0]) onStall?.();
+      // Reasoning effort goes out as the provider's own param — OpenRouter
+      // takes {reasoning:{effort}}, everyone else reasoning_effort — and
+      // only when the serving model accepts it (effortFor returns undefined
+      // for non-reasoning models so nothing bogus hits the wire).
+      const effort = effortFor(cand.model, cand.effort);
+      const effortField = effort
+        ? cand.baseUrl === OPENROUTER_BASE_URL
+          ? { reasoning: { effort } }
+          : { reasoning_effort: effort }
+        : {};
       // 15s is generous for a chat completion — a hung connection never
       // resolves, so fail fast and retry onto a fresh socket with jitter.
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -640,6 +650,7 @@ async function complete(
               max_tokens: 400,
               messages: msgs,
               ...(toolsSchema ? { tools: toolsSchema } : {}),
+              ...effortField,
             }),
             signal: AbortSignal.timeout(15_000),
           });

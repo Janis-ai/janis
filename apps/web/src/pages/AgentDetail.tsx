@@ -1177,14 +1177,6 @@ function LlmCard({
 
   const usd = (n: number) => n.toFixed(2).replace(/\.?0+$/, '');
   const margin = rates?.margin ?? 0;
-  // Row hint: metered → the customer's billed price; BYOK → provider list
-  // price (they bill it, not Janis). Prices come from the shared catalog.
-  const rateHint = (id: string) => {
-    const p = catalogRateFor(id);
-    if (!p) return null;
-    const f = mode === 'hosted' ? 1 + margin : 1;
-    return `$${usd(p.input * f)}/$${usd(p.output * f)}`;
-  };
   // saved model wins; hosted falls back to the server's env default so the
   // picker reflects what actually runs
   const effectiveModel = llm.model || (mode === 'hosted' ? meteredDefault : '');
@@ -1194,8 +1186,9 @@ function LlmCard({
     setCfg({ ...cfg, llm: { ...cfg.llm, ...patch } });
 
   /** Set provider + base_url, translating the model id: OpenRouter wants
-   *  `vendor/id` compounds, direct endpoints want the provider-native id. */
-  const applyProvider = (id: string, model?: string) => {
+   *  `vendor/id` compounds, direct endpoints want the provider-native id.
+   *  `extra` merges additional llm fields (e.g. effort) into the patch. */
+  const applyProvider = (id: string, model?: string, extra?: Record<string, unknown>) => {
     const p = providerFor(id);
     const sameEndpoint =
       Boolean(p?.baseUrl) && p!.baseUrl === (cfg.llm?.base_url ?? '');
@@ -1215,6 +1208,7 @@ function LlmCard({
         // a different endpoint needs its own key — null clears the stored one
         ...(sameEndpoint ? {} : { api_key: null }),
         key_set: undefined,
+        ...extra,
       },
     });
   };
@@ -1230,16 +1224,20 @@ function LlmCard({
     applyProvider(providerForVendor(c?.vendor)?.id ?? 'custom', c?.id ?? llm.model);
   };
 
-  const pickModel = (id: string) => {
-    if (mode === 'hosted') return setLlm({ model: id });
+  const pickModel = (id: string, extra?: Record<string, unknown>) => {
+    if (mode === 'hosted') return setLlm({ model: id, ...extra });
     const c = catalogForId(id);
     if (providerId === 'openrouter') {
-      setLlm({ model: c ? (c.or ?? `${OR_VENDOR_SLUG[c.vendor]}/${c.id}`) : id });
+      setLlm({ model: c ? (c.or ?? `${OR_VENDOR_SLUG[c.vendor]}/${c.id}`) : id, ...extra });
       return;
     }
-    if (!c) return applyProvider('custom', id); // unknown id → custom endpoint
-    applyProvider(providerForVendor(c.vendor)?.id ?? 'custom', c.id);
+    if (!c) return applyProvider('custom', id, extra); // unknown id → custom endpoint
+    applyProvider(providerForVendor(c.vendor)?.id ?? 'custom', c.id, extra);
   };
+
+  // choosing an effort level in a model's detail panel selects it too
+  const pickEffort = (id: string, effort?: string) =>
+    pickModel(id, { effort: effort || undefined });
 
   // Options: hosted → catalog + live ids for vendors Janis has accounts for;
   // BYOK → the whole catalog + live ids from the chosen endpoint.
@@ -1309,7 +1307,9 @@ function LlmCard({
           options={modelOptions}
           disabled={!isAdmin}
           onChange={pickModel}
-          hint={rateHint}
+          effort={llm.effort}
+          onEffort={pickEffort}
+          rateScale={mode === 'hosted' ? 1 + margin : 1}
         />
         {isAdmin && (
           <button

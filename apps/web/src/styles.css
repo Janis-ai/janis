@@ -343,13 +343,16 @@ textarea:disabled { opacity: .55; }
 .model-picker-pop {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 40;
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-  box-shadow: 0 8px 30px rgba(0,0,0,.5); overflow: hidden;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5); overflow: visible;
   display: flex; flex-direction: column;
 }
-.model-picker-pop > input {
-  margin: 8px; width: auto;
+.model-picker-top { display: flex; gap: 6px; margin: 8px; }
+.model-picker-top > input { flex: 1; min-width: 0; }
+.model-sort {
+  width: auto; padding: 6px 8px; font-size: 12px; color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px;
 }
-.model-picker-list { max-height: 280px; overflow-y: auto; }
+.model-picker-list { max-height: 280px; overflow-y: auto; border-radius: 0 0 10px 10px; }
 .model-item {
   display: flex; align-items: center; gap: 8px; width: 100%;
   background: none; border: none; color: var(--text);
@@ -362,6 +365,66 @@ textarea:disabled { opacity: .55; }
 .model-item.active .model-name { color: var(--accent); }
 .model-vendor {
   width: 18px; flex: none; text-align: center; font-weight: 700; font-size: 13px;
+}
+.model-info {
+  color: var(--muted); font-size: 12px; padding: 0 2px; flex: none;
+}
+.model-info:hover { color: var(--text); }
+/* gradient cost meter — green cheap → purple pricey, like Devin's picker */
+.cost-meter {
+  position: relative; flex: none; width: 46px; height: 4px; border-radius: 2px;
+  background: linear-gradient(90deg, #39d98a, #ffd34d, #c05aff);
+}
+.cost-meter.big { width: 100%; height: 6px; border-radius: 3px; margin: 6px 0 10px; }
+.cost-meter-dot {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 4px rgba(0,0,0,.6);
+}
+.cost-meter.big .cost-meter-dot { width: 10px; height: 10px; }
+/* model detail panel — flyout on desktop, covers the sheet on mobile */
+.model-detail {
+  display: none; position: absolute; left: calc(100% + 8px); top: 0;
+  width: 250px; padding: 14px; z-index: 41;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5);
+}
+.model-detail.pinned { display: block; }
+.model-detail-back { display: none; }
+.model-detail-name {
+  display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px;
+}
+.model-detail-sub { margin: 2px 0 10px; }
+.model-detail-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; font-size: 13px; margin: 8px 0;
+}
+.model-detail-row select { width: auto; padding: 5px 8px; font-size: 12px; }
+.model-detail-note { font-size: 12px; margin-top: 10px; }
+.model-detail-prices {
+  display: flex; flex-direction: column; gap: 6px; font-size: 12px;
+  color: var(--muted);
+}
+.model-detail-prices b { color: var(--text); font-weight: 600; }
+@media (hover: hover) and (min-width: 901px) {
+  .model-detail { display: block; }
+}
+@media (max-width: 900px) {
+  /* bottom sheet — equivalent mobile picker */
+  .model-picker-pop {
+    position: fixed; left: 8px; right: 8px; bottom: 8px; top: auto;
+    max-height: 72dvh; z-index: 80;
+  }
+  .model-picker-list { max-height: 46dvh; }
+  /* detail covers the sheet; shown only when ⓘ pinned it */
+  .model-detail {
+    left: 0; top: 0; right: 0; bottom: 0; width: auto;
+    overflow-y: auto; border-radius: 10px;
+  }
+  .model-detail-back {
+    display: inline-block; background: none; border: none; cursor: pointer;
+    color: var(--accent); font-size: 12px; padding: 0 0 8px;
+  }
 }
 .row.wrap { flex-wrap: wrap; }
 .row.wrap > .grow { flex: 1 1 200px; }
