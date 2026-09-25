@@ -19,7 +19,6 @@ import {
   slackApi,
   slackChannelInfo,
   slackUserToMember,
-  threadsForConversation,
   verifyAvatarSig,
   verifySlackSignature,
 } from '../lib/slack.js';
@@ -373,25 +372,6 @@ export function slackPublicRoutes(db: Db) {
 
     const found = await findThread(db, ev.channel, ev.thread_ts);
     if (!found) return c.json({ ok: true });
-
-    // Only the newest few threads per conversation stay live — a reply in a
-    // stale thread would silently reach the customer (or run a command) out
-    // of context. Bounce it with a pointer to the live thread instead.
-    const live = await threadsForConversation(db, found.thread.conversationId);
-    if (live.length && !live.some((t) => t.slackThreads.id === found.thread.id)) {
-      const latest = live[0].slackThreads;
-      await slackApi(found.installation.botToken, 'chat.postMessage', {
-        channel: ev.channel,
-        thread_ts: ev.thread_ts,
-        text:
-          ':warning: This thread is stale — Janis only mirrors the most recent ' +
-          'threads of a conversation. ' +
-          `<https://slack.com/app_redirect?channel=${latest.channelId}&message=${latest.ts}|Continue in the live thread>` +
-          ` · <${env.webOrigin}/conversations/${found.thread.conversationId}|Open in Janis>`,
-      }).catch(() => {});
-      return c.json({ ok: true });
-    }
-
     const user = await slackUserToMember(db, found.installation, ev.user);
     if (!user) {
       // Channel member but not a Janis operator — tell them why nothing

@@ -25,12 +25,12 @@ type UserRow = typeof users.$inferSelect;
 
 const SLACK_API = 'https://slack.com/api';
 
-async function callSlackApi<T>(
+export async function slackApi<T = Record<string, unknown>>(
   token: string,
   method: string,
   body: Record<string, unknown>,
   query?: Record<string, string>,
-): Promise<{ json: T & { ok: boolean; error?: string }; status: number; retryAfter: number | null }> {
+): Promise<T & { ok: boolean; error?: string }> {
   const url = query ? `${SLACK_API}/${method}?${new URLSearchParams(query)}` : `${SLACK_API}/${method}`;
   const res = await fetch(url, {
     method: 'POST',
@@ -43,62 +43,7 @@ async function callSlackApi<T>(
     },
     body: JSON.stringify(body),
   });
-  const retryAfter = Number(res.headers.get('retry-after'));
-  const json = (await res
-    .json()
-    .catch(() => ({ ok: false, error: `http_${res.status}` }))) as T & {
-    ok: boolean;
-    error?: string;
-  };
-  return { json, status: res.status, retryAfter: Number.isFinite(retryAfter) ? retryAfter : null };
-}
-
-// Slack allows roughly one chat.postMessage per second per channel — thread
-// seeding and multi-thread fan-out burst far past that and Slack silently
-// drops the excess ("not displaying some messages sent by this application").
-// Same-channel posts are serialized behind a minimum interval, and a 429
-// honors Retry-After instead of dropping the message.
-const postQueues = new Map<string, Promise<unknown>>();
-const nextPostAt = new Map<string, number>();
-const POST_INTERVAL_MS = process.env.VITEST ? 0 : 1050;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function pacedPostMessage<T>(
-  token: string,
-  body: Record<string, unknown>,
-): Promise<T & { ok: boolean; error?: string }> {
-  const key = `${token}:${String(body.channel)}`;
-  const prev = postQueues.get(key) ?? Promise.resolve();
-  const work = async (): Promise<T & { ok: boolean; error?: string }> => {
-    const wait = (nextPostAt.get(key) ?? 0) - Date.now();
-    if (wait > 0) await sleep(wait);
-    for (let attempt = 0; ; attempt++) {
-      nextPostAt.set(key, Date.now() + POST_INTERVAL_MS);
-      const { json, status, retryAfter } = await callSlackApi<T>(token, 'chat.postMessage', body);
-      if (status === 429 && attempt < 2) {
-        const delayMs = Math.max(1, retryAfter ?? 2) * 1000;
-        nextPostAt.set(key, Date.now() + delayMs + POST_INTERVAL_MS);
-        await sleep(delayMs);
-        continue;
-      }
-      return json;
-    }
-  };
-  const run = prev.then(work, work);
-  postQueues.set(key, run.then(() => undefined, () => undefined));
-  return run;
-}
-
-export async function slackApi<T = Record<string, unknown>>(
-  token: string,
-  method: string,
-  body: Record<string, unknown>,
-  query?: Record<string, string>,
-): Promise<T & { ok: boolean; error?: string }> {
-  if (method === 'chat.postMessage' && typeof body.channel === 'string') {
-    return pacedPostMessage<T>(token, body);
-  }
-  return (await callSlackApi<T>(token, method, body, query)).json;
+  return (await res.json()) as T & { ok: boolean; error?: string };
 }
 
 /** Verify Slack's request signature (v0 HMAC-SHA256, 5-minute replay window). */
@@ -552,30 +497,25 @@ async function dmAlertPointer(
 }
 
 /** All live Slack threads for a conversation, newest first, each joined to
- * its installation. A conversation accumulates one thread per alert; only the
- * newest LIVE_THREADS stay mirrored — older threads get a stale bounce on
- * reply (see the /slack/events handler) so nothing posts out of context. */
-export const LIVE_THREADS = 4;
-export async function threadsForConversation(
-  db: Db,
-  conversationId: string,
-  limit = LIVE_THREADS,
-) {
+ * its installation. A conversation accumulates one thread per alert and all
+ * of them stay live forever: mirrors fan out to every thread and replies in
+ * any of them route back via findThread — so nothing an operator sees ever
+ * goes dead or out of sync. */
+async function threadsForConversation(db: Db, conversationId: string) {
   return db
     .select({ slackThreads, installation: slackInstallations })
     .from(slackThreads)
     .innerJoin(slackInstallations, eq(slackThreads.installationId, slackInstallations.id))
     .where(eq(slackThreads.conversationId, conversationId))
-    .orderBy(desc(slackThreads.createdAt))
-    .limit(limit);
+    .orderBy(desc(slackThreads.createdAt));
 }
 
 /**
  * Post an alert into Slack with action buttons and register its thread.
  * A NEW alert always posts a fresh top-level channel message and gets its
- * own seeded thread — previous threads stay registered and keep receiving
- * mirrors up to the LIVE_THREADS cap. Deduped handoffs (opts.reply) echo
- * into all live threads.
+ * own seeded thread — but every previous thread for the conversation stays
+ * registered and keeps receiving mirrors, so operators can reply in any of
+ * them. Deduped handoffs (opts.reply) echo into all live threads.
  */
 /**
  * Post an approval card for a gated tool call into every live thread —
@@ -645,9 +585,7 @@ export async function resolveSlackActionCards(
 ): Promise<void> {
   const posts = (action.slackPosts ?? []) as { channelId: string; ts: string }[];
   if (!posts.length) return;
-  // Uncapped — a card posted to a thread that has since aged out of the live
-  // window must still resolve in place rather than show "pending" forever.
-  const threads = await threadsForConversation(db, action.conversationId, 1000);
+  const threads = await threadsForConversation(db, action.conversationId);
   const preview = action.result ? `\n\`\`\`${action.result.slice(0, 400)}\`\`\`` : '';
   const text = approved
     ? `:white_check_mark: *${decidedByName} approved* \`${action.toolName}\` — executed${preview}`
@@ -772,6 +710,8 @@ async function seedSlackThread(
       text: messages.text,
       author: users.name,
       authorDisplayName: users.displayName,
+      authorAvatarUrl: users.avatarUrl,
+      authorShowIdentity: users.showIdentity,
       flags: messages.flags,
     })
     .from(messages)
@@ -784,25 +724,25 @@ async function seedSlackThread(
     picture_url?: string;
   };
   const customerName = profile.name ?? friendlyName(conv.externalId);
+  const avatar = profile.picture_url ? slackAvatarUrl(conv.id) : null;
+  const agentIcon = await agentIconFor(db, conv.id);
 
   const [{ count }] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(messages)
     .where(eq(messages.conversationId, conv.id));
-
-  // One labeled line per message, chunked into as few posts as possible —
-  // the old per-message seed burst (20+ calls) is what tripped Slack's
-  // ~1 msg/sec channel limit and got messages suppressed.
-  const lines: string[] = [];
   if (count > recent.length) {
-    lines.push(
-      `_Showing the last ${recent.length} of ${count} messages — <${env.webOrigin}/conversations/${conv.id}|full transcript in Janis>._`,
-    );
+    await slackApi(inst.botToken, 'chat.postMessage', {
+      channel,
+      thread_ts: threadTs,
+      text: `_Showing the last ${recent.length} of ${count} messages — <${env.webOrigin}/conversations/${conv.id}|full transcript in Janis>._`,
+    });
   }
+
   for (const m of recent.reverse()) {
     if (!m.text) continue;
     // Flagged notes (handoff/failure/custom alert) are internal system lines
-    // — italic, not attributed to a participant.
+    // — italic, from the app itself, not attributed to a participant.
     const f = m.flags as {
       failure?: boolean;
       help_requested?: boolean;
@@ -812,41 +752,38 @@ async function seedSlackThread(
     const isSystemNote = Boolean(
       f?.failure || f?.help_requested || f?.custom_alert || f?.handoff_offer,
     );
-    if (isSystemNote) {
-      lines.push(`_${m.text}_`);
-      continue;
-    }
     // Role suffixes keep same-named participants (e.g. agent and customer
     // both "Michael Nathanson") from collapsing into a single header.
-    const who =
-      m.direction === 'in'
-        ? `${customerName} (customer)`
+    const identity: { username?: string; icon_url?: string } = isSystemNote
+      ? {}
+      : m.direction === 'in'
+        ? { username: `${customerName} (customer)`, icon_url: avatar ?? undefined }
         : m.direction === 'human'
-          ? `${m.authorDisplayName ?? m.author ?? 'operator'} (operator)`
-          : `${agent.name} (agent)`;
-    lines.push(`*${who}:* ${m.text}`);
-  }
-
-  const CHUNK = 3500;
-  let chunk = '';
-  for (const line of lines) {
-    const piece = line.length > CHUNK ? `${line.slice(0, CHUNK - 1)}…` : line;
-    if (chunk && chunk.length + piece.length + 2 > CHUNK) {
+          ? operatorIdentity(
+              agent.name,
+              {
+                name: m.author,
+                displayName: m.authorDisplayName,
+                avatarUrl: m.authorAvatarUrl,
+                showIdentity: m.authorShowIdentity,
+              },
+              agentIcon,
+            )
+          : { username: `${agent.name} (agent)`, icon_url: agentIcon };
+    const res2 = await slackApi(inst.botToken, 'chat.postMessage', {
+      channel,
+      thread_ts: threadTs,
+      text: isSystemNote ? `_${m.text}_` : m.text,
+      ...identity,
+    });
+    if (!res2.ok && !isSystemNote) {
+      // Install predates chat:write.customize — fall back to a label.
       await slackApi(inst.botToken, 'chat.postMessage', {
         channel,
         thread_ts: threadTs,
-        text: chunk,
+        text: `*${identity.username}:* ${m.text}`,
       });
-      chunk = '';
     }
-    chunk = chunk ? `${chunk}\n\n${piece}` : piece;
-  }
-  if (chunk) {
-    await slackApi(inst.botToken, 'chat.postMessage', {
-      channel,
-      thread_ts: threadTs,
-      text: chunk,
-    });
   }
   // One pointer to the thread per alert, right after it's seeded.
   await slackApi(inst.botToken, 'chat.postMessage', {
