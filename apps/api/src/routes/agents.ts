@@ -206,11 +206,19 @@ export function agentRoutes(db: Db) {
           accs.map(async (a) => {
             try {
               const res = await fetch(`${a.baseUrl}/models`, {
-                headers: a.apiKey ? { authorization: `Bearer ${a.apiKey}` } : {},
+                headers: {
+                  ...(a.apiKey ? { authorization: `Bearer ${a.apiKey}` } : {}),
+                  ...(a.headers ?? {}),
+                },
                 signal: AbortSignal.timeout(8000),
               });
               if (!res.ok) {
-                return { vendor: a.vendor, base_url: a.baseUrl, models: [], error: `provider returned ${res.status}` };
+                return {
+                  vendor: a.vendor,
+                  base_url: a.baseUrl,
+                  models: [],
+                  error: `${a.vendor}: provider returned ${res.status}`,
+                };
               }
               const data = (await res.json()) as { data?: { id?: string }[] };
               return {
@@ -226,13 +234,18 @@ export function agentRoutes(db: Db) {
                 vendor: a.vendor,
                 base_url: a.baseUrl,
                 models: [] as string[],
-                error: e instanceof Error ? e.message : 'fetch failed',
+                error: `${a.vendor}: ${e instanceof Error ? e.message : 'fetch failed'}`,
               };
             }
           }),
         );
         // models/base_url kept for older clients — the default account's
-        return c.json({ accounts, models: accounts[0].models, base_url: accounts[0].base_url });
+        return c.json({
+          accounts,
+          models: accounts[0].models,
+          base_url: accounts[0].base_url,
+          default_model: env.llmModel,
+        });
       }
       if (!/^https?:\/\//i.test(baseUrl)) {
         return c.json({ models: [], error: 'base_url must be an http(s) URL' }, 400);

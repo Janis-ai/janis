@@ -476,7 +476,11 @@ async function llmChat(
   try {
     const res = await fetch(`${llm.baseUrl}/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${llm.apiKey}` },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${llm.apiKey}`,
+        ...(llm.headers ?? {}),
+      },
       body: JSON.stringify({
         model: llm.model,
         max_tokens: maxTokens,

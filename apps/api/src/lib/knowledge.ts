@@ -7,6 +7,7 @@ export interface KnowledgeLlm {
   apiKey: string;
   baseUrl: string;
   model: string;
+  headers?: Record<string, string>;
 }
 
 export class UnsupportedFileError extends Error {}
@@ -44,6 +45,7 @@ async function describeImage(buf: Buffer, mime: string, llm: KnowledgeLlm): Prom
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${llm.apiKey}`,
+      ...(llm.headers ?? {}),
     },
     body: JSON.stringify({
       model: llm.model,

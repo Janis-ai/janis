@@ -9,6 +9,9 @@ export interface LlmSettings {
   apiKey: string;
   baseUrl: string;
   model: string;
+  /** Extra request headers the provider needs alongside Bearer auth
+   *  (e.g. anthropic-version / anthropic-workspace-id). */
+  headers?: Record<string, string>;
   /** True when the agent runs on its own credentials/endpoint — tokens are
    *  paid to their provider, so Janis must not meter them at cost+margin. */
   byok: boolean;
@@ -20,6 +23,7 @@ export interface MeteredAccount {
   vendor: string;
   apiKey: string;
   baseUrl: string;
+  headers?: Record<string, string>;
 }
 
 /** Provider accounts Janis can meter against: the JANIS_LLM_API_KEY/
@@ -29,10 +33,12 @@ export function meteredAccounts(): MeteredAccount[] {
   const accs: MeteredAccount[] = [];
   // the env pair is always the default account — key optional (local
   // endpoints are keyless; a missing key on a real provider just 401s)
+  const defaultVendor = vendorForBaseUrl(env.llmBaseUrl) ?? 'default';
   accs.push({
-    vendor: vendorForBaseUrl(env.llmBaseUrl) ?? 'default',
+    vendor: defaultVendor,
     apiKey: env.llmApiKey,
     baseUrl: env.llmBaseUrl.replace(/\/+$/, ''),
+    ...(defaultVendor === 'anthropic' ? { headers: anthropicHeaders() } : {}),
   });
   const upsert = (acc: MeteredAccount) => {
     const i = accs.findIndex((a) => a.vendor === acc.vendor);
@@ -49,10 +55,24 @@ export function meteredAccounts(): MeteredAccount[] {
         ''
       ).replace(/\/+$/, '');
       if (!a.api_key || !baseUrl) continue;
-      upsert({ vendor, apiKey: a.api_key, baseUrl });
+      upsert({
+        vendor,
+        apiKey: a.api_key,
+        baseUrl,
+        ...(vendor === 'anthropic' ? { headers: anthropicHeaders() } : {}),
+      });
     }
   }
   return accs;
+}
+
+/** Anthropic needs a version header on every call; org-scoped keys also
+ *  need the workspace UUID (ANTHROPIC_LLM_WORKSPACE). */
+function anthropicHeaders(): Record<string, string> {
+  return {
+    'anthropic-version': '2023-06-01',
+    ...(env.anthropicWorkspace ? { 'anthropic-workspace-id': env.anthropicWorkspace } : {}),
+  };
 }
 
 /** The account that serves `model` on Janis's meter — matched by catalog
@@ -106,6 +126,7 @@ export function llmFor(agent: typeof agents.$inferSelect): LlmSettings {
       apiKey: acc?.apiKey ?? env.llmApiKey,
       baseUrl: (acc?.baseUrl ?? env.llmBaseUrl).replace(/\/+$/, ''),
       model: acc ? meteredModelId(acc, model) : model,
+      headers: acc?.headers,
       byok: false,
     };
   }

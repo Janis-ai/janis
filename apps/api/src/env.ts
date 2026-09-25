@@ -54,6 +54,9 @@ export const env = {
   // Per-vendor metered keys: <VENDOR>_LLM_API_KEY (+ optional
   // <VENDOR>_LLM_BASE_URL override). OPENROUTER_LLM_API_KEY makes one
   // account serve every catalog model via vendor/id routing.
+  // Org-scoped Anthropic keys require this header on every request — the
+  // workspace UUID from console.anthropic.com → Settings → Workspaces.
+  anthropicWorkspace: process.env.ANTHROPIC_LLM_WORKSPACE ?? '',
   llmVendorKeys: (() => {
     const out: Record<string, { api_key: string; base_url?: string }> = {};
     for (const v of [

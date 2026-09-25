@@ -606,6 +606,7 @@ async function complete(
             headers: {
               'content-type': 'application/json',
               authorization: `Bearer ${llm.apiKey}`,
+              ...(llm.headers ?? {}),
             },
             body: JSON.stringify({
               model,

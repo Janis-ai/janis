@@ -1093,6 +1093,9 @@ function LlmCard({
   const [meteredAccounts, setMeteredAccounts] = useState<
     { vendor: string; base_url: string; models: string[]; error?: string }[] | null
   >(null);
+  // what runs when the agent has no saved model — JANIS_LLM_MODEL on the
+  // server, surfaced so the picker shows the effective default
+  const [meteredDefault, setMeteredDefault] = useState('');
   const [rates, setRates] = useState<{
     rates: Record<string, { input: number; output: number }>;
     margin: number;
@@ -1137,6 +1140,7 @@ function LlmCard({
         accounts?: { vendor: string; base_url: string; models: string[]; error?: string }[];
         error?: string;
         base_url?: string;
+        default_model?: string;
       }>(`/api/agents/${agent.id}/llm-models`, {
         method: 'POST',
         body: JSON.stringify(
@@ -1147,8 +1151,9 @@ function LlmCard({
       });
       if (r.accounts) {
         setMeteredAccounts(r.accounts);
-        const err = r.accounts.find((a) => a.error)?.error;
-        if (err) setModelsMsg(`couldn't list models: ${err}`);
+        if (r.default_model) setMeteredDefault(r.default_model);
+        const errs = r.accounts.map((a) => a.error).filter(Boolean);
+        if (errs.length) setModelsMsg(`couldn't list models: ${errs.join(' · ')}`);
       } else {
         setLiveModels(r.models ?? []);
         if (r.error) setModelsMsg(`couldn't list models: ${r.error}`);
@@ -1179,7 +1184,10 @@ function LlmCard({
     const f = mode === 'hosted' ? 1 + margin : 1;
     return `$${usd(p.input * f)}/$${usd(p.output * f)}`;
   };
-  const billedRate = llm.model ? catalogRateFor(llm.model) : null;
+  // saved model wins; hosted falls back to the server's env default so the
+  // picker reflects what actually runs
+  const effectiveModel = llm.model || (mode === 'hosted' ? meteredDefault : '');
+  const billedRate = effectiveModel ? catalogRateFor(effectiveModel) : null;
 
   const setLlm = (patch: Record<string, unknown>) =>
     setCfg({ ...cfg, llm: { ...cfg.llm, ...patch } });
@@ -1259,11 +1267,11 @@ function LlmCard({
     for (const o of catalogOptions()) push(o);
     for (const o of filterLiveModels(providerId, liveModels)) push(o);
   }
-  if (llm.model && !modelOptions.some((o) => o.id === llm.model)) {
-    const c = catalogForId(llm.model);
+  if (effectiveModel && !modelOptions.some((o) => o.id === effectiveModel)) {
+    const c = catalogForId(effectiveModel);
     modelOptions.unshift({
-      id: llm.model,
-      name: c?.name ?? prettifyModelName(llm.model),
+      id: effectiveModel,
+      name: c?.name ?? prettifyModelName(effectiveModel),
       vendor: c?.vendor ?? preset?.vendor,
     });
   }
@@ -1295,7 +1303,7 @@ function LlmCard({
 
       <div className="row">
         <ModelPicker
-          value={llm.model ?? ''}
+          value={effectiveModel}
           options={modelOptions}
           disabled={!isAdmin}
           onChange={pickModel}
@@ -1385,8 +1393,8 @@ function LlmCard({
       )}
       <div className="muted" style={{ fontSize: 12 }}>
         {mode === 'hosted'
-          ? billedRate && llm.model
-            ? `Billed $${usd(billedRate.input * (1 + (rates?.margin ?? 0)))} per 1M input / $${usd(billedRate.output * (1 + (rates?.margin ?? 0)))} per 1M output tokens on your LLM meter.`
+          ? billedRate && effectiveModel
+            ? `Billed $${usd(billedRate.input * (1 + (rates?.margin ?? 0)))} per 1M input / $${usd(billedRate.output * (1 + (rates?.margin ?? 0)))} per 1M output tokens on your LLM meter.${llm.model ? '' : ' (account default)'}`
             : 'Runs on Janis’s provider accounts — each model bills its own price to your LLM meter. Pick a model to see it.'
           : billedRate && llm.model
             ? `$0 Janis LLM fees — ${llm.model} bills ~$${usd(billedRate.input)}/$${usd(billedRate.output)} per 1M on your provider account. Keys are write-only.`
