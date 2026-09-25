@@ -557,8 +557,11 @@ export function ChannelCard({
             code={`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
           />
           <WebchatIdentity channel={ch} />
-          <details className="webhook-details" style={{ marginTop: 8 }}>
-            <summary>Appearance — branding for the embedded widget</summary>
+          <details className="webhook-details appearance-details" open style={{ marginTop: 8 }}>
+            <summary>
+              <span className="details-title">Appearance</span>
+              <span className="details-sub">branding for the embedded widget</span>
+            </summary>
             <WebchatBranding channel={ch} />
           </details>
         </>

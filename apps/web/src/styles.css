@@ -533,6 +533,8 @@ textarea:disabled { opacity: .55; }
   border-top: 1px solid var(--border);
 }
 .webhook-details { margin-top: 8px; font-size: 12px; }
+.appearance-details > summary .details-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.appearance-details > summary .details-sub { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 8px; }
 .channel-card { transition: border-color .4s, box-shadow .4s; }
 .channel-card.flash {
   border-color: var(--accent);
