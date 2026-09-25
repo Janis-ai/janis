@@ -89,7 +89,12 @@ export default function Conversations() {
     mine,
   });
   const { data: agents } = useAgents();
-  const { data: hits } = useSearch(query);
+  const { data: hits } = useSearch(query, {
+    attention: tab === 'attention' || undefined,
+    state: state || undefined,
+    agent_id: agentId || undefined,
+    mine,
+  });
 
   const searching = query.trim().length > 0;
   const agentName = (c: Conversation) =>

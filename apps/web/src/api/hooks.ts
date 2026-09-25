@@ -98,13 +98,20 @@ export function useDigests() {
   });
 }
 
-export function useSearch(q: string) {
+export function useSearch(
+  q: string,
+  filter: { state?: string; agent_id?: string; attention?: boolean; mine?: boolean } = {},
+) {
+  const params = new URLSearchParams();
+  params.set('q', q);
+  if (filter.state) params.set('state', filter.state);
+  if (filter.agent_id) params.set('agent_id', filter.agent_id);
+  if (filter.attention) params.set('attention', '1');
+  if (filter.mine) params.set('assignee', 'me');
   return useQuery({
-    queryKey: ['search', q],
+    queryKey: ['search', q, filter],
     queryFn: () =>
-      api<{ conversations: Conversation[]; messages: Message[] }>(
-        `/api/search?q=${encodeURIComponent(q)}`,
-      ),
+      api<{ conversations: Conversation[]; messages: Message[] }>(`/api/search?${params}`),
     enabled: q.trim().length > 0,
   });
 }

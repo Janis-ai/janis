@@ -1,18 +1,28 @@
 import { Hono } from 'hono';
+import { zValidator } from '@hono/zod-validator';
+import { z } from 'zod';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, messages } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toConversation, toMessage } from '../lib/serializers.js';
+import { convListConditions, convListQuery } from '../lib/convFilters.js';
+
+const searchQuery = convListQuery.extend({
+  q: z.string().optional(),
+});
 
 export function searchRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
 
-  // GET /api/search?q=... → conversations + message hits across the workspace
-  app.get('/', async (c) => {
+  // GET /api/search?q=... → conversations + message hits across the workspace.
+  // Accepts the same filters as GET /api/conversations so a search + filter
+  // combination behaves like the filtered list.
+  app.get('/', zValidator('query', searchQuery), async (c) => {
     const workspaceId = c.get('workspaceId');
-    const q = (c.req.query('q') ?? '').trim();
+    const params = c.req.valid('query');
+    const q = (params.q ?? '').trim();
     if (!q) return c.json({ conversations: [], messages: [] });
     const like = `%${q.replace(/[%_]/g, '')}%`;
 
@@ -29,7 +39,7 @@ export function searchRoutes(db: Db) {
       .innerJoin(agents, eq(conversations.agentId, agents.id))
       .where(
         and(
-          eq(agents.workspaceId, workspaceId),
+          ...convListConditions(params, workspaceId, c.get('user').id),
           sql`(
             ${conversations.externalId} ilike ${like}
             or ${conversations.userProfile}::text ilike ${like}

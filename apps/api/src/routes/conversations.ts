@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, desc, eq, gt, gte, inArray, lt, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -16,6 +16,7 @@ import {
 } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toAlert, toConversation, toMessage, toSuggestion } from '../lib/serializers.js';
+import { convListConditions, convListQuery } from '../lib/convFilters.js';
 import { bus } from '../lib/bus.js';
 import {
   agentSend,
@@ -38,16 +39,7 @@ import {
   type AttachmentRef,
 } from '../lib/channels.js';
 
-const listQuery = z.object({
-  // 'unread'/'starred' are flags and 'handoff_offer'/'failure' are open-alert
-  // signals — all ride the same param as the four real lifecycle states
-  state: z
-    .enum(['active', 'needs_human', 'human', 'archived', 'unread', 'starred', 'handoff_offer', 'failure'])
-    .optional(),
-  agent_id: z.string().uuid().optional(),
-  attention: z.enum(['1', 'true']).optional(), // needs_human OR has open alerts
-  assignee: z.enum(['me']).optional(), // only conversations assigned to the caller
-});
+const listQuery = convListQuery;
 
 const patchBody = z.object({
   tags: z.array(z.string()).optional(),
@@ -81,26 +73,7 @@ export function conversationRoutes(db: Db) {
     const workspaceId = c.get('workspaceId');
     const q = c.req.valid('query');
 
-    const conditions = [eq(agents.workspaceId, workspaceId)];
-    if (q.state === 'unread') conditions.push(eq(conversations.isUnread, true));
-    else if (q.state === 'starred') conditions.push(eq(conversations.isStarred, true));
-    else if (q.state === 'handoff_offer' || q.state === 'failure')
-      // signal filter: any open alert of that type, whatever the lifecycle state
-      conditions.push(
-        sql`exists (
-          select 1 from ${alerts}
-          where ${alerts.conversationId} = ${conversations.id}
-            and ${alerts.status} = 'open'
-            and ${alerts.type} = ${q.state}
-        )`,
-      );
-    else if (q.state) conditions.push(eq(conversations.state, q.state));
-    else conditions.push(ne(conversations.state, 'archived')); // archived hidden unless filtered
-    if (q.agent_id) conditions.push(eq(conversations.agentId, q.agent_id));
-    if (q.assignee === 'me') conditions.push(eq(conversations.assigneeId, c.get('user').id));
-    if (q.attention) {
-      conditions.push(inArray(conversations.state, ['needs_human', 'human']));
-    }
+    const conditions = convListConditions(q, workspaceId, c.get('user').id);
 
     const rows = await db
       .select({
