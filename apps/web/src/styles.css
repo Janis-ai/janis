@@ -539,7 +539,7 @@ details summary:hover { color: var(--text); }
   box-shadow: 0 8px 24px rgba(0,0,0,.4);
   animation: toast-in .18s ease-out;
 }
-.toast-icon { width: 22px; height: 22px; border-radius: 5px; flex-shrink: 0; margin-top: 1px; }
+.toast-icon { width: 22px; height: 22px; border-radius: 5px; flex-shrink: 0; margin-top: 1px; object-fit: contain; }
 .toast-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .toast .toast-body > span { color: var(--muted); font-size: 13px; }
 .toast:hover { border-color: var(--accent); }

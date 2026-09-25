@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, messages, pendingActions } from '../db/schema.js';
 import { bus } from './bus.js';
+import { openAlertOnce } from './alerts.js';
 import { alertNotification, notifyWorkspace } from './notify.js';
 import { toAlert, toMessage } from './serializers.js';
 import { loadSecretsMap } from './secrets.js';
@@ -101,20 +102,25 @@ export async function requestToolApproval(
       // name the newest request.
       await db.update(alerts).set({ detail }).where(eq(alerts.id, openAlert.id));
     } else {
-      const [alert] = await db
-        .insert(alerts)
-        .values({ conversationId: convId, type: 'approval_request', detail })
-        .returning();
-      const notification = await alertNotification(db, alert, conv, agent);
-      bus.publish(agent.workspaceId, {
-        type: 'alert',
-        data: { ...toAlert(alert), notification },
+      const { alert, created } = await openAlertOnce(db, {
+        conversationId: convId,
+        type: 'approval_request',
+        detail,
       });
-      void notifyWorkspace(db, agent.workspaceId, notification, {
-        userIds: conv.assigneeId ? [conv.assigneeId] : undefined,
-      });
-      const { postSlackAlert } = await import('./slack.js');
-      void postSlackAlert(db, agent.workspaceId, conv, agent, alert).catch(() => {});
+      if (!created) {
+        if (alert) await db.update(alerts).set({ detail }).where(eq(alerts.id, alert.id));
+      } else {
+        const notification = await alertNotification(db, alert, conv, agent);
+        bus.publish(agent.workspaceId, {
+          type: 'alert',
+          data: { ...toAlert(alert), notification },
+        });
+        void notifyWorkspace(db, agent.workspaceId, notification, {
+          userIds: conv.assigneeId ? [conv.assigneeId] : undefined,
+        });
+        const { postSlackAlert } = await import('./slack.js');
+        void postSlackAlert(db, agent.workspaceId, conv, agent, alert).catch(() => {});
+      }
     }
     // needs_human is an attention flag only — the agent still replies while
     // the action awaits a decision. Human-owned threads stay human-owned.

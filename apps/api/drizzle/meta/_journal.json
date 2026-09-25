@@ -253,6 +253,13 @@
       "when": 1790281868239,
       "tag": "0035_hard_magma",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1790296720023,
+      "tag": "0036_one-open-alert-per-type",
+      "breakpoints": true
     }
   ]
 }

@@ -203,7 +203,14 @@ export const alerts = pgTable(
       .default('open'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('alerts_conversation_status').on(t.conversationId, t.status)],
+  (t) => [
+    index('alerts_conversation_status').on(t.conversationId, t.status),
+    // One open alert per type per conversation — the app-level select→insert
+    // dedupe races under concurrent event processing, so the DB enforces it.
+    uniqueIndex('alerts_one_open_per_type')
+      .on(t.conversationId, t.type)
+      .where(sql`${t.status} = 'open'`),
+  ],
 );
 
 export const alertRules = pgTable('alert_rules', {

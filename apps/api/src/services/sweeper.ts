@@ -2,6 +2,7 @@ import { and, desc, eq, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alertRules, alerts, conversations, messages } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
+import { openAlertOnce } from '../lib/alerts.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { inactivityThresholds } from '../lib/rules.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
@@ -118,14 +119,12 @@ export async function sweep(db: Db): Promise<number> {
       );
 
     for (const { conversation, agent } of stale) {
-      const [alert] = await db
-        .insert(alerts)
-        .values({
-          conversationId: conversation.id,
-          type: 'inactivity',
-          detail: `no agent response for ${minutes}m`,
-        })
-        .returning();
+      const { alert, created } = await openAlertOnce(db, {
+        conversationId: conversation.id,
+        type: 'inactivity',
+        detail: `no agent response for ${minutes}m`,
+      });
+      if (!created) continue;
       await db
         .update(conversations)
         .set({ state: 'needs_human' })
@@ -198,23 +197,22 @@ export async function sweepSla(db: Db): Promise<number> {
 
       const ageMin = Math.round((Date.now() - handoffAt.getTime()) / 60_000);
       const escalated = Boolean(lastSla); // 2nd+ breach → escalate to Slack
-      const [alert] = await db
-        .insert(alerts)
-        .values({
-          conversationId: conv.id,
-          type: 'sla',
-          detail: `unclaimed for ${ageMin}m (SLA ${slaMinutes}m)${escalated ? ' — escalated' : ''}`,
-        })
-        .returning();
-      const n = await alertNotification(db, alert, conv, agent);
-      bus.publish(agent.workspaceId, {
-        type: 'alert',
-        data: { ...toAlert(alert), notification: n },
+      const { alert, created } = await openAlertOnce(db, {
+        conversationId: conv.id,
+        type: 'sla',
+        detail: `unclaimed for ${ageMin}m (SLA ${slaMinutes}m)${escalated ? ' — escalated' : ''}`,
       });
-      // SLA breaches page the whole workspace even when assigned — the point
-      // of the escalation is that the owner didn't respond
-      void notifyWorkspace(db, agent.workspaceId, n);
-      if (escalated) {
+      if (created) {
+        const n = await alertNotification(db, alert, conv, agent);
+        bus.publish(agent.workspaceId, {
+          type: 'alert',
+          data: { ...toAlert(alert), notification: n },
+        });
+        // SLA breaches page the whole workspace even when assigned — the point
+        // of the escalation is that the owner didn't respond
+        void notifyWorkspace(db, agent.workspaceId, n);
+      }
+      if (escalated && alert) {
         void postSlackAlert(db, agent.workspaceId, conv, agent, alert);
       }
       fired++;

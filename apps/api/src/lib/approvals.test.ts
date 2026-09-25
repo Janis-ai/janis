@@ -18,6 +18,7 @@ import {
 import { generateApiKey, hashPassword } from './crypto.js';
 import { processEvents } from '../services/ingest.js';
 import { decidePendingAction, requestToolApproval } from './approvals.js';
+import { openAlertOnce } from './alerts.js';
 import type { ToolDef } from './toolExec.js';
 
 let db: Db;
@@ -271,6 +272,30 @@ describe('gated tool approvals', () => {
       .from(conversations)
       .where(eq(conversations.id, conv.id));
     expect(fresh.state).toBe('needs_human');
+  });
+
+  it('openAlertOnce is idempotent — a concurrent second open returns the same alert', async () => {
+    const conv = await makeConv('c-alert-once');
+    const first = await openAlertOnce(db, {
+      conversationId: conv.id,
+      type: 'keyword',
+      detail: 'first',
+    });
+    const second = await openAlertOnce(db, {
+      conversationId: conv.id,
+      type: 'keyword',
+      detail: 'second',
+    });
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.alert?.id).toBe(first.alert.id);
+    // a different type on the same conversation still opens
+    const other = await openAlertOnce(db, {
+      conversationId: conv.id,
+      type: 'inactivity',
+      detail: 'other',
+    });
+    expect(other.created).toBe(true);
   });
 
   it('does not steal a human-owned conversation', async () => {

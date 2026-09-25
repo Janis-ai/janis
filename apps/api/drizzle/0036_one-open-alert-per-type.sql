@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "alerts_one_open_per_type" ON "alerts" USING btree ("conversation_id","type") WHERE "alerts"."status" = 'open';

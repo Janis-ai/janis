@@ -10,6 +10,7 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
+import { openAlertOnce } from '../lib/alerts.js';
 import { enrichHandoff } from '../lib/handoff.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { evaluateEvent } from '../lib/rules.js';
@@ -173,10 +174,15 @@ export async function processEvents(
         }
         continue;
       }
-      const [alert] = await db
-        .insert(alerts)
-        .values({ conversationId: conv.id, type: triggered.type, detail: triggered.detail })
-        .returning();
+      // A concurrent event may have opened the same alert between our select
+      // and insert — the unique index decides; the loser skips (the winner's
+      // publish/notify already covers it).
+      const { alert, created } = await openAlertOnce(db, {
+        conversationId: conv.id,
+        type: triggered.type,
+        detail: triggered.detail ?? undefined,
+      });
+      if (!created) continue;
       alertIds.push(alert.id);
       newAlertTypes.push(alert.type);
       bus.publish(agent.workspaceId, {

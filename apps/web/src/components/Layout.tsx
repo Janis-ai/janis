@@ -136,9 +136,10 @@ export default function Layout() {
       // resolved-alert republishes (takeover/resolve) refresh queries only —
       // they must not pop a "needs attention" toast
       if (alert.status !== 'open') return;
-      // Same alert + same timestamp = an enrichment republish → update the
-      // toast in place. A bumped timestamp (5-min re-alert) is a new toast.
-      const id = `${alert.id}:${alert.created_at}`;
+      // One toast per conversation+issue — enrichment republishes, re-alert
+      // bumps, and (rare) duplicate alert rows all update the same toast
+      // rather than stacking. If it expired, the republish re-shows it.
+      const id = `${alert.conversation_id}:${alert.type}`;
       const next = {
         id,
         title: alert.notification?.title ?? ALERT_LABELS[alert.type] ?? 'Needs attention',
@@ -314,7 +315,7 @@ export default function Layout() {
               navigate(t.url);
             }}
           >
-            <img src="/img/janis-logo-bot.png" className="toast-icon" alt="" />
+            <img src="/img/janis-mark.png" className="toast-icon" alt="" />
             <span className="toast-body">
               <strong>{t.title}</strong>
               <span>{t.body}</span>

@@ -6,6 +6,7 @@ import { signWebhookPayload } from './crypto.js';
 import { runHostedEvent } from './hostedAgent.js';
 import { messageCap } from './plans.js';
 import { bus } from './bus.js';
+import { openAlertOnce } from './alerts.js';
 import { setSlackThreadStatus } from './slack.js';
 import { markAgentWorking } from './typingState.js';
 
@@ -56,7 +57,7 @@ export async function deliverWebhook(
           )
           .limit(1);
         if (!existing) {
-          await db.insert(alerts).values({ conversationId: convId, type: 'custom', detail });
+          await openAlertOnce(db, { conversationId: convId, type: 'custom', detail });
         }
       }
       return;

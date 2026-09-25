@@ -19,6 +19,7 @@ import { deliverToChannel, fetchPlatformProfile, sendChannelTyping } from '../li
 import { rehostAttachments } from '../lib/uploads.js';
 import { toMessage } from '../lib/serializers.js';
 import { bus } from '../lib/bus.js';
+import { openAlertOnce } from '../lib/alerts.js';
 import { env } from '../env.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { processEvents } from './ingest.js';
@@ -289,7 +290,7 @@ export async function handleChannelMessage(
       )
       .limit(1);
     if (!open) {
-      await db.insert(alerts).values({
+      await openAlertOnce(db, {
         conversationId: conv.id,
         type: 'custom',
         detail: `Message cap reached on ${cap.plan.name} plan (${cap.used}/${cap.plan.includedMessages} this period) — inbound messages are dropped until the plan is upgraded.`,
