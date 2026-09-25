@@ -20,6 +20,7 @@ import {
   METERED,
   catalogRateFor,
   detectProvider,
+  filterLiveModels,
   modelsForProvider,
   providerFor,
   type ModelOption,
@@ -1202,11 +1203,10 @@ function LlmCard({
   const modelOptions: ModelOption[] = effectiveProvider
     ? modelsForProvider(effectiveProvider)
     : [];
-  for (const id of liveModels) {
-    if (modelOptions.some((o) => o.id === id)) continue;
-    const bare = id.slice(id.lastIndexOf('/') + 1);
-    const c = catalogModel(id) ?? catalogModel(bare);
-    modelOptions.push({ id, name: c?.name ?? id, vendor: c?.vendor });
+  // live /models ids not in the catalog — filtered to chat-capable families
+  // (vendor-prefixed for known providers, non-media for custom endpoints)
+  for (const opt of filterLiveModels(effectiveProvider ?? 'custom', liveModels)) {
+    if (!modelOptions.some((o) => o.id === opt.id)) modelOptions.push(opt);
   }
   if (llm.model && !modelOptions.some((o) => o.id === llm.model)) {
     const c = catalogModel(llm.model);

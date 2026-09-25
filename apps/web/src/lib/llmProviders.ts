@@ -188,3 +188,50 @@ export function catalogRateFor(id: string) {
   if (slash > 0) return catalogModel(id.slice(slash + 1))?.price ?? null;
   return null;
 }
+
+/** Live /models lists include image/video/audio generators, embeddings,
+ *  previews and tools — none of which can run a chat loop. Filter them. */
+const NON_CHAT =
+  /embed|imagen|image|veo|lyria|banana|sora|tts|audio|video|realtime|live-|aqa|deep-research|antigravity|robotics|computer-use|moderation|transcrib|whisper|dall-e|guard|shield|search|codey|text-(embedding|bison|unicorn)/i;
+
+/** Chat-model id families per vendor — live ids outside these are dropped. */
+const VENDOR_RX: Partial<Record<LlmVendor, RegExp>> = {
+  openai: /^(gpt-|o\d|chatgpt-)/i,
+  anthropic: /^claude-/i,
+  google: /^gemini-/i,
+  xai: /^grok-/i,
+  deepseek: /^deepseek-/i,
+  moonshot: /^(kimi|moonshot)/i,
+  zai: /^glm/i,
+  mistral: /^(mistral|magistral|codestral|pixtral|devstral|ministral)/i,
+  nvidia: /^(nvidia\/|nemotron|llama)/i,
+};
+
+/** Normalize + filter raw /models ids into picker options. Gemini returns
+ *  'models/gemini-…' — the strip is needed for both matching and the id we
+ *  send back in chat requests. */
+export function filterLiveModels(providerId: string, ids: string[]): ModelOption[] {
+  const p = providerFor(providerId);
+  const out: ModelOption[] = [];
+  for (const raw of ids) {
+    const id = raw.replace(/^models\//, '');
+    const bare = id.slice(id.lastIndexOf('/') + 1);
+    const cat = catalogModel(id) ?? catalogModel(bare);
+    if (!cat) {
+      if (!p) continue;
+      if (p.id === 'custom') {
+        // self-hosted — can't guess a family, keep everything non-media
+        if (NON_CHAT.test(id)) continue;
+      } else if (p.id === 'openrouter') {
+        // thousands of ids; the catalog already covers what matters
+        continue;
+      } else {
+        const rx = p.vendor ? VENDOR_RX[p.vendor] : undefined;
+        if (rx && !rx.test(id)) continue;
+        if (NON_CHAT.test(id)) continue;
+      }
+    }
+    out.push({ id, name: cat?.name ?? id, vendor: cat?.vendor });
+  }
+  return out;
+}
