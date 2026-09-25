@@ -13,6 +13,7 @@ import {
   parseMetaWebhook,
   resolveChatIdentity,
   setGetStartedButton,
+  takeThreadControl,
   verifyMetaSignature,
   type ChannelCredentials,
 } from '../lib/channels.js';
@@ -244,6 +245,20 @@ export function channelWebhookRoutes(db: Db) {
     for (const msg of msgs) {
       const channel = await findChannelByObjectId(db, msg.objectId);
       if (channel) {
+        // Handover protocol: the event arrived on standby, so another app
+        // (Page Inbox, a legacy bot) owns the thread and only it can send.
+        // For oauth channels WE are the bot — pull control so replies go
+        // through; Meta then routes this thread's future events on
+        // messaging. Legacy channels read standby for transcript only —
+        // their replies still live in the legacy stack.
+        if (msg.standby) {
+          console.log(
+            `meta standby event: page=${msg.objectId} sender=${msg.senderId} via=${(channel.credentials as ChannelCredentials).via ?? '-'}`,
+          );
+          if ((channel.credentials as ChannelCredentials).via === 'oauth') {
+            await takeThreadControl(channel, msg.senderId);
+          }
+        }
         await handleChannelMessage(db, channel, msg);
         handled++;
         // Channel belongs to a legacy-imported agent — the event also goes

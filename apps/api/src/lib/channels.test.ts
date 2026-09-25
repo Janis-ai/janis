@@ -51,6 +51,23 @@ describe('parseMetaWebhook', () => {
     ]);
   });
 
+  it('parses standby feed (handover) messages flagged standby', () => {
+    const body = {
+      entry: [
+        {
+          id: 'PAGE123',
+          standby: [
+            { sender: { id: 'PSID9' }, recipient: { id: 'PAGE123' }, message: { mid: 'mid.s1', text: 'hi' } },
+            { sender: { id: 'PSID9' }, recipient: { id: 'PAGE123' }, message: { text: 'echo', is_echo: true } },
+          ],
+        },
+      ],
+    };
+    expect(parseMetaWebhook(body)).toEqual([
+      { objectId: 'PAGE123', senderId: 'PSID9', text: 'hi', messageId: 'mid.s1', standby: true },
+    ]);
+  });
+
   it('skips echoes, receipts, and non-text', () => {
     const body = {
       entry: [

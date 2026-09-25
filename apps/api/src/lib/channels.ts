@@ -62,6 +62,10 @@ export interface InboundMessage {
   text: string;
   /** platform message id (mid / wamid) — dedups the same event arriving via webhook + relay */
   messageId?: string;
+  /** Event arrived on Meta's `standby` feed — another app is the thread's
+   *  primary receiver (handover protocol), so this app cannot send until it
+   *  takes thread control. */
+  standby?: boolean;
   name?: string;
   /** Identity asserted by the embedding host (webchat): session-authenticated
    *  or HMAC-signed payloads carry verified=true; anything else is a claim.
@@ -130,9 +134,21 @@ export function parseMetaWebhook(body: unknown): InboundMessage[] {
   const entries = (body as { entry?: unknown[] })?.entry ?? [];
 
   for (const entry of entries as Record<string, unknown>[]) {
-    // Messenger / Instagram
-    const messaging = (entry.messaging ?? []) as Record<string, unknown>[];
-    for (const m of messaging) {
+    // Messenger / Instagram — `messaging` when this app owns the thread,
+    // `standby` when another app is the primary receiver (handover
+    // protocol): same event shape, flagged so the route can pull thread
+    // control before replying.
+    const feed = [
+      ...((entry.messaging ?? []) as Record<string, unknown>[]).map((m) => ({
+        m,
+        standby: false,
+      })),
+      ...((entry.standby ?? []) as Record<string, unknown>[]).map((m) => ({
+        m,
+        standby: true,
+      })),
+    ];
+    for (const { m, standby } of feed) {
       const sender = (m.sender as { id?: string })?.id;
       if (!sender) continue;
       const objectId = String((m.recipient as { id?: string })?.id ?? entry.id ?? '');
@@ -149,6 +165,7 @@ export function parseMetaWebhook(body: unknown): InboundMessage[] {
           senderId: sender,
           text: postback.title ?? postback.payload ?? 'Get Started',
           messageId: postback.mid,
+          ...(standby ? { standby } : {}),
         });
         continue;
       }
@@ -176,6 +193,7 @@ export function parseMetaWebhook(body: unknown): InboundMessage[] {
         senderId: sender,
         text: msg.text ?? '',
         messageId: msg.mid,
+        ...(standby ? { standby } : {}),
         ...(attachments.length ? { attachments } : {}),
       });
     }
