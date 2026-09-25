@@ -29,9 +29,18 @@ export function pricedRateFor(model: string | null | undefined) {
   if (!model) return undefined;
   const custom = env.llmPrices as Record<string, { input: number; output: number }> | undefined;
   if (custom?.[model]) return custom[model];
-  // match prefix so dated variants (gpt-4o-mini-2024-07-18) hit their family
-  const key = Object.keys(RATE_CARD).find((k) => k !== 'default' && model.startsWith(k));
-  return key ? RATE_CARD[key] : undefined;
+  // Normalize transport ids to catalog ids: Gemini's /models listing adds
+  // 'models/', OpenRouter compounds are 'vendor/model' — both bill at the
+  // catalog model's rate.
+  const bare = model.replace(/^models\//, '');
+  const last = bare.slice(bare.lastIndexOf('/') + 1);
+  for (const id of bare === last ? [bare] : [bare, last]) {
+    if (custom?.[id]) return custom[id];
+    // match prefix so dated variants (gpt-4o-mini-2024-07-18) hit their family
+    const key = Object.keys(RATE_CARD).find((k) => k !== 'default' && id.startsWith(k));
+    if (key) return RATE_CARD[key];
+  }
+  return undefined;
 }
 
 /** Resolve a model to its per-1M cost basis (prefix match → default). */

@@ -3,7 +3,7 @@ import { env } from '../env.js';
 import { VENDOR_ENDPOINTS, OR_VENDOR_SLUG, catalogModel, vendorForBaseUrl, type LlmVendor } from '@janis/shared';
 import { pricedRateFor } from './billing.js';
 
-const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
 export interface LlmSettings {
   apiKey: string;
@@ -104,6 +104,21 @@ export function meteredModelId(acc: MeteredAccount, model: string): string {
   return cat ? (cat.or ?? `${OR_VENDOR_SLUG[cat.vendor]}/${cat.id}`) : model;
 }
 
+/** Metered settings for a single model — resolves the serving provider
+ *  account and translates the id for OpenRouter. Used by llmFor for the
+ *  configured model and by the hosted retry loop for the fallback model,
+ *  which may live on a different vendor account entirely. */
+export function meteredSettingsFor(model: string): LlmSettings {
+  const acc = meteredAccountFor(model);
+  return {
+    apiKey: acc?.apiKey ?? env.llmApiKey,
+    baseUrl: (acc?.baseUrl ?? env.llmBaseUrl).replace(/\/+$/, ''),
+    model: acc ? meteredModelId(acc, model) : model,
+    headers: acc?.headers,
+    byok: false,
+  };
+}
+
 /** Per-agent LLM config with env fallback (OpenAI-compatible). */
 export function llmFor(agent: typeof agents.$inferSelect): LlmSettings {
   const cfg = (agent.config ?? {}) as {
@@ -121,14 +136,7 @@ export function llmFor(agent: typeof agents.$inferSelect): LlmSettings {
         `'${model}' has no metered rate — pick a priced model or switch this agent to BYOK`,
       );
     }
-    const acc = meteredAccountFor(model);
-    return {
-      apiKey: acc?.apiKey ?? env.llmApiKey,
-      baseUrl: (acc?.baseUrl ?? env.llmBaseUrl).replace(/\/+$/, ''),
-      model: acc ? meteredModelId(acc, model) : model,
-      headers: acc?.headers,
-      byok: false,
-    };
+    return meteredSettingsFor(model);
   }
   // A custom endpoint without a key never gets ours — sending env.llmApiKey
   // to a customer-controlled base_url would leak it. Same for an explicit

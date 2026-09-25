@@ -64,4 +64,10 @@ describe('rateFor', () => {
     expect(rateFor('llama-local-70b')).toEqual({ input: 0.5, output: 1.5 });
     expect(rateFor(null)).toEqual({ input: 0.5, output: 1.5 });
   });
+
+  it('normalizes transport ids — models/ prefix and OpenRouter vendor/ compounds', () => {
+    expect(rateFor('models/gemini-3.5-flash')).toEqual({ input: 1.5, output: 9 });
+    expect(rateFor('anthropic/claude-fable-5-1')).toEqual({ input: 10, output: 50 });
+    expect(rateFor('google/gemini-3.7-pro')).toEqual({ input: 2, output: 12 });
+  });
 });

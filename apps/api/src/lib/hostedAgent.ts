@@ -21,7 +21,8 @@ type ConversationRow = typeof conversations.$inferSelect;
 export type { LlmSettings } from './llm.js';
 export { llmFor } from './llm.js';
 import type { LlmSettings } from './llm.js';
-import { llmFor } from './llm.js';
+import { llmFor, meteredSettingsFor, OPENROUTER_BASE_URL } from './llm.js';
+import { catalogModel, vendorForBaseUrl, OR_VENDOR_SLUG } from '@janis/shared';
 import { runLegacyReply } from './legacyAgent.js';
 import { env } from '../env.js';
 
@@ -366,15 +367,15 @@ async function generateReply(
   ctx: AgentRunContext | undefined,
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
-): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number }> {
+): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string }> {
   const first = await complete(llm, prompt, msgs, tools, secrets, ctx, builtins, onStall);
   const draft = first.text;
   if (!draft) {
-    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, fixed: [], stripped: [], verified: [], unverified: [] };
+    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, fixed: [], stripped: [], verified: [], unverified: [] };
   }
   const guard = await guardReplyLinks(draft, blessedUrls);
   if (!guard.stripped.length) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, ...guard };
   }
   const retry = await complete(
     llm,
@@ -390,12 +391,13 @@ async function generateReply(
     builtins,
   ).catch(() => null);
   if (!retry?.text) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, ...guard };
   }
   const g2 = await guardReplyLinks(retry.text, blessedUrls);
   return {
     promptTokens: first.promptTokens + retry.promptTokens,
     completionTokens: first.completionTokens + retry.completionTokens,
+    model: retry.model,
     ...g2,
   };
 }
@@ -454,6 +456,9 @@ interface Completion {
   text: string | null;
   promptTokens: number;
   completionTokens: number;
+  /** Wire id of the model that actually produced the response — differs from
+   *  the configured model when the fallback answered. Bill against this. */
+  model: string;
 }
 
 /** OpenAI-compat multimodal content part — Gemini accepts image_url parts. */
@@ -519,7 +524,7 @@ async function complete(
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
 ): Promise<Completion> {
-  const empty = { text: null, promptTokens: 0, completionTokens: 0 };
+  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model };
   if (!llm.apiKey) return empty;
 
   const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
@@ -579,6 +584,7 @@ async function complete(
 
   let promptTokens = 0;
   let completionTokens = 0;
+  let servedModel = llm.model;
 
   for (let round = 0; round < 4; round++) {
     // Retry network timeouts and transient upstream errors (429 / 5xx —
@@ -589,27 +595,48 @@ async function complete(
     let flattenedTools = false;
     // Retry network timeouts and transient upstream errors (429 / 5xx —
     // Gemini flash often 503s "model overloaded"), then fall back to
-    // JANIS_LLM_FALLBACK_MODEL if the primary keeps failing.
-    const models =
-      env.llmFallbackModel && env.llmFallbackModel !== llm.model
-        ? [llm.model, env.llmFallbackModel]
-        : [llm.model];
-    for (const model of models) {
+    // JANIS_LLM_FALLBACK_MODEL if the primary keeps failing. Each candidate
+    // carries its own provider settings — a gemini-* fallback can't run on
+    // the primary's OpenAI/Anthropic endpoint.
+    const candidates: LlmSettings[] = [llm];
+    if (env.llmFallbackModel && env.llmFallbackModel !== llm.model) {
+      if (!llm.byok) {
+        try {
+          const fb = meteredSettingsFor(env.llmFallbackModel);
+          if (fb.model !== llm.model) candidates.push(fb);
+        } catch {
+          // fallback's vendor has no account — no fallback
+        }
+      } else {
+        // BYOK: only fall back to a model this endpoint can plausibly serve —
+        // an OpenRouter endpoint (translates to vendor/model), a same-vendor
+        // catalog model, or unknown-on-unknown where we can't tell.
+        const fb = env.llmFallbackModel;
+        const fbCat = catalogModel(fb) ?? catalogModel(fb.slice(fb.lastIndexOf('/') + 1));
+        const epVendor = vendorForBaseUrl(llm.baseUrl);
+        if (llm.baseUrl === OPENROUTER_BASE_URL && fbCat) {
+          candidates.push({ ...llm, model: fbCat.or ?? `${OR_VENDOR_SLUG[fbCat.vendor]}/${fbCat.id}` });
+        } else if (fbCat ? fbCat.vendor === epVendor : !epVendor) {
+          candidates.push({ ...llm, model: fb });
+        }
+      }
+    }
+    for (const cand of candidates) {
       res = undefined;
-      if (model !== models[0]) onStall?.();
+      if (cand !== candidates[0]) onStall?.();
       // 15s is generous for a chat completion — a hung connection never
       // resolves, so fail fast and retry onto a fresh socket with jitter.
       for (let attempt = 0; attempt < 4; attempt++) {
         try {
-          res = await fetch(`${llm.baseUrl}/chat/completions`, {
+          res = await fetch(`${cand.baseUrl}/chat/completions`, {
             method: 'POST',
             headers: {
               'content-type': 'application/json',
-              authorization: `Bearer ${llm.apiKey}`,
-              ...(llm.headers ?? {}),
+              authorization: `Bearer ${cand.apiKey}`,
+              ...(cand.headers ?? {}),
             },
             body: JSON.stringify({
-              model,
+              model: cand.model,
               max_tokens: 400,
               messages: msgs,
               ...(toolsSchema ? { tools: toolsSchema } : {}),
@@ -643,9 +670,13 @@ async function complete(
           await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
         }
       }
-      if (res?.ok) break;
-      // A 4xx won't heal on another model — stop falling over.
-      if (res && res.status < 500 && res.status !== 429) break;
+      if (res?.ok) {
+        servedModel = cand.model;
+        break;
+      }
+      // A 4xx won't heal on another model — except 404 model_not_found,
+      // which is exactly the case a different model fixes.
+      if (res && res.status < 500 && res.status !== 429 && res.status !== 404) break;
     }
     if (!res?.ok) {
       if (!res) throw lastErr instanceof Error ? lastErr : new Error('LLM request failed');
@@ -671,7 +702,7 @@ async function complete(
     if (!calls.length) {
       const text = msg?.content?.trim() ?? null;
       completionTokens += json.usage?.completion_tokens ?? (text ? Math.ceil(text.length / 4) : 0);
-      return { text, promptTokens, completionTokens };
+      return { text, promptTokens, completionTokens, model: servedModel };
     }
 
     completionTokens += json.usage?.completion_tokens ?? 0;
@@ -706,7 +737,7 @@ async function complete(
       msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
     }
   }
-  return { text: null, promptTokens, completionTokens };
+  return { text: null, promptTokens, completionTokens, model: servedModel };
 }
 
 const RECENT_WINDOW = 20;
@@ -836,8 +867,8 @@ export async function refreshConversationSummary(
   db: Db,
   conv: ConversationRow,
   llm: LlmSettings,
-): Promise<{ summary?: string; promptTokens: number; completionTokens: number }> {
-  const none = { summary: conv.agentSummary ?? undefined, promptTokens: 0, completionTokens: 0 };
+): Promise<{ summary?: string; promptTokens: number; completionTokens: number; model: string }> {
+  const none = { summary: conv.agentSummary ?? undefined, promptTokens: 0, completionTokens: 0, model: llm.model };
 
   // The (RECENT_WINDOW+1)th newest message bounds what the window covers
   const [boundary] = await db
@@ -882,12 +913,12 @@ export async function refreshConversationSummary(
       content: `Existing summary (may be empty):\n${conv.agentSummary ?? '(none)'}\n\nNew messages to fold in:\n${lines.join('\n').slice(0, MAX_SUMMARY_SOURCE_CHARS)}\n\nUpdated summary:`,
     },
   ]);
-  if (!res.text) return { ...none, promptTokens: res.promptTokens, completionTokens: res.completionTokens };
+  if (!res.text) return { ...none, promptTokens: res.promptTokens, completionTokens: res.completionTokens, model: res.model };
   await db
     .update(conversations)
     .set({ agentSummary: res.text.trim(), summaryUpTo: boundary.createdAt })
     .where(eq(conversations.id, conv.id));
-  return { summary: res.text.trim(), promptTokens: res.promptTokens, completionTokens: res.completionTokens };
+  return { summary: res.text.trim(), promptTokens: res.promptTokens, completionTokens: res.completionTokens, model: res.model };
 }
 
 /**
@@ -1026,7 +1057,7 @@ async function foldConversationMemory(
         workspaceId: agent.workspaceId,
         agentId: agent.id,
         conversationId: conv.id,
-        model: llm.model,
+        model: mem.model,
         promptTokens: mem.promptTokens,
         completionTokens: mem.completionTokens,
         byok: llm.byok,
@@ -1085,7 +1116,7 @@ export async function runHostedEvent(
         workspaceId: agent.workspaceId,
         agentId: agent.id,
         conversationId: convId,
-        model: llm.model,
+        model: result.model,
         promptTokens: result.promptTokens,
         completionTokens: result.completionTokens,
         byok: llm.byok,
@@ -1124,7 +1155,7 @@ export async function runHostedEvent(
           workspaceId: agent.workspaceId,
           agentId: agent.id,
           conversationId: convId,
-          model: llm.model,
+          model: retry.model,
           promptTokens: retry.promptTokens,
           completionTokens: retry.completionTokens,
           byok: llm.byok,
@@ -1291,7 +1322,7 @@ async function replyAsHostedAgent(
       ),
       onStall,
     );
-    const { text: guardedReply, promptTokens, completionTokens } = gen;
+    const { text: guardedReply, promptTokens, completionTokens, model } = gen;
     const { text: reply, learns } = extractLearns(guardedReply);
     const learnFlag = learns.length ? { learn: learns } : {};
     if (promptTokens || completionTokens) {
@@ -1299,7 +1330,7 @@ async function replyAsHostedAgent(
         workspaceId: agent.workspaceId,
         agentId: agent.id,
         conversationId: convId,
-        model: llm.model,
+        model,
         promptTokens,
         completionTokens,
         byok: llm.byok,
