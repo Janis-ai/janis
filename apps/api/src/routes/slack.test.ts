@@ -207,10 +207,11 @@ describe('slash commands', () => {
     expect(conv.pauseMinutes).toBeNull();
   });
 
-  it('a second alert replies in the canonical thread instead of opening a new one', async () => {
-    // one thread per conversation — the alert card lands as a reply in the
-    // existing thread and its ts is stored on the alert so its buttons can
-    // be refreshed on takeover/resume
+  it('a second alert posts top-level but links into the canonical thread', async () => {
+    // one thread per conversation — the fresh alert is a top-level channel
+    // post for visibility, with a "View thread" permalink button, but it
+    // does NOT anchor a new thread; its ts is stored on the alert so its
+    // buttons can be refreshed on takeover/resume
     await db
       .update(slackInstallations)
       .set({ alertChannelId: 'CALERT' })
@@ -238,13 +239,22 @@ describe('slash commands', () => {
     await postSlackAlert(db, agent.workspaceId, conv, agent, alert);
 
     const posts = calls.filter((c) => c.url.includes('chat.postMessage'));
-    // the alert is a reply in the existing thread — nothing top-level
-    expect(posts.some((p) => p.body.thread_ts === '1.0')).toBe(true);
-    expect(posts.some((p) => p.body.channel === 'CALERT' && !p.body.thread_ts)).toBe(false);
-    // no new thread registered
+    // fresh top-level alert in the channel…
+    const topLevel = posts.filter((p) => p.body.channel === 'CALERT' && !p.body.thread_ts);
+    expect(topLevel.length).toBe(1);
+    // …with a "View thread" button pointing at the canonical thread permalink
+    const blocks = topLevel[0].body.blocks as { elements?: { url?: string; action_id?: string }[] }[];
+    const threadBtn = blocks
+      .flatMap((b) => b.elements ?? [])
+      .find((e) => e.action_id === 'janis_view_thread');
+    expect(threadBtn?.url).toBe(
+      'https://t.slack.com/archives/CALERT/p1000?thread_ts=1.0&cid=CALERT',
+    );
+    // nothing posted into the thread, and no new thread registered
+    expect(posts.some((p) => p.body.thread_ts === '1.0')).toBe(false);
     const rows = await db.select().from(slackThreads).where(eq(slackThreads.conversationId, convId));
     expect(rows.map((r) => r.ts)).toEqual(['1.0']);
-    // the card's reply ts is stored for button refreshes
+    // the card's ts is stored for button refreshes
     const [stored] = await db.select().from(alerts).where(eq(alerts.id, alert.id));
     expect(stored.slackTs).toBe('9.9');
     expect(stored.slackChannelId).toBe('CALERT');

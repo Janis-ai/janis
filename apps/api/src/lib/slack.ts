@@ -233,6 +233,7 @@ function alertBlocks(
   agent: typeof agents.$inferSelect,
   alert: Pick<AlertRow, 'type' | 'detail'>,
   mention = '',
+  threadLink?: string,
 ): SlackBlock[] {
   const p = (conv.userProfile ?? {}) as {
     name?: string;
@@ -295,6 +296,14 @@ function alertBlocks(
     text: { type: 'plain_text', text: 'Open in Janis' },
     url: `${env.webOrigin}/conversations/${conv.id}`,
   });
+  if (threadLink) {
+    actions.push({
+      type: 'button',
+      action_id: 'janis_view_thread',
+      text: { type: 'plain_text', text: 'View thread' },
+      url: threadLink,
+    });
+  }
 
   const stateLine = paused ? `\n*Agent paused* — replying as human.` : '';
   const avatar = (conv.userProfile as { picture_url?: string } | null)?.picture_url
@@ -627,8 +636,10 @@ async function threadPermalink(
 /**
  * Post an alert into Slack with action buttons. A conversation gets ONE
  * Slack thread: the first alert posts a top-level card that anchors it and
- * is seeded with the transcript; every later alert lands as a reply in that
- * thread so links always open the same place and nothing multiplies.
+ * is seeded with the transcript. Every later alert is still a fresh
+ * top-level message — channel visibility — but carries a "View thread"
+ * permalink into the canonical thread instead of anchoring a parallel one,
+ * so nothing accumulates and links always open the same place.
  */
 export async function postSlackAlert(
   db: Db,
@@ -659,8 +670,7 @@ export async function postSlackAlert(
     `${mention}:rotating_light: *${alert.type.replace('_', ' ')}* — agent *${agent.name}* · ` +
     `conversation \`${conv.externalId}\`\n${alert.detail ?? conv.lastMessagePreview ?? ''}`;
 
-  const dmAll = async (channelId: string, ts: string) => {
-    const link = await threadPermalink(inst.botToken, channelId, ts);
+  const dmAll = (link: string) => {
     const text =
       `${summary}\n<${link}|View alert thread>` +
       ` · <${env.webOrigin}/conversations/${conv.id}|Open in Janis>`;
@@ -668,30 +678,34 @@ export async function postSlackAlert(
   };
 
   if (existing.length) {
-    // The conversation already has a thread — post the alert as a reply in
-    // the canonical (newest) one instead of starting a parallel thread.
+    // The conversation already has its thread — post a fresh top-level alert
+    // for channel visibility, but link it into the canonical thread instead
+    // of anchoring a parallel one. Store where the card landed so
+    // updateSlackAlert can refresh its buttons.
     const t = existing[0];
+    const link = await threadPermalink(
+      t.installation.botToken,
+      t.slackThreads.channelId,
+      t.slackThreads.ts,
+    );
     const res = await slackApi<{ channel: string; ts: string }>(
       t.installation.botToken,
       'chat.postMessage',
       {
         channel: t.slackThreads.channelId,
-        thread_ts: t.slackThreads.ts,
         text: summary,
-        blocks: alertBlocks(conv, agent, alert, mention),
+        blocks: alertBlocks(conv, agent, alert, mention, link),
       },
     );
     if (!res.ok || !res.ts) {
-      console.error('slack alert reply failed:', res.error);
+      console.error('slack alert post failed:', res.error);
       return;
     }
-    // Remember where the card landed so updateSlackAlert can refresh its
-    // buttons — the thread anchor belongs to an older alert.
     await db
       .update(alerts)
       .set({ slackTs: res.ts, slackChannelId: res.channel ?? t.slackThreads.channelId })
       .where(eq(alerts.id, alert.id));
-    await dmAll(t.slackThreads.channelId, t.slackThreads.ts);
+    dmAll(link);
     return;
   }
 
@@ -710,7 +724,7 @@ export async function postSlackAlert(
         ts: res.ts,
       })
       .onConflictDoNothing();
-    await dmAll(res.channel, res.ts);
+    dmAll(await threadPermalink(inst.botToken, res.channel, res.ts));
     await seedSlackThread(db, inst, res.channel, res.ts, conv, agent);
   } else {
     console.error('slack alert post failed:', res.error);
