@@ -24,6 +24,20 @@ export function operatorTyping(conversationId: string): { name: string | null } 
 /** The operator's reply just stored — they can't still be composing it. */
 export function clearOperatorTyping(conversationId: string): void {
   typing.delete(conversationId);
+  relayed.delete(conversationId); // next composing burst relays immediately
+}
+
+/**
+ * Composer pings arrive far more often than Meta needs them (its typing
+ * bubble persists ~20s) — relay at most one sender_action per window.
+ */
+const relayed = new Map<string, number>();
+
+export function shouldRelayTyping(conversationId: string, windowMs = 8_000): boolean {
+  const last = relayed.get(conversationId);
+  if (last && Date.now() - last < windowMs) return false;
+  relayed.set(conversationId, Date.now());
+  return true;
 }
 
 /**

@@ -30,11 +30,12 @@ import {
 } from '../services/takeover.js';
 import { requestSuggestion } from '../services/suggestions.js';
 import { fetchAvatar } from '../lib/avatar.js';
-import { markOperatorTyping } from '../lib/typingState.js';
+import { markOperatorTyping, shouldRelayTyping } from '../lib/typingState.js';
 import {
   channelBindingFor,
   deliverToChannel,
   releaseThreadControl,
+  sendChannelTyping,
   takeThreadControl,
   type AttachmentRef,
 } from '../lib/channels.js';
@@ -410,6 +411,13 @@ export function conversationRoutes(db: Db) {
         ? null
         : user.displayName || user.name.split(' ')[0] || user.name;
     markOperatorTyping(owned.id, name);
+    // Meta channels need an actual sender_action — the webchat poll reads
+    // the in-memory flag, but Messenger/IG visitors see nothing without it.
+    if (shouldRelayTyping(owned.id)) {
+      void channelBindingFor(db, owned.id).then(
+        (b) => b && sendChannelTyping(b.channel, b.platformUserId),
+      );
+    }
     return c.json({ ok: true });
   });
 
