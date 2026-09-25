@@ -66,6 +66,10 @@ export interface InboundMessage {
    *  primary receiver (handover protocol), so this app cannot send until it
    *  takes thread control. */
   standby?: boolean;
+  /** Event was a Meta postback — a Get Started/menu/button tap rather than
+   *  typed text. New conversations opened this way get the greeting as the
+   *  opener; typed first messages go straight to the agent's answer. */
+  postback?: boolean;
   name?: string;
   /** Identity asserted by the embedding host (webchat): session-authenticated
    *  or HMAC-signed payloads carry verified=true; anything else is a claim.
@@ -165,6 +169,7 @@ export function parseMetaWebhook(body: unknown): InboundMessage[] {
           senderId: sender,
           text: postback.title ?? postback.payload ?? 'Get Started',
           messageId: postback.mid,
+          postback: true,
           ...(standby ? { standby } : {}),
         });
         continue;

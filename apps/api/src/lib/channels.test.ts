@@ -46,8 +46,8 @@ describe('parseMetaWebhook', () => {
       ],
     };
     expect(parseMetaWebhook(body)).toEqual([
-      { objectId: 'PAGE123', senderId: 'PSID1', text: 'Get Started', messageId: 'mid.pb' },
-      { objectId: 'PAGE123', senderId: 'PSID2', text: 'MENU_ITEM', messageId: undefined },
+      { objectId: 'PAGE123', senderId: 'PSID1', text: 'Get Started', messageId: 'mid.pb', postback: true },
+      { objectId: 'PAGE123', senderId: 'PSID2', text: 'MENU_ITEM', messageId: undefined, postback: true },
     ]);
   });
 

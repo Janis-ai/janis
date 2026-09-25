@@ -313,15 +313,20 @@ export async function handleChannelMessage(
       platformUserId: participantId,
     });
     // Greeting — a real outbound message stored before the inbound so the
-    // transcript opens with it. Null when the agent has greetings disabled.
-    // deliverToChannel pushes it on Meta; on webchat the widget renders its
-    // own greeting locally and the poll filters this row out. Internal test
-    // channels resolve synchronously so the row matches what the rail's
-    // bootstrap already rendered — a background resolve could land the
-    // generated text here after the placeholder showed the default.
-    const greeting = await resolveGreeting(channel, agent, undefined, {
-      background: creds.internal !== true,
-    });
+    // transcript opens with it. Only fires on deliberate openers: a Meta
+    // postback tap (Get Started/menu), or webchat/internal channels where
+    // the widget renders its own greeting on open and this row keeps the
+    // transcript honest. A typed first message IS the opener — greeting +
+    // agent answer would double up. Null when greetings are disabled.
+    // Internal test channels resolve synchronously so the row matches what
+    // the rail's bootstrap already rendered — a background resolve could
+    // land the generated text here after the placeholder showed the default.
+    const greet = msg.postback === true || channel.kind === 'webchat';
+    const greeting = !greet
+      ? null
+      : await resolveGreeting(channel, agent, undefined, {
+          background: creds.internal !== true,
+        });
     if (greeting) {
       // Suggested replies ride the greeting on Meta channels — native quick
       // replies on Messenger/IG, interactive buttons on WhatsApp. Channel

@@ -72,7 +72,14 @@ describe('handleChannelMessage dedup', () => {
     // profile fetch + webhook attempt both go through fetch
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
 
-    const msg = { objectId: 'PG1', senderId: 'PSID1', text: 'hi', messageId: 'mid.dup' };
+    // postback: true — a Get Started tap still opens with the greeting
+    const msg = {
+      objectId: 'PG1',
+      senderId: 'PSID1',
+      text: 'Get Started',
+      messageId: 'mid.dup',
+      postback: true,
+    };
     await handleChannelMessage(db, channel, msg);
     await handleChannelMessage(db, channel, msg); // legacy relay copy
 
@@ -92,6 +99,32 @@ describe('handleChannelMessage dedup', () => {
     expect(deliveries).toHaveLength(1);
   });
 
+  it('skips the greeting when a typed message opens the conversation', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    await handleChannelMessage(db, channel, {
+      objectId: 'PG1',
+      senderId: 'PSID-TYPED',
+      text: 'hi',
+      messageId: 'mid.typed',
+    });
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'messenger:PSID-TYPED'));
+    const all = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(
+      all.filter(
+        (m) => m.direction === 'out' && (m.payload as { via?: string })?.via === 'greeting',
+      ),
+    ).toHaveLength(0);
+    // the inbound still lands and the agent still fires
+    expect(all.some((m) => m.direction === 'in' && m.text === 'hi')).toBe(true);
+    const deliveries = (await db.select().from(webhookDeliveries)).filter(
+      (d) => (d.payload as { janis_conversation_id?: string }).janis_conversation_id === conv.id,
+    );
+    expect(deliveries).toHaveLength(1);
+  });
+
   it('processes a different mid as a new message', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     await handleChannelMessage(db, channel, {
@@ -100,7 +133,14 @@ describe('handleChannelMessage dedup', () => {
       text: 'again',
       messageId: 'mid.other',
     });
-    const deliveries = await db.select().from(webhookDeliveries);
+    // count only this conversation — other tests in this file dispatch too
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'messenger:PSID1'));
+    const deliveries = (await db.select().from(webhookDeliveries)).filter(
+      (d) => (d.payload as { janis_conversation_id?: string }).janis_conversation_id === conv.id,
+    );
     expect(deliveries).toHaveLength(2);
   });
 });
