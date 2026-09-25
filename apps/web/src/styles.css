@@ -410,6 +410,8 @@ textarea:disabled { opacity: .55; }
 .model-detail-prices b { color: var(--text); font-weight: 600; }
 @media (hover: hover) and (min-width: 901px) {
   .model-detail { display: block; }
+  /* hover already surfaces details — the ⓘ pin only matters on touch */
+  .model-info { display: none; }
 }
 @media (max-width: 900px) {
   /* bottom sheet — equivalent mobile picker */

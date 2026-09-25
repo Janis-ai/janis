@@ -197,8 +197,8 @@ export function ModelPicker({
                 >
                   {m.vendor && <VendorMark vendor={m.vendor} />}
                   <span className="model-name">{m.name}</span>
-                  {pos != null && <CostMeter pos={pos} />}
                   {m.id === value && <span className="model-check">✓</span>}
+                  {pos != null && <CostMeter pos={pos} />}
                   <span
                     role="button"
                     className="model-info"
