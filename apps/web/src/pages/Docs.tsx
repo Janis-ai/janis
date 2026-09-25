@@ -125,9 +125,9 @@ export default function Docs() {
       <Code>{`docker run -e JANIS_API_KEY=jk_live_... -e LLM_API_KEY=sk-... \\
   -p 9798:9798 ghcr.io/janis-ai/janis-agent`}</Code>
       <p className="muted" style={{ lineHeight: 1.6 }}>
-        Get the key from the agent's Connection tab → Generate API key (shown once).
+        Get the key from the agent's Engine tab → Generate API key (shown once).
         Then set your agent's webhook URL (console → Agents → your agent →
-        Connection) to <span className="mono">https://your-host:9798/webhook</span>.
+        Engine) to <span className="mono">https://your-host:9798/webhook</span>.
         Without <span className="mono">LLM_API_KEY</span> every message hands off to a
         human — a safe way to test the plumbing.
       </p>

@@ -141,7 +141,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const rules = rulesData?.rules.filter((r) => r.agent_id === agent.id) ?? [];
   const channels = channelsData?.channels.filter((c) => c.agent_id === agent.id) ?? [];
   const tabs: { key: Tab; label: string }[] = [
-    { key: 'connection', label: 'Connection' },
+    { key: 'connection', label: 'Engine' },
     { key: 'integrations', label: 'Channels' },
     { key: 'behavior', label: 'Behavior' },
     { key: 'escalation', label: 'Escalation' },
@@ -214,6 +214,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
       {activeTab === 'behavior' && <BehaviorTab agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />}
       {activeTab === 'escalation' && (
         <EscalationTab
+          agent={agent}
           cfg={cfg}
           setCfg={setCfg}
           autoResume={autoResume}
@@ -228,6 +229,8 @@ function AgentEditor({ agent }: { agent: Agent }) {
       {activeTab === 'connection' && (
         <ConnectionTab
           agent={agent}
+          cfg={cfg}
+          setCfg={setCfg}
           isAdmin={isAdmin}
           webhookUrl={webhookUrl}
           setWebhookUrl={setWebhookUrl}
@@ -331,7 +334,6 @@ function IntegrationsTab({
       <div className="muted" style={{ marginTop: 10 }}>
         Channel settings (credentials, embed code, per-channel overrides) live on the Channels page.
       </div>
-      <SlackAlerts agent={agent} />
     </div>
   );
 }
@@ -518,6 +520,7 @@ function BehaviorTab({
 }
 
 function EscalationTab({
+  agent,
   cfg,
   setCfg,
   autoResume,
@@ -527,6 +530,7 @@ function EscalationTab({
   onAddRule,
   onDeleteRule,
 }: {
+  agent: Agent;
   cfg: AgentConfig;
   setCfg: (c: AgentConfig) => void;
   autoResume: string;
@@ -585,6 +589,7 @@ function EscalationTab({
           </label>
         </div>
         <div className="muted">Repeat breaches escalate to the Slack alert channel.</div>
+        <SlackAlerts agent={agent} />
       </div>
 
       <div className="card" style={{ marginTop: 12 }}>
@@ -728,26 +733,6 @@ function ToolsTab({
         <span className="mono">{'{{secrets.NAME}}'}</span> in tool URLs and headers
       </label>
       <Secrets agentId={agentId} />
-      <label>LLM (OpenAI-compatible — your own key bills $0 Janis LLM fees; blank uses Janis's metered key)</label>
-      <input
-        placeholder="API key (sk-…)"
-        value={cfg.llm?.api_key ?? ''}
-        onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, api_key: e.target.value } })}
-      />
-      <div className="row">
-        <input
-          className="grow"
-          placeholder="Base URL (default https://api.openai.com/v1)"
-          value={cfg.llm?.base_url ?? ''}
-          onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, base_url: e.target.value } })}
-        />
-        <input
-          placeholder="Model"
-          style={{ width: 160 }}
-          value={cfg.llm?.model ?? ''}
-          onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, model: e.target.value } })}
-        />
-      </div>
       </ReadOnly>
     </div>
   );
@@ -907,6 +892,8 @@ function IntegrationCards({
 
 function ConnectionTab({
   agent,
+  cfg,
+  setCfg,
   isAdmin,
   webhookUrl,
   setWebhookUrl,
@@ -917,6 +904,8 @@ function ConnectionTab({
   onRevealSecret,
 }: {
   agent: Agent;
+  cfg: AgentConfig;
+  setCfg: (c: AgentConfig) => void;
   isAdmin: boolean;
   webhookUrl: string;
   setWebhookUrl: (s: string) => void;
@@ -1021,6 +1010,34 @@ function ConnectionTab({
           </>
         )}
       </div>
+
+      {agent.hosted && (
+      <div className="card" style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <label>LLM (OpenAI-compatible — your own key bills $0 Janis LLM fees; blank uses Janis's metered key)</label>
+        <input
+          placeholder="API key (sk-…)"
+          value={cfg.llm?.api_key ?? ''}
+          disabled={!isAdmin}
+          onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, api_key: e.target.value } })}
+        />
+        <div className="row">
+          <input
+            className="grow"
+            placeholder="Base URL (default https://api.openai.com/v1)"
+            value={cfg.llm?.base_url ?? ''}
+            disabled={!isAdmin}
+            onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, base_url: e.target.value } })}
+          />
+          <input
+            placeholder="Model"
+            style={{ width: 160 }}
+            value={cfg.llm?.model ?? ''}
+            disabled={!isAdmin}
+            onChange={(e) => setCfg({ ...cfg, llm: { ...cfg.llm, model: e.target.value } })}
+          />
+        </div>
+      </div>
+      )}
 
       {!agent.hosted && (
       <div className="card" style={{ marginTop: 12 }}>
