@@ -16,16 +16,18 @@ import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { ModelPicker } from '../components/ModelPicker';
 import { railBus } from '../lib/railBus';
 import {
-  LLM_PROVIDERS,
   METERED,
+  catalogForId,
+  catalogOptions,
   catalogRateFor,
   detectProvider,
   filterLiveModels,
-  modelsForProvider,
+  prettifyModelName,
   providerFor,
+  providerForVendor,
   type ModelOption,
 } from '../lib/llmProviders';
-import { catalogModel } from '@janis/shared';
+import { OR_VENDOR_SLUG, type LlmVendor } from '@janis/shared';
 import { connectOpenRouter, consumeOpenRouterResult } from '../lib/openrouterAuth';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert'] as const;
@@ -1081,13 +1083,16 @@ function LlmCard({
 }) {
   const llm = cfg.llm ?? {};
   const providerId = llm.provider ?? detectProvider(llm) ?? METERED;
+  const mode = providerId === METERED ? 'hosted' : 'byok';
   const preset = providerFor(providerId);
   const [liveModels, setLiveModels] = useState<string[]>([]);
   const [modelsMsg, setModelsMsg] = useState('');
   const [modelsBusy, setModelsBusy] = useState(false);
-  // which provider serves 'metered' — resolved from the models endpoint's
-  // returned base_url so the picker lists the right vendor's catalog
-  const [meteredProvider, setMeteredProvider] = useState<string | null>(null);
+  // Metered provider accounts — which vendors Janis can actually serve,
+  // resolved server-side from env (JANIS_LLM_* + JANIS_LLM_PROVIDERS).
+  const [meteredAccounts, setMeteredAccounts] = useState<
+    { vendor: string; base_url: string; models: string[]; error?: string }[] | null
+  >(null);
   const [rates, setRates] = useState<{
     rates: Record<string, { input: number; output: number }>;
     margin: number;
@@ -1127,23 +1132,28 @@ function LlmCard({
     setModelsBusy(true);
     setModelsMsg('');
     try {
-      const r = await api<{ models: string[]; error?: string; base_url?: string }>(
-        `/api/agents/${agent.id}/llm-models`,
-        {
-          method: 'POST',
-          body: JSON.stringify(
-            providerId === METERED
-              ? { metered: true }
-              : { base_url: llm.base_url, api_key: llm.api_key || undefined },
-          ),
-        },
-      );
-      setLiveModels(r.models);
-      if (providerId === METERED && r.base_url) {
-        setMeteredProvider(detectProvider({ base_url: r.base_url }) ?? 'custom');
+      const r = await api<{
+        models?: string[];
+        accounts?: { vendor: string; base_url: string; models: string[]; error?: string }[];
+        error?: string;
+        base_url?: string;
+      }>(`/api/agents/${agent.id}/llm-models`, {
+        method: 'POST',
+        body: JSON.stringify(
+          mode === 'hosted'
+            ? { metered: true }
+            : { base_url: llm.base_url, api_key: llm.api_key || undefined },
+        ),
+      });
+      if (r.accounts) {
+        setMeteredAccounts(r.accounts);
+        const err = r.accounts.find((a) => a.error)?.error;
+        if (err) setModelsMsg(`couldn't list models: ${err}`);
+      } else {
+        setLiveModels(r.models ?? []);
+        if (r.error) setModelsMsg(`couldn't list models: ${r.error}`);
+        else if (!r.models?.length) setModelsMsg('endpoint returned no models');
       }
-      if (r.error) setModelsMsg(`couldn't list models: ${r.error}`);
-      else if (!r.models.length) setModelsMsg('endpoint returned no models');
     } catch (e) {
       setModelsMsg(`couldn't list models: ${e instanceof Error ? e.message : 'failed'}`);
     } finally {
@@ -1154,7 +1164,7 @@ function LlmCard({
   // Populate the model list when we can authenticate (metered key, saved key,
   // or a key typed into the draft).
   useEffect(() => {
-    if (providerId === METERED || llm.api_key || llm.key_set) void fetchModels();
+    if (mode === 'hosted' || llm.api_key || llm.key_set) void fetchModels();
     else setLiveModels([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerId]);
@@ -1166,7 +1176,7 @@ function LlmCard({
   const rateHint = (id: string) => {
     const p = catalogRateFor(id);
     if (!p) return null;
-    const f = providerId === METERED ? 1 + margin : 1;
+    const f = mode === 'hosted' ? 1 + margin : 1;
     return `$${usd(p.input * f)}/$${usd(p.output * f)}`;
   };
   const billedRate = llm.model ? catalogRateFor(llm.model) : null;
@@ -1174,22 +1184,25 @@ function LlmCard({
   const setLlm = (patch: Record<string, unknown>) =>
     setCfg({ ...cfg, llm: { ...cfg.llm, ...patch } });
 
-  const onProvider = (id: string) => {
-    if (id === METERED) {
-      // keep the BYOK fields around — switching back shouldn't lose the key
-      setLlm({ provider: METERED });
-      return;
-    }
+  /** Set provider + base_url, translating the model id: OpenRouter wants
+   *  `vendor/id` compounds, direct endpoints want the provider-native id. */
+  const applyProvider = (id: string, model?: string) => {
     const p = providerFor(id);
     const sameEndpoint =
       Boolean(p?.baseUrl) && p!.baseUrl === (cfg.llm?.base_url ?? '');
+    let m = model ?? llm.model;
+    const c = m ? catalogForId(m) : undefined;
+    if (m && c) {
+      m = id === 'openrouter' ? (c.or ?? `${OR_VENDOR_SLUG[c.vendor]}/${c.id}`) : c.id;
+    }
     setCfg({
       ...cfg,
       llm: {
         ...cfg.llm,
         provider: id,
+        model: m,
         // 'custom' keeps whatever endpoint was there for editing
-        base_url: p?.baseUrl ?? cfg.llm?.base_url ?? '',
+        base_url: p?.baseUrl ?? (id === 'custom' ? (cfg.llm?.base_url ?? '') : ''),
         // a different endpoint needs its own key — null clears the stored one
         ...(sameEndpoint ? {} : { api_key: null }),
         key_set: undefined,
@@ -1197,42 +1210,88 @@ function LlmCard({
     });
   };
 
-  // Options: the provider's catalog models (named + iconed), then any
-  // uncatalogued ids the live /models call returned, then the current value.
-  const effectiveProvider = providerId === METERED ? meteredProvider : providerId;
-  const modelOptions: ModelOption[] = effectiveProvider
-    ? modelsForProvider(effectiveProvider)
-    : [];
-  // live /models ids not in the catalog — filtered to chat-capable families
-  // (vendor-prefixed for known providers, non-media for custom endpoints)
-  for (const opt of filterLiveModels(effectiveProvider ?? 'custom', liveModels)) {
-    if (!modelOptions.some((o) => o.id === opt.id)) modelOptions.push(opt);
+  const onMode = (m: 'hosted' | 'byok') => {
+    if (m === 'hosted') {
+      // keep the BYOK fields around — switching back shouldn't lose the key
+      setLlm({ provider: METERED });
+      return;
+    }
+    // derive the provider from the current model's vendor
+    const c = llm.model ? catalogForId(llm.model) : undefined;
+    applyProvider(providerForVendor(c?.vendor)?.id ?? 'custom', c?.id ?? llm.model);
+  };
+
+  const pickModel = (id: string) => {
+    if (mode === 'hosted') return setLlm({ model: id });
+    const c = catalogForId(id);
+    if (providerId === 'openrouter') {
+      setLlm({ model: c ? (c.or ?? `${OR_VENDOR_SLUG[c.vendor]}/${c.id}`) : id });
+      return;
+    }
+    if (!c) return applyProvider('custom', id); // unknown id → custom endpoint
+    applyProvider(providerForVendor(c.vendor)?.id ?? 'custom', c.id);
+  };
+
+  // Options: hosted → catalog + live ids for vendors Janis has accounts for;
+  // BYOK → the whole catalog + live ids from the chosen endpoint.
+  const modelOptions: ModelOption[] = [];
+  const push = (o: ModelOption) => {
+    if (!modelOptions.some((x) => x.id === o.id)) modelOptions.push(o);
+  };
+  if (mode === 'hosted') {
+    for (const acc of meteredAccounts ?? []) {
+      const vend = acc.vendor === 'default' ? undefined : (acc.vendor as LlmVendor);
+      for (const o of catalogOptions(vend ? [vend] : undefined)) push(o);
+      for (const o of filterLiveModels(providerForVendor(vend)?.id ?? 'custom', acc.models)) {
+        push(o);
+      }
+    }
+  } else {
+    for (const o of catalogOptions()) push(o);
+    for (const o of filterLiveModels(providerId, liveModels)) push(o);
   }
   if (llm.model && !modelOptions.some((o) => o.id === llm.model)) {
-    const c = catalogModel(llm.model);
-    modelOptions.unshift({ id: llm.model, name: c?.name ?? llm.model, vendor: c?.vendor });
+    const c = catalogForId(llm.model);
+    modelOptions.unshift({
+      id: llm.model,
+      name: c?.name ?? prettifyModelName(llm.model),
+      vendor: c?.vendor ?? preset?.vendor,
+    });
   }
 
+  // 'via' choices for BYOK — the model's vendor first, then OpenRouter
+  // (one OAuth key reaches everything), then a raw custom endpoint.
+  const modelVendor = llm.model ? catalogForId(llm.model)?.vendor : undefined;
+  const direct = providerForVendor(modelVendor);
+  const viaOptions: { id: string; label: string }[] = [
+    ...(direct && direct.id !== 'openrouter' ? [{ id: direct.id, label: direct.label }] : []),
+    { id: 'openrouter', label: 'OpenRouter (all models)' },
+    { id: 'custom', label: 'Custom (OpenAI-compatible)' },
+  ];
+  if (!viaOptions.some((o) => o.id === providerId) && mode === 'byok') {
+    viaOptions.unshift({ id: providerId, label: preset?.label ?? providerId });
+  }
 
   return (
     <div className="card" style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
       <label>LLM</label>
+      <select
+        value={mode}
+        disabled={!isAdmin}
+        onChange={(e) => onMode(e.target.value as 'hosted' | 'byok')}
+      >
+        <option value="hosted">Hosted by Janis — billed to your plan's LLM meter</option>
+        <option value="byok">Bring your own key — $0 Janis LLM fees</option>
+      </select>
+
       <div className="row">
-        <select
-          className="grow"
-          value={providerId}
+        <ModelPicker
+          value={llm.model ?? ''}
+          options={modelOptions}
           disabled={!isAdmin}
-          onChange={(e) => onProvider(e.target.value)}
-        >
-          <option value={METERED}>Janis metered — billed to your plan's LLM meter</option>
-          <optgroup label="Your account — $0 Janis LLM fees">
-            {LLM_PROVIDERS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </optgroup>
-        </select>
+          onChange={pickModel}
+          hint={rateHint}
+        />
         {isAdmin && (
           <button
             className="btn"
@@ -1245,8 +1304,25 @@ function LlmCard({
         )}
       </div>
 
-      {providerId !== METERED && (
+      {mode === 'byok' && (
         <>
+          <div className="row">
+            <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+              via
+            </span>
+            <select
+              className="grow"
+              value={providerId}
+              disabled={!isAdmin}
+              onChange={(e) => applyProvider(e.target.value)}
+            >
+              {viaOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="row">
             <input
               className="grow"
@@ -1293,26 +1369,16 @@ function LlmCard({
         </>
       )}
 
-      <div className="row">
-        <ModelPicker
-          value={llm.model ?? ''}
-          options={modelOptions}
-          disabled={!isAdmin}
-          onChange={(m) => setLlm({ model: m })}
-          hint={rateHint}
-        />
-      </div>
-
       {modelsMsg && (
         <div className="muted" style={{ fontSize: 12 }}>
           {modelsMsg}
         </div>
       )}
       <div className="muted" style={{ fontSize: 12 }}>
-        {providerId === METERED
+        {mode === 'hosted'
           ? billedRate && llm.model
             ? `Billed $${usd(billedRate.input * (1 + (rates?.margin ?? 0)))} per 1M input / $${usd(billedRate.output * (1 + (rates?.margin ?? 0)))} per 1M output tokens on your LLM meter.`
-            : 'Runs on Janis\u2019s provider account — each model bills its own price to your LLM meter. Pick a model to see it.'
+            : 'Runs on Janis’s provider accounts — each model bills its own price to your LLM meter. Pick a model to see it.'
           : billedRate && llm.model
             ? `$0 Janis LLM fees — ${llm.model} bills ~$${usd(billedRate.input)}/$${usd(billedRate.output)} per 1M on your provider account. Keys are write-only.`
             : 'Your key bills $0 Janis LLM fees. Keys are write-only — saved keys are never re-displayed.'}

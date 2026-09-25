@@ -293,7 +293,13 @@ describe('llm config', () => {
       headers: { 'Content-Type': 'application/json', cookie: parentCookie },
       body: JSON.stringify({ metered: true }),
     });
-    expect((await res.json()).models).toEqual(['a-model', 'b-model']);
+    const body = await res.json();
+    expect(body.models).toEqual(['a-model', 'b-model']);
+    // accounts expose which vendor Janis's env key serves — the UI filters
+    // the hosted model picker on it
+    expect(body.accounts).toEqual([
+      expect.objectContaining({ vendor: 'openai', models: ['a-model', 'b-model'] }),
+    ]);
     expect(fetchMock).toHaveBeenCalledWith(
       'https://api.openai.com/v1/models',
       expect.objectContaining({ headers: {} }),

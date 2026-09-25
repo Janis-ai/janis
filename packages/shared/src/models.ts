@@ -122,3 +122,27 @@ export const MODEL_CATALOG: CatalogModel[] = [
 export function catalogModel(id: string): CatalogModel | undefined {
   return MODEL_CATALOG.find((m) => m.id === id);
 }
+
+/** OpenAI-compatible chat endpoint per vendor — used to detect which vendor
+ *  a Janis metered env key serves, and as BYOK preset base URLs. '' = no
+ *  first-party endpoint (meta → OpenRouter or self-hosted). */
+export const VENDOR_ENDPOINTS: Record<LlmVendor, string> = {
+  openai: 'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com/v1',
+  google: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  xai: 'https://api.x.ai/v1',
+  deepseek: 'https://api.deepseek.com',
+  moonshot: 'https://api.moonshot.ai/v1',
+  zai: 'https://api.z.ai/api/paas/v4',
+  nvidia: 'https://integrate.api.nvidia.com/v1',
+  mistral: 'https://api.mistral.ai/v1',
+  meta: '',
+};
+
+/** Which vendor a base_url belongs to (trailing slashes ignored). */
+export function vendorForBaseUrl(baseUrl: string): LlmVendor | undefined {
+  const norm = baseUrl.replace(/\/+$/, '');
+  return (Object.entries(VENDOR_ENDPOINTS) as [LlmVendor, string][]).find(
+    ([, url]) => url && url === norm,
+  )?.[0];
+}

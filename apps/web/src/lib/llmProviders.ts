@@ -127,6 +127,27 @@ export function providerFor(id: string | undefined): LlmProvider | undefined {
   return LLM_PROVIDERS.find((p) => p.id === id);
 }
 
+/** The preset serving a catalog vendor — vendors with no first-party
+ *  endpoint (meta) route through OpenRouter. */
+export function providerForVendor(vendor: LlmVendor | undefined): LlmProvider | undefined {
+  if (!vendor) return undefined;
+  return LLM_PROVIDERS.find((p) => p.vendor === vendor) ?? providerFor('openrouter');
+}
+
+/** Catalog lookup tolerant of `vendor/id` compounds (stored OpenRouter ids). */
+export function catalogForId(id: string) {
+  return catalogModel(id) ?? catalogModel(id.slice(id.lastIndexOf('/') + 1));
+}
+
+/** Picker options straight from the catalog — optionally vendor-scoped. */
+export function catalogOptions(vendors?: LlmVendor[]): ModelOption[] {
+  return MODEL_CATALOG.filter((m) => !vendors || vendors.includes(m.vendor)).map((m) => ({
+    id: m.id,
+    name: m.name,
+    vendor: m.vendor,
+  }));
+}
+
 /** Which preset does this saved config correspond to? Matches on base_url;
  *  a key with no base_url is OpenAI (the pre-preset default). */
 export function detectProvider(llm?: {

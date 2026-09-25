@@ -21,6 +21,7 @@ import {
 } from '../services/knowledgeGaps.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
+import { meteredAccounts } from '../lib/llm.js';
 import { processEvents } from '../services/ingest.js';
 import { toAgent } from '../lib/serializers.js';
 import { invalidateChannelCache } from '../lib/channels.js';
@@ -195,24 +196,58 @@ export function agentRoutes(db: Db) {
       let baseUrl = (body.base_url ?? '').replace(/\/+$/, '');
       let apiKey = body.api_key ?? '';
       if (body.metered || (!baseUrl && !apiKey)) {
-        baseUrl = env.llmBaseUrl.replace(/\/+$/, '');
-        apiKey = env.llmApiKey;
-      } else {
-        if (!/^https?:\/\//i.test(baseUrl)) {
-          return c.json({ models: [], error: 'base_url must be an http(s) URL' }, 400);
+        // Every configured metered account — the picker shows the catalog
+        // filtered to vendors Janis actually has keys for.
+        const accs = meteredAccounts();
+        if (!accs.length) {
+          return c.json({ accounts: [], models: [], error: 'no metered provider configured' });
         }
-        if (!apiKey) {
-          const [row] = await db
-            .select({ config: agents.config })
-            .from(agents)
-            .where(
-              and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))),
-            )
-            .limit(1);
-          const stored =
-            (((row?.config ?? {}) as { llm?: { api_key?: string; base_url?: string } }).llm) ?? {};
-          if (stored.base_url === body.base_url && stored.api_key) apiKey = stored.api_key;
-        }
+        const accounts = await Promise.all(
+          accs.map(async (a) => {
+            try {
+              const res = await fetch(`${a.baseUrl}/models`, {
+                headers: a.apiKey ? { authorization: `Bearer ${a.apiKey}` } : {},
+                signal: AbortSignal.timeout(8000),
+              });
+              if (!res.ok) {
+                return { vendor: a.vendor, base_url: a.baseUrl, models: [], error: `provider returned ${res.status}` };
+              }
+              const data = (await res.json()) as { data?: { id?: string }[] };
+              return {
+                vendor: a.vendor,
+                base_url: a.baseUrl,
+                models: (data.data ?? [])
+                  .map((m) => m.id)
+                  .filter((s): s is string => Boolean(s))
+                  .sort(),
+              };
+            } catch (e) {
+              return {
+                vendor: a.vendor,
+                base_url: a.baseUrl,
+                models: [] as string[],
+                error: e instanceof Error ? e.message : 'fetch failed',
+              };
+            }
+          }),
+        );
+        // models/base_url kept for older clients — the default account's
+        return c.json({ accounts, models: accounts[0].models, base_url: accounts[0].base_url });
+      }
+      if (!/^https?:\/\//i.test(baseUrl)) {
+        return c.json({ models: [], error: 'base_url must be an http(s) URL' }, 400);
+      }
+      if (!apiKey) {
+        const [row] = await db
+          .select({ config: agents.config })
+          .from(agents)
+          .where(
+            and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))),
+          )
+          .limit(1);
+        const stored =
+          (((row?.config ?? {}) as { llm?: { api_key?: string; base_url?: string } }).llm) ?? {};
+        if (stored.base_url === body.base_url && stored.api_key) apiKey = stored.api_key;
       }
       try {
         const res = await fetch(`${baseUrl}/models`, {

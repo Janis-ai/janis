@@ -35,6 +35,22 @@ export const env = {
   // Second model tried when the primary keeps failing on 429/5xx/timeouts
   // (e.g. Gemini flash-lite demand spikes). Empty = no fallback.
   llmFallbackModel: process.env.JANIS_LLM_FALLBACK_MODEL ?? '',
+  // Extra Janis-metered provider accounts — JSON keyed by catalog vendor:
+  // JANIS_LLM_PROVIDERS='{"anthropic":{"api_key":"sk-ant-…"},"openai":{"api_key":"sk-…"}}'
+  // base_url optional (defaults to the vendor endpoint). The legacy
+  // JANIS_LLM_API_KEY/JANIS_LLM_BASE_URL pair is always the default account.
+  janisLlmProviders: (() => {
+    try {
+      return process.env.JANIS_LLM_PROVIDERS
+        ? (JSON.parse(process.env.JANIS_LLM_PROVIDERS) as Record<
+            string,
+            { api_key?: string; base_url?: string }
+          >)
+        : {};
+    } catch {
+      return {};
+    }
+  })(),
   // Janis-side Brave Search key powering the built-in web_search tool — lets
   // hosted agents search without the customer configuring a connection.
   // Empty = the tool is hidden from the catalog and never offered to the LLM.
