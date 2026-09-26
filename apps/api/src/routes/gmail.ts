@@ -195,7 +195,9 @@ export function gmailPublicRoutes(db: Db) {
       | { emailAddress?: string }
       | null;
     if (!profileRes.ok || !profile?.emailAddress) {
-      return done('could not read the mailbox profile — check the Gmail API is enabled');
+      return done(
+        `could not read the mailbox profile (HTTP ${profileRes.status}) — check the Gmail API is enabled and the mailbox is a test user`,
+      );
     }
     const address = profile.emailAddress.toLowerCase();
 
