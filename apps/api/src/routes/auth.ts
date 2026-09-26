@@ -137,10 +137,12 @@ export function authRoutes(db: Db) {
       .from(memberships)
       .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
       .where(eq(memberships.userId, row.user.id));
-    const active =
-      mems.find(
-        (m) => m.membership.acceptedAt && m.membership.workspaceId === row.session.workspaceId,
-      ) ?? mems.find((m) => m.membership.acceptedAt);
+    // The session pins which workspace is active — don't fall back to just
+    // any membership here, or a switch into a grant-only workspace snaps
+    // right back on the next /me.
+    let active = mems.find(
+      (m) => m.membership.acceptedAt && m.membership.workspaceId === row.session.workspaceId,
+    );
 
     // Sessions minted before agent grants existed (or while none did) carry
     // workspaceId=null — re-resolve so a later agent invite heals the shell.
@@ -152,6 +154,9 @@ export function authRoutes(db: Db) {
           .set({ workspaceId: wsId })
           .where(eq(sessions.id, row.session.id));
         row.session.workspaceId = wsId;
+        active = mems.find(
+          (m) => m.membership.acceptedAt && m.membership.workspaceId === wsId,
+        );
       }
     }
 

@@ -275,4 +275,36 @@ describe('agent-invite sign-in landing', () => {
     });
     expect(denied.status).toBe(403);
   });
+
+  it('switching to a grant-only workspace sticks — /me reports the scoped view', async () => {
+    const { authRoutes } = await import('./auth.js');
+    const authApp = new Hono().route('/auth', authRoutes(db));
+    // A user with their OWN workspace membership + an agent grant elsewhere —
+    // the mookniness case: switch must not snap back to their membership.
+    const [ownWs] = await db.insert(workspaces).values({ name: 'OwnWS' }).returning();
+    const { user: dual, cookie: dualCookie } = await makeUser('dual@x.test', ownWs.id, 'admin');
+    await grant(dual.id, agentB, 'member'); // grant on wsId, member elsewhere
+
+    const sw = await authApp.request('/auth/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: dualCookie },
+      body: JSON.stringify({ workspace_id: wsId }),
+    });
+    expect(sw.status).toBe(200);
+
+    const me = await authApp.request('/auth/me', { headers: { cookie: dualCookie } });
+    const body = await me.json();
+    expect(body.workspace?.id).toBe(wsId);
+    expect(body.agent_scope?.map((a: { id: string }) => a.id)).toEqual([agentB]);
+
+    // and it stays after switching back to their membership workspace
+    const back = await authApp.request('/auth/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: dualCookie },
+      body: JSON.stringify({ workspace_id: ownWs.id }),
+    });
+    expect(back.status).toBe(200);
+    const me2 = await authApp.request('/auth/me', { headers: { cookie: dualCookie } });
+    expect((await me2.json()).workspace?.id).toBe(ownWs.id);
+  });
 });

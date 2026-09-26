@@ -168,7 +168,9 @@ export async function listSlackChannels(
       if (!c.is_archived) out.push({ id: c.id, name: c.name });
     }
     cursor = res.response_metadata?.next_cursor || undefined;
-  } while (cursor && out.length < 2000);
+    // legacy workspaces carry tens of thousands of channels — cap high so a
+    // valid alert channel isn't silently dropped from the picker
+  } while (cursor && out.length < 30000);
   return out;
 }
 
