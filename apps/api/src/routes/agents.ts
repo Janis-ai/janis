@@ -158,8 +158,12 @@ export function agentRoutes(db: Db) {
     // Translate the legacy single-override fields into the routes model:
     // both null clears back to inherit; otherwise it's a one-entry route on
     // the given (or the agent's current/default) installation.
+    // NB: `?.map` alone would collapse null→undefined — a null PATCH must
+    // reach the write as null (clear to inherit), not "field absent".
     let routesPatch: { installation_id: string; channel_id: string | null }[] | null | undefined =
-      body.slack_routes?.map((r) => ({ ...r, channel_id: r.channel_id ?? null }));
+      body.slack_routes === null
+        ? null
+        : body.slack_routes?.map((r) => ({ ...r, channel_id: r.channel_id ?? null }));
     if (
       routesPatch === undefined &&
       (body.slack_channel_id !== undefined || body.slack_installation_id !== undefined)

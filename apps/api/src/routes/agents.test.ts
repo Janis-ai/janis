@@ -394,3 +394,57 @@ describe('llm config', () => {
     ).toBe(200);
   });
 });
+
+describe('slack_routes PATCH', () => {
+  it('null clears routes back to inheriting the workspace default', async () => {
+    const res = await postAgent(parentCookie);
+    const agentId = (await res.json()).agent.id as string;
+    const [agent] = await db
+      .select({ workspaceId: schema.agents.workspaceId })
+      .from(schema.agents)
+      .where(eq(schema.agents.id, agentId));
+    const [inst] = await db
+      .insert(schema.slackInstallations)
+      .values({ workspaceId: agent.workspaceId, teamId: 'T_NULL', botToken: 'xoxb-null' })
+      .returning();
+    await db
+      .update(schema.agents)
+      .set({ slackRoutes: [{ installation_id: inst.id, channel_id: 'C1' }] })
+      .where(eq(schema.agents.id, agentId));
+
+    const patch = await app.request(`/api/agents/${agentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ slack_routes: null }),
+    });
+    expect(patch.status).toBe(200);
+    const [stored] = await db
+      .select({ routes: schema.agents.slackRoutes })
+      .from(schema.agents)
+      .where(eq(schema.agents.id, agentId));
+    expect(stored.routes).toBeNull();
+
+    // and the serialized agent says "inherit"
+    const get = await app.request('/api/agents', {
+      headers: { cookie: parentCookie },
+    });
+    const found = (await get.json()).agents.find((a: { id: string }) => a.id === agentId);
+    expect(found.slack_routes).toBeNull();
+  });
+
+  it('[] sticks as explicitly muted', async () => {
+    const res = await postAgent(parentCookie);
+    const agentId = (await res.json()).agent.id as string;
+    const patch = await app.request(`/api/agents/${agentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ slack_routes: [] }),
+    });
+    expect(patch.status).toBe(200);
+    const [stored] = await db
+      .select({ routes: schema.agents.slackRoutes })
+      .from(schema.agents)
+      .where(eq(schema.agents.id, agentId));
+    expect(stored.routes).toEqual([]);
+  });
+});

@@ -531,13 +531,6 @@ function SlackAlerts({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
                 {slack.configured && (
                   <a className="btn" href="/api/slack/install">Add workspace</a>
                 )}
-                <button
-                  className="btn"
-                  disabled={setRoutes.isPending}
-                  onClick={() => setRoutes.mutate(null)}
-                >
-                  Restore workspace default
-                </button>
               </div>
             </>
           )}
