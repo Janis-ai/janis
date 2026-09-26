@@ -165,6 +165,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     identity_secret?: string;
     show_operator?: boolean;
     inbound_address?: string;
+    email_address?: string;
     from_name?: string;
   };
   return {
@@ -182,7 +183,9 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
       identity_secret: row.kind === 'webchat' ? creds.identity_secret : undefined,
       show_operator: row.kind === 'webchat' ? creds.show_operator === true : undefined,
       inbound_address: row.kind === 'email' ? creds.inbound_address : undefined,
-      from_name: row.kind === 'email' ? creds.from_name : undefined,
+      email_address: row.kind === 'gmail' ? creds.email_address : undefined,
+      from_name:
+        row.kind === 'email' || row.kind === 'gmail' ? creds.from_name : undefined,
       branding:
         row.kind === 'webchat'
           ? {

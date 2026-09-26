@@ -8,6 +8,7 @@ import { inactivityThresholds } from '../lib/rules.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
+import { sweepGmail } from './gmailSweep.js';
 
 /**
  * Periodically:
@@ -21,6 +22,7 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
     void sweep(db).catch((err) => console.error('sweep error:', err));
     void sweepAutoResume(db).catch((err) => console.error('sweepAutoResume error:', err));
     void sweepSla(db).catch((err) => console.error('sweepSla error:', err));
+    void sweepGmail(db).catch((err) => console.error('sweepGmail error:', err));
   }, intervalMs);
   timer.unref();
   return () => clearInterval(timer);

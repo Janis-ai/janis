@@ -25,6 +25,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   whatsapp: 'WhatsApp',
   webchat: 'Web chat',
   email: 'Email',
+  gmail: 'Gmail',
 };
 
 export function channelLabel(kind?: string): string {

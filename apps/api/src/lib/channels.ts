@@ -7,6 +7,10 @@ import { env } from '../env.js';
 import { emitChatResponse } from './legacySocket.js';
 import { bus } from './bus.js';
 import { toMessage } from './serializers.js';
+import {
+  ensureAccessToken,
+  sendMessage as sendGmailMessage,
+} from './gmail.js';
 
 type ChannelRow = typeof channels.$inferSelect;
 
@@ -49,6 +53,13 @@ export interface ChannelCredentials {
   // + the display name outbound replies are From:'d as
   inbound_address?: string;
   from_name?: string;
+  // gmail (oauth): tokens + connected mailbox + poll cursor. access_token is
+  // refreshed in place when token_expiry is near; gmail_cursor is the ms
+  // internalDate watermark of the newest message ingested.
+  refresh_token?: string;
+  token_expiry?: number;
+  email_address?: string;
+  gmail_cursor?: number;
 }
 
 export interface AttachmentRef {
@@ -427,6 +438,9 @@ export async function sendChannelMessage(
   if (channel.kind === 'email') {
     return sendEmailReply(db, channel, platformUserId, text, attachments, opts);
   }
+  if (channel.kind === 'gmail') {
+    return sendGmailReply(db, channel, platformUserId, text, attachments, opts);
+  }
   const creds = channel.credentials as ChannelCredentials;
   if (!creds.access_token) {
     return {
@@ -658,41 +672,25 @@ export async function sendChannelMessage(
   return { mid, error, retryable };
 }
 
-/** Payload shape the email inbound webhook stashes on inbound messages —
- * subject/message-id/references so replies fold into the customer's thread. */
-interface EmailMeta {
+/** Payload shape email-family inbound stores on messages — subject +
+ * RFC threading ids so replies fold into the customer's mail thread. */
+export interface EmailMeta {
   subject?: string;
   message_id?: string;
   references?: string[];
+  thread_id?: string; // gmail: API thread id — send targets it directly
 }
 
-/** Email channel: reply through Resend with RFC threading headers so the
- * answer lands in the customer's existing mail thread. Suggested replies
- * collapse to a numbered list — email's affordance for buttons. */
-async function sendEmailReply(
+/** Shared threading context for email-family sends: Re: subject off the
+ * customer's last inbound + the references chain + gmail thread id. */
+async function emailThreadContext(
   db: Db | undefined,
   channel: ChannelRow,
   platformUserId: string,
-  text: string,
-  attachments: AttachmentRef[] | undefined,
-  opts: SendOptions | undefined,
-): Promise<SendResult> {
-  const creds = channel.credentials as ChannelCredentials;
-  const fromAddr = creds.inbound_address;
-  if (!fromAddr) {
-    return {
-      mid: null,
-      error: 'email channel has no inbound address — recreate it under Integrations',
-      retryable: false,
-    };
-  }
-  if (!env.resendApiKey) {
-    return { mid: null, error: 'RESEND_API_KEY not configured', retryable: false };
-  }
-  // Thread under the customer's most recent message — mail clients key on
-  // In-Reply-To/References to fold replies into the existing conversation.
+): Promise<{ subject: string; refs: string[]; threadId?: string }> {
   let subject = `Re: ${channel.name}`;
   const refs: string[] = [];
+  let threadId: string | undefined;
   if (db) {
     const [binding] = await db
       .select({ conversationId: channelBindings.conversationId })
@@ -718,23 +716,61 @@ async function sendEmailReply(
           .limit(1)
       : [];
     const em = ((lastIn?.payload as { email?: EmailMeta } | null)?.email) ?? {};
+    threadId = em.thread_id;
     if (em.subject) {
       subject = /^re:/i.test(em.subject.trim()) ? em.subject : `Re: ${em.subject}`;
     }
     if (em.message_id) refs.push(...(em.references ?? []), em.message_id);
   }
-  // Operator identity goes in the From display name — an inline "Name:"
-  // prefix reads wrong in email.
-  const displayName = opts?.senderName
+  return { subject, refs, threadId };
+}
+
+/** From display name — operator identity rides the name field; an inline
+ * "Name:" prefix reads wrong in email. */
+function emailDisplayName(
+  channel: ChannelRow,
+  creds: ChannelCredentials,
+  opts?: SendOptions,
+): string {
+  return opts?.senderName
     ? `${opts.senderName} via ${creds.from_name || channel.name}`
     : creds.from_name || channel.name;
-  // Buttons have no email affordance — flatten to a numbered list the
-  // customer answers in text. Typed contact asks degrade to the text ask.
+}
+
+/** Buttons have no email affordance — flatten to a numbered list the
+ * customer answers in text. Typed contact asks degrade to the text ask. */
+function emailBody(text: string, opts?: SendOptions): string {
   const strs = (opts?.quickReplies ?? []).filter((q): q is string => typeof q === 'string');
-  const body =
-    strs.length && text.trim()
-      ? `${text}\n\n${strs.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
-      : text;
+  return strs.length && text.trim()
+    ? `${text}\n\n${strs.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
+    : text;
+}
+
+/** Email channel (Resend): reply with RFC threading headers so the answer
+ * lands in the customer's existing mail thread. */
+async function sendEmailReply(
+  db: Db | undefined,
+  channel: ChannelRow,
+  platformUserId: string,
+  text: string,
+  attachments: AttachmentRef[] | undefined,
+  opts: SendOptions | undefined,
+): Promise<SendResult> {
+  const creds = channel.credentials as ChannelCredentials;
+  const fromAddr = creds.inbound_address;
+  if (!fromAddr) {
+    return {
+      mid: null,
+      error: 'email channel has no inbound address — recreate it under Integrations',
+      retryable: false,
+    };
+  }
+  if (!env.resendApiKey) {
+    return { mid: null, error: 'RESEND_API_KEY not configured', retryable: false };
+  }
+  const { subject, refs } = await emailThreadContext(db, channel, platformUserId);
+  const displayName = emailDisplayName(channel, creds, opts);
+  const body = emailBody(text, opts);
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -776,6 +812,51 @@ async function sendEmailReply(
     return {
       mid: null,
       error: `Email send failed: ${e instanceof Error ? e.message : e}`,
+      retryable: true,
+    };
+  }
+}
+
+/** Gmail channel: reply through the mailbox's own Gmail API — threadId does
+ * the threading natively; attachments go as hosted links (Janis uploads are
+ * already public URLs). */
+async function sendGmailReply(
+  db: Db | undefined,
+  channel: ChannelRow,
+  platformUserId: string,
+  text: string,
+  attachments: AttachmentRef[] | undefined,
+  opts: SendOptions | undefined,
+): Promise<SendResult> {
+  const creds = channel.credentials as ChannelCredentials;
+  if (!creds.email_address || !db) {
+    return {
+      mid: null,
+      error: 'gmail channel is not connected — reconnect it under Integrations',
+      retryable: false,
+    };
+  }
+  try {
+    const token = await ensureAccessToken(db, channel);
+    const { subject, refs, threadId } = await emailThreadContext(db, channel, platformUserId);
+    const data = await sendGmailMessage(token, {
+      from: `${emailDisplayName(channel, creds, opts)} <${creds.email_address}>`,
+      to: platformUserId,
+      subject,
+      text: emailBody(text, opts),
+      threadId,
+      inReplyTo: refs[refs.length - 1],
+      references: refs,
+      attachmentLinks: attachments?.map((a) => ({
+        name: a.name,
+        url: absoluteAttachmentUrl(a),
+      })),
+    });
+    return { mid: data?.id ?? null, error: null, retryable: true };
+  } catch (e) {
+    return {
+      mid: null,
+      error: `Gmail send failed: ${e instanceof Error ? e.message : e}`,
       retryable: true,
     };
   }
@@ -1065,7 +1146,12 @@ export async function fetchPlatformProfile(
   platformUserId: string,
 ): Promise<Partial<UserProfile>> {
   const creds = channel.credentials as ChannelCredentials;
-  if (!creds.access_token || channel.kind === 'whatsapp') return {};
+  // WhatsApp has no profile endpoint (name arrives in the webhook); email/
+  // gmail carry the address in the message itself and their access_token is
+  // a Google credential, not Meta's.
+  if (!creds.access_token || ['whatsapp', 'email', 'gmail'].includes(channel.kind)) {
+    return {};
+  }
   const fields =
     channel.kind === 'instagram'
       ? 'name,username,profile_pic'

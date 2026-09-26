@@ -84,6 +84,11 @@ export const env = {
   slackSigningSecretAlt: process.env.SLACK_SIGNING_SECRET_ALT ?? '',
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? '',
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
+  // gmail channel OAuth: separate redirect from sign-in — must be registered
+  // in the same Google OAuth client's authorized URIs.
+  gmailRedirectUri:
+    process.env.GMAIL_REDIRECT_URI ??
+    `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/api/gmail/callback`,
   googleRedirectUri:
     process.env.GOOGLE_REDIRECT_URI ?? `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/auth/google/callback`,
   slackRedirectUri:

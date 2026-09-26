@@ -29,6 +29,7 @@ import { reportRoutes } from './routes/reports.js';
 import { slackApiRoutes, slackPublicRoutes } from './routes/slack.js';
 import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 import { metaApiRoutes, metaPublicRoutes } from './routes/meta.js';
+import { gmailApiRoutes } from './routes/gmail.js';
 import { onboardingRoutes } from './routes/onboarding.js';
 import { toolTemplateRoutes } from './routes/toolTemplates.js';
 import { billingRoutes, stripeWebhookRoutes } from './routes/billing.js';
@@ -134,6 +135,7 @@ export function createApp(db: Db) {
   api.route('/slack', slackApiRoutes(db));
   api.route('/channels', channelApiRoutes(db));
   api.route('/meta', metaApiRoutes(db));
+  api.route('/gmail', gmailApiRoutes(db));
   api.route('/onboarding', onboardingRoutes(db));
   api.route('/billing', billingRoutes(db));
   api.route('/workspace', workspaceRoutes(db));

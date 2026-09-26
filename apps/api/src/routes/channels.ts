@@ -193,7 +193,7 @@ export function channelApiRoutes(db: Db) {
     if (body.show_operator !== undefined && row.kind !== 'webchat') {
       return c.json({ error: 'show_operator applies to webchat channels' }, 400);
     }
-    if (body.from_name !== undefined && row.kind !== 'email') {
+    if (body.from_name !== undefined && row.kind !== 'email' && row.kind !== 'gmail') {
       return c.json({ error: 'from_name applies to email channels' }, 400);
     }
     if (body.agent_id) {

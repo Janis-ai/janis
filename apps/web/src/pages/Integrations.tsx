@@ -37,6 +37,8 @@ export default function Integrations() {
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const metaError = params.get('meta_error') ?? '';
+  const gmailError = params.get('gmail_error') ?? '';
+  const gmailConnected = params.get('gmail_connect') ?? '';
   const [showManual, setShowManual] = useState(false);
   const [linkAgent, setLinkAgent] = useState(() => params.get('agent') ?? '');
   const [error, setError] = useState('');
@@ -102,6 +104,12 @@ export default function Integrations() {
     return () => clearTimeout(t);
   }, [focusChannel, data]);
 
+  // Gmail OAuth lands back here with ?gmail_connect=<addr> — refresh the list.
+  useEffect(() => {
+    if (!gmailConnected) return;
+    void qc.invalidateQueries({ queryKey: ['channels'] });
+  }, [gmailConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [form, setForm] = useState({
     kind: 'messenger' as 'messenger' | 'instagram' | 'whatsapp',
     name: '',
@@ -165,6 +173,12 @@ export default function Integrations() {
     from_name: '',
   });
   const [emCreated, setEmCreated] = useState('');
+  // Gmail channel — OAuth round-trip creates the channel; agent + label are
+  // chosen here and carried through the consent redirect.
+  const [gmForm, setGmForm] = useState({
+    agent_id: params.get('agent') ?? '',
+    name: '',
+  });
   const createEmail = useMutation({
     mutationFn: () =>
       api<{ channel: Channel }>('/api/channels', {
@@ -243,6 +257,10 @@ export default function Integrations() {
             <strong>Email</strong> — a unique inbound address per channel; customer mail lands in
             the inbox and replies send as normal email threading.
           </li>
+          <li>
+            <strong>Gmail</strong> — connect an existing Gmail/Workspace mailbox (support@you.com)
+            over OAuth; Janis reads the inbox and replies from that address.
+          </li>
         </ul>
         <p className="muted">
           Messages relay to your agent only while it owns the conversation — during a human
@@ -251,6 +269,7 @@ export default function Integrations() {
       </div>
 
       {metaError && <div className="error" style={{ marginBottom: 12 }}>Meta connect failed: {metaError}</div>}
+      {gmailError && <div className="error" style={{ marginBottom: 12 }}>Gmail connect failed: {gmailError}</div>}
       {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
 
       {/* Step 1: OAuth connect (primary path) or pending asset picker */}
@@ -474,6 +493,52 @@ export default function Integrations() {
         )}
       </div>
 
+      {/* Gmail channel */}
+      <div className="card connect-card">
+        <div className="row">
+          <div className="grow">
+            <strong>Gmail</strong>
+            <div className="muted" style={{ marginTop: 4 }}>
+              Connect an existing Gmail or Google Workspace mailbox (like support@you.com) —
+              mail lands in the same inbox, and replies send from that address in the
+              customer's thread. The inbox is polled about once a minute.
+            </div>
+          </div>
+        </div>
+        <form
+          className="row wrap"
+          style={{ marginTop: 12 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            const q = new URLSearchParams({ agent_id: gmForm.agent_id });
+            if (gmForm.name) q.set('name', gmForm.name);
+            window.location.href = `${apiOrigin}/api/gmail/connect?${q}`;
+          }}
+        >
+          <select
+            value={gmForm.agent_id}
+            onChange={(e) => setGmForm({ ...gmForm, agent_id: e.target.value })}
+            required
+          >
+            <option value="">Which agent answers?…</option>
+            {agents?.agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+          <input
+            className="grow"
+            placeholder="Channel name (optional — defaults to the mailbox address)"
+            value={gmForm.name}
+            onChange={(e) => setGmForm({ ...gmForm, name: e.target.value })}
+          />
+          <button className="btn">Connect Gmail</button>
+        </form>
+        {gmailConnected && (
+          <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+            Connected <span className="mono">{gmailConnected}</span> — new mail from that inbox
+            becomes conversations here; replies send from the mailbox itself.
+          </div>
+        )}
+      </div>
+
       {/* Connected channels */}
       {data && data.channels.length > 0 && (
         <h2 className="section-title">Connected channels</h2>
@@ -663,6 +728,23 @@ export function ChannelCard({
             <span className="mono">{apiOrigin}/channels/email/inbound</span>, or forward an
             existing mailbox to this address. Replies send back from the same address, threaded
             onto the customer's message.
+          </div>
+          <EmailFromName channel={ch} />
+        </details>
+      )}
+      {ch.kind === 'gmail' && ch.meta.email_address && (
+        <details className="webhook-details" open style={{ marginTop: 8 }}>
+          <summary>
+            <span className="details-title">Connected mailbox</span>
+            <span className="details-sub">polled about once a minute</span>
+          </summary>
+          <div className="mono" style={{ marginTop: 6, fontSize: 14 }}>
+            {ch.meta.email_address}
+          </div>
+          <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
+            New inbox mail becomes conversations here and replies send from this address in
+            the customer's thread. To stop syncing, disconnect the channel — or revoke access
+            at myaccount.google.com/permissions.
           </div>
           <EmailFromName channel={ch} />
         </details>

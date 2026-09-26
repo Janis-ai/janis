@@ -441,7 +441,9 @@ export const channels = pgTable('channels', {
   agentId: uuid('agent_id')
     .notNull()
     .references(() => agents.id),
-  kind: text('kind', { enum: ['messenger', 'instagram', 'whatsapp', 'webchat', 'email'] }).notNull(),
+  kind: text('kind', {
+    enum: ['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail'],
+  }).notNull(),
   name: text('name').notNull(),
   // {page_id, page_access_token, verify_token, phone_number_id} — secrets never leave the API
   credentials: jsonb('credentials').notNull().default({}),
