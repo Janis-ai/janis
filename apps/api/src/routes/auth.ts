@@ -183,6 +183,32 @@ export function authRoutes(db: Db) {
       }
     }
 
+    // Agent grants on workspaces the user isn't a member of — auto-accepted,
+    // so there's no accept step; surfaced as "you've been added" rows the UI
+    // renders with a Switch action (otherwise the grant is invisible).
+    const memberWsIds = new Set(
+      mems.filter((m) => m.membership.acceptedAt).map((m) => m.workspace.id),
+    );
+    const grants = await db
+      .select({ workspaceId: agents.workspaceId, agentName: agents.name })
+      .from(agentMembers)
+      .innerJoin(agents, eq(agentMembers.agentId, agents.id))
+      .where(and(eq(agentMembers.userId, row.user.id), isNotNull(agentMembers.acceptedAt)));
+    const grantWs = new Map<string, string[]>();
+    for (const g of grants) {
+      if (memberWsIds.has(g.workspaceId)) continue;
+      grantWs.set(g.workspaceId, [...(grantWs.get(g.workspaceId) ?? []), g.agentName]);
+    }
+    const agentInvites: { workspace_id: string; workspace_name: string; agents: string[] }[] = [];
+    for (const [wsId, agentNames] of grantWs) {
+      const [ws] = await db
+        .select({ id: workspaces.id, name: workspaces.name })
+        .from(workspaces)
+        .where(eq(workspaces.id, wsId))
+        .limit(1);
+      if (ws) agentInvites.push({ workspace_id: ws.id, workspace_name: ws.name, agents: agentNames });
+    }
+
     return c.json({
       user: toWorkspaceUser(row.user, active?.membership.role ?? 'member'),
       workspace: active
@@ -193,6 +219,7 @@ export function authRoutes(db: Db) {
       invites: mems
         .filter((m) => !m.membership.acceptedAt)
         .map((m) => ({ id: m.membership.id, workspace_name: m.workspace.name })),
+      agent_invites: agentInvites,
       support_channel_id: env.supportChannelId || null,
     });
   });

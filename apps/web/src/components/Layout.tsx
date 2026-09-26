@@ -263,6 +263,24 @@ export default function Layout() {
             ))}
           </div>
         )}
+        {data?.agent_invites
+          ?.filter((ai) => ai.workspace_id !== data.workspace?.id)
+          .map((ai) => (
+            <div key={ai.workspace_id} className="card" style={{ marginBottom: 12 }}>
+              <div className="row">
+                <span className="grow">
+                  You've been added to <strong>{ai.agents.join(', ')}</strong> on{' '}
+                  <strong>{ai.workspace_name}</strong>
+                </span>
+                <button
+                  className="btn primary"
+                  onClick={() => void switchWorkspace(ai.workspace_id)}
+                >
+                  Switch
+                </button>
+              </div>
+            </div>
+          ))}
         {data && !data.workspace ? (
           <WorkspaceChooser />
         ) : (

@@ -26,6 +26,9 @@ export function useMe() {
          *  agents are visible (agent-scoped grants via the Team override). */
         agent_scope: { id: string; name: string; role: string }[] | null;
         invites: { id: string; workspace_name: string }[];
+        /** Agent grants on workspaces the user isn't a member of — auto-
+         *  accepted, shown as "added to X" rows with a Switch action. */
+        agent_invites: { workspace_id: string; workspace_name: string; agents: string[] }[];
         support_channel_id: string | null;
       }>('/auth/me'),
     retry: false,
