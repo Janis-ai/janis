@@ -751,6 +751,31 @@ describe('channel management', () => {
     expect(body.channels).toContainEqual({ id: 'CGEN', name: 'general' });
   });
 
+  it('filters archived channels even when Slack returns them', async () => {
+    // Slack occasionally returns archived rows despite exclude_archived —
+    // the client-side belt keeps them out of the picker regardless
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string | URL) => {
+        const u = String(url);
+        if (u.includes('conversations.list')) {
+          return slackOk({
+            channels: [
+              { id: 'C_LIVE', name: 'live-chan' },
+              { id: 'C_DEAD', name: 'dead-chan', is_archived: true },
+            ],
+          });
+        }
+        return new Response(JSON.stringify({ ok: false, error: 'channel_not_found' }));
+      }),
+    );
+    const res = await req('/api/slack/channels');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.channels.map((ch: { id: string }) => ch.id)).toContain('C_LIVE');
+    expect(body.channels.map((ch: { id: string }) => ch.id)).not.toContain('C_DEAD');
+  });
+
   it('sends conversations.list params on the query string', async () => {
     const mock = stubSlack([], { CSEL: 'sel', CAGENT: 'ag' });
     await req('/api/slack/channels');

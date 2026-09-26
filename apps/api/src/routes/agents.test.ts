@@ -448,3 +448,39 @@ describe('slack_routes PATCH', () => {
     expect(stored.routes).toEqual([]);
   });
 });
+
+describe('slack_routes channel validation', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it('rejects a route pointing at an archived channel', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ ok: true, channel: { id: 'C_DEAD', name: 'dead', is_archived: true } }),
+            { status: 200 },
+          ),
+        ),
+      ),
+    );
+    const res = await postAgent(parentCookie);
+    const agentId = (await res.json()).agent.id as string;
+    const [agent] = await db
+      .select({ workspaceId: schema.agents.workspaceId })
+      .from(schema.agents)
+      .where(eq(schema.agents.id, agentId));
+    const [inst] = await db
+      .insert(schema.slackInstallations)
+      .values({ workspaceId: agent.workspaceId, teamId: 'T_ARCH', botToken: 'xoxb-arch' })
+      .returning();
+    const patch = await app.request(`/api/agents/${agentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({
+        slack_routes: [{ installation_id: inst.id, channel_id: 'C_DEAD' }],
+      }),
+    });
+    expect(patch.status).toBe(400);
+    expect((await patch.json()).error).toContain('archived');
+  });
+});
