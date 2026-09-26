@@ -16,6 +16,7 @@ const KIND_LABEL: Record<string, string> = {
   instagram: 'Instagram',
   whatsapp: 'WhatsApp',
   webchat: 'Web chat',
+  email: 'Email',
 };
 
 /** Comma- or newline-separated text → trimmed array of quick-reply labels. */
@@ -157,6 +158,33 @@ export default function Integrations() {
     onError: (e) => setError(e.message),
   });
 
+  // Email channel — the address is minted server-side; shown once created.
+  const [emForm, setEmForm] = useState({
+    name: '',
+    agent_id: params.get('agent') ?? '',
+    from_name: '',
+  });
+  const [emCreated, setEmCreated] = useState('');
+  const createEmail = useMutation({
+    mutationFn: () =>
+      api<{ channel: Channel }>('/api/channels', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'email',
+          name: emForm.name,
+          agent_id: emForm.agent_id,
+          from_name: emForm.from_name || undefined,
+        }),
+      }),
+    onSuccess: (r) => {
+      setEmCreated(r.channel.meta.inbound_address ?? '');
+      setEmForm({ ...emForm, name: '', from_name: '' });
+      setError('');
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+    },
+    onError: (e) => setError(e.message),
+  });
+
   const hasAssets =
     pending.data && (pending.data.pages.length > 0 || pending.data.whatsapp.length > 0);
   // Map a discovered asset id (page / ig account / phone_number_id) to its channel.
@@ -210,6 +238,10 @@ export default function Integrations() {
           </li>
           <li>
             <strong>Web chat</strong> — an embeddable widget for your own site.
+          </li>
+          <li>
+            <strong>Email</strong> — a unique inbound address per channel; customer mail lands in
+            the inbox and replies send as normal email threading.
           </li>
         </ul>
         <p className="muted">
@@ -392,6 +424,56 @@ export default function Integrations() {
         </form>
       </div>
 
+      {/* Email channel */}
+      <div className="card connect-card">
+        <div className="row">
+          <div className="grow">
+            <strong>Email</strong>
+            <div className="muted" style={{ marginTop: 4 }}>
+              Give the agent its own inbound address — customer mail lands in the same inbox,
+              and replies go out as threaded email from that address.
+            </div>
+          </div>
+        </div>
+        <form
+          className="row wrap"
+          style={{ marginTop: 12 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            createEmail.mutate();
+          }}
+        >
+          <select
+            value={emForm.agent_id}
+            onChange={(e) => setEmForm({ ...emForm, agent_id: e.target.value })}
+            required
+          >
+            <option value="">Which agent answers?…</option>
+            {agents?.agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+          <input
+            className="grow"
+            placeholder="Channel name (e.g. Acme support inbox)"
+            value={emForm.name}
+            onChange={(e) => setEmForm({ ...emForm, name: e.target.value })}
+            required
+          />
+          <input
+            className="grow"
+            placeholder="From name on replies (optional, e.g. Acme Support)"
+            value={emForm.from_name}
+            onChange={(e) => setEmForm({ ...emForm, from_name: e.target.value })}
+          />
+          <button className="btn" disabled={createEmail.isPending}>Create address</button>
+        </form>
+        {emCreated && (
+          <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+            Address created: <span className="mono">{emCreated}</span> — point this domain's MX
+            at your inbound provider, or forward an existing mailbox to it.
+          </div>
+        )}
+      </div>
+
       {/* Connected channels */}
       {data && data.channels.length > 0 && (
         <h2 className="section-title">Connected channels</h2>
@@ -566,7 +648,26 @@ export function ChannelCard({
           </details>
         </>
       )}
-      {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && (
+      {ch.kind === 'email' && ch.meta.inbound_address && (
+        <details className="webhook-details" open style={{ marginTop: 8 }}>
+          <summary>
+            <span className="details-title">Inbound address</span>
+            <span className="details-sub">mail to this address becomes a conversation</span>
+          </summary>
+          <div className="mono" style={{ marginTop: 6, fontSize: 14 }}>
+            {ch.meta.inbound_address}
+          </div>
+          <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
+            To receive mail: point the inbound domain's MX record at your inbound provider
+            (Resend → Receiving), register the webhook{' '}
+            <span className="mono">{apiOrigin}/channels/email/inbound</span>, or forward an
+            existing mailbox to this address. Replies send back from the same address, threaded
+            onto the customer's message.
+          </div>
+          <EmailFromName channel={ch} />
+        </details>
+      )}
+      {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && ch.kind !== 'email' && (
       <details className="webhook-details">
         <summary>Webhook details</summary>
         <div className="mono" style={{ marginTop: 6 }}>
@@ -575,6 +676,40 @@ export function ChannelCard({
         </div>
       </details>
       )}
+    </div>
+  );
+}
+
+/** Email channel: the From display name outbound replies send as. */
+function EmailFromName({ channel }: { channel: Channel }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(channel.meta.from_name ?? '');
+  const [msg, setMsg] = useState('');
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/channels/${channel.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ from_name: name.trim() }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+      setMsg('Saved.');
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),
+  });
+  return (
+    <div className="row" style={{ marginTop: 10 }}>
+      <input
+        className="grow"
+        placeholder={`From name on replies (defaults to "${channel.name}")`}
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+      />
+      <button className="btn" disabled={save.isPending} onClick={() => save.mutate()}>
+        Save
+      </button>
+      {msg && <span className="muted">{msg}</span>}
     </div>
   );
 }

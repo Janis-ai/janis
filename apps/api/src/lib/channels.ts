@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import type { QuickReply, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, channelBindings, channels, conversations, messages } from '../db/schema.js';
@@ -45,6 +45,10 @@ export interface ChannelCredentials {
   // messenger: cached Meta Persona ids per operator user id — recreated
   // when the operator's display name or avatar changes
   personas?: Record<string, { id: string; name: string; avatar: string }>;
+  // email: the channel's unique inbound address (ch_*@{EMAIL_INBOUND_DOMAIN})
+  // + the display name outbound replies are From:'d as
+  inbound_address?: string;
+  from_name?: string;
 }
 
 export interface AttachmentRef {
@@ -70,6 +74,9 @@ export interface InboundMessage {
    *  typed text. New conversations opened this way get the greeting as the
    *  opener; typed first messages go straight to the agent's answer. */
   postback?: boolean;
+  /** Extra fields merged into the stored message's payload — email carries
+   *  subject/message-id/references so replies can thread. */
+  payload?: Record<string, unknown>;
   name?: string;
   /** Identity asserted by the embedding host (webchat): session-authenticated
    *  or HMAC-signed payloads carry verified=true; anything else is a claim.
@@ -417,6 +424,9 @@ export async function sendChannelMessage(
 ): Promise<SendResult | null> {
   // webchat has no push channel — the widget polls for new messages
   if (channel.kind === 'webchat') return null;
+  if (channel.kind === 'email') {
+    return sendEmailReply(db, channel, platformUserId, text, attachments, opts);
+  }
   const creds = channel.credentials as ChannelCredentials;
   if (!creds.access_token) {
     return {
@@ -646,6 +656,142 @@ export async function sendChannelMessage(
     }
   }
   return { mid, error, retryable };
+}
+
+/** Payload shape the email inbound webhook stashes on inbound messages —
+ * subject/message-id/references so replies fold into the customer's thread. */
+interface EmailMeta {
+  subject?: string;
+  message_id?: string;
+  references?: string[];
+}
+
+/** Email channel: reply through Resend with RFC threading headers so the
+ * answer lands in the customer's existing mail thread. Suggested replies
+ * collapse to a numbered list — email's affordance for buttons. */
+async function sendEmailReply(
+  db: Db | undefined,
+  channel: ChannelRow,
+  platformUserId: string,
+  text: string,
+  attachments: AttachmentRef[] | undefined,
+  opts: SendOptions | undefined,
+): Promise<SendResult> {
+  const creds = channel.credentials as ChannelCredentials;
+  const fromAddr = creds.inbound_address;
+  if (!fromAddr) {
+    return {
+      mid: null,
+      error: 'email channel has no inbound address — recreate it under Integrations',
+      retryable: false,
+    };
+  }
+  if (!env.resendApiKey) {
+    return { mid: null, error: 'RESEND_API_KEY not configured', retryable: false };
+  }
+  // Thread under the customer's most recent message — mail clients key on
+  // In-Reply-To/References to fold replies into the existing conversation.
+  let subject = `Re: ${channel.name}`;
+  const refs: string[] = [];
+  if (db) {
+    const [binding] = await db
+      .select({ conversationId: channelBindings.conversationId })
+      .from(channelBindings)
+      .where(
+        and(
+          eq(channelBindings.channelId, channel.id),
+          eq(channelBindings.platformUserId, platformUserId),
+        ),
+      )
+      .limit(1);
+    const [lastIn] = binding
+      ? await db
+          .select({ payload: messages.payload })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, binding.conversationId),
+              eq(messages.direction, 'in'),
+            ),
+          )
+          .orderBy(desc(messages.createdAt))
+          .limit(1)
+      : [];
+    const em = ((lastIn?.payload as { email?: EmailMeta } | null)?.email) ?? {};
+    if (em.subject) {
+      subject = /^re:/i.test(em.subject.trim()) ? em.subject : `Re: ${em.subject}`;
+    }
+    if (em.message_id) refs.push(...(em.references ?? []), em.message_id);
+  }
+  // Operator identity goes in the From display name — an inline "Name:"
+  // prefix reads wrong in email.
+  const displayName = opts?.senderName
+    ? `${opts.senderName} via ${creds.from_name || channel.name}`
+    : creds.from_name || channel.name;
+  // Buttons have no email affordance — flatten to a numbered list the
+  // customer answers in text. Typed contact asks degrade to the text ask.
+  const strs = (opts?.quickReplies ?? []).filter((q): q is string => typeof q === 'string');
+  const body =
+    strs.length && text.trim()
+      ? `${text}\n\n${strs.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
+      : text;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.resendApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: `${displayName} <${fromAddr}>`,
+        to: [platformUserId],
+        subject,
+        text: body,
+        ...(refs.length
+          ? { headers: { 'In-Reply-To': refs[refs.length - 1], References: refs.join(' ') } }
+          : {}),
+        ...(attachments?.length
+          ? {
+              attachments: attachments.map((a) => ({
+                filename: a.name,
+                path: absoluteAttachmentUrl(a),
+              })),
+            }
+          : {}),
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const data = (await res.json().catch(() => null)) as
+      | { id?: string; message?: string }
+      | null;
+    if (!res.ok) {
+      return {
+        mid: null,
+        error: `Resend rejected the send (error ${res.status}): ${data?.message ?? 'send failed'}`,
+        retryable: res.status === 429 || res.status >= 500,
+      };
+    }
+    return { mid: data?.id ?? null, error: null, retryable: true };
+  } catch (e) {
+    return {
+      mid: null,
+      error: `Email send failed: ${e instanceof Error ? e.message : e}`,
+      retryable: true,
+    };
+  }
+}
+
+/** Find the email channel owning a recipient address (To: match, case-folded). */
+export async function findChannelByEmailAddress(
+  db: Db,
+  toAddress: string,
+): Promise<ChannelRow | undefined> {
+  const rows = await db.select().from(channels).where(eq(channels.kind, 'email'));
+  const want = toAddress.trim().toLowerCase();
+  return rows.find(
+    (c) =>
+      ((c.credentials as ChannelCredentials).inbound_address ?? '').toLowerCase() === want,
+  );
 }
 
 /** Channel binding for a conversation — channel row + the platform user id. */

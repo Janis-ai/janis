@@ -73,6 +73,7 @@ export function createApp(db: Db) {
   app.use('/slack/events', rateLimit({ scope: 'slack', windowMs: 60_000, max: 120 }));
   app.use('/slack/interactions', rateLimit({ scope: 'slack', windowMs: 60_000, max: 120 }));
   app.use('/channels/meta/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));
+  app.use('/channels/email/*', rateLimit({ scope: 'email', windowMs: 60_000, max: 300 }));
   app.use('/messenger/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));
   app.use('/meta/*', rateLimit({ scope: 'meta-cb', windowMs: 60_000, max: 60 }));
   app.use('/billing/stripe-webhook', rateLimit({ scope: 'stripe', windowMs: 60_000, max: 60 }));

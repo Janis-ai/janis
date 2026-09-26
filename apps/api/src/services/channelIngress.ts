@@ -409,6 +409,7 @@ export async function handleChannelMessage(
         payload: {
           ...(msg.messageId ? { mid: msg.messageId } : {}),
           ...(hasFiles ? { attachments: msg.attachments } : {}),
+          ...(msg.payload ?? {}),
         },
         user: { id: msg.senderId },
       },

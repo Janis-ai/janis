@@ -9,6 +9,7 @@ import { agents, channelBindings, channels } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import {
+  findChannelByEmailAddress,
   findChannelByObjectId,
   invalidateChannelCache,
   parseMetaWebhook,
@@ -18,19 +19,29 @@ import {
   verifyMetaSignature,
   type ChannelCredentials,
 } from '../lib/channels.js';
+import {
+  htmlToText,
+  isAutoReply,
+  isDaemonAddress,
+  parseAddressList,
+  parseFrom,
+  verifySvixSignature,
+  type EmailReceived,
+} from '../lib/email.js';
 import { toChannel } from '../lib/serializers.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 
 const createChannel = z.object({
-  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat']),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email']),
   name: z.string().min(1).max(120),
   agent_id: z.string().uuid(),
   page_id: z.string().optional(), // messenger / instagram
   phone_number_id: z.string().optional(), // whatsapp
-  access_token: z.string().min(1).optional(), // not required for webchat
+  access_token: z.string().min(1).optional(), // not required for webchat/email
   verify_token: z.string().optional(), // auto-generated if absent
   greeting: z.string().max(500).optional(), // webchat
   quick_replies: z.array(z.string().min(1).max(120)).max(8).optional(), // webchat
+  from_name: z.string().max(120).optional(), // email: From display name
 });
 
 const patchChannel = z.object({
@@ -54,6 +65,8 @@ const patchChannel = z.object({
   identity_secret: z.string().max(200).optional(),
   // webchat: show operator name/avatar on human replies — off by default
   show_operator: z.boolean().optional(),
+  // email: From display name on outbound replies; '' clears to channel name
+  from_name: z.string().max(120).optional(),
   // reassign which agent answers this channel
   agent_id: z.string().uuid().optional(),
 });
@@ -134,6 +147,12 @@ export function channelApiRoutes(db: Db) {
       greeting: body.greeting,
       quick_replies: body.quick_replies,
     };
+    if (body.kind === 'email') {
+      // Each email channel gets a unique inbound address — customer mail is
+      // routed to this channel by matching the To: header against it.
+      credentials.inbound_address = `ch_${randomBytes(4).toString('hex')}@${env.emailInboundDomain}`;
+      credentials.from_name = body.from_name;
+    }
     const [row] = await db
       .insert(channels)
       .values({
@@ -174,6 +193,9 @@ export function channelApiRoutes(db: Db) {
     if (body.show_operator !== undefined && row.kind !== 'webchat') {
       return c.json({ error: 'show_operator applies to webchat channels' }, 400);
     }
+    if (body.from_name !== undefined && row.kind !== 'email') {
+      return c.json({ error: 'from_name applies to email channels' }, 400);
+    }
     if (body.agent_id) {
       const [target] = await db
         .select({ id: agents.id })
@@ -189,6 +211,10 @@ export function channelApiRoutes(db: Db) {
       else creds.identity_secret = body.identity_secret;
     }
     if (body.show_operator !== undefined) creds.show_operator = body.show_operator;
+    if (body.from_name !== undefined) {
+      if (body.from_name === '') delete creds.from_name;
+      else creds.from_name = body.from_name;
+    }
     if (body.branding) {
       const b = body.branding;
       for (const key of ['title', 'subtitle', 'greeting', 'accent', 'logo_url'] as const) {
@@ -365,6 +391,92 @@ export function channelWebhookRoutes(db: Db) {
       const channel = await findChannelByObjectId(db, msg.objectId);
       if (channel) await handleChannelMessage(db, channel, msg);
     }
+    return c.json({ ok: true });
+  });
+
+  // Resend inbound email — one channel per recipient address. The webhook
+  // carries the envelope; the body is fetched from the receiving API.
+  app.post('/email/inbound', async (c) => {
+    const raw = await c.req.text();
+    if (
+      !env.resendInboundSecret ||
+      !verifySvixSignature(env.resendInboundSecret, raw, c.req.raw.headers)
+    ) {
+      return c.text('invalid signature', 401);
+    }
+    let event: { type?: string; data?: EmailReceived };
+    try {
+      event = JSON.parse(raw) as typeof event;
+    } catch {
+      return c.text('bad json', 400);
+    }
+    if (event.type !== 'email.received' || !event.data) return c.json({ ok: true });
+    const data = event.data;
+
+    // The webhook is an envelope — pull the full message (text/html) from
+    // the receiving API when the key is configured; tolerate either shape.
+    let mail = data;
+    const emailId = data.email_id ?? data.id;
+    if (env.resendApiKey && emailId && !(data.text || data.html)) {
+      const res = await fetch(`https://api.resend.com/emails/receiving/${emailId}`, {
+        headers: { Authorization: `Bearer ${env.resendApiKey}` },
+        signal: AbortSignal.timeout(10_000),
+      }).catch(() => null);
+      if (res?.ok) {
+        mail = { ...data, ...((await res.json().catch(() => ({}))) as EmailReceived) };
+      }
+    }
+
+    const headers = mail.headers;
+    const { name: fromName, address: fromAddr } = parseFrom(mail.from);
+    // Loop guards — auto-replies, bulk mail, bounces, and our own outbound
+    // domain must never ingest, or we'd email ourselves into a loop.
+    if (
+      !fromAddr ||
+      isAutoReply(headers) ||
+      isDaemonAddress(fromAddr) ||
+      fromAddr.endsWith(`@${env.emailInboundDomain}`)
+    ) {
+      return c.json({ ok: true });
+    }
+    const recipients = parseAddressList(mail.to);
+    let channel;
+    for (const r of recipients) {
+      channel = await findChannelByEmailAddress(db, r);
+      if (channel) break;
+    }
+    if (!channel) return c.json({ ok: true });
+
+    let text = (mail.text ?? '').trim();
+    if (!text && mail.html) text = htmlToText(mail.html);
+    const atts = (mail.attachments ?? [])
+      .map((a) => a.filename)
+      .filter((f): f is string => !!f);
+    if (atts.length) {
+      text = `${text}${text ? '\n\n' : ''}${atts.map((f) => `📎 ${f}`).join('\n')}`;
+    }
+    // RFC threading fields get stored on the message so replies can
+    // reconstruct In-Reply-To/References.
+    const refsHeader = headers?.['References'] ?? headers?.['references'];
+    const references = refsHeader
+      ? [...refsHeader.matchAll(/<[^>]+>/g)].map((m) => m[0])
+      : [];
+
+    await handleChannelMessage(db, channel, {
+      objectId: (channel.credentials as ChannelCredentials).inbound_address ?? '',
+      senderId: fromAddr,
+      text,
+      messageId: mail.message_id ?? emailId,
+      name: fromName,
+      user: { email: fromAddr },
+      payload: {
+        email: {
+          subject: mail.subject,
+          message_id: mail.message_id,
+          references: references.length ? references : undefined,
+        },
+      },
+    });
     return c.json({ ok: true });
   });
 

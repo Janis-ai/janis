@@ -15,6 +15,10 @@ export const env = {
   // transactional email alerts (Resend) — inactive until both are set
   resendApiKey: process.env.RESEND_API_KEY ?? '',
   emailFrom: process.env.JANIS_EMAIL_FROM ?? 'Janis <alerts@janis.ai>',
+  // email channel: inbound domain each channel address is minted under +
+  // svix webhook secret verifying Resend's email.received posts
+  emailInboundDomain: process.env.EMAIL_INBOUND_DOMAIN ?? 'inbound.janis.ai',
+  resendInboundSecret: process.env.RESEND_INBOUND_SECRET ?? '',
   seedAdminEmail: process.env.SEED_ADMIN_EMAIL ?? 'admin@janis.local',
   seedAdminPassword: process.env.SEED_ADMIN_PASSWORD ?? 'janis-admin',
   // Email+password sign-in — OAuth is the product login; password auth stays
