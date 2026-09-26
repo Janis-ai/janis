@@ -35,6 +35,29 @@ export function planFor(key: string | null | undefined): Plan {
   return PLANS[key ?? ''] ?? PLANS.free;
 }
 
+/** The plan that actually governs a workspace — agency children without
+ *  their own subscription ride on the parent's. */
+export async function effectivePlanKey(db: Db, workspaceId: string): Promise<string> {
+  const [ws] = await db
+    .select({
+      plan: workspaces.plan,
+      parentWorkspaceId: workspaces.parentWorkspaceId,
+      stripeSubscriptionId: workspaces.stripeSubscriptionId,
+    })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  if (ws?.parentWorkspaceId && !ws.stripeSubscriptionId) {
+    const [parent] = await db
+      .select({ plan: workspaces.plan })
+      .from(workspaces)
+      .where(eq(workspaces.id, ws.parentWorkspaceId))
+      .limit(1);
+    return parent?.plan ?? ws.plan;
+  }
+  return ws?.plan ?? 'free';
+}
+
 /** Every stored message counts — user in, agent out, human replies. */
 export async function messagesInPeriod(
   db: Db,

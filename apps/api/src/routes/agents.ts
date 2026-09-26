@@ -21,7 +21,8 @@ import {
 } from '../services/knowledgeGaps.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
-import { meteredAccounts } from '../lib/llm.js';
+import { meteredAccounts, meteredModelOf } from '../lib/llm.js';
+import { effectivePlanKey } from '../lib/plans.js';
 import { processEvents } from '../services/ingest.js';
 import { toAgent } from '../lib/serializers.js';
 import { invalidateChannelCache } from '../lib/channels.js';
@@ -151,6 +152,28 @@ export function agentRoutes(db: Db) {
       if (llm.api_key === null) delete llm.api_key;
       else if (!llm.api_key) llm.api_key = storedKey || undefined;
       configToSave = { ...body.config, llm };
+      // Free plan: the metered model is locked to the current selection —
+      // picking a different hosted LLM tier requires upgrading. BYOK results
+      // are exempt (the customer pays the provider), and moving onto the
+      // default model is always allowed so a lock can't trap anyone.
+      const after = meteredModelOf(configToSave);
+      if (after !== null) {
+        const before = meteredModelOf(existing?.config);
+        if (
+          after !== before &&
+          after !== env.llmModel &&
+          (await effectivePlanKey(db, c.get('workspaceId'))) === 'free'
+        ) {
+          return c.json(
+            {
+              error:
+                'Changing the hosted LLM model requires a paid Janis plan — upgrade under Billing, or switch to bring-your-own-key.',
+              llm_locked: true,
+            },
+            402,
+          );
+        }
+      }
     }
     const [row] = await db
       .update(agents)

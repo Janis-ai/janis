@@ -55,6 +55,8 @@ export function ModelPicker({
   effort,
   onEffort,
   rateScale = 1,
+  locked,
+  unlockIds,
 }: {
   value: string;
   options: ModelOption[];
@@ -68,6 +70,10 @@ export function ModelPicker({
   /** Display multiplier for prices — hosted mode passes 1+margin so the
    *  breakdown shows what the customer is actually billed. */
   rateScale?: number;
+  /** Free-plan gate: rows render grayed with a lock and can't be selected —
+   *  except ids in unlockIds (the Janis default stays reachable). */
+  locked?: boolean;
+  unlockIds?: string[];
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
@@ -121,7 +127,12 @@ export function ModelPicker({
   const selected = options.find((m) => m.id === value);
   const detail = options.find((m) => m.id === (pinnedId ?? hoverId)) ?? selected;
 
+  // Locked plan: only the current value and explicitly unlocked ids pick.
+  const canPick = (id: string) =>
+    !locked || id === value || (unlockIds ?? []).includes(id);
+
   const pick = (id: string) => {
+    if (!canPick(id)) return;
     onChange(id);
     setOpen(false);
     setQ('');
@@ -185,20 +196,29 @@ export function ModelPicker({
           </div>
           <div className="model-picker-body">
             <div className="model-picker-list">
+              {locked && (
+                <div className="model-lock-note">
+                  🔒 Hosted models are fixed on the Free plan — upgrade to choose
+                  a different LLM.
+                </div>
+              )}
               {sorted.map((m) => {
               const pos = meterPos(m);
+              const open = canPick(m.id);
               return (
                 <button
                   key={m.id}
                   type="button"
-                  className={`model-item${m.id === value ? ' active' : ''}`}
+                  className={`model-item${m.id === value ? ' active' : ''}${open ? '' : ' locked'}`}
                   onMouseEnter={() => setHoverId(m.id)}
                   onClick={() => pick(m.id)}
+                  title={open ? undefined : 'Upgrade your Janis plan to use this model'}
                 >
                   {m.vendor && <VendorMark vendor={m.vendor} />}
                   <span className="model-name">{m.name}</span>
                   {m.id === value && <span className="model-check">✓</span>}
                   {pos != null && <CostMeter pos={pos} />}
+                  {!open && <span className="model-lock">🔒</span>}
                   <span
                     role="button"
                     className="model-info"
@@ -213,7 +233,7 @@ export function ModelPicker({
                 </button>
               );
             })}
-            {needle && !sorted.some((m) => m.id === q.trim()) && (
+            {needle && !sorted.some((m) => m.id === q.trim()) && (!locked || canPick(q.trim())) && (
               <button type="button" className="model-item" onClick={() => pick(q.trim())}>
                 <span className="model-name">Use “{q.trim()}”</span>
               </button>
@@ -231,6 +251,7 @@ export function ModelPicker({
                 meterPos={meterPos(detail)}
                 effort={detail.id === value ? effort : undefined}
                 onEffort={onEffort}
+                effortDisabled={!canPick(detail.id)}
                 pinned={Boolean(pinnedId)}
                 onClose={() => setPinnedId(null)}
               />
@@ -250,6 +271,7 @@ function DetailPanel({
   meterPos,
   effort,
   onEffort,
+  effortDisabled,
   pinned,
   onClose,
 }: {
@@ -258,6 +280,8 @@ function DetailPanel({
   meterPos: number | null;
   effort?: string;
   onEffort?: (id: string, effort?: LlmEffort) => void;
+  /** Locked-plan rows can't be selected, so their effort select is inert. */
+  effortDisabled?: boolean;
   pinned: boolean;
   onClose: () => void;
 }) {
@@ -282,6 +306,7 @@ function DetailPanel({
           <span>Reasoning effort</span>
           <select
             value={effortValue}
+            disabled={effortDisabled}
             onChange={(e) =>
               onEffort?.(m.id, (e.target.value || undefined) as LlmEffort | undefined)
             }

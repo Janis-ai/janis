@@ -3,7 +3,7 @@ import { and, eq, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, channels, usageEvents, workspaces } from '../db/schema.js';
 import { allRates, billingConfig, currentPeriod, rateFor } from '../lib/billing.js';
-import { invalidateCapCache, messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
+import { effectivePlanKey, invalidateCapCache, messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
 import { planForPrice, stripe } from '../lib/stripe.js';
 import { env } from '../env.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -46,8 +46,11 @@ export function billingRoutes(db: Db) {
   });
 
   // GET /api/billing/llm-rates — the whole card + margin, so the model picker
-  // can show a billed price per row without a request per model.
-  app.get('/llm-rates', (c) => c.json(allRates()));
+  // can show a billed price per row without a request per model. `plan`
+  // tells the picker whether hosted model selection is gated (free plan).
+  app.get('/llm-rates', async (c) =>
+    c.json({ ...allRates(), plan: await effectivePlanKey(db, c.get('workspaceId')) }),
+  );
 
   // GET /api/billing/summary?period=YYYY-MM — usage + estimated invoice
   app.get('/summary', async (c) => {

@@ -123,6 +123,19 @@ export function meteredSettingsFor(model: string, effort?: string): LlmSettings 
   };
 }
 
+/** The model a config would run on Janis's metered accounts, or null when
+ *  the config is BYOK (own key, endpoint, or non-janis provider). Used by the
+ *  free-plan gate in PATCH /agents — locked workspaces can't move this. */
+export function meteredModelOf(config: unknown): string | null {
+  const llm = (config as
+    | { llm?: { provider?: string; api_key?: string; base_url?: string; model?: string } }
+    | null
+    | undefined)?.llm;
+  const metered =
+    llm?.provider === 'janis' || (!llm?.api_key && !llm?.base_url && !llm?.provider);
+  return metered ? (llm?.model || env.llmModel) : null;
+}
+
 /** Per-agent LLM config with env fallback (OpenAI-compatible). */
 export function llmFor(agent: typeof agents.$inferSelect): LlmSettings {
   const cfg = (agent.config ?? {}) as {

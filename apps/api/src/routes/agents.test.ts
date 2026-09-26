@@ -9,6 +9,7 @@ import * as schema from '../db/schema.js';
 import { agentConnections, memberships, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
+import { env } from '../env.js';
 import { agentRoutes } from './agents.js';
 
 let app: Hono;
@@ -344,5 +345,52 @@ describe('llm config', () => {
       'https://llm.example.com/v1/models',
       expect.objectContaining({ headers: {} }),
     );
+  });
+
+  it('free plan locks the hosted model — default and BYOK stay open', async () => {
+    const [free] = await db
+      .insert(workspaces)
+      .values({ name: 'Free WS', plan: 'free' })
+      .returning();
+    const freeCookie = await cookieFor(free.id, 'free@x.test');
+    const res = await app.request('/api/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: freeCookie },
+      body: JSON.stringify({ name: 'FreeBot' }),
+    });
+    const id = (await res.json()).agent.id as string;
+    const patch = (config: unknown) =>
+      app.request(`/api/agents/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', cookie: freeCookie },
+        body: JSON.stringify({ config }),
+      });
+
+    // switching the hosted model → 402
+    const locked = await patch({ llm: { provider: 'janis', model: 'claude-sonnet-4-6' } });
+    expect(locked.status).toBe(402);
+    expect((await locked.json()).llm_locked).toBe(true);
+
+    // picking the env default is always allowed — the lock can't trap anyone
+    expect(
+      (await patch({ llm: { provider: 'janis', model: env.llmModel } })).status,
+    ).toBe(200);
+    // unrelated llm fields (effort etc.) still save
+    expect((await patch({ llm: { provider: 'janis', effort: 'high' } })).status).toBe(
+      200,
+    );
+    // BYOK is exempt — the customer pays the provider
+    expect(
+      (
+        await patch({
+          llm: { provider: 'openai', api_key: 'sk-x', model: 'gpt-6-sol' },
+        })
+      ).status,
+    ).toBe(200);
+    // upgrading lifts the gate
+    await db.update(workspaces).set({ plan: 'pro' }).where(eq(workspaces.id, free.id));
+    expect(
+      (await patch({ llm: { provider: 'janis', model: 'claude-sonnet-4-6' } })).status,
+    ).toBe(200);
   });
 });

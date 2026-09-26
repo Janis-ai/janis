@@ -1099,12 +1099,15 @@ function LlmCard({
   const [rates, setRates] = useState<{
     rates: Record<string, { input: number; output: number }>;
     margin: number;
+    plan?: string;
   } | null>(null);
 
   useEffect(() => {
-    api<{ rates: Record<string, { input: number; output: number }>; margin: number }>(
-      '/api/billing/llm-rates',
-    )
+    api<{
+      rates: Record<string, { input: number; output: number }>;
+      margin: number;
+      plan?: string;
+    }>('/api/billing/llm-rates')
       .then(setRates)
       .catch(() => {});
   }, []);
@@ -1215,8 +1218,13 @@ function LlmCard({
 
   const onMode = (m: 'hosted' | 'byok') => {
     if (m === 'hosted') {
-      // keep the BYOK fields around — switching back shouldn't lose the key
-      setLlm({ provider: METERED });
+      // keep the BYOK fields around — switching back shouldn't lose the key.
+      // On the free plan hosted models are locked to the Janis default —
+      // clear the draft model so the save lands on it.
+      setLlm({
+        provider: METERED,
+        ...(rates?.plan === 'free' ? { model: undefined } : {}),
+      });
       return;
     }
     // derive the provider from the current model's vendor
@@ -1312,6 +1320,8 @@ function LlmCard({
           effort={llm.effort}
           onEffort={pickEffort}
           rateScale={mode === 'hosted' ? 1 + margin : 1}
+          locked={mode === 'hosted' && rates?.plan === 'free'}
+          unlockIds={meteredDefault ? [meteredDefault] : []}
         />
         {isAdmin && (
           <button
@@ -1324,6 +1334,14 @@ function LlmCard({
           </button>
         )}
       </div>
+
+      {mode === 'hosted' && rates?.plan === 'free' && (
+        <div className="muted" style={{ fontSize: 12 }}>
+          Hosted model selection is fixed on the Free plan —{' '}
+          <a href="/billing">upgrade to choose a different LLM</a>, or switch
+          to bring-your-own-key below.
+        </div>
+      )}
 
       {mode === 'byok' && (
         <>

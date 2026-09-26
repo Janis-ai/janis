@@ -364,6 +364,14 @@ textarea:disabled { opacity: .55; }
 .model-item .model-hint { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .model-item .model-check { color: var(--accent); font-weight: 700; }
 .model-item.active .model-name { color: var(--accent); }
+.model-item.locked { opacity: 0.45; cursor: not-allowed; }
+.model-item.locked:hover { background: none; }
+.model-item .model-lock { font-size: 11px; flex: none; }
+.model-lock-note {
+  padding: 8px 12px; font-size: 12px; color: var(--muted);
+  border-bottom: 1px solid var(--border); position: sticky; top: 0;
+  background: var(--panel); z-index: 1;
+}
 .model-vendor {
   width: 18px; flex: none; text-align: center; font-weight: 700; font-size: 13px;
 }
