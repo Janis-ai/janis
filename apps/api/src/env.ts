@@ -88,7 +88,7 @@ export const env = {
   // in the same Google OAuth client's authorized URIs.
   gmailRedirectUri:
     process.env.GMAIL_REDIRECT_URI ??
-    `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/api/gmail/callback`,
+    `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/gmail/callback`,
   googleRedirectUri:
     process.env.GOOGLE_REDIRECT_URI ?? `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/auth/google/callback`,
   slackRedirectUri:

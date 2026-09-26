@@ -179,6 +179,19 @@ export default function Integrations() {
     agent_id: params.get('agent') ?? '',
     name: '',
   });
+  const [gmLink, setGmLink] = useState('');
+  const gmInvite = useMutation({
+    mutationFn: () =>
+      api<{ url: string }>(
+        `/api/gmail/connect-link?agent_id=${gmForm.agent_id}${gmForm.name ? `&name=${encodeURIComponent(gmForm.name)}` : ''}`,
+      ),
+    onSuccess: async (r) => {
+      setGmLink(r.url);
+      try {
+        await navigator.clipboard.writeText(r.url);
+      } catch {}
+    },
+  });
   const createEmail = useMutation({
     mutationFn: () =>
       api<{ channel: Channel }>('/api/channels', {
@@ -501,7 +514,9 @@ export default function Integrations() {
             <div className="muted" style={{ marginTop: 4 }}>
               Connect an existing Gmail or Google Workspace mailbox (like support@you.com) —
               mail lands in the same inbox, and replies send from that address in the
-              customer's thread. The inbox is polled about once a minute.
+              customer's thread. The inbox is polled about once a minute. If the mailbox
+              belongs to someone else, send them the invite link — they grant access
+              themselves, no Janis login needed.
             </div>
           </div>
         </div>
@@ -530,7 +545,22 @@ export default function Integrations() {
             onChange={(e) => setGmForm({ ...gmForm, name: e.target.value })}
           />
           <button className="btn">Connect Gmail</button>
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={!gmForm.agent_id || gmInvite.isPending}
+            title="Link for whoever controls the mailbox — works without a Janis login (expires in 7 days)"
+            onClick={() => gmInvite.mutate()}
+          >
+            Copy invite link
+          </button>
         </form>
+        {gmLink && (
+          <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+            Invite link (copied — valid 7 days):{' '}
+            <span className="mono" style={{ wordBreak: 'break-all' }}>{gmLink}</span>
+          </div>
+        )}
         {gmailConnected && (
           <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
             Connected <span className="mono">{gmailConnected}</span> — new mail from that inbox

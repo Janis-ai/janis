@@ -20,7 +20,7 @@ import {
 import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import type { ChannelCredentials } from '../lib/channels.js';
-import type { gmailApiRoutes } from './gmail.js';
+import type { gmailApiRoutes, gmailPublicRoutes } from './gmail.js';
 import type { sweepGmail } from '../services/gmailSweep.js';
 
 let db: Db;
@@ -31,6 +31,7 @@ let channel: typeof channels.$inferSelect;
 // Wired in beforeAll — env.ts evaluates at module load, so the Google creds
 // must be set before these modules import.
 let routes: typeof gmailApiRoutes;
+let publicRoutes: typeof gmailPublicRoutes;
 let sweep: typeof sweepGmail;
 let sendChannelMessage: typeof import('../lib/channels.js').sendChannelMessage;
 
@@ -90,13 +91,16 @@ beforeAll(async () => {
     import('../lib/channels.js'),
   ]);
   routes = routesMod.gmailApiRoutes;
+  publicRoutes = routesMod.gmailPublicRoutes;
   sweep = sweepMod.sweepGmail;
   sendChannelMessage = channelsMod.sendChannelMessage;
 
   const client = new PGlite();
   db = drizzle(client, { schema }) as unknown as Db;
   await migrate(db as never, { migrationsFolder: './drizzle' });
-  app = new Hono().route('/api/gmail', routes(db));
+  app = new Hono()
+    .route('/api/gmail', routes(db))
+    .route('/gmail', publicRoutes(db));
 
   const [ws] = await db.insert(workspaces).values({ name: 'Test' }).returning();
   const { hash, preview } = generateApiKey();
@@ -319,8 +323,17 @@ describe('gmail send', () => {
 });
 
 describe('gmail oauth', () => {
+  const googleTokenResponse = () =>
+    new Response(
+      JSON.stringify({
+        access_token: 'ya29.cb',
+        refresh_token: 'rt_cb',
+        expires_in: 3600,
+      }),
+    );
+
   it('connect → callback creates a channel bound to the agent', async () => {
-    // Step 1: connect redirects to Google consent carrying agent+name.
+    // Step 1: connect redirects to Google consent with signed state.
     const connect = await app.request(
       `/api/gmail/connect?agent_id=${agentId}&name=Acme%20Inbox`,
       { headers: { cookie }, redirect: 'manual' },
@@ -332,26 +345,15 @@ describe('gmail oauth', () => {
     );
     expect(consent.searchParams.get('scope')).toContain('gmail.readonly');
     expect(consent.searchParams.get('access_type')).toBe('offline');
+    expect(consent.searchParams.get('prompt')).toContain('select_account');
     const state = consent.searchParams.get('state')!;
-    const stateCookie = (connect.headers.get('set-cookie') ?? '').match(
-      /janis_gmail_state=([^;]+)/,
-    )?.[1];
-    expect(stateCookie).toBe(state);
 
     // Step 2: callback exchanges the code, reads the profile, makes a channel.
     stubFetch({
-      'oauth2.googleapis.com/token': () =>
-        new Response(
-          JSON.stringify({
-            access_token: 'ya29.cb',
-            refresh_token: 'rt_cb',
-            expires_in: 3600,
-          }),
-        ),
+      'oauth2.googleapis.com/token': googleTokenResponse,
       'users/me/profile': () => new Response(JSON.stringify({ emailAddress: 'CS@ACME.TEST' })),
     });
-    const cb = await app.request(`/api/gmail/callback?state=${state}&code=authcode`, {
-      headers: { cookie: `${cookie}; janis_gmail_state=${stateCookie}` },
+    const cb = await app.request(`/gmail/callback?state=${state}&code=authcode`, {
       redirect: 'manual',
     });
     expect(cb.status).toBe(302);
@@ -367,12 +369,43 @@ describe('gmail oauth', () => {
     expect(creds.gmail_cursor).toBeGreaterThan(0);
   });
 
-  it('rejects a callback with no matching state', async () => {
-    const cb = await app.request('/api/gmail/callback?state=bogus&code=x', {
-      headers: { cookie },
-      redirect: 'manual',
+  it('invite link runs the whole flow with no Janis session', async () => {
+    const linkRes = await app.request(
+      `/api/gmail/connect-link?agent_id=${agentId}&name=Client%20Mailbox`,
+      { headers: { cookie } },
+    );
+    const { url } = (await linkRes.json()) as { url: string };
+    const key = new URL(url).searchParams.get('key')!;
+
+    // Mailbox owner clicks the link → /gmail/start → Google consent.
+    const start = await app.request(`/gmail/start?key=${key}`, { redirect: 'manual' });
+    expect(start.status).toBe(302);
+    const consent = new URL(start.headers.get('location')!);
+    expect(consent.origin).toBe('https://accounts.google.com');
+    const state = consent.searchParams.get('state')!;
+
+    stubFetch({
+      'oauth2.googleapis.com/token': googleTokenResponse,
+      'users/me/profile': () =>
+        new Response(JSON.stringify({ emailAddress: 'owner@client.test' })),
     });
-    expect(cb.status).toBe(302);
+    // No cookie at all — the signed state is the only auth.
+    const cb = await app.request(`/gmail/callback?state=${state}&code=authcode`);
+    expect(cb.status).toBe(200);
+    expect(await cb.text()).toContain('owner@client.test');
+    const [created] = await db
+      .select()
+      .from(channels)
+      .where(and(eq(channels.kind, 'gmail'), eq(channels.name, 'Client Mailbox')));
+    const creds = created.credentials as ChannelCredentials;
+    expect(creds.email_address).toBe('owner@client.test');
+    expect(created.agentId).toBe(agentId);
+  });
+
+  it('rejects a bad invite key and bad OAuth state', async () => {
+    const bad = await app.request('/gmail/start?key=bogus', { redirect: 'manual' });
+    expect(bad.status).toBe(400);
+    const cb = await app.request('/gmail/callback?state=bogus&code=x', { redirect: 'manual' });
     expect(cb.headers.get('location')).toContain('gmail_error=');
   });
 });
