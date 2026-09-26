@@ -331,6 +331,29 @@ describe('sendChannelMessage quick replies', () => {
     ]);
   });
 
+  it('maps contact-field asks to native quick replies on messenger only', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await sendChannelMessage(ch('messenger'), 'PSID1', 'May I have your email?', undefined, {
+      quickReplies: [{ type: 'email' }, 'No thanks'],
+    });
+    const { message } = lastBody(fetchMock);
+    expect(message.quick_replies).toEqual([
+      { content_type: 'user_email' },
+      { content_type: 'text', title: 'No thanks', payload: 'No thanks' },
+    ]);
+
+    fetchMock.mockClear();
+    await sendChannelMessage(ch('instagram'), 'IGSID', 'May I have your email?', undefined, {
+      quickReplies: [{ type: 'email' }, 'No thanks'],
+    });
+    const ig = lastBody(fetchMock);
+    // IG quick replies are text-only — the ask is dropped, the label remains
+    expect(ig.message.quick_replies).toEqual([
+      { content_type: 'text', title: 'No thanks', payload: 'No thanks' },
+    ]);
+  });
+
   it('sends whatsapp interactive reply buttons, capped at 3 with 20-char titles', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);

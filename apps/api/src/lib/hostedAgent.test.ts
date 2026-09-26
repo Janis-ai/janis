@@ -271,4 +271,12 @@ describe('extractButtons', () => {
     expect(r.buttons).toEqual(['a', 'a very long button l', 'c', 'd']);
     expect(r.text).toBe('pick one');
   });
+
+  it('turns ASK lines into contact-field quick replies', () => {
+    const r = extractButtons(
+      'Could I get your email?\nASK: email\nBUTTON: skip for now\nask: phone',
+    );
+    expect(r.text).toBe('Could I get your email?');
+    expect(r.buttons).toEqual([{ type: 'email' }, 'skip for now', { type: 'phone' }]);
+  });
 });

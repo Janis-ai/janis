@@ -81,6 +81,17 @@ export const MessageInEvent = z.object({
   ...eventBase,
 });
 
+/** A tappable option on an outbound message's quick_replies. A plain string
+ * renders as a labelled quick reply; {type:'email'|'phone'} asks the
+ * customer to share that contact field via the channel's native affordance
+ * (Messenger user_email/user_phone_number quick replies, an inline field on
+ * webchat) — channels without one just show the agent's text asking. */
+export const QuickReply = z.union([
+  z.string().min(1),
+  z.object({ type: z.enum(['email', 'phone']) }),
+]);
+export type QuickReply = z.infer<typeof QuickReply>;
+
 export const MessageOutEvent = z.object({
   type: z.literal('message_out'),
   text: z.string().min(1),

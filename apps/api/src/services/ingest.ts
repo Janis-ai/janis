@@ -1,4 +1,4 @@
-import type { IngestEvent, IngestResult } from '@janis/shared';
+import type { IngestEvent, IngestResult, QuickReply } from '@janis/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
@@ -117,7 +117,8 @@ export async function processEvents(
           !(message.payload as { delivered?: boolean } | undefined)?.delivered
         ) {
           const atts = (message.payload as { attachments?: AttachmentRef[] } | undefined)?.attachments;
-          const qrs = (message.payload as { quick_replies?: string[] } | undefined)?.quick_replies;
+          const qrs = (message.payload as { quick_replies?: QuickReply[] } | undefined)
+            ?.quick_replies;
           void deliverToChannel(db, conv.id, message.text, atts, {
             messageId: message.id,
             quickReplies: qrs,

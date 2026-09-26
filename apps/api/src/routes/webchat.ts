@@ -9,6 +9,7 @@ import type { Db } from '../db/client.js';
 import { agents, channelBindings, channels, conversations, messages, sessions, users } from '../db/schema.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
+import type { QuickReply } from '@janis/shared';
 import type { ChannelCredentials, InboundMessage } from '../lib/channels.js';
 import { resolveGreeting } from '../lib/greeting.js';
 import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
@@ -426,7 +427,7 @@ export function webchatRoutes(db: Db) {
         text: m.text,
         created_at: m.created_at.toISOString(),
         attachments: (m.payload as { attachments?: unknown[] } | undefined)?.attachments,
-        quick_replies: (m.payload as { quick_replies?: string[] } | undefined)?.quick_replies,
+        quick_replies: (m.payload as { quick_replies?: QuickReply[] } | undefined)?.quick_replies,
         // approval card payload — serialized only for internal test channels;
         // external embeds must never see tool args (refund amounts, order ids)
         ...(internal

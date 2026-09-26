@@ -176,6 +176,10 @@
     '.janis-qr{border:1px solid var(--janis-accent,#5b21b6);color:var(--janis-accent,#5b21b6);background:#fff;' +
     'border-radius:16px;padding:7px 14px;font-size:13px;cursor:pointer;font-family:inherit;line-height:1.3;text-align:left}' +
     '.janis-qr:active{opacity:.7}' +
+    '.janis-qr-ask{display:flex;gap:6px;align-items:center;flex:1 1 100%}' +
+    '.janis-qr-ask input{flex:1;min-width:0;border:1px solid #d1d5db;border-radius:16px;' +
+    'padding:7px 12px;font-size:13px;font-family:inherit;outline:none}' +
+    '.janis-qr-ask input:focus{border-color:var(--janis-accent,#5b21b6)}' +
     '.janis-msg img{display:block;max-width:180px;max-height:180px;border-radius:8px;margin-top:4px}' +
     '.janis-file{display:inline-flex;align-items:center;gap:4px;margin-top:4px;padding:4px 8px;border-radius:8px;' +
     'background:rgba(0,0,0,.08);color:inherit;text-decoration:none;font-size:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
@@ -502,6 +506,35 @@
     clearChips();
     var row = el('div', {}, { class: 'janis-qrs' });
     list.forEach(function (q) {
+      // {type:'email'|'phone'} — contact-field ask; webchat has no native
+      // share affordance, so render an inline field that sends the value.
+      if (q && typeof q === 'object' && (q.type === 'email' || q.type === 'phone')) {
+        var form = el('div', {}, { class: 'janis-qr-ask' });
+        var input = document.createElement('input');
+        input.type = q.type === 'email' ? 'email' : 'tel';
+        input.placeholder = q.type === 'email' ? 'you@example.com' : 'Your phone number';
+        input.autocomplete = q.type === 'email' ? 'email' : 'tel';
+        var send = document.createElement('button');
+        send.type = 'button';
+        send.className = 'janis-qr';
+        send.textContent = 'Send';
+        var submit = function () {
+          var v = input.value.trim();
+          if (!v) { input.focus(); return; }
+          if (q.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+            input.focus();
+            return;
+          }
+          clearChips();
+          sendText(v);
+        };
+        send.onclick = submit;
+        input.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } };
+        form.appendChild(input);
+        form.appendChild(send);
+        row.appendChild(form);
+        return;
+      }
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'janis-qr';

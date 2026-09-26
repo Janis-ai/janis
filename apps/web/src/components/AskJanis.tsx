@@ -24,7 +24,7 @@ interface ChatMsg {
   text: string;
   created_at: string;
   attachments?: Attachment[];
-  quick_replies?: string[];
+  quick_replies?: (string | { type: 'email' | 'phone' })[];
   author?: { name: string; avatar: string | null };
   action?: {
     id: string;
@@ -188,7 +188,7 @@ export function AskJanis({
   // post-send `typing` guess this also covers slow runs and silent failures
   const [agentTyping, setAgentTyping] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
-  const [chips, setChips] = useState<string[] | null>(null);
+  const [chips, setChips] = useState<(string | { type: 'email' | 'phone' })[] | null>(null);
   const [loaded, setLoaded] = useState(false); // composer disabled until first poll lands
   const [hasMore, setHasMore] = useState(false); // older pages exist — scroll up to back-fill
   const [fetchingOlder, setFetchingOlder] = useState(false);
@@ -650,9 +650,17 @@ export function AskJanis({
         )}
         {convState !== 'human' && (chips ?? (!loaded || msgs.length ? null : cfg?.quick_replies ?? null))?.length ? (
           <div className="ask-qrs">
-            {(chips ?? cfg?.quick_replies ?? []).map((q) => (
-              <button key={q} className="btn" onClick={() => void send(q, [])}>{q}</button>
-            ))}
+            {(chips ?? cfg?.quick_replies ?? []).map((q, i) =>
+              typeof q === 'string' ? (
+                <button key={q} className="btn" onClick={() => void send(q, [])}>{q}</button>
+              ) : (
+                <AskField
+                  key={i}
+                  type={q.type}
+                  onSend={(v) => void send(v, [])}
+                />
+              ),
+            )}
           </div>
         ) : null}
         {convState === 'human' && (
@@ -745,5 +753,32 @@ export function AskJanis({
         </div>
       </div>
     </div>
+  );
+}
+
+/** Inline contact-field ask ({type:'email'|'phone'} quick reply) — the
+ * console preview counterpart of the widget's inline field. */
+function AskField({ type, onSend }: { type: 'email' | 'phone'; onSend: (v: string) => void }) {
+  const [v, setV] = useState('');
+  const submit = () => {
+    const t = v.trim();
+    if (!t) return;
+    if (type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) return;
+    onSend(t);
+  };
+  return (
+    <span className="row" style={{ gap: 6, flex: '1 1 100%' }}>
+      <input
+        type={type === 'email' ? 'email' : 'tel'}
+        placeholder={type === 'email' ? 'you@example.com' : 'Your phone number'}
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && submit()}
+        style={{ flex: 1, minWidth: 0 }}
+      />
+      <button className="btn" onClick={submit} disabled={!v.trim()}>
+        Share
+      </button>
+    </span>
   );
 }

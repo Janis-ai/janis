@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, lte } from 'drizzle-orm';
-import type { OutboundWebhook, UserProfile } from '@janis/shared';
+import type { OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, knowledgeFiles, messages, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
@@ -146,7 +146,8 @@ export function systemPrompt(
   );
   if (!opts.forSuggestion) {
     parts.push(
-      '\nYou CAN offer tappable reply buttons — they render as real buttons on the customer\'s chat. When 2-4 short choices would move the conversation forward (e.g. picking a plan, yes/no, sharing an email vs learning more), end your reply with lines starting "BUTTON:" — one per choice, each under 20 characters (e.g. "BUTTON: See pricing"). They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps.',
+      '\nYou CAN offer tappable reply buttons — they render as real buttons on the customer\'s chat. When 2-4 short choices would move the conversation forward (e.g. picking a plan, yes/no, sharing an email vs learning more), end your reply with lines starting "BUTTON:" — one per choice, each under 20 characters (e.g. "BUTTON: See pricing"). They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps.' +
+      '\nIf you need the customer\'s email or phone number, end your reply with a line "ASK: email" or "ASK: phone" — it becomes a one-tap share control where the channel supports it (otherwise they can type it). Still ask in the text — never rely on the control alone.',
     );
   }
   if (opts.forSuggestion) {
@@ -354,20 +355,29 @@ export function extractLearns(text: string): { text: string; learns: string[] } 
 }
 
 /** "BUTTON: …" lines — the agent's way to attach tappable suggested replies
- * (Messenger/IG quick replies, WhatsApp buttons, webchat chips). Stripped
- * from the text and returned for payload.quick_replies. WhatsApp shows max
- * 3 and truncates titles past ~20 chars, so cap tight. */
-export function extractButtons(text: string): { text: string; buttons: string[] } {
-  const buttons: string[] = [];
+ * (Messenger/IG quick replies, WhatsApp buttons, webchat chips) — and
+ * "ASK: email|phone" lines that request a contact field through the
+ * channel's native share affordance where one exists. Stripped from the
+ * text and returned for payload.quick_replies. WhatsApp shows max 3 and
+ * truncates titles past ~20 chars, so cap tight. */
+export function extractButtons(text: string): {
+  text: string;
+  buttons: QuickReply[];
+} {
+  const buttons: QuickReply[] = [];
   const out = text
     .split('\n')
     .filter((line) => {
+      const ask = line.trim().match(/^ASK:\s*(email|phone)\s*$/i);
+      if (ask && buttons.length < 4) {
+        buttons.push({ type: ask[1].toLowerCase() as 'email' | 'phone' });
+      }
       const m = line.trim().match(/^BUTTONS?:\s*(.+)$/i);
       if (m && buttons.length < 4) {
         const label = m[1].trim().slice(0, 20);
         if (label) buttons.push(label);
       }
-      return !m;
+      return !ask && !m;
     })
     .join('\n');
   return { text: out.trim(), buttons };

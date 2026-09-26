@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
-import type { UserProfile } from '@janis/shared';
+import type { QuickReply, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, channelBindings, channels, conversations, messages } from '../db/schema.js';
 import { env } from '../env.js';
@@ -333,8 +333,11 @@ function metaError(data: unknown, status: number): { text: string; retryable: bo
 
 export interface SendOptions {
   /** Suggested replies — tappable buttons on Messenger/IG quick replies and
-   * WhatsApp interactive buttons. 20-char titles; WhatsApp shows max 3. */
-  quickReplies?: string[];
+   * WhatsApp interactive buttons. 20-char titles; WhatsApp shows max 3.
+   * {type:'email'|'phone'} asks for a contact field natively (Messenger
+   * user_email/user_phone_number); unsupported channels drop it — the
+   * agent's text should still ask plainly. */
+  quickReplies?: QuickReply[];
   /** Message row to stamp with Meta's message_id after a successful send —
    * lets the webhook echo of our own delivery be deduped by mid. */
   messageId?: string;
@@ -418,7 +421,11 @@ export async function sendChannelMessage(
         ? `*${opts.senderName}:* ${text}`
         : `${opts.senderName}: ${text}`
       : text;
-  const qrs = (opts?.quickReplies ?? []).map((t) => t.trim().slice(0, 20)).filter(Boolean);
+  const qrs = (opts?.quickReplies ?? [])
+    .map((t): QuickReply | null =>
+      typeof t === 'string' ? t.trim().slice(0, 20) || null : t,
+    )
+    .filter((t): t is QuickReply => t !== null);
   if (channel.kind === 'whatsapp') {
     const send = async (body: unknown): Promise<SendResult> => {
       try {
@@ -451,10 +458,14 @@ export async function sendChannelMessage(
     let error: string | null = null;
     let retryable = true;
     if (named.trim()) {
-      const buttons = qrs.slice(0, 3).map((title, i) => ({
-        type: 'reply',
-        reply: { id: `qr_${i}`, title },
-      }));
+      // WhatsApp has no contact-request primitive — only labelled buttons
+      const buttons = qrs
+        .filter((q): q is string => typeof q === 'string')
+        .slice(0, 3)
+        .map((title, i) => ({
+          type: 'reply',
+          reply: { id: `qr_${i}`, title },
+        }));
       const r = await send(
         buttons.length
           ? {
@@ -525,17 +536,23 @@ export async function sendChannelMessage(
       };
     }
   };
-  const textMessage = (body: string) =>
-    qrs.length
-      ? {
-          text: body,
-          quick_replies: qrs.slice(0, 13).map((title) => ({
-            content_type: 'text',
-            title,
-            payload: title,
-          })),
-        }
+  const textMessage = (body: string) => {
+    // Instagram quick replies are text-only — contact-request types are
+    // Messenger (user_email/user_phone_number)
+    const mapped =
+      channel.kind === 'messenger'
+        ? qrs.map((q) =>
+            typeof q === 'string'
+              ? { content_type: 'text', title: q, payload: q }
+              : { content_type: q.type === 'email' ? 'user_email' : 'user_phone_number' },
+          )
+        : qrs
+            .filter((q): q is string => typeof q === 'string')
+            .map((title) => ({ content_type: 'text', title, payload: title }));
+    return mapped.length
+      ? { text: body, quick_replies: mapped.slice(0, 13) }
       : { text: body };
+  };
   let mid: string | null = null;
   let error: string | null = null;
   let retryable = true;
