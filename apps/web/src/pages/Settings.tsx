@@ -6,6 +6,7 @@ import { useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } fr
 import { getPushSubscription, subscribeToPush, unsubscribeFromPush, markPushDisabled, PUSH_CHANGE_EVENT } from '../lib/push';
 import { installAvailable, isIOS, isStandalone, onInstallStateChange, promptInstall } from '../lib/install';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
+import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 
 export default function Settings() {
   const { data: me } = useMe();
@@ -236,6 +237,8 @@ export default function Settings() {
         <strong>Workspace</strong>
         <div className="muted" style={{ marginTop: 6 }}>{me?.workspace?.name}</div>
       </div>
+
+      {me?.user.role === 'admin' && <DefaultLlmCard />}
 
       <div className="card">
         <strong>Profile</strong>
@@ -579,6 +582,69 @@ export default function Settings() {
         </div>
       )}
     </>
+  );
+}
+
+/** The workspace default LLM — every hosted agent inherits it unless it
+ *  sets its own override on the agent page. Admin only. */
+function DefaultLlmCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () =>
+      api<{ workspace: { id: string; name: string; llm_config?: LlmBlock } }>('/api/workspace'),
+  });
+  const saved = data?.workspace.llm_config;
+  const [draft, setDraft] = useState<LlmBlock | null>(null);
+  const [msg, setMsg] = useState('');
+  const llm = draft ?? saved ?? {};
+
+  const save = useMutation({
+    mutationFn: (body: { llm_config: LlmBlock | null }) =>
+      api('/api/workspace', { method: 'PATCH', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      setDraft(null);
+      setMsg('Default LLM saved — agents without an override now use it.');
+      void qc.invalidateQueries({ queryKey: ['workspace'] });
+    },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+
+  const dirty = draft !== null;
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <strong>Default LLM</strong>
+      <div className="muted" style={{ fontSize: 13 }}>
+        The model and credentials hosted agents run on unless an agent sets its
+        own override on its page.
+      </div>
+      <LlmEditor
+        llm={llm}
+        onChange={(l) => setDraft(l)}
+        isAdmin
+        modelsUrl="/api/workspace/llm-models"
+        inheritedLabel="platform default"
+      />
+      <div className="row">
+        <button
+          className="btn primary"
+          disabled={!dirty || save.isPending}
+          onClick={() => save.mutate({ llm_config: llm })}
+        >
+          {save.isPending ? 'Saving…' : 'Save default'}
+        </button>
+        {Object.keys(saved ?? {}).length > 0 && (
+          <button
+            className="btn"
+            disabled={save.isPending}
+            onClick={() => save.mutate({ llm_config: null })}
+          >
+            Reset to platform default
+          </button>
+        )}
+      </div>
+      {msg && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
+    </div>
   );
 }
 

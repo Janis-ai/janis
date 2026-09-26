@@ -6,7 +6,7 @@ import { and, eq, gt, isNotNull, isNull } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { Context } from 'hono';
 import type { Db } from '../db/client.js';
-import { memberships, sessions, users, workspaces } from '../db/schema.js';
+import { agentMembers, agents, memberships, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken, sha256, verifyPassword } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { toWorkspaceUser } from '../lib/serializers.js';
@@ -99,9 +99,40 @@ export function authRoutes(db: Db) {
         (m) => m.membership.acceptedAt && m.membership.workspaceId === row.session.workspaceId,
       ) ?? mems.find((m) => m.membership.acceptedAt);
 
+    // Agent-scoped user: no membership, but agent_members rows on this
+    // workspace grant them a narrow view — surface the workspace shell plus
+    // the agent ids they can see so the UI can hide workspace-level nav.
+    let agentScope: { id: string; name: string; role: string }[] = [];
+    let scopedWorkspace: { id: string; name: string } | null = null;
+    if (!active && row.session.workspaceId) {
+      const rows = await db
+        .select({ agentId: agentMembers.agentId, role: agentMembers.role, name: agents.name })
+        .from(agentMembers)
+        .innerJoin(agents, eq(agentMembers.agentId, agents.id))
+        .where(
+          and(
+            eq(agentMembers.userId, row.user.id),
+            eq(agents.workspaceId, row.session.workspaceId),
+            isNotNull(agentMembers.acceptedAt),
+          ),
+        );
+      if (rows.length) {
+        agentScope = rows.map((r) => ({ id: r.agentId, name: r.name, role: r.role ?? 'member' }));
+        const [ws] = await db
+          .select({ id: workspaces.id, name: workspaces.name })
+          .from(workspaces)
+          .where(eq(workspaces.id, row.session.workspaceId))
+          .limit(1);
+        scopedWorkspace = ws ?? null;
+      }
+    }
+
     return c.json({
       user: toWorkspaceUser(row.user, active?.membership.role ?? 'member'),
-      workspace: active ? { id: active.workspace.id, name: active.workspace.name } : null,
+      workspace: active
+        ? { id: active.workspace.id, name: active.workspace.name }
+        : scopedWorkspace,
+      agent_scope: active ? null : agentScope.length ? agentScope : null,
       workspaces: mems
         .filter((m) => m.membership.acceptedAt)
         .map((m) => ({

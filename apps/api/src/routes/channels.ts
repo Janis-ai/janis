@@ -6,7 +6,8 @@ import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import { agents, channelBindings, channels } from '../db/schema.js';
-import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { agentRoleFor, agentScopeCond } from '../lib/access.js';
 import {
   findChannelByObjectId,
   invalidateChannelCache,
@@ -67,7 +68,12 @@ export function channelApiRoutes(db: Db) {
       .select({ channel: channels, agentName: agents.name })
       .from(channels)
       .innerJoin(agents, eq(channels.agentId, agents.id))
-      .where(eq(channels.workspaceId, c.get('workspaceId')));
+      .where(
+        and(
+          eq(channels.workspaceId, c.get('workspaceId')),
+          ...(agentScopeCond(c.get('agentScope')) ? [agentScopeCond(c.get('agentScope'))!] : []),
+        ),
+      );
     await Promise.all(rows.map((r) => resolveChatIdentity(db, r.channel)));
     // Internal test-chat channels ride the real /chat pipeline but aren't
     // integrations — keep them out of the console list.
@@ -83,15 +89,25 @@ export function channelApiRoutes(db: Db) {
       .select({ channel: channels, agentName: agents.name })
       .from(channels)
       .innerJoin(agents, eq(channels.agentId, agents.id))
-      .where(and(eq(channels.id, c.req.param('id')), eq(channels.workspaceId, c.get('workspaceId'))))
+      .where(
+        and(
+          eq(channels.id, c.req.param('id')),
+          eq(channels.workspaceId, c.get('workspaceId')),
+          ...(agentScopeCond(c.get('agentScope')) ? [agentScopeCond(c.get('agentScope'))!] : []),
+        ),
+      )
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
     await resolveChatIdentity(db, row.channel);
     return c.json({ channel: toChannel(row.channel, row.agentName) });
   });
 
-  app.post('/', adminOnly, zValidator('json', createChannel), async (c) => {
+  app.post('/', zValidator('json', createChannel), async (c) => {
     const body = c.req.valid('json');
+    const role = await agentRoleFor(
+      db, c.get('user').id, c.get('role'), c.get('agentScope'), body.agent_id, c.get('workspaceId'),
+    );
+    if (role !== 'admin') return c.json({ error: 'admin required' }, 403);
     const [agent] = await db
       .select({ id: agents.id, name: agents.name })
       .from(agents)
@@ -134,7 +150,7 @@ export function channelApiRoutes(db: Db) {
     return c.json({ channel: toChannel(row, agent.name) }, 201);
   });
 
-  app.patch('/:id', adminOnly, zValidator('json', patchChannel), async (c) => {
+  app.patch('/:id', zValidator('json', patchChannel), async (c) => {
     const body = c.req.valid('json');
     const [row] = await db
       .select()
@@ -142,6 +158,13 @@ export function channelApiRoutes(db: Db) {
       .where(and(eq(channels.id, c.req.param('id')), eq(channels.workspaceId, c.get('workspaceId'))))
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
+    // both the current and the target agent must be adminable
+    for (const aid of [row.agentId, ...(body.agent_id ? [body.agent_id] : [])]) {
+      const role = await agentRoleFor(
+        db, c.get('user').id, c.get('role'), c.get('agentScope'), aid, c.get('workspaceId'),
+      );
+      if (role !== 'admin') return c.json({ error: 'admin required' }, 403);
+    }
     if (body.branding && row.kind !== 'webchat') {
       return c.json({ error: 'branding applies to webchat channels' }, 400);
     }
@@ -196,13 +219,17 @@ export function channelApiRoutes(db: Db) {
     return c.json({ channel: toChannel(updated, agent?.name ?? '') });
   });
 
-  app.delete('/:id', adminOnly, async (c) => {
+  app.delete('/:id', async (c) => {
     const [row] = await db
-      .select({ id: channels.id })
+      .select({ id: channels.id, agentId: channels.agentId })
       .from(channels)
       .where(and(eq(channels.id, c.req.param('id')), eq(channels.workspaceId, c.get('workspaceId'))))
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
+    const role = await agentRoleFor(
+      db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
+    );
+    if (role !== 'admin') return c.json({ error: 'admin required' }, 403);
     // Bindings reference channels without cascade — remove them first.
     await db.delete(channelBindings).where(eq(channelBindings.channelId, row.id));
     await db.delete(channels).where(eq(channels.id, row.id));

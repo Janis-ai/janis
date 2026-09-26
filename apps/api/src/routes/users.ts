@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { memberships, users } from '../db/schema.js';
+import { agentMembers, memberships, users } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { hashPassword, verifyPassword } from '../lib/crypto.js';
 import { toWorkspaceUser } from '../lib/serializers.js';
@@ -19,18 +19,45 @@ export function userRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
 
-  // Members (accepted) + pending invites for this workspace.
+  // Members (accepted) + pending invites for this workspace. ?agent_id=
+  // returns that agent's eligible set instead: workspace members ∪ accepted
+  // agent_members, with the effective role per user (agent role wins).
   app.get('/', async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const agentId = c.req.query('agent_id');
     const rows = await db
       .select({ user: users, membership: memberships })
       .from(memberships)
       .innerJoin(users, eq(memberships.userId, users.id))
-      .where(eq(memberships.workspaceId, c.get('workspaceId')));
+      .where(eq(memberships.workspaceId, workspaceId));
+    if (!agentId) {
+      return c.json({
+        users: rows.map((r) => ({
+          ...toWorkspaceUser(r.user, r.membership.role),
+          status: r.membership.acceptedAt ? 'active' : 'invited',
+        })),
+      });
+    }
+    const scoped = await db
+      .select({ user: users, member: agentMembers })
+      .from(agentMembers)
+      .innerJoin(users, eq(agentMembers.userId, users.id))
+      .where(and(eq(agentMembers.agentId, agentId), isNotNull(agentMembers.acceptedAt)));
+    const scopedById = new Map(scoped.map((s) => [s.user.id, s.member]));
+    const memberIds = new Set(rows.map((r) => r.user.id));
     return c.json({
-      users: rows.map((r) => ({
-        ...toWorkspaceUser(r.user, r.membership.role),
-        status: r.membership.acceptedAt ? 'active' : 'invited',
-      })),
+      users: [
+        ...rows.map((r) => ({
+          ...toWorkspaceUser(r.user, scopedById.get(r.user.id)?.role ?? r.membership.role),
+          status: r.membership.acceptedAt ? 'active' : 'invited',
+        })),
+        ...scoped
+          .filter((s) => !memberIds.has(s.user.id))
+          .map((s) => ({
+            ...toWorkspaceUser(s.user, s.member.role ?? 'member'),
+            status: 'active',
+          })),
+      ],
     });
   });
 

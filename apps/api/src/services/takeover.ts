@@ -8,6 +8,7 @@ import { emitChannelUpdate } from '../lib/legacySocket.js';
 import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
+import { agentVis, operatorIdentity, type AgentScope } from '../lib/access.js';
 
 type UserRow = typeof users.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -25,14 +26,15 @@ export async function getConversationForWorkspace(
   db: Db,
   workspaceId: string,
   conversationId: string,
+  scope?: AgentScope,
 ): Promise<{ conversation: ConversationRow; agent: typeof agents.$inferSelect }> {
   const [row] = await db
     .select({ conversation: conversations, agent: agents })
     .from(conversations)
     .innerJoin(agents, eq(conversations.agentId, agents.id))
-    .where(eq(conversations.id, conversationId))
+    .where(and(eq(conversations.id, conversationId), ...agentVis(workspaceId, scope ?? null)))
     .limit(1);
-  if (!row || row.agent.workspaceId !== workspaceId) {
+  if (!row) {
     throw new TakeoverError('conversation not found', 404);
   }
   return row;
@@ -40,11 +42,16 @@ export async function getConversationForWorkspace(
 
 /** Identity exposed on customer-facing surfaces (agent webhooks — an external
  * agent may render it to end users). display_name wins, else first name; a
- * show_identity opt-out withholds the name entirely. Internal surfaces
+ * show_identity opt-out withholds the name entirely. Per-agent overrides
+ * (agent_members) win over the global profile. Internal surfaces
  * (console, Slack) keep the real account name. */
-function customerOperator(u: UserRow): { id: string; name: string } {
-  if (u.showIdentity === false) return { id: u.id, name: 'Operator' };
-  return { id: u.id, name: u.displayName || u.name.split(' ')[0] || u.name };
+async function customerOperator(
+  db: Db,
+  u: UserRow,
+  agentId: string,
+): Promise<{ id: string; name: string }> {
+  const id = await operatorIdentity(db, u, agentId);
+  return { id: u.id, name: id.name ?? 'Operator' };
 }
 
 /** Human takes over: conversation → 'human', open alerts resolved, agent notified. */
@@ -53,11 +60,13 @@ export async function takeover(
   workspaceId: string,
   conversationId: string,
   user: UserRow,
+  scope?: AgentScope,
 ): Promise<ConversationRow> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
     workspaceId,
     conversationId,
+    scope,
   );
   if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
 
@@ -112,7 +121,7 @@ export async function takeover(
   await deliverWebhook(db, agent, 'human.takeover', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
-    operator: customerOperator(user),
+    operator: await customerOperator(db, user, agent.id),
   });
   return updated;
 }
@@ -127,11 +136,13 @@ export async function humanReply(
   attachments?: { name: string; url: string; type: string; size: number }[],
   viaSlack = false,
   slackTs?: string, // originating slack message ts — dedupe key on redelivery
+  scope?: AgentScope,
 ): Promise<{ message: typeof messages.$inferSelect; delivery: ChannelDelivery }> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
     workspaceId,
     conversationId,
+    scope,
   );
   if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
   if (conversation.state !== 'human') {
@@ -168,20 +179,28 @@ export async function humanReply(
   clearOperatorTyping(conversationId);
   void setSlackThreadStatus(db, conversationId, null);
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
+  // Per-agent override wins: the operator's identity for THIS agent's
+  // channels (agent_members display_name/avatar/show_identity), else their
+  // global profile.
+  const ident = await operatorIdentity(db, user, agent.id);
   if (!viaSlack) {
     // Operators who opted to show their identity appear as themselves in
     // Slack too; the rest wear the agent's face — the same masquerade the
     // customer sees.
-    const opName =
-      user.showIdentity === false
-        ? null
-        : user.displayName || user.name.split(' ')[0] || user.name;
     void mirrorToSlack(
       db,
       conversationId,
-      `:bust_in_silhouette: *${opName ?? agent.name} (operator):*`,
+      `:bust_in_silhouette: *${ident.name ?? agent.name} (operator):*`,
       text,
-      { direction: 'human', operator: user },
+      {
+        direction: 'human',
+        operator: {
+          ...user,
+          displayName: ident.name,
+          avatarUrl: ident.avatar,
+          showIdentity: ident.name != null,
+        },
+      },
     );
   }
   // If the conv went 'human' without an explicit takeover (DF action, Page
@@ -195,15 +214,11 @@ export async function humanReply(
     // Customer-facing identity for the reply: Messenger renders it as a real
     // Persona (name + avatar), text-only channels get an inline name prefix,
     // and show_identity opt-out keeps the reply anonymous everywhere.
-    const senderName =
-      user.showIdentity === false
-        ? undefined
-        : user.displayName || user.name.split(' ')[0] || user.name;
     return deliverToChannel(db, conversationId, text, attachments, {
       messageId: message.id,
-      senderName,
-      senderId: senderName ? user.id : undefined,
-      senderAvatar: senderName ? user.avatarUrl : undefined,
+      senderName: ident.name ?? undefined,
+      senderId: ident.name ? user.id : undefined,
+      senderAvatar: ident.name ? ident.avatar : undefined,
     }); // hosted channel: human → end user
   })();
   if (!delivery.delivered) {
@@ -218,7 +233,7 @@ export async function humanReply(
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
     text,
-    operator: customerOperator(user),
+    operator: await customerOperator(db, user, agent.id),
     payload: attachments?.length ? { attachments } : undefined,
   });
   return { message, delivery };
@@ -238,11 +253,13 @@ export async function agentSend(
   attachments?: { name: string; url: string; type: string; size: number }[],
   viaSlack = false,
   slackTs?: string,
+  scope?: AgentScope,
 ): Promise<{ message: typeof messages.$inferSelect; delivery: ChannelDelivery }> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
     workspaceId,
     conversationId,
+    scope,
   );
   if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
 
@@ -300,7 +317,7 @@ export async function agentSend(
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
     text,
-    operator: customerOperator(user),
+    operator: await customerOperator(db, user, agent.id),
     payload: attachments?.length
       ? { via: 'operator', attachments }
       : { via: 'operator' },
@@ -322,11 +339,13 @@ export async function internalNote(
   text: string,
   viaSlack = false,
   slackTs?: string,
+  scope?: AgentScope,
 ): Promise<typeof messages.$inferSelect> {
-  const { conversation } = await getConversationForWorkspace(
+  const { conversation, agent } = await getConversationForWorkspace(
     db,
     workspaceId,
     conversationId,
+    scope,
   );
   if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
 
@@ -370,11 +389,13 @@ export async function teachAgent(
   text: string,
   viaSlack = false,
   slackTs?: string,
+  scope?: AgentScope,
 ): Promise<{ message: typeof messages.$inferSelect; knowledgeCount: number }> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
     workspaceId,
     conversationId,
+    scope,
   );
   if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
   const engine = (agent.config as { engine?: string } | null)?.engine;
@@ -418,11 +439,13 @@ export async function resume(
   workspaceId: string,
   conversationId: string,
   user: UserRow | null,
+  scope?: AgentScope,
 ): Promise<ConversationRow> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
     workspaceId,
     conversationId,
+    scope,
   );
   if (conversation.state !== 'human') throw new TakeoverError('conversation is not in human mode', 409);
 
@@ -465,7 +488,7 @@ export async function resume(
   await deliverWebhook(db, agent, 'human.resume', {
     conversation_id: conversation.externalId,
     janis_conversation_id: conversation.id,
-    operator: user ? customerOperator(user) : undefined,
+    operator: user ? await customerOperator(db, user, agent.id) : undefined,
   });
   return updated;
 }

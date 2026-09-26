@@ -4,6 +4,7 @@ import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, messages } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { agentVis } from '../lib/access.js';
 
 /** Handoff metrics for the Reports page — mounted at /api/reports. */
 export function reportRoutes(db: Db) {
@@ -26,7 +27,7 @@ export function reportRoutes(db: Db) {
       .innerJoin(agents, eq(conversations.agentId, agents.id))
       .where(
         and(
-          eq(agents.workspaceId, c.get('workspaceId')),
+          ...agentVis(c.get('workspaceId'), c.get('agentScope')),
           gt(alerts.createdAt, cutoff),
           ne(alerts.type, 'sla'), // sla alerts are re-alerts, not new handoffs
           ne(alerts.type, 'keyword'),

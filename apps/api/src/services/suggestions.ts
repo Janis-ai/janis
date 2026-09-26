@@ -41,7 +41,7 @@ export async function requestSuggestion(
     return { mode: 'agent' };
   }
 
-  const llm = llmFor(agent);
+  const llm = await llmFor(db, agent);
   const result = await generateWithLlm(db, conv, llm);
   if (result) {
     await recordLlmUsage(db, {

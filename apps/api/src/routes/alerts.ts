@@ -5,6 +5,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alerts, conversations } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { agentScopeCond, agentVis } from '../lib/access.js';
 import { toAlert } from '../lib/serializers.js';
 
 const listQuery = z.object({
@@ -18,7 +19,7 @@ export function alertRoutes(db: Db) {
   app.get('/', zValidator('query', listQuery), async (c) => {
     const workspaceId = c.get('workspaceId');
     const q = c.req.valid('query');
-    const conditions = [eq(agents.workspaceId, workspaceId)];
+    const conditions = agentVis(workspaceId, c.get('agentScope'));
     if (q.status) conditions.push(eq(alerts.status, q.status));
 
     const rows = await db
@@ -38,6 +39,7 @@ export function alertRoutes(db: Db) {
   })), async (c) => {
     const workspaceId = c.get('workspaceId');
     const { status } = c.req.valid('json');
+    const scope = agentScopeCond(c.get('agentScope'));
     const [row] = await db
       .update(alerts)
       .set({ status })
@@ -49,6 +51,7 @@ export function alertRoutes(db: Db) {
             join ${agents} on ${conversations.agentId} = ${agents.id}
             where ${conversations.id} = ${alerts.conversationId}
               and ${agents.workspaceId} = ${workspaceId}
+              ${scope ? sql`and ${scope}` : sql``}
           )`,
         ),
       )

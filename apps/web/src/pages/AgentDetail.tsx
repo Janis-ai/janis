@@ -10,25 +10,11 @@ import type {
   ToolTemplateInfo,
 } from '@janis/shared';
 import { api } from '../api/client';
-import { useAgents, useAlertRules, useChannels, useDeliveries, useMe, useSlackChannels, useSlackStatus } from '../api/hooks';
+import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
 import { timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
-import { ModelPicker } from '../components/ModelPicker';
+import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { railBus } from '../lib/railBus';
-import {
-  METERED,
-  catalogForId,
-  catalogOptions,
-  catalogRateFor,
-  detectProvider,
-  filterLiveModels,
-  prettifyModelName,
-  providerFor,
-  providerForVendor,
-  type ModelOption,
-} from '../lib/llmProviders';
-import { OR_VENDOR_SLUG, type LlmVendor } from '@janis/shared';
-import { connectOpenRouter, consumeOpenRouterResult } from '../lib/openrouterAuth';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
@@ -402,7 +388,7 @@ function SlackAlerts({ agent }: { agent: Agent }) {
     (ch) => ch.id === slack.alert_channel_id,
   );
   return (
-    <div style={{ borderTop: '1px solid var(--border)', marginTop: 14, paddingTop: 12 }}>
+    <div className="card" style={{ marginTop: 12 }}>
       <strong>Slack alerts</strong>
       <div className="muted" style={{ margin: '4px 0 8px' }}>
         Where this agent's escalations post. Inherits the workspace channel unless you
@@ -560,6 +546,12 @@ function EscalationTab({
   const [minutes, setMinutes] = useState('15');
 
   return (
+    <>
+    {/* Per-agent overrides — same order as the Settings page. Profile and
+        Notifications are self-service (each operator sets their own), so
+        they sit outside the admin read-only wrapper. */}
+    <AgentProfileOverride agent={agent} />
+    <AgentNotifyOverride agent={agent} />
     <ReadOnly off={!isAdmin}>
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Human takeover</strong>
@@ -604,8 +596,13 @@ function EscalationTab({
           </label>
         </div>
         <div className="muted">Repeat breaches escalate to the Slack alert channel.</div>
-        <SlackAlerts agent={agent} />
       </div>
+
+      <SlackAlerts agent={agent} />
+
+      <AgentSavedRepliesCard agent={agent} />
+
+      <AgentTeamCard agent={agent} isAdmin={isAdmin} />
 
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Alert rules</strong>
@@ -657,6 +654,430 @@ function EscalationTab({
         </div>
       </div>
     </ReadOnly>
+    </>
+  );
+}
+
+/** Profile override — the operator's identity on THIS agent's channels.
+ *  Self-service: each teammate sets their own; fields inherit the workspace
+ *  profile until overridden. */
+function AgentProfileOverride({ agent }: { agent: Agent }) {
+  const { data: me } = useMe();
+  const { data: members } = useAgentMembers(agent.id);
+  const qc = useQueryClient();
+  const mine = members?.members.find((m) => m.user_id === me?.user.id);
+  const [on, setOn] = useState<boolean | null>(null);
+  const [name, setName] = useState('');
+  const [avatar, setAvatar] = useState('');
+  const [show, setShow] = useState(true);
+  const [msg, setMsg] = useState('');
+
+  const hasOverride = Boolean(
+    mine && (mine.display_name || mine.avatar_override || mine.show_identity !== null),
+  );
+  useEffect(() => {
+    if (on !== null || !members) return;
+    setOn(hasOverride);
+    setName(mine?.display_name ?? '');
+    setAvatar(mine?.avatar_override ?? '');
+    setShow(mine?.show_identity ?? me?.user.show_identity ?? true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [members]);
+
+  const save = useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      api(`/api/agents/${agent.id}/members/${me?.user.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      setMsg('Saved.');
+      void qc.invalidateQueries({ queryKey: ['agentMembers', agent.id] });
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : 'failed'),
+  });
+
+  const uploadAvatar = async (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/uploads', { method: 'POST', body: fd, credentials: 'include' });
+    if (res.ok) setAvatar(((await res.json()) as { url: string }).url);
+  };
+
+  const baseName = me?.user.display_name || me?.user.name.split(' ')[0] || 'your profile name';
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <strong>Profile override</strong>
+      <div className="muted" style={{ margin: '4px 0 8px' }}>
+        Your name &amp; avatar as customers see them on this agent's channels.
+        Off — inherits your workspace profile ({baseName}).
+      </div>
+      <label className="check-label">
+        <input
+          type="checkbox"
+          checked={on ?? false}
+          onChange={(e) => {
+            const next = e.target.checked;
+            setOn(next);
+            if (!next) {
+              save.mutate({ display_name: null, avatar_url: null, show_identity: null });
+            }
+          }}
+        />
+        Use a different identity on this agent
+      </label>
+      {on && (
+        <div className="form-field" style={{ marginTop: 8 }}>
+          <div className="row">
+            <input
+              style={{ maxWidth: 220 }}
+              placeholder={baseName}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={80}
+            />
+            <label className="btn" style={{ cursor: 'pointer' }}>
+              {avatar ? 'Change avatar' : 'Upload avatar'}
+              <input
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => e.target.files?.[0] && void uploadAvatar(e.target.files[0])}
+              />
+            </label>
+            {avatar && (
+              <img
+                src={avatar}
+                alt="avatar"
+                style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }}
+              />
+            )}
+          </div>
+          <label className="check-label" style={{ marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={show}
+              onChange={(e) => setShow(e.target.checked)}
+            />
+            Show my name &amp; avatar to customers on this agent
+          </label>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button
+              className="btn"
+              disabled={save.isPending}
+              onClick={() =>
+                save.mutate({
+                  display_name: name.trim() || null,
+                  avatar_url: avatar || null,
+                  show_identity: show,
+                })
+              }
+            >
+              Save identity
+            </button>
+            {msg && <span className="muted">{msg}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Notifications override — this user's push/email/sound for THIS agent's
+ *  alerts, field-wise over their workspace prefs. */
+function AgentNotifyOverride({ agent }: { agent: Agent }) {
+  const { data: me } = useMe();
+  const { data: members } = useAgentMembers(agent.id);
+  const qc = useQueryClient();
+  const mine = members?.members.find((m) => m.user_id === me?.user.id);
+  const [on, setOn] = useState<boolean | null>(null);
+  const [prefs, setPrefs] = useState({ push: true, email: true, sound: true });
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    if (on !== null || !members) return;
+    setOn(mine?.notify != null);
+    const n = mine?.notify ?? {};
+    setPrefs({
+      push: n.push ?? me?.user.notify?.push ?? true,
+      email: n.email ?? me?.user.notify?.email ?? true,
+      sound: n.sound ?? me?.user.notify?.sound ?? true,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [members]);
+
+  const save = useMutation({
+    mutationFn: (notify: Record<string, boolean> | null) =>
+      api(`/api/agents/${agent.id}/members/${me?.user.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ notify }),
+      }),
+    onSuccess: () => {
+      setMsg('Saved.');
+      void qc.invalidateQueries({ queryKey: ['agentMembers', agent.id] });
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : 'failed'),
+  });
+
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <strong>Notifications override</strong>
+      <div className="muted" style={{ margin: '4px 0 8px' }}>
+        Alert delivery for this agent only — off, your workspace notification
+        settings apply.
+      </div>
+      <label className="check-label">
+        <input
+          type="checkbox"
+          checked={on ?? false}
+          onChange={(e) => {
+            const next = e.target.checked;
+            setOn(next);
+            save.mutate(next ? prefs : null);
+          }}
+        />
+        Custom notifications for this agent
+      </label>
+      {on && (
+        <div className="row" style={{ marginTop: 8 }}>
+          {(['push', 'email', 'sound'] as const).map((k) => (
+            <label key={k} className="check-label">
+              <input
+                type="checkbox"
+                checked={prefs[k]}
+                onChange={(e) => {
+                  const next = { ...prefs, [k]: e.target.checked };
+                  setPrefs(next);
+                  save.mutate(next);
+                }}
+              />
+              {k === 'push' ? 'Web push' : k === 'email' ? 'Email' : 'Alert sounds'}
+            </label>
+          ))}
+          {msg && <span className="muted">{msg}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Agent-scoped saved replies — merge with workspace replies in this agent's
+ *  composer. Any agent member can add; workspace replies stay managed under
+ *  Settings. */
+function AgentSavedRepliesCard({ agent }: { agent: Agent }) {
+  const { data } = useSavedReplies(agent.id);
+  const qc = useQueryClient();
+  const [reply, setReply] = useState({ title: '', body: '' });
+  const [err, setErr] = useState('');
+  const own = data?.saved_replies.filter((r) => r.agent_id === agent.id) ?? [];
+  const inherited = data?.saved_replies.filter((r) => !r.agent_id) ?? [];
+
+  const add = useMutation({
+    mutationFn: (b: typeof reply) =>
+      api('/api/saved-replies', {
+        method: 'POST',
+        body: JSON.stringify({ ...b, agent_id: agent.id }),
+      }),
+    onSuccess: () => {
+      setReply({ title: '', body: '' });
+      void qc.invalidateQueries({ queryKey: ['savedReplies'] });
+    },
+    onError: (e) => setErr(e instanceof Error ? e.message : 'failed'),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api(`/api/saved-replies/${id}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['savedReplies'] }),
+  });
+
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <strong>Saved replies</strong>
+      <div className="muted" style={{ margin: '4px 0 8px' }}>
+        Extra canned responses for this agent's composer.
+        {inherited.length > 0 &&
+          ` ${inherited.length} workspace ${inherited.length === 1 ? 'reply' : 'replies'} also apply.`}
+      </div>
+      {own.map((r) => (
+        <div key={r.id} className="row muted" style={{ marginTop: 6 }}>
+          <span className="grow">
+            <strong>{r.title}</strong> — {r.body.slice(0, 80)}
+          </span>
+          <button className="btn danger" onClick={() => remove.mutate(r.id)}>✕</button>
+        </div>
+      ))}
+      <form
+        style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, maxWidth: 520 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          add.mutate(reply);
+        }}
+      >
+        <input
+          placeholder="title"
+          value={reply.title}
+          onChange={(e) => setReply({ ...reply, title: e.target.value })}
+          required
+        />
+        <textarea
+          placeholder="reply text…"
+          rows={2}
+          value={reply.body}
+          onChange={(e) => setReply({ ...reply, body: e.target.value })}
+          required
+        />
+        <div>
+          <button className="btn" disabled={add.isPending}>Add agent reply</button>
+        </div>
+      </form>
+      {err && <div className="error">{err}</div>}
+    </div>
+  );
+}
+
+/** Team — who can see and manage this agent. Workspace members inherit their
+ *  workspace role; a role here overrides it for this agent only; users added
+ *  with no workspace membership see ONLY this agent. */
+function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
+  const { data: me } = useMe();
+  const { data: members } = useAgentMembers(agent.id);
+  const { data: wsUsers } = useUsers();
+  const qc = useQueryClient();
+  const [form, setForm] = useState({ email: '', role: 'member' });
+  const [err, setErr] = useState('');
+
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['agentMembers', agent.id] });
+    void qc.invalidateQueries({ queryKey: ['users'] });
+  };
+  const add = useMutation({
+    mutationFn: (b: typeof form) =>
+      api(`/api/agents/${agent.id}/members`, { method: 'POST', body: JSON.stringify(b) }),
+    onSuccess: () => {
+      setForm({ email: '', role: 'member' });
+      setErr('');
+      refresh();
+    },
+    onError: (e) => setErr(e instanceof Error ? e.message : 'failed'),
+  });
+  const setRole = useMutation({
+    mutationFn: ({ userId, role }: { userId: string; role: string | null }) =>
+      api(`/api/agents/${agent.id}/members/${userId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role }),
+      }),
+    onSuccess: refresh,
+    onError: (e) => setErr(e instanceof Error ? e.message : 'failed'),
+  });
+  const remove = useMutation({
+    mutationFn: (userId: string) =>
+      api(`/api/agents/${agent.id}/members/${userId}`, { method: 'DELETE' }),
+    onSuccess: refresh,
+    onError: (e) => setErr(e instanceof Error ? e.message : 'failed'),
+  });
+
+  const wsById = new Map((wsUsers?.users ?? []).map((u) => [u.id, u]));
+  const memberRows = members?.members ?? [];
+  const agentOnly = memberRows.filter((m) => !wsById.has(m.user_id));
+  const wsWithOverride = new Set(memberRows.map((m) => m.user_id));
+  const plainMembers = (wsUsers?.users ?? []).filter((u) => !wsWithOverride.has(u.id));
+
+  const roleSelect = (userId: string, value: string, inherited: string | null) =>
+    isAdmin ? (
+      <select
+        value={value}
+        onChange={(e) =>
+          setRole.mutate({ userId, role: e.target.value === 'inherit' ? null : e.target.value })
+        }
+      >
+        {inherited !== null && <option value="inherit">inherit ({inherited})</option>}
+        <option value="member">member</option>
+        <option value="admin">admin</option>
+      </select>
+    ) : (
+      <span className="badge active">{value === 'inherit' ? inherited : value}</span>
+    );
+
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <strong>Team</strong>
+      <div className="muted" style={{ margin: '4px 0 8px' }}>
+        Workspace members can see every agent — a role set here overrides
+        theirs for this agent only. People added with no workspace account
+        become agent-only users who see nothing but this agent.
+      </div>
+      {plainMembers.map((u) => (
+        <div key={u.id} className="row muted" style={{ marginTop: 6 }}>
+          <span className="grow">
+            {u.name} · {u.email}
+          </span>
+          {roleSelect(u.id, 'inherit', u.role)}
+          {isAdmin && u.id !== me?.user.id && (
+            <button className="btn danger" onClick={() => remove.mutate(u.id)} title="Clear override">
+              ✕
+            </button>
+          )}
+        </div>
+      ))}
+      {memberRows
+        .filter((m) => wsById.has(m.user_id))
+        .map((m) => (
+          <div key={m.user_id} className="row muted" style={{ marginTop: 6 }}>
+            <span className="grow">
+              {m.name} · {m.email}
+              <span className="badge" style={{ marginLeft: 8 }}>override</span>
+            </span>
+            {roleSelect(m.user_id, m.role ?? 'inherit', wsById.get(m.user_id)?.role ?? 'member')}
+            {isAdmin && (
+              <button className="btn danger" onClick={() => remove.mutate(m.user_id)} title="Clear override">
+                ✕
+              </button>
+            )}
+          </div>
+        ))}
+      {agentOnly.map((m) => (
+        <div key={m.user_id} className="row muted" style={{ marginTop: 6 }}>
+          <span className="grow">
+            {m.name} · {m.email}
+            <span className="badge" style={{ marginLeft: 8 }}>this agent only</span>
+          </span>
+          {roleSelect(m.user_id, m.role ?? 'member', null)}
+          {isAdmin && (
+            <button className="btn danger" onClick={() => remove.mutate(m.user_id)} title="Remove access">
+              Remove
+            </button>
+          )}
+        </div>
+      ))}
+      {isAdmin && (
+        <form
+          className="row"
+          style={{ marginTop: 10 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            add.mutate(form);
+          }}
+        >
+          <input
+            className="grow"
+            type="email"
+            placeholder="teammate@email.com"
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            required
+          />
+          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+            <option value="member">member</option>
+            <option value="admin">admin</option>
+          </select>
+          <button className="btn" disabled={add.isPending}>Add</button>
+        </form>
+      )}
+      <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>
+        New emails sign in with Google or Slack under that address — no
+        workspace invite needed for agent-only access.
+      </div>
+      {err && <div className="error">{err}</div>}
+    </div>
   );
 }
 
@@ -1068,8 +1489,8 @@ function ConnectionTab({
 
 /* ---- shared subcomponents ---- */
 
-/** Hosted-agent LLM picker: Janis metered vs BYOK provider presets, with a
- *  live /models dropdown and one-click OpenRouter connect (PKCE). */
+/** Per-agent LLM override — empty llm block inherits the workspace default
+ *  (Settings → Default LLM), which itself falls back to the env default. */
 function LlmCard({
   agent,
   cfg,
@@ -1081,347 +1502,27 @@ function LlmCard({
   setCfg: (c: AgentConfig) => void;
   isAdmin: boolean;
 }) {
-  const llm = cfg.llm ?? {};
-  const providerId = llm.provider ?? detectProvider(llm) ?? METERED;
-  const mode = providerId === METERED ? 'hosted' : 'byok';
-  const preset = providerFor(providerId);
-  const [liveModels, setLiveModels] = useState<string[]>([]);
-  const [modelsMsg, setModelsMsg] = useState('');
-  const [modelsBusy, setModelsBusy] = useState(false);
-  // Metered provider accounts — which vendors Janis can actually serve,
-  // resolved server-side from env (JANIS_LLM_* + JANIS_LLM_PROVIDERS).
-  const [meteredAccounts, setMeteredAccounts] = useState<
-    { vendor: string; base_url: string; models: string[]; error?: string }[] | null
-  >(null);
-  // what runs when the agent has no saved model — JANIS_LLM_MODEL on the
-  // server, surfaced so the picker shows the effective default
-  const [meteredDefault, setMeteredDefault] = useState('');
-  const [rates, setRates] = useState<{
-    rates: Record<string, { input: number; output: number }>;
-    margin: number;
-    plan?: string;
-  } | null>(null);
-
-  useEffect(() => {
-    api<{
-      rates: Record<string, { input: number; output: number }>;
-      margin: number;
-      plan?: string;
-    }>('/api/billing/llm-rates')
-      .then(setRates)
-      .catch(() => {});
-  }, []);
-
-  // An OpenRouter OAuth round-trip lands back on this page — pick up the key.
-  useEffect(() => {
-    const r = consumeOpenRouterResult();
-    if (!r.key && !r.error) return;
-    if (r.key) {
-      setCfg({
-        ...cfg,
-        llm: {
-          ...cfg.llm,
-          provider: 'openrouter',
-          api_key: r.key,
-          base_url: providerFor('openrouter')?.baseUrl,
-        },
-      });
-      setModelsMsg('OpenRouter connected — click Save to apply.');
-    } else {
-      setModelsMsg(`OpenRouter connect failed: ${r.error}`);
-    }
-    // run once — cfg/setCfg identity churns on every keystroke
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const fetchModels = async () => {
-    setModelsBusy(true);
-    setModelsMsg('');
-    try {
-      const r = await api<{
-        models?: string[];
-        accounts?: { vendor: string; base_url: string; models: string[]; error?: string }[];
-        error?: string;
-        base_url?: string;
-        default_model?: string;
-      }>(`/api/agents/${agent.id}/llm-models`, {
-        method: 'POST',
-        body: JSON.stringify(
-          mode === 'hosted'
-            ? { metered: true }
-            : { base_url: llm.base_url, api_key: llm.api_key || undefined },
-        ),
-      });
-      if (r.accounts) {
-        setMeteredAccounts(r.accounts);
-        if (r.default_model) setMeteredDefault(r.default_model);
-        // provider errors are operator-side (bad key, no credits) — logged
-        // server-side, never shown to customers; errored vendors' models
-        // are simply absent from the picker
-      } else {
-        setLiveModels(r.models ?? []);
-        if (r.error) setModelsMsg(`couldn't list models: ${r.error}`);
-        else if (!r.models?.length) setModelsMsg('endpoint returned no models');
-      }
-    } catch (e) {
-      setModelsMsg(`couldn't list models: ${e instanceof Error ? e.message : 'failed'}`);
-    } finally {
-      setModelsBusy(false);
-    }
-  };
-
-  // Populate the model list when we can authenticate (metered key, saved key,
-  // or a key typed into the draft).
-  useEffect(() => {
-    if (mode === 'hosted' || llm.api_key || llm.key_set) void fetchModels();
-    else setLiveModels([]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerId]);
-
-  const usd = (n: number) => n.toFixed(2).replace(/\.?0+$/, '');
-  const margin = rates?.margin ?? 0;
-  // saved model wins; hosted falls back to the server's env default so the
-  // picker reflects what actually runs
-  const effectiveModel = llm.model || (mode === 'hosted' ? meteredDefault : '');
-  const billedRate = effectiveModel ? catalogRateFor(effectiveModel) : null;
-
-  const setLlm = (patch: Record<string, unknown>) =>
-    setCfg({ ...cfg, llm: { ...cfg.llm, ...patch } });
-
-  /** Set provider + base_url, translating the model id: OpenRouter wants
-   *  `vendor/id` compounds, direct endpoints want the provider-native id.
-   *  `extra` merges additional llm fields (e.g. effort) into the patch. */
-  const applyProvider = (id: string, model?: string, extra?: Record<string, unknown>) => {
-    const p = providerFor(id);
-    const sameEndpoint =
-      Boolean(p?.baseUrl) && p!.baseUrl === (cfg.llm?.base_url ?? '');
-    let m = model ?? llm.model;
-    const c = m ? catalogForId(m) : undefined;
-    if (m && c) {
-      m = id === 'openrouter' ? (c.or ?? `${OR_VENDOR_SLUG[c.vendor]}/${c.id}`) : c.id;
-    }
-    setCfg({
-      ...cfg,
-      llm: {
-        ...cfg.llm,
-        provider: id,
-        model: m,
-        // 'custom' keeps whatever endpoint was there for editing
-        base_url: p?.baseUrl ?? (id === 'custom' ? (cfg.llm?.base_url ?? '') : ''),
-        // a different endpoint needs its own key — null clears the stored one
-        ...(sameEndpoint ? {} : { api_key: null }),
-        key_set: undefined,
-        ...extra,
-      },
-    });
-  };
-
-  const onMode = (m: 'hosted' | 'byok') => {
-    if (m === 'hosted') {
-      // keep the BYOK fields around — switching back shouldn't lose the key.
-      // On the free plan hosted models are locked to the Janis default —
-      // clear the draft model so the save lands on it.
-      setLlm({
-        provider: METERED,
-        ...(rates?.plan === 'free' ? { model: undefined } : {}),
-      });
-      return;
-    }
-    // derive the provider from the current model's vendor
-    const c = llm.model ? catalogForId(llm.model) : undefined;
-    applyProvider(providerForVendor(c?.vendor)?.id ?? 'custom', c?.id ?? llm.model);
-  };
-
-  const pickModel = (id: string, extra?: Record<string, unknown>) => {
-    if (mode === 'hosted') return setLlm({ model: id, ...extra });
-    const c = catalogForId(id);
-    if (providerId === 'openrouter') {
-      setLlm({ model: c ? (c.or ?? `${OR_VENDOR_SLUG[c.vendor]}/${c.id}`) : id, ...extra });
-      return;
-    }
-    if (!c) return applyProvider('custom', id, extra); // unknown id → custom endpoint
-    applyProvider(providerForVendor(c.vendor)?.id ?? 'custom', c.id, extra);
-  };
-
-  // choosing an effort level in a model's detail panel selects it too
-  const pickEffort = (id: string, effort?: string) =>
-    pickModel(id, { effort: effort || undefined });
-
-  // Options: hosted → catalog + live ids for vendors Janis has accounts for;
-  // BYOK → the whole catalog + live ids from the chosen endpoint.
-  const modelOptions: ModelOption[] = [];
-  const push = (o: ModelOption) => {
-    if (!modelOptions.some((x) => x.id === o.id)) modelOptions.push(o);
-  };
-  // Unpriced rows have no meter and can't show a breakdown — and on the
-  // metered side can't be billed correctly anyway. Custom endpoints are
-  // exempt: self-hosted models have no catalog price by definition.
-  const priced = (o: ModelOption) => catalogRateFor(o.id) != null;
-  if (mode === 'hosted') {
-    for (const acc of meteredAccounts ?? []) {
-      if (acc.error) continue; // unreachable account — its models can't run
-      // 'default' (unknown base_url) and 'openrouter' (routes all vendors)
-      // accounts expose the whole catalog
-      const vend =
-        acc.vendor === 'default' || acc.vendor === 'openrouter'
-          ? undefined
-          : (acc.vendor as LlmVendor);
-      for (const o of catalogOptions(vend ? [vend] : undefined).filter(priced)) push(o);
-      const liveProvider = acc.vendor === 'openrouter' ? 'openrouter' : (providerForVendor(vend)?.id ?? 'custom');
-      for (const o of filterLiveModels(liveProvider, acc.models).filter(priced)) {
-        push(o);
-      }
-    }
-  } else {
-    const keep = providerId === 'custom' ? () => true : priced;
-    for (const o of catalogOptions().filter(keep)) push(o);
-    for (const o of filterLiveModels(providerId, liveModels).filter(keep)) push(o);
-  }
-  if (effectiveModel && !modelOptions.some((o) => o.id === effectiveModel)) {
-    const c = catalogForId(effectiveModel);
-    modelOptions.unshift({
-      id: effectiveModel,
-      name: c?.name ?? prettifyModelName(effectiveModel),
-      vendor: c?.vendor ?? preset?.vendor,
-    });
-  }
-
-  // 'via' choices for BYOK — the model's vendor first, then OpenRouter
-  // (one OAuth key reaches everything), then a raw custom endpoint.
-  const modelVendor = llm.model ? catalogForId(llm.model)?.vendor : undefined;
-  const direct = providerForVendor(modelVendor);
-  const viaOptions: { id: string; label: string }[] = [
-    ...(direct && direct.id !== 'openrouter' ? [{ id: direct.id, label: direct.label }] : []),
-    { id: 'openrouter', label: 'OpenRouter (all models)' },
-    { id: 'custom', label: 'Custom (OpenAI-compatible)' },
-  ];
-  if (!viaOptions.some((o) => o.id === providerId) && mode === 'byok') {
-    viaOptions.unshift({ id: providerId, label: preset?.label ?? providerId });
-  }
-
+  const { data: ws } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () =>
+      api<{ workspace: { llm_config?: LlmBlock } }>('/api/workspace'),
+  });
+  const inherited = ws?.workspace.llm_config?.model || undefined;
   return (
     <div className="card" style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <label>LLM</label>
-      <select
-        value={mode}
-        disabled={!isAdmin}
-        onChange={(e) => onMode(e.target.value as 'hosted' | 'byok')}
-      >
-        <option value="hosted">Hosted by Janis — billed to your plan's LLM meter</option>
-        <option value="byok">Bring your own key — $0 Janis LLM fees</option>
-      </select>
-
-      <div className="row">
-        <ModelPicker
-          value={effectiveModel}
-          options={modelOptions}
-          disabled={!isAdmin}
-          onChange={pickModel}
-          effort={llm.effort}
-          onEffort={pickEffort}
-          rateScale={mode === 'hosted' ? 1 + margin : 1}
-          locked={mode === 'hosted' && rates?.plan === 'free'}
-          unlockIds={meteredDefault ? [meteredDefault] : []}
-        />
-        {isAdmin && (
-          <button
-            className="btn"
-            disabled={modelsBusy}
-            onClick={() => void fetchModels()}
-            title="Fetch the live model list from the provider endpoint"
-          >
-            {modelsBusy ? 'Loading…' : 'Refresh models'}
-          </button>
-        )}
-      </div>
-
-      {mode === 'hosted' && rates?.plan === 'free' && (
-        <div className="muted" style={{ fontSize: 12 }}>
-          Hosted model selection is fixed on the Free plan —{' '}
-          <a href="/billing">upgrade to choose a different LLM</a>, or switch
-          to bring-your-own-key below.
-        </div>
-      )}
-
-      {mode === 'byok' && (
-        <>
-          <div className="row">
-            <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-              via
-            </span>
-            <select
-              className="grow"
-              value={providerId}
-              disabled={!isAdmin}
-              onChange={(e) => applyProvider(e.target.value)}
-            >
-              {viaOptions.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="row">
-            <input
-              className="grow"
-              type="password"
-              autoComplete="off"
-              placeholder={
-                llm.key_set
-                  ? 'Key saved — paste a new one to replace'
-                  : (preset?.keyHint ?? 'API key')
-              }
-              value={llm.api_key ?? ''}
-              disabled={!isAdmin}
-              onChange={(e) => setLlm({ api_key: e.target.value })}
-            />
-            {preset?.oauth === 'openrouter' && isAdmin && (
-              <button
-                className="btn"
-                onClick={() => void connectOpenRouter()}
-                title="Authorize Janis on OpenRouter — creates a key on your account"
-              >
-                Connect account
-              </button>
-            )}
-            {preset?.keyUrl && preset.oauth !== 'openrouter' && (
-              <a
-                href={preset.keyUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="muted"
-                style={{ whiteSpace: 'nowrap', alignSelf: 'center' }}
-              >
-                get a key ↗
-              </a>
-            )}
-          </div>
-          {providerId === 'custom' && (
-            <input
-              placeholder="Base URL (https://your-llm.example.com/v1)"
-              value={llm.base_url ?? ''}
-              disabled={!isAdmin}
-              onChange={(e) => setLlm({ base_url: e.target.value })}
-            />
-          )}
-        </>
-      )}
-
-      {modelsMsg && (
-        <div className="muted" style={{ fontSize: 12 }}>
-          {modelsMsg}
-        </div>
-      )}
+      <label>LLM override</label>
       <div className="muted" style={{ fontSize: 12 }}>
-        {mode === 'hosted'
-          ? billedRate && effectiveModel
-            ? `Billed $${usd(billedRate.input * (1 + (rates?.margin ?? 0)))} per 1M input / $${usd(billedRate.output * (1 + (rates?.margin ?? 0)))} per 1M output tokens on your LLM meter.${llm.model ? '' : ' (account default)'}`
-            : 'Runs on Janis’s provider accounts — each model bills its own price to your LLM meter. Pick a model to see it.'
-          : billedRate && llm.model
-            ? `$0 Janis LLM fees — ${llm.model} bills ~$${usd(billedRate.input)}/$${usd(billedRate.output)} per 1M on your provider account. Keys are write-only.`
-            : 'Your key bills $0 Janis LLM fees. Keys are write-only — saved keys are never re-displayed.'}
+        Overrides the workspace default (Settings → Default LLM). Leave the model
+        unset to inherit.
       </div>
+      <LlmEditor
+        llm={(cfg.llm ?? {}) as LlmBlock}
+        onChange={(l) => setCfg({ ...cfg, llm: l })}
+        isAdmin={isAdmin}
+        modelsUrl={`/api/agents/${agent.id}/llm-models`}
+        inheritedModel={inherited}
+        inheritedLabel="workspace default"
+      />
     </div>
   );
 }

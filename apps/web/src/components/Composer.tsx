@@ -10,6 +10,7 @@ const EMOJIS = [
 ];
 
 export default function Composer({
+  agentId,
   value,
   onChange,
   onSend,
@@ -22,6 +23,8 @@ export default function Composer({
 }: {
   value: string;
   onChange: (v: string) => void;
+  /** Conversation's agent — merges its saved replies with workspace ones. */
+  agentId?: string;
   onSend: (attachments: Attachment[]) => void;
   onResume?: () => void;
   sendAs: 'human' | 'agent' | 'note' | 'teach';
@@ -36,7 +39,7 @@ export default function Composer({
   const [repliesOpen, setRepliesOpen] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
-  const { data: savedReplies } = useSavedReplies();
+  const { data: savedReplies } = useSavedReplies(agentId);
 
   // autosize: grow with content up to ~8 lines; no scrollbar until it overflows
   useEffect(() => {

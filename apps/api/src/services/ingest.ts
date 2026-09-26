@@ -15,7 +15,7 @@ import { enrichHandoff } from '../lib/handoff.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { evaluateEvent } from '../lib/rules.js';
 import { mirrorToSlack, postSlackAlert, setSlackThreadStatus } from '../lib/slack.js';
-import { workspaceMembers } from '../lib/members.js';
+import { agentEligibleMembers } from '../lib/members.js';
 import { deliverToChannel, type AttachmentRef } from '../lib/channels.js';
 import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
 import { METER_MESSAGES, reportMeter } from '../lib/stripe.js';
@@ -163,7 +163,7 @@ export async function processEvents(
             });
             void postSlackAlert(db, agent.workspaceId, conv, agent, reAlert);
             // Re-page whoever owns it — an ignored handoff is an escalation
-            void notifyWorkspace(db, agent.workspaceId, n, {
+            void notifyWorkspace(db, agent.workspaceId, n, { agentId: agent.id,
               userIds: conv.assigneeId ? [conv.assigneeId] : undefined,
             });
           } else {
@@ -282,7 +282,7 @@ export async function processEvents(
     // Queued alert notifications — scoped to the assignee when one exists so
     // the page reaches the person who owns it, not the whole workspace
     for (const n of pendingNotifies) {
-      void notifyWorkspace(db, agent.workspaceId, n, {
+      void notifyWorkspace(db, agent.workspaceId, n, { agentId: agent.id,
         userIds: assigneeId ? [assigneeId] : undefined,
       });
     }
@@ -463,7 +463,7 @@ async function autoAssign(
   agent: AgentRow,
   conv: ConversationRow,
 ): Promise<string | undefined> {
-  const members = await workspaceMembers(db, agent.workspaceId);
+  const members = await agentEligibleMembers(db, agent.workspaceId, agent.id);
   if (!members.length) return undefined;
   const loads = new Map(members.map((m) => [m.user.id, 0]));
   const open = await db

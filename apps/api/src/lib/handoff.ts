@@ -40,7 +40,7 @@ export async function summarizeHandoff(
   conv: ConversationRow,
   reason?: string,
 ): Promise<string | null> {
-  const llm = llmFor(agent);
+  const llm = await llmFor(db, agent);
   if (!llm.apiKey) return null;
   const rows = await db
     .select({ direction: messages.direction, text: messages.text, flags: messages.flags })
@@ -151,7 +151,7 @@ export async function enrichHandoff(
         db,
         agent.workspaceId,
         await alertNotification(db, alert, conv, agent, summary ?? reason),
-        { userIds: assigneeId ? [assigneeId] : undefined },
+        { agentId: agent.id, userIds: assigneeId ? [assigneeId] : undefined },
       );
     }
   } catch {

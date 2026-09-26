@@ -34,14 +34,16 @@ const iso = (d: Date | string | null | undefined) =>
 function scrubLlmKey(config: unknown): AgentConfig {
   const cfg = { ...((config ?? {}) as Record<string, unknown>) };
   const llm = cfg.llm as Record<string, unknown> | undefined;
-  if (llm) {
-    cfg.llm = {
-      ...llm,
-      api_key: undefined,
-      key_set: Boolean(llm.api_key),
-    };
-  }
+  if (llm) cfg.llm = scrubLlmBlock(llm);
   return cfg as AgentConfig;
+}
+
+/** Same write-only contract for a bare llm block (workspace defaults). */
+export function scrubLlmBlock(llm: unknown): Record<string, unknown> {
+  const l = { ...((llm ?? {}) as Record<string, unknown>) };
+  l.api_key = undefined;
+  l.key_set = Boolean((llm as Record<string, unknown> | undefined)?.api_key);
+  return l;
 }
 
 export function toAgent(row: Row<typeof agents>): Agent {
@@ -194,7 +196,13 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
 }
 
 export function toSavedReply(row: Row<typeof savedReplies>): SavedReply {
-  return { id: row.id, title: row.title, body: row.body, created_at: iso(row.createdAt)! };
+  return {
+    id: row.id,
+    title: row.title,
+    body: row.body,
+    agent_id: row.agentId,
+    created_at: iso(row.createdAt)!,
+  };
 }
 
 export function toDigest(row: Row<typeof digests>): Digest {

@@ -17,6 +17,7 @@ import {
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toAlert, toConversation, toMessage, toSuggestion } from '../lib/serializers.js';
 import { convListConditions, convListQuery } from '../lib/convFilters.js';
+import { agentRoleFor, agentVis, conversationAgent, operatorIdentity } from '../lib/access.js';
 import { bus } from '../lib/bus.js';
 import {
   agentSend,
@@ -74,7 +75,7 @@ export function conversationRoutes(db: Db) {
     const workspaceId = c.get('workspaceId');
     const q = c.req.valid('query');
 
-    const conditions = convListConditions(q, workspaceId, c.get('user').id);
+    const conditions = convListConditions(q, workspaceId, c.get('user').id, c.get('agentScope'));
 
     const rows = await db
       .select({
@@ -105,7 +106,7 @@ export function conversationRoutes(db: Db) {
       .innerJoin(agents, eq(conversations.agentId, agents.id))
       .where(
         and(
-          eq(agents.workspaceId, workspaceId),
+          ...agentVis(workspaceId, c.get('agentScope')),
           inArray(conversations.state, ['needs_human', 'human']),
         ),
       );
@@ -118,7 +119,7 @@ export function conversationRoutes(db: Db) {
       .select({ conversation: conversations })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+      .where(and(eq(conversations.id, c.req.param('id')), ...agentVis(workspaceId, c.get('agentScope'))))
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
 
@@ -172,7 +173,7 @@ export function conversationRoutes(db: Db) {
       .select({ conversation: conversations })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+      .where(and(eq(conversations.id, c.req.param('id')), ...agentVis(workspaceId, c.get('agentScope'))))
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
 
@@ -274,7 +275,7 @@ export function conversationRoutes(db: Db) {
       .select({ conversation: conversations })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+      .where(and(eq(conversations.id, c.req.param('id')), ...agentVis(workspaceId, c.get('agentScope'))))
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
 
@@ -290,7 +291,7 @@ export function conversationRoutes(db: Db) {
 
   app.post('/:id/takeover', async (c) => {
     try {
-      const conv = await takeover(db, c.get('workspaceId'), c.req.param('id'), c.get('user'));
+      const conv = await takeover(db, c.get('workspaceId'), c.req.param('id'), c.get('user'), c.get('agentScope'));
       return c.json({ conversation: toConversation(conv) });
     } catch (err) {
       if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
@@ -308,6 +309,9 @@ export function conversationRoutes(db: Db) {
         c.get('user'),
         body.text,
         body.attachments,
+        undefined,
+        undefined,
+        c.get('agentScope'),
       );
       // delivery.delivered is only true once the channel actually accepted
       // the send (Meta message id, SDK socket ack, or webchat pull); a
@@ -329,6 +333,9 @@ export function conversationRoutes(db: Db) {
         c.get('user'),
         body.text,
         body.attachments,
+        undefined,
+        undefined,
+        c.get('agentScope'),
       );
       return c.json({ message: toMessage(msg), delivery }, 201);
     } catch (err) {
@@ -346,7 +353,7 @@ export function conversationRoutes(db: Db) {
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
       .where(
-        and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)),
+        and(eq(conversations.id, c.req.param('id')), ...agentVis(workspaceId, c.get('agentScope'))),
       )
       .limit(1);
     if (!owned) return c.json({ error: 'not found' }, 404);
@@ -376,10 +383,13 @@ export function conversationRoutes(db: Db) {
     };
     if (msg.direction === 'human' && msg.authorId) {
       const [u] = await db.select().from(users).where(eq(users.id, msg.authorId)).limit(1);
-      if (u && u.showIdentity !== false) {
-        opts.senderName = u.displayName || u.name.split(' ')[0] || u.name;
-        opts.senderId = u.id;
-        opts.senderAvatar = u.avatarUrl;
+      if (u) {
+        const ident = await operatorIdentity(db, u, owned.conversation.agentId);
+        if (ident.name) {
+          opts.senderName = ident.name;
+          opts.senderId = u.id;
+          opts.senderAvatar = ident.avatar;
+        }
       }
     }
     const delivery = await deliverToChannel(
@@ -397,20 +407,17 @@ export function conversationRoutes(db: Db) {
   app.post('/:id/typing', async (c) => {
     const workspaceId = c.get('workspaceId');
     const [owned] = await db
-      .select({ id: conversations.id })
+      .select({ id: conversations.id, agentId: conversations.agentId })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+      .where(and(eq(conversations.id, c.req.param('id')), ...agentVis(workspaceId, c.get('agentScope'))))
       .limit(1);
     if (!owned) return c.json({ error: 'not found' }, 404);
     const user = c.get('user');
     // Same customer-facing identity rules as a sent reply — a show_identity
     // opt-out still shows dots, just anonymously.
-    const name =
-      user.showIdentity === false
-        ? null
-        : user.displayName || user.name.split(' ')[0] || user.name;
-    markOperatorTyping(owned.id, name);
+    const ident = await operatorIdentity(db, user, owned.agentId);
+    markOperatorTyping(owned.id, ident.name);
     // Meta channels need an actual sender_action — the webchat poll reads
     // the in-memory flag, but Messenger/IG visitors see nothing without it.
     if (shouldRelayTyping(owned.id)) {
@@ -432,6 +439,9 @@ export function conversationRoutes(db: Db) {
         c.req.param('id'),
         c.get('user'),
         body.text,
+        undefined,
+        undefined,
+        c.get('agentScope'),
       );
       return c.json({ message: toMessage(msg) }, 201);
     } catch (err) {
@@ -444,7 +454,14 @@ export function conversationRoutes(db: Db) {
   app.post('/:id/teach', zValidator('json', replyBody), async (c) => {
     try {
       const user = c.get('user');
-      if (c.get('role') !== 'admin') {
+      const convAgent = await conversationAgent(
+        db, c.get('workspaceId'), c.get('agentScope'), c.req.param('id'),
+      );
+      if (!convAgent) return c.json({ error: 'not found' }, 404);
+      const effRole = await agentRoleFor(
+        db, user.id, c.get('role'), c.get('agentScope'), convAgent.agent.id, c.get('workspaceId'),
+      );
+      if (effRole !== 'admin') {
         return c.json({ error: 'only admins can teach the agent' }, 403);
       }
       const body = c.req.valid('json');
@@ -465,7 +482,7 @@ export function conversationRoutes(db: Db) {
 
   app.post('/:id/resume', async (c) => {
     try {
-      const conv = await resume(db, c.get('workspaceId'), c.req.param('id'), c.get('user'));
+      const conv = await resume(db, c.get('workspaceId'), c.req.param('id'), c.get('user'), c.get('agentScope'));
       return c.json({ conversation: toConversation(conv) });
     } catch (err) {
       if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
@@ -480,6 +497,7 @@ export function conversationRoutes(db: Db) {
         db,
         c.get('workspaceId'),
         c.req.param('id'),
+        c.get('agentScope'),
       );
       if (conversation.state === 'archived') {
         return c.json({ error: 'conversation is archived' }, 409);
@@ -505,6 +523,7 @@ export function conversationRoutes(db: Db) {
         db,
         c.get('workspaceId'),
         c.req.param('id'),
+        c.get('agentScope'),
       );
       const [row] = await db
         .update(suggestions)
@@ -529,7 +548,7 @@ export function conversationRoutes(db: Db) {
       .select({ conversation: conversations })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+      .where(and(eq(conversations.id, c.req.param('id')), ...agentVis(workspaceId, c.get('agentScope'))))
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
     const id = row.conversation.id;
@@ -555,7 +574,7 @@ export function conversationRoutes(db: Db) {
       .select({ id: conversations.id, state: conversations.state })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(and(eq(conversations.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+      .where(and(eq(conversations.id, c.req.param('id')), ...agentVis(workspaceId, c.get('agentScope'))))
       .limit(1);
     if (!owned) return c.json({ error: 'not found' }, 404);
 

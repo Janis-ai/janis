@@ -39,7 +39,7 @@ export function searchRoutes(db: Db) {
       .innerJoin(agents, eq(conversations.agentId, agents.id))
       .where(
         and(
-          ...convListConditions(params, workspaceId, c.get('user').id),
+          ...convListConditions(params, workspaceId, c.get('user').id, c.get('agentScope')),
           sql`(
             ${conversations.externalId} ilike ${like}
             or ${conversations.userProfile}::text ilike ${like}

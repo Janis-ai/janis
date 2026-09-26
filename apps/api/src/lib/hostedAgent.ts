@@ -937,6 +937,7 @@ export async function refreshConversationSummary(
  * no configured text needed. Used when greeting is enabled but unset.
  */
 export async function generateGreeting(
+  db: Db,
   agent: AgentRow,
   channelName?: string,
 ): Promise<string | null> {
@@ -949,7 +950,7 @@ export async function generateGreeting(
     `Write a short, warm greeting that ${agent.name} sends the moment a customer opens a new chat` +
     `${channelName ? ` on ${channelName}` : ''}. One or two sentences, under 160 characters. ` +
     `Output only the greeting text — no quotes, no preamble.`;
-  const res = await complete(llmFor(agent), system, [{ role: 'user', content: 'Greeting:' }]);
+  const res = await complete(await llmFor(db, agent), system, [{ role: 'user', content: 'Greeting:' }]);
   const text = res.text?.trim().replace(/^["']+|["']+$/g, '');
   return text ? text.slice(0, 480) : null;
 }
@@ -1099,7 +1100,7 @@ export async function runHostedEvent(
       .where(eq(conversations.id, convId))
       .limit(1);
     if (!conv) return;
-    const llm = llmFor(agent);
+    const llm = await llmFor(db, agent);
     void foldConversationMemory(db, agent, conv, llm);
     const history = await transcriptFor(db, convId, await fileAnalysisAllowed(db, agent.workspaceId));
     const docs = await loadKnowledgeDocs(db, agent.id);
@@ -1294,7 +1295,7 @@ async function replyAsHostedAgent(
   const emit = (e: Parameters<typeof processEvents>[2]) => processEvents(db, agent, e);
 
   try {
-    const llm = llmFor(agent);
+    const llm = await llmFor(db, agent);
     // Fold memory alongside the reply — the summary only matters for future
     // turns, so blocking on it adds a whole LLM call to every reply.
     void foldConversationMemory(db, agent, conv, llm);

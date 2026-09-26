@@ -183,7 +183,7 @@ export function webchatRoutes(db: Db) {
     // text once the cache warms, and the rail would show a placeholder that
     // doesn't match the transcript.
     const internal = (channel.credentials as ChannelCredentials).internal === true;
-    const greeting = await resolveGreeting(channel, agent, undefined, { background: !internal });
+    const greeting = await resolveGreeting(channel, agent, undefined, { background: !internal }, db);
     return c.json({
       name: channel.name,
       agent_name: agent?.name ?? 'Assistant',

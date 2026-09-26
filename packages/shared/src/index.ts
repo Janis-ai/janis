@@ -390,9 +390,34 @@ export const SavedReply = z.object({
   id: z.string(),
   title: z.string(),
   body: z.string(),
+  // set when scoped to one agent — workspace replies have null
+  agent_id: z.string().nullable().optional(),
   created_at: z.string(),
 });
 export type SavedReply = z.infer<typeof SavedReply>;
+
+/** A user's grant/overrides on one agent (agent_members row + user fields).
+ *  role null = inherit workspace role; identity/notify fields null = inherit
+ *  the user's own profile/prefs. */
+export const AgentMember = z.object({
+  user_id: z.string(),
+  email: z.string(),
+  name: z.string(),
+  role: z.enum(['admin', 'member']).nullable(),
+  display_name: z.string().nullable(),
+  avatar_url: z.string().nullable(),
+  avatar_override: z.string().nullable(),
+  show_identity: z.boolean().nullable(),
+  notify: z
+    .object({
+      push: z.boolean().optional(),
+      email: z.boolean().optional(),
+      sound: z.boolean().optional(),
+    })
+    .nullable(),
+  status: z.enum(['active', 'invited']),
+});
+export type AgentMember = z.infer<typeof AgentMember>;
 
 export const Digest = z.object({
   id: z.string(),

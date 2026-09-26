@@ -225,6 +225,9 @@ export function metaApiRoutes(db: Db) {
     if (!p || p.expiresAt < Date.now() || p.workspaceId !== c.get('workspaceId')) {
       return c.json({ error: 'connect session expired — start again' }, 404);
     }
+    // OAuth linking stays workspace-admin — it touches the shared Meta
+    // connection; an agent-admin who isn't a workspace admin can't pull in
+    // pages they shouldn't see.
     const [agent] = await db
       .select({ id: agents.id, name: agents.name })
       .from(agents)

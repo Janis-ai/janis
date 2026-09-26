@@ -4,6 +4,7 @@ import { zValidator } from '@hono/zod-validator';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { pendingActions } from '../db/schema.js';
+import { conversationAgent } from '../lib/access.js';
 import { decidePendingAction } from '../lib/approvals.js';
 import { runHostedEvent } from '../lib/hostedAgent.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -25,6 +26,13 @@ export function actionRoutes(db: Db) {
       .where(and(eq(pendingActions.id, c.req.param('id')), eq(pendingActions.workspaceId, workspaceId)))
       .limit(1);
     if (!action) return c.json({ error: 'not found' }, 404);
+    // Scoped users may only decide actions on conversations they can see.
+    if (
+      c.get('agentScope') &&
+      !(await conversationAgent(db, workspaceId, c.get('agentScope'), action.conversationId))
+    ) {
+      return c.json({ error: 'not found' }, 404);
+    }
 
     const decided = await decidePendingAction(
       db,

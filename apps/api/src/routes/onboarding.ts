@@ -3,6 +3,7 @@ import { and, eq, isNotNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, channels, conversations, messages } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { agentVis } from '../lib/access.js';
 
 const count = sql<number>`count(*)::int`;
 
@@ -13,18 +14,19 @@ export function onboardingRoutes(db: Db) {
 
   app.get('/', async (c) => {
     const ws = c.get('workspaceId');
+    const vis = agentVis(ws, c.get('agentScope'));
     const [[a], [live], [ch], [conv], [human]] = await Promise.all([
-      db.select({ n: count }).from(agents).where(eq(agents.workspaceId, ws)),
+      db.select({ n: count }).from(agents).where(and(...vis)),
       db
         .select({ n: count })
         .from(agents)
-        .where(and(eq(agents.workspaceId, ws), isNotNull(agents.lastSeenAt))),
+        .where(and(...vis, isNotNull(agents.lastSeenAt))),
       db.select({ n: count }).from(channels).where(eq(channels.workspaceId, ws)),
       db
         .select({ n: count })
         .from(conversations)
         .innerJoin(agents, eq(conversations.agentId, agents.id))
-        .where(eq(agents.workspaceId, ws)),
+        .where(and(...vis)),
       // Taken over = currently human-owned, or has a human reply on record.
       // human_since alone won't do — resume clears it back to null.
       db
@@ -36,10 +38,7 @@ export function onboardingRoutes(db: Db) {
           and(eq(messages.conversationId, conversations.id), eq(messages.direction, 'human')),
         )
         .where(
-          and(
-            eq(agents.workspaceId, ws),
-            or(isNotNull(conversations.humanSince), isNotNull(messages.id)),
-          ),
+          and(...vis, or(isNotNull(conversations.humanSince), isNotNull(messages.id))),
         ),
     ]);
 

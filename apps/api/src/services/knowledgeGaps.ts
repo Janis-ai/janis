@@ -471,7 +471,7 @@ async function llmChat(
   user: string,
   maxTokens = 220,
 ): Promise<string | null> {
-  const llm = llmFor(agent);
+  const llm = await llmFor(db, agent);
   if (!llm.apiKey) return null;
   try {
     const res = await fetch(`${llm.baseUrl}/chat/completions`, {

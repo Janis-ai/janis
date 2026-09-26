@@ -197,10 +197,16 @@ export default function Layout() {
         </Link>
         <NavLink to="/conversations" end><span className="label">Conversations</span><span className="icon">▤</span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
         <NavLink to="/agents"><span className="label">Agents</span><span className="icon">◈</span></NavLink>
-        <NavLink to="/reports"><span className="label">Reports</span><span className="icon">◫</span></NavLink>
-        <NavLink to="/integrations"><span className="label">Channels</span><span className="icon">⇄</span></NavLink>
-        <NavLink to="/billing"><span className="label">Billing</span><span className="icon">$</span></NavLink>
-        <NavLink to="/settings"><span className="label">Settings</span><span className="icon">⚙</span></NavLink>
+        {/* Workspace-wide sections vanish for agent-scoped users — they only
+            hold grants on specific agents, not the workspace itself. */}
+        {!data?.agent_scope && (
+          <>
+            <NavLink to="/reports"><span className="label">Reports</span><span className="icon">◫</span></NavLink>
+            <NavLink to="/integrations"><span className="label">Channels</span><span className="icon">⇄</span></NavLink>
+            <NavLink to="/billing"><span className="label">Billing</span><span className="icon">$</span></NavLink>
+            <NavLink to="/settings"><span className="label">Settings</span><span className="icon">⚙</span></NavLink>
+          </>
+        )}
         {data?.support_channel_id && (
           <button
             type="button"

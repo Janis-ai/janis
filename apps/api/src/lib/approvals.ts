@@ -115,7 +115,7 @@ export async function requestToolApproval(
           type: 'alert',
           data: { ...toAlert(alert), notification },
         });
-        void notifyWorkspace(db, agent.workspaceId, notification, {
+        void notifyWorkspace(db, agent.workspaceId, notification, { agentId: agent.id,
           userIds: conv.assigneeId ? [conv.assigneeId] : undefined,
         });
         const { postSlackAlert } = await import('./slack.js');

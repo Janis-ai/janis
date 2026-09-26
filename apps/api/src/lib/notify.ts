@@ -1,8 +1,8 @@
 import webpush from 'web-push';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { channelBindings, channels, pushSubscriptions, users } from '../db/schema.js';
+import { agentMembers, channelBindings, channels, pushSubscriptions, users } from '../db/schema.js';
 import { workspaceMembers } from './members.js';
 import { env } from '../env.js';
 
@@ -128,21 +128,42 @@ export async function notifyWorkspace(
   db: Db,
   workspaceId: string,
   notification: { title: string; body: string; url?: string },
-  opts: { userIds?: string[] } = {},
+  opts: { userIds?: string[]; agentId?: string } = {},
 ): Promise<void> {
-  const members = (await workspaceMembers(db, workspaceId))
-    .map((m) => m.user)
-    .filter((m) => !opts.userIds || opts.userIds.includes(m.id));
-  if (members.length === 0) return;
+  const members = (await workspaceMembers(db, workspaceId)).map((m) => m.user);
+  // Agent-scoped users hold no membership — pull them in when the alert is
+  // for an agent they're granted on, else they'd never see escalations.
+  const memberIds = new Set(members.map((m) => m.id));
+  if (opts.agentId) {
+    const scoped = await db
+      .select({ user: users })
+      .from(agentMembers)
+      .innerJoin(users, eq(agentMembers.userId, users.id))
+      .where(and(eq(agentMembers.agentId, opts.agentId), isNotNull(agentMembers.acceptedAt)));
+    for (const s of scoped) if (!memberIds.has(s.user.id)) members.push(s.user);
+  }
+  const recipients = members.filter((m) => !opts.userIds || opts.userIds.includes(m.id));
+  if (recipients.length === 0) return;
 
-  const pushUserIds = members
-    .filter((m) => (m.notifyPrefs as NotifyPrefs).push !== false)
-    .map((m) => m.id);
-  const emailAddrs = members
-    .filter((m) => (m.notifyPrefs as NotifyPrefs).email !== false)
-    .map((m) => m.email);
+  // Per-agent notify overrides (agent_members.notify_prefs) win field-wise
+  // over the user's workspace prefs for this agent's alerts.
+  const overrideByUser = new Map<string, NotifyPrefs>();
+  if (opts.agentId) {
+    const rows = await db
+      .select({ userId: agentMembers.userId, prefs: agentMembers.notifyPrefs })
+      .from(agentMembers)
+      .where(eq(agentMembers.agentId, opts.agentId));
+    for (const r of rows) if (r.prefs) overrideByUser.set(r.userId, r.prefs as NotifyPrefs);
+  }
+  const prefs = (u: (typeof recipients)[number]): NotifyPrefs => ({
+    ...(u.notifyPrefs as NotifyPrefs),
+    ...(overrideByUser.get(u.id) ?? {}),
+  });
+
+  const pushUserIds = recipients.filter((m) => prefs(m).push !== false).map((m) => m.id);
+  const emailAddrs = recipients.filter((m) => prefs(m).email !== false).map((m) => m.email);
   const silentUsers = new Set(
-    members.filter((m) => (m.notifyPrefs as NotifyPrefs).sound === false).map((m) => m.id),
+    recipients.filter((m) => prefs(m).sound === false).map((m) => m.id),
   );
 
   const jobs: Promise<unknown>[] = [];

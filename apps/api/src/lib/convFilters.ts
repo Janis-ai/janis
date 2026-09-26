@@ -1,6 +1,7 @@
 import { eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { agents, alerts, conversations } from '../db/schema.js';
+import { agentScopeCond, type AgentScope } from './access.js';
 
 /** Query params shared by the conversation list and search endpoints —
  * 'unread'/'starred' are flags and 'handoff_offer'/'failure' are open-alert
@@ -20,8 +21,10 @@ export function convListConditions(
   q: z.infer<typeof convListQuery>,
   workspaceId: string,
   userId: string,
+  scope?: AgentScope,
 ): SQL[] {
-  const conditions: SQL[] = [eq(agents.workspaceId, workspaceId)];
+  const scoped = agentScopeCond(scope ?? null);
+  const conditions: SQL[] = [eq(agents.workspaceId, workspaceId), ...(scoped ? [scoped] : [])];
   if (q.state === 'unread') conditions.push(eq(conversations.isUnread, true));
   else if (q.state === 'starred') conditions.push(eq(conversations.isStarred, true));
   else if (q.state === 'handoff_offer' || q.state === 'failure')

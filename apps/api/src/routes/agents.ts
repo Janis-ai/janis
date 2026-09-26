@@ -4,8 +4,14 @@ import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentConnections, agentSecrets, channels, conversations, knowledgeFiles, webhookDeliveries, workspaces } from '../db/schema.js';
-import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { agents, agentConnections, agentMembers, agentSecrets, channels, conversations, knowledgeFiles, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import {
+  adminOnly,
+  agentAdminOnly,
+  agentMemberOnly,
+  sessionAuth,
+  type SessionEnv,
+} from '../middleware/sessionAuth.js';
 import { generateApiKey, generateWebhookSecret } from '../lib/crypto.js';
 import { env } from '../env.js';
 import { deliverWebhook } from '../lib/webhooks.js';
@@ -21,7 +27,9 @@ import {
 } from '../services/knowledgeGaps.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
-import { meteredAccounts, meteredModelOf } from '../lib/llm.js';
+import { effectiveMeteredModel } from '../lib/llm.js';
+import { llmModelsResult } from '../lib/llmModels.js';
+import { agentRoleFor, agentScopeCond } from '../lib/access.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { processEvents } from '../services/ingest.js';
 import { toAgent } from '../lib/serializers.js';
@@ -55,12 +63,15 @@ const updateAgent = z.object({
 export function agentRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
+  const agentAdmin = agentAdminOnly(db);
+  const agentMember = agentMemberOnly(db);
 
   app.get('/', async (c) => {
+    const scope = agentScopeCond(c.get('agentScope'));
     const rows = await db
       .select()
       .from(agents)
-      .where(eq(agents.workspaceId, c.get('workspaceId')))
+      .where(and(eq(agents.workspaceId, c.get('workspaceId')), ...(scope ? [scope] : [])))
       .orderBy(desc(agents.createdAt));
     return c.json({ agents: rows.map(toAgent) });
   });
@@ -124,7 +135,7 @@ export function agentRoutes(db: Db) {
     return c.json({ agent: toAgent(row) }, 201);
   });
 
-  app.patch('/:id', adminOnly, zValidator('json', updateAgent), async (c) => {
+  app.patch('/:id', agentAdmin, zValidator('json', updateAgent), async (c) => {
     const body = c.req.valid('json');
     // A non-null override must be a real channel — otherwise alerts would
     // silently fail to post.
@@ -152,13 +163,14 @@ export function agentRoutes(db: Db) {
       if (llm.api_key === null) delete llm.api_key;
       else if (!llm.api_key) llm.api_key = storedKey || undefined;
       configToSave = { ...body.config, llm };
-      // Free plan: the metered model is locked to the current selection —
-      // picking a different hosted LLM tier requires upgrading. BYOK results
-      // are exempt (the customer pays the provider), and moving onto the
-      // default model is always allowed so a lock can't trap anyone.
-      const after = meteredModelOf(configToSave);
+      // Free plan: the effective metered model is locked to the current
+      // selection — picking a different hosted LLM tier requires upgrading.
+      // Resolution includes the workspace default under this override; BYOK
+      // results are exempt, and moving onto the env default always works so
+      // a lock can't trap anyone.
+      const after = await effectiveMeteredModel(db, c.get('workspaceId'), configToSave);
       if (after !== null) {
-        const before = meteredModelOf(existing?.config);
+        const before = await effectiveMeteredModel(db, c.get('workspaceId'), existing?.config);
         if (
           after !== before &&
           after !== env.llmModel &&
@@ -205,7 +217,7 @@ export function agentRoutes(db: Db) {
   // The env key is never sent to a non-env base_url.
   app.post(
     '/:id/llm-models',
-    adminOnly,
+    agentAdmin,
     zValidator(
       'json',
       z.object({
@@ -216,98 +228,21 @@ export function agentRoutes(db: Db) {
     ),
     async (c) => {
       const body = c.req.valid('json');
-      let baseUrl = (body.base_url ?? '').replace(/\/+$/, '');
-      let apiKey = body.api_key ?? '';
-      if (body.metered || (!baseUrl && !apiKey)) {
-        // Every configured metered account — the picker shows the catalog
-        // filtered to vendors Janis actually has keys for.
-        const accs = meteredAccounts();
-        if (!accs.length) {
-          return c.json({ accounts: [], models: [], error: 'no metered provider configured' });
-        }
-        const accounts = await Promise.all(
-          accs.map(async (a) => {
-            try {
-              const res = await fetch(`${a.baseUrl}/models`, {
-                headers: {
-                  ...(a.apiKey ? { authorization: `Bearer ${a.apiKey}` } : {}),
-                  ...(a.headers ?? {}),
-                },
-                signal: AbortSignal.timeout(8000),
-              });
-              if (!res.ok) {
-                console.warn(`metered /models failed for ${a.vendor}: ${res.status}`);
-                return {
-                  vendor: a.vendor,
-                  base_url: a.baseUrl,
-                  models: [],
-                  error: `${a.vendor}: provider returned ${res.status}`,
-                };
-              }
-              const data = (await res.json()) as { data?: { id?: string }[] };
-              return {
-                vendor: a.vendor,
-                base_url: a.baseUrl,
-                models: (data.data ?? [])
-                  .map((m) => m.id)
-                  .filter((s): s is string => Boolean(s))
-                  .sort(),
-              };
-            } catch (e) {
-              const msg = e instanceof Error ? e.message : 'fetch failed';
-              console.warn(`metered /models failed for ${a.vendor}: ${msg}`);
-              return {
-                vendor: a.vendor,
-                base_url: a.baseUrl,
-                models: [] as string[],
-                error: `${a.vendor}: ${msg}`,
-              };
-            }
-          }),
-        );
-        // models/base_url kept for older clients — the default account's
-        return c.json({
-          accounts,
-          models: accounts[0].models,
-          base_url: accounts[0].base_url,
-          default_model: env.llmModel,
-        });
-      }
-      if (!/^https?:\/\//i.test(baseUrl)) {
-        return c.json({ models: [], error: 'base_url must be an http(s) URL' }, 400);
-      }
-      if (!apiKey) {
-        const [row] = await db
-          .select({ config: agents.config })
-          .from(agents)
-          .where(
-            and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))),
-          )
-          .limit(1);
-        const stored =
-          (((row?.config ?? {}) as { llm?: { api_key?: string; base_url?: string } }).llm) ?? {};
-        if (stored.base_url === body.base_url && stored.api_key) apiKey = stored.api_key;
-      }
-      try {
-        const res = await fetch(`${baseUrl}/models`, {
-          headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
-          signal: AbortSignal.timeout(8000),
-        });
-        if (!res.ok) return c.json({ models: [], error: `provider returned ${res.status}` });
-        const data = (await res.json()) as { data?: { id?: string }[] };
-        const models = (data.data ?? [])
-          .map((m) => m.id)
-          .filter((s): s is string => Boolean(s))
-          .sort();
-        // base_url tells the UI which provider catalog applies to 'metered'
-        return c.json({ models, base_url: baseUrl });
-      } catch (e) {
-        return c.json({ models: [], error: e instanceof Error ? e.message : 'fetch failed' });
-      }
+      const [row] = await db
+        .select({ config: agents.config })
+        .from(agents)
+        .where(
+          and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))),
+        )
+        .limit(1);
+      const stored =
+        (((row?.config ?? {}) as { llm?: { api_key?: string; base_url?: string } }).llm) ?? {};
+      const r = await llmModelsResult(stored, body);
+      return c.json(r.body, r.status as 200 | 400);
     },
   );
 
-  app.post('/:id/rotate-key', adminOnly, async (c) => {
+  app.post('/:id/rotate-key', agentAdmin, async (c) => {
     const { key, hash, preview } = generateApiKey();
     const [row] = await db
       .update(agents)
@@ -318,7 +253,7 @@ export function agentRoutes(db: Db) {
     return c.json({ agent: toAgent(row), api_key: key });
   });
 
-  app.post('/:id/rotate-webhook-secret', adminOnly, async (c) => {
+  app.post('/:id/rotate-webhook-secret', agentAdmin, async (c) => {
     const secret = generateWebhookSecret();
     const [row] = await db
       .update(agents)
@@ -329,7 +264,7 @@ export function agentRoutes(db: Db) {
     return c.json({ agent: toAgent(row), webhook_secret: secret });
   });
 
-  app.post('/:id/webhook-test', adminOnly, async (c) => {
+  app.post('/:id/webhook-test', agentAdmin, async (c) => {
     const [row] = await db
       .select()
       .from(agents)
@@ -351,7 +286,7 @@ export function agentRoutes(db: Db) {
   // internal so it stays out of Integrations, but messages ride the real
   // /chat pipeline (ingest → agent → reply), so testing exercises exactly
   // what a visitor would hit, including handoffs. Any member may test.
-  app.post('/:id/test-channel', async (c) => {
+  app.post('/:id/test-channel', agentMember, async (c) => {
     const [agent] = await db
       .select({ id: agents.id, name: agents.name })
       .from(agents)
@@ -385,7 +320,7 @@ export function agentRoutes(db: Db) {
   });
 
   // Reveal the webhook secret (needed to verify signatures agent-side)
-  app.get('/:id/webhook-secret', adminOnly, async (c) => {
+  app.get('/:id/webhook-secret', agentAdmin, async (c) => {
     const [row] = await db
       .select({ webhookSecret: agents.webhookSecret })
       .from(agents)
@@ -396,7 +331,7 @@ export function agentRoutes(db: Db) {
   });
 
   // Recent outbound webhook deliveries — for debugging agent wiring
-  app.get('/:id/deliveries', async (c) => {
+  app.get('/:id/deliveries', agentMember, async (c) => {
     const [owned] = await db
       .select({ id: agents.id })
       .from(agents)
@@ -425,6 +360,7 @@ export function agentRoutes(db: Db) {
   // per operator per agent.
   app.post(
     '/:id/chat',
+    agentMember,
     zValidator('json', z.object({ text: z.string().min(1) })),
     async (c) => {
       const user = c.get('user');
@@ -474,7 +410,7 @@ export function agentRoutes(db: Db) {
   };
 
   // Knowledge files — uploaded docs whose extracted text feeds the agent's prompt
-  app.get('/:id/knowledge', async (c) => {
+  app.get('/:id/knowledge', agentMember, async (c) => {
     if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
     const rows = await db
       .select()
@@ -495,7 +431,7 @@ export function agentRoutes(db: Db) {
     });
   });
 
-  app.post('/:id/knowledge', adminOnly, async (c) => {
+  app.post('/:id/knowledge', agentAdmin, async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
 
@@ -513,7 +449,7 @@ export function agentRoutes(db: Db) {
     const buf = Buffer.from(await file.arrayBuffer());
     let text: string;
     try {
-      text = await extractKnowledgeText(buf, file.type, file.name, llmFor(agent));
+      text = await extractKnowledgeText(buf, file.type, file.name, await llmFor(db, agent));
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'extraction failed';
       return c.json({ error: msg }, err instanceof UnsupportedFileError ? 415 : 422);
@@ -564,7 +500,7 @@ export function agentRoutes(db: Db) {
     return cache;
   };
 
-  app.get('/:id/knowledge-gaps', async (c) => {
+  app.get('/:id/knowledge-gaps', agentMember, async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const cached = readGapsCache(agent.config);
@@ -574,7 +510,7 @@ export function agentRoutes(db: Db) {
   });
 
   // Force a fresh detection run — the operator's "Refresh" button.
-  app.post('/:id/knowledge-gaps/refresh', adminOnly, async (c) => {
+  app.post('/:id/knowledge-gaps/refresh', agentAdmin, async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const cache = await computeAndCacheGaps(agent);
@@ -582,7 +518,7 @@ export function agentRoutes(db: Db) {
   });
 
   app.post(
-    '/:id/knowledge-gaps/draft', adminOnly, zValidator(
+    '/:id/knowledge-gaps/draft', agentAdmin, zValidator(
       'json',
       z.object({
         questions: z.array(z.string().min(1)).min(1).max(10),
@@ -601,7 +537,7 @@ export function agentRoutes(db: Db) {
   // Re-check clusters against the current knowledge base — the LLM marks
   // questions the agent can now handle; covered clusters are dismissed so
   // they stop surfacing.
-  app.post('/:id/knowledge-gaps/recheck', adminOnly, async (c) => {
+  app.post('/:id/knowledge-gaps/recheck', agentAdmin, async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     // Audit the same clusters the operator sees — the cached set, not a fresh roll.
@@ -630,7 +566,7 @@ export function agentRoutes(db: Db) {
 
   // Approve an entry — append to config.knowledge without clobbering other keys.
   app.post(
-    '/:id/knowledge-gaps', adminOnly, zValidator('json', z.object({ entry: z.string().min(1).max(2000) })),
+    '/:id/knowledge-gaps', agentAdmin, zValidator('json', z.object({ entry: z.string().min(1).max(2000) })),
     async (c) => {
       const agent = await ownedAgent(c);
       if (!agent) return c.json({ error: 'not found' }, 404);
@@ -653,7 +589,7 @@ export function agentRoutes(db: Db) {
 
   // Agent secrets — API keys/credentials for tool calls. Write-only: the
   // list endpoint returns names + timestamps, never values.
-  app.get('/:id/secrets', async (c) => {
+  app.get('/:id/secrets', agentMember, async (c) => {
     if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
     const rows = await db
       .select({ name: agentSecrets.name, createdAt: agentSecrets.createdAt })
@@ -672,7 +608,7 @@ export function agentRoutes(db: Db) {
     value: z.string().min(1).max(4096),
   });
 
-  app.put('/:id/secrets', adminOnly, zValidator('json', secretBody), async (c) => {
+  app.put('/:id/secrets', agentAdmin, zValidator('json', secretBody), async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const { name, value } = c.req.valid('json');
@@ -701,7 +637,7 @@ export function agentRoutes(db: Db) {
     return c.json({ secret: { name: row.name, created_at: row.createdAt.toISOString() } });
   });
 
-  app.delete('/:id/secrets/:name', adminOnly, async (c) => {
+  app.delete('/:id/secrets/:name', agentAdmin, async (c) => {
     if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
     const [row] = await db
       .delete(agentSecrets)
@@ -720,7 +656,7 @@ export function agentRoutes(db: Db) {
   // credentials as agent secrets in one shot. Tools merge by name so
   // reinstalling updates rather than duplicating.
   app.post(
-    '/:id/tools/install', adminOnly, zValidator(
+    '/:id/tools/install', agentAdmin, zValidator(
       'json',
       z.object({
         template: z.string(),
@@ -789,7 +725,7 @@ export function agentRoutes(db: Db) {
   );
 
   // Remove a template's tools; secrets stay (they may be shared with custom tools).
-  app.delete('/:id/tools/:template', adminOnly, async (c) => {
+  app.delete('/:id/tools/:template', agentAdmin, async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const tpl = TOOL_TEMPLATES.find((t) => t.id === c.req.param('template'));
@@ -815,7 +751,7 @@ export function agentRoutes(db: Db) {
     return c.json({ agent: toAgent(updated) });
   });
 
-  app.delete('/:id/knowledge/:fileId', adminOnly, async (c) => {
+  app.delete('/:id/knowledge/:fileId', agentAdmin, async (c) => {
     if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
     const [row] = await db
       .delete(knowledgeFiles)
@@ -827,10 +763,149 @@ export function agentRoutes(db: Db) {
     return c.json({ ok: true });
   });
 
-  app.delete('/:id', adminOnly, async (c) => {
+  app.delete('/:id', agentAdmin, async (c) => {
     const [row] = await db
       .delete(agents)
       .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
+      .returning();
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({ ok: true });
+  });
+
+  // ---- Agent members: per-agent role / identity / notification overrides ----
+  // One row per (agent, user). role null = inherit the workspace role; users
+  // with NO workspace membership and an accepted row see only that agent.
+
+  const memberBody = z.object({
+    email: z.string().email(),
+    name: z.string().max(120).optional(),
+    role: z.enum(['admin', 'member']).default('member'),
+  });
+  const memberPatch = z.object({
+    // explicit null clears the override back to the workspace role
+    role: z.enum(['admin', 'member']).nullable().optional(),
+    display_name: z.string().max(80).nullable().optional(),
+    avatar_url: z.string().max(2000).nullable().optional(),
+    show_identity: z.boolean().nullable().optional(),
+    notify: z
+      .object({
+        push: z.boolean().optional(),
+        email: z.boolean().optional(),
+        sound: z.boolean().optional(),
+      })
+      .nullable()
+      .optional(),
+  });
+  const toMember = (
+    m: typeof agentMembers.$inferSelect,
+    u: typeof users.$inferSelect,
+  ) => ({
+    user_id: u.id,
+    email: u.email,
+    name: u.name,
+    avatar_url: m.avatarUrl ?? u.avatarUrl,
+    role: m.role,
+    display_name: m.displayName,
+    avatar_override: m.avatarUrl,
+    show_identity: m.showIdentity,
+    notify: m.notifyPrefs ?? null,
+    status: m.acceptedAt ? ('active' as const) : ('invited' as const),
+  });
+
+  app.get('/:id/members', agentMember, async (c) => {
+    const rows = await db
+      .select({ m: agentMembers, u: users })
+      .from(agentMembers)
+      .innerJoin(users, eq(agentMembers.userId, users.id))
+      .where(eq(agentMembers.agentId, c.req.param('id')));
+    return c.json({ members: rows.map((r) => toMember(r.m, r.u)) });
+  });
+
+  // Add (or re-role) an agent member by email. Workspace members get an
+  // override row; unknown emails become agent-scoped users who see ONLY this
+  // agent — they sign in with Google/Slack under the invited address.
+  app.post('/:id/members', agentAdmin, zValidator('json', memberBody), async (c) => {
+    const b = c.req.valid('json');
+    const email = b.email.trim().toLowerCase();
+    let [u] = await db
+      .select()
+      .from(users)
+      .where(sql`lower(${users.email}) = ${email}`)
+      .limit(1);
+    if (!u) {
+      [u] = await db
+        .insert(users)
+        .values({ email, name: b.name?.trim() || email.split('@')[0] })
+        .returning();
+    }
+    const [row] = await db
+      .insert(agentMembers)
+      .values({
+        agentId: c.req.param('id'),
+        userId: u.id,
+        role: b.role,
+        invitedBy: c.get('user').id,
+        acceptedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [agentMembers.agentId, agentMembers.userId],
+        set: { role: b.role },
+      })
+      .returning();
+    return c.json({ member: toMember(row, u) }, 201);
+  });
+
+  // role/notify changes need agent admin; a member can always update their
+  // OWN profile override for the agent. Workspace admins retain management
+  // as the escape hatch (an override can't lock them out of member admin).
+  app.patch('/:id/members/:userId', zValidator('json', memberPatch), async (c) => {
+    const me = c.get('user');
+    const self = c.req.param('userId') === me.id;
+    const myRole = await agentRoleFor(
+      db, me.id, c.get('role'), c.get('agentScope'), c.req.param('id'), c.get('workspaceId'),
+    );
+    if (!myRole) return c.json({ error: 'not found' }, 404);
+    const b = c.req.valid('json');
+    const wsAdmin = c.get('role') === 'admin' && !c.get('agentScope');
+    const manages = myRole === 'admin' || wsAdmin;
+    // self-service: members update their own profile/notify override only —
+    // role changes and editing others require agent (or workspace) admin
+    if (b.role !== undefined && !manages) return c.json({ error: 'admin required' }, 403);
+    if (!self && !manages) return c.json({ error: 'admin required' }, 403);
+    const set: Record<string, unknown> = {
+      ...(b.role !== undefined ? { role: b.role } : {}),
+      ...(b.display_name !== undefined ? { displayName: b.display_name } : {}),
+      ...(b.avatar_url !== undefined ? { avatarUrl: b.avatar_url } : {}),
+      ...(b.show_identity !== undefined ? { showIdentity: b.show_identity } : {}),
+      ...(b.notify !== undefined ? { notifyPrefs: b.notify } : {}),
+    };
+    const [row] = await db
+      .insert(agentMembers)
+      .values({
+        agentId: c.req.param('id'),
+        userId: c.req.param('userId'),
+        invitedBy: me.id,
+        acceptedAt: new Date(),
+        ...set,
+      })
+      .onConflictDoUpdate({
+        target: [agentMembers.agentId, agentMembers.userId],
+        set,
+      })
+      .returning();
+    const [u] = await db.select().from(users).where(eq(users.id, c.req.param('userId'))).limit(1);
+    return c.json({ member: toMember(row, u!) });
+  });
+
+  app.delete('/:id/members/:userId', agentAdmin, async (c) => {
+    const [row] = await db
+      .delete(agentMembers)
+      .where(
+        and(
+          eq(agentMembers.agentId, c.req.param('id')),
+          eq(agentMembers.userId, c.req.param('userId')),
+        ),
+      )
       .returning();
     if (!row) return c.json({ error: 'not found' }, 404);
     return c.json({ ok: true });

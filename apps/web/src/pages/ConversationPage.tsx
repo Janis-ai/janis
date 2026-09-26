@@ -842,6 +842,7 @@ export default function ConversationPage() {
         {canSend ? (
           <>
             <Composer
+              agentId={c.agent_id}
               value={draft}
               onChange={(v) => {
                 setDraft(v);

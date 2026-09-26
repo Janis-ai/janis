@@ -1,4 +1,6 @@
-import type { agents } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
+import type { Db } from '../db/client.js';
+import { agents, workspaces } from '../db/schema.js';
 import { env } from '../env.js';
 import { VENDOR_ENDPOINTS, OR_VENDOR_SLUG, catalogModel, vendorForBaseUrl, type LlmVendor } from '@janis/shared';
 import { pricedRateFor } from './billing.js';
@@ -136,21 +138,60 @@ export function meteredModelOf(config: unknown): string | null {
   return metered ? (llm?.model || env.llmModel) : null;
 }
 
-/** Per-agent LLM config with env fallback (OpenAI-compatible). */
-export function llmFor(agent: typeof agents.$inferSelect): LlmSettings {
-  const cfg = (agent.config ?? {}) as {
-    llm?: {
-      api_key?: string;
-      base_url?: string;
-      model?: string;
-      provider?: string;
-      effort?: string;
-    };
+export interface LlmConfigBlock {
+  api_key?: string;
+  base_url?: string;
+  model?: string;
+  provider?: string;
+  effort?: string;
+}
+
+/** The workspace's default LLM block (workspaces.llm_config), {} when unset. */
+export async function workspaceLlm(db: Db, workspaceId: string): Promise<LlmConfigBlock> {
+  const [ws] = await db
+    .select({ llmConfig: workspaces.llmConfig })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  return (ws?.llmConfig ?? {}) as LlmConfigBlock;
+}
+
+/** Effective LLM block for an agent: workspace default under the agent's
+ *  own config.llm override (any field the agent sets wins; unset fields
+ *  inherit the workspace default). */
+export async function effectiveLlm(
+  db: Db,
+  agent: Pick<typeof agents.$inferSelect, 'config' | 'workspaceId'>,
+): Promise<LlmConfigBlock> {
+  const agentLlm = ((agent.config ?? {}) as { llm?: LlmConfigBlock }).llm ?? {};
+  const wsLlm = await workspaceLlm(db, agent.workspaceId);
+  return { ...wsLlm, ...agentLlm };
+}
+
+/** The metered model an agent would run after resolving workspace defaults —
+ *  null when the effective config is BYOK (exempt from the free-plan gate). */
+export async function effectiveMeteredModel(
+  db: Db,
+  workspaceId: string,
+  config: unknown,
+): Promise<string | null> {
+  const llm = {
+    ...(await workspaceLlm(db, workspaceId)),
+    ...(((config ?? {}) as { llm?: LlmConfigBlock }).llm ?? {}),
   };
-  const model = cfg.llm?.model || env.llmModel;
-  const metered =
-    cfg.llm?.provider === 'janis' ||
-    (!cfg.llm?.api_key && !cfg.llm?.base_url && !cfg.llm?.provider);
+  const byok = llm.api_key || llm.base_url || (llm.provider && llm.provider !== 'janis');
+  return byok ? null : llm.model || env.llmModel;
+}
+
+/** Per-agent LLM config: agent override over workspace default over env
+ *  (OpenAI-compatible). */
+export async function llmFor(
+  db: Db,
+  agent: Pick<typeof agents.$inferSelect, 'config' | 'workspaceId'>,
+): Promise<LlmSettings> {
+  const llm = await effectiveLlm(db, agent);
+  const model = llm.model || env.llmModel;
+  const metered = llm.provider === 'janis' || (!llm.api_key && !llm.base_url && !llm.provider);
   if (metered) {
     // No verified price = we can't bill correctly — refuse rather than fall
     // back to a guessed default rate.
@@ -159,16 +200,16 @@ export function llmFor(agent: typeof agents.$inferSelect): LlmSettings {
         `'${model}' has no metered rate — pick a priced model or switch this agent to BYOK`,
       );
     }
-    return meteredSettingsFor(model, cfg.llm?.effort);
+    return meteredSettingsFor(model, llm.effort);
   }
   // A custom endpoint without a key never gets ours — sending env.llmApiKey
   // to a customer-controlled base_url would leak it. Same for an explicit
   // BYOK provider selection with no key saved yet.
   return {
-    apiKey: cfg.llm?.api_key ?? '',
-    baseUrl: (cfg.llm?.base_url || env.llmBaseUrl).replace(/\/+$/, ''),
+    apiKey: llm.api_key ?? '',
+    baseUrl: (llm.base_url || env.llmBaseUrl).replace(/\/+$/, ''),
     model,
-    effort: cfg.llm?.effort,
-    byok: Boolean(cfg.llm?.api_key) || Boolean(cfg.llm?.base_url || cfg.llm?.provider),
+    effort: llm.effort,
+    byok: Boolean(llm.api_key) || Boolean(llm.base_url || llm.provider),
   };
 }

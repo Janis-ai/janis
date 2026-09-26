@@ -30,6 +30,10 @@ export const workspaces = pgTable('workspaces', {
     (): AnyPgColumn => workspaces.id,
   ),
   parentContact: text('parent_contact'),
+  // Workspace default LLM config — same shape as agents.config.llm; agent
+  // fields override it field-by-field (unset → inherit). api_key is
+  // write-only like the agent one.
+  llmConfig: jsonb('llm_config').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -218,6 +222,38 @@ export const alerts = pgTable(
   ],
 );
 
+/**
+ * Per-(agent, user) grant + overrides. One row serves three purposes:
+ * - role: null = inherit the workspace role; a set role overrides it for
+ *   this agent. Users with NO workspace membership can hold agent rows —
+ *   they see only the agents listed here (agent-scoped access).
+ * - profile override: display_name/avatar_url/show_identity shown to
+ *   customers when this operator replies on this agent's channels.
+ * - notifyPrefs: {push,email,sound} — null fields inherit user.notify_prefs
+ *   for this agent's alerts.
+ */
+export const agentMembers = pgTable(
+  'agent_members',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    role: text('role', { enum: ['admin', 'member'] }),
+    displayName: text('display_name'),
+    avatarUrl: text('avatar_url'),
+    showIdentity: boolean('show_identity'), // null = inherit user.showIdentity
+    notifyPrefs: jsonb('notify_prefs'), // null = inherit users.notifyPrefs
+    invitedBy: uuid('invited_by').references(() => users.id),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('agent_members_agent_user').on(t.agentId, t.userId)],
+);
+
 export const alertRules = pgTable('alert_rules', {
   id: uuid('id').primaryKey().defaultRandom(),
   agentId: uuid('agent_id')
@@ -324,6 +360,9 @@ export const savedReplies = pgTable('saved_replies', {
   workspaceId: uuid('workspace_id')
     .notNull()
     .references(() => workspaces.id),
+  // null = workspace-wide; set = scoped to one agent (merged into its
+  // conversations' composer alongside the workspace replies)
+  agentId: uuid('agent_id').references(() => agents.id),
   title: text('title').notNull(),
   body: text('body').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

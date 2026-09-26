@@ -326,7 +326,7 @@ export async function handleChannelMessage(
       ? null
       : await resolveGreeting(channel, agent, undefined, {
           background: creds.internal !== true,
-        });
+        }, db);
     if (greeting) {
       // Suggested replies ride the greeting on Meta channels — native quick
       // replies on Messenger/IG, interactive buttons on WhatsApp. Channel

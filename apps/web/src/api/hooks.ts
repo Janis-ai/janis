@@ -22,6 +22,9 @@ export function useMe() {
         user: WorkspaceUser;
         workspace: { id: string; name: string } | null;
         workspaces: { id: string; name: string; role: 'admin' | 'member' }[];
+        /** Set when the user holds no workspace membership — only these
+         *  agents are visible (agent-scoped grants via the Team override). */
+        agent_scope: { id: string; name: string; role: string }[] | null;
         invites: { id: string; workspace_name: string }[];
         support_channel_id: string | null;
       }>('/auth/me'),
@@ -84,10 +87,36 @@ export function useUsers() {
   });
 }
 
-export function useSavedReplies() {
+export function useSavedReplies(agentId?: string) {
   return useQuery({
-    queryKey: ['savedReplies'],
-    queryFn: () => api<{ saved_replies: SavedReply[] }>('/api/saved-replies'),
+    queryKey: ['savedReplies', agentId ?? null],
+    queryFn: () =>
+      api<{ saved_replies: SavedReply[] }>(
+        `/api/saved-replies${agentId ? `?agent_id=${agentId}` : ''}`,
+      ),
+  });
+}
+
+export interface AgentMember {
+  user_id: string;
+  email: string;
+  name: string;
+  avatar_url: string | null;
+  /** null = inherit the workspace role */
+  role: 'admin' | 'member' | null;
+  display_name: string | null;
+  avatar_override: string | null;
+  show_identity: boolean | null;
+  notify: { push?: boolean; email?: boolean; sound?: boolean } | null;
+  status: 'active' | 'invited';
+}
+
+/** Per-agent grants/overrides — one row per (agent, user). */
+export function useAgentMembers(agentId: string | undefined) {
+  return useQuery({
+    queryKey: ['agentMembers', agentId],
+    enabled: !!agentId,
+    queryFn: () => api<{ members: AgentMember[] }>(`/api/agents/${agentId}/members`),
   });
 }
 
