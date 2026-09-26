@@ -42,7 +42,7 @@ export async function requestSuggestion(
   }
 
   const llm = await llmFor(db, agent);
-  const result = await generateWithLlm(db, conv, llm);
+  const result = await generateWithLlm(db, conv, agent, llm);
   if (result) {
     await recordLlmUsage(db, {
       workspaceId: agent.workspaceId,
@@ -63,7 +63,7 @@ export async function requestSuggestion(
   }
   const [row] = await db
     .insert(suggestions)
-    .values({ conversationId: conv.id, text, source: 'llm' })
+    .values({ conversationId: conv.id, text, notes: result?.notes ?? null, source: 'llm' })
     .returning();
   return { mode: 'llm', suggestion: row };
 }
@@ -74,10 +74,11 @@ export async function storeSuggestion(
   conversationId: string,
   text: string,
   source: 'agent' | 'llm',
+  notes?: string,
 ) {
   const [row] = await db
     .insert(suggestions)
-    .values({ conversationId, text, source })
+    .values({ conversationId, text, notes: notes ?? null, source })
     .returning();
   const [conv] = await db
     .select({ workspaceId: agents.workspaceId })
@@ -94,8 +95,9 @@ export async function storeSuggestion(
 async function generateWithLlm(
   db: Db,
   conv: ConvRow,
+  agent: AgentRow,
   llm: LlmSettings,
-): Promise<{ text: string; promptTokens: number; completionTokens: number } | null> {
+): Promise<{ text: string; notes: string | null; promptTokens: number; completionTokens: number } | null> {
   if (!llm.apiKey) return null;
   const recent = await db
     .select()
@@ -109,6 +111,22 @@ async function generateWithLlm(
     .map((m) => `${m.direction === 'in' ? 'User' : m.direction === 'human' ? 'Human operator' : 'Agent'}: ${m.text ?? ''}`)
     .join('\n');
 
+  // Feed the agent's own persona/goals into the draft so the suggestion steers
+  // toward the outcome this agent exists to produce, not just "a next line".
+  const cfg = (agent.config ?? {}) as { system_prompt?: string; tone?: string };
+  const persona = [cfg.system_prompt, cfg.tone ? `Tone: ${cfg.tone}` : '']
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+  const system = [
+    'You draft replies for a human operator who has taken over a customer conversation from an AI agent.',
+    persona && `The agent's own instructions and goals (stay in character):\n<agent_prompt>\n${persona.slice(0, 2000)}\n</agent_prompt>`,
+    'Figure out what outcome the agent is trying to reach, what the customer still needs or must provide to get there, and write the single reply that best moves the conversation toward resolution. If information is missing, ask for it; if the customer is stuck, unblock them.',
+    'Respond with JSON only: {"notes": "one short sentence — what this reply achieves or what is still needed", "reply": "the reply text to send"}. The reply goes to the customer verbatim: short, in the agent\'s voice, no preamble.',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
   try {
     const res = await fetch(`${llm.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -119,14 +137,11 @@ async function generateWithLlm(
       },
       body: JSON.stringify({
         model: llm.model,
-        max_tokens: 300,
+        max_tokens: 400,
+        response_format: { type: 'json_object' },
         messages: [
-          {
-            role: 'system',
-            content:
-              'You draft short, helpful support replies for a human operator overseeing an AI agent. Return only the reply text — no preamble, no quotes.',
-          },
-          { role: 'user', content: `Conversation so far:\n\n${transcript}\n\nDraft the next reply:` },
+          { role: 'system', content: system },
+          { role: 'user', content: `Conversation so far:\n\n${transcript}\n\nDraft the reply that moves this toward resolution:` },
         ],
       }),
       signal: AbortSignal.timeout(15_000),
@@ -136,13 +151,30 @@ async function generateWithLlm(
       choices?: { message?: { content?: string } }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
-    const text = json.choices?.[0]?.message?.content?.trim();
+    const raw = json.choices?.[0]?.message?.content?.trim();
+    if (!raw) return null;
+    // response_format is best-effort on some providers — fall back to the raw
+    // text when the payload isn't the {"notes","reply"} object we asked for
+    let text = raw;
+    let notes: string | null = null;
+    if (raw.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(raw) as { notes?: unknown; reply?: unknown };
+        if (typeof parsed.reply === 'string' && parsed.reply.trim()) {
+          text = parsed.reply.trim();
+          if (typeof parsed.notes === 'string') notes = parsed.notes.trim() || null;
+        }
+      } catch {
+        /* keep raw as the reply */
+      }
+    }
     if (!text) return null;
     // estimate chars/4 when the endpoint omits `usage` rather than billing zero
     return {
       text,
+      notes,
       promptTokens: json.usage?.prompt_tokens ?? Math.ceil(transcript.length / 4),
-      completionTokens: json.usage?.completion_tokens ?? Math.ceil(text.length / 4),
+      completionTokens: json.usage?.completion_tokens ?? Math.ceil(raw.length / 4),
     };
   } catch {
     return null;

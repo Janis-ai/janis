@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, desc, eq, isNotNull, sql, type SQLWrapper } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, sql, type SQLWrapper } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import {
@@ -93,12 +93,49 @@ export async function getInstallation(
   db: Db,
   workspaceId: string,
 ): Promise<Installation | undefined> {
+  // The workspace DEFAULT installation is the earliest connected — agents can
+  // point at a different one via slackInstallationId.
   const [row] = await db
     .select()
     .from(slackInstallations)
     .where(eq(slackInstallations.workspaceId, workspaceId))
+    .orderBy(asc(slackInstallations.createdAt))
     .limit(1);
   return row;
+}
+
+/** Every Slack workspace connected to this Janis workspace. */
+export async function installationsFor(
+  db: Db,
+  workspaceId: string,
+): Promise<Installation[]> {
+  return db
+    .select()
+    .from(slackInstallations)
+    .where(eq(slackInstallations.workspaceId, workspaceId))
+    .orderBy(asc(slackInstallations.createdAt));
+}
+
+/** Which installation an agent's alerts/threads run through — its own
+ * override when set (and still in this workspace), else the default. */
+export async function installationFor(
+  db: Db,
+  agent: typeof agents.$inferSelect,
+): Promise<Installation | undefined> {
+  if (agent.slackInstallationId) {
+    const [row] = await db
+      .select()
+      .from(slackInstallations)
+      .where(
+        and(
+          eq(slackInstallations.id, agent.slackInstallationId),
+          eq(slackInstallations.workspaceId, agent.workspaceId),
+        ),
+      )
+      .limit(1);
+    if (row) return row;
+  }
+  return getInstallation(db, agent.workspaceId);
 }
 
 /** All channels the bot can see — follows conversations.list pagination
@@ -278,9 +315,22 @@ export async function postSlackMessage(
   db: Db,
   workspaceId: string,
   text: string,
-  opts: { channelId?: string; threadTs?: string } = {},
+  opts: { channelId?: string; threadTs?: string; installationId?: string } = {},
 ): Promise<{ channel?: string; ts?: string } | null> {
-  const inst = await getInstallation(db, workspaceId);
+  const inst = opts.installationId
+    ? (
+        await db
+          .select()
+          .from(slackInstallations)
+          .where(
+            and(
+              eq(slackInstallations.id, opts.installationId),
+              eq(slackInstallations.workspaceId, workspaceId),
+            ),
+          )
+          .limit(1)
+      )[0]
+    : await getInstallation(db, workspaceId);
   const channel = opts.channelId ?? inst?.alertChannelId;
   if (!inst || !channel) return null;
   const res = await postChannelMessage(inst, channel, {
@@ -493,16 +543,26 @@ export async function inviteWorkspaceMembers(
   }
 }
 
-/** Every channel Janis posts alerts to in this workspace: the workspace
- * alert channel plus each agent's own override channel. */
+/** Every channel Janis posts alerts to through THIS installation: its alert
+ * channel plus the override channels of agents routed to it. Agents without
+ * an installation override ride the default (earliest) installation. */
 async function janisAlertChannels(db: Db, inst: Installation): Promise<string[]> {
   const ids = new Set<string>();
   if (inst.alertChannelId) ids.add(inst.alertChannelId);
   const rows = await db
-    .select({ ch: agents.slackChannelId })
+    .select({ ch: agents.slackChannelId, instId: agents.slackInstallationId })
     .from(agents)
     .where(and(eq(agents.workspaceId, inst.workspaceId), isNotNull(agents.slackChannelId)));
-  for (const r of rows) if (r.ch) ids.add(r.ch);
+  const [defaultInst] = await db
+    .select({ id: slackInstallations.id })
+    .from(slackInstallations)
+    .where(eq(slackInstallations.workspaceId, inst.workspaceId))
+    .orderBy(asc(slackInstallations.createdAt))
+    .limit(1);
+  for (const r of rows) {
+    const routed = r.instId ?? defaultInst?.id;
+    if (r.ch && routed === inst.id) ids.add(r.ch);
+  }
   return [...ids];
 }
 
@@ -513,12 +573,12 @@ export async function syncMemberToAlertChannels(
   workspaceId: string,
   userId: string,
 ): Promise<void> {
-  const inst = await getInstallation(db, workspaceId);
-  if (!inst) return;
-  const sid = await memberToSlackUser(db, inst, userId);
-  if (!sid) return;
-  for (const ch of await janisAlertChannels(db, inst)) {
-    await ensureInAlertChannel(inst, sid, ch);
+  for (const inst of await installationsFor(db, workspaceId)) {
+    const sid = await memberToSlackUser(db, inst, userId);
+    if (!sid) continue;
+    for (const ch of await janisAlertChannels(db, inst)) {
+      await ensureInAlertChannel(inst, sid, ch);
+    }
   }
 }
 
@@ -529,21 +589,21 @@ export async function removeMemberFromAlertChannels(
   workspaceId: string,
   userId: string,
 ): Promise<void> {
-  const inst = await getInstallation(db, workspaceId);
-  if (!inst) return;
-  const sid = await memberToSlackUser(db, inst, userId);
-  if (!sid) return;
-  for (const ch of await janisAlertChannels(db, inst)) {
-    const kick = () =>
-      slackApi(inst.botToken, 'conversations.kick', { channel: ch, user: sid }).catch(() => null);
-    let res = await kick();
-    // Bot must be a channel member to kick — join first on public channels.
-    if (res?.error === 'not_in_channel') {
-      await slackApi(inst.botToken, 'conversations.join', { channel: ch }).catch(() => null);
-      res = await kick();
-    }
-    if (res && !res.ok && !['not_in_channel', 'cant_kick_self'].includes(res.error ?? '')) {
-      console.error('slack kick failed:', res.error);
+  for (const inst of await installationsFor(db, workspaceId)) {
+    const sid = await memberToSlackUser(db, inst, userId);
+    if (!sid) continue;
+    for (const ch of await janisAlertChannels(db, inst)) {
+      const kick = () =>
+        slackApi(inst.botToken, 'conversations.kick', { channel: ch, user: sid }).catch(() => null);
+      let res = await kick();
+      // Bot must be a channel member to kick — join first on public channels.
+      if (res?.error === 'not_in_channel') {
+        await slackApi(inst.botToken, 'conversations.join', { channel: ch }).catch(() => null);
+        res = await kick();
+      }
+      if (res && !res.ok && !['not_in_channel', 'cant_kick_self'].includes(res.error ?? '')) {
+        console.error('slack kick failed:', res.error);
+      }
     }
   }
 }
@@ -743,7 +803,7 @@ export async function postSlackAlert(
   agent: typeof agents.$inferSelect,
   alert: AlertRow,
 ): Promise<void> {
-  const inst = await getInstallation(db, workspaceId);
+  const inst = await installationFor(db, agent);
   if (!inst) return;
   const channelId = await alertChannelFor(db, inst, agent.id);
   if (!channelId) return;
@@ -1185,7 +1245,16 @@ export async function slackNotice(
     }
     return;
   }
-  const inst = await getInstallation(db, workspaceId);
+  // Route through the agent's own installation when it has one — alerts and
+  // notices land in the same Slack workspace.
+  const [agentRow] = await db
+    .select()
+    .from(agents)
+    .where(eq(agents.id, conv.agentId))
+    .limit(1);
+  const inst = agentRow
+    ? await installationFor(db, agentRow)
+    : await getInstallation(db, workspaceId);
   if (!inst) return;
   const channelId = await alertChannelFor(db, inst, conv.agentId);
   if (!channelId) return;

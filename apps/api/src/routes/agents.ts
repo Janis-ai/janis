@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentConnections, agentMembers, agentSecrets, channels, conversations, knowledgeFiles, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentConnections, agentMembers, agentSecrets, channels, conversations, knowledgeFiles, slackInstallations, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import {
   adminOnly,
   agentAdminOnly,
@@ -57,6 +57,8 @@ const updateAgent = z.object({
   auto_resume_minutes: z.number().min(1).max(10080).nullable().optional(),
   // null clears the override back to the workspace alert channel
   slack_channel_id: z.string().nullable().optional(),
+  // null clears the override back to the default Slack installation
+  slack_installation_id: z.string().nullable().optional(),
   config: AgentConfig.optional(),
 });
 
@@ -137,11 +139,41 @@ export function agentRoutes(db: Db) {
 
   app.patch('/:id', agentAdmin, zValidator('json', updateAgent), async (c) => {
     const body = c.req.valid('json');
-    // A non-null override must be a real channel — otherwise alerts would
-    // silently fail to post.
-    const inst = body.slack_channel_id
-      ? await getInstallation(db, c.get('workspaceId'))
-      : undefined;
+    // A non-null override must be a real channel in the installation this
+    // agent's alerts will route through — otherwise they'd silently fail.
+    let inst: typeof slackInstallations.$inferSelect | undefined;
+    if (body.slack_channel_id || body.slack_installation_id) {
+      let instId = body.slack_installation_id ?? undefined;
+      if (!instId && body.slack_channel_id) {
+        // channel-only change — validate against the agent's current override
+        const [cur] = await db
+          .select({ instId: agents.slackInstallationId })
+          .from(agents)
+          .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
+          .limit(1);
+        instId = cur?.instId ?? undefined;
+      }
+      inst = instId
+        ? (
+            await db
+              .select()
+              .from(slackInstallations)
+              .where(
+                and(
+                  eq(slackInstallations.id, instId),
+                  eq(slackInstallations.workspaceId, c.get('workspaceId')),
+                ),
+              )
+              .limit(1)
+          )[0]
+        : await getInstallation(db, c.get('workspaceId'));
+      if (body.slack_installation_id && !inst) {
+        return c.json({ error: 'slack workspace not found' }, 400);
+      }
+      if (body.slack_channel_id && !inst) {
+        return c.json({ error: 'slack not connected' }, 400);
+      }
+    }
     if (body.slack_channel_id && inst) {
       const info = await slackChannelInfo(inst.botToken, body.slack_channel_id);
       if (!info) return c.json({ error: 'channel not found in Slack' }, 400);
@@ -198,6 +230,9 @@ export function agentRoutes(db: Db) {
           : {}),
         ...(body.slack_channel_id !== undefined
           ? { slackChannelId: body.slack_channel_id }
+          : {}),
+        ...(body.slack_installation_id !== undefined
+          ? { slackInstallationId: body.slack_installation_id }
           : {}),
         ...(configToSave !== undefined ? { config: configToSave } : {}),
       })

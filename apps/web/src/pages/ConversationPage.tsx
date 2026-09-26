@@ -796,6 +796,11 @@ export default function ConversationPage() {
                 <div className="muted" style={{ marginBottom: 6 }}>
                   Suggested ({suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
                 </div>
+                {suggestions[0].notes && (
+                  <div className="muted" style={{ fontStyle: 'italic', marginBottom: 6 }}>
+                    {suggestions[0].notes}
+                  </div>
+                )}
                 <div>{suggestions[0].text}</div>
               </>
             ) : (

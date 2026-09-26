@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceUser } from '@janis/shared';
 import { api, ApiError } from '../api/client';
-import { useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
+import { useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers, type SlackInstallationInfo } from '../api/hooks';
 import { getPushSubscription, subscribeToPush, unsubscribeFromPush, markPushDisabled, PUSH_CHANGE_EVENT } from '../lib/push';
 import { installAvailable, isIOS, isStandalone, onInstallStateChange, promptInstall } from '../lib/install';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
@@ -69,26 +69,25 @@ export default function Settings() {
   });
 
   const setSlackChannel = useMutation({
-    mutationFn: (channelId: string) =>
-      api('/api/slack/channel', { method: 'PATCH', body: JSON.stringify({ channel_id: channelId }) }),
+    mutationFn: ({ installation_id, channel_id }: { installation_id: string; channel_id: string }) =>
+      api('/api/slack/channel', {
+        method: 'PATCH',
+        body: JSON.stringify({ installation_id, channel_id }),
+      }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['slackStatus'] }),
   });
   const createChannel = useMutation({
-    mutationFn: (name: string) =>
+    mutationFn: (vars: { name: string; installation_id?: string }) =>
       api<{ channel: { id: string; name: string } }>('/api/slack/channel', {
         method: 'POST',
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(vars),
       }),
-    onSuccess: (res) => {
+    onSuccess: (res, vars) => {
       // Select the new channel immediately — Slack's conversations.list can
       // lag on freshly created channels, so don't wait for the refetch to
       // show it picked (that lag is what made "create & use" look broken).
-      qc.setQueryData<{ connected: boolean; alert_channel_id: string | null }>(
-        ['slackStatus'],
-        (old) => (old ? { ...old, alert_channel_id: res.channel.id } : old),
-      );
       qc.setQueryData<{ channels: { id: string; name: string }[] }>(
-        ['slackChannels'],
+        ['slackChannels', vars.installation_id ?? ''],
         (old) => ({
           channels: old?.channels.some((ch) => ch.id === res.channel.id)
             ? old.channels
@@ -103,16 +102,18 @@ export default function Settings() {
   });
 
   const testSlack = useMutation({
-    mutationFn: () => api('/api/slack/test', { method: 'POST' }),
+    mutationFn: (installation_id: string) =>
+      api(`/api/slack/test?installation_id=${installation_id}`, { method: 'POST' }),
     onSuccess: () => setSlackMsg('Test message posted.'),
     onError: (e) => setSlackMsg(e.message),
   });
 
   const disconnectSlack = useMutation({
-    mutationFn: () => api('/api/slack', { method: 'DELETE' }),
+    mutationFn: (installationId: string) =>
+      api(`/api/slack/${installationId}`, { method: 'DELETE' }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['slackStatus'] });
-      setSlackMsg('Slack disconnected.');
+      setSlackMsg('Slack workspace disconnected.');
     },
   });
 
@@ -411,50 +412,29 @@ export default function Settings() {
           </div>
         ) : slack?.connected ? (
           <>
-            {!slack.alert_channel_id && (
-              <div
-                style={{
-                  border: '1px solid var(--border)',
-                  borderRadius: 8,
-                  padding: '10px 12px',
-                  marginBottom: 10,
+            {(slack.installations ?? []).map((inst, i) => (
+              <SlackInstallEditor
+                key={inst.id}
+                inst={inst}
+                isDefault={i === 0}
+                alertChannelName={alertChannelName}
+                setAlertChannelName={setAlertChannelName}
+                busy={setSlackChannel.isPending || createChannel.isPending}
+                onPick={(channel_id) =>
+                  setSlackChannel.mutate({ installation_id: inst.id, channel_id })
+                }
+                onCreate={async (name) => {
+                  await createChannel.mutateAsync({ name, installation_id: inst.id });
                 }}
-              >
-                <div style={{ marginBottom: 8 }}>
-                  No alert channel yet. Create a dedicated channel for Janis alerts —
-                  you can rename it:
-                </div>
-                <div className="row">
-                  <input
-                    style={{ width: 200 }}
-                    value={alertChannelName}
-                    onChange={(e) => setAlertChannelName(e.target.value)}
-                    placeholder="janis-alerts"
-                  />
-                  <button
-                    className="btn primary"
-                    disabled={!alertChannelName.trim() || createChannel.isPending}
-                    onClick={() => createChannel.mutate(alertChannelName.trim())}
-                  >
-                    {createChannel.isPending ? 'Creating…' : 'Create channel'}
-                  </button>
-                  <span className="muted">or pick an existing channel below</span>
-                </div>
+                onTest={() => testSlack.mutate(inst.id)}
+                onDisconnect={() => disconnectSlack.mutate(inst.id)}
+              />
+            ))}
+            {slack.configured && (
+              <div style={{ marginTop: 10 }}>
+                <a className="btn" href="/api/slack/install">Connect another Slack workspace</a>
               </div>
             )}
-            <div className="row">
-              <SlackChannelSelect
-                channels={slackChannels?.channels}
-                value={slack.alert_channel_id ?? ''}
-                busy={setSlackChannel.isPending || createChannel.isPending}
-                onPick={(id) => id && setSlackChannel.mutate(id)}
-                onCreate={async (name) => {
-                  await createChannel.mutateAsync(name);
-                }}
-              />
-              <button className="btn" onClick={() => testSlack.mutate()}>Send test</button>
-              <button className="btn danger" onClick={() => disconnectSlack.mutate()}>Disconnect</button>
-            </div>
             {slackMsg && <div className="muted" style={{ marginTop: 8 }}>{slackMsg}</div>}
           </>
         ) : slack?.configured ? (
@@ -670,6 +650,84 @@ function InstallCard() {
           <button className="btn" onClick={() => void promptInstall()}>Install Janis</button>
         </>
       )}
+    </div>
+  );
+}
+
+/** One connected Slack workspace: name, its alert channel picker, and
+ * test/disconnect controls scoped to that installation. */
+function SlackInstallEditor({
+  inst,
+  isDefault,
+  alertChannelName,
+  setAlertChannelName,
+  busy,
+  onPick,
+  onCreate,
+  onTest,
+  onDisconnect,
+}: {
+  inst: SlackInstallationInfo;
+  isDefault: boolean;
+  alertChannelName: string;
+  setAlertChannelName: (v: string) => void;
+  busy: boolean;
+  onPick: (channelId: string) => void;
+  onCreate: (name: string) => Promise<void>;
+  onTest: () => void;
+  onDisconnect: () => void;
+}) {
+  const { data: channels } = useSlackChannels(true, inst.id);
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: '10px 12px',
+        marginBottom: 10,
+      }}
+    >
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+        <strong>{inst.team_name ?? inst.team_id}</strong>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {isDefault ? 'default workspace' : ''}
+        </span>
+      </div>
+      {!inst.alert_channel_id && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ marginBottom: 8 }}>
+            No alert channel yet. Create a dedicated channel for Janis alerts —
+            you can rename it:
+          </div>
+          <div className="row">
+            <input
+              style={{ width: 200 }}
+              value={alertChannelName}
+              onChange={(e) => setAlertChannelName(e.target.value)}
+              placeholder="janis-alerts"
+            />
+            <button
+              className="btn primary"
+              disabled={!alertChannelName.trim() || busy}
+              onClick={() => void onCreate(alertChannelName.trim())}
+            >
+              {busy ? 'Creating…' : 'Create channel'}
+            </button>
+            <span className="muted">or pick an existing channel below</span>
+          </div>
+        </div>
+      )}
+      <div className="row">
+        <SlackChannelSelect
+          channels={channels?.channels}
+          value={inst.alert_channel_id ?? ''}
+          busy={busy}
+          onPick={(id) => id && onPick(id)}
+          onCreate={onCreate}
+        />
+        <button className="btn" onClick={onTest}>Send test</button>
+        <button className="btn danger" onClick={onDisconnect}>Disconnect</button>
+      </div>
     </div>
   );
 }

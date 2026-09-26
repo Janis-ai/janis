@@ -112,6 +112,12 @@ export const agents = pgTable('agents', {
   // Slack channel override for this agent's alerts — null routes to the
   // installation's workspace-wide alert channel
   slackChannelId: text('slack_channel_id'),
+  // Slack workspace override — null uses the workspace's default installation
+  // (earliest connected); set routes this agent's alerts/threads there
+  slackInstallationId: uuid('slack_installation_id').references(
+    () => slackInstallations.id,
+    { onDelete: 'set null' },
+  ),
   autoResumeMinutes: integer('auto_resume_minutes').default(10), // auto-release human takeover after N min (null = never)
   // Behavior config for template-based agents: {system_prompt, knowledge[], tone}
   config: jsonb('config').notNull().default({}),
@@ -295,6 +301,7 @@ export const slackInstallations = pgTable('slack_installations', {
     .notNull()
     .references(() => workspaces.id),
   teamId: text('team_id').notNull(),
+  teamName: text('team_name'),
   botToken: text('bot_token').notNull(),
   alertChannelId: text('alert_channel_id'),
   installerUserId: uuid('installer_user_id').references(() => users.id),
@@ -315,6 +322,9 @@ export const suggestions = pgTable('suggestions', {
     .notNull()
     .references(() => conversations.id),
   text: text('text').notNull(),
+  // goal-steering context: what the draft is trying to achieve / what info is
+  // missing — shown muted above the reply, never sent to the customer
+  notes: text('notes'),
   source: text('source', { enum: ['agent', 'llm'] }).notNull(),
   status: text('status', { enum: ['pending', 'used', 'dismissed'] })
     .notNull()

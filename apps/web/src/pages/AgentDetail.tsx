@@ -345,18 +345,24 @@ function SlackAlerts({ agent }: { agent: Agent }) {
   const { data: me } = useMe();
   const isAdmin = me?.user.role === 'admin';
   const { data: slack } = useSlackStatus();
-  const { data: slackChannels } = useSlackChannels(!!slack?.connected);
+  const installations = slack?.installations ?? [];
+  const effInstId = agent.slack_installation_id ?? installations[0]?.id ?? null;
+  const { data: slackChannels } = useSlackChannels(!!slack?.connected, effInstId);
+  const { data: defaultChannels } = useSlackChannels(
+    !!slack?.connected && effInstId !== installations[0]?.id,
+    installations[0]?.id,
+  );
   const qc = useQueryClient();
   const [msg, setMsg] = useState('');
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['agents'] });
     void qc.invalidateQueries({ queryKey: ['slackChannels'] });
   };
-  const setChannel = useMutation({
-    mutationFn: (channelId: string | null) =>
+  const setRoute = useMutation({
+    mutationFn: (patch: { slack_installation_id?: string | null; slack_channel_id?: string | null }) =>
       api(`/api/agents/${agent.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ slack_channel_id: channelId }),
+        body: JSON.stringify(patch),
       }),
     onSuccess: refresh,
     onError: (e) => setMsg(e.message),
@@ -371,7 +377,7 @@ function SlackAlerts({ agent }: { agent: Agent }) {
       // Merge into the channel list now — conversations.list can lag on new
       // channels, so a plain refetch would briefly drop the option.
       qc.setQueryData<{ channels: { id: string; name: string }[] }>(
-        ['slackChannels'],
+        ['slackChannels', effInstId ?? ''],
         (old) => ({
           channels: old?.channels.some((ch) => ch.id === res.channel.id)
             ? old.channels
@@ -384,37 +390,77 @@ function SlackAlerts({ agent }: { agent: Agent }) {
     onError: (e) => setMsg(e.message),
   });
   if (!slack?.connected) return null;
-  const workspaceChannel = slackChannels?.channels.find(
-    (ch) => ch.id === slack.alert_channel_id,
+  const effInst = installations.find((i) => i.id === effInstId);
+  const instChannel = slackChannels?.channels.find((ch) => ch.id === effInst?.alert_channel_id);
+  const defaultInstChannel = defaultChannels?.channels.find(
+    (ch) => ch.id === installations[0]?.alert_channel_id,
   );
+  const instLabel = (i?: { team_name: string | null; team_id: string }) =>
+    i?.team_name ?? i?.team_id ?? 'Slack';
   return (
     <div className="card" style={{ marginTop: 12 }}>
       <strong>Slack alerts</strong>
       <div className="muted" style={{ margin: '4px 0 8px' }}>
-        Where this agent's escalations post. Inherits the workspace channel unless you
-        pick or create a dedicated one.
+        Where this agent's escalations post. Inherits the workspace defaults unless you
+        override the Slack workspace or channel.
       </div>
       {isAdmin ? (
-        <SlackChannelSelect
-          channels={slackChannels?.channels}
-          value={agent.slack_channel_id ?? ''}
-          inheritLabel={
-            workspaceChannel
-              ? `Workspace channel (#${workspaceChannel.name})`
-              : 'Workspace channel (default)'
-          }
-          defaultName={`janis-${agent.name}`}
-          busy={setChannel.isPending || createChannel.isPending}
-          onPick={(id) => setChannel.mutate(id)}
-          onCreate={async (name) => {
-            await createChannel.mutateAsync(name);
-          }}
-        />
+        <>
+          {installations.length > 0 && (
+            <div className="row" style={{ marginBottom: 8 }}>
+              <label className="muted" style={{ minWidth: 110 }}>Slack workspace</label>
+              <select
+                value={agent.slack_installation_id ?? ''}
+                disabled={setRoute.isPending}
+                onChange={(e) =>
+                  // switching workspaces invalidates the channel — clear it
+                  setRoute.mutate({
+                    slack_installation_id: e.target.value || null,
+                    slack_channel_id: null,
+                  })
+                }
+              >
+                <option value="">
+                  Default ({instLabel(installations[0])})
+                </option>
+                {installations.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {instLabel(i)}
+                  </option>
+                ))}
+              </select>
+              {slack.configured && (
+                <a className="btn" href="/api/slack/install">Add workspace</a>
+              )}
+            </div>
+          )}
+          <div className="row">
+            <label className="muted" style={{ minWidth: 110 }}>Channel</label>
+            <SlackChannelSelect
+              channels={slackChannels?.channels}
+              value={agent.slack_channel_id ?? ''}
+              inheritLabel={
+                instChannel
+                  ? `Workspace channel (#${instChannel.name})`
+                  : 'Workspace channel (default)'
+              }
+              defaultName={`janis-${agent.name}`}
+              busy={setRoute.isPending || createChannel.isPending}
+              onPick={(id) => setRoute.mutate({ slack_channel_id: id })}
+              onCreate={async (name) => {
+                await createChannel.mutateAsync(name);
+              }}
+            />
+          </div>
+        </>
       ) : (
         <div className="muted">
+          {agent.slack_installation_id && effInst
+            ? `${instLabel(effInst)} — `
+            : ''}
           {agent.slack_channel_id
             ? `#${slackChannels?.channels.find((ch) => ch.id === agent.slack_channel_id)?.name ?? agent.slack_channel_id}`
-            : `Workspace channel${workspaceChannel ? ` (#${workspaceChannel.name})` : ''}`}
+            : `Workspace channel${(instChannel ?? defaultInstChannel) ? ` (#${(instChannel ?? defaultInstChannel)!.name})` : ''}`}
         </div>
       )}
       {msg && <div className="muted" style={{ marginTop: 8 }}>{msg}</div>}

@@ -45,10 +45,17 @@ export function v1Routes(db: Db) {
   // Agent answers a suggestion.request webhook with its drafted reply
   app.post(
     '/suggestions',
-    zValidator('json', z.object({ conversation_id: z.string(), text: z.string().min(1) })),
+    zValidator(
+      'json',
+      z.object({
+        conversation_id: z.string(),
+        text: z.string().min(1),
+        notes: z.string().max(500).optional(),
+      }),
+    ),
     async (c) => {
       const agent = c.get('agent');
-      const { conversation_id, text } = c.req.valid('json');
+      const { conversation_id, text, notes } = c.req.valid('json');
       const [conv] = await db
         .select()
         .from(conversations)
@@ -57,7 +64,7 @@ export function v1Routes(db: Db) {
         )
         .limit(1);
       if (!conv) return c.json({ error: 'conversation not found' }, 404);
-      const row = await storeSuggestion(db, conv.id, text, 'agent');
+      const row = await storeSuggestion(db, conv.id, text, 'agent', notes);
       return c.json({ suggestion: { id: row.id } }, 201);
     },
   );

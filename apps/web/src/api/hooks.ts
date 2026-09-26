@@ -145,13 +145,24 @@ export function useSearch(
   });
 }
 
+export interface SlackInstallationInfo {
+  id: string;
+  team_id: string;
+  team_name: string | null;
+  alert_channel_id: string | null;
+}
+
 export function useSlackStatus() {
   return useQuery({
     queryKey: ['slackStatus'],
     queryFn: () =>
-      api<{ connected: boolean; team_id: string | null; alert_channel_id: string | null; configured: boolean }>(
-        '/api/slack/status',
-      ),
+      api<{
+        connected: boolean;
+        team_id: string | null;
+        alert_channel_id: string | null;
+        installations: SlackInstallationInfo[];
+        configured: boolean;
+      }>('/api/slack/status'),
   });
 }
 
@@ -171,10 +182,13 @@ export function useDeliveries(agentId: string | null) {
   });
 }
 
-export function useSlackChannels(enabled: boolean) {
+export function useSlackChannels(enabled: boolean, installationId?: string | null) {
   return useQuery({
-    queryKey: ['slackChannels'],
-    queryFn: () => api<{ channels: { id: string; name: string }[] }>('/api/slack/channels'),
+    queryKey: ['slackChannels', installationId ?? ''],
+    queryFn: () =>
+      api<{ channels: { id: string; name: string }[] }>(
+        `/api/slack/channels${installationId ? `?installation_id=${installationId}` : ''}`,
+      ),
     enabled,
   });
 }

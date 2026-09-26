@@ -376,7 +376,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         key: 'restricted_key',
         label: 'Restricted API key',
         placeholder: 'e.g. rk_live_…',
-        help: 'Dashboard → Developers → API keys → Create restricted key (asks for 2FA) → grant Read on Customers and Charges; add Write on Refunds and Subscriptions if you want the agent to propose those actions.',
+        help: 'Dashboard → Developers → API keys → Create restricted key (asks for 2FA) → grant Read on Customers, Charges, Subscriptions, Prices and Products; add Write on Refunds and Subscriptions if you want the agent to propose those actions.',
       },
     ],
     secrets: (f) => ({ STRIPE_RESTRICTED_KEY: f.restricted_key.trim() }),
@@ -396,6 +396,32 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://api.stripe.com/v1/charges?customer={customer_id}&limit=5',
         headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
         params: { customer_id: 'Stripe customer id, e.g. cus_…' },
+      },
+      {
+        name: 'stripe_customer_subscriptions',
+        description:
+          'List a customer\'s subscriptions — returns each sub_… id with status, current period, and its subscription items (si_…) with the price/plan on each.',
+        method: 'GET',
+        url: 'https://api.stripe.com/v1/subscriptions?customer={customer_id}&status=all&limit=10&expand[]=data.items.data.price',
+        headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
+        params: { customer_id: 'Stripe customer id, e.g. cus_…' },
+      },
+      {
+        name: 'stripe_list_products',
+        description:
+          'List active Stripe products — use this to resolve a plan name (e.g. "Pro") into a prod_… id before looking up its prices.',
+        method: 'GET',
+        url: 'https://api.stripe.com/v1/products?active=true&limit=20',
+        headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
+      },
+      {
+        name: 'stripe_list_prices',
+        description:
+          'List active prices for a Stripe product — returns price_… ids with amounts, currency and billing interval.',
+        method: 'GET',
+        url: 'https://api.stripe.com/v1/prices?active=true&limit=20&product={product_id}&expand[]=data.product',
+        headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
+        params: { product_id: 'Stripe product id prod_… from stripe_list_products' },
       },
       {
         name: 'stripe_create_refund',
@@ -423,6 +449,23 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         params: {
           subscription_id: 'subscription id sub_…',
           cancel_at_period_end: 'always "true" — cancels at period end, not immediately',
+        },
+      },
+      {
+        name: 'stripe_update_subscription',
+        description:
+          'Change the plan on a Stripe subscription — swaps a subscription item to a new price. Changes billing — needs a teammate to approve.',
+        method: 'POST',
+        bodyFormat: 'form',
+        approval: true,
+        url: 'https://api.stripe.com/v1/subscriptions/{subscription_id}',
+        headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
+        params: {
+          subscription_id: 'subscription id sub_… from stripe_customer_subscriptions',
+          'items[0][id]': 'existing subscription item id si_… being changed (from stripe_customer_subscriptions)',
+          'items[0][price]': 'new price id price_… (from stripe_list_prices)',
+          proration_behavior:
+            '"always_invoice" (bill the difference now), "create_prorations" (apply at next invoice) or "none"',
         },
       },
     ],

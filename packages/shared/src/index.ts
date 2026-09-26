@@ -271,6 +271,8 @@ export const Agent = z.object({
   auto_resume_minutes: z.number().nullable(),
   // Slack channel override for this agent's alerts — null = workspace channel
   slack_channel_id: z.string().nullable(),
+  // Slack workspace override — null = workspace's default installation
+  slack_installation_id: z.string().nullable(),
   config: AgentConfig,
   last_seen_at: z.string().nullable(), // last ingest event received
   api_key_preview: z.string().nullable(), // null until a key is generated; full key shown once on generate/rotate
@@ -367,6 +369,7 @@ export const Suggestion = z.object({
   id: z.string(),
   conversation_id: z.string(),
   text: z.string(),
+  notes: z.string().nullable(),
   source: z.enum(['agent', 'llm']),
   status: z.enum(['pending', 'used', 'dismissed']),
   created_at: z.string(),

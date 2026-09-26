@@ -12,6 +12,8 @@ import {
   createSlackChannel,
   findThread,
   getInstallation,
+  installationFor,
+  installationsFor,
   inviteWorkspaceMembers,
   listSlackChannels,
   markThreadReply,
@@ -26,6 +28,27 @@ import {
 import { fetchAvatar } from '../lib/avatar.js';
 import { membershipFor } from '../lib/members.js';
 import { agentSend, humanReply, internalNote, resume, takeover, TakeoverError, teachAgent } from '../services/takeover.js';
+
+type Installation = typeof slackInstallations.$inferSelect;
+
+/** Optional installation_id query/body → that row if it belongs to this
+ * workspace; absent → the default (earliest) installation. A foreign or stale
+ * id resolves to undefined rather than silently falling back. */
+async function installationById(
+  db: Db,
+  workspaceId: string,
+  installationId?: string | null,
+): Promise<Installation | undefined> {
+  if (!installationId) return getInstallation(db, workspaceId);
+  const [row] = await db
+    .select()
+    .from(slackInstallations)
+    .where(
+      and(eq(slackInstallations.id, installationId), eq(slackInstallations.workspaceId, workspaceId)),
+    )
+    .limit(1);
+  return row;
+}
 
 // channel:ts → processed-at. Slack's overlapping event subscriptions deliver
 // the same user message twice in parallel; this collapses them in-process.
@@ -74,11 +97,18 @@ export function slackApiRoutes(db: Db) {
   app.use('/*', sessionAuth(db));
 
   app.get('/status', async (c) => {
-    const inst = await getInstallation(db, c.get('workspaceId'));
+    const insts = await installationsFor(db, c.get('workspaceId'));
+    const inst = insts[0]; // default = earliest connected
     return c.json({
       connected: !!inst,
       team_id: inst?.teamId ?? null,
       alert_channel_id: inst?.alertChannelId ?? null,
+      installations: insts.map((i) => ({
+        id: i.id,
+        team_id: i.teamId,
+        team_name: i.teamName,
+        alert_channel_id: i.alertChannelId,
+      })),
       configured: !!(env.slackClientId && env.slackClientSecret),
     });
   });
@@ -92,7 +122,7 @@ export function slackApiRoutes(db: Db) {
 
   app.get('/channels', async (c) => {
     const workspaceId = c.get('workspaceId');
-    const inst = await getInstallation(db, workspaceId);
+    const inst = await installationById(db, workspaceId, c.req.query('installation_id'));
     if (!inst) return c.json({ channels: [] });
     const channels = await listSlackChannels(inst.botToken);
     // conversations.list can omit freshly created channels for a while —
@@ -114,11 +144,16 @@ export function slackApiRoutes(db: Db) {
   });
 
   app.patch(
-    '/channel', adminOnly, zValidator('json', z.object({ channel_id: z.string().min(1) })),
+    '/channel',
+    adminOnly,
+    zValidator(
+      'json',
+      z.object({ channel_id: z.string().min(1), installation_id: z.string().optional() }),
+    ),
     async (c) => {
-      const inst = await getInstallation(db, c.get('workspaceId'));
+      const { channel_id: channelId, installation_id } = c.req.valid('json');
+      const inst = await installationById(db, c.get('workspaceId'), installation_id);
       if (!inst) return c.json({ error: 'slack not connected' }, 404);
-      const channelId = c.req.valid('json').channel_id;
       await db
         .update(slackInstallations)
         .set({ alertChannelId: channelId })
@@ -138,19 +173,24 @@ export function slackApiRoutes(db: Db) {
       z.object({ name: z.string().min(1).max(80), agent_id: z.string().optional() }),
     ),
     async (c) => {
-      const inst = await getInstallation(db, c.get('workspaceId'));
-      if (!inst) return c.json({ error: 'slack not connected' }, 404);
       const { name: rawName, agent_id: agentId } = c.req.valid('json');
-      const name = sanitizeChannelName(rawName);
-      if (!name) return c.json({ error: 'invalid channel name' }, 400);
+      // With agent_id the channel is created in that agent's Slack workspace
+      // (its installation override, else the default).
+      let inst: Installation | undefined;
       if (agentId) {
         const [agent] = await db
-          .select({ id: agents.id })
+          .select()
           .from(agents)
-          .where(and(eq(agents.id, agentId), eq(agents.workspaceId, inst.workspaceId)))
+          .where(and(eq(agents.id, agentId), eq(agents.workspaceId, c.get('workspaceId'))))
           .limit(1);
         if (!agent) return c.json({ error: 'agent not found' }, 404);
+        inst = await installationFor(db, agent);
+      } else {
+        inst = await getInstallation(db, c.get('workspaceId'));
       }
+      if (!inst) return c.json({ error: 'slack not connected' }, 404);
+      const name = sanitizeChannelName(rawName);
+      if (!name) return c.json({ error: 'invalid channel name' }, 400);
       // The user typed this name — surface collisions instead of silently
       // creating #name-x3yz so they can rename in the dialog.
       const { channel, error: createErr } = await createSlackChannel(inst, name, {
@@ -168,7 +208,7 @@ export function slackApiRoutes(db: Db) {
       if (agentId) {
         await db
           .update(agents)
-          .set({ slackChannelId: channel.id })
+          .set({ slackChannelId: channel.id, slackInstallationId: inst.id })
           .where(eq(agents.id, agentId));
       } else {
         await db
@@ -187,16 +227,25 @@ export function slackApiRoutes(db: Db) {
       db,
       workspaceId,
       ':white_check_mark: Janis is connected — agent alerts will arrive here.',
+      { installationId: c.req.query('installation_id') },
     );
     if (!posted) return c.json({ error: 'no alert channel configured' }, 400);
     return c.json({ ok: true });
   });
 
-  app.delete('/', adminOnly, async (c) => {
-    const inst = await getInstallation(db, c.get('workspaceId'));
+  app.delete('/:id', adminOnly, async (c) => {
+    const inst = await installationById(db, c.get('workspaceId'), c.req.param('id'));
     if (!inst) return c.json({ ok: true });
     await db.delete(slackThreads).where(eq(slackThreads.installationId, inst.id));
     await db.delete(slackInstallations).where(eq(slackInstallations.id, inst.id));
+    return c.json({ ok: true });
+  });
+
+  app.delete('/', adminOnly, async (c) => {
+    for (const inst of await installationsFor(db, c.get('workspaceId'))) {
+      await db.delete(slackThreads).where(eq(slackThreads.installationId, inst.id));
+      await db.delete(slackInstallations).where(eq(slackInstallations.id, inst.id));
+    }
     return c.json({ ok: true });
   });
 
@@ -261,17 +310,26 @@ export function slackPublicRoutes(db: Db) {
       ok: boolean;
       error?: string;
       access_token?: string;
-      team?: { id: string };
+      team?: { id: string; name?: string };
       authed_user?: { id: string; access_token?: string };
     };
     if (!data.ok || !data.access_token || !data.team) {
       return c.text(`slack oauth failed: ${data.error ?? 'unknown'}`, 400);
     }
 
+    // Re-install of a Slack team we already have refreshes that row (threads
+    // anchored on it die with the old token's channel state); installing a
+    // DIFFERENT team adds another workspace — agents can then be pointed at
+    // it via slack_installation_id.
     const [existing] = await db
       .select()
       .from(slackInstallations)
-      .where(eq(slackInstallations.workspaceId, workspaceId))
+      .where(
+        and(
+          eq(slackInstallations.workspaceId, workspaceId),
+          eq(slackInstallations.teamId, data.team.id),
+        ),
+      )
       .limit(1);
     if (existing) {
       await db.delete(slackThreads).where(eq(slackThreads.installationId, existing.id));
@@ -282,6 +340,7 @@ export function slackPublicRoutes(db: Db) {
       .values({
         workspaceId,
         teamId: data.team.id,
+        teamName: data.team.name ?? null,
         botToken: data.access_token,
         installerUserId: userId || null,
         installerSlackUserId: data.authed_user?.id ?? null,

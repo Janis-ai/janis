@@ -882,3 +882,132 @@ describe('member channel sync', () => {
     expect(callsFor(fetchMock, 'conversations.invite')).toHaveLength(0);
   });
 });
+
+describe('per-agent Slack workspace override', () => {
+  it('routes an agent\'s alert through its own installation + channel; default agents stay on the default install', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'MultiWS' }).returning();
+    const [defInst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_DEF', botToken: 'xoxb-default', alertChannelId: 'C_DEF' })
+      .returning();
+    const [altInst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_ALT', botToken: 'xoxb-alt', alertChannelId: 'C_ALT' })
+      .returning();
+    // orderBy createdAt picks the default — keep them distinct if the clock ties
+    const [routed] = await db
+      .insert(agents)
+      .values({
+        workspaceId: ws.id,
+        name: 'RoutedBot',
+        slackInstallationId: altInst.id,
+        slackChannelId: 'C_AGENT_ALT',
+      })
+      .returning();
+    const [plain] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'PlainBot' })
+      .returning();
+    const [convR] = await db
+      .insert(conversations)
+      .values({ agentId: routed.id, externalId: 'mr:1' })
+      .returning();
+    const [convP] = await db
+      .insert(conversations)
+      .values({ agentId: plain.id, externalId: 'mp:1' })
+      .returning();
+
+    const calls: { url: string; token: string; body: Record<string, unknown> }[] = [];
+    let tsSeq = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
+        calls.push({
+          url: String(url),
+          token: init?.headers?.Authorization ?? '',
+          body: init?.body ? JSON.parse(init.body) : {},
+        });
+        // unique ts per call — slack_threads is unique on (channel, ts)
+        return new Response(`{"ok":true,"channel":"C_X","ts":"5.${++tsSeq}"}`, { status: 200 });
+      }),
+    );
+
+    const [alertR] = await db
+      .insert(alerts)
+      .values({ conversationId: convR.id, type: 'help_request', detail: 'routed' })
+      .returning();
+    await postSlackAlert(db, ws.id, convR, routed, alertR);
+    const routedPosts = calls.filter(
+      (c) => c.url.includes('chat.postMessage') && c.token === 'Bearer xoxb-alt',
+    );
+    // agent's own channel in the ALT workspace
+    expect(routedPosts.some((p) => p.body.channel === 'C_AGENT_ALT')).toBe(true);
+    // nothing went out over the default installation's token
+    expect(
+      calls.some((c) => c.token === 'Bearer xoxb-default' && c.url.includes('chat.postMessage')),
+    ).toBe(false);
+    const [threadR] = await db
+      .select()
+      .from(slackThreads)
+      .where(eq(slackThreads.conversationId, convR.id));
+    expect(threadR.installationId).toBe(altInst.id);
+
+    calls.length = 0;
+    const [alertP] = await db
+      .insert(alerts)
+      .values({ conversationId: convP.id, type: 'help_request', detail: 'plain' })
+      .returning();
+    await postSlackAlert(db, ws.id, convP, plain, alertP);
+    const plainPosts = calls.filter(
+      (c) => c.url.includes('chat.postMessage') && c.token === 'Bearer xoxb-default',
+    );
+    expect(plainPosts.some((p) => p.body.channel === 'C_DEF')).toBe(true);
+    const [threadP] = await db
+      .select()
+      .from(slackThreads)
+      .where(eq(slackThreads.conversationId, convP.id));
+    expect(threadP.installationId).toBe(defInst.id);
+  });
+
+  it('ignores an override pointing at another workspace\'s installation', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'OrphanWS' }).returning();
+    const [otherWs] = await db.insert(workspaces).values({ name: 'OtherWS' }).returning();
+    const [defInst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_ONLY', botToken: 'xoxb-only', alertChannelId: 'C_ONLY' })
+      .returning();
+    const [foreign] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: otherWs.id, teamId: 'T_FOREIGN', botToken: 'xoxb-foreign' })
+      .returning();
+    const [agent] = await db
+      .insert(agents)
+      .values({
+        workspaceId: ws.id,
+        name: 'OrphanBot',
+        // an installation that belongs to a different Janis workspace
+        slackInstallationId: foreign.id,
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'mo:1' })
+      .returning();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () =>
+        new Response('{"ok":true,"channel":"C_ONLY","ts":"6.6"}', { status: 200 }),
+      ),
+    );
+    const [alert] = await db
+      .insert(alerts)
+      .values({ conversationId: conv.id, type: 'failure', detail: 'x' })
+      .returning();
+    await postSlackAlert(db, ws.id, conv, agent, alert);
+    const [thread] = await db
+      .select()
+      .from(slackThreads)
+      .where(eq(slackThreads.conversationId, conv.id));
+    expect(thread.installationId).toBe(defInst.id);
+  });
+});
