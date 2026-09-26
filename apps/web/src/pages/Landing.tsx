@@ -8,7 +8,7 @@ const FEATURES = [
   {
     icon: '/img/home-connect.png',
     title: 'Every channel, one inbox',
-    body: 'Messenger, Instagram, WhatsApp, Slack, and web chat — unified, searchable, triageable.',
+    body: 'Messenger, Instagram, WhatsApp, email, and web chat — unified, searchable, triageable.',
   },
   {
     icon: '/img/home-deploy.png',
@@ -19,6 +19,11 @@ const FEATURES = [
     icon: '/img/home-delight.png',
     title: 'Take over from Slack',
     body: 'Escalations arrive with an AI brief — reply in-thread, run it with /pause, /resume, /note, /teach.',
+  },
+  {
+    icon: '/img/value-reduce.png',
+    title: 'Autonomous, with checkpoints',
+    body: 'Agents reply and run tools unattended. Mark an action approval-required — refunds, plan changes — and it waits for a human click.',
   },
   {
     icon: '/img/value-boost.png',
@@ -39,6 +44,7 @@ const FEATURES = [
 
 const DIFFERENT: [string, string, string][] = [
   ['Your agent', 'Rebuild it on their bot platform', 'Keep yours — or use ours'],
+  ['Autonomy', 'All-or-nothing, decided globally', 'Full speed — checkpoints where you draw them'],
   ['The handoff', 'A bolted-on escape hatch', 'The core of the product'],
   ['When the AI fails', 'A dashboard shows you where', 'Janis drafts the fix for you'],
   ['Pricing', 'Per seat, per teammate', 'Per message + metered tokens'],
@@ -55,7 +61,7 @@ const PRICING = [
 const STEPS = [
   ['Connect', 'Link your channels and your agent — hosted on Janis or your own webhook.'],
   ['Agent answers', 'Instant replies grounded in your knowledge base, 24/7.'],
-  ['Human steps in', 'Slack alert with an AI brief — reply in-thread and you’re talking to the customer.'],
+  ['Human steps in', 'Slack alert with an AI brief — reply in-thread, or approve a gated action without leaving the channel.'],
   ['Hand it back', 'Resume the agent; the exchange becomes training data.'],
 ];
 
@@ -105,8 +111,8 @@ export default function Landing() {
         <h1>Your AI agent has a help button.</h1>
         <p>
           AI and humans working together. Janis answers your customers on
-          Messenger, Instagram, WhatsApp, Slack, and web chat — hands off to a human
-          when it matters, and learns from every rescue.
+          Messenger, Instagram, WhatsApp, email, and web chat — autonomous by
+          default, with a human checkpoint exactly where you draw it.
         </p>
         <div className="row" style={{ justifyContent: 'center', gap: 12 }}>
           <Link className="btn primary lg" to={cta.to}>{cta.label}</Link>
