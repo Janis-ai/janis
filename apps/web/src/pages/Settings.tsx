@@ -738,6 +738,7 @@ function SlackInstallEditor({
       <div className="row">
         <SlackChannelSelect
           channels={channels?.channels}
+          truncated={channels?.truncated}
           value={inst.alert_channel_id ?? ''}
           busy={busy}
           onPick={(id) => id && onPick(id)}

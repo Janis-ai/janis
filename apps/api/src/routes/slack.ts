@@ -124,7 +124,7 @@ export function slackApiRoutes(db: Db) {
     const workspaceId = c.get('workspaceId');
     const inst = await installationById(db, workspaceId, c.req.query('installation_id'));
     if (!inst) return c.json({ channels: [] });
-    const channels = await listSlackChannels(inst.botToken);
+    const { channels, complete } = await listSlackChannels(inst.botToken);
     // conversations.list can omit freshly created channels for a while —
     // resolve any selected channels that are missing so the picker shows
     // them instead of snapping back to "Pick alert channel…".
@@ -140,7 +140,7 @@ export function slackApiRoutes(db: Db) {
       const info = await slackChannelInfo(inst.botToken, id);
       if (info) channels.push({ id: info.id, name: info.name });
     }
-    return c.json({ channels });
+    return c.json({ channels, truncated: !complete });
   });
 
   app.patch(
@@ -355,7 +355,7 @@ export function slackPublicRoutes(db: Db) {
     // janis-* match. When none exists we leave it unset: Settings prompts
     // the admin to confirm creating one (or pick an existing channel)
     // rather than silently provisioning inside an OAuth redirect.
-    const channels = await listSlackChannels(inst.botToken);
+    const { channels } = await listSlackChannels(inst.botToken);
     const channelId =
       channels.find((ch) => ch.name === 'janis-alerts')?.id ??
       channels.find((ch) => /janis/i.test(ch.name))?.id;

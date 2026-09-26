@@ -11,7 +11,7 @@ import { eq } from 'drizzle-orm';
 import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { slackApiRoutes, slackPublicRoutes } from './slack.js';
-import { findThread, mirrorToSlack, postSlackAlert, removeMemberFromAlertChannels, syncMemberToAlertChannels } from '../lib/slack.js';
+import { findThread, mirrorToSlack, postSlackAlert, removeMemberFromAlertChannels, resetChannelScanCache, syncMemberToAlertChannels } from '../lib/slack.js';
 import { env } from '../env.js';
 
 let app: Hono;
@@ -27,7 +27,11 @@ beforeAll(async () => {
   env.legacySlackInteractionsUrl = 'https://legacy-slack.test/slack/receive';
 });
 
-beforeEach(() => vi.unstubAllGlobals());
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  // channel scans cache per bot token — tests reuse token strings
+  resetChannelScanCache();
+});
 
 function signedPost(body: string, path = '/slack/interactions') {
   const ts = String(Math.floor(Date.now() / 1000));

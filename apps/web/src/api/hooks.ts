@@ -189,7 +189,7 @@ export function useSlackChannels(enabled: boolean, installationId?: string | nul
   return useQuery({
     queryKey: ['slackChannels', installationId ?? ''],
     queryFn: () =>
-      api<{ channels: { id: string; name: string }[] }>(
+      api<{ channels: { id: string; name: string }[]; truncated?: boolean }>(
         `/api/slack/channels${installationId ? `?installation_id=${installationId}` : ''}`,
       ),
     enabled,

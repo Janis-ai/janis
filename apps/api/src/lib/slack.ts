@@ -32,20 +32,41 @@ export async function slackApi<T = Record<string, unknown>>(
   method: string,
   body: Record<string, unknown>,
   query?: Record<string, string>,
+  opts?: { rateLimitRetries?: number },
 ): Promise<T & { ok: boolean; error?: string }> {
   const url = query ? `${SLACK_API}/${method}?${new URLSearchParams(query)}` : `${SLACK_API}/${method}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    // charset is required — without it Slack silently ignores the JSON body
-    // on most methods (chat.postMessage tolerates it; users.*, conversations.*
-    // return invalid_arguments / "missing required field").
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json; charset=utf-8',
-    },
-    body: JSON.stringify(body),
-  });
-  return (await res.json()) as T & { ok: boolean; error?: string };
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, {
+      method: 'POST',
+      // charset is required — without it Slack silently ignores the JSON body
+      // on most methods (chat.postMessage tolerates it; users.*, conversations.*
+      // return invalid_arguments / "missing required field").
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+      body: JSON.stringify(body),
+    });
+    // Slack's rate-limit signal is HTTP 429 + Retry-After; some methods also
+    // answer 200 {ok:false, error:'ratelimited'}. Only retry when the caller
+    // opted in — webhook handlers must ack inside Slack's 3s window.
+    const retryAfter = Number(res.headers.get('retry-after') ?? 0);
+    if (
+      attempt < (opts?.rateLimitRetries ?? 0) &&
+      (res.status === 429 || res.headers.get('retry-after') !== null) &&
+      retryAfter > 0 &&
+      retryAfter <= 45
+    ) {
+      await new Promise((r) => setTimeout(r, retryAfter * 1000));
+      continue;
+    }
+    // 429/other error bodies aren't always JSON — never let json() throw past
+    // callers that treat Slack responses as data.
+    return (await res.json().catch(() => null) ?? {
+      ok: false,
+      error: `http_${res.status}`,
+    }) as T & { ok: boolean; error?: string };
+  }
 }
 
 /** Verify Slack's request signature (v0 HMAC-SHA256, 5-minute replay window). */
@@ -143,12 +164,28 @@ export async function installationFor(
  * (a single 200-limit page drops channels in bigger workspaces).
  * exclude_archived goes on the QUERY STRING — Slack ignores it in a JSON
  * body — and we still filter is_archived client-side as a backstop: legacy
- * workspaces carry thousands of archived channels. */
+ * workspaces carry thousands of archived channels.
+ *
+ * Full scans are expensive (thousands of channels = dozens of calls) and
+ * conversations.list is tier-2 rate limited, so successful scans are cached
+ * briefly per token and failures surface as `complete: false` rather than a
+ * silently truncated list. */
+const channelScanCache = new Map<
+  string,
+  { at: number; channels: { id: string; name: string }[] }
+>();
+const CHANNEL_SCAN_TTL = 5 * 60_000;
+
 export async function listSlackChannels(
   botToken: string,
-): Promise<{ id: string; name: string }[]> {
+): Promise<{ channels: { id: string; name: string }[]; complete: boolean }> {
+  const cached = channelScanCache.get(botToken);
+  if (cached && Date.now() - cached.at < CHANNEL_SCAN_TTL) {
+    return { channels: cached.channels, complete: true };
+  }
   const out: { id: string; name: string }[] = [];
   let cursor: string | undefined;
+  let complete = false;
   do {
     const res: {
       channels?: { id: string; name: string; is_archived?: boolean }[];
@@ -163,6 +200,7 @@ export async function listSlackChannels(
         limit: '200',
         ...(cursor ? { cursor } : {}),
       },
+      { rateLimitRetries: 3 },
     );
     if (!res.ok) break;
     for (const c of res.channels ?? []) {
@@ -172,7 +210,20 @@ export async function listSlackChannels(
     // legacy workspaces carry tens of thousands of channels — cap high so a
     // valid alert channel isn't silently dropped from the picker
   } while (cursor && out.length < 30000);
-  return out;
+  complete = !cursor;
+  if (complete) channelScanCache.set(botToken, { at: Date.now(), channels: out });
+  return { channels: out, complete };
+}
+
+/** Drop a cached channel scan (e.g. right after creating a channel) so the
+ * next pick doesn't wait out the TTL on a stale list. */
+export function invalidateChannelScan(botToken: string): void {
+  channelScanCache.delete(botToken);
+}
+
+/** Tests: clear every cached scan. */
+export function resetChannelScanCache(): void {
+  channelScanCache.clear();
 }
 
 /** Slack channel names: lowercase letters/digits/dash/underscore, ≤80 chars. */
@@ -199,6 +250,8 @@ export async function createSlackChannel(
     'conversations.create',
     { name: `${name}${suffix}` },
   ).catch(() => null);
+  // a successful create makes any cached channel scan stale
+  if (res?.ok) invalidateChannelScan(inst.botToken);
   if (res?.ok) return { channel: res.channel };
   if (res?.error === 'name_taken' && retryOnTaken && !suffix) {
     return createSlackChannel(inst, name.slice(0, 74), {

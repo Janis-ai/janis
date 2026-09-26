@@ -444,6 +444,7 @@ function SlackAlerts({ agent }: { agent: Agent }) {
             <label className="muted" style={{ minWidth: 110 }}>Channel</label>
             <SlackChannelSelect
               channels={slackChannels?.channels}
+              truncated={slackChannels?.truncated}
               value={agent.slack_channel_id ?? ''}
               inheritLabel={
                 instChannel

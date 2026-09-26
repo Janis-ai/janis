@@ -6,6 +6,7 @@ import { useState } from 'react';
  * stays open while it's pending and closes on success. */
 export function SlackChannelSelect({
   channels,
+  truncated,
   value,
   onPick,
   onCreate,
@@ -14,6 +15,9 @@ export function SlackChannelSelect({
   busy,
 }: {
   channels: { id: string; name: string }[] | undefined;
+  /** API stopped before listing every channel (e.g. Slack rate limits) —
+   * the picker shows a hint instead of pretending the list is complete. */
+  truncated?: boolean;
   value: string;
   onPick: (channelId: string | null) => void;
   onCreate: (name: string) => void | Promise<void>;
@@ -99,6 +103,11 @@ export function SlackChannelSelect({
         ))}
         {q && options.length === 0 && <option disabled>no matches</option>}
       </select>
+      {truncated && (
+        <div className="muted" style={{ flexBasis: '100%', fontSize: 12 }}>
+          Slack rate-limited the channel scan — the list may be incomplete; try again shortly.
+        </div>
+      )}
       <button
         className="btn"
         onClick={() => {
