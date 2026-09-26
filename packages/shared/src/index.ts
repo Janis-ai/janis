@@ -273,6 +273,8 @@ export const Agent = z.object({
   slack_channel_id: z.string().nullable(),
   // Slack workspace override — null = workspace's default installation
   slack_installation_id: z.string().nullable(),
+  // the owning user — always effectively an admin; transfers ownership only
+  owner_user_id: z.string().nullable(),
   config: AgentConfig,
   last_seen_at: z.string().nullable(), // last ingest event received
   api_key_preview: z.string().nullable(), // null until a key is generated; full key shown once on generate/rotate
@@ -400,13 +402,14 @@ export const SavedReply = z.object({
 export type SavedReply = z.infer<typeof SavedReply>;
 
 /** A user's grant/overrides on one agent (agent_members row + user fields).
- *  role null = inherit workspace role; identity/notify fields null = inherit
- *  the user's own profile/prefs. */
+ *  role null = inherit workspace role; 'hidden' = explicitly denied;
+ *  'owner' comes from agents.owner_user_id (the owner may hold no row).
+ *  identity/notify fields null = inherit the user's own profile/prefs. */
 export const AgentMember = z.object({
   user_id: z.string(),
   email: z.string(),
   name: z.string(),
-  role: z.enum(['admin', 'member']).nullable(),
+  role: z.enum(['owner', 'admin', 'member', 'hidden']).nullable(),
   display_name: z.string().nullable(),
   avatar_url: z.string().nullable(),
   avatar_override: z.string().nullable(),
@@ -485,7 +488,8 @@ export const WorkspaceUser = z.object({
   id: z.string(),
   email: z.string(),
   name: z.string(),
-  role: z.enum(['admin', 'member']),
+  // 'owner' = workspaces.owner_user_id — can't be demoted or removed
+  role: z.enum(['owner', 'admin', 'member']),
   // 'invited' = pending membership they haven't accepted yet
   status: z.enum(['active', 'invited']).default('active'),
   notify: z

@@ -26,11 +26,9 @@ export function actionRoutes(db: Db) {
       .where(and(eq(pendingActions.id, c.req.param('id')), eq(pendingActions.workspaceId, workspaceId)))
       .limit(1);
     if (!action) return c.json({ error: 'not found' }, 404);
-    // Scoped users may only decide actions on conversations they can see.
-    if (
-      c.get('agentScope') &&
-      !(await conversationAgent(db, workspaceId, c.get('agentScope'), action.conversationId))
-    ) {
+    // The conversation must be visible to the caller — scoped users are
+    // limited to their grants, and hidden agents are excluded for members.
+    if (!(await conversationAgent(db, workspaceId, c.get('agentScope'), action.conversationId))) {
       return c.json({ error: 'not found' }, 404);
     }
 

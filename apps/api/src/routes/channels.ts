@@ -7,7 +7,7 @@ import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import { agents, channelBindings, channels } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
-import { agentRoleFor, agentScopeCond } from '../lib/access.js';
+import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import {
   findChannelByObjectId,
   invalidateChannelCache,
@@ -107,7 +107,7 @@ export function channelApiRoutes(db: Db) {
     const role = await agentRoleFor(
       db, c.get('user').id, c.get('role'), c.get('agentScope'), body.agent_id, c.get('workspaceId'),
     );
-    if (role !== 'admin') return c.json({ error: 'admin required' }, 403);
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
     const [agent] = await db
       .select({ id: agents.id, name: agents.name })
       .from(agents)
@@ -163,7 +163,7 @@ export function channelApiRoutes(db: Db) {
       const role = await agentRoleFor(
         db, c.get('user').id, c.get('role'), c.get('agentScope'), aid, c.get('workspaceId'),
       );
-      if (role !== 'admin') return c.json({ error: 'admin required' }, 403);
+      if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
     }
     if (body.branding && row.kind !== 'webchat') {
       return c.json({ error: 'branding applies to webchat channels' }, 400);
@@ -229,7 +229,7 @@ export function channelApiRoutes(db: Db) {
     const role = await agentRoleFor(
       db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
     );
-    if (role !== 'admin') return c.json({ error: 'admin required' }, 403);
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
     // Bindings reference channels without cascade — remove them first.
     await db.delete(channelBindings).where(eq(channelBindings.channelId, row.id));
     await db.delete(channels).where(eq(channels.id, row.id));

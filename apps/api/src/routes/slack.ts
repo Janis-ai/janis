@@ -216,7 +216,7 @@ export function slackApiRoutes(db: Db) {
           .set({ alertChannelId: channel.id })
           .where(eq(slackInstallations.id, inst.id));
       }
-      void inviteWorkspaceMembers(db, inst, channel.id);
+      void inviteWorkspaceMembers(db, inst, channel.id, agentId);
       return c.json({ ok: true, channel });
     },
   );

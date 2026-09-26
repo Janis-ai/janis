@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -21,6 +21,7 @@ import { env } from '../env.js';
 import { llmFor } from '../lib/llm.js';
 import { agentRoutes } from './agents.js';
 import { savedReplyRoutes } from './savedReplies.js';
+import { userRoutes } from './users.js';
 import { workspaceRoutes } from './workspace.js';
 
 let app: Hono;
@@ -29,6 +30,7 @@ let wsId: string;
 let agentA: string;
 let agentB: string;
 let adminCookie: string;
+let adminId: string;
 let memberCookie: string;
 let memberId: string;
 let scopedCookie: string;
@@ -70,11 +72,15 @@ beforeAll(async () => {
   app = new Hono()
     .route('/api/agents', agentRoutes(db))
     .route('/api/saved-replies', savedReplyRoutes(db))
+    .route('/api/users', userRoutes(db))
     .route('/api/workspace', workspaceRoutes(db));
 
   const [ws] = await db.insert(workspaces).values({ name: 'WS', plan: 'internal' }).returning();
   wsId = ws.id;
-  adminCookie = (await makeUser('admin@x.test', wsId, 'admin')).cookie;
+  const admin = await makeUser('admin@x.test', wsId, 'admin');
+  adminCookie = admin.cookie;
+  adminId = admin.user.id;
+  await db.update(workspaces).set({ ownerUserId: adminId }).where(eq(workspaces.id, wsId));
   const member = await makeUser('member@x.test', wsId, 'member');
   memberCookie = member.cookie;
   memberId = member.user.id;
@@ -135,14 +141,27 @@ describe('agent-scoped access', () => {
   });
 
   it('workspace admin demoted on an agent loses PATCH there', async () => {
-    const [adminUser] = await db.select().from(users).where(eq(users.email, 'admin@x.test'));
-    await grant(adminUser.id, agentB, 'member');
+    // not the owner — admin@x.test OWNS agentB and owners can't be demoted
+    const { user: second, cookie: secondCookie } = await makeUser(
+      'admin-b@x.test',
+      wsId,
+      'admin',
+    );
+    await grant(second.id, agentB, 'member');
     const res = await app.request(`/api/agents/${agentB}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: secondCookie },
+      body: JSON.stringify({ name: 'B Renamed' }),
+    });
+    expect(res.status).toBe(403);
+    // while the owner ignores the same kind of row entirely
+    await grant(adminId, agentB, 'member');
+    const stillAdmin = await app.request(`/api/agents/${agentB}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', cookie: adminCookie },
       body: JSON.stringify({ name: 'B Renamed' }),
     });
-    expect(res.status).toBe(403);
+    expect(stillAdmin.status).toBe(200);
   });
 });
 
@@ -237,6 +256,159 @@ describe('agent saved replies', () => {
       body: JSON.stringify({ title: 'mine', body: 'agent reply', agent_id: agentA }),
     });
     expect(ok.status).toBe(201);
+  });
+});
+
+describe('agent ownership', () => {
+  it('the creator is recorded as owner and cannot be demoted/hidden/removed', async () => {
+    const list = await app.request('/api/agents', { headers: { cookie: adminCookie } });
+    const a = (await list.json()).agents.find((x: { id: string }) => x.id === agentA);
+    expect(a.owner_user_id).toBe(adminId);
+
+    for (const role of ['member', 'hidden', null]) {
+      const res = await app.request(`/api/agents/${agentA}/members/${adminId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+        body: JSON.stringify({ role }),
+      });
+      expect(res.status).toBe(409);
+    }
+    const del = await app.request(`/api/agents/${agentA}/members/${adminId}`, {
+      method: 'DELETE',
+      headers: { cookie: adminCookie },
+    });
+    expect(del.status).toBe(409);
+  });
+
+  it('only the owner can transfer ownership', async () => {
+    // member is an agent admin on agentA (granted above) but not the owner
+    const denied = await app.request(`/api/agents/${agentA}/members/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: memberCookie },
+      body: JSON.stringify({ role: 'owner' }),
+    });
+    expect(denied.status).toBe(403);
+
+    const res = await app.request(`/api/agents/${agentA}/members/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ role: 'owner' }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).member.role).toBe('owner');
+    const [a] = await db.select().from(agents).where(eq(agents.id, agentA));
+    expect(a.ownerUserId).toBe(memberId);
+
+    // the former owner is no longer protected — now a plain member row
+    const demote = await app.request(`/api/agents/${agentA}/members/${adminId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: memberCookie },
+      body: JSON.stringify({ role: 'member' }),
+    });
+    expect(demote.status).toBe(200);
+  });
+});
+
+describe('hidden agent members', () => {
+  it('hidden removes the agent from a workspace member entirely', async () => {
+    const hide = await app.request(`/api/agents/${agentB}/members/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ role: 'hidden' }),
+    });
+    expect(hide.status).toBe(200);
+
+    const list = await app.request('/api/agents', { headers: { cookie: memberCookie } });
+    const ids = (await list.json()).agents.map((a: { id: string }) => a.id);
+    expect(ids).toContain(agentA);
+    expect(ids).not.toContain(agentB);
+
+    const denied = await app.request(`/api/agents/${agentB}/members`, {
+      headers: { cookie: memberCookie },
+    });
+    expect(denied.status).toBe(404);
+
+    // hidden members aren't eligible assignees either
+    const users = await app.request(`/api/users?agent_id=${agentB}`, {
+      headers: { cookie: adminCookie },
+    });
+    expect((await users.json()).users.map((u: { id: string }) => u.id)).not.toContain(memberId);
+
+    // un-hide restores access
+    const back = await app.request(`/api/agents/${agentB}/members/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ role: 'member' }),
+    });
+    expect(back.status).toBe(200);
+    const relist = await app.request('/api/agents', { headers: { cookie: memberCookie } });
+    expect((await relist.json()).agents.map((a: { id: string }) => a.id)).toContain(agentB);
+  });
+
+  it('hidden is rejected for agent-only users — remove them instead', async () => {
+    const res = await app.request(`/api/agents/${agentA}/members/${scopedId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ role: 'hidden' }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('workspace ownership', () => {
+  it('the workspace owner cannot be demoted or removed', async () => {
+    const demote = await app.request(`/api/users/${adminId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ role: 'member' }),
+    });
+    expect(demote.status).toBe(409);
+
+    const { cookie: otherAdmin } = await makeUser('admin2@x.test', wsId, 'admin');
+    const del = await app.request(`/api/users/${adminId}`, {
+      method: 'DELETE',
+      headers: { cookie: otherAdmin },
+    });
+    expect(del.status).toBe(409);
+
+    // a non-owner admin cannot transfer ownership
+    const steal = await app.request(`/api/users/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: otherAdmin },
+      body: JSON.stringify({ role: 'owner' }),
+    });
+    expect(steal.status).toBe(403);
+  });
+
+  it('the owner transfers ownership by promoting a member', async () => {
+    const res = await app.request(`/api/users/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ role: 'owner' }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).user.role).toBe('owner');
+
+    // transfer auto-promotes the membership to admin
+    const [mem] = await db
+      .select()
+      .from(memberships)
+      .where(and(eq(memberships.userId, memberId), eq(memberships.workspaceId, wsId)));
+    expect(mem.role).toBe('admin');
+
+    // the former owner is unprotected now — demotable like any admin
+    const demote = await app.request(`/api/users/${adminId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: memberCookie },
+      body: JSON.stringify({ role: 'member' }),
+    });
+    expect(demote.status).toBe(200);
+
+    // members list reports the owner role
+    const users = await app.request('/api/users', { headers: { cookie: adminCookie } });
+    const list = await users.json();
+    expect(list.users.find((u: { id: string }) => u.id === memberId).role).toBe('owner');
+    expect(list.users.find((u: { id: string }) => u.id === adminId).role).toBe('member');
   });
 });
 

@@ -130,17 +130,23 @@ export async function notifyWorkspace(
   notification: { title: string; body: string; url?: string },
   opts: { userIds?: string[]; agentId?: string } = {},
 ): Promise<void> {
-  const members = (await workspaceMembers(db, workspaceId)).map((m) => m.user);
+  let members = (await workspaceMembers(db, workspaceId)).map((m) => m.user);
   // Agent-scoped users hold no membership — pull them in when the alert is
   // for an agent they're granted on, else they'd never see escalations.
+  // 'hidden' rows deny the agent: scoped hidden users are skipped and
+  // hidden workspace members are dropped from this agent's alerts.
   const memberIds = new Set(members.map((m) => m.id));
   if (opts.agentId) {
     const scoped = await db
-      .select({ user: users })
+      .select({ user: users, role: agentMembers.role })
       .from(agentMembers)
       .innerJoin(users, eq(agentMembers.userId, users.id))
       .where(and(eq(agentMembers.agentId, opts.agentId), isNotNull(agentMembers.acceptedAt)));
-    for (const s of scoped) if (!memberIds.has(s.user.id)) members.push(s.user);
+    const hidden = new Set(scoped.filter((s) => s.role === 'hidden').map((s) => s.user.id));
+    for (const s of scoped) {
+      if (s.role !== 'hidden' && !memberIds.has(s.user.id)) members.push(s.user);
+    }
+    members = members.filter((m) => !hidden.has(m.id));
   }
   const recipients = members.filter((m) => !opts.userIds || opts.userIds.includes(m.id));
   if (recipients.length === 0) return;

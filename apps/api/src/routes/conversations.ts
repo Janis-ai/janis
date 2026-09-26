@@ -17,7 +17,7 @@ import {
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toAlert, toConversation, toMessage, toSuggestion } from '../lib/serializers.js';
 import { convListConditions, convListQuery } from '../lib/convFilters.js';
-import { agentRoleFor, agentVis, conversationAgent, operatorIdentity } from '../lib/access.js';
+import { agentRoleFor, agentVis, conversationAgent, isAdminRole, operatorIdentity } from '../lib/access.js';
 import { bus } from '../lib/bus.js';
 import {
   agentSend,
@@ -461,7 +461,7 @@ export function conversationRoutes(db: Db) {
       const effRole = await agentRoleFor(
         db, user.id, c.get('role'), c.get('agentScope'), convAgent.agent.id, c.get('workspaceId'),
       );
-      if (effRole !== 'admin') {
+      if (!isAdminRole(effRole)) {
         return c.json({ error: 'only admins can teach the agent' }, 403);
       }
       const body = c.req.valid('json');

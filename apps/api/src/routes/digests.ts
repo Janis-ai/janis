@@ -12,7 +12,7 @@ export function digestRoutes(db: Db) {
 
   app.get('/', async (c) => {
     // Digests are workspace-wide summaries — nothing here for scoped users.
-    if (c.get('agentScope')) return c.json({ digests: [] });
+    if (c.get('agentScope').grants) return c.json({ digests: [] });
     const rows = await db
       .select()
       .from(digests)
@@ -23,7 +23,7 @@ export function digestRoutes(db: Db) {
   });
 
   app.post('/generate', async (c) => {
-    if (c.get('agentScope')) return c.json({ error: 'forbidden' }, 403);
+    if (c.get('agentScope').grants) return c.json({ error: 'forbidden' }, 403);
     const d = await generateDigest(db, c.get('workspaceId'));
     return c.json({ digest: d }, 201);
   });

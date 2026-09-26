@@ -40,7 +40,13 @@ export default function AgentDetail() {
 
 function AgentEditor({ agent }: { agent: Agent }) {
   const { data: me } = useMe();
-  const isAdmin = me?.user.role === 'admin';
+  // Effective admin on THIS agent: workspace admin, the agent's owner, or an
+  // agent-scoped user whose grant is admin (their workspace role is 'member').
+  const isAdmin =
+    me?.user.role === 'admin' ||
+    me?.user.role === 'owner' ||
+    agent.owner_user_id === me?.user.id ||
+    me?.agent_scope?.find((a) => a.id === agent.id)?.role === 'admin';
   const { data: rulesData } = useAlertRules();
   const { data: channelsData } = useChannels();
   const qc = useQueryClient();
@@ -1026,42 +1032,62 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
   const agentOnly = memberRows.filter((m) => !wsById.has(m.user_id));
   const wsWithOverride = new Set(memberRows.map((m) => m.user_id));
   const plainMembers = (wsUsers?.users ?? []).filter((u) => !wsWithOverride.has(u.id));
+  const ownerId = agent.owner_user_id;
+  const isOwner = me?.user.id === ownerId;
 
-  const roleSelect = (userId: string, value: string, inherited: string | null) =>
-    isAdmin ? (
+  const roleBadge = (v: string) =>
+    v === 'hidden' ? 'no privileges (hidden)' : v;
+
+  const roleSelect = (
+    userId: string,
+    value: string,
+    inherited: string | null,
+    wsMember: boolean,
+  ) => {
+    // The owner is fixed — the only way out is transferring ownership,
+    // which only they can do (an "owner" option appears on other rows).
+    if (userId === ownerId) return <span className="badge active">owner</span>;
+    if (!isAdmin) {
+      return <span className="badge active">{roleBadge(value === 'inherit' ? (inherited ?? 'member') : value)}</span>;
+    }
+    return (
       <select
         value={value}
-        onChange={(e) =>
-          setRole.mutate({ userId, role: e.target.value === 'inherit' ? null : e.target.value })
-        }
+        onChange={(e) => {
+          const role = e.target.value;
+          if (
+            role === 'owner' &&
+            !window.confirm('Transfer ownership of this agent? They become owner — you stay an admin but lose ownership.')
+          ) {
+            return;
+          }
+          setRole.mutate({ userId, role: role === 'inherit' ? null : role });
+        }}
       >
         {inherited !== null && <option value="inherit">inherit ({inherited})</option>}
         <option value="member">member</option>
         <option value="admin">admin</option>
+        {wsMember && <option value="hidden">no privileges (hidden)</option>}
+        {isOwner && <option value="owner">owner (transfer)</option>}
       </select>
-    ) : (
-      <span className="badge active">{value === 'inherit' ? inherited : value}</span>
     );
+  };
 
   return (
     <div className="card" style={{ marginTop: 12 }}>
       <strong>Team</strong>
       <div className="muted" style={{ margin: '4px 0 8px' }}>
         Workspace members can see every agent — a role set here overrides
-        theirs for this agent only. People added with no workspace account
-        become agent-only users who see nothing but this agent.
+        theirs for this agent only, and "no privileges" hides it from them
+        entirely. People added with no workspace account become agent-only
+        users who see nothing but this agent.
       </div>
       {plainMembers.map((u) => (
         <div key={u.id} className="row muted" style={{ marginTop: 6 }}>
           <span className="grow">
             {u.name} · {u.email}
           </span>
-          {roleSelect(u.id, 'inherit', u.role)}
-          {isAdmin && u.id !== me?.user.id && (
-            <button className="btn danger" onClick={() => remove.mutate(u.id)} title="Clear override">
-              ✕
-            </button>
-          )}
+          {roleSelect(u.id, 'inherit', u.role, true)}
         </div>
       ))}
       {memberRows
@@ -1072,12 +1098,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
               {m.name} · {m.email}
               <span className="badge" style={{ marginLeft: 8 }}>override</span>
             </span>
-            {roleSelect(m.user_id, m.role ?? 'inherit', wsById.get(m.user_id)?.role ?? 'member')}
-            {isAdmin && (
-              <button className="btn danger" onClick={() => remove.mutate(m.user_id)} title="Clear override">
-                ✕
-              </button>
-            )}
+            {roleSelect(m.user_id, m.role ?? 'inherit', wsById.get(m.user_id)?.role ?? 'member', true)}
           </div>
         ))}
       {agentOnly.map((m) => (
@@ -1086,8 +1107,8 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
             {m.name} · {m.email}
             <span className="badge" style={{ marginLeft: 8 }}>this agent only</span>
           </span>
-          {roleSelect(m.user_id, m.role ?? 'member', null)}
-          {isAdmin && (
+          {roleSelect(m.user_id, m.role ?? 'member', null, false)}
+          {isAdmin && m.user_id !== ownerId && (
             <button className="btn danger" onClick={() => remove.mutate(m.user_id)} title="Remove access">
               Remove
             </button>

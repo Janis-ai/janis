@@ -1,31 +1,52 @@
-import { and, eq, inArray, isNotNull, sql, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, notInArray, sql, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agentMembers, agents, conversations, users } from '../db/schema.js';
 
-export type AgentRole = 'admin' | 'member';
-/** null = full workspace member; a map = agent-scoped user (only these
- *  agents, with the per-agent role the row grants). */
-export type AgentScope = Record<string, AgentRole> | null;
+/** Effective role on an agent. 'owner' outranks admin and always wins —
+ * set via agents.owner_user_id, never stored on agent_members rows. The
+ * storage-only 'hidden' row role resolves to null (no access). */
+export type AgentRole = 'owner' | 'admin' | 'member';
 
-/** WHERE fragment limiting a query (joined to `agents`) to a scoped user's
- *  agents. Undefined for full workspace members — no extra condition. */
-export function agentScopeCond(scope: AgentScope): SQL | undefined {
-  if (!scope) return undefined;
-  const ids = Object.keys(scope);
-  return ids.length ? inArray(agents.id, ids) : sql`false`;
+export const isAdminRole = (r: AgentRole | null | undefined): boolean =>
+  r === 'admin' || r === 'owner';
+
+/** Everything the session needs to decide agent visibility:
+ *  - grants non-null: agent-scoped user — only these agents exist for them.
+ *  - grants null: full workspace member; `hidden` lists agents they were
+ *    explicitly denied via agent_members.role='hidden'. */
+export interface AgentScope {
+  grants: Record<string, AgentRole> | null;
+  hidden: string[];
+}
+
+export const FULL_SCOPE: AgentScope = { grants: null, hidden: [] };
+
+/** WHERE fragment limiting a query (joined to `agents`) to what the user
+ *  can see: the grant map for scoped users, minus hidden agents for
+ *  workspace members. Undefined when nothing restricts visibility. */
+export function agentScopeCond(scope: AgentScope | null | undefined): SQL | undefined {
+  const parts: SQL[] = [];
+  if (scope?.grants) {
+    const ids = Object.keys(scope.grants);
+    parts.push(ids.length ? inArray(agents.id, ids) : sql`false`);
+  }
+  if (scope?.hidden.length) parts.push(notInArray(agents.id, scope.hidden));
+  return parts.length ? and(...parts) : undefined;
 }
 
 /** Spreadable WHERE parts for a query joined on `agents`: the workspace
- *  match plus the scope restriction when the caller is agent-scoped. */
-export function agentVis(workspaceId: string, scope: AgentScope): SQL[] {
+ *  match plus the user's visibility restriction. */
+export function agentVis(workspaceId: string, scope: AgentScope | null): SQL[] {
   const s = agentScopeCond(scope);
   return s ? [eq(agents.workspaceId, workspaceId), s] : [eq(agents.workspaceId, workspaceId)];
 }
 
 /** The user's effective role on one agent, or null when they can't see it.
- *  An agent_members row's role wins over the workspace role in both
- *  directions (member → agent admin, admin → agent member). Agent-scoped
- *  users have no workspace role to inherit — the scope map is the grant. */
+ *  Owner always wins (it's on the agents row, not agent_members). Then: a
+ *  scoped user sees only their granted agents; a 'hidden' row denies access;
+ *  otherwise an agent_members role overrides the workspace role either way.
+ *  Agent-scoped users have no workspace role to inherit — the grant map is
+ *  the grant. */
 export async function agentRoleFor(
   db: Db,
   userId: string,
@@ -34,9 +55,8 @@ export async function agentRoleFor(
   agentId: string,
   workspaceId: string,
 ): Promise<AgentRole | null> {
-  if (scope) return scope[agentId] ?? null;
   const [row] = await db
-    .select({ id: agents.id, role: agentMembers.role })
+    .select({ id: agents.id, role: agentMembers.role, ownerId: agents.ownerUserId })
     .from(agents)
     .leftJoin(
       agentMembers,
@@ -49,6 +69,9 @@ export async function agentRoleFor(
     .where(and(eq(agents.id, agentId), eq(agents.workspaceId, workspaceId)))
     .limit(1);
   if (!row) return null; // agent isn't in this workspace
+  if (row.ownerId === userId) return 'owner';
+  if (scope?.grants) return scope.grants[agentId] ?? null;
+  if (row.role === 'hidden') return null;
   return row.role ?? workspaceRole;
 }
 

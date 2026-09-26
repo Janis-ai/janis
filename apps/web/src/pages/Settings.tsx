@@ -490,7 +490,8 @@ export default function Settings() {
         <div className="muted" style={{ margin: '6px 0 4px', fontSize: 13 }}>
           <strong>Admins</strong> manage agents, integrations, billing, and the team.{' '}
           <strong>Members</strong> work the inbox — reply, take over, assign, and set
-          conversation status.
+          conversation status. The <strong>owner</strong> can't be removed — only they
+          can hand ownership to another member.
         </div>
         {users?.users.map((u) => (
           <div key={u.id} className="row muted" style={{ marginTop: 8 }}>
@@ -500,11 +501,28 @@ export default function Settings() {
                 <span className="badge" style={{ marginLeft: 8 }}>invited</span>
               )}
             </span>
-            {me?.user.role === 'admin' && u.id !== me.user.id ? (
+            {u.role === 'owner' ? (
+              <span className="badge active">owner</span>
+            ) : me?.user.role === 'admin' && u.id !== me.user.id ? (
               <>
-                <select value={u.role} onChange={(e) => setRole.mutate({ id: u.id, role: e.target.value })}>
+                <select
+                  value={u.role}
+                  onChange={(e) => {
+                    const role = e.target.value;
+                    if (
+                      role === 'owner' &&
+                      !window.confirm(`Transfer ownership of this workspace to ${u.name}? You stay an admin but lose ownership.`)
+                    ) {
+                      return;
+                    }
+                    setRole.mutate({ id: u.id, role });
+                  }}
+                >
                   <option value="member">member</option>
                   <option value="admin">admin</option>
+                  {me.user.id === me.workspace?.owner_id && (
+                    <option value="owner">owner (transfer)</option>
+                  )}
                 </select>
                 <button className="btn danger" onClick={() => removeUser.mutate(u.id)}>Remove</button>
               </>

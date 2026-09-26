@@ -3,7 +3,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, eq, isNotNull } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agentMembers, memberships, users } from '../db/schema.js';
+import { agentMembers, agents, memberships, users, workspaces } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { hashPassword, verifyPassword } from '../lib/crypto.js';
 import { toWorkspaceUser } from '../lib/serializers.js';
@@ -19,42 +19,71 @@ export function userRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
 
+  const workspaceOwner = async (workspaceId: string) => {
+    const [ws] = await db
+      .select({ ownerId: workspaces.ownerUserId })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    return ws?.ownerId ?? null;
+  };
+
   // Members (accepted) + pending invites for this workspace. ?agent_id=
   // returns that agent's eligible set instead: workspace members ∪ accepted
   // agent_members, with the effective role per user (agent role wins).
+  // 'hidden' rows are denied access — they're never eligible assignees.
   app.get('/', async (c) => {
     const workspaceId = c.get('workspaceId');
     const agentId = c.req.query('agent_id');
+    const ownerId = await workspaceOwner(workspaceId);
     const rows = await db
       .select({ user: users, membership: memberships })
       .from(memberships)
       .innerJoin(users, eq(memberships.userId, users.id))
       .where(eq(memberships.workspaceId, workspaceId));
+    const wsRole = (u: (typeof rows)[number]) =>
+      u.user.id === ownerId ? ('owner' as const) : u.membership.role;
     if (!agentId) {
       return c.json({
         users: rows.map((r) => ({
-          ...toWorkspaceUser(r.user, r.membership.role),
+          ...toWorkspaceUser(r.user, wsRole(r)),
           status: r.membership.acceptedAt ? 'active' : 'invited',
         })),
       });
     }
+    const [agent] = await db
+      .select({ ownerId: agents.ownerUserId })
+      .from(agents)
+      .where(and(eq(agents.id, agentId), eq(agents.workspaceId, workspaceId)))
+      .limit(1);
     const scoped = await db
       .select({ user: users, member: agentMembers })
       .from(agentMembers)
       .innerJoin(users, eq(agentMembers.userId, users.id))
       .where(and(eq(agentMembers.agentId, agentId), isNotNull(agentMembers.acceptedAt)));
     const scopedById = new Map(scoped.map((s) => [s.user.id, s.member]));
+    const hidden = new Set(
+      scoped.filter((s) => s.member.role === 'hidden').map((s) => s.user.id),
+    );
     const memberIds = new Set(rows.map((r) => r.user.id));
+    // hidden rows were filtered above — a residual 'hidden' can't surface
+    const effRole = (userId: string, fallback: 'owner' | 'admin' | 'member') => {
+      if (userId === agent?.ownerId) return 'owner' as const;
+      const r = scopedById.get(userId)?.role;
+      return r && r !== 'hidden' ? r : fallback;
+    };
     return c.json({
       users: [
-        ...rows.map((r) => ({
-          ...toWorkspaceUser(r.user, scopedById.get(r.user.id)?.role ?? r.membership.role),
-          status: r.membership.acceptedAt ? 'active' : 'invited',
-        })),
+        ...rows
+          .filter((r) => !hidden.has(r.user.id))
+          .map((r) => ({
+            ...toWorkspaceUser(r.user, effRole(r.user.id, wsRole(r))),
+            status: r.membership.acceptedAt ? 'active' : 'invited',
+          })),
         ...scoped
-          .filter((s) => !memberIds.has(s.user.id))
+          .filter((s) => !memberIds.has(s.user.id) && s.member.role !== 'hidden')
           .map((s) => ({
-            ...toWorkspaceUser(s.user, s.member.role ?? 'member'),
+            ...toWorkspaceUser(s.user, effRole(s.user.id, 'member')),
             status: 'active',
           })),
       ],
@@ -176,33 +205,75 @@ export function userRoutes(db: Db) {
     },
   );
 
-  // admin-only: change a teammate's role in this workspace
+  // admin-only: change a teammate's role in this workspace. role 'owner'
+  // TRANSFERS ownership — only the current owner can do it (an admin may
+  // claim it when no owner is recorded, e.g. a pre-migration workspace).
+  // The owner can't be demoted except by handing ownership over.
   app.patch(
     '/:id',
     adminOnly,
-    zValidator('json', z.object({ role: z.enum(['admin', 'member']) })),
+    zValidator('json', z.object({ role: z.enum(['admin', 'member', 'owner']) })),
     async (c) => {
+      const me = c.get('user');
+      const workspaceId = c.get('workspaceId');
+      const role = c.req.valid('json').role;
+      const [mem] = await db
+        .select()
+        .from(memberships)
+        .where(
+          and(eq(memberships.userId, c.req.param('id')), eq(memberships.workspaceId, workspaceId)),
+        )
+        .limit(1);
+      if (!mem) return c.json({ error: 'not found' }, 404);
+      const ownerId = await workspaceOwner(workspaceId);
+
+      if (role === 'owner') {
+        if (ownerId === c.req.param('id')) {
+          const [u] = await db.select().from(users).where(eq(users.id, mem.userId)).limit(1);
+          return c.json({ user: toWorkspaceUser(u, 'owner') });
+        }
+        if (ownerId !== me.id && ownerId !== null) {
+          return c.json({ error: 'only the workspace owner can transfer ownership' }, 403);
+        }
+        if (!mem.acceptedAt) {
+          return c.json({ error: 'ownership can only go to an accepted member' }, 409);
+        }
+        // Owners are always admins — promote the membership, then move the
+        // owner pointer. The previous owner stays an admin.
+        await db
+          .update(memberships)
+          .set({ role: 'admin' })
+          .where(eq(memberships.id, mem.id));
+        await db
+          .update(workspaces)
+          .set({ ownerUserId: mem.userId })
+          .where(eq(workspaces.id, workspaceId));
+        const [u] = await db.select().from(users).where(eq(users.id, mem.userId)).limit(1);
+        return c.json({ user: toWorkspaceUser(u, 'owner') });
+      }
+
+      if (c.req.param('id') === ownerId) {
+        return c.json({ error: 'the workspace owner stays admin — transfer ownership first' }, 409);
+      }
       const [row] = await db
         .update(memberships)
-        .set({ role: c.req.valid('json').role })
-        .where(
-          and(
-            eq(memberships.userId, c.req.param('id')),
-            eq(memberships.workspaceId, c.get('workspaceId')),
-          ),
-        )
+        .set({ role })
+        .where(eq(memberships.id, mem.id))
         .returning();
-      if (!row) return c.json({ error: 'not found' }, 404);
       const [u] = await db.select().from(users).where(eq(users.id, row.userId)).limit(1);
       return c.json({ user: toWorkspaceUser(u, row.role) });
     },
   );
 
-  // admin-only: remove a teammate from this workspace (can't remove yourself).
-  // The account survives — their other memberships are unaffected.
+  // admin-only: remove a teammate from this workspace (can't remove yourself
+  // or the owner — ownership must be transferred first). The account
+  // survives — their other memberships are unaffected.
   app.delete('/:id', adminOnly, async (c) => {
     const me = c.get('user');
     if (me.id === c.req.param('id')) return c.json({ error: 'cannot remove yourself' }, 409);
+    if ((await workspaceOwner(c.get('workspaceId'))) === c.req.param('id')) {
+      return c.json({ error: 'the workspace owner cannot be removed — transfer ownership first' }, 409);
+    }
     const [row] = await db
       .delete(memberships)
       .where(

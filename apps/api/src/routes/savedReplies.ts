@@ -24,6 +24,12 @@ export function savedReplyRoutes(db: Db) {
   // bare returns workspace-wide only.
   app.get('/', async (c) => {
     const agentId = c.req.query('agent_id');
+    if (agentId) {
+      const role = await agentRoleFor(
+        db, c.get('user').id, c.get('role'), c.get('agentScope'), agentId, c.get('workspaceId'),
+      );
+      if (!role) return c.json({ error: 'agent not found' }, 404);
+    }
     const where = agentId
       ? and(
           eq(savedReplies.workspaceId, c.get('workspaceId')),
@@ -42,7 +48,7 @@ export function savedReplyRoutes(db: Db) {
     const b = c.req.valid('json');
     // Workspace-level replies are workspace-member territory — scoped users
     // can only add replies to agents they're on.
-    if (!b.agent_id && c.get('agentScope')) {
+    if (!b.agent_id && c.get('agentScope').grants) {
       return c.json({ error: 'forbidden' }, 403);
     }
     if (b.agent_id) {
@@ -75,7 +81,7 @@ export function savedReplyRoutes(db: Db) {
       )
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
-    if (!row.agentId && c.get('agentScope')) return c.json({ error: 'forbidden' }, 403);
+    if (!row.agentId && c.get('agentScope').grants) return c.json({ error: 'forbidden' }, 403);
     if (row.agentId) {
       const role = await agentRoleFor(
         db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),

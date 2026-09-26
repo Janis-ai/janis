@@ -20,7 +20,7 @@ export function useMe() {
     queryFn: () =>
       api<{
         user: WorkspaceUser;
-        workspace: { id: string; name: string } | null;
+        workspace: { id: string; name: string; owner_id: string | null } | null;
         workspaces: { id: string; name: string; role: 'admin' | 'member' }[];
         /** Set when the user holds no workspace membership — only these
          *  agents are visible (agent-scoped grants via the Team override). */

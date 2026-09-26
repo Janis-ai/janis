@@ -13,16 +13,21 @@ export function workspaceMembers(db: Db, workspaceId: string) {
 
 /** Everyone eligible to work one agent: accepted workspace members ∪
  *  accepted agent_members (agent-scoped users carry no workspace
- *  membership, so they'd otherwise never be assignable). */
+ *  membership, so they'd otherwise never be assignable). 'hidden' rows
+ *  are denied — they're excluded either way. */
 export async function agentEligibleMembers(db: Db, workspaceId: string, agentId: string) {
   const members = await workspaceMembers(db, workspaceId);
   const ids = new Set(members.map((m) => m.user.id));
   const scoped = await db
-    .select({ user: users })
+    .select({ user: users, role: agentMembers.role })
     .from(agentMembers)
     .innerJoin(users, eq(agentMembers.userId, users.id))
     .where(and(eq(agentMembers.agentId, agentId), isNotNull(agentMembers.acceptedAt)));
-  return [...members, ...scoped.filter((s) => !ids.has(s.user.id))];
+  const hidden = new Set(scoped.filter((s) => s.role === 'hidden').map((s) => s.user.id));
+  return [
+    ...members.filter((m) => !hidden.has(m.user.id)),
+    ...scoped.filter((s) => !ids.has(s.user.id) && s.role !== 'hidden'),
+  ];
 }
 
 /** The user's membership in a workspace, if any (pending invites included). */

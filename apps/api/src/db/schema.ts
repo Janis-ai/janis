@@ -34,6 +34,13 @@ export const workspaces = pgTable('workspaces', {
   // fields override it field-by-field (unset → inherit). api_key is
   // write-only like the agent one.
   llmConfig: jsonb('llm_config').notNull().default({}),
+  // The owning user — exactly one per workspace, kept here (not as a
+  // membership role) so transfer is one atomic update. Owners hold an
+  // admin membership that can't be demoted or removed; only the owner can
+  // hand ownership to another member.
+  ownerUserId: uuid('owner_user_id').references((): AnyPgColumn => users.id, {
+    onDelete: 'set null',
+  }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -119,7 +126,10 @@ export const agents = pgTable('agents', {
     { onDelete: 'set null' },
   ),
   autoResumeMinutes: integer('auto_resume_minutes').default(10), // auto-release human takeover after N min (null = never)
-  // Behavior config for template-based agents: {system_prompt, knowledge[], tone}
+  // The owning user — always at least an admin on this agent; can't be
+  // demoted, hidden, or removed until they hand ownership to someone else.
+  ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'set null' }),
+  // Behavior config for template-based agents, {system_prompt, knowledge[], tone}
   config: jsonb('config').notNull().default({}),
   lastSeenAt: timestamp('last_seen_at', { withTimezone: true }), // last ingest event
   metadata: jsonb('metadata').notNull().default({}),
@@ -248,7 +258,9 @@ export const agentMembers = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id),
-    role: text('role', { enum: ['admin', 'member'] }),
+    // 'hidden' = workspace member explicitly denied this agent (no access);
+    // meaningless for agent-only users — remove their row instead.
+    role: text('role', { enum: ['admin', 'member', 'hidden'] }),
     displayName: text('display_name'),
     avatarUrl: text('avatar_url'),
     showIdentity: boolean('show_identity'), // null = inherit user.showIdentity

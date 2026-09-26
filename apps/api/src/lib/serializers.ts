@@ -57,6 +57,7 @@ export function toAgent(row: Row<typeof agents>): Agent {
     auto_resume_minutes: row.autoResumeMinutes,
     slack_channel_id: row.slackChannelId ?? null,
     slack_installation_id: row.slackInstallationId ?? null,
+    owner_user_id: row.ownerUserId ?? null,
     config: scrubLlmKey(row.config),
     last_seen_at: iso(row.lastSeenAt),
     api_key_preview: row.apiKeyPreview,
@@ -230,7 +231,7 @@ export function toSuggestion(row: Row<typeof suggestions>): Suggestion {
 
 export function toWorkspaceUser(
   row: Row<typeof users>,
-  role: 'admin' | 'member' = 'member',
+  role: 'owner' | 'admin' | 'member' = 'member',
 ): WorkspaceUser {
   const prefs = (row.notifyPrefs ?? {}) as { push?: boolean; email?: boolean; sound?: boolean };
   return {

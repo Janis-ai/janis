@@ -6,7 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alertRules } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
-import { agentRoleFor, agentScopeCond } from '../lib/access.js';
+import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import { toAlertRule } from '../lib/serializers.js';
 
 const ruleConfig = z.object({
@@ -68,7 +68,7 @@ export function ruleRoutes(db: Db) {
           c.get('workspaceId'),
         )
       : c.get('role'); // no target agent: only workspace admins get to the 400
-    if (role !== 'admin') return c.json({ error: 'admin required' }, 403);
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
     await next();
   });
 
@@ -90,7 +90,7 @@ export function ruleRoutes(db: Db) {
     const role = await agentRoleFor(
       db, c.get('user').id, c.get('role'), c.get('agentScope'), agentId, c.get('workspaceId'),
     );
-    if (role !== 'admin') return c.json({ error: 'admin required' }, 403);
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
     const [row] = await db
       .update(alertRules)
       .set({ config: c.req.valid('json').config })
@@ -105,7 +105,7 @@ export function ruleRoutes(db: Db) {
     const role = await agentRoleFor(
       db, c.get('user').id, c.get('role'), c.get('agentScope'), agentId, c.get('workspaceId'),
     );
-    if (role !== 'admin') return c.json({ error: 'admin required' }, 403);
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
     await db.delete(alertRules).where(eq(alertRules.id, c.req.param('id')));
     return c.json({ ok: true });
   });

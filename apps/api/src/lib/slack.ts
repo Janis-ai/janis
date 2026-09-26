@@ -3,6 +3,7 @@ import { and, asc, desc, eq, isNotNull, sql, type SQLWrapper } from 'drizzle-orm
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import {
+  agentMembers,
   agents,
   alerts,
   channelBindings,
@@ -532,27 +533,52 @@ async function ensureInAlertChannel(
 }
 
 /** Resolve every workspace member to a Slack user and invite them into the
- * alert channel — thread replies only reach humans who are channel members. */
+ * alert channel — thread replies only reach humans who are channel members.
+ * When the channel belongs to one agent, members hidden from that agent
+ * are skipped — the channel would leak its conversations. */
 export async function inviteWorkspaceMembers(
   db: Db,
   inst: Installation,
   channelId: string,
+  agentId?: string,
 ): Promise<void> {
   const members = await workspaceMembers(db, inst.workspaceId);
+  const hidden = agentId ? await hiddenUserIds(db, agentId) : new Set<string>();
   for (const m of members) {
+    if (hidden.has(m.user.id)) continue;
     const sid = await memberToSlackUser(db, inst, m.user.id);
     if (sid) await ensureInAlertChannel(inst, sid, channelId);
   }
 }
 
-/** Every channel Janis posts alerts to through THIS installation: its alert
- * channel plus the override channels of agents routed to it. Agents without
- * an installation override ride the default (earliest) installation. */
-async function janisAlertChannels(db: Db, inst: Installation): Promise<string[]> {
-  const ids = new Set<string>();
-  if (inst.alertChannelId) ids.add(inst.alertChannelId);
+/** Users denied an agent via agent_members.role='hidden'. */
+async function hiddenUserIds(db: Db, agentId: string): Promise<Set<string>> {
   const rows = await db
-    .select({ ch: agents.slackChannelId, instId: agents.slackInstallationId })
+    .select({ userId: agentMembers.userId })
+    .from(agentMembers)
+    .where(
+      and(
+        eq(agentMembers.agentId, agentId),
+        eq(agentMembers.role, 'hidden'),
+        isNotNull(agentMembers.acceptedAt),
+      ),
+    );
+  return new Set(rows.map((r) => r.userId));
+}
+
+/** Every channel Janis posts alerts to through THIS installation, paired
+ * with the agent it belongs to (null = the workspace's default channel):
+ * its alert channel plus the override channels of agents routed to it.
+ * Agents without an installation override ride the default (earliest)
+ * installation. */
+async function janisAlertChannels(
+  db: Db,
+  inst: Installation,
+): Promise<{ id: string; agentId: string | null }[]> {
+  const ids = new Map<string, string | null>();
+  if (inst.alertChannelId) ids.set(inst.alertChannelId, null);
+  const rows = await db
+    .select({ id: agents.id, ch: agents.slackChannelId, instId: agents.slackInstallationId })
     .from(agents)
     .where(and(eq(agents.workspaceId, inst.workspaceId), isNotNull(agents.slackChannelId)));
   const [defaultInst] = await db
@@ -563,13 +589,14 @@ async function janisAlertChannels(db: Db, inst: Installation): Promise<string[]>
     .limit(1);
   for (const r of rows) {
     const routed = r.instId ?? defaultInst?.id;
-    if (r.ch && routed === inst.id) ids.add(r.ch);
+    if (r.ch && routed === inst.id) ids.set(r.ch, r.id);
   }
-  return [...ids];
+  return [...ids].map(([id, agentId]) => ({ id, agentId }));
 }
 
 /** A newly-accepted member gets invited into every Janis alert channel —
- * thread replies and buttons only reach channel members. */
+ * thread replies and buttons only reach channel members. Channels belonging
+ * to an agent they're hidden from are skipped. */
 export async function syncMemberToAlertChannels(
   db: Db,
   workspaceId: string,
@@ -579,7 +606,8 @@ export async function syncMemberToAlertChannels(
     const sid = await memberToSlackUser(db, inst, userId);
     if (!sid) continue;
     for (const ch of await janisAlertChannels(db, inst)) {
-      await ensureInAlertChannel(inst, sid, ch);
+      if (ch.agentId && (await hiddenUserIds(db, ch.agentId)).has(userId)) continue;
+      await ensureInAlertChannel(inst, sid, ch.id);
     }
   }
 }
@@ -596,11 +624,11 @@ export async function removeMemberFromAlertChannels(
     if (!sid) continue;
     for (const ch of await janisAlertChannels(db, inst)) {
       const kick = () =>
-        slackApi(inst.botToken, 'conversations.kick', { channel: ch, user: sid }).catch(() => null);
+        slackApi(inst.botToken, 'conversations.kick', { channel: ch.id, user: sid }).catch(() => null);
       let res = await kick();
       // Bot must be a channel member to kick — join first on public channels.
       if (res?.error === 'not_in_channel') {
-        await slackApi(inst.botToken, 'conversations.join', { channel: ch }).catch(() => null);
+        await slackApi(inst.botToken, 'conversations.join', { channel: ch.id }).catch(() => null);
         res = await kick();
       }
       if (res && !res.ok && !['not_in_channel', 'cant_kick_self'].includes(res.error ?? '')) {

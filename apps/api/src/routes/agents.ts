@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentConnections, agentMembers, agentSecrets, channels, conversations, knowledgeFiles, slackInstallations, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentConnections, agentMembers, agentSecrets, channels, conversations, knowledgeFiles, memberships, slackInstallations, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import {
   adminOnly,
   agentAdminOnly,
@@ -29,7 +29,7 @@ import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
 import { effectiveMeteredModel } from '../lib/llm.js';
 import { llmModelsResult } from '../lib/llmModels.js';
-import { agentRoleFor, agentScopeCond } from '../lib/access.js';
+import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { processEvents } from '../services/ingest.js';
 import { toAgent } from '../lib/serializers.js';
@@ -110,6 +110,7 @@ export function agentRoutes(db: Db) {
       .insert(agents)
       .values({
         workspaceId: c.get('workspaceId'),
+        ownerUserId: c.get('user').id,
         name: body.name,
         // no API key until the operator generates one — hosted agents never call /v1
         webhookSecret: generateWebhookSecret(),
@@ -131,7 +132,7 @@ export function agentRoutes(db: Db) {
           .set({ slackChannelId: channel.id })
           .where(eq(agents.id, row.id));
         row.slackChannelId = channel.id;
-        void inviteWorkspaceMembers(db, inst, channel.id);
+        void inviteWorkspaceMembers(db, inst, channel.id, row.id);
       }
     }
     return c.json({ agent: toAgent(row) }, 201);
@@ -241,7 +242,7 @@ export function agentRoutes(db: Db) {
     if (!row) return c.json({ error: 'not found' }, 404);
     // New alert channel → every member needs to be in it to see/act on alerts.
     if (body.slack_channel_id && inst) {
-      void inviteWorkspaceMembers(db, inst, body.slack_channel_id);
+      void inviteWorkspaceMembers(db, inst, body.slack_channel_id, c.req.param('id'));
     }
     return c.json({ agent: toAgent(row) });
   });
@@ -817,8 +818,10 @@ export function agentRoutes(db: Db) {
     role: z.enum(['admin', 'member']).default('member'),
   });
   const memberPatch = z.object({
-    // explicit null clears the override back to the workspace role
-    role: z.enum(['admin', 'member']).nullable().optional(),
+    // explicit null clears the override back to the workspace role.
+    // 'hidden' = deny a workspace member this agent; 'owner' = transfer
+    // ownership to them (only the current owner may do that).
+    role: z.enum(['admin', 'member', 'hidden', 'owner']).nullable().optional(),
     display_name: z.string().max(80).nullable().optional(),
     avatar_url: z.string().max(2000).nullable().optional(),
     show_identity: z.boolean().nullable().optional(),
@@ -848,12 +851,22 @@ export function agentRoutes(db: Db) {
   });
 
   app.get('/:id/members', agentMember, async (c) => {
+    const [agent] = await db
+      .select({ ownerId: agents.ownerUserId })
+      .from(agents)
+      .where(eq(agents.id, c.req.param('id')))
+      .limit(1);
     const rows = await db
       .select({ m: agentMembers, u: users })
       .from(agentMembers)
       .innerJoin(users, eq(agentMembers.userId, users.id))
       .where(eq(agentMembers.agentId, c.req.param('id')));
-    return c.json({ members: rows.map((r) => toMember(r.m, r.u)) });
+    return c.json({
+      members: rows.map((r) => ({
+        ...toMember(r.m, r.u),
+        role: r.m.userId === agent?.ownerId ? ('owner' as const) : r.m.role,
+      })),
+    });
   });
 
   // Add (or re-role) an agent member by email. Workspace members get an
@@ -893,20 +906,90 @@ export function agentRoutes(db: Db) {
   // role/notify changes need agent admin; a member can always update their
   // OWN profile override for the agent. Workspace admins retain management
   // as the escape hatch (an override can't lock them out of member admin).
+  // The agent's owner (agents.owner_user_id) can never be demoted, hidden,
+  // or removed — role 'owner' transfers ownership to them and only the
+  // current owner may send it (an admin may claim an owner-less agent).
   app.patch('/:id/members/:userId', zValidator('json', memberPatch), async (c) => {
     const me = c.get('user');
-    const self = c.req.param('userId') === me.id;
+    const targetId = c.req.param('userId');
+    const self = targetId === me.id;
     const myRole = await agentRoleFor(
       db, me.id, c.get('role'), c.get('agentScope'), c.req.param('id'), c.get('workspaceId'),
     );
     if (!myRole) return c.json({ error: 'not found' }, 404);
     const b = c.req.valid('json');
-    const wsAdmin = c.get('role') === 'admin' && !c.get('agentScope');
-    const manages = myRole === 'admin' || wsAdmin;
+    const [agent] = await db
+      .select({ ownerId: agents.ownerUserId })
+      .from(agents)
+      .where(eq(agents.id, c.req.param('id')))
+      .limit(1);
+    const wsAdmin = c.get('role') === 'admin' && !c.get('agentScope').grants;
+    const manages = isAdminRole(myRole) || wsAdmin;
     // self-service: members update their own profile/notify override only —
     // role changes and editing others require agent (or workspace) admin
     if (b.role !== undefined && !manages) return c.json({ error: 'admin required' }, 403);
     if (!self && !manages) return c.json({ error: 'admin required' }, 403);
+    if (b.role !== undefined && b.role !== 'owner' && targetId === agent?.ownerId) {
+      return c.json({ error: 'the agent owner stays admin — transfer ownership instead' }, 409);
+    }
+    if (b.role === 'hidden') {
+      // hiding only makes sense for workspace members — an agent-only user
+      // with no row simply has no access, so DELETE their row instead.
+      const [mem] = await db
+        .select({ id: memberships.id })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, targetId),
+            eq(memberships.workspaceId, c.get('workspaceId')),
+          ),
+        )
+        .limit(1);
+      if (!mem) {
+        return c.json({ error: 'no privileges only applies to workspace members — remove them instead' }, 400);
+      }
+    }
+    if (b.role === 'owner') {
+      if (agent?.ownerId !== me.id && agent?.ownerId != null) {
+        return c.json({ error: 'only the agent owner can transfer ownership' }, 403);
+      }
+      await db
+        .update(agents)
+        .set({ ownerUserId: targetId })
+        .where(eq(agents.id, c.req.param('id')));
+      // a hidden row would contradict ownership — clear it back to inherit
+      await db
+        .update(agentMembers)
+        .set({ role: null })
+        .where(
+          and(
+            eq(agentMembers.agentId, c.req.param('id')),
+            eq(agentMembers.userId, targetId),
+            eq(agentMembers.role, 'hidden'),
+          ),
+        );
+      const [u] = await db.select().from(users).where(eq(users.id, targetId)).limit(1);
+      // give the new owner a member row (role null = inherit) so the row
+      // exists for identity/notify overrides; effective role comes from
+      // agents.owner_user_id either way.
+      await db
+        .insert(agentMembers)
+        .values({
+          agentId: c.req.param('id'),
+          userId: targetId,
+          invitedBy: me.id,
+          acceptedAt: new Date(),
+        })
+        .onConflictDoNothing();
+      const [row] = await db
+        .select()
+        .from(agentMembers)
+        .where(
+          and(eq(agentMembers.agentId, c.req.param('id')), eq(agentMembers.userId, targetId)),
+        )
+        .limit(1);
+      return c.json({ member: { ...toMember(row!, u!), role: 'owner' } });
+    }
     const set: Record<string, unknown> = {
       ...(b.role !== undefined ? { role: b.role } : {}),
       ...(b.display_name !== undefined ? { displayName: b.display_name } : {}),
@@ -918,7 +1001,7 @@ export function agentRoutes(db: Db) {
       .insert(agentMembers)
       .values({
         agentId: c.req.param('id'),
-        userId: c.req.param('userId'),
+        userId: targetId,
         invitedBy: me.id,
         acceptedAt: new Date(),
         ...set,
@@ -928,11 +1011,22 @@ export function agentRoutes(db: Db) {
         set,
       })
       .returning();
-    const [u] = await db.select().from(users).where(eq(users.id, c.req.param('userId'))).limit(1);
+    const [u] = await db.select().from(users).where(eq(users.id, targetId)).limit(1);
     return c.json({ member: toMember(row, u!) });
   });
 
   app.delete('/:id/members/:userId', agentAdmin, async (c) => {
+    // The owner can't be removed — they must pass ownership first. (For a
+    // workspace member this only clears their override row; they still see
+    // the agent unless an admin sets their role to 'hidden' instead.)
+    const [agent] = await db
+      .select({ ownerId: agents.ownerUserId })
+      .from(agents)
+      .where(eq(agents.id, c.req.param('id')))
+      .limit(1);
+    if (agent?.ownerId === c.req.param('userId')) {
+      return c.json({ error: 'the agent owner cannot be removed — transfer ownership first' }, 409);
+    }
     const [row] = await db
       .delete(agentMembers)
       .where(

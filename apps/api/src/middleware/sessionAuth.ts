@@ -4,7 +4,7 @@ import { and, eq, gt, isNotNull } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agentMembers, agents, memberships, sessions, users } from '../db/schema.js';
 import { sha256 } from '../lib/crypto.js';
-import { agentRoleFor, type AgentRole, type AgentScope } from '../lib/access.js';
+import { agentRoleFor, isAdminRole, type AgentRole, type AgentScope } from '../lib/access.js';
 
 type UserRow = typeof users.$inferSelect;
 
@@ -15,8 +15,8 @@ export interface SessionEnv {
     user: UserRow;
     workspaceId: string;
     role: AgentRole;
-    /** null = full workspace member. Set = agent-scoped: the user holds
-     *  no workspace membership; these agents are all they can see. */
+    /** {grants: null} = full workspace member (hidden lists their denied
+     *  agents). grants set = agent-scoped: these agents are all they see. */
     agentScope: AgentScope;
   };
 }
@@ -74,14 +74,18 @@ export function sessionAuth(db: Db) {
           ),
         )
         .limit(50);
-      if (granted.length) {
+      // 'hidden' rows deny access — they can never be a grant.
+      const grants = granted.filter((g) => g.role !== 'hidden');
+      if (grants.length) {
         c.set('user', row.user);
         c.set('workspaceId', row.session.workspaceId);
         c.set('role', 'member');
-        c.set(
-          'agentScope',
-          Object.fromEntries(granted.map((g) => [g.agentId, g.role ?? 'member'])),
-        );
+        c.set('agentScope', {
+          grants: Object.fromEntries(
+            grants.map((g) => [g.agentId, (g.role ?? 'member') as AgentRole]),
+          ),
+          hidden: [],
+        });
         await next();
         return;
       }
@@ -115,8 +119,9 @@ export function sessionAuth(db: Db) {
         .innerJoin(agents, eq(agentMembers.agentId, agents.id))
         .where(and(eq(agentMembers.userId, row.user.id), isNotNull(agentMembers.acceptedAt)))
         .limit(50);
-      if (!granted.length) return c.json({ error: 'no_workspace' }, 401);
-      const wsId = granted.find((g) => g.ws === row.session.workspaceId)?.ws ?? granted[0].ws;
+      const usable = granted.filter((g) => g.role !== 'hidden');
+      if (!usable.length) return c.json({ error: 'no_workspace' }, 401);
+      const wsId = usable.find((g) => g.ws === row.session.workspaceId)?.ws ?? usable[0].ws;
       if (wsId !== row.session.workspaceId) {
         await db
           .update(sessions)
@@ -126,20 +131,36 @@ export function sessionAuth(db: Db) {
       c.set('user', row.user);
       c.set('workspaceId', wsId);
       c.set('role', 'member');
-      c.set(
-        'agentScope',
-        Object.fromEntries(
-          granted.filter((g) => g.ws === wsId).map((g) => [g.agentId, g.role ?? 'member']),
+      c.set('agentScope', {
+        grants: Object.fromEntries(
+          usable
+            .filter((g) => g.ws === wsId)
+            .map((g) => [g.agentId, (g.role ?? 'member') as AgentRole]),
         ),
-      );
+        hidden: [],
+      });
       await next();
       return;
     }
 
+    // Workspace member — gather their 'hidden' agent rows so list/visibility
+    // queries can exclude agents they were explicitly denied.
+    const hiddenRows = await db
+      .select({ agentId: agentMembers.agentId })
+      .from(agentMembers)
+      .innerJoin(agents, eq(agentMembers.agentId, agents.id))
+      .where(
+        and(
+          eq(agentMembers.userId, row.user.id),
+          eq(agents.workspaceId, membership.workspaceId),
+          eq(agentMembers.role, 'hidden'),
+          isNotNull(agentMembers.acceptedAt),
+        ),
+      );
     c.set('user', row.user);
     c.set('workspaceId', membership.workspaceId);
     c.set('role', membership.role);
-    c.set('agentScope', null);
+    c.set('agentScope', { grants: null, hidden: hiddenRows.map((h) => h.agentId) });
     await next();
   });
 }
@@ -147,7 +168,7 @@ export function sessionAuth(db: Db) {
 /** Gate a route to workspace admins — mount after sessionAuth. Agent-scoped
  * users never pass (they hold no workspace role). */
 export const adminOnly = createMiddleware<SessionEnv>(async (c, next) => {
-  if (c.get('role') !== 'admin' || c.get('agentScope')) {
+  if (c.get('role') !== 'admin' || c.get('agentScope').grants) {
     return c.json({ error: 'admin required' }, 403);
   }
   await next();
@@ -167,7 +188,7 @@ export function agentAdminOnly(db: Db) {
       c.req.param('id')!,
       c.get('workspaceId'),
     );
-    if (role !== 'admin') return c.json({ error: 'admin required' }, 403);
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
     await next();
   });
 }

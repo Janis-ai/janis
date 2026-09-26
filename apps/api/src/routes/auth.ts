@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq, gt, isNotNull, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, ne } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { Context } from 'hono';
 import type { Db } from '../db/client.js';
@@ -45,7 +45,13 @@ export function authRoutes(db: Db) {
       .select({ workspaceId: agents.workspaceId })
       .from(agentMembers)
       .innerJoin(agents, eq(agentMembers.agentId, agents.id))
-      .where(and(eq(agentMembers.userId, userId), isNotNull(agentMembers.acceptedAt)));
+      .where(
+        and(
+          eq(agentMembers.userId, userId),
+          isNotNull(agentMembers.acceptedAt),
+          ne(agentMembers.role, 'hidden'),
+        ),
+      );
     return (
       scoped.find((s) => s.workspaceId === u?.lastWorkspaceId)?.workspaceId ??
       scoped[0]?.workspaceId ??
@@ -70,7 +76,13 @@ export function authRoutes(db: Db) {
       .selectDistinct({ workspaceId: agents.workspaceId })
       .from(agentMembers)
       .innerJoin(agents, eq(agentMembers.agentId, agents.id))
-      .where(and(eq(agentMembers.userId, userId), isNotNull(agentMembers.acceptedAt)));
+      .where(
+        and(
+          eq(agentMembers.userId, userId),
+          isNotNull(agentMembers.acceptedAt),
+          ne(agentMembers.role, 'hidden'),
+        ),
+      );
     const seen = new Set(list.map((w) => w.id));
     for (const s of scoped) {
       if (seen.has(s.workspaceId)) continue;
@@ -164,7 +176,7 @@ export function authRoutes(db: Db) {
     // workspace grant them a narrow view — surface the workspace shell plus
     // the agent ids they can see so the UI can hide workspace-level nav.
     let agentScope: { id: string; name: string; role: string }[] = [];
-    let scopedWorkspace: { id: string; name: string } | null = null;
+    let scopedWorkspace: { id: string; name: string; ownerId: string | null } | null = null;
     if (!active && row.session.workspaceId) {
       const rows = await db
         .select({ agentId: agentMembers.agentId, role: agentMembers.role, name: agents.name })
@@ -175,12 +187,13 @@ export function authRoutes(db: Db) {
             eq(agentMembers.userId, row.user.id),
             eq(agents.workspaceId, row.session.workspaceId),
             isNotNull(agentMembers.acceptedAt),
+            ne(agentMembers.role, 'hidden'),
           ),
         );
       if (rows.length) {
         agentScope = rows.map((r) => ({ id: r.agentId, name: r.name, role: r.role ?? 'member' }));
         const [ws] = await db
-          .select({ id: workspaces.id, name: workspaces.name })
+          .select({ id: workspaces.id, name: workspaces.name, ownerId: workspaces.ownerUserId })
           .from(workspaces)
           .where(eq(workspaces.id, row.session.workspaceId))
           .limit(1);
@@ -198,7 +211,13 @@ export function authRoutes(db: Db) {
       .select({ workspaceId: agents.workspaceId, agentName: agents.name })
       .from(agentMembers)
       .innerJoin(agents, eq(agentMembers.agentId, agents.id))
-      .where(and(eq(agentMembers.userId, row.user.id), isNotNull(agentMembers.acceptedAt)));
+      .where(
+        and(
+          eq(agentMembers.userId, row.user.id),
+          isNotNull(agentMembers.acceptedAt),
+          ne(agentMembers.role, 'hidden'),
+        ),
+      );
     const grantWs = new Map<string, string[]>();
     for (const g of grants) {
       if (memberWsIds.has(g.workspaceId)) continue;
@@ -217,8 +236,14 @@ export function authRoutes(db: Db) {
     return c.json({
       user: toWorkspaceUser(row.user, active?.membership.role ?? 'member'),
       workspace: active
-        ? { id: active.workspace.id, name: active.workspace.name }
-        : scopedWorkspace,
+        ? {
+            id: active.workspace.id,
+            name: active.workspace.name,
+            owner_id: active.workspace.ownerUserId,
+          }
+        : scopedWorkspace
+          ? { id: scopedWorkspace.id, name: scopedWorkspace.name, owner_id: scopedWorkspace.ownerId }
+          : null,
       agent_scope: active ? null : agentScope.length ? agentScope : null,
       workspaces: await workspaceListFor(row.user.id),
       invites: mems
@@ -267,6 +292,7 @@ export function authRoutes(db: Db) {
               eq(agentMembers.userId, session.userId),
               eq(agents.workspaceId, targetWs),
               isNotNull(agentMembers.acceptedAt),
+              ne(agentMembers.role, 'hidden'),
             ),
           )
           .limit(1);
@@ -362,7 +388,7 @@ export function authRoutes(db: Db) {
       if (!row) return c.json({ error: 'unauthenticated' }, 401);
       const [ws] = await db
         .insert(workspaces)
-        .values({ name: c.req.valid('json').name, plan: env.defaultPlan })
+        .values({ name: c.req.valid('json').name, plan: env.defaultPlan, ownerUserId: row.user.id })
         .returning();
       await db.insert(memberships).values({
         userId: row.user.id,
@@ -398,13 +424,17 @@ export function authRoutes(db: Db) {
     const email = rawEmail.trim().toLowerCase();
     const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
     if (existing) return existing;
-    const [ws] = await db
-      .insert(workspaces)
-      .values({ name: `${name || email.split('@')[0]}'s workspace`, plan: env.defaultPlan })
-      .returning();
     const [user] = await db
       .insert(users)
       .values({ email, name: name || email })
+      .returning();
+    const [ws] = await db
+      .insert(workspaces)
+      .values({
+        name: `${name || email.split('@')[0]}'s workspace`,
+        plan: env.defaultPlan,
+        ownerUserId: user.id,
+      })
       .returning();
     await db
       .insert(memberships)

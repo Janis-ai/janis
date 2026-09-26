@@ -19,10 +19,18 @@ export function streamRoutes(db: Db) {
     // conversation → agent resolution cache; events don't always carry
     // agent_id, and looking one up per event is cheap enough at alert volume
     const convAgent = new Map<string, string | null>();
+    // Scoped users see only granted agents; workspace members see everything
+    // except agents they were hidden from.
+    const agentVisible = (agentId: string | null | undefined) => {
+      if (!agentId) return false;
+      if (scope.grants) return agentId in scope.grants;
+      return !scope.hidden.includes(agentId);
+    };
+    const unfiltered = !scope.grants && scope.hidden.length === 0;
     const visible = async (data: Record<string, unknown>) => {
-      if (!scope) return true;
+      if (unfiltered) return true;
       const agentId = data.agent_id as string | undefined;
-      if (agentId) return agentId in scope;
+      if (agentId) return agentVisible(agentId);
       const convId = (data.conversation_id ?? data.id) as string | undefined;
       if (!convId) return false;
       if (!convAgent.has(convId)) {
@@ -33,8 +41,7 @@ export function streamRoutes(db: Db) {
           .limit(1);
         convAgent.set(convId, row?.agentId ?? null);
       }
-      const a = convAgent.get(convId);
-      return a != null && a in scope;
+      return agentVisible(convAgent.get(convId));
     };
     return streamSSE(c, async (stream) => {
       const unsubscribe = bus.subscribe(workspaceId, (event) => {
