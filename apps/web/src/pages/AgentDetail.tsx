@@ -1389,6 +1389,17 @@ function IntegrationCards({
             <span className="badge" style={{ marginLeft: 'auto' }}>{t.category}</span>
           </div>
           <div className="muted" style={{ fontSize: 12, margin: '8px 0 10px' }}>{t.blurb}</div>
+          {t.docs_url && (
+            <a
+              href={t.docs_url}
+              target="_blank"
+              rel="noreferrer"
+              className="muted"
+              style={{ fontSize: 11 }}
+            >
+              Setup guide ↗
+            </a>
+          )}
           <div className="muted" style={{ fontSize: 11, margin: '0 0 10px', lineHeight: 1.7 }}>
             {t.tools.map((x) => (
               <div key={x.name}>
