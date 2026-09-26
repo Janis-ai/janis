@@ -36,9 +36,52 @@ export function authRoutes(db: Db) {
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
+    const memberWs =
+      (mems.find((m) => m.workspaceId === u?.lastWorkspaceId) ?? mems[0])?.workspaceId;
+    if (memberWs) return memberWs;
+    // Agent-scoped users hold no memberships — land on the workspace their
+    // agent grants live in so the scoped shell renders instead of nothing.
+    const scoped = await db
+      .select({ workspaceId: agents.workspaceId })
+      .from(agentMembers)
+      .innerJoin(agents, eq(agentMembers.agentId, agents.id))
+      .where(and(eq(agentMembers.userId, userId), isNotNull(agentMembers.acceptedAt)));
     return (
-      mems.find((m) => m.workspaceId === u?.lastWorkspaceId) ?? mems[0]
-    )?.workspaceId ?? null;
+      scoped.find((s) => s.workspaceId === u?.lastWorkspaceId)?.workspaceId ??
+      scoped[0]?.workspaceId ??
+      null
+    );
+  };
+
+  /** Switcher list: accepted memberships plus workspaces reachable only via
+   * agent grants (agent-scoped users see them so they can switch to them). */
+  const workspaceListFor = async (userId: string) => {
+    const mems = await db
+      .select({ workspace: workspaces, membership: memberships })
+      .from(memberships)
+      .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
+      .where(and(eq(memberships.userId, userId), isNotNull(memberships.acceptedAt)));
+    const list = mems.map((m) => ({
+      id: m.workspace.id,
+      name: m.workspace.name,
+      role: m.membership.role as 'admin' | 'member',
+    }));
+    const scoped = await db
+      .selectDistinct({ workspaceId: agents.workspaceId })
+      .from(agentMembers)
+      .innerJoin(agents, eq(agentMembers.agentId, agents.id))
+      .where(and(eq(agentMembers.userId, userId), isNotNull(agentMembers.acceptedAt)));
+    const seen = new Set(list.map((w) => w.id));
+    for (const s of scoped) {
+      if (seen.has(s.workspaceId)) continue;
+      const [ws] = await db
+        .select({ id: workspaces.id, name: workspaces.name })
+        .from(workspaces)
+        .where(eq(workspaces.id, s.workspaceId))
+        .limit(1);
+      if (ws) list.push({ id: ws.id, name: ws.name, role: 'member' });
+    }
+    return list;
   };
 
   const issueSession = async (c: Context, userId: string, workspaceId?: string) => {
@@ -99,6 +142,19 @@ export function authRoutes(db: Db) {
         (m) => m.membership.acceptedAt && m.membership.workspaceId === row.session.workspaceId,
       ) ?? mems.find((m) => m.membership.acceptedAt);
 
+    // Sessions minted before agent grants existed (or while none did) carry
+    // workspaceId=null — re-resolve so a later agent invite heals the shell.
+    if (!active && !row.session.workspaceId) {
+      const wsId = await initialWorkspace(row.user.id);
+      if (wsId) {
+        await db
+          .update(sessions)
+          .set({ workspaceId: wsId })
+          .where(eq(sessions.id, row.session.id));
+        row.session.workspaceId = wsId;
+      }
+    }
+
     // Agent-scoped user: no membership, but agent_members rows on this
     // workspace grant them a narrow view — surface the workspace shell plus
     // the agent ids they can see so the UI can hide workspace-level nav.
@@ -133,13 +189,7 @@ export function authRoutes(db: Db) {
         ? { id: active.workspace.id, name: active.workspace.name }
         : scopedWorkspace,
       agent_scope: active ? null : agentScope.length ? agentScope : null,
-      workspaces: mems
-        .filter((m) => m.membership.acceptedAt)
-        .map((m) => ({
-          id: m.workspace.id,
-          name: m.workspace.name,
-          role: m.membership.role,
-        })),
+      workspaces: await workspaceListFor(row.user.id),
       invites: mems
         .filter((m) => !m.membership.acceptedAt)
         .map((m) => ({ id: m.membership.id, workspace_name: m.workspace.name })),
@@ -161,25 +211,42 @@ export function authRoutes(db: Db) {
         .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
         .limit(1);
       if (!session) return c.json({ error: 'unauthenticated' }, 401);
+      const targetWs = c.req.valid('json').workspace_id;
       const [mem] = await db
         .select()
         .from(memberships)
         .where(
           and(
             eq(memberships.userId, session.userId),
-            eq(memberships.workspaceId, c.req.valid('json').workspace_id),
+            eq(memberships.workspaceId, targetWs),
             isNotNull(memberships.acceptedAt),
           ),
         )
         .limit(1);
-      if (!mem) return c.json({ error: 'not a member of that workspace' }, 403);
+      // Agent-scoped users may switch to a workspace they only reach through
+      // agent grants — the scoped shell renders there.
+      if (!mem) {
+        const [grant] = await db
+          .select({ agentId: agentMembers.agentId })
+          .from(agentMembers)
+          .innerJoin(agents, eq(agentMembers.agentId, agents.id))
+          .where(
+            and(
+              eq(agentMembers.userId, session.userId),
+              eq(agents.workspaceId, targetWs),
+              isNotNull(agentMembers.acceptedAt),
+            ),
+          )
+          .limit(1);
+        if (!grant) return c.json({ error: 'not a member of that workspace' }, 403);
+      }
       await db
         .update(sessions)
-        .set({ workspaceId: mem.workspaceId })
+        .set({ workspaceId: targetWs })
         .where(eq(sessions.id, sessionId));
       await db
         .update(users)
-        .set({ lastWorkspaceId: mem.workspaceId })
+        .set({ lastWorkspaceId: targetWs })
         .where(eq(users.id, session.userId));
       return c.json({ ok: true });
     },

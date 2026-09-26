@@ -239,3 +239,40 @@ describe('agent saved replies', () => {
     expect(ok.status).toBe(201);
   });
 });
+
+describe('agent-invite sign-in landing', () => {
+  it('a fresh session with no workspace heals onto the invited agent workspace', async () => {
+    const { authRoutes } = await import('./auth.js');
+    const authApp = new Hono().route('/auth', authRoutes(db));
+    // scoped@x.test holds an agent_members grant but zero memberships — the
+    // session was issued with no workspace pin (pre-fix behavior)
+    const res = await authApp.request('/auth/me', {
+      headers: { cookie: scopedCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.workspace?.id).toBe(wsId);
+    expect(body.agent_scope?.map((a: { id: string }) => a.id)).toContain(agentA);
+    // switcher also exposes the scope-reachable workspace
+    expect(body.workspaces.map((w: { id: string }) => w.id)).toContain(wsId);
+  });
+
+  it('/auth/switch accepts a workspace reachable only via agent grants', async () => {
+    const { authRoutes } = await import('./auth.js');
+    const authApp = new Hono().route('/auth', authRoutes(db));
+    const res = await authApp.request('/auth/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: scopedCookie },
+      body: JSON.stringify({ workspace_id: wsId }),
+    });
+    expect(res.status).toBe(200);
+    // a workspace they hold NO grants on stays closed
+    const [otherWs] = await db.insert(workspaces).values({ name: 'Closed' }).returning();
+    const denied = await authApp.request('/auth/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: scopedCookie },
+      body: JSON.stringify({ workspace_id: otherWs.id }),
+    });
+    expect(denied.status).toBe(403);
+  });
+});
