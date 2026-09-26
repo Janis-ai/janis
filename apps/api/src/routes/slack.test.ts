@@ -719,20 +719,20 @@ describe('channel management', () => {
       expiresAt: new Date(Date.now() + 86400_000),
     });
     cookie = `${SESSION_COOKIE}=${token}`;
-    await db.insert(slackInstallations).values({
+    const [chInst] = await db.insert(slackInstallations).values({
       workspaceId: wsId,
       teamId: 'T_CH',
       botToken: 'xoxb-ch',
       installerUserId: admin.id,
       alertChannelId: 'CSEL',
-    });
+    }).returning();
     const { hash, preview } = generateApiKey();
     await db.insert(agents).values({
       workspaceId: wsId,
       name: 'Ch Agent',
       apiKeyHash: hash,
       apiKeyPreview: preview,
-      slackChannelId: 'CAGENT',
+      slackRoutes: [{ installation_id: chInst.id, channel_id: 'CAGENT' }],
     });
   });
 
@@ -829,19 +829,19 @@ describe('member channel sync', () => {
       role: 'member',
       acceptedAt: new Date(),
     });
-    await db.insert(slackInstallations).values({
+    const [inst] = await db.insert(slackInstallations).values({
       workspaceId: ws.id,
       teamId: 'T_SYNC',
       botToken: 'xoxb-sync',
       alertChannelId: 'C_MAIN',
-    });
+    }).returning();
     const { hash, preview } = generateApiKey();
     await db.insert(agents).values({
       workspaceId: ws.id,
       name: 'OverrideBot',
       apiKeyHash: hash,
       apiKeyPreview: preview,
-      slackChannelId: 'C_AGENT',
+      slackRoutes: [{ installation_id: inst.id, channel_id: 'C_AGENT' }],
     });
   });
 
@@ -904,8 +904,7 @@ describe('per-agent Slack workspace override', () => {
       .values({
         workspaceId: ws.id,
         name: 'RoutedBot',
-        slackInstallationId: altInst.id,
-        slackChannelId: 'C_AGENT_ALT',
+        slackRoutes: [{ installation_id: altInst.id, channel_id: 'C_AGENT_ALT' }],
       })
       .returning();
     const [plain] = await db
@@ -973,10 +972,10 @@ describe('per-agent Slack workspace override', () => {
     expect(threadP.installationId).toBe(defInst.id);
   });
 
-  it('ignores an override pointing at another workspace\'s installation', async () => {
+  it('ignores a route pointing at another workspace\'s installation', async () => {
     const [ws] = await db.insert(workspaces).values({ name: 'OrphanWS' }).returning();
     const [otherWs] = await db.insert(workspaces).values({ name: 'OtherWS' }).returning();
-    const [defInst] = await db
+    await db
       .insert(slackInstallations)
       .values({ workspaceId: ws.id, teamId: 'T_ONLY', botToken: 'xoxb-only', alertChannelId: 'C_ONLY' })
       .returning();
@@ -989,29 +988,107 @@ describe('per-agent Slack workspace override', () => {
       .values({
         workspaceId: ws.id,
         name: 'OrphanBot',
-        // an installation that belongs to a different Janis workspace
-        slackInstallationId: foreign.id,
+        // an installation that belongs to a different Janis workspace —
+        // unresolvable, so this agent has no valid destinations
+        slackRoutes: [{ installation_id: foreign.id, channel_id: null }],
       })
       .returning();
     const [conv] = await db
       .insert(conversations)
       .values({ agentId: agent.id, externalId: 'mo:1' })
       .returning();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockImplementation(async () =>
-        new Response('{"ok":true,"channel":"C_ONLY","ts":"6.6"}', { status: 200 }),
-      ),
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response('{"ok":true,"channel":"C_ONLY","ts":"6.6"}', { status: 200 }),
     );
+    vi.stubGlobal('fetch', fetchMock);
     const [alert] = await db
       .insert(alerts)
       .values({ conversationId: conv.id, type: 'failure', detail: 'x' })
       .returning();
     await postSlackAlert(db, ws.id, conv, agent, alert);
-    const [thread] = await db
+    const rows = await db
       .select()
       .from(slackThreads)
       .where(eq(slackThreads.conversationId, conv.id));
-    expect(thread.installationId).toBe(defInst.id);
+    expect(rows).toHaveLength(0);
+    expect(
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes('chat.postMessage')),
+    ).toHaveLength(0);
+  });
+
+  it('fans out to multiple destinations and mutes on an empty route list', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'FanWS' }).returning();
+    const [instA] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_A', botToken: 'xoxb-a', alertChannelId: 'C_A' })
+      .returning();
+    const [instB] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_B', botToken: 'xoxb-b', alertChannelId: 'C_B' })
+      .returning();
+    // routes = A's alert channel (channel_id null) + a specific channel on B
+    const [multi] = await db
+      .insert(agents)
+      .values({
+        workspaceId: ws.id,
+        name: 'MultiBot',
+        slackRoutes: [
+          { installation_id: instA.id, channel_id: null },
+          { installation_id: instB.id, channel_id: 'C_B2' },
+        ],
+      })
+      .returning();
+    const [muted] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'MutedBot', slackRoutes: [] })
+      .returning();
+    const [convM] = await db
+      .insert(conversations)
+      .values({ agentId: multi.id, externalId: 'fan:1' })
+      .returning();
+    const [convMuted] = await db
+      .insert(conversations)
+      .values({ agentId: muted.id, externalId: 'fan:2' })
+      .returning();
+
+    const calls: { url: string; token: string; body: Record<string, unknown> }[] = [];
+    let tsSeq = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(
+        async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
+          calls.push({
+            url: String(url),
+            token: init?.headers?.Authorization ?? '',
+            body: init?.body ? JSON.parse(init.body) : {},
+          });
+          return new Response(`{"ok":true,"channel":"C_X","ts":"7.${++tsSeq}"}`, { status: 200 });
+        },
+      ),
+    );
+
+    const [alertM] = await db
+      .insert(alerts)
+      .values({ conversationId: convM.id, type: 'failure', detail: 'fan out' })
+      .returning();
+    await postSlackAlert(db, ws.id, convM, multi, alertM);
+    // one anchored alert per destination: A's alert channel via xoxb-a,
+    // C_B2 via xoxb-b — each anchored its own thread
+    const posts = calls.filter((c) => c.url.includes('chat.postMessage'));
+    expect(posts.some((p) => p.token === 'Bearer xoxb-a' && p.body.channel === 'C_A')).toBe(true);
+    expect(posts.some((p) => p.token === 'Bearer xoxb-b' && p.body.channel === 'C_B2')).toBe(true);
+    const threads = await db
+      .select()
+      .from(slackThreads)
+      .where(eq(slackThreads.conversationId, convM.id));
+    expect(new Set(threads.map((t) => t.installationId)).size).toBe(2);
+
+    calls.length = 0;
+    const [alertMuted] = await db
+      .insert(alerts)
+      .values({ conversationId: convMuted.id, type: 'failure', detail: 'muted' })
+      .returning();
+    await postSlackAlert(db, ws.id, convMuted, muted, alertMuted);
+    expect(calls.filter((c) => c.url.includes('chat.postMessage'))).toHaveLength(0);
   });
 });

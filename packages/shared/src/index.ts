@@ -269,10 +269,12 @@ export const Agent = z.object({
   has_webhook_secret: z.boolean(),
   hosted: z.boolean(), // Janis runs the agent in-process (no webhook needed)
   auto_resume_minutes: z.number().nullable(),
-  // Slack channel override for this agent's alerts — null = workspace channel
-  slack_channel_id: z.string().nullable(),
-  // Slack workspace override — null = workspace's default installation
-  slack_installation_id: z.string().nullable(),
+  // Slack alert destinations: null = workspace default install+channel,
+  // [] = no Slack alerts for this agent, otherwise the exact list —
+  // channel_id null means that installation's own alert channel
+  slack_routes: z
+    .array(z.object({ installation_id: z.string(), channel_id: z.string().nullable() }))
+    .nullable(),
   // the owning user — always effectively an admin; transfers ownership only
   owner_user_id: z.string().nullable(),
   config: AgentConfig,

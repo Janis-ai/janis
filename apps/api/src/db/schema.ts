@@ -117,7 +117,8 @@ export const agents = pgTable('agents', {
   webhookSecret: text('webhook_secret'),
   hosted: boolean('hosted').notNull().default(false), // Janis runs the agent in-process
   // Slack channel override for this agent's alerts — null routes to the
-  // installation's workspace-wide alert channel
+  // installation's workspace-wide alert channel. Legacy columns, kept for
+  // rollback; slack_routes is authoritative.
   slackChannelId: text('slack_channel_id'),
   // Slack workspace override — null uses the workspace's default installation
   // (earliest connected); set routes this agent's alerts/threads there
@@ -125,6 +126,12 @@ export const agents = pgTable('agents', {
     () => slackInstallations.id,
     { onDelete: 'set null' },
   ),
+  // Alert destinations: null = workspace default install+channel, [] = no
+  // Slack alerts for this agent, [{installation_id, channel_id|null}] = those
+  // exact destinations (channel_id null = that install's alert channel).
+  slackRoutes: jsonb('slack_routes').$type<
+    { installation_id: string; channel_id: string | null }[] | null
+  >(),
   autoResumeMinutes: integer('auto_resume_minutes').default(10), // auto-release human takeover after N min (null = never)
   // The owning user — always at least an admin on this agent; can't be
   // demoted, hidden, or removed until they hand ownership to someone else.

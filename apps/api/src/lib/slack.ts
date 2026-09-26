@@ -280,22 +280,42 @@ export async function slackChannelInfo(
     : null;
 }
 
-/** Where this agent's alerts post — its own channel if set, else the
- * workspace-wide alert channel. */
-export async function alertChannelFor(
+/** Every Slack destination this agent's alerts post to.
+ * slackRoutes semantics: null/undefined → the workspace default install's
+ * alert channel; [] → the agent has no Slack destinations; otherwise each
+ * route is {installation_id, channel_id|null} where a null channel falls
+ * back to that install's own alert channel. Unknown/foreign installs are
+ * skipped; exact (install, channel) dupes collapse. */
+export async function alertTargetsFor(
   db: Db,
-  inst: Installation,
-  agentId: string | null | undefined,
-): Promise<string | null> {
-  if (agentId) {
-    const [agent] = await db
-      .select({ slackChannelId: agents.slackChannelId })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .limit(1);
-    if (agent?.slackChannelId) return agent.slackChannelId;
+  agent: { workspaceId: string; slackRoutes?: { installation_id: string; channel_id: string | null }[] | null },
+): Promise<{ inst: Installation; channelId: string | null }[]> {
+  const routes = agent.slackRoutes;
+  if (routes == null) {
+    const inst = await getInstallation(db, agent.workspaceId);
+    return inst ? [{ inst, channelId: inst.alertChannelId }] : [];
   }
-  return inst.alertChannelId;
+  const out: { inst: Installation; channelId: string | null }[] = [];
+  const seen = new Set<string>();
+  for (const r of routes) {
+    const [inst] = await db
+      .select()
+      .from(slackInstallations)
+      .where(
+        and(
+          eq(slackInstallations.id, r.installation_id),
+          eq(slackInstallations.workspaceId, agent.workspaceId),
+        ),
+      )
+      .limit(1);
+    if (!inst) continue;
+    const channelId = r.channel_id ?? inst.alertChannelId;
+    const key = `${inst.id}:${channelId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ inst, channelId });
+  }
+  return out;
 }
 
 /** Slack answers not_in_channel / channel_not_found when the bot can't use a
@@ -631,18 +651,15 @@ async function janisAlertChannels(
   const ids = new Map<string, string | null>();
   if (inst.alertChannelId) ids.set(inst.alertChannelId, null);
   const rows = await db
-    .select({ id: agents.id, ch: agents.slackChannelId, instId: agents.slackInstallationId })
+    .select({ id: agents.id, routes: agents.slackRoutes })
     .from(agents)
-    .where(and(eq(agents.workspaceId, inst.workspaceId), isNotNull(agents.slackChannelId)));
-  const [defaultInst] = await db
-    .select({ id: slackInstallations.id })
-    .from(slackInstallations)
-    .where(eq(slackInstallations.workspaceId, inst.workspaceId))
-    .orderBy(asc(slackInstallations.createdAt))
-    .limit(1);
+    .where(and(eq(agents.workspaceId, inst.workspaceId), isNotNull(agents.slackRoutes)));
   for (const r of rows) {
-    const routed = r.instId ?? defaultInst?.id;
-    if (r.ch && routed === inst.id) ids.set(r.ch, r.id);
+    for (const route of r.routes ?? []) {
+      if (route.installation_id !== inst.id) continue;
+      const ch = route.channel_id ?? inst.alertChannelId;
+      if (ch) ids.set(ch, r.id);
+    }
   }
   return [...ids].map(([id, agentId]) => ({ id, agentId }));
 }
@@ -886,12 +903,29 @@ export async function postSlackAlert(
   agent: typeof agents.$inferSelect,
   alert: AlertRow,
 ): Promise<void> {
-  const inst = await installationFor(db, agent);
-  if (!inst) return;
-  const channelId = await alertChannelFor(db, inst, agent.id);
-  if (!channelId) return;
+  // Fan out to every configured destination — an agent can alert several
+  // Slack workspaces/channels at once; each keeps its own thread anchor.
+  const targets = await alertTargetsFor(db, agent);
+  for (const t of targets) {
+    if (!t.channelId) continue;
+    await postSlackAlertTo(db, conv, agent, alert, t.inst, t.channelId).catch((err) =>
+      console.error('slack alert post failed:', err),
+    );
+  }
+}
 
-  let existing = await threadsForConversation(db, conv.id);
+async function postSlackAlertTo(
+  db: Db,
+  conv: ConversationRow,
+  agent: typeof agents.$inferSelect,
+  alert: AlertRow,
+  inst: Installation,
+  channelId: string,
+): Promise<void> {
+  // Only this installation's threads — each destination anchors its own.
+  const convThreads = async () =>
+    (await threadsForConversation(db, conv.id)).filter((t) => t.installation.id === inst.id);
+  let existing = await convThreads();
 
   // Routing: assigned → invite them into the alert channel (idempotent) and
   // @mention; if they can't be invited, DM a pointer instead. Unassigned →
@@ -948,7 +982,7 @@ export async function postSlackAlert(
     // dead rows and try the next thread; if none are left, fall through and
     // anchor a fresh thread in the configured alert channel.
     await pruneDeadThreads(db, conv.id, t.slackThreads.channelId);
-    existing = await threadsForConversation(db, conv.id);
+    existing = await convThreads();
   }
 
   const res = await postChannelMessage(inst, channelId, {
@@ -1328,35 +1362,38 @@ export async function slackNotice(
     }
     return;
   }
-  // Route through the agent's own installation when it has one — alerts and
-  // notices land in the same Slack workspace.
+  // Anchor a thread at each of the agent's configured destinations so
+  // notices, mirrors and refreshed cards land in the same Slack workspaces
+  // as its alerts.
   const [agentRow] = await db
     .select()
     .from(agents)
     .where(eq(agents.id, conv.agentId))
     .limit(1);
-  const inst = agentRow
-    ? await installationFor(db, agentRow)
-    : await getInstallation(db, workspaceId);
-  if (!inst) return;
-  const channelId = await alertChannelFor(db, inst, conv.agentId);
-  if (!channelId) return;
-  const res = await postChannelMessage(inst, channelId, {
-    text: `${label} ${text} — \`${conv.externalId}\``,
-  });
-  if (!res.ok || !res.channel || !res.ts) {
-    console.error('slack notice failed:', res.error);
-    return;
+  const targets = agentRow
+    ? await alertTargetsFor(db, agentRow)
+    : await getInstallation(db, workspaceId).then((i) =>
+        i ? [{ inst: i, channelId: i.alertChannelId }] : [],
+      );
+  for (const { inst, channelId } of targets) {
+    if (!channelId) continue;
+    const res = await postChannelMessage(inst, channelId, {
+      text: `${label} ${text} — \`${conv.externalId}\``,
+    });
+    if (!res.ok || !res.channel || !res.ts) {
+      console.error('slack notice failed:', res.error);
+      continue;
+    }
+    await db
+      .insert(slackThreads)
+      .values({
+        conversationId: conv.id,
+        installationId: inst.id,
+        channelId: res.channel,
+        ts: res.ts,
+      })
+      .onConflictDoNothing();
   }
-  await db
-    .insert(slackThreads)
-    .values({
-      conversationId: conv.id,
-      installationId: inst.id,
-      channelId: res.channel,
-      ts: res.ts,
-    })
-    .onConflictDoNothing();
 }
 
 /** Look up the Slack thread for a channel+thread_ts pair. */

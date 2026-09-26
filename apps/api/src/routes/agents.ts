@@ -56,8 +56,21 @@ const updateAgent = z.object({
   hosted: z.boolean().optional(),
   auto_resume_minutes: z.number().min(1).max(10080).nullable().optional(),
   // null clears the override back to the workspace alert channel
+  // null inherits the workspace default, [] mutes Slack for this agent,
+  // otherwise the exact destination list (channel_id null = the install's
+  // own alert channel)
+  slack_routes: z
+    .array(
+      z.object({
+        installation_id: z.string(),
+        channel_id: z.string().nullable().optional(),
+      }),
+    )
+    .max(8)
+    .nullable()
+    .optional(),
+  // legacy single-override fields — translated into a one-entry route
   slack_channel_id: z.string().nullable().optional(),
-  // null clears the override back to the default Slack installation
   slack_installation_id: z.string().nullable().optional(),
   config: AgentConfig.optional(),
 });
@@ -127,11 +140,12 @@ export function agentRoutes(db: Db) {
       const slug = sanitizeChannelName(`janis-${row.name}`) || 'janis-agent';
       const { channel } = await createSlackChannel(inst, slug);
       if (channel) {
+        const routes = [{ installation_id: inst.id, channel_id: channel.id }];
         await db
           .update(agents)
-          .set({ slackChannelId: channel.id })
+          .set({ slackRoutes: routes })
           .where(eq(agents.id, row.id));
-        row.slackChannelId = channel.id;
+        row.slackRoutes = routes;
         void inviteWorkspaceMembers(db, inst, channel.id, row.id);
       }
     }
@@ -140,45 +154,52 @@ export function agentRoutes(db: Db) {
 
   app.patch('/:id', agentAdmin, zValidator('json', updateAgent), async (c) => {
     const body = c.req.valid('json');
-    // A non-null override must be a real channel in the installation this
-    // agent's alerts will route through — otherwise they'd silently fail.
-    let inst: typeof slackInstallations.$inferSelect | undefined;
-    if (body.slack_channel_id || body.slack_installation_id) {
-      let instId = body.slack_installation_id ?? undefined;
-      if (!instId && body.slack_channel_id) {
-        // channel-only change — validate against the agent's current override
-        const [cur] = await db
-          .select({ instId: agents.slackInstallationId })
-          .from(agents)
-          .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
-          .limit(1);
-        instId = cur?.instId ?? undefined;
-      }
-      inst = instId
-        ? (
-            await db
-              .select()
-              .from(slackInstallations)
-              .where(
-                and(
-                  eq(slackInstallations.id, instId),
-                  eq(slackInstallations.workspaceId, c.get('workspaceId')),
-                ),
-              )
-              .limit(1)
-          )[0]
-        : await getInstallation(db, c.get('workspaceId'));
-      if (body.slack_installation_id && !inst) {
-        return c.json({ error: 'slack workspace not found' }, 400);
-      }
-      if (body.slack_channel_id && !inst) {
-        return c.json({ error: 'slack not connected' }, 400);
+    const workspaceId = c.get('workspaceId');
+    // Translate the legacy single-override fields into the routes model:
+    // both null clears back to inherit; otherwise it's a one-entry route on
+    // the given (or the agent's current/default) installation.
+    let routesPatch: { installation_id: string; channel_id: string | null }[] | null | undefined =
+      body.slack_routes?.map((r) => ({ ...r, channel_id: r.channel_id ?? null }));
+    if (
+      routesPatch === undefined &&
+      (body.slack_channel_id !== undefined || body.slack_installation_id !== undefined)
+    ) {
+      if (body.slack_channel_id == null && body.slack_installation_id == null) {
+        routesPatch = null;
+      } else {
+        let instId = body.slack_installation_id ?? undefined;
+        if (!instId) {
+          const [cur] = await db
+            .select({ routes: agents.slackRoutes })
+            .from(agents)
+            .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+            .limit(1);
+          instId = cur?.routes?.[0]?.installation_id;
+        }
+        if (!instId) {
+          const def = await getInstallation(db, workspaceId);
+          instId = def?.id;
+        }
+        if (!instId) return c.json({ error: 'slack not connected' }, 400);
+        routesPatch = [{ installation_id: instId, channel_id: body.slack_channel_id ?? null }];
       }
     }
-    if (body.slack_channel_id && inst) {
-      const info = await slackChannelInfo(inst.botToken, body.slack_channel_id);
-      if (!info) return c.json({ error: 'channel not found in Slack' }, 400);
-      if (info.isArchived) return c.json({ error: 'that channel is archived' }, 400);
+    // Every route's install must belong to this workspace and its channel
+    // must resolve there — otherwise alerts would silently fail.
+    if (routesPatch) {
+      const insts = await db
+        .select()
+        .from(slackInstallations)
+        .where(eq(slackInstallations.workspaceId, workspaceId));
+      const byId = new Map(insts.map((i) => [i.id, i]));
+      for (const r of routesPatch) {
+        const inst = byId.get(r.installation_id);
+        if (!inst) return c.json({ error: 'slack workspace not found' }, 400);
+        if (!r.channel_id) continue;
+        const info = await slackChannelInfo(inst.botToken, r.channel_id);
+        if (!info) return c.json({ error: 'channel not found in Slack' }, 400);
+        if (info.isArchived) return c.json({ error: 'that channel is archived' }, 400);
+      }
     }
     let configToSave = body.config;
     // llm.api_key is write-only — reads return key_set instead. Merge so a
@@ -229,20 +250,26 @@ export function agentRoutes(db: Db) {
         ...(body.auto_resume_minutes !== undefined
           ? { autoResumeMinutes: body.auto_resume_minutes }
           : {}),
-        ...(body.slack_channel_id !== undefined
-          ? { slackChannelId: body.slack_channel_id }
-          : {}),
-        ...(body.slack_installation_id !== undefined
-          ? { slackInstallationId: body.slack_installation_id }
-          : {}),
+        ...(routesPatch !== undefined ? { slackRoutes: routesPatch } : {}),
         ...(configToSave !== undefined ? { config: configToSave } : {}),
       })
       .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
       .returning();
     if (!row) return c.json({ error: 'not found' }, 404);
-    // New alert channel → every member needs to be in it to see/act on alerts.
-    if (body.slack_channel_id && inst) {
-      void inviteWorkspaceMembers(db, inst, body.slack_channel_id, c.req.param('id'));
+    // New alert destinations → every member needs to be in those channels
+    // to see/act on alerts.
+    if (routesPatch) {
+      const insts = await db
+        .select()
+        .from(slackInstallations)
+        .where(eq(slackInstallations.workspaceId, workspaceId));
+      const byId = new Map(insts.map((i) => [i.id, i]));
+      for (const r of routesPatch) {
+        const inst = byId.get(r.installation_id);
+        if (inst && r.channel_id) {
+          void inviteWorkspaceMembers(db, inst, r.channel_id, c.req.param('id'));
+        }
+      }
     }
     return c.json({ agent: toAgent(row) });
   });

@@ -12,7 +12,6 @@ import {
   createSlackChannel,
   findThread,
   getInstallation,
-  installationFor,
   installationsFor,
   inviteWorkspaceMembers,
   listSlackChannels,
@@ -131,10 +130,14 @@ export function slackApiRoutes(db: Db) {
     const selected = new Set<string>();
     if (inst.alertChannelId) selected.add(inst.alertChannelId);
     const agentRows = await db
-      .select({ channelId: agents.slackChannelId })
+      .select({ routes: agents.slackRoutes })
       .from(agents)
       .where(eq(agents.workspaceId, workspaceId));
-    for (const a of agentRows) if (a.channelId) selected.add(a.channelId);
+    for (const a of agentRows) {
+      for (const r of a.routes ?? []) {
+        if (r.installation_id === inst.id && r.channel_id) selected.add(r.channel_id);
+      }
+    }
     const listed = new Set(channels.map((ch) => ch.id));
     for (const id of [...selected].filter((id) => !listed.has(id)).slice(0, 10)) {
       const info = await slackChannelInfo(inst.botToken, id);
@@ -170,21 +173,30 @@ export function slackApiRoutes(db: Db) {
   app.post(
     '/channel', adminOnly, zValidator(
       'json',
-      z.object({ name: z.string().min(1).max(80), agent_id: z.string().optional() }),
+      z.object({
+        name: z.string().min(1).max(80),
+        agent_id: z.string().optional(),
+        installation_id: z.string().optional(),
+      }),
     ),
     async (c) => {
-      const { name: rawName, agent_id: agentId } = c.req.valid('json');
-      // With agent_id the channel is created in that agent's Slack workspace
-      // (its installation override, else the default).
+      const { name: rawName, agent_id: agentId, installation_id: instParam } = c.req.valid('json');
+      // installation_id picks the Slack workspace directly. With agent_id the
+      // channel is created in that agent's first routed workspace (else the
+      // default) and appended to its routes.
       let inst: Installation | undefined;
-      if (agentId) {
+      if (instParam) {
+        inst = await installationById(db, c.get('workspaceId'), instParam);
+      } else if (agentId) {
         const [agent] = await db
-          .select()
+          .select({ slackRoutes: agents.slackRoutes })
           .from(agents)
           .where(and(eq(agents.id, agentId), eq(agents.workspaceId, c.get('workspaceId'))))
           .limit(1);
         if (!agent) return c.json({ error: 'agent not found' }, 404);
-        inst = await installationFor(db, agent);
+        inst = agent.slackRoutes?.[0]?.installation_id
+          ? await installationById(db, c.get('workspaceId'), agent.slackRoutes[0].installation_id)
+          : await getInstallation(db, c.get('workspaceId'));
       } else {
         inst = await getInstallation(db, c.get('workspaceId'));
       }
@@ -206,9 +218,20 @@ export function slackApiRoutes(db: Db) {
         return c.json({ error: msg }, 400);
       }
       if (agentId) {
+        // Append the new channel to the agent's routes — creating a channel
+        // in the picker means "send this agent's alerts here too".
+        const [agent] = await db
+          .select({ routes: agents.slackRoutes })
+          .from(agents)
+          .where(eq(agents.id, agentId))
+          .limit(1);
+        const routes = [
+          ...(agent?.routes ?? []),
+          { installation_id: inst.id, channel_id: channel.id },
+        ];
         await db
           .update(agents)
-          .set({ slackChannelId: channel.id, slackInstallationId: inst.id })
+          .set({ slackRoutes: routes })
           .where(eq(agents.id, agentId));
       } else {
         await db
@@ -236,6 +259,21 @@ export function slackApiRoutes(db: Db) {
   app.delete('/:id', adminOnly, async (c) => {
     const inst = await installationById(db, c.get('workspaceId'), c.req.param('id'));
     if (!inst) return c.json({ ok: true });
+    // Strip this install from agent routes. An agent left with no
+    // destinations reverts to inheriting the workspace default rather than
+    // silently going dark.
+    const routedAgents = await db
+      .select({ id: agents.id, routes: agents.slackRoutes })
+      .from(agents)
+      .where(eq(agents.workspaceId, c.get('workspaceId')));
+    for (const a of routedAgents) {
+      if (!a.routes?.some((r) => r.installation_id === inst.id)) continue;
+      const next = a.routes.filter((r) => r.installation_id !== inst.id);
+      await db
+        .update(agents)
+        .set({ slackRoutes: next.length ? next : null })
+        .where(eq(agents.id, a.id));
+    }
     await db.delete(slackThreads).where(eq(slackThreads.installationId, inst.id));
     await db.delete(slackInstallations).where(eq(slackInstallations.id, inst.id));
     return c.json({ ok: true });
