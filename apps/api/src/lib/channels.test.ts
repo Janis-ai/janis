@@ -370,6 +370,44 @@ describe('sendChannelMessage quick replies', () => {
     ]);
   });
 
+  it('whatsapp: body over the 1024-char interactive cap splits at the last newline', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const head = 'x'.repeat(1050);
+    await sendChannelMessage(ch('whatsapp'), '1555', `${head}\nPick one?`, undefined, {
+      quickReplies: ['A', 'B'],
+    });
+    // first call: the head as plain text; second: tail carries the buttons
+    const [textMsg, btnMsg] = fetchMock.mock.calls.map(
+      (c) => JSON.parse((c[1] as RequestInit).body as string),
+    );
+    expect(textMsg).toMatchObject({ type: 'text', text: { body: head } });
+    expect(btnMsg.interactive.body.text).toBe('Pick one?');
+    expect(btnMsg.interactive.action.buttons).toHaveLength(2);
+  });
+
+  it('whatsapp: no clean split drops the buttons instead of failing', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const longText = 'x'.repeat(1100);
+    await sendChannelMessage(ch('whatsapp'), '1555', longText, undefined, {
+      quickReplies: ['A', 'B'],
+    });
+    const body = lastBody(fetchMock);
+    expect(body).toMatchObject({ type: 'text', text: { body: longText } });
+  });
+
+  it('truncates qr titles by code point, not mid-surrogate-pair', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await sendChannelMessage(ch('messenger'), 'PSID1', 'Hi!', undefined, {
+      quickReplies: [`${'a'.repeat(19)}🎉 trailing`],
+    });
+    const { message } = lastBody(fetchMock);
+    // 19 chars + the emoji = 20 code points — intact, not a dangling half-pair
+    expect(message.quick_replies[0].title).toBe(`${'a'.repeat(19)}🎉`);
+  });
+
   it('sends plain text when no quick replies configured', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);

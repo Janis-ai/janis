@@ -374,7 +374,7 @@ export function extractButtons(text: string): {
       }
       const m = line.trim().match(/^BUTTONS?:\s*(.+)$/i);
       if (m && buttons.length < 4) {
-        const label = m[1].trim().slice(0, 20);
+        const label = [...m[1].trim()].slice(0, 20).join('');
         if (label) buttons.push(label);
       }
       return !ask && !m;

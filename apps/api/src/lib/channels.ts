@@ -331,6 +331,19 @@ function metaError(data: unknown, status: number): { text: string; retryable: bo
   };
 }
 
+/** Split `text` at its last newline into {head, tail} when it exceeds `cap`
+ * characters — used to re-anchor quick-reply/button bodies on the final
+ * line (usually the question they answer) while the head goes out as plain
+ * text. head: null when there's no clean split (caller drops the buttons). */
+function buttonBodySplit(text: string, cap: number): { head: string | null; tail: string } {
+  if ([...text].length <= cap) return { head: null, tail: text };
+  const cut = text.lastIndexOf('\n');
+  const tail = cut > 0 ? text.slice(cut + 1).trim() : '';
+  const head = cut > 0 ? text.slice(0, cut).trim() : '';
+  if (head && tail && [...tail].length <= cap) return { head, tail };
+  return { head: null, tail: text };
+}
+
 export interface SendOptions {
   /** Suggested replies — tappable buttons on Messenger/IG quick replies and
    * WhatsApp interactive buttons. 20-char titles; WhatsApp shows max 3.
@@ -421,9 +434,11 @@ export async function sendChannelMessage(
         ? `*${opts.senderName}:* ${text}`
         : `${opts.senderName}: ${text}`
       : text;
+  // Meta/whatsApp title cap is 20 CHARACTERS — slice by code point so an
+  // emoji never gets cut mid-surrogate-pair into mojibake
   const qrs = (opts?.quickReplies ?? [])
     .map((t): QuickReply | null =>
-      typeof t === 'string' ? t.trim().slice(0, 20) || null : t,
+      typeof t === 'string' ? [...t.trim()].slice(0, 20).join('') || null : t,
     )
     .filter((t): t is QuickReply => t !== null);
   if (channel.kind === 'whatsapp') {
@@ -459,22 +474,46 @@ export async function sendChannelMessage(
     let retryable = true;
     if (named.trim()) {
       // WhatsApp has no contact-request primitive — only labelled buttons
-      const buttons = qrs
+      let buttons = qrs
         .filter((q): q is string => typeof q === 'string')
         .slice(0, 3)
         .map((title, i) => ({
           type: 'reply',
           reply: { id: `qr_${i}`, title },
         }));
+      // Interactive-button bodies cap at 1024 chars (plain text gets 4096).
+      // A longer reply splits at the last newline — head goes out as plain
+      // text and the tail carries the buttons; no clean split → buttons
+      // drop rather than fail the whole send.
+      let body = named;
+      if (buttons.length && [...named].length > 1024) {
+        const split = buttonBodySplit(named, 1024);
+        if (split.head) {
+          const r0 = await send({
+            messaging_product: 'whatsapp',
+            to: platformUserId,
+            type: 'text',
+            text: { body: split.head },
+          });
+          mid = r0.mid ?? mid;
+          if (r0.error && !error) {
+            error = r0.error;
+            retryable = r0.retryable;
+          }
+          body = split.tail;
+        } else {
+          buttons = [];
+        }
+      }
       const r = await send(
         buttons.length
           ? {
               messaging_product: 'whatsapp',
               to: platformUserId,
               type: 'interactive',
-              interactive: { type: 'button', body: { text: named }, action: { buttons } },
+              interactive: { type: 'button', body: { text: body }, action: { buttons } },
             }
-          : { messaging_product: 'whatsapp', to: platformUserId, type: 'text', text: { body: named } },
+          : { messaging_product: 'whatsapp', to: platformUserId, type: 'text', text: { body } },
       );
       mid = r.mid ?? mid;
       if (r.error && !error) {
@@ -557,27 +596,39 @@ export async function sendChannelMessage(
   let error: string | null = null;
   let retryable = true;
   if (named.trim()) {
-    // Always the prefixed text — Meta accepts persona_id but silently drops
-    // persona rendering for a growing list of recipients/surfaces (admins
-    // viewing the thread see plain page identity), so the inline name is the
-    // only dependable attribution. persona_id still rides along when it
+    // Meta caps message text at ~2000 chars — over that, split at the last
+    // newline so the tail (with any quick replies) still lands. Always the
+    // prefixed text — Meta accepts persona_id but silently drops persona
+    // rendering for a growing list of recipients/surfaces (admins viewing
+    // the thread see plain page identity), so the inline name is the only
+    // dependable attribution. persona_id still rides along when it
     // resolves — where it renders, the annotation backs the prefix.
-    const r = await send(textMessage(named));
-    if (!r.mid && personaId) {
-      // persona deleted or rejected server-side — retry without it
-      personaId = null;
-      const retry = await send(textMessage(named));
-      mid = retry.mid;
-      const e = retry.error ?? r.error;
-      if (e) {
-        error = e;
-        retryable = retry.error !== null ? retry.retryable : r.retryable;
-      }
+    const parts: Record<string, unknown>[] = [];
+    if ([...named].length > 2000) {
+      const split = buttonBodySplit(named, 2000);
+      if (split.head) parts.push({ text: split.head });
+      parts.push(textMessage(split.tail));
     } else {
-      mid = r.mid;
-      if (r.error) {
-        error = r.error;
-        retryable = r.retryable;
+      parts.push(textMessage(named));
+    }
+    for (const m of parts) {
+      const r = await send(m);
+      if (!r.mid && personaId) {
+        // persona deleted or rejected server-side — retry without it
+        personaId = null;
+        const retry = await send(m);
+        mid = retry.mid ?? mid;
+        const e = retry.error ?? r.error;
+        if (e) {
+          error = e;
+          retryable = retry.error !== null ? retry.retryable : r.retryable;
+        }
+      } else {
+        mid = r.mid ?? mid;
+        if (r.error) {
+          error = r.error;
+          retryable = r.retryable;
+        }
       }
     }
   }
