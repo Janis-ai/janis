@@ -297,6 +297,14 @@ describe('agent-invite sign-in landing', () => {
     expect(body.workspace?.id).toBe(wsId);
     expect(body.agent_scope?.map((a: { id: string }) => a.id)).toEqual([agentB]);
 
+    // API calls against the pinned grant workspace resolve the grant scope —
+    // not the user's unrelated membership (sessionAuth snap-back regression)
+    const agentsRes = await app.request('/api/agents', {
+      headers: { cookie: dualCookie },
+    });
+    const agentsBody = await agentsRes.json();
+    expect(agentsBody.agents.map((a: { id: string }) => a.id)).toEqual([agentB]);
+
     // and it stays after switching back to their membership workspace
     const back = await authApp.request('/auth/switch', {
       method: 'POST',
@@ -306,5 +314,7 @@ describe('agent-invite sign-in landing', () => {
     expect(back.status).toBe(200);
     const me2 = await authApp.request('/auth/me', { headers: { cookie: dualCookie } });
     expect((await me2.json()).workspace?.id).toBe(ownWs.id);
+    const back2 = await app.request('/api/agents', { headers: { cookie: dualCookie } });
+    expect((await back2.json()).agents).toEqual([]);
   });
 });

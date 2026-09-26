@@ -58,6 +58,35 @@ export function sessionAuth(db: Db) {
             .limit(1)
         )[0]
       : undefined;
+    // Agent-scoped session: the pinned workspace is reachable via grants
+    // even without a membership — resolve scoped context instead of stealing
+    // the session back to an unrelated membership.
+    if (!membership && row.session.workspaceId) {
+      const granted = await db
+        .select({ agentId: agentMembers.agentId, role: agentMembers.role })
+        .from(agentMembers)
+        .innerJoin(agents, eq(agentMembers.agentId, agents.id))
+        .where(
+          and(
+            eq(agentMembers.userId, row.user.id),
+            eq(agents.workspaceId, row.session.workspaceId),
+            isNotNull(agentMembers.acceptedAt),
+          ),
+        )
+        .limit(50);
+      if (granted.length) {
+        c.set('user', row.user);
+        c.set('workspaceId', row.session.workspaceId);
+        c.set('role', 'member');
+        c.set(
+          'agentScope',
+          Object.fromEntries(granted.map((g) => [g.agentId, g.role ?? 'member'])),
+        );
+        await next();
+        return;
+      }
+    }
+
     if (!membership) {
       [membership] = await db
         .select()
