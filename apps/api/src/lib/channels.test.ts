@@ -381,7 +381,7 @@ describe('messenger personas', () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it('creates a persona and sends with persona_id, no text prefix', async () => {
+  it('creates a persona and sends persona_id alongside the name prefix', async () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string | URL) => {
       const u = String(url);
       if (u.includes('/personas')) {
@@ -399,7 +399,9 @@ describe('messenger personas', () => {
     });
     const sendBody = JSON.parse(String(fetchMock.mock.calls.at(-1)![1]?.body));
     expect(sendBody.persona_id).toBe('PERSONA1');
-    expect(sendBody.message.text).toBe('hi there');
+    // Meta accepts persona_id but drops persona rendering on many surfaces —
+    // the inline prefix is the dependable attribution.
+    expect(sendBody.message.text).toBe('Bob: hi there');
   });
 
   it('reuses a cached persona when name and avatar are unchanged', async () => {

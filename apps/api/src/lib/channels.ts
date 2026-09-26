@@ -539,10 +539,15 @@ export async function sendChannelMessage(
   let mid: string | null = null;
   let error: string | null = null;
   let retryable = true;
-  if ((personaId ? text : named).trim()) {
-    const r = await send(textMessage(personaId ? text : named));
+  if (named.trim()) {
+    // Always the prefixed text — Meta accepts persona_id but silently drops
+    // persona rendering for a growing list of recipients/surfaces (admins
+    // viewing the thread see plain page identity), so the inline name is the
+    // only dependable attribution. persona_id still rides along when it
+    // resolves — where it renders, the annotation backs the prefix.
+    const r = await send(textMessage(named));
     if (!r.mid && personaId) {
-      // persona deleted or rejected server-side — plain prefixed send
+      // persona deleted or rejected server-side — retry without it
       personaId = null;
       const retry = await send(textMessage(named));
       mid = retry.mid;
