@@ -64,7 +64,13 @@ function ConvRow({ c, agentName }: { c: Conversation; agentName?: string }) {
           {displayName(c)}
           {agentName && <span className="agent-tag">{agentName}</span>}
           {c.user_profile?.channel && (
-            <span className="channel-tag">{channelLabel(c.user_profile.channel)}</span>
+            <span className="channel-tag">
+              {channelLabel(c.user_profile.channel)}
+              {/* disambiguate same-person-different-page PSID conversations */}
+              {c.user_profile.channel_name &&
+                c.user_profile.channel_name.toLowerCase() !== agentName?.toLowerCase() &&
+                ` · ${c.user_profile.channel_name}`}
+            </span>
           )}
         </div>
         <div className="preview">{c.last_message_preview}</div>
