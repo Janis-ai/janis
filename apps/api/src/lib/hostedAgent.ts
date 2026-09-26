@@ -114,7 +114,7 @@ export function systemPrompt(
       `You are a helpful support agent. Answer concisely and accurately.${
         opts.forSuggestion
           ? ''
-          : ' If the customer explicitly asks for a human, reply with [HANDOFF]. If you are unsure or think a human would help but they have not asked, offer one first — reply with your best answer plus [OFFER_HUMAN]. If they decline a human, reply with [CANCEL_HANDOFF].'
+          : ' If the customer explicitly asks for a human, reply with [HANDOFF]. If they seem stuck or frustrated and you genuinely cannot help further, offer a human once with [OFFER_HUMAN] — otherwise just ask a clarifying question. If they decline a human, reply with [CANCEL_HANDOFF].'
       }`,
   ];
   if (cfg.knowledge?.length) {
@@ -156,7 +156,7 @@ export function systemPrompt(
     );
   } else {
     parts.push(
-      '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. If you cannot fully help but they have NOT asked for a human, give your best answer, ask whether they would like a human to step in, and end with [OFFER_HUMAN] on its own line. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line.',
+      '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, or mild pushback, and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line.',
     );
   }
   return parts.join('');
@@ -1492,6 +1492,14 @@ async function replyAsHostedAgent(
       // Agent thinks a human would help but the customer hasn't asked —
       // deliver the reply (which should include the offer question) and
       // fire a non-escalating handoff_offer alert so operators can peek.
+      // One offer per conversation: an open or previously-declined offer
+      // means the tag is suppressed — the text still goes out (the customer
+      // can always just ask for a human, which escalates via [HANDOFF]).
+      const offeredBefore = !!(await db
+        .select({ id: alerts.id })
+        .from(alerts)
+        .where(and(eq(alerts.conversationId, convId), eq(alerts.type, 'handoff_offer')))
+        .limit(1))[0];
       const partial = tag.partial;
       const events: Parameters<typeof processEvents>[2] = [];
       if (partial) {
@@ -1499,14 +1507,18 @@ async function replyAsHostedAgent(
           type: 'message_out',
           conversation_id: externalId,
           text: partial,
-          payload: { via: 'hosted', quick_replies: OFFER_CHOICES, ...linkFlag },
+          payload: offeredBefore
+            ? { via: 'hosted', ...linkFlag, ...buttonFlag }
+            : { via: 'hosted', quick_replies: OFFER_CHOICES, ...linkFlag },
         });
       }
-      events.push({
-        type: 'handoff_offer',
-        conversation_id: externalId,
-        reason: 'agent offered a human — awaiting customer reply',
-      });
+      if (!offeredBefore) {
+        events.push({
+          type: 'handoff_offer',
+          conversation_id: externalId,
+          reason: 'agent offered a human — awaiting customer reply',
+        });
+      }
       await emit(events);
       return;
     }

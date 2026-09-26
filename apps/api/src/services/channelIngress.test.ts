@@ -16,7 +16,7 @@ import {
 } from '../db/schema.js';
 import { generateApiKey } from '../lib/crypto.js';
 import { handleChannelMessage } from './channelIngress.js';
-import { refreshConversationSummary } from '../lib/hostedAgent.js';
+import { refreshConversationSummary, runHostedEvent } from '../lib/hostedAgent.js';
 import { systemPrompt } from '../lib/hostedAgent.js';
 import { enrichHandoff } from '../lib/handoff.js';
 import { alerts } from '../db/schema.js';
@@ -408,5 +408,91 @@ describe('handoff brief', () => {
     expect(updatedAlert.detail).toBe(
       'agent signalled handoff — Customer needs a refund for order #4213',
     );
+  });
+});
+
+describe('hosted handoff offers', () => {
+  const offerEvent = (convId: string, externalId: string) =>
+    ({
+      type: 'message.user',
+      conversation_id: externalId,
+      janis_conversation_id: convId,
+      text: 'hmm',
+    }) as Parameters<typeof runHostedEvent>[2];
+
+  it('offers once — a repeat [OFFER_HUMAN] in the same conversation is suppressed', async () => {
+    // fresh Response per call — a resolvedValue singleton reads as
+    // "Body has already been read" on the second LLM fetch
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(llmResponse('Want me to get a human?\n[OFFER_HUMAN]')),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'Hosted',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-offer-1' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'hmm' });
+
+    const offers = () =>
+      db
+        .select()
+        .from(alerts)
+        .where(eq(alerts.conversationId, conv.id))
+        .then((rows) => rows.filter((a) => a.type === 'handoff_offer'));
+    // skip internal notes (the offer alert line is also direction 'out')
+    const lastOut = () =>
+      db
+        .select()
+        .from(messages)
+        .where(eq(messages.conversationId, conv.id))
+        .then((rows) =>
+          rows
+            .filter(
+              (m) =>
+                m.direction === 'out' &&
+                !(m.flags as { handoff_offer?: boolean } | null)?.handoff_offer,
+            )
+            .at(-1),
+        );
+
+    // first offer — alert + the get-a-human buttons
+    await runHostedEvent(db, hosted, offerEvent(conv.id, 'ext-offer-1'));
+    expect(await offers()).toHaveLength(1);
+    expect(
+      ((await lastOut())?.payload as { quick_replies?: unknown[] })?.quick_replies,
+    ).toEqual(['Yes, get a human', 'No thanks']);
+
+    // decline → the offer resolves; model offers AGAIN on the next turn
+    await db
+      .update(alerts)
+      .set({ status: 'resolved' })
+      .where(eq(alerts.conversationId, conv.id));
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'still nope' });
+    await runHostedEvent(db, hosted, offerEvent(conv.id, 'ext-offer-1'));
+
+    // reply still goes out — but no second alert, no re-rendered buttons
+    expect(await offers()).toHaveLength(1);
+    expect(
+      ((await lastOut())?.payload as { quick_replies?: unknown[] })?.quick_replies,
+    ).toBeUndefined();
   });
 });
