@@ -638,9 +638,18 @@ export function agentRoutes(db: Db) {
       const agent = await ownedAgent(c);
       if (!agent) return c.json({ error: 'not found' }, 404);
       const cfg = (agent.config ?? {}) as Record<string, unknown> & { knowledge?: string[] };
-      const entry = c.req.valid('json').entry.trim();
+      // Entries are one-per-line — split multi-line drafts so they land as
+      // separate entries matching the textarea model, and strip markdown
+      // decoration (bold, leading bullets) the draft model sometimes emits.
+      const entries = c.req
+        .valid('json')
+        .entry.split('\n')
+        .map((l) => l.trim().replace(/^[-*•]\s+/, '').replace(/\*\*/g, ''))
+        .filter(Boolean);
       const knowledge = cfg.knowledge ?? [];
-      if (!knowledge.includes(entry)) knowledge.push(entry);
+      for (const entry of entries) {
+        if (!knowledge.includes(entry)) knowledge.push(entry);
+      }
       // Keep the cached gap set stable — only its "added" flags move, so the
       // page shows the approved cluster as covered instead of re-rolling.
       const cache = readGapsCache(agent.config);

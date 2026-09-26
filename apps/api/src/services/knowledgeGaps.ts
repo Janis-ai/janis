@@ -458,9 +458,11 @@ export async function listLearnNotes(
 
 const DRAFT_SYSTEM =
   'You write knowledge base entries for a customer support AI. Given recurring ' +
-  'customer questions and how human agents answered them, write ONE concise ' +
-  'knowledge entry the agent can use to answer next time. Format: the question ' +
-  'or topic, then a 1-3 sentence answer in a helpful support tone. No preamble.';
+  'customer questions and how human agents answered them, write 2-4 standalone ' +
+  'one-line facts the agent can use to answer next time. Each line must make ' +
+  'sense alone (state the subject, not "it" or "this") — e.g. "Q: How do I add ' +
+  'an agent?" or "New agents are created from Agents > New agent in the ' +
+  'dashboard." Plain text only: no markdown, no headings, no bullets, no preamble.';
 
 /** One-shot chat call for knowledge tooling — records usage, returns null on
  * any failure so callers can fall back. */

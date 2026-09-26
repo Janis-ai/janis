@@ -484,3 +484,43 @@ describe('slack_routes channel validation', () => {
     expect((await patch.json()).error).toContain('archived');
   });
 });
+
+describe('knowledge-gaps approve', () => {
+  it('splits multi-line drafts into separate entries and strips markdown', async () => {
+    const res = await postAgent(parentCookie);
+    const agentId = (await res.json()).agent.id as string;
+    const approve = await app.request(`/api/agents/${agentId}/knowledge-gaps`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({
+        entry:
+          '**Adding a New Agent**\n\nTo add a new team member, go to Settings > Team and select Invite Agent.\n- Agents each get their own knowledge base.',
+      }),
+    });
+    expect(approve.status).toBe(200);
+    const body = await approve.json();
+    expect(body.agent.config.knowledge).toEqual([
+      'Adding a New Agent',
+      'To add a new team member, go to Settings > Team and select Invite Agent.',
+      'Agents each get their own knowledge base.',
+    ]);
+  });
+
+  it('dedupes lines already in the knowledge base', async () => {
+    const res = await postAgent(parentCookie);
+    const agentId = (await res.json()).agent.id as string;
+    const approve = (entry: string) =>
+      app.request(`/api/agents/${agentId}/knowledge-gaps`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+        body: JSON.stringify({ entry }),
+      });
+    await approve('Refunds are accepted within 30 days.');
+    const second = await approve('Refunds are accepted within 30 days.\nShipping is flat-rate.');
+    const body = await second.json();
+    expect(body.agent.config.knowledge).toEqual([
+      'Refunds are accepted within 30 days.',
+      'Shipping is flat-rate.',
+    ]);
+  });
+});
