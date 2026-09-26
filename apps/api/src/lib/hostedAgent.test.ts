@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, conversations, messages, uploads, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, controlTag, extractLearns, fileAnalysisAllowed, guardReplyLinks, transcriptFor } from './hostedAgent.js';
+import { blessedUrlsFor, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, transcriptFor } from './hostedAgent.js';
 
 let db: Db;
 let convId: string;
@@ -252,5 +252,23 @@ describe('extractLearns', () => {
     const r = extractLearns('Nothing to learn here.');
     expect(r.text).toBe('Nothing to learn here.');
     expect(r.learns).toHaveLength(0);
+  });
+});
+
+describe('extractButtons', () => {
+  it('strips BUTTON lines into tappable labels', () => {
+    const r = extractButtons(
+      'Want your email on file?\nBUTTON: Sure, take it\nbutton: Not now',
+    );
+    expect(r.text).toBe('Want your email on file?');
+    expect(r.buttons).toEqual(['Sure, take it', 'Not now']);
+  });
+
+  it('caps at 4 buttons and 20-char labels', () => {
+    const r = extractButtons(
+      'pick one\nBUTTON: a\nBUTTON: a very long button label here\nBUTTON: c\nBUTTON: d\nBUTTON: e',
+    );
+    expect(r.buttons).toEqual(['a', 'a very long button l', 'c', 'd']);
+    expect(r.text).toBe('pick one');
   });
 });

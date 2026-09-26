@@ -144,6 +144,11 @@ export function systemPrompt(
   parts.push(
     '\nKeep replies short and conversational — this is a live chat, not an essay. A sentence or three unless the customer asks for detail.',
   );
+  if (!opts.forSuggestion) {
+    parts.push(
+      '\nYou CAN offer tappable reply buttons — they render as real buttons on the customer\'s chat. When 2-4 short choices would move the conversation forward (e.g. picking a plan, yes/no, sharing an email vs learning more), end your reply with lines starting "BUTTON:" — one per choice, each under 20 characters (e.g. "BUTTON: See pricing"). They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps.',
+    );
+  }
   if (opts.forSuggestion) {
     parts.push(
       '\nNow write the reply you would send to the customer right now — your single best, most confident answer to their latest message, in your own voice. If details are missing, give the best answer you can and ask one targeted follow-up rather than hedging or deferring. Output only the reply text — no speaker labels, no preamble; never output [HANDOFF] in a draft.',
@@ -346,6 +351,26 @@ export function extractLearns(text: string): { text: string; learns: string[] } 
     })
     .join('\n');
   return { text: out.trim(), learns };
+}
+
+/** "BUTTON: …" lines — the agent's way to attach tappable suggested replies
+ * (Messenger/IG quick replies, WhatsApp buttons, webchat chips). Stripped
+ * from the text and returned for payload.quick_replies. WhatsApp shows max
+ * 3 and truncates titles past ~20 chars, so cap tight. */
+export function extractButtons(text: string): { text: string; buttons: string[] } {
+  const buttons: string[] = [];
+  const out = text
+    .split('\n')
+    .filter((line) => {
+      const m = line.trim().match(/^BUTTONS?:\s*(.+)$/i);
+      if (m && buttons.length < 4) {
+        const label = m[1].trim().slice(0, 20);
+        if (label) buttons.push(label);
+      }
+      return !m;
+    })
+    .join('\n');
+  return { text: out.trim(), buttons };
 }
 
 const LINK_GUARD_RETRY =
@@ -1137,9 +1162,15 @@ export async function runHostedEvent(
       });
     }
     // The model sometimes mimics the transcript's speaker labels
-    // ("(human operator) ...") — strip any leading role prefix.
-    const stripLabel = (t?: string | null) =>
-      t?.replace(/^\s*\(?(human operator|operator|agent|assistant)\)?\s*[:\-–—]\s*/i, '') ?? undefined;
+    // ("(human operator) ...") — strip any leading role prefix. LEARN:/
+    // BUTTON: lines are reply-path machinery — never show them in a draft.
+    const stripLabel = (t?: string | null) => {
+      const clean = t?.replace(
+        /^\s*\(?(human operator|operator|agent|assistant)\)?\s*[:\-–—]\s*/i,
+        '',
+      );
+      return clean ? extractButtons(extractLearns(clean).text).text || undefined : undefined;
+    };
     let draft = stripLabel(result?.text);
     if (draft && CONTROL_TAG.test(draft)) draft = undefined;
 
@@ -1338,8 +1369,12 @@ async function replyAsHostedAgent(
       onStall,
     );
     const { text: guardedReply, promptTokens, completionTokens, model } = gen;
-    const { text: reply, learns } = extractLearns(guardedReply);
+    const { text: noLearns, learns } = extractLearns(guardedReply);
+    const { text: reply, buttons } = extractButtons(noLearns);
     const learnFlag = learns.length ? { learn: learns } : {};
+    // model-emitted tappable choices ride payload.quick_replies → native
+    // buttons on Messenger/WhatsApp, chips on webchat
+    const buttonFlag = buttons.length ? { quick_replies: buttons } : {};
     if (promptTokens || completionTokens) {
       await recordLlmUsage(db, {
         workspaceId: agent.workspaceId,
@@ -1410,7 +1445,7 @@ async function replyAsHostedAgent(
           type: 'message_out',
           conversation_id: externalId,
           text: partial,
-          payload: { via: 'hosted', ...linkFlag },
+          payload: { via: 'hosted', ...linkFlag, ...buttonFlag },
         });
       }
       events.push({
@@ -1432,7 +1467,7 @@ async function replyAsHostedAgent(
           type: 'message_out',
           conversation_id: externalId,
           text: partial,
-          payload: { via: 'hosted', ...linkFlag },
+          payload: { via: 'hosted', ...linkFlag, ...buttonFlag },
         });
       }
       events.push({
@@ -1466,7 +1501,7 @@ async function replyAsHostedAgent(
       return;
     }
     await emit([
-      { type: 'message_out', conversation_id: externalId, text: reply, payload: { via: 'hosted', ...linkFlag } },
+      { type: 'message_out', conversation_id: externalId, text: reply, payload: { via: 'hosted', ...linkFlag, ...buttonFlag } },
     ]);
     console.log(`[hosted] ${agent.name} replied in ${Date.now() - t0}ms`);
   } catch (err) {
