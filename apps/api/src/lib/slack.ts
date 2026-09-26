@@ -170,60 +170,127 @@ export async function installationFor(
  * conversations.list is tier-2 rate limited, so successful scans are cached
  * briefly per token and failures surface as `complete: false` rather than a
  * silently truncated list. */
-const channelScanCache = new Map<
-  string,
-  { at: number; channels: { id: string; name: string }[] }
->();
-const CHANNEL_SCAN_TTL = 5 * 60_000;
+/** Scan state per bot token. conversations.list paginates Slack's UNFILTERED
+ * store — a legacy workspace with thousands of archived/old channels returns
+ * sparse pages (a handful of live channels each), so a full scan means
+ * hundreds of sequential calls. Tier-2 rate limits (~20/min) then make the
+ * scan take minutes — far beyond one HTTP request. So scans are resumable:
+ * every call pumps pages from the stored cursor and returns whatever has
+ * accumulated; the UI refetches while `complete` is false. Completed scans
+ * serve for the TTL; a stale or never-finished scan resumes rather than
+ * restarting. */
+type ChannelScan = {
+  cursor: string | undefined;
+  channels: Map<string, { id: string; name: string }>;
+  complete: boolean;
+  running: boolean;
+  at: number;
+};
+const channelScans = new Map<string, ChannelScan>();
+const CHANNEL_SCAN_TTL = 30 * 60_000;
+// per-request page budget — a picker call waits this long for more channels
+// before returning the partial list; the background pump below keeps going
+const INLINE_SCAN_BUDGET_MS = 8_000;
+const SCAN_CHANNEL_CAP = 30_000;
 
 export async function listSlackChannels(
   botToken: string,
 ): Promise<{ channels: { id: string; name: string }[]; complete: boolean }> {
-  const cached = channelScanCache.get(botToken);
-  if (cached && Date.now() - cached.at < CHANNEL_SCAN_TTL) {
-    return { channels: cached.channels, complete: true };
+  let st = channelScans.get(botToken);
+  if (!st || (st.complete && Date.now() - st.at > CHANNEL_SCAN_TTL)) {
+    st = {
+      cursor: undefined,
+      channels: new Map(),
+      complete: false,
+      running: false,
+      at: Date.now(),
+    };
+    channelScans.set(botToken, st);
   }
-  const out: { id: string; name: string }[] = [];
-  let cursor: string | undefined;
-  let complete = false;
-  do {
-    const res: {
-      channels?: { id: string; name: string; is_archived?: boolean }[];
-      response_metadata?: { next_cursor?: string };
-    } & { ok: boolean; error?: string } = await slackApi(
-      botToken,
-      'conversations.list',
-      {},
-      {
-        types: 'public_channel,private_channel',
-        exclude_archived: 'true',
-        limit: '200',
-        ...(cursor ? { cursor } : {}),
-      },
-      { rateLimitRetries: 3 },
-    );
-    if (!res.ok) break;
-    for (const c of res.channels ?? []) {
-      if (!c.is_archived) out.push({ id: c.id, name: c.name });
+  if (!st.complete) {
+    // fill as much as fits in the request budget, then keep scanning in the
+    // background so a single picker open eventually warms the whole list —
+    // the pump's own retry sleeps ride out the 429s
+    await pumpChannelScan(botToken, st, INLINE_SCAN_BUDGET_MS, 1);
+    if (!st.complete) {
+      void (async () => {
+        for (let i = 0; i < 12 && !st.complete; i++) {
+          if (i) await new Promise((r) => setTimeout(r, 30_000));
+          await pumpChannelScan(botToken, st, 20_000, 3);
+        }
+      })().catch(() => {});
     }
-    cursor = res.response_metadata?.next_cursor || undefined;
-    // legacy workspaces carry tens of thousands of channels — cap high so a
-    // valid alert channel isn't silently dropped from the picker
-  } while (cursor && out.length < 30000);
-  complete = !cursor;
-  if (complete) channelScanCache.set(botToken, { at: Date.now(), channels: out });
-  return { channels: out, complete };
+  }
+  return { channels: [...st.channels.values()], complete: st.complete };
 }
 
-/** Drop a cached channel scan (e.g. right after creating a channel) so the
- * next pick doesn't wait out the TTL on a stale list. */
+/** Walks conversations.list pages into `st.channels`, stopping when the
+ * budget elapses, a page fails (the next caller resumes), or the scan
+ * finishes. `rateLimitRetries` bounds how long one page may wait out a 429 —
+ * inline calls stay low so the picker request can't hang for minutes. */
+async function pumpChannelScan(
+  botToken: string,
+  st: ChannelScan,
+  budgetMs: number,
+  rateLimitRetries: number,
+): Promise<void> {
+  if (st.running || st.complete) return;
+  st.running = true;
+  const start = Date.now();
+  try {
+    for (;;) {
+      const res: {
+        channels?: { id: string; name: string; is_archived?: boolean }[];
+        response_metadata?: { next_cursor?: string };
+      } & { ok: boolean; error?: string } = await slackApi(
+        botToken,
+        'conversations.list',
+        {},
+        {
+          types: 'public_channel,private_channel',
+          exclude_archived: 'true',
+          // Slack's max — denser pages mean fewer round-trips against the
+          // unfiltered-store pagination that makes legacy scans so sparse
+          limit: '1000',
+          ...(st.cursor ? { cursor: st.cursor } : {}),
+        },
+        { rateLimitRetries },
+      );
+      if (!res.ok) break;
+      for (const c of res.channels ?? []) {
+        if (!c.is_archived) st.channels.set(c.id, { id: c.id, name: c.name });
+      }
+      st.cursor = res.response_metadata?.next_cursor || undefined;
+      st.at = Date.now();
+      if (!st.cursor || st.channels.size >= SCAN_CHANNEL_CAP) {
+        st.complete = true;
+        break;
+      }
+      if (Date.now() - start > budgetMs) break;
+    }
+  } finally {
+    st.running = false;
+  }
+}
+
+/** Add a freshly created channel to a live scan so it shows in the picker
+ * without waiting out a rescan. No-op when no scan exists. */
+export function addScannedChannel(
+  botToken: string,
+  channel: { id: string; name: string },
+): void {
+  channelScans.get(botToken)?.channels.set(channel.id, channel);
+}
+
+/** Drop a cached channel scan (e.g. right after (re)install) so the next
+ * pick rescans rather than serving a stale list. */
 export function invalidateChannelScan(botToken: string): void {
-  channelScanCache.delete(botToken);
+  channelScans.delete(botToken);
 }
 
 /** Tests: clear every cached scan. */
 export function resetChannelScanCache(): void {
-  channelScanCache.clear();
+  channelScans.clear();
 }
 
 /** Slack channel names: lowercase letters/digits/dash/underscore, ≤80 chars. */
@@ -250,8 +317,9 @@ export async function createSlackChannel(
     'conversations.create',
     { name: `${name}${suffix}` },
   ).catch(() => null);
-  // a successful create makes any cached channel scan stale
-  if (res?.ok) invalidateChannelScan(inst.botToken);
+  // a successful create makes any cached channel scan stale — add it
+  // surgically rather than forcing a fresh multi-minute rescan
+  if (res?.ok) addScannedChannel(inst.botToken, res.channel);
   if (res?.ok) return { channel: res.channel };
   if (res?.error === 'name_taken' && retryOnTaken && !suffix) {
     return createSlackChannel(inst, name.slice(0, 74), {
@@ -268,12 +336,14 @@ export async function createSlackChannel(
 export async function slackChannelInfo(
   botToken: string,
   channelId: string,
+  opts?: { rateLimitRetries?: number },
 ): Promise<{ id: string; name: string; isArchived: boolean } | null> {
   const res = await slackApi<{ channel: { id: string; name: string; is_archived?: boolean } }>(
     botToken,
     'conversations.info',
     {},
     { channel: channelId },
+    opts,
   ).catch(() => null);
   return res?.ok
     ? { id: res.channel.id, name: res.channel.name, isArchived: !!res.channel.is_archived }

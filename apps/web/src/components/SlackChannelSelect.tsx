@@ -105,7 +105,7 @@ export function SlackChannelSelect({
       </select>
       {truncated && (
         <div className="muted" style={{ flexBasis: '100%', fontSize: 12 }}>
-          Slack rate-limited the channel scan — the list may be incomplete; try again shortly.
+          Still scanning — large Slack workspaces trickle in under rate limits; this list keeps filling.
         </div>
       )}
       <button

@@ -140,7 +140,7 @@ export function slackApiRoutes(db: Db) {
     }
     const listed = new Set(channels.map((ch) => ch.id));
     for (const id of [...selected].filter((id) => !listed.has(id)).slice(0, 10)) {
-      const info = await slackChannelInfo(inst.botToken, id);
+      const info = await slackChannelInfo(inst.botToken, id, { rateLimitRetries: 2 });
       if (info) channels.push({ id: info.id, name: info.name });
     }
     return c.json({ channels, truncated: !complete });
@@ -393,10 +393,13 @@ export function slackPublicRoutes(db: Db) {
     // janis-* match. When none exists we leave it unset: Settings prompts
     // the admin to confirm creating one (or pick an existing channel)
     // rather than silently provisioning inside an OAuth redirect.
-    const { channels } = await listSlackChannels(inst.botToken);
+    const { channels, complete } = await listSlackChannels(inst.botToken);
+    // the fuzzy janis-* fallback only runs on a complete scan — a partial
+    // list's first match is arbitrary (that's how a random j-* channel once
+    // became the alert channel)
     const channelId =
       channels.find((ch) => ch.name === 'janis-alerts')?.id ??
-      channels.find((ch) => /janis/i.test(ch.name))?.id;
+      (complete ? channels.find((ch) => /janis/i.test(ch.name))?.id : undefined);
     if (channelId) {
       await db
         .update(slackInstallations)

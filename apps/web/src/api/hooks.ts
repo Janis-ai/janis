@@ -193,6 +193,9 @@ export function useSlackChannels(enabled: boolean, installationId?: string | nul
         `/api/slack/channels${installationId ? `?installation_id=${installationId}` : ''}`,
       ),
     enabled,
+    // big workspaces scan incrementally under Slack's tier-2 limits — poll
+    // while truncated so the picker fills in as pages land
+    refetchInterval: (q) => (q.state.data?.truncated ? 4000 : false),
   });
 }
 
