@@ -35,11 +35,6 @@ const FEATURES = [
     title: 'A handoff that feels human',
     body: 'Typing indicators, receipts, operator personas — customers see a person, not a broken bot.',
   },
-  {
-    icon: '/img/value-reduce.png',
-    title: 'Know what it costs, always',
-    body: 'Per-message pricing, token usage metered to the cent, unlimited seats and channels.',
-  },
 ];
 
 const DIFFERENT: [string, string, string][] = [
