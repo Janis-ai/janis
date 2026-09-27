@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
 import { useAgents, useChannels, useMe } from '../api/hooks';
 import { Empty } from './bits';
-import { ChannelCard, KIND_LABEL, parseReplies, type PendingAssets } from './Channels';
+import { ChannelCard, KIND_LABEL, type PendingAssets } from './Channels';
 
 /**
  * Per-agent channel manager — everything the old workspace-wide /integrations
@@ -127,22 +127,19 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     onError: (e) => setError(e.message),
   });
 
-  // Web chat widget — no credentials needed, just a display config.
-  const [wcForm, setWcForm] = useState({ name: '', greeting: '', quick_replies: '' });
+  // Web chat widget — no credentials needed; name/greeting/replies are
+  // edited on the channel card after creation.
   const createWebchat = useMutation({
     mutationFn: () =>
       api('/api/channels', {
         method: 'POST',
         body: JSON.stringify({
           kind: 'webchat',
-          name: wcForm.name,
+          name: `${agent.name} web chat`,
           agent_id: agentId,
-          greeting: wcForm.greeting || undefined,
-          quick_replies: parseReplies(wcForm.quick_replies),
         }),
       }),
     onSuccess: () => {
-      setWcForm({ name: '', greeting: '', quick_replies: '' });
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
     },
@@ -150,7 +147,6 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   });
 
   // Email channel — the address is minted server-side; shown once created.
-  const [emForm, setEmForm] = useState({ name: '', from_name: '' });
   const [emCreated, setEmCreated] = useState('');
   const createEmail = useMutation({
     mutationFn: () =>
@@ -158,28 +154,24 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         method: 'POST',
         body: JSON.stringify({
           kind: 'email',
-          name: emForm.name,
+          name: `${agent.name} email`,
           agent_id: agentId,
-          from_name: emForm.from_name || undefined,
         }),
       }),
     onSuccess: (r) => {
       setEmCreated(r.channel.meta.inbound_address ?? '');
-      setEmForm({ name: '', from_name: '' });
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
     },
     onError: (e) => setError(e.message),
   });
 
-  // Gmail — OAuth round-trip creates the channel; optional display name.
-  const [gmName, setGmName] = useState('');
+  // Gmail — OAuth round-trip creates the channel; the name defaults to the
+  // mailbox address and is renamed on the channel card.
   const [gmLink, setGmLink] = useState('');
   const gmInvite = useMutation({
     mutationFn: () =>
-      api<{ url: string }>(
-        `/api/gmail/connect-link?agent_id=${agentId}${gmName ? `&name=${encodeURIComponent(gmName)}` : ''}`,
-      ),
+      api<{ url: string }>(`/api/gmail/connect-link?agent_id=${agentId}`),
     onSuccess: async (r) => {
       setGmLink(r.url);
       try {
@@ -303,7 +295,12 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             <a href={`/api/meta/connect?agent=${agentId}`} onClick={() => dropParams('meta_connect')}>Switch account</a>
             <button className="btn" onClick={() => disconnect.mutate()}>Disconnect</button>
           </div>
-          {pending.isLoading && <div className="muted" style={{ marginTop: 8 }}>Looking up your Meta accounts…</div>}
+          {pending.isLoading && (
+            <div className="row" style={{ marginTop: 8 }}>
+              <span className="spin" />
+              <span className="muted">Looking up your Meta accounts…</span>
+            </div>
+          )}
           {pending.isError && (
             <div className="error">
               Couldn't load your Meta assets.{' '}
@@ -345,9 +342,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                       </div>
                       {msgr ? (
                         msgr.agent_id === agentId ? (
-                          <button className="btn" disabled={removeChannel.isPending}
+                          <button className="btn danger" disabled={removeChannel.isPending}
                             onClick={() => removeChannel.mutate(msgr.id)}>
-                            Remove
+                            Disconnect Messenger
                           </button>
                         ) : (
                           <span className="muted">Messenger on {msgr.agent_name}</span>
@@ -361,9 +358,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                       {pg.instagram && (
                         igCh ? (
                           igCh.agent_id === agentId ? (
-                            <button className="btn" disabled={removeChannel.isPending}
+                            <button className="btn danger" disabled={removeChannel.isPending}
                               onClick={() => removeChannel.mutate(igCh.id)}>
-                              Remove
+                              Disconnect Instagram
                             </button>
                           ) : (
                             <span className="muted">Instagram on {igCh.agent_name}</span>
@@ -394,9 +391,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                         </div>
                         {wa ? (
                           wa.agent_id === agentId ? (
-                            <button className="btn" disabled={removeChannel.isPending}
+                            <button className="btn danger" disabled={removeChannel.isPending}
                               onClick={() => removeChannel.mutate(wa.id)}>
-                              Remove
+                              Disconnect WhatsApp
                             </button>
                           ) : (
                             <span className="muted">WhatsApp on {wa.agent_name}</span>
@@ -415,6 +412,13 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               {!hasAssets && <Empty>No Pages or WhatsApp numbers found on that Meta login.</Empty>}
             </>
           )}
+        </div>
+      ) : session.isPending ? (
+        <div className="card connect-card">
+          <div className="row">
+            <span className="spin" />
+            <span className="muted">Checking for a stored Meta connection…</span>
+          </div>
         </div>
       ) : (
         <div className="card connect-card">
@@ -512,80 +516,21 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             </div>
           </div>
         </div>
-        <form
-          className="row wrap"
-          style={{ marginTop: 12 }}
-          onSubmit={(e) => {
-            e.preventDefault();
-            createWebchat.mutate();
-          }}
-        >
-          <input
-            className="grow"
-            placeholder="Widget name (e.g. Acme website)"
-            value={wcForm.name}
-            onChange={(e) => setWcForm({ ...wcForm, name: e.target.value })}
-            required
-          />
-          <input
-            className="grow"
-            placeholder="Greeting — overrides the agent's greeting (optional)"
-            value={wcForm.greeting}
-            onChange={(e) => setWcForm({ ...wcForm, greeting: e.target.value })}
-          />
-          <input
-            className="grow"
-            placeholder="Quick replies — comma-separated (optional, e.g. Pricing, Support, Book demo)"
-            value={wcForm.quick_replies}
-            onChange={(e) => setWcForm({ ...wcForm, quick_replies: e.target.value })}
-          />
-          <button className="btn" disabled={createWebchat.isPending}>Create widget</button>
-        </form>
-      </div>
-
-      {/* Email channel */}
-      <div className="card connect-card">
-        <div className="row">
-          <div className="grow">
-            <strong>Email</strong>
-            <div className="muted" style={{ marginTop: 4 }}>
-              Give the agent its own inbound address — customer mail lands in the same inbox,
-              and replies go out as threaded email from that address.
-            </div>
-          </div>
+        <div className="row" style={{ marginTop: 12 }}>
+          <button
+            className="btn"
+            disabled={createWebchat.isPending}
+            onClick={() => createWebchat.mutate()}
+          >
+            Create widget
+          </button>
+          <span className="muted" style={{ fontSize: 12 }}>
+            Name, greeting and quick replies are set on the channel card.
+          </span>
         </div>
-        <form
-          className="row wrap"
-          style={{ marginTop: 12 }}
-          onSubmit={(e) => {
-            e.preventDefault();
-            createEmail.mutate();
-          }}
-        >
-          <input
-            className="grow"
-            placeholder="Channel name (e.g. Acme support inbox)"
-            value={emForm.name}
-            onChange={(e) => setEmForm({ ...emForm, name: e.target.value })}
-            required
-          />
-          <input
-            className="grow"
-            placeholder="From name on replies (optional, e.g. Acme Support)"
-            value={emForm.from_name}
-            onChange={(e) => setEmForm({ ...emForm, from_name: e.target.value })}
-          />
-          <button className="btn" disabled={createEmail.isPending}>Create address</button>
-        </form>
-        {emCreated && (
-          <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-            Address created: <span className="mono">{emCreated}</span> — point this domain's MX
-            at your inbound provider, or forward an existing mailbox to it.
-          </div>
-        )}
       </div>
 
-      {/* Gmail channel */}
+      {/* Gmail — the obvious email path: OAuth onto an existing mailbox */}
       <div className="card connect-card">
         <div className="row">
           <div className="grow">
@@ -599,23 +544,15 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             </div>
           </div>
         </div>
-        <form
-          className="row wrap"
-          style={{ marginTop: 12 }}
-          onSubmit={(e) => {
-            e.preventDefault();
-            const q = new URLSearchParams({ agent_id: agentId });
-            if (gmName) q.set('name', gmName);
-            window.location.href = `${apiOrigin}/api/gmail/connect?${q}`;
-          }}
-        >
-          <input
-            className="grow"
-            placeholder="Channel name (optional — defaults to the mailbox address)"
-            value={gmName}
-            onChange={(e) => setGmName(e.target.value)}
-          />
-          <button className="btn">Connect Gmail</button>
+        <div className="row" style={{ marginTop: 12 }}>
+          <button
+            className="btn primary"
+            onClick={() => {
+              window.location.href = `${apiOrigin}/api/gmail/connect?agent_id=${agentId}`;
+            }}
+          >
+            Connect Gmail
+          </button>
           <button
             type="button"
             className="btn ghost"
@@ -625,7 +562,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           >
             Copy invite link
           </button>
-        </form>
+        </div>
         {gmLink && (
           <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
             Invite link (copied — valid 7 days):{' '}
@@ -638,6 +575,42 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             becomes conversations here; replies send from the mailbox itself.
           </div>
         )}
+      </div>
+
+      {/* Email — advanced: a minted inbound address for any provider
+          (forwarding or MX), for mailboxes that aren't Gmail. */}
+      <div className="card">
+        <details className="appearance-details">
+          <summary>
+            <span className="details-title">Email — any provider</span>
+            <span className="details-sub">
+              advanced: Janis mints an inbound address; forward an existing mailbox to it or
+              point a domain's MX at it
+            </span>
+          </summary>
+          <div className="muted" style={{ marginTop: 10 }}>
+            Customer mail lands in the same inbox, and replies go out as threaded email from
+            that address.
+          </div>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button
+              className="btn"
+              disabled={createEmail.isPending}
+              onClick={() => createEmail.mutate()}
+            >
+              Create address
+            </button>
+            <span className="muted" style={{ fontSize: 12 }}>
+              Name and reply From-name are set on the channel card.
+            </span>
+          </div>
+          {emCreated && (
+            <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+              Address created: <span className="mono">{emCreated}</span> — point this domain's MX
+              at your inbound provider, or forward an existing mailbox to it.
+            </div>
+          )}
+        </details>
       </div>
 
       {/* This agent's connected channels — Meta channels are managed in the
@@ -664,11 +637,12 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                 )}
               </div>
               <button
-                className="btn"
+                className="btn danger"
+                style={{ whiteSpace: 'nowrap' }}
                 disabled={removeChannel.isPending}
                 onClick={() => removeChannel.mutate(ch.id)}
               >
-                Remove
+                Disconnect {KIND_LABEL[ch.kind] ?? ch.kind}
               </button>
             </div>
           ))}

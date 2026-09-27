@@ -2,6 +2,8 @@ import type { ToolTemplateInfo } from '@janis/shared';
 
 interface CatalogTool {
   name: string;
+  /** Short human label for the approval toggles, e.g. "Cancel subscription". */
+  label: string;
   description: string;
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   url: string;
@@ -41,7 +43,7 @@ export function templateInfo(t: ToolTemplate): ToolTemplateInfo {
   return {
     ...rest,
     auth: connection ? 'oauth' : 'secrets',
-    tools: tools.map(({ name, description, approval }) => ({ name, description, approval })),
+    tools: tools.map(({ name, label, description, approval }) => ({ name, label, description, approval })),
   };
 }
 
@@ -74,6 +76,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [
       {
         name: 'shopify_lookup_order',
+        label: 'Look up order',
         description:
           'Look up a Shopify order by order number. Returns status, items, totals and fulfilment/tracking info.',
         method: 'GET',
@@ -83,6 +86,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'shopify_customer_orders',
+        label: 'Customer orders',
         description: 'List the most recent Shopify orders for a customer email address.',
         method: 'GET',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders.json?status=any&limit=5&fields=id,name,order_number,email,financial_status,fulfillment_status,total_price,currency,created_at&email={email}',
@@ -91,6 +95,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'shopify_cancel_order',
+        label: 'Cancel order',
         description:
           'Cancel a Shopify order by its numeric order id (from shopify_lookup_order). Money-moving — needs a teammate to approve.',
         method: 'POST',
@@ -101,6 +106,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'shopify_create_draft_order',
+        label: 'Create draft order',
         description:
           'Create a Shopify draft order (custom sale, phone order, invoice). Needs a teammate to approve.',
         method: 'POST',
@@ -114,6 +120,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'shopify_update_order_tags',
+        label: 'Update order tags',
         description: 'Set the tags on a Shopify order by numeric order id (from shopify_lookup_order).',
         method: 'PUT',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders/{order_id}.json',
@@ -143,6 +150,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [
       {
         name: 'hubspot_get_contact',
+        label: 'Get contact',
         description: 'Look up a HubSpot contact by email address.',
         method: 'GET',
         url: 'https://api.hubapi.com/crm/v3/objects/contacts/{email}?idProperty=email&properties=email,firstname,lastname,phone,company,lifecyclestage,hs_lead_status',
@@ -151,6 +159,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'hubspot_search_contacts',
+        label: 'Search contacts',
         description: 'Search HubSpot contacts with a filterGroups JSON array (e.g. by name or company).',
         method: 'POST',
         url: 'https://api.hubapi.com/crm/v3/objects/contacts/search',
@@ -162,6 +171,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'hubspot_create_ticket',
+        label: 'Create ticket',
         description: 'Create a HubSpot support ticket for an issue the agent could not resolve.',
         method: 'POST',
         url: 'https://api.hubapi.com/crm/v3/objects/tickets',
@@ -173,6 +183,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'hubspot_update_contact',
+        label: 'Update contact',
         description: 'Update properties on a HubSpot contact — phone, lifecycle stage, notes.',
         method: 'PATCH',
         url: 'https://api.hubapi.com/crm/v3/objects/contacts/{contact_id}',
@@ -207,6 +218,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [
       {
         name: 'zendesk_search',
+        label: 'Search',
         description: 'Search Zendesk tickets and users, e.g. by requester email or keyword.',
         method: 'GET',
         url: 'https://{{secrets.ZENDESK_SUBDOMAIN}}.zendesk.com/api/v2/search.json?query={query}',
@@ -217,6 +229,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'zendesk_create_ticket',
+        label: 'Create ticket',
         description: 'Create a Zendesk ticket for an issue the agent could not resolve.',
         method: 'POST',
         url: 'https://{{secrets.ZENDESK_SUBDOMAIN}}.zendesk.com/api/v2/tickets.json',
@@ -263,6 +276,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [
       {
         name: 'zendesk_oauth_search',
+        label: 'Search',
         description: 'Search Zendesk tickets and users, e.g. by requester email or keyword.',
         method: 'GET',
         url: 'https://{{secrets.ZENDESK_OAUTH_SUBDOMAIN}}.zendesk.com/api/v2/search.json?query={query}',
@@ -273,6 +287,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'zendesk_oauth_create_ticket',
+        label: 'Create ticket',
         description: 'Create a Zendesk ticket for an issue the agent could not resolve.',
         method: 'POST',
         url: 'https://{{secrets.ZENDESK_OAUTH_SUBDOMAIN}}.zendesk.com/api/v2/tickets.json',
@@ -321,6 +336,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [
       {
         name: 'salesforce_find_contact',
+        label: 'Find contact',
         description: 'Find a Salesforce contact by email — returns name, account and phone.',
         method: 'GET',
         url: "https://{{secrets.SALESFORCE_HOST}}/services/data/v62.0/query?q=SELECT+Id,Name,Email,Phone,Account.Name+FROM+Contact+WHERE+Email='{email}'",
@@ -329,6 +345,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'salesforce_query',
+        label: 'Run query',
         description: 'Run a read-only SOQL query against Salesforce for account, case or order lookups.',
         method: 'GET',
         url: 'https://{{secrets.SALESFORCE_HOST}}/services/data/v62.0/query?q={soql}',
@@ -357,6 +374,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [
       {
         name: 'web_search',
+        label: 'Web search',
         description: 'Search the web for current information, links, products or answers.',
         method: 'GET',
         url: 'https://api.search.brave.com/res/v1/web/search?q={q}&count=5',
@@ -376,13 +394,14 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         key: 'restricted_key',
         label: 'Restricted API key',
         placeholder: 'e.g. rk_live_… (rk_test_… while testing)',
-        help: 'Stripe Dashboard → Developers → API keys → Create restricted key → name it e.g. "janis-agent" → permissions: Read on Customers, Charges, Products, Prices and Subscriptions; add Write on Subscriptions (plan changes/cancels) and Refunds if the agent may propose them. Reads run unattended; writes wait for approval — toggle per action once connected.',
+        help: 'Stripe Dashboard → Developers → API keys → Create restricted key → name it e.g. "janis-agent" → permissions: Read on Customers, Charges, Products; Write on Prices and Subscriptions (plan changes/cancels) — add Write on Refunds too if the agent may propose them. Reads run unattended; writes wait for approval — toggle per action once connected.',
       },
     ],
     secrets: (f) => ({ STRIPE_RESTRICTED_KEY: f.restricted_key.trim() }),
     tools: [
       {
         name: 'stripe_find_customer',
+        label: 'Find customer',
         description: 'Find a Stripe customer by email address.',
         method: 'GET',
         url: 'https://api.stripe.com/v1/customers?email={email}&limit=3',
@@ -391,6 +410,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'stripe_customer_charges',
+        label: 'List charges',
         description: 'List recent charges for a Stripe customer id (cus_…) from stripe_find_customer.',
         method: 'GET',
         url: 'https://api.stripe.com/v1/charges?customer={customer_id}&limit=5',
@@ -399,6 +419,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'stripe_customer_subscriptions',
+        label: 'List subscriptions',
         description:
           'List a customer\'s subscriptions — returns each sub_… id with status, current period, and its subscription items (si_…) with the price/plan on each.',
         method: 'GET',
@@ -408,6 +429,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'stripe_list_products',
+        label: 'List products',
         description:
           'List active Stripe products — use this to resolve a plan name (e.g. "Pro") into a prod_… id before looking up its prices.',
         method: 'GET',
@@ -416,6 +438,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'stripe_list_prices',
+        label: 'List prices',
         description:
           'List active prices for a Stripe product — returns price_… ids with amounts, currency and billing interval.',
         method: 'GET',
@@ -425,6 +448,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'stripe_create_refund',
+        label: 'Create refund',
         description:
           'Refund a Stripe charge or payment intent. Money-moving — needs a teammate to approve.',
         method: 'POST',
@@ -439,6 +463,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'stripe_cancel_subscription',
+        label: 'Cancel subscription',
         description:
           'Cancel a Stripe subscription at the end of the paid period. Needs a teammate to approve.',
         method: 'POST',
@@ -453,6 +478,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'stripe_update_subscription',
+        label: 'Update subscription',
         description:
           'Change the plan on a Stripe subscription — swaps a subscription item to a new price. Changes billing — needs a teammate to approve.',
         method: 'POST',
@@ -496,6 +522,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [
       {
         name: 'calcom_availability',
+        label: 'Check availability',
         description: 'Check available booking slots for a date (YYYY-MM-DD).',
         method: 'GET',
         url: 'https://api.cal.com/v2/slots?eventTypeId={{secrets.CALCOM_EVENT_TYPE}}&start={date}&end={date}',
@@ -507,6 +534,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
       {
         name: 'calcom_list_bookings',
+        label: 'List bookings',
         description: 'List recent bookings to confirm whether a callback or meeting was scheduled.',
         method: 'GET',
         url: 'https://api.cal.com/v2/bookings?status=upcoming&take=10',
@@ -528,6 +556,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [
       {
         name: 'itunes_search',
+        label: 'Search',
         description:
           'Search Apple’s catalog for songs, albums or artists. Returns real links to share with the customer.',
         method: 'GET',

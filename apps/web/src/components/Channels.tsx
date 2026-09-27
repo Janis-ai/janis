@@ -46,6 +46,16 @@ export function ChannelCard({
       void qc.invalidateQueries({ queryKey: ['agents'] });
     },
   });
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(ch.name);
+  const rename = useMutation({
+    mutationFn: (name: string) =>
+      api(`/api/channels/${ch.id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+    onSuccess: () => {
+      setEditingName(false);
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+    },
+  });
   const remove = useMutation({
     mutationFn: () => api(`/api/channels/${ch.id}`, { method: 'DELETE' }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
@@ -53,7 +63,39 @@ export function ChannelCard({
   return (
     <div id={`ch-${ch.id}`} className="card channel-card">
       <div className="row">
-        <strong className="grow">{ch.name}</strong>
+        {editingName ? (
+          <input
+            className="grow"
+            autoFocus
+            value={nameDraft}
+            disabled={rename.isPending}
+            onChange={(e) => setNameDraft(e.target.value)}
+            onBlur={() => {
+              const next = nameDraft.trim();
+              if (next && next !== ch.name) rename.mutate(next);
+              else setEditingName(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+              if (e.key === 'Escape') {
+                setNameDraft(ch.name);
+                setEditingName(false);
+              }
+            }}
+          />
+        ) : (
+          <strong
+            className="grow"
+            style={{ cursor: 'text' }}
+            title="Click to rename"
+            onClick={() => {
+              setNameDraft(ch.name);
+              setEditingName(true);
+            }}
+          >
+            {ch.name}
+          </strong>
+        )}
         <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
         <button className="btn danger" onClick={() => remove.mutate()}>Remove</button>
       </div>
@@ -64,9 +106,11 @@ export function ChannelCard({
           onChange={(e) => reassign.mutate(e.target.value)}
           disabled={reassign.isPending}
         >
-          {agents.map((a) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
+          {[...agents]
+            .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+            .map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
         </select>
         {dead && <span className="badge warn" style={{ marginLeft: 6 }}>agent unreachable</span>}
         {ch.meta.page_id && <> · page {ch.meta.page_id}</>}

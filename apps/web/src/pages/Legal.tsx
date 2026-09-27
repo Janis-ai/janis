@@ -7,8 +7,9 @@ Janis ("we", "us") provides tools that let businesses monitor AI agents and hand
 
 What we collect
 - Account information: name, email address, and sign-in identifiers (Google, Slack, or email/password).
-- Conversation data: messages sent to and from connected channels (Facebook Messenger, Instagram, WhatsApp, Slack) and any agent replies, stored so operators can view and respond to them.
+- Conversation data: messages sent to and from connected channels (Facebook Messenger, Instagram, WhatsApp, Slack, email) and any agent replies, stored so operators can view and respond to them.
 - Integration credentials: access tokens for channels you connect, used solely to send and receive messages on your behalf.
+- Google user data: if you connect a Gmail or Google Workspace mailbox, we access that mailbox's inbound mail (gmail.readonly) solely to route customer email into your Janis inbox, and send replies (gmail.send) on your behalf in the same thread. Google data is never used for advertising, sold, shared with third parties beyond operating the service, or used to train AI models. Janis's use of information received from Google APIs adheres to the Google API Services User Data Policy (https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements.
 - Usage data: message counts and AI token consumption, used for billing.
 
 How we use it

@@ -441,6 +441,12 @@ textarea:disabled { opacity: .55; }
 .row.wrap { flex-wrap: wrap; }
 .row.wrap > .grow { flex: 1 1 200px; }
 .muted { color: var(--muted); font-size: 13px; }
+.spin {
+  width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 .mono { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; }
 
 /* docs page */

@@ -140,7 +140,9 @@ export default function Conversations() {
         </select>
         <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
           <option value="">All agents</option>
-          {agents?.agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          {[...(agents?.agents ?? [])]
+            .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+            .map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
         <label className="check">
           <input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} />

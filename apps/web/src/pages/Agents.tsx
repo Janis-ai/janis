@@ -68,7 +68,9 @@ export default function Agents() {
       {error && <div className="error">{error}</div>}
 
       <div className="agent-list">
-        {data?.agents.map((agent) => {
+        {[...(data?.agents ?? [])]
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+          .map((agent) => {
           const channels = channelsData?.channels.filter((c) => c.agent_id === agent.id) ?? [];
           return (
             <div

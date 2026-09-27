@@ -19,7 +19,7 @@ import { railBus } from '../lib/railBus';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
-type Tab = 'integrations' | 'behavior' | 'escalation' | 'tools' | 'connection';
+type Tab = 'integrations' | 'escalation' | 'tools' | 'connection';
 
 export default function AgentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -57,7 +57,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const [params, setParams] = useSearchParams();
   const tabParam = params.get('tab') as Tab | null;
   const tab: Tab =
-    tabParam && ['integrations', 'behavior', 'escalation', 'tools', 'connection'].includes(tabParam)
+    tabParam && ['integrations', 'escalation', 'tools', 'connection'].includes(tabParam)
       ? tabParam
       : 'connection';
   const activeTab: Tab = tab === 'tools' && !agent.hosted ? 'connection' : tab;
@@ -151,9 +151,8 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const tabs: { key: Tab; label: string }[] = [
     { key: 'connection', label: 'Engine' },
     { key: 'integrations', label: 'Channels' },
-    { key: 'behavior', label: 'Behavior' },
     { key: 'escalation', label: 'Escalation' },
-    ...(agent.hosted ? [{ key: 'tools' as Tab, label: 'Integrations' }] : []),
+    ...(agent.hosted ? [{ key: 'tools' as Tab, label: 'Tools' }] : []),
   ];
 
   const saveAll = () =>
@@ -219,7 +218,6 @@ function AgentEditor({ agent }: { agent: Agent }) {
       {error && <div className="error">{error}</div>}
 
       {activeTab === 'integrations' && <AgentChannels agent={agent} />}
-      {activeTab === 'behavior' && <BehaviorTab agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />}
       {activeTab === 'escalation' && (
         <EscalationTab
           agent={agent}
@@ -381,7 +379,7 @@ function SlackAlerts({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
     onSuccess: refresh,
     onError: (e) => setMsg(e.message),
   });
-  if (!slack?.connected) return null;
+  if (!slack) return null;
   const defInst = installations[0];
   const patchRoute = (i: number, route: SlackRoute | null) => {
     if (!routes) return;
@@ -401,7 +399,19 @@ function SlackAlerts({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         Where this agent's escalations post. Add destinations to alert several Slack
         workspaces/channels — any destination turns the workspace default off.
       </div>
-      {isAdmin ? (
+      {!slack.connected ? (
+        isAdmin ? (
+          slack.configured ? (
+            <a className="btn primary" style={{ display: 'inline-block', marginTop: 8 }} href="/api/slack/install">Connect Slack</a>
+          ) : (
+            <div className="muted">
+              Set SLACK_CLIENT_ID / SLACK_CLIENT_SECRET on the API to enable Slack alerts.
+            </div>
+          )
+        ) : (
+          <div className="muted">No Slack workspace connected — alerts stay in the inbox.</div>
+        )
+      ) : isAdmin ? (
         <>
           {routes === null ? (
             <div className="row">
@@ -424,6 +434,9 @@ function SlackAlerts({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
               >
                 Turn off Slack alerts
               </button>
+              {slack.configured && (
+                <a className="btn" href="/api/slack/install">Add workspace</a>
+              )}
             </div>
           ) : (
             <>
@@ -489,16 +502,18 @@ const ReadOnly = ({ children, off }: { children: React.ReactNode; off: boolean }
     <>{children}</>
   );
 
-function BehaviorTab({
+function BehaviorSection({
   agent,
   cfg,
   setCfg,
   isAdmin,
+  hosted,
 }: {
   agent: Agent;
   cfg: AgentConfig;
   setCfg: (c: AgentConfig) => void;
   isAdmin: boolean;
+  hosted: boolean;
 }) {
   const [knowledgeText, setKnowledgeText] = useState(() =>
     (agent.config?.knowledge ?? []).join('\n'),
@@ -509,6 +524,7 @@ function BehaviorTab({
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+      <strong>{hosted ? 'Behavior' : 'Greeting'}</strong>
       <ReadOnly off={!isAdmin}>
       <label className="check-label">
         <input
@@ -546,31 +562,35 @@ function BehaviorTab({
           />
         </>
       )}
-      <label>System prompt</label>
-      <textarea
-        rows={4}
-        placeholder="You are the support agent for Acme Co. You help with orders, returns…"
-        value={cfg.system_prompt ?? ''}
-        onChange={(e) => setCfg({ ...cfg, system_prompt: e.target.value })}
-      />
-      <label>Knowledge base — one fact/snippet per line</label>
-      <textarea
-        rows={5}
-        placeholder={'Refunds are allowed within 30 days of purchase.\nSupport hours are 9-5 ET.\nOrder lookup requires the order number.'}
-        value={knowledgeText}
-        onChange={(e) => setKnowledgeText(e.target.value)}
-        onBlur={() => setCfg({ ...cfg, knowledge: knowledgeText.split('\n').filter(Boolean) })}
-      />
-      <label>Tone</label>
-      <textarea
-        rows={2}
-        placeholder="e.g. warm, concise, never apologetic"
-        value={cfg.tone ?? ''}
-        onChange={(e) => setCfg({ ...cfg, tone: e.target.value })}
-      />
-      <label>Knowledge files — PDFs, docs, text, images; the agent answers from these</label>
-      <KnowledgeFiles agentId={agent.id} />
-      <KnowledgeGaps agentId={agent.id} config={agent.config ?? {}} />
+      {hosted && (
+        <>
+          <label>System prompt</label>
+          <textarea
+            rows={4}
+            placeholder="You are the support agent for Acme Co. You help with orders, returns…"
+            value={cfg.system_prompt ?? ''}
+            onChange={(e) => setCfg({ ...cfg, system_prompt: e.target.value })}
+          />
+          <label>Knowledge base — one fact/snippet per line</label>
+          <textarea
+            rows={5}
+            placeholder={'Refunds are allowed within 30 days of purchase.\nSupport hours are 9-5 ET.\nOrder lookup requires the order number.'}
+            value={knowledgeText}
+            onChange={(e) => setKnowledgeText(e.target.value)}
+            onBlur={() => setCfg({ ...cfg, knowledge: knowledgeText.split('\n').filter(Boolean) })}
+          />
+          <label>Tone</label>
+          <textarea
+            rows={2}
+            placeholder="e.g. warm, concise, never apologetic"
+            value={cfg.tone ?? ''}
+            onChange={(e) => setCfg({ ...cfg, tone: e.target.value })}
+          />
+          <label>Knowledge files — PDFs, docs, text, images; the agent answers from these</label>
+          <KnowledgeFiles agentId={agent.id} />
+          <KnowledgeGaps agentId={agent.id} config={agent.config ?? {}} />
+        </>
+      )}
       </ReadOnly>
     </div>
   );
@@ -603,9 +623,10 @@ function EscalationTab({
 
   return (
     <>
-    {/* Per-agent overrides — same order as the Settings page. Profile and
-        Notifications are self-service (each operator sets their own), so
-        they sit outside the admin read-only wrapper. */}
+    {/* Team and the profile/notify overrides are self-service or gate
+        themselves on isAdmin, so they sit outside the admin read-only
+        wrapper. */}
+    <AgentTeamCard agent={agent} isAdmin={isAdmin} />
     <AgentProfileOverride agent={agent} />
     <AgentNotifyOverride agent={agent} />
     <ReadOnly off={!isAdmin}>
@@ -653,12 +674,6 @@ function EscalationTab({
         </div>
         <div className="muted">Repeat breaches escalate to the Slack alert channel.</div>
       </div>
-
-      <SlackAlerts agent={agent} isAdmin={isAdmin} />
-
-      <AgentSavedRepliesCard agent={agent} />
-
-      <AgentTeamCard agent={agent} isAdmin={isAdmin} />
 
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Alert rules</strong>
@@ -709,6 +724,10 @@ function EscalationTab({
           </button>
         </div>
       </div>
+
+      <SlackAlerts agent={agent} isAdmin={isAdmin} />
+
+      <AgentSavedRepliesCard agent={agent} />
     </ReadOnly>
     </>
   );
@@ -1353,7 +1372,7 @@ function IntegrationCards({
                         setApprovals.mutate({ t, approvals: { [x.name]: e.target.checked } })
                       }
                     />
-                    <span className="mono">{x.name}</span>
+                    <span>{x.label ?? x.name}</span>
                     {gated && <span className="badge">needs approval</span>}
                   </label>
                 );
@@ -1362,18 +1381,7 @@ function IntegrationCards({
                 Checked = a teammate approves before it runs; unchecked = autonomous.
               </div>
             </div>
-          ) : (
-            <div className="muted" style={{ fontSize: 11, margin: '0 0 10px', lineHeight: 1.7 }}>
-              {t.tools.map((x) => (
-                <div key={x.name}>
-                  <span className="mono">{x.name}</span>
-                  {x.approval && (
-                    <span className="badge" style={{ marginLeft: 6 }}>needs approval</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+          ) : null}
           {openId === t.id ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {t.fields.map((f) => (
@@ -1407,7 +1415,7 @@ function IntegrationCards({
               </div>
             </div>
           ) : (
-            <div className="row">
+            <div className="row" style={{ marginTop: 10 }}>
               <button
                 className="btn"
                 onClick={() =>
@@ -1496,7 +1504,7 @@ function ConnectionTab({
         </div>
         {agent.hosted ? (
           <div className="muted">
-            Janis runs this agent in-process with the config in the other tabs — replies go
+            Janis runs this agent in-process with the config below — replies go
             straight to the connected channel. No webhook, no deploy.
             <form
               className="row"
@@ -1563,6 +1571,8 @@ function ConnectionTab({
           </>
         )}
       </div>
+
+      <BehaviorSection agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} hosted={agent.hosted} />
 
       {agent.hosted && <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />}
 

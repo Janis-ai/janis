@@ -503,7 +503,12 @@ export const ToolTemplateInfo = z.object({
   auth: z.enum(['secrets', 'oauth']).optional(),
   fields: z.array(ToolTemplateField),
   tools: z.array(
-    z.object({ name: z.string(), description: z.string(), approval: z.boolean().optional() }),
+    z.object({
+      name: z.string(),
+      label: z.string().optional(),
+      description: z.string(),
+      approval: z.boolean().optional(),
+    }),
   ),
 });
 export type ToolTemplateInfo = z.infer<typeof ToolTemplateInfo>;

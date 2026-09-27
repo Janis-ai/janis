@@ -20,3 +20,7 @@ legacy-bots*.json
 # migration artifacts (contain slack team ids/tokens)
 migrated-teams.json
 slack-integrations.json
+
+# oauth demo recordings + recorder script
+demo-video/
+demo-gmail-connect.mjs

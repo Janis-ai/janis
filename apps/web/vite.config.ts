@@ -27,6 +27,12 @@ export default defineConfig({
     }),
   ],
   server: {
+    watch: {
+      // This repo sits in an iCloud-synced dir — fs events are unreliable, so
+      // poll instead of trusting native watchers (stale module cache).
+      usePolling: true,
+      interval: 1000,
+    },
     proxy: {
       '/api': 'http://localhost:8787',
       '/auth': 'http://localhost:8787',
