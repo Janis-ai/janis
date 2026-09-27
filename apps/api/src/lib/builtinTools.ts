@@ -1,9 +1,10 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, conversations, memberships, users, workspaces } from '../db/schema.js';
 import type { UserProfile } from '@janis/shared';
 import { env } from '../env.js';
-import { planFor } from './plans.js';
+import { invalidateCapCache, planFor, PLANS } from './plans.js';
+import { ensureStripeCustomer, planForPrice, stripe } from './stripe.js';
 
 /** Context a builtin can reach — matches AgentRunContext in hostedAgent. */
 export interface BuiltinCtx {
@@ -25,6 +26,20 @@ export interface BuiltinTool {
   params?: Record<string, string>;
   available: (workspaceId?: string) => boolean;
   run: (args: Record<string, string>, ctx?: BuiltinCtx) => Promise<string>;
+}
+
+/** The verified signed-in user behind a concierge conversation, if any. */
+async function signedInUser(ctx: BuiltinCtx) {
+  const [conv] = await ctx.db
+    .select({ userProfile: conversations.userProfile })
+    .from(conversations)
+    .where(eq(conversations.id, ctx.convId))
+    .limit(1);
+  const p = (conv?.userProfile ?? {}) as UserProfile;
+  const userId = p.identity_verified ? (p.external_id as string | undefined) : undefined;
+  if (!userId) return null;
+  const [user] = await ctx.db.select().from(users).where(eq(users.id, userId)).limit(1);
+  return user ?? null;
 }
 
 export const BUILTIN_TOOLS: BuiltinTool[] = [
@@ -61,18 +76,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
     run: async (_args, ctx) => {
       if (!ctx) return 'error: no conversation context';
-      const [conv] = await ctx.db
-        .select({ userProfile: conversations.userProfile })
-        .from(conversations)
-        .where(eq(conversations.id, ctx.convId))
-        .limit(1);
-      const p = (conv?.userProfile ?? {}) as UserProfile;
-      const userId = p.identity_verified ? (p.external_id as string | undefined) : undefined;
-      if (!userId) {
+      const user = await signedInUser(ctx);
+      if (!user) {
         return JSON.stringify({ signed_in: false, note: 'visitor is not a signed-in Janis user' });
       }
-      const [user] = await ctx.db.select().from(users).where(eq(users.id, userId)).limit(1);
-      if (!user) return JSON.stringify({ signed_in: false, note: 'account not found' });
       const mems = await ctx.db
         .select({ acceptedAt: memberships.acceptedAt, ws: workspaces })
         .from(memberships)
@@ -96,6 +103,160 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         name: user.name,
         email: user.email,
         workspaces: out,
+      });
+    },
+  },
+  {
+    name: 'change_plan',
+    description:
+      "Change the signed-in visitor's Janis subscription plan for a workspace they administer. Paid→paid switches apply immediately with proration; free→paid returns a secure Stripe Checkout link they must open to add a card and confirm; 'free' cancels at period end. Ask which plan first, and which workspace if they administer more than one.",
+    params: {
+      plan: 'free | starter | pro | scale',
+      workspace: 'workspace name — required only when the visitor administers more than one',
+    },
+    // Operator-workspace + Stripe only — it moves real money on Janis
+    // subscriptions, so it must never be offered on customer agents.
+    available: (ws) =>
+      Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId && Boolean(env.stripeSecret),
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const s = stripe();
+      if (!s) return JSON.stringify({ error: 'billing is not configured' });
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({
+          signed_in: false,
+          note: 'visitor is not signed in — billing changes need a signed-in account owner',
+        });
+      }
+      const target = (args.plan ?? '').trim().toLowerCase();
+      if (!target || !PLANS[target] || PLANS[target].hidden) {
+        return JSON.stringify({
+          error: `unknown plan — one of ${Object.keys(PLANS).filter((k) => !PLANS[k].hidden).join(', ')}`,
+        });
+      }
+      // Billing changes require workspace admin, same as the in-app routes.
+      const adminRows = await ctx.db
+        .select({ ws: workspaces })
+        .from(memberships)
+        .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.role, 'admin'),
+            isNotNull(memberships.acceptedAt),
+          ),
+        );
+      const hint = (args.workspace ?? '').trim().toLowerCase();
+      const ws = hint
+        ? adminRows.find(
+            (r) =>
+              r.ws.name.toLowerCase() === hint || r.ws.name.toLowerCase().includes(hint),
+          )?.ws
+        : adminRows.length === 1
+          ? adminRows[0].ws
+          : undefined;
+      if (!ws) {
+        return JSON.stringify({
+          error: adminRows.length
+            ? `which workspace? ${user.name ?? 'the visitor'} administers: ${adminRows.map((r) => r.ws.name).join(', ')}`
+            : 'no workspace where the visitor is an admin — billing changes need admin rights',
+        });
+      }
+      const plan = PLANS[target];
+      const current = ws.stripeSubscriptionId ? (ws.plan ?? 'free') : 'free';
+      if (current === target) {
+        return JSON.stringify({ changed: false, note: `${ws.name} is already on ${plan.name}` });
+      }
+
+      // Downgrade: cancel the subscription at period end when one exists,
+      // else flip straight to free (mirrors POST /api/billing/downgrade).
+      if (target === 'free') {
+        if (ws.stripeSubscriptionId) {
+          try {
+            await s.subscriptions.update(ws.stripeSubscriptionId, {
+              cancel_at_period_end: true,
+            });
+            return JSON.stringify({
+              changed: true,
+              plan: 'Free',
+              at_period_end: true,
+              note: `${ws.name} keeps ${planFor(ws.plan).name} until the current period ends, then drops to Free`,
+            });
+          } catch {
+            // subscription already gone on Stripe's side — flip locally
+          }
+        }
+        await ctx.db
+          .update(workspaces)
+          .set({ plan: 'free', stripeSubscriptionId: null })
+          .where(eq(workspaces.id, ws.id));
+        invalidateCapCache(ws.id);
+        return JSON.stringify({ changed: true, plan: 'Free', at_period_end: false });
+      }
+
+      const priceId = env.stripePrices[target];
+      if (!priceId) return JSON.stringify({ error: `${plan.name} is not purchasable right now` });
+      const meterPrice = env.stripeMeterPrices[target];
+
+      // Paid→paid: swap the plan line item (and the plan's metered-overage
+      // item — it differs per plan) in place, with proration. The LLM meter
+      // price is shared across plans and stays.
+      if (ws.stripeSubscriptionId) {
+        const sub = await s.subscriptions.retrieve(ws.stripeSubscriptionId, {
+          expand: ['items'],
+        });
+        const meterIds = new Set(
+          Object.values(env.stripeMeterPrices).filter(
+            (p): p is string => Boolean(p) && p !== env.stripeMeterPrices.llm,
+          ),
+        );
+        const baseItem = sub.items.data.find((i) => planForPrice(i.price.id));
+        const meterItem = sub.items.data.find((i) => meterIds.has(i.price.id));
+        if (baseItem) {
+          await s.subscriptionItems.update(baseItem.id, {
+            price: priceId,
+            proration_behavior: 'create_prorations',
+          });
+        }
+        if (meterItem && meterPrice) {
+          await s.subscriptionItems.update(meterItem.id, {
+            price: meterPrice,
+            proration_behavior: 'create_prorations',
+          });
+        } else if (!meterItem && meterPrice) {
+          await s.subscriptionItems.create({ subscription: sub.id, price: meterPrice });
+        }
+        await ctx.db
+          .update(workspaces)
+          .set({ plan: target })
+          .where(eq(workspaces.id, ws.id));
+        invalidateCapCache(ws.id);
+        return JSON.stringify({
+          changed: true,
+          plan: plan.name,
+          note: `${ws.name} is now on ${plan.name} — proration appears on the next invoice`,
+        });
+      }
+
+      // Free→paid: checkout session — the visitor adds a card and confirms.
+      const customerId = await ensureStripeCustomer(s, ctx.db, ws.id, ws, user.email);
+      const line_items: { price: string; quantity?: number }[] = [{ price: priceId, quantity: 1 }];
+      if (meterPrice) line_items.push({ price: meterPrice });
+      if (env.stripeMeterPrices.llm) line_items.push({ price: env.stripeMeterPrices.llm });
+      const session = await s.checkout.sessions.create({
+        customer: customerId,
+        mode: 'subscription',
+        line_items,
+        metadata: { workspace_id: ws.id, plan: target },
+        subscription_data: { metadata: { workspace_id: ws.id, plan: target } },
+        success_url: `${env.webOrigin}/billing?upgraded=1`,
+        cancel_url: `${env.webOrigin}/billing`,
+      });
+      return JSON.stringify({
+        changed: false,
+        checkout_url: session.url,
+        note: `send the visitor this secure Stripe checkout link to complete the upgrade to ${plan.name}`,
       });
     },
   },

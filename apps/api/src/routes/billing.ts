@@ -4,35 +4,9 @@ import type { Db } from '../db/client.js';
 import { agents, channels, usageEvents, workspaces } from '../db/schema.js';
 import { allRates, billingConfig, currentPeriod, rateFor } from '../lib/billing.js';
 import { effectivePlanKey, invalidateCapCache, messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
-import { planForPrice, stripe } from '../lib/stripe.js';
+import { ensureStripeCustomer, planForPrice, stripe } from '../lib/stripe.js';
 import { env } from '../env.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
-
-/** The stored Stripe customer may have been created under the other mode
- *  (test vs live) — verify it exists under the active key, else re-create. */
-async function ensureStripeCustomer(
-  s: NonNullable<ReturnType<typeof stripe>>,
-  db: Db,
-  workspaceId: string,
-  ws: typeof workspaces.$inferSelect | undefined,
-  email: string,
-): Promise<string> {
-  const existing = ws?.stripeCustomerId;
-  if (existing) {
-    const found = await s.customers.retrieve(existing).catch(() => null);
-    if (found && !(found as { deleted?: boolean }).deleted) return existing;
-  }
-  const customer = await s.customers.create({
-    email,
-    name: ws?.name,
-    metadata: { workspace_id: workspaceId },
-  });
-  await db
-    .update(workspaces)
-    .set({ stripeCustomerId: customer.id })
-    .where(eq(workspaces.id, workspaceId));
-  return customer.id;
-}
 
 export function billingRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
