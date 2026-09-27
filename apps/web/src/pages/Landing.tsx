@@ -4,38 +4,102 @@ import { useMe } from '../api/hooks';
 import { api } from '../api/client';
 import { SiteFooter } from '../components/bits';
 
+// Inline stroke glyphs — the old PNG set only had three distinct images,
+// which read as copy-paste once six cards sat side by side.
+const GLYPHS = {
+  inbox: (
+    <>
+      <path d="M21 12l-3.5-7h-11L3 12v7h18v-7z" />
+      <path d="M3 12h5a4 4 0 008 0h5" />
+    </>
+  ),
+  plug: (
+    <>
+      <path d="M9 7V4m6 3V4" />
+      <path d="M7 7h10v5a5 5 0 01-10 0V7z" />
+      <path d="M12 17v4" />
+    </>
+  ),
+  handover: (
+    <>
+      <circle cx="9" cy="8" r="4" />
+      <path d="M3 21v-1a6 6 0 016-6 6 6 0 016 6v1" />
+      <path d="M16 9l2 2 4-4" />
+    </>
+  ),
+  flag: (
+    <>
+      <path d="M5 21V4" />
+      <path d="M5 4h13l-3 4 3 4H5" />
+    </>
+  ),
+  loop: (
+    <>
+      <path d="M20 8A9 9 0 005.6 5.6L3 8" />
+      <path d="M3 3v5h5" />
+      <path d="M4 16a9 9 0 0014.4 2.4L21 16" />
+      <path d="M21 21v-5h-5" />
+    </>
+  ),
+  headset: (
+    <>
+      <path d="M4 14v-2a8 8 0 0116 0v2" />
+      <rect x="3" y="13" width="4" height="6" rx="1.5" />
+      <rect x="17" y="13" width="4" height="6" rx="1.5" />
+      <path d="M20 19a3 3 0 01-3 2h-3" />
+    </>
+  ),
+} as const;
+
+function Icon({ name }: { name: keyof typeof GLYPHS }) {
+  return (
+    <svg
+      className="landing-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {GLYPHS[name]}
+    </svg>
+  );
+}
+
 const FEATURES = [
   {
-    icon: '/img/home-connect.png',
+    icon: 'inbox',
     title: 'Every channel, one inbox',
     body: 'Messenger, Instagram, WhatsApp, email, and web chat — unified, searchable, triageable.',
   },
   {
-    icon: '/img/home-deploy.png',
+    icon: 'plug',
     title: 'Hosted or bring-your-own',
     body: 'Run your agent inside Janis, or keep the one you built and connect it with a webhook.',
   },
   {
-    icon: '/img/home-delight.png',
-    title: 'Take over from Slack',
-    body: 'Escalations arrive with an AI brief — reply in-thread, run it with /pause, /resume, /note, /teach.',
+    icon: 'handover',
+    title: 'Take over from anywhere',
+    body: 'Escalations land with an AI brief. Step in from the Janis console — or reply in Slack right in the thread, with /pause, /resume, /note and /teach.',
   },
   {
-    icon: '/img/value-reduce.png',
+    icon: 'flag',
     title: 'Autonomous, with checkpoints',
     body: 'Agents reply and run tools unattended. Mark an action approval-required — refunds, plan changes — and it waits for a human click.',
   },
   {
-    icon: '/img/value-boost.png',
+    icon: 'loop',
     title: 'Every rescue teaches the agent',
     body: 'Recurring escalations cluster into knowledge gaps — Janis drafts the fix, you approve.',
   },
   {
-    icon: '/img/value-delight.png',
+    icon: 'headset',
     title: 'A handoff that feels human',
     body: 'Typing indicators, receipts, operator personas — customers see a person, not a broken bot.',
   },
-];
+] as const;
 
 const DIFFERENT: [string, string, string][] = [
   ['Your agent', 'Rebuild it on their bot platform', 'Keep yours — or use ours'],
@@ -56,7 +120,7 @@ const PRICING = [
 const STEPS = [
   ['Connect', 'Link your channels and your agent — hosted on Janis or your own webhook.'],
   ['Agent answers', 'Instant replies grounded in your knowledge base, 24/7.'],
-  ['Human steps in', 'Slack alert with an AI brief — reply in-thread, or approve a gated action without leaving the channel.'],
+  ['Human steps in', 'An alert lands with an AI brief — take over in the console or straight from Slack, and approve gated actions inline.'],
   ['Hand it back', 'Resume the agent; the exchange becomes training data.'],
 ];
 
@@ -132,7 +196,7 @@ export default function Landing() {
       <section className="landing-grid">
         {FEATURES.map((f) => (
           <div key={f.title} className="card landing-card">
-            <img src={f.icon} alt="" className="landing-icon" />
+            <Icon name={f.icon} />
             <strong>{f.title}</strong>
             <p className="muted">{f.body}</p>
           </div>

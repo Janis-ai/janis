@@ -689,7 +689,7 @@ details summary:hover { color: var(--text); }
 .landing-grid.four { grid-template-columns: repeat(4, 1fr); }
 .landing-card { display: flex; flex-direction: column; gap: 8px; }
 .landing-card p { margin: 0; font-size: 14px; line-height: 1.55; flex: 1; }
-.landing-icon { width: 52px; height: 44px; display: block; object-fit: contain; object-position: left top; opacity: 0.9; }
+.landing-icon { width: 44px; height: 40px; display: block; color: var(--text); opacity: 0.85; }
 .landing-steps h2, .landing-cta h2, .landing-pricing h2 { font-size: 28px; letter-spacing: -0.5px; margin: 0 0 18px; }
 .landing-compare { display: block; overflow-x: auto; }
 .landing-compare table { width: 100%; }
