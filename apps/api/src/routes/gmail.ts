@@ -138,11 +138,12 @@ export function gmailPublicRoutes(db: Db) {
     const intent = verifyIntent(c.req.query('state') ?? '');
     if (!intent) {
       return c.redirect(
-        `${env.webOrigin}/integrations?gmail_error=${encodeURIComponent('invalid OAuth state')}`,
+        `${env.webOrigin}/agents?gmail_error=${encodeURIComponent('invalid OAuth state')}`,
       );
     }
     // Link flows land here for people with no Janis login — answer in text
-    // instead of redirecting them at a login wall.
+    // instead of redirecting them at a login wall. Session flows return to
+    // the agent's Channels tab (the intent carries the agent id).
     const done = (msg: string, ok = false) =>
       intent.l
         ? c.text(
@@ -151,7 +152,7 @@ export function gmailPublicRoutes(db: Db) {
               : `Gmail connect failed: ${msg}`,
           )
         : c.redirect(
-            `${env.webOrigin}/integrations?${ok ? 'gmail_connect' : 'gmail_error'}=${encodeURIComponent(msg)}`,
+            `${env.webOrigin}/agents/${intent.a}?tab=integrations&${ok ? 'gmail_connect' : 'gmail_error'}=${encodeURIComponent(msg)}`,
           );
 
     const code = c.req.query('code');

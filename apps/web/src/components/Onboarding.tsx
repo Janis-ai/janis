@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
+import { useAgents } from '../api/hooks';
 
 interface Step {
   key: string;
@@ -9,14 +10,6 @@ interface Step {
   hint: string;
   done: boolean;
 }
-
-const STEP_LINKS: Record<string, string> = {
-  create_agent: '/agents',
-  agent_live: '/agents',
-  add_channel: '/integrations',
-  first_message: '/integrations',
-  take_over: '/conversations',
-};
 
 /** Setup checklist shown on the inbox until every step is done (or dismissed). */
 export default function Onboarding() {
@@ -28,6 +21,18 @@ export default function Onboarding() {
     queryFn: () => api<{ steps: Step[]; complete: boolean }>('/api/onboarding'),
     refetchInterval: 30_000,
   });
+  const { data: agents } = useAgents();
+  // Channel steps land on the first agent's Channels tab (management is per-agent now).
+  const channelsLink = agents?.agents[0]
+    ? `/agents/${agents.agents[0].id}?tab=integrations`
+    : '/agents';
+  const STEP_LINKS: Record<string, string> = {
+    create_agent: '/agents',
+    agent_live: '/agents',
+    add_channel: channelsLink,
+    first_message: channelsLink,
+    take_over: '/conversations',
+  };
 
   if (dismissed || !data || data.complete) return null;
 

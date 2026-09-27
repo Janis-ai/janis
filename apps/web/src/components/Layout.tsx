@@ -202,7 +202,6 @@ export default function Layout() {
         {!data?.agent_scope && (
           <>
             <NavLink to="/reports"><span className="label">Reports</span><span className="icon">◫</span></NavLink>
-            <NavLink to="/integrations"><span className="label">Channels</span><span className="icon">⇄</span></NavLink>
             <NavLink to="/billing"><span className="label">Billing</span><span className="icon">$</span></NavLink>
             <NavLink to="/settings"><span className="label">Settings</span><span className="icon">⚙</span></NavLink>
           </>

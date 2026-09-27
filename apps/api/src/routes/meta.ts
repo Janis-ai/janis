@@ -13,6 +13,7 @@ import { setGetStartedButton, type ChannelCredentials } from '../lib/channels.js
 
 const GRAPH = 'https://graph.facebook.com/v21.0';
 const STATE_COOKIE = 'janis_meta_state';
+const AGENT_COOKIE = 'janis_meta_agent';
 const PENDING_TTL_MS = 15 * 60 * 1000;
 
 // What the OAuth flow discovers about the user's Meta assets.
@@ -111,9 +112,26 @@ export function metaApiRoutes(db: Db) {
 
   // Step 1: kick off Meta OAuth. Session cookie (SameSite=Lax) survives the
   // top-level redirect back from facebook.com.
-  app.get('/connect', adminOnly, (c) => {
+  app.get('/connect', adminOnly, async (c) => {
     if (!env.metaAppId || !env.metaAppSecret) {
       return c.json({ error: 'Meta app not configured (META_APP_ID/META_APP_SECRET)' }, 400);
+    }
+    // The connect link is per-agent — carry it through the OAuth round-trip so
+    // the callback can return to that agent's Channels tab.
+    const agentId = c.req.query('agent');
+    if (agentId) {
+      const [a] = await db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.id, agentId), eq(agents.workspaceId, c.get('workspaceId'))))
+        .limit(1);
+      if (!a) return c.json({ error: 'agent not found' }, 404);
+      setCookie(c, AGENT_COOKIE, agentId, {
+        httpOnly: true,
+        sameSite: 'Lax',
+        path: '/',
+        maxAge: 600,
+      });
     }
     const state = randomBytes(16).toString('hex');
     setCookie(c, STATE_COOKIE, state, { httpOnly: true, sameSite: 'Lax', path: '/', maxAge: 600 });
@@ -127,7 +145,14 @@ export function metaApiRoutes(db: Db) {
 
   // Step 2: exchange code → long-lived user token → discover assets.
   app.get('/callback', adminOnly, async (c) => {
-    const back = (msg: string) => c.redirect(`${env.webOrigin}/integrations?meta_error=${encodeURIComponent(msg)}`);
+    const agentId = getCookie(c, AGENT_COOKIE);
+    const dest = (q: string) =>
+      c.redirect(
+        agentId
+          ? `${env.webOrigin}/agents/${agentId}?tab=integrations&${q}`
+          : `${env.webOrigin}/agents?${q}`,
+      );
+    const back = (msg: string) => dest(`meta_error=${encodeURIComponent(msg)}`);
     const sent = c.req.query('state');
     const stored = getCookie(c, STATE_COOKIE);
     if (!sent || !stored || sent !== stored) return back('invalid OAuth state');
@@ -168,7 +193,7 @@ export function metaApiRoutes(db: Db) {
       ...assets,
       expiresAt: Date.now() + PENDING_TTL_MS,
     });
-    return c.redirect(`${env.webOrigin}/integrations?meta_connect=${id}`);
+    return dest(`meta_connect=${id}`);
   });
 
   // Persistent session: if this workspace has a stored Meta token, re-discover

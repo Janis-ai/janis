@@ -11,6 +11,7 @@ import type {
 } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
+import { AgentChannels } from '../components/AgentChannels';
 import { timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
@@ -217,7 +218,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
       )}
       {error && <div className="error">{error}</div>}
 
-      {activeTab === 'integrations' && <IntegrationsTab channels={channels} agent={agent} />}
+      {activeTab === 'integrations' && <AgentChannels agent={agent} />}
       {activeTab === 'behavior' && <BehaviorTab agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />}
       {activeTab === 'escalation' && (
         <EscalationTab
@@ -272,78 +273,6 @@ function AgentEditor({ agent }: { agent: Agent }) {
 }
 
 /* ---- tabs ---- */
-
-const KIND_LABEL: Record<string, string> = {
-  messenger: 'Messenger',
-  instagram: 'Instagram',
-  whatsapp: 'WhatsApp',
-  webchat: 'Web chat',
-};
-
-function IntegrationsTab({
-  channels,
-  agent,
-}: {
-  channels: Channel[];
-  agent: Agent;
-}) {
-  const agentId = agent.id;
-  const agentName = agent.name;
-  const { data: me } = useMe();
-  const isAdmin = me?.user.role === 'admin';
-  const overrides = (ch: Channel) => {
-    const bits: string[] = [];
-    if (ch.meta.branding?.greeting) bits.push('custom greeting');
-    const replies = ch.meta.branding?.quick_replies?.length ?? 0;
-    if (replies) bits.push(`${replies} suggested repl${replies === 1 ? 'y' : 'ies'}`);
-    return bits.join(' · ');
-  };
-
-  return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
-      {channels.length === 0 && (
-        <div className="muted">
-          Nothing is connected — this agent isn't answering anywhere yet.
-        </div>
-      )}
-      {channels.map((ch) => (
-        <div key={ch.id} className="row" style={{ alignItems: 'baseline' }}>
-          <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
-          <strong className="grow">{ch.name}</strong>
-          <span className="muted">
-            {ch.meta.page_id && `page ${ch.meta.page_id}`}
-            {ch.meta.phone_number_id && ch.meta.phone_number_id}
-            {overrides(ch) && ` · ${overrides(ch)}`}
-          </span>
-          {ch.meta.chat_url && (
-            <a href={ch.meta.chat_url} target="_blank" rel="noreferrer" className="btn">
-              Open ↗
-            </a>
-          )}
-          {isAdmin && (
-            <Link
-              to={`/integrations/${ch.id}`}
-              state={{ from: `/agents/${agentId}?tab=integrations`, label: agentName }}
-              className="btn"
-            >
-              Edit
-            </Link>
-          )}
-        </div>
-      ))}
-      {isAdmin && (
-        <div style={{ marginTop: channels.length ? 12 : 8 }}>
-          <Link to={`/integrations?agent=${agentId}`} className="btn">
-            + Add channel
-          </Link>
-        </div>
-      )}
-      <div className="muted" style={{ marginTop: 10 }}>
-        Channel settings (credentials, embed code, per-channel overrides) live on the Channels page.
-      </div>
-    </div>
-  );
-}
 
 type SlackRoute = { installation_id: string; channel_id: string | null };
 

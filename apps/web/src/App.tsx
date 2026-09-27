@@ -1,6 +1,8 @@
 import { Component, type ReactNode, useEffect } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { ApiError } from './api/client';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { api, ApiError } from './api/client';
+import type { Channel } from '@janis/shared';
 import { useMe } from './api/hooks';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -12,8 +14,6 @@ import ConversationPage from './pages/ConversationPage';
 import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
 import Reports from './pages/Reports';
-import Integrations from './pages/Integrations';
-import ChannelEdit from './pages/ChannelEdit';
 import Billing from './pages/Billing';
 import Settings from './pages/Settings';
 import { finishOpenRouterCallback } from './lib/openrouterAuth';
@@ -78,6 +78,26 @@ function PushDeepLink() {
   return null;
 }
 
+/** Channels are managed per agent now — old /integrations/:id links resolve
+ * to the owning agent's Channels tab (and flash the channel card). */
+function ChannelRedirect() {
+  const { channelId } = useParams();
+  const { data, error } = useQuery({
+    queryKey: ['channel', channelId],
+    queryFn: () => api<{ channel: Channel }>(`/api/channels/${channelId}`),
+    enabled: Boolean(channelId),
+    retry: false,
+  });
+  if (error) return <Navigate to="/agents" replace />;
+  if (!data) return <div className="login-wrap muted">Loading…</div>;
+  return (
+    <Navigate
+      to={`/agents/${data.channel.agent_id}?tab=integrations&channel=${channelId}`}
+      replace
+    />
+  );
+}
+
 /** OpenRouter OAuth landing: exchange ?code, stash the key, bounce back to
  * the agent page that started the flow (stored in sessionStorage). */
 function LlmCallback() {
@@ -113,8 +133,8 @@ export default function App() {
           <Route path="/agents" element={<Agents />} />
           <Route path="/agents/:id" element={<AgentDetail />} />
           <Route path="/reports" element={<Reports />} />
-          <Route path="/integrations" element={<Integrations />} />
-          <Route path="/integrations/:channelId" element={<ChannelEdit />} />
+          <Route path="/integrations" element={<Navigate to="/agents" replace />} />
+          <Route path="/integrations/:channelId" element={<ChannelRedirect />} />
           <Route path="/billing" element={<Billing />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
