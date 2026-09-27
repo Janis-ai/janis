@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useMe } from '../api/hooks';
@@ -65,7 +65,12 @@ export default function Layout() {
   const railParam = searchParams.get('rail');
   const railAgentParam = searchParams.get('agent');
   const consumedRail = useRef('');
+  const navType = useNavigationType();
   useEffect(() => {
+    // The rail's own ?rail= URL mirror navigates with replace — that's not a
+    // deeplink. Without this guard a stamped param survives into the next
+    // location and the consumer re-opens the rail a nav click just closed.
+    if (navType === 'REPLACE') return;
     const key = `${railParam}:${railAgentParam}`;
     if (key === consumedRail.current) return;
     consumedRail.current = key;
@@ -88,7 +93,7 @@ export default function Layout() {
       setRailOpen(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [railParam, railAgentParam]);
+  }, [railParam, railAgentParam, navType]);
 
   // Reflect rail state back into the URL — refresh or a copied link reopens
   // the same panel. replace: keeps tab flips out of history.
