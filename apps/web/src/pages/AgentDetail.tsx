@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
@@ -1234,23 +1234,35 @@ function ToolsTab({
   agentId: string;
   isAdmin: boolean;
 }) {
-  const [toolsJson, setToolsJson] = useState(() =>
-    cfg.tools ? JSON.stringify(cfg.tools, null, 2) : '',
+  const { data: catalog } = useQuery({
+    queryKey: ['tool-templates'],
+    queryFn: () => api<{ templates: ToolTemplateInfo[] }>('/api/tool-templates'),
+    staleTime: 300_000,
+  });
+  // Template-installed tools are managed by the integration cards — the JSON
+  // editor only ever sees custom actions. Name matching covers installs that
+  // predate the `template` marker.
+  const managedNames = new Set(
+    (catalog?.templates ?? []).flatMap((t) => t.tools.map((x) => x.name)),
   );
-  const [toolsError, setToolsError] = useState('');
-  const [toolsDirty, setToolsDirty] = useState(false);
-  const [toolsStale, setToolsStale] = useState(false);
-  const [showCustom, setShowCustom] = useState(false);
-  const lastTools = useRef(cfg.tools);
+  const isManaged = (t: NonNullable<AgentConfig['tools']>[number]) =>
+    !!t.template || managedNames.has(t.name);
+  const managedTools = (cfg.tools ?? []).filter(isManaged);
+  const customTools = (cfg.tools ?? []).filter((t) => !isManaged(t));
 
-  // Re-sync the editor when cfg.tools changes externally (template
-  // install/remove) — otherwise the stale textarea overwrites them on blur.
+  const [toolsJson, setToolsJson] = useState('');
+  const [toolsError, setToolsError] = useState('');
+  const [showCustom, setShowCustom] = useState(false);
+
+  // Populate the editor when it's opened — by then the catalog is loaded so
+  // managed tools are correctly excluded. Reopening always reflects current
+  // custom tools.
   useEffect(() => {
-    if (cfg.tools === lastTools.current) return;
-    lastTools.current = cfg.tools;
-    if (toolsDirty) setToolsStale(true);
-    else setToolsJson(cfg.tools ? JSON.stringify(cfg.tools, null, 2) : '');
-  }, [cfg.tools, toolsDirty]);
+    if (!showCustom) return;
+    setToolsJson(customTools.length ? JSON.stringify(customTools, null, 2) : '');
+    setToolsError('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCustom]);
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
@@ -1265,22 +1277,19 @@ function ToolsTab({
       />
       {showCustom && (
       <>
-      <label>Custom API actions — call any API (JSON array, GET/POST/PUT/PATCH/DELETE, {'{param}'} URL placeholders, "approval": true gates a call behind teammate sign-off)</label>
+      <label>Custom API actions — call any API (JSON array, GET/POST/PUT/PATCH/DELETE, {'{param}'} URL placeholders, "approval": true gates a call behind teammate sign-off). Integration tools are managed on the cards above, not here.</label>
       <textarea
         rows={4}
         className="mono"
         placeholder={'[\n  {\n    "name": "lookup_order",\n    "description": "Look up an order in our POS by order number",\n    "method": "GET",\n    "url": "https://api.acme-pos.com/orders/{order_id}",\n    "headers": { "authorization": "Bearer {{secrets.POS_API_KEY}}" },\n    "params": { "order_id": "the order number the user gave" }\n  }\n]'}
         value={toolsJson}
-        onChange={(e) => {
-          setToolsJson(e.target.value);
-          setToolsDirty(true);
-        }}
+        onChange={(e) => setToolsJson(e.target.value)}
         onBlur={() => {
           try {
-            const parsed = toolsJson.trim() ? JSON.parse(toolsJson) : undefined;
-            setCfg({ ...cfg, tools: parsed });
-            setToolsDirty(false);
-            setToolsStale(false);
+            const parsed: NonNullable<AgentConfig['tools']> = toolsJson.trim()
+              ? JSON.parse(toolsJson)
+              : [];
+            setCfg({ ...cfg, tools: [...managedTools, ...parsed] });
             setToolsError('');
           } catch {
             setToolsError('invalid JSON — not saved until it parses');
@@ -1288,22 +1297,6 @@ function ToolsTab({
         }}
       />
       {toolsError && <div className="error">{toolsError}</div>}
-      {toolsStale && (
-        <div className="muted">
-          Tools changed via the integrations above — your JSON edits will overwrite them.{' '}
-          <button
-            className="btn"
-            onClick={() => {
-              setToolsJson(cfg.tools ? JSON.stringify(cfg.tools, null, 2) : '');
-              setToolsDirty(false);
-              setToolsStale(false);
-              setToolsError('');
-            }}
-          >
-            Discard my edits
-          </button>
-        </div>
-      )}
       </>
       )}
       <label>
@@ -1372,6 +1365,19 @@ function IntegrationCards({
     onError: (e) => setErr(e.message),
   });
 
+  const setApprovals = useMutation({
+    mutationFn: ({ t, approvals }: { t: ToolTemplateInfo; approvals: Record<string, boolean> }) =>
+      api<{ agent: Agent }>(`/api/agents/${agentId}/tools/${t.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ approvals }),
+      }),
+    onSuccess: (r) => {
+      syncTools(r.agent.config?.tools);
+      invalidate();
+    },
+    onError: (e) => setErr(e.message),
+  });
+
   const installed = (t: ToolTemplateInfo) => {
     const names = new Set((cfg.tools ?? []).map((x) => x.name));
     return t.tools.every((x) => names.has(x.name));
@@ -1400,16 +1406,45 @@ function IntegrationCards({
               Setup guide ↗
             </a>
           )}
-          <div className="muted" style={{ fontSize: 11, margin: '0 0 10px', lineHeight: 1.7 }}>
-            {t.tools.map((x) => (
-              <div key={x.name}>
-                <span className="mono">{x.name}</span>
-                {x.approval && (
-                  <span className="badge" style={{ marginLeft: 6 }}>needs approval</span>
-                )}
+          {installed(t) ? (
+            <div className="muted" style={{ fontSize: 11, margin: '0 0 10px', lineHeight: 1.9 }}>
+              {t.tools.map((x) => {
+                const live = (cfg.tools ?? []).find((o) => o.name === x.name);
+                const gated = live ? !!live.approval : !!x.approval;
+                return (
+                  <label
+                    key={x.name}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={gated}
+                      disabled={setApprovals.isPending}
+                      onChange={(e) =>
+                        setApprovals.mutate({ t, approvals: { [x.name]: e.target.checked } })
+                      }
+                    />
+                    <span className="mono">{x.name}</span>
+                    {gated && <span className="badge">needs approval</span>}
+                  </label>
+                );
+              })}
+              <div style={{ fontSize: 11, marginTop: 4 }}>
+                Checked = a teammate approves before it runs; unchecked = autonomous.
               </div>
-            ))}
-          </div>
+            </div>
+          ) : (
+            <div className="muted" style={{ fontSize: 11, margin: '0 0 10px', lineHeight: 1.7 }}>
+              {t.tools.map((x) => (
+                <div key={x.name}>
+                  <span className="mono">{x.name}</span>
+                  {x.approval && (
+                    <span className="badge" style={{ marginLeft: 6 }}>needs approval</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           {openId === t.id ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {t.fields.map((f) => (

@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentConnections, memberships, sessions, users, workspaces } from '../db/schema.js';
+import { agentConnections, agents, memberships, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { env } from '../env.js';
@@ -233,6 +233,127 @@ describe('tool template install', () => {
     expect(
       await db.select().from(agentConnections).where(eq(agentConnections.agentId, id)),
     ).toHaveLength(0);
+  });
+
+  it('stamps installed tools with the template id so the UI manages them', async () => {
+    const id = await newAgentId();
+    await app.request(`/api/agents/${id}/tools/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ template: 'itunes', fields: {} }),
+    });
+    const list = await (
+      await app.request('/api/agents', { headers: { cookie: parentCookie } })
+    ).json();
+    const agent = list.agents.find((a: { id: string }) => a.id === id);
+    expect(
+      agent.config.tools.every(
+        (t: { template?: string }) => t.template === 'itunes',
+      ),
+    ).toBe(true);
+  });
+
+  it('toggles approval per tool via PATCH /tools/:template', async () => {
+    const id = await newAgentId();
+    await app.request(`/api/agents/${id}/tools/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({
+        template: 'shopify',
+        fields: { shop: 'mystore', token: 'shpat_test' },
+      }),
+    });
+    const res = await app.request(`/api/agents/${id}/tools/shopify`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({
+        approvals: { shopify_cancel_order: false, shopify_lookup_order: true },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const { agent } = await res.json();
+    const byName = (n: string) =>
+      agent.config.tools.find((t: { name: string }) => t.name === n);
+    // un-gated a write; gated a read — the trust dial is per action
+    expect(byName('shopify_cancel_order').approval).toBeUndefined();
+    expect(byName('shopify_lookup_order').approval).toBe(true);
+    // not in the map → untouched
+    expect(byName('shopify_create_draft_order').approval).toBe(true);
+  });
+
+  it('PATCH manages legacy installs by name and stamps the marker', async () => {
+    const id = await newAgentId();
+    // simulate a pre-marker install: same tool names, no `template` field
+    const [before] = await db.select().from(agents).where(eq(agents.id, id));
+    await db
+      .update(agents)
+      .set({
+        config: {
+          ...(before.config ?? {}),
+          tools: [
+            {
+              name: 'itunes_search',
+              description: 'legacy install',
+              method: 'GET',
+              url: 'https://itunes.apple.com/search?term={term}',
+              params: { term: 'search' },
+            },
+          ],
+        },
+      })
+      .where(eq(agents.id, id));
+    const res = await app.request(`/api/agents/${id}/tools/itunes`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ approvals: { itunes_search: true } }),
+    });
+    expect(res.status).toBe(200);
+    const { agent } = await res.json();
+    expect(agent.config.tools[0].approval).toBe(true);
+    expect(agent.config.tools[0].template).toBe('itunes');
+  });
+
+  it('PATCH never touches tools outside the template', async () => {
+    const id = await newAgentId();
+    await app.request(`/api/agents/${id}/tools/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ template: 'itunes', fields: {} }),
+    });
+    const [before] = await db.select().from(agents).where(eq(agents.id, id));
+    await db
+      .update(agents)
+      .set({
+        config: {
+          ...(before.config ?? {}),
+          tools: [
+            ...(before.config?.tools ?? []),
+            {
+              name: 'my_custom_tool',
+              description: 'hand-written',
+              method: 'GET',
+              url: 'https://example.com/{x}',
+              approval: true,
+            },
+          ],
+        },
+      })
+      .where(eq(agents.id, id));
+    // even if the request names a foreign tool, it's scoped to the template
+    await app.request(`/api/agents/${id}/tools/itunes`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ approvals: { my_custom_tool: false } }),
+    });
+    const list = await (
+      await app.request('/api/agents', { headers: { cookie: parentCookie } })
+    ).json();
+    const agent = list.agents.find((a: { id: string }) => a.id === id);
+    const custom = agent.config.tools.find(
+      (t: { name: string }) => t.name === 'my_custom_tool',
+    );
+    expect(custom.approval).toBe(true);
+    expect(custom.template).toBeUndefined();
   });
 });
 

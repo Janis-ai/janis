@@ -376,7 +376,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         key: 'restricted_key',
         label: 'Restricted API key',
         placeholder: 'e.g. rk_live_… (rk_test_… while testing)',
-        help: 'Stripe Dashboard → Developers → API keys → Create restricted key → name it e.g. "janis-agent" → permissions: Read on Customers, Charges, Products, Prices and Subscriptions; add Write on Subscriptions (plan changes/cancels) and Refunds if the agent may propose them. Reads run unattended; writes still wait for a teammate’s approval.',
+        help: 'Stripe Dashboard → Developers → API keys → Create restricted key → name it e.g. "janis-agent" → permissions: Read on Customers, Charges, Products, Prices and Subscriptions; add Write on Subscriptions (plan changes/cancels) and Refunds if the agent may propose them. Reads run unattended; writes wait for approval — toggle per action once connected.',
       },
     ],
     secrets: (f) => ({ STRIPE_RESTRICTED_KEY: f.restricted_key.trim() }),

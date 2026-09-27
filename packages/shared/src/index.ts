@@ -203,6 +203,9 @@ export const AgentConfig = z.object({
         bodyFormat: z.enum(['json', 'form']).optional(),
         // mutating tools park as pending actions until a teammate decides
         approval: z.boolean().optional(),
+        // catalog template id that installed this tool — managed via the
+        // integrations UI, hidden from the custom-tools JSON editor
+        template: z.string().optional(),
       }),
     )
     .optional(),

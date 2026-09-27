@@ -790,7 +790,39 @@ export function agentRoutes(db: Db) {
       }
       const cfg = (agent.config ?? {}) as AgentConfig;
       const names = new Set(tpl.tools.map((t) => t.name));
-      const tools = [...(cfg.tools ?? []).filter((t) => !names.has(t.name)), ...tpl.tools];
+      const stamped = tpl.tools.map((t) => ({ ...t, template: tpl.id }));
+      const tools = [...(cfg.tools ?? []).filter((t) => !names.has(t.name)), ...stamped];
+      const [updated] = await db
+        .update(agents)
+        .set({ config: { ...cfg, tools } })
+        .where(eq(agents.id, agent.id))
+        .returning();
+      return c.json({ agent: toAgent(updated) });
+    },
+  );
+
+  // Per-tool approval gates on an installed template — the UI's checkboxes.
+  // Matches tools by name so installs predating the `template` marker still
+  // get managed (and get stamped on write).
+  app.patch(
+    '/:id/tools/:template', agentAdmin,
+    zValidator(
+      'json',
+      z.object({ approvals: z.record(z.string(), z.boolean()) }),
+    ),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const tpl = TOOL_TEMPLATES.find((t) => t.id === c.req.param('template'));
+      if (!tpl) return c.json({ error: 'unknown template' }, 404);
+      const { approvals } = c.req.valid('json');
+      const names = new Set(tpl.tools.map((t) => t.name));
+      const cfg = (agent.config ?? {}) as AgentConfig;
+      const tools = (cfg.tools ?? []).map((t) =>
+        names.has(t.name) && approvals[t.name] !== undefined
+          ? { ...t, template: tpl.id, approval: approvals[t.name] || undefined }
+          : t,
+      );
       const [updated] = await db
         .update(agents)
         .set({ config: { ...cfg, tools } })
