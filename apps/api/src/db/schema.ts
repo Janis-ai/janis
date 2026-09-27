@@ -335,6 +335,20 @@ export const slackInstallations = pgTable('slack_installations', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Slack OAuth grants that completed with no Janis session (the public
+// "Add to Slack" flow / Marketplace listing install). Held here until the
+// installer signs in and POST /api/slack/claim binds it to their workspace.
+export const slackPendingInstalls = pgTable('slack_pending_installs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  teamId: text('team_id').notNull(),
+  teamName: text('team_name'),
+  botToken: text('bot_token').notNull(),
+  installerSlackUserId: text('installer_slack_user_id'),
+  installerUserToken: text('installer_user_token'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const suggestions = pgTable('suggestions', {
   id: uuid('id').primaryKey().defaultRandom(),
   conversationId: uuid('conversation_id')

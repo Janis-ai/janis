@@ -140,6 +140,30 @@ export default function Layout() {
     }
   }, [navigate]);
 
+  // Claim a pending Slack install — the public "Add to Slack" flow can
+  // complete OAuth before sign-in; the grant waits on a cookie until an
+  // admin session picks it up. Cheap no-op when nothing is pending.
+  const claimedSlack = useRef(false);
+  useEffect(() => {
+    if (!hasWorkspace || claimedSlack.current || data?.user.role !== 'admin') return;
+    claimedSlack.current = true;
+    void api<{ claimed?: boolean; team_name?: string }>('/api/slack/claim', { method: 'POST' })
+      .then((r) => {
+        if (r?.claimed) {
+          setToasts((t) => [
+            ...t,
+            {
+              id: 'slack-claim',
+              title: 'Slack connected',
+              body: `${r.team_name ?? 'Your workspace'} is linked — alerts can route to it.`,
+              url: '/settings',
+            },
+          ]);
+        }
+      })
+      .catch(() => {});
+  }, [hasWorkspace, data?.user.role]);
+
   const dismiss = useCallback((id: string) => {
     setToasts((t) => t.filter((x) => x.id !== id));
     const timer = timers.current.get(id);

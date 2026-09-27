@@ -36,6 +36,8 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:8787',
       '/auth': 'http://localhost:8787',
+      // public Slack install entry (OAuth redirect — top-level navigation)
+      '/slack/add': 'http://localhost:8787',
       // webchat widget + visitor endpoints — dogfood embed in dev too
       '/widget.js': 'http://localhost:8787',
       '/chat': 'http://localhost:8787',

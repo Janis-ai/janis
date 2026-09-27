@@ -6,7 +6,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alerts, conversations, memberships, messages, sessions, slackInstallations, slackThreads, users, workspaces } from '../db/schema.js';
+import { agents, alerts, conversations, memberships, messages, sessions, slackInstallations, slackPendingInstalls, slackThreads, users, workspaces } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
@@ -1115,5 +1115,289 @@ describe('per-agent Slack workspace override', () => {
       .returning();
     await postSlackAlert(db, ws.id, convMuted, muted, alertMuted);
     expect(calls.filter((c) => c.url.includes('chat.postMessage'))).toHaveLength(0);
+  });
+});
+
+describe('public OAuth install', () => {
+  let api: Hono;
+  let adminCookie = '';
+  let adminWsId = '';
+  let adminUserId = '';
+
+  const slackOk = (body: unknown) =>
+    new Response(JSON.stringify({ ok: true, ...(body as object) }), {
+      headers: { 'content-type': 'application/json' },
+    });
+
+  /** oauth.v2.access grants `xoxb-<teamId>`; every other Slack call acks
+   *  (conversations.list → empty → no alert channel picked). */
+  const stubOAuth = (teamId: string) =>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string | URL) => {
+        if (String(url).includes('oauth.v2.access')) {
+          return slackOk({
+            access_token: `xoxb-${teamId}`,
+            team: { id: teamId, name: `Team ${teamId}` },
+            authed_user: { id: 'U_INST', access_token: `xoxp-${teamId}` },
+          });
+        }
+        return slackOk({ channels: [] });
+      }),
+    );
+
+  const pubState = async () => {
+    const res = await api.request('/slack/add');
+    return new URL(res.headers.get('location')!).searchParams.get('state')!;
+  };
+
+  const pendingCookieOf = (res: Response) =>
+    /janis_slack_pending=([^;]+)/.exec(res.headers.get('set-cookie') ?? '')?.[1] ?? '';
+
+  const claim = (pendingId: string) =>
+    api.request('/api/slack/claim', {
+      method: 'POST',
+      headers: { cookie: `${adminCookie}; janis_slack_pending=${pendingId}` },
+    });
+
+  beforeAll(async () => {
+    env.slackClientId = 'CID';
+    env.slackClientSecret = 'SEC';
+    api = new Hono()
+      .route('/slack', slackPublicRoutes(db))
+      .route('/api/slack', slackApiRoutes(db));
+    const [ws] = await db.insert(workspaces).values({ name: 'Claim WS' }).returning();
+    adminWsId = ws.id;
+    const [admin] = await db
+      .insert(users)
+      .values({ email: 'claim-admin@x.c', name: 'CAdmin' })
+      .returning();
+    adminUserId = admin.id;
+    await db.insert(memberships).values({
+      userId: admin.id,
+      workspaceId: ws.id,
+      role: 'admin',
+      acceptedAt: new Date(),
+    });
+    const { token, id } = generateSessionToken();
+    await db.insert(sessions).values({
+      id,
+      userId: admin.id,
+      workspaceId: ws.id,
+      expiresAt: new Date(Date.now() + 86400_000),
+    });
+    adminCookie = `${SESSION_COOKIE}=${token}`;
+  });
+
+  it('GET /slack/add redirects to Slack with a signed pub state', async () => {
+    const res = await api.request('/slack/add');
+    expect(res.status).toBe(302);
+    const loc = new URL(res.headers.get('location')!);
+    expect(`${loc.origin}${loc.pathname}`).toBe('https://slack.com/oauth/v2/authorize');
+    expect(loc.searchParams.get('client_id')).toBe('CID');
+    expect(loc.searchParams.get('state')!.startsWith('pub.')).toBe(true);
+  });
+
+  it('sessionless callback parks a pending install and redirects to login', async () => {
+    stubOAuth('T_PARK');
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(await pubState())}`,
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(`${env.webOrigin}/login?slack=pending`);
+    const pid = pendingCookieOf(res);
+    expect(pid).toBeTruthy();
+    const [p] = await db
+      .select()
+      .from(slackPendingInstalls)
+      .where(eq(slackPendingInstalls.id, pid));
+    expect(p.teamId).toBe('T_PARK');
+    expect(p.botToken).toBe('xoxb-T_PARK');
+    expect(p.installerUserToken).toBe('xoxp-T_PARK');
+    expect(p.expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('rejects a tampered pub state before touching the token exchange', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent('pub.bogus.sig')}`,
+    );
+    expect(res.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects the legacy unsigned workspace:user state shape', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent('a-workspace-id:a-user-id')}`,
+    );
+    expect(res.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('Marketplace-style empty state parks pending when logged out', async () => {
+    stubOAuth('T_MKT');
+    const res = await api.request('/slack/oauth/callback?code=C');
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(`${env.webOrigin}/login?slack=pending`);
+    expect(pendingCookieOf(res)).toBeTruthy();
+  });
+
+  it('pub-state callback with a live session binds straight to the active workspace', async () => {
+    stubOAuth('T_SOFT');
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(await pubState())}`,
+      { headers: { cookie: adminCookie } },
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(`${env.webOrigin}/settings?slack=connected`);
+    const [inst] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, 'T_SOFT'));
+    expect(inst.workspaceId).toBe(adminWsId);
+    expect(inst.installerUserId).toBe(adminUserId);
+  });
+
+  it('claims a pending install into the signed-in workspace exactly once', async () => {
+    stubOAuth('T_CLAIM');
+    const oauth = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(await pubState())}`,
+    );
+    const pid = pendingCookieOf(oauth);
+    const res = await claim(pid);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ claimed: true, team_name: 'Team T_CLAIM' });
+    const [inst] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, 'T_CLAIM'));
+    expect(inst.workspaceId).toBe(adminWsId);
+    expect(inst.installerUserId).toBe(adminUserId);
+    expect(inst.installerSlackUserId).toBe('U_INST');
+    expect(
+      await db.select().from(slackPendingInstalls).where(eq(slackPendingInstalls.id, pid)),
+    ).toHaveLength(0);
+    // replaying the consumed cookie claims nothing
+    expect(((await (await claim(pid)).json()) as { claimed: boolean }).claimed).toBe(false);
+  });
+
+  it('refuses an expired pending install', async () => {
+    const [p] = await db
+      .insert(slackPendingInstalls)
+      .values({ teamId: 'T_EXP', botToken: 'xoxb-exp', expiresAt: new Date(Date.now() - 1000) })
+      .returning();
+    const res = await claim(p.id);
+    expect(((await res.json()) as { claimed: boolean }).claimed).toBe(false);
+    expect(
+      await db.select().from(slackInstallations).where(eq(slackInstallations.teamId, 'T_EXP')),
+    ).toHaveLength(0);
+  });
+
+  it('never re-binds a team already owned by another workspace', async () => {
+    const [otherWs] = await db.insert(workspaces).values({ name: 'Other WS' }).returning();
+    await db.insert(slackInstallations).values({
+      workspaceId: otherWs.id,
+      teamId: 'T_OWNED',
+      botToken: 'xoxb-owned',
+    });
+    const [p] = await db
+      .insert(slackPendingInstalls)
+      .values({ teamId: 'T_OWNED', botToken: 'xoxb-new', expiresAt: new Date(Date.now() + 3600_000) })
+      .returning();
+    const body = (await (await claim(p.id)).json()) as {
+      claimed: boolean;
+      already_connected?: boolean;
+    };
+    expect(body.claimed).toBe(false);
+    expect(body.already_connected).toBe(true);
+    const [inst] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, 'T_OWNED'));
+    expect(inst.workspaceId).toBe(otherWs.id);
+    expect(inst.botToken).toBe('xoxb-owned');
+  });
+
+  it('in-session install binds directly via signed dir. state', async () => {
+    stubOAuth('T_DIR');
+    const start = await api.request('/api/slack/install', { headers: { cookie: adminCookie } });
+    expect(start.status).toBe(302);
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    expect(state.startsWith('dir.')).toBe(true);
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(state)}`,
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(`${env.webOrigin}/settings?slack=connected`);
+    const [inst] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, 'T_DIR'));
+    expect(inst.workspaceId).toBe(adminWsId);
+  });
+
+  it('sessionless reinstall of a connected team refreshes the token in place', async () => {
+    // The Marketplace listing's reauthorize path: keeps the binding, upgrades
+    // scopes, doesn't park a pending row.
+    await db.insert(slackInstallations).values({
+      workspaceId: adminWsId,
+      teamId: 'T_SESS',
+      botToken: 'xoxb-stale',
+    });
+    stubOAuth('T_SESS');
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(await pubState())}`,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('already connected');
+    const insts = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, 'T_SESS'));
+    expect(insts).toHaveLength(1);
+    expect(insts[0].botToken).toBe('xoxb-T_SESS');
+    expect(
+      await db.select().from(slackPendingInstalls).where(eq(slackPendingInstalls.teamId, 'T_SESS')),
+    ).toHaveLength(0);
+  });
+
+  it('reinstall replaces the row, clears threads, and keeps the migrated flag', async () => {
+    const { hash, preview } = generateApiKey();
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: adminWsId, name: 'MigBot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'mig-conv' })
+      .returning();
+    const [inst0] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: adminWsId, teamId: 'T_MIG2', botToken: 'xoxb-old', migrated: true })
+      .returning();
+    await db.insert(slackThreads).values({
+      conversationId: conv.id,
+      installationId: inst0.id,
+      channelId: 'C_OLD',
+      ts: '1.0',
+    });
+    stubOAuth('T_MIG2');
+    const start = await api.request('/api/slack/install', { headers: { cookie: adminCookie } });
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    const res = await api.request(`/slack/oauth/callback?code=C&state=${encodeURIComponent(state)}`);
+    expect(res.status).toBe(302);
+    const insts = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, 'T_MIG2'));
+    expect(insts).toHaveLength(1);
+    expect(insts[0].botToken).toBe('xoxb-T_MIG2');
+    expect(insts[0].migrated).toBe(true);
+    expect(
+      await db.select().from(slackThreads).where(eq(slackThreads.installationId, inst0.id)),
+    ).toHaveLength(0);
   });
 });

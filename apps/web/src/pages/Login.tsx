@@ -47,6 +47,9 @@ export default function Login() {
   };
 
   const oauthError = params.get('error');
+  // Slack OAuth completed before sign-in (public "Add to Slack" flow) — the
+  // grant waits in a cookie; once signed in, the app claims it.
+  const slackPending = params.get('slack') === 'pending';
   const anyProvider = providers.data?.google || providers.data?.slack;
   const passwordLogin = providers.data?.password;
 
@@ -57,6 +60,12 @@ export default function Login() {
           <img src="/img/janis-top.png" alt="Janis" style={{ height: 40, marginBottom: 6 }} />
           <p className="muted">Human backup for AI agents</p>
         </div>
+        {slackPending && (
+          <div className="muted" style={{ marginBottom: 12 }}>
+            Your Slack workspace authorized Janis — sign in (or create an account) to finish
+            connecting it.
+          </div>
+        )}
         {anyProvider && (
           <div className="oauth-buttons">
             {providers.data?.google && (

@@ -1,11 +1,14 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { and, desc, eq, ne, sql } from 'drizzle-orm';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { and, desc, eq, gt, isNotNull, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, conversations, messages, pendingActions, slackInstallations, slackThreads, suggestions } from '../db/schema.js';
+import { agents, conversations, memberships, messages, pendingActions, sessions, slackInstallations, slackPendingInstalls, slackThreads, suggestions } from '../db/schema.js';
 import { env } from '../env.js';
-import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { adminOnly, sessionAuth, SESSION_COOKIE, type SessionEnv } from '../middleware/sessionAuth.js';
+import { sha256 } from '../lib/crypto.js';
 import { runHostedEvent } from '../lib/hostedAgent.js';
 import { decidePendingAction } from '../lib/approvals.js';
 import {
@@ -90,6 +93,79 @@ function oauthUrl(state: string) {
   return `https://slack.com/oauth/v2/authorize?${params}`;
 }
 
+const STATE_TTL_MS = 15 * 60 * 1000;
+const PENDING_COOKIE = 'janis_slack_pending';
+const PENDING_TTL_MS = 24 * 3600 * 1000;
+
+/** OAuth state is HMAC-signed so nobody can forge a workspace binding:
+ *  'dir.' states carry {w: workspaceId, u: installerUserId} for in-session
+ *  installs; 'pub.' carries just an expiry for the public Add-to-Slack flow
+ *  (the Marketplace listing's Install button arrives with no state at all). */
+function signState(body: Record<string, unknown>): string {
+  const b64 = Buffer.from(JSON.stringify({ ...body, x: Date.now() + STATE_TTL_MS })).toString('base64url');
+  const sig = createHmac('sha256', env.sessionSecret).update(b64).digest('base64url');
+  return `${b64}.${sig}`;
+}
+
+function verifyState<T>(token: string): T | null {
+  const [body, sig] = (token ?? '').split('.');
+  if (!body || !sig) return null;
+  const expected = createHmac('sha256', env.sessionSecret).update(body).digest('base64url');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const i = JSON.parse(Buffer.from(body, 'base64url').toString()) as T & { x?: number };
+    return i.x && i.x > Date.now() ? i : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Soft session check for public routes — resolves the active workspace when
+ *  the installing browser happens to be signed in, without requiring it. */
+async function sessionWorkspace(
+  db: Db,
+  cookieToken: string | undefined,
+): Promise<{ workspaceId: string; userId: string } | null> {
+  if (!cookieToken) return null;
+  const [row] = await db
+    .select({ userId: sessions.userId, workspaceId: sessions.workspaceId })
+    .from(sessions)
+    .where(and(eq(sessions.id, sha256(cookieToken)), gt(sessions.expiresAt, new Date())))
+    .limit(1);
+  if (!row) return null;
+  let wsId = row.workspaceId;
+  if (!wsId) {
+    const [mem] = await db
+      .select({ workspaceId: memberships.workspaceId })
+      .from(memberships)
+      .where(and(eq(memberships.userId, row.userId), isNotNull(memberships.acceptedAt)))
+      .limit(1);
+    wsId = mem?.workspaceId ?? null;
+  }
+  return wsId ? { workspaceId: wsId, userId: row.userId } : null;
+}
+
+/** Default the install's alert channel to an existing #janis-alerts, then
+ *  any janis-* match (on a complete scan only — a partial list's first match
+ *  is arbitrary, that's how a random j-* channel once became the default).
+ *  Nothing found → left unset; Settings prompts rather than silently
+ *  provisioning inside an OAuth redirect. */
+async function chooseAlertChannel(db: Db, inst: Installation) {
+  const { channels, complete } = await listSlackChannels(inst.botToken);
+  const channelId =
+    channels.find((ch) => ch.name === 'janis-alerts')?.id ??
+    (complete ? channels.find((ch) => /janis/i.test(ch.name))?.id : undefined);
+  if (channelId) {
+    await db
+      .update(slackInstallations)
+      .set({ alertChannelId: channelId })
+      .where(eq(slackInstallations.id, inst.id));
+    void inviteWorkspaceMembers(db, inst, channelId);
+  }
+}
+
 /** Session-authed management endpoints mounted at /api/slack. */
 export function slackApiRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
@@ -115,8 +191,52 @@ export function slackApiRoutes(db: Db) {
   // Navigate here in the browser (top-level GET → session cookie is sent).
   app.get('/install', adminOnly, (c) => {
     if (!env.slackClientId) return c.json({ error: 'SLACK_CLIENT_ID not configured' }, 503);
-    const state = `${c.get('workspaceId')}:${c.get('user').id}`;
+    const state = `dir.${signState({ w: c.get('workspaceId'), u: c.get('user').id })}`;
     return c.redirect(oauthUrl(state));
+  });
+
+  // Bind a Slack grant that completed while signed out (public install —
+  // Marketplace listing or landing-page button) to this workspace. The
+  // pending row id rides an httpOnly cookie set at OAuth callback; the app
+  // shell calls this opportunistically after login — no-op when absent.
+  app.post('/claim', adminOnly, async (c) => {
+    const pendingId = getCookie(c, PENDING_COOKIE);
+    deleteCookie(c, PENDING_COOKIE, { path: '/' });
+    if (!pendingId) return c.json({ claimed: false });
+    const [row] = await db
+      .select()
+      .from(slackPendingInstalls)
+      .where(
+        and(
+          eq(slackPendingInstalls.id, pendingId),
+          gt(slackPendingInstalls.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+    if (!row) return c.json({ claimed: false });
+    await db.delete(slackPendingInstalls).where(eq(slackPendingInstalls.id, row.id));
+    // The team may have been bound meanwhile (someone else claimed it, or a
+    // session-bound reinstall) — never double-bind.
+    const [existing] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, row.teamId))
+      .limit(1);
+    if (existing) return c.json({ claimed: false, already_connected: true });
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({
+        workspaceId: c.get('workspaceId'),
+        teamId: row.teamId,
+        teamName: row.teamName,
+        botToken: row.botToken,
+        installerUserId: c.get('user').id,
+        installerSlackUserId: row.installerSlackUserId,
+        installerUserToken: row.installerUserToken,
+      })
+      .returning();
+    await chooseAlertChannel(db, inst);
+    return c.json({ claimed: true, team_name: row.teamName });
   });
 
   app.get('/channels', async (c) => {
@@ -327,12 +447,36 @@ export function slackPublicRoutes(db: Db) {
     );
   };
 
-  // OAuth redirect target
+  // Public install entry — the Marketplace listing's Install button and the
+  // landing-page "Add to Slack" link. Signed workspace-free state; the
+  // callback parks the grant until the installer signs in.
+  app.get('/add', (c) => {
+    if (!env.slackClientId) return c.text('Slack app not configured', 503);
+    return c.redirect(oauthUrl(`pub.${signState({ p: 1 })}`));
+  });
+
+  // OAuth redirect target. State shapes: 'dir.<signed{w,u}>' (in-session
+  // install), 'pub.<signed{p}>' (our /slack/add), or empty (Slack's listing
+  // initiates installs with no state at all).
   app.get('/oauth/callback', async (c) => {
     const code = c.req.query('code');
     const state = c.req.query('state') ?? '';
-    const [workspaceId, userId] = state.split(':');
-    if (!code || !workspaceId) return c.text('missing code/state', 400);
+    if (!code) return c.text('missing code', 400);
+
+    let workspaceId: string | undefined;
+    let userId: string | undefined;
+    if (state.startsWith('dir.')) {
+      const s = verifyState<{ w?: string; u?: string }>(state.slice(4));
+      if (!s?.w || !s.u) return c.text('invalid OAuth state', 400);
+      workspaceId = s.w;
+      userId = s.u;
+    } else if (state === '') {
+      // Marketplace listing install — no state; resolves via session/pending.
+    } else if (state.startsWith('pub.')) {
+      if (!verifyState<{ p?: number }>(state.slice(4))) return c.text('invalid OAuth state', 400);
+    } else {
+      return c.text('invalid OAuth state', 400);
+    }
 
     const tokenRes = await fetch('https://slack.com/api/oauth.v2.access', {
       method: 'POST',
@@ -355,24 +499,71 @@ export function slackPublicRoutes(db: Db) {
       return c.text(`slack oauth failed: ${data.error ?? 'unknown'}`, 400);
     }
 
-    // Re-install of a Slack team we already have refreshes that row (threads
-    // anchored on it die with the old token's channel state); installing a
-    // DIFFERENT team adds another workspace — agents can then be pointed at
-    // it via slack_installation_id.
+    // Public flows fall back to a soft session — a signed-in installer binds
+    // to their active workspace without a dir. state.
+    const sess = workspaceId
+      ? null
+      : await sessionWorkspace(db, getCookie(c, SESSION_COOKIE));
+    workspaceId ??= sess?.workspaceId;
+    userId ??= sess?.userId;
+
+    // A Slack team binds to exactly one Janis workspace. Reinstalls refresh
+    // the row (threads anchored on it die with the old token's channel
+    // state); a team already owned by a DIFFERENT workspace is refused —
+    // silently rebinding would leak that customer's alerts.
     const [existing] = await db
       .select()
       .from(slackInstallations)
-      .where(
-        and(
-          eq(slackInstallations.workspaceId, workspaceId),
-          eq(slackInstallations.teamId, data.team.id),
-        ),
-      )
+      .where(eq(slackInstallations.teamId, data.team.id))
       .limit(1);
     if (existing) {
+      if (!workspaceId) {
+        await db
+          .update(slackInstallations)
+          .set({
+            botToken: data.access_token,
+            installerSlackUserId: data.authed_user?.id ?? existing.installerSlackUserId,
+            installerUserToken: data.authed_user?.access_token ?? existing.installerUserToken,
+          })
+          .where(eq(slackInstallations.id, existing.id));
+        return c.text(
+          `Slack is already connected to Janis${existing.teamName ? ` for ${existing.teamName}` : ''} — sign in to manage it.`,
+        );
+      }
+      if (existing.workspaceId !== workspaceId) {
+        return c.text(
+          'That Slack workspace is already connected to a different Janis workspace — disconnect it there first.',
+          409,
+        );
+      }
       await db.delete(slackThreads).where(eq(slackThreads.installationId, existing.id));
       await db.delete(slackInstallations).where(eq(slackInstallations.id, existing.id));
     }
+
+    // New team, nobody signed in — park the grant; the installer claims it
+    // into their workspace after sign-in via POST /api/slack/claim.
+    if (!workspaceId) {
+      const [pending] = await db
+        .insert(slackPendingInstalls)
+        .values({
+          teamId: data.team.id,
+          teamName: data.team.name ?? null,
+          botToken: data.access_token,
+          installerSlackUserId: data.authed_user?.id ?? null,
+          installerUserToken: data.authed_user?.access_token ?? null,
+          expiresAt: new Date(Date.now() + PENDING_TTL_MS),
+        })
+        .returning();
+      setCookie(c, PENDING_COOKIE, pending.id, {
+        httpOnly: true,
+        sameSite: 'Lax',
+        path: '/',
+        maxAge: PENDING_TTL_MS / 1000,
+        secure: env.apiOrigin.startsWith('https'),
+      });
+      return c.redirect(`${env.webOrigin}/login?slack=pending`);
+    }
+
     const [inst] = await db
       .insert(slackInstallations)
       .values({
@@ -388,26 +579,7 @@ export function slackPublicRoutes(db: Db) {
         migrated: existing?.migrated ?? false,
       })
       .returning();
-
-    // Default to an existing Janis channel — #janis-alerts first, then any
-    // janis-* match. When none exists we leave it unset: Settings prompts
-    // the admin to confirm creating one (or pick an existing channel)
-    // rather than silently provisioning inside an OAuth redirect.
-    const { channels, complete } = await listSlackChannels(inst.botToken);
-    // the fuzzy janis-* fallback only runs on a complete scan — a partial
-    // list's first match is arbitrary (that's how a random j-* channel once
-    // became the alert channel)
-    const channelId =
-      channels.find((ch) => ch.name === 'janis-alerts')?.id ??
-      (complete ? channels.find((ch) => /janis/i.test(ch.name))?.id : undefined);
-    if (channelId) {
-      await db
-        .update(slackInstallations)
-        .set({ alertChannelId: channelId })
-        .where(eq(slackInstallations.id, inst.id));
-      void inviteWorkspaceMembers(db, inst, channelId);
-    }
-
+    await chooseAlertChannel(db, inst);
     return c.redirect(`${env.webOrigin}/settings?slack=connected`);
   });
 

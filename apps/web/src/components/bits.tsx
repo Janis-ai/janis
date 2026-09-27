@@ -96,6 +96,7 @@ export function SiteFooter({ style }: { style?: React.CSSProperties }) {
       <span>© {new Date().getFullYear()} Janis</span>
       <Link to="/">Home</Link>
       <Link to="/docs">Developer docs</Link>
+      <a href="/slack/add">Add to Slack</a>
       <Link to="/privacy">Privacy Policy</Link>
       <Link to="/terms">Terms of Service</Link>
     </footer>
