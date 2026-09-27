@@ -153,6 +153,8 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
   const creds = (row.credentials ?? {}) as {
     page_id?: string;
     phone_number_id?: string;
+    username?: string;
+    phone_number?: string;
     verify_token?: string;
     via?: string;
     title?: string;
@@ -177,6 +179,8 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     meta: {
       page_id: creds.page_id,
       phone_number_id: creds.phone_number_id,
+      username: row.kind === 'instagram' ? creds.username : undefined,
+      phone_number: row.kind === 'whatsapp' ? creds.phone_number : undefined,
       verify_token: creds.verify_token ?? '',
       via: creds.via === 'oauth' || creds.via === 'manual' ? creds.via : undefined,
       chat_url: channelChatUrl(row),

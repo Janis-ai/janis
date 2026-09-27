@@ -310,6 +310,9 @@ export const Channel = z.object({
   meta: z.object({
     page_id: z.string().optional(),
     phone_number_id: z.string().optional(),
+    // instagram handle + whatsapp display number — public, used for launch links
+    username: z.string().optional(),
+    phone_number: z.string().optional(),
     verify_token: z.string(),
     via: z.enum(['oauth', 'manual']).optional(),
     chat_url: z.string().optional(), // where a customer opens a chat with this channel

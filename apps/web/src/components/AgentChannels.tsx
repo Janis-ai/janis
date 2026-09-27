@@ -188,12 +188,25 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     },
   });
 
+  const removeChannel = useMutation({
+    mutationFn: (channelId: string) => api(`/api/channels/${channelId}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
+  });
+
   const allChannels = data?.channels ?? [];
   const channels = allChannels.filter((ch) => ch.agent_id === agentId);
   const allAgents = agents?.agents ?? [];
 
-  const hasAssets =
-    pending.data && (pending.data.pages.length > 0 || pending.data.whatsapp.length > 0);
+  const sortedPages = [...(pending.data?.pages ?? [])].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  const sortedWabas = (pending.data?.whatsapp ?? []).map((w) => ({
+    ...w,
+    phone_numbers: [...w.phone_numbers].sort((a, b) =>
+      (a.display_phone_number ?? a.id).localeCompare(b.display_phone_number ?? b.id),
+    ),
+  }));
+  const hasAssets = sortedPages.length > 0 || sortedWabas.length > 0;
   // Map a discovered asset id (page / ig account / phone_number_id) to its channel.
   const linkedChannels = new Map(
     allChannels.flatMap((ch) =>
@@ -202,6 +215,30 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         .map((v) => [v, ch] as const),
     ),
   );
+  // Meta channels managed inline in the picker; anything the picker can't see
+  // (no session, or the asset vanished from the Meta account) still needs a row.
+  const META_KINDS = new Set(['messenger', 'instagram', 'whatsapp']);
+  const pendingAssetIds = new Set([
+    ...sortedPages.flatMap((pg) => [pg.id, ...(pg.instagram ? [pg.instagram.id] : [])]),
+    ...sortedWabas.flatMap((w) => w.phone_numbers.map((n) => n.id)),
+  ]);
+  const uncoveredMeta = channels.filter(
+    (ch) =>
+      META_KINDS.has(ch.kind) &&
+      !pendingAssetIds.has(ch.meta.page_id ?? '') &&
+      !pendingAssetIds.has(ch.meta.phone_number_id ?? ''),
+  );
+  const cardChannels = channels.filter((ch) => !META_KINDS.has(ch.kind));
+
+  /** Customer-facing chat link for a connected Meta channel. */
+  const launchUrl = (ch: Channel) =>
+    ch.kind === 'whatsapp' && ch.meta.phone_number
+      ? `https://wa.me/${ch.meta.phone_number}`
+      : ch.kind === 'instagram'
+        ? `https://ig.me/m/${ch.meta.username ?? ch.meta.page_id}`
+        : ch.meta.page_id
+          ? `https://m.me/${ch.meta.page_id}`
+          : undefined;
 
   const overrides = (ch: Channel) => {
     const bits: string[] = [];
@@ -287,55 +324,92 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           {pending.data && (
             <>
               <div className="asset-list">
-                {pending.data.pages.map((pg) => (
-                  <div key={pg.id} className="asset-row">
-                    <div className="grow">
-                      <strong>{pg.name}</strong>
-                      <div className="muted">Facebook Page</div>
-                    </div>
-                    {linkedChannels.has(pg.id) ? (
-                      <span className="muted">
-                        Messenger on {linkedChannels.get(pg.id)!.agent_name}
-                      </span>
-                    ) : (
-                      <button className="btn" disabled={link.isPending}
-                        onClick={() => link.mutate({ kind: 'messenger', page_id: pg.id })}>
-                        Connect Messenger
-                      </button>
-                    )}
-                    {pg.instagram && (
-                      linkedChannels.has(pg.instagram.id) ? (
-                        <span className="muted">
-                          Instagram on {linkedChannels.get(pg.instagram.id)!.agent_name}
-                        </span>
-                      ) : (
-                        <button className="btn" disabled={link.isPending}
-                          onClick={() => link.mutate({ kind: 'instagram', page_id: pg.id })}>
-                          Connect Instagram{pg.instagram.username ? ` @${pg.instagram.username}` : ''}
-                        </button>
-                      )
-                    )}
-                  </div>
-                ))}
-                {pending.data.whatsapp.flatMap((w) =>
-                  w.phone_numbers.map((n) => (
-                    <div key={n.id} className="asset-row">
+                {sortedPages.map((pg) => {
+                  const msgr = linkedChannels.get(pg.id);
+                  const igCh = pg.instagram ? linkedChannels.get(pg.instagram.id) : undefined;
+                  return (
+                    <div key={pg.id} className="asset-row">
                       <div className="grow">
-                        <strong>{n.display_phone_number ?? n.id}</strong>
-                        <div className="muted">WhatsApp Business{w.name ? ` · ${w.name}` : ''}</div>
+                        <strong>{pg.name}</strong>
+                        <div className="muted">Facebook Page</div>
+                        {msgr && msgr.agent_id === agentId && launchUrl(msgr) && (
+                          <a href={launchUrl(msgr)} target="_blank" rel="noreferrer">
+                            Launch chat on Messenger ↗
+                          </a>
+                        )}
+                        {igCh && igCh.agent_id === agentId && launchUrl(igCh) && (
+                          <a href={launchUrl(igCh)} target="_blank" rel="noreferrer" style={{ display: 'block' }}>
+                            Launch chat on Instagram ↗
+                          </a>
+                        )}
                       </div>
-                      {linkedChannels.has(n.id) ? (
-                        <span className="muted">
-                          WhatsApp on {linkedChannels.get(n.id)!.agent_name}
-                        </span>
+                      {msgr ? (
+                        msgr.agent_id === agentId ? (
+                          <button className="btn" disabled={removeChannel.isPending}
+                            onClick={() => removeChannel.mutate(msgr.id)}>
+                            Remove
+                          </button>
+                        ) : (
+                          <span className="muted">Messenger on {msgr.agent_name}</span>
+                        )
                       ) : (
                         <button className="btn" disabled={link.isPending}
-                          onClick={() => link.mutate({ kind: 'whatsapp', phone_number_id: n.id })}>
-                          Connect WhatsApp
+                          onClick={() => link.mutate({ kind: 'messenger', page_id: pg.id })}>
+                          Connect Messenger
                         </button>
                       )}
+                      {pg.instagram && (
+                        igCh ? (
+                          igCh.agent_id === agentId ? (
+                            <button className="btn" disabled={removeChannel.isPending}
+                              onClick={() => removeChannel.mutate(igCh.id)}>
+                              Remove
+                            </button>
+                          ) : (
+                            <span className="muted">Instagram on {igCh.agent_name}</span>
+                          )
+                        ) : (
+                          <button className="btn" disabled={link.isPending}
+                            onClick={() => link.mutate({ kind: 'instagram', page_id: pg.id })}>
+                            Connect Instagram{pg.instagram.username ? ` @${pg.instagram.username}` : ''}
+                          </button>
+                        )
+                      )}
                     </div>
-                  )),
+                  );
+                })}
+                {sortedWabas.flatMap((w) =>
+                  w.phone_numbers.map((n) => {
+                    const wa = linkedChannels.get(n.id);
+                    return (
+                      <div key={n.id} className="asset-row">
+                        <div className="grow">
+                          <strong>{n.display_phone_number ?? n.id}</strong>
+                          <div className="muted">WhatsApp Business{w.name ? ` · ${w.name}` : ''}</div>
+                          {wa && wa.agent_id === agentId && launchUrl(wa) && (
+                            <a href={launchUrl(wa)} target="_blank" rel="noreferrer">
+                              Launch chat on WhatsApp ↗
+                            </a>
+                          )}
+                        </div>
+                        {wa ? (
+                          wa.agent_id === agentId ? (
+                            <button className="btn" disabled={removeChannel.isPending}
+                              onClick={() => removeChannel.mutate(wa.id)}>
+                              Remove
+                            </button>
+                          ) : (
+                            <span className="muted">WhatsApp on {wa.agent_name}</span>
+                          )
+                        ) : (
+                          <button className="btn" disabled={link.isPending}
+                            onClick={() => link.mutate({ kind: 'whatsapp', phone_number_id: n.id })}>
+                            Connect WhatsApp
+                          </button>
+                        )}
+                      </div>
+                    );
+                  }),
                 )}
               </div>
               {!hasAssets && <Empty>No Pages or WhatsApp numbers found on that Meta login.</Empty>}
@@ -368,6 +442,64 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           )}
         </div>
       )}
+
+      {/* Manual Meta entry — advanced fallback for the connect flow */}
+      <div className="card">
+        <details open={showManual} onToggle={(e) => setShowManual((e.target as HTMLDetailsElement).open)}>
+          <summary><strong>Connect to Meta with credentials</strong></summary>
+          <form
+            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, maxWidth: 520 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              create.mutate();
+            }}
+          >
+            <select
+              value={form.kind}
+              onChange={(e) => setForm({ ...form, kind: e.target.value as typeof form.kind })}
+            >
+              <option value="messenger">Facebook Messenger</option>
+              <option value="instagram">Instagram DM</option>
+              <option value="whatsapp">WhatsApp Business</option>
+            </select>
+            <input
+              placeholder="Channel name (e.g. Acme Facebook Page)"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              required
+            />
+            {form.kind !== 'whatsapp' && (
+              <input
+                placeholder="Facebook Page ID"
+                value={form.page_id}
+                onChange={(e) => setForm({ ...form, page_id: e.target.value })}
+                required
+              />
+            )}
+            {form.kind === 'whatsapp' && (
+              <input
+                placeholder="WhatsApp phone_number_id"
+                value={form.phone_number_id}
+                onChange={(e) => setForm({ ...form, phone_number_id: e.target.value })}
+                required
+              />
+            )}
+            <input
+              placeholder="Access token (page token / system user token)"
+              value={form.access_token}
+              onChange={(e) => setForm({ ...form, access_token: e.target.value })}
+              required
+            />
+            <div>
+              <button className="btn" disabled={create.isPending}>Add channel</button>
+            </div>
+          </form>
+          <div className="muted" style={{ marginTop: 10 }}>
+            Then register <span className="mono">{apiOrigin}/channels/meta/webhook</span>{' '}
+            in your Meta app with the channel's verify token, and subscribe to <span className="mono">messages</span>.
+          </div>
+        </details>
+      </div>
 
       {/* Web chat widget */}
       <div className="card connect-card">
@@ -508,72 +640,43 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         )}
       </div>
 
-      {/* This agent's connected channels */}
-      {channels.length > 0 && <h2 className="section-title">Connected channels</h2>}
-      {channels.map((ch) => (
+      {/* This agent's connected channels — Meta channels are managed in the
+          picker above; cards here carry the non-Meta config (embed, branding,
+          inbound addresses). Meta channels the picker can't see (no session,
+          asset gone) fall back to a compact row so they're never stranded. */}
+      {(cardChannels.length > 0 || uncoveredMeta.length > 0) && (
+        <h2 className="section-title">Connected channels</h2>
+      )}
+      {cardChannels.map((ch) => (
         <ChannelCard key={ch.id} ch={ch} agents={allAgents} />
       ))}
+      {uncoveredMeta.length > 0 && (
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {uncoveredMeta.map((ch) => (
+            <div key={ch.id} className="row" style={{ alignItems: 'baseline' }}>
+              <div className="grow">
+                <strong>{ch.name}</strong>
+                <div className="muted">{KIND_LABEL[ch.kind] ?? ch.kind}</div>
+                {launchUrl(ch) && (
+                  <a href={launchUrl(ch)} target="_blank" rel="noreferrer">
+                    Launch chat on {KIND_LABEL[ch.kind] ?? ch.kind} ↗
+                  </a>
+                )}
+              </div>
+              <button
+                className="btn"
+                disabled={removeChannel.isPending}
+                onClick={() => removeChannel.mutate(ch.id)}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {channels.length === 0 && !connectId && (
         <Empty>No channels connected yet — this agent isn't answering anywhere.</Empty>
       )}
-
-      {/* Manual entry — advanced */}
-      <div className="card">
-        <details open={showManual} onToggle={(e) => setShowManual((e.target as HTMLDetailsElement).open)}>
-          <summary><strong>Advanced: connect with credentials</strong></summary>
-          <form
-            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, maxWidth: 520 }}
-            onSubmit={(e) => {
-              e.preventDefault();
-              create.mutate();
-            }}
-          >
-            <select
-              value={form.kind}
-              onChange={(e) => setForm({ ...form, kind: e.target.value as typeof form.kind })}
-            >
-              <option value="messenger">Facebook Messenger</option>
-              <option value="instagram">Instagram DM</option>
-              <option value="whatsapp">WhatsApp Business</option>
-            </select>
-            <input
-              placeholder="Channel name (e.g. Acme Facebook Page)"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              required
-            />
-            {form.kind !== 'whatsapp' && (
-              <input
-                placeholder="Facebook Page ID"
-                value={form.page_id}
-                onChange={(e) => setForm({ ...form, page_id: e.target.value })}
-                required
-              />
-            )}
-            {form.kind === 'whatsapp' && (
-              <input
-                placeholder="WhatsApp phone_number_id"
-                value={form.phone_number_id}
-                onChange={(e) => setForm({ ...form, phone_number_id: e.target.value })}
-                required
-              />
-            )}
-            <input
-              placeholder="Access token (page token / system user token)"
-              value={form.access_token}
-              onChange={(e) => setForm({ ...form, access_token: e.target.value })}
-              required
-            />
-            <div>
-              <button className="btn" disabled={create.isPending}>Add channel</button>
-            </div>
-          </form>
-          <div className="muted" style={{ marginTop: 10 }}>
-            Then register <span className="mono">{apiOrigin}/channels/meta/webhook</span>{' '}
-            in your Meta app with the channel's verify token, and subscribe to <span className="mono">messages</span>.
-          </div>
-        </details>
-      </div>
     </>
   );
 }
