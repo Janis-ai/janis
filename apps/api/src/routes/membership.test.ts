@@ -6,7 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { memberships, sessions, users, workspaces } from '../db/schema.js';
+import { agentMembers, agents, memberships, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken, hashPassword } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { authRoutes } from './auth.js';
@@ -160,7 +160,11 @@ describe('invite acceptance and switching', () => {
     const res = await app.request('/auth/me', { headers: { cookie: adminCookie } });
     const body = await res.json();
     expect(body.workspace.name).toBe('Alpha');
-    expect(body.workspaces.map((w: { name: string }) => w.name)).toEqual(['Alpha']);
+    // the admin healed a personal workspace at login — it shows alongside
+    // their real memberships in the switcher
+    expect(new Set(body.workspaces.map((w: { name: string }) => w.name))).toEqual(
+      new Set(['Alpha', "admin's workspace"]),
+    );
   });
 
   it('accepting an invite grants access to the new workspace', async () => {
@@ -174,7 +178,8 @@ describe('invite acceptance and switching', () => {
     });
     const meRes = await app.request('/auth/me', { headers: { cookie: invited.cookie } });
     const me = await meRes.json();
-    expect(me.workspace).toBeNull();
+    // healed personal workspace — they're never workspace-less now
+    expect(me.workspace?.name).toBe("invited's workspace");
     expect(me.invites).toHaveLength(1);
 
     const res = await post(`/auth/invites/${me.invites[0].id}/accept`, invited.cookie);
@@ -339,6 +344,77 @@ describe('last workspace persistence', () => {
     const cookie = await loginCookie('orphan@x.test');
     const me = await (await app.request('/auth/me', { headers: { cookie } })).json();
     expect(me.workspace.name).toBe('Alpha');
+  });
+});
+
+describe('personal workspace healing', () => {
+  const loginCookie = async (email: string) => {
+    const res = await post('/auth/login', '', { email, password: 'password123' });
+    expect(res.status).toBe(200);
+    return (res.headers.get('set-cookie') ?? '').split(';')[0];
+  };
+
+  it('an agent-scoped user gets their own workspace at first login', async () => {
+    // grant lives on wsB so the workspace-isolation test's wsA stays empty
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: wsB, name: 'Scoped Bot', apiKeyHash: 'h', apiKeyPreview: 'p' })
+      .returning();
+    const scoped = await makeUser('scoped@x.test', null);
+    await db.insert(agentMembers).values({
+      agentId: agent.id,
+      userId: scoped.user.id,
+      role: 'member',
+      acceptedAt: new Date(),
+    });
+
+    const cookie = await loginCookie('scoped@x.test');
+    const me = await (await app.request('/auth/me', { headers: { cookie } })).json();
+    // only accepted membership is the healed personal workspace — lands there
+    expect(me.workspace.name).toBe("scoped's workspace");
+    expect(me.user.role).toBe('admin');
+    // the grant workspace stays reachable via the switch list
+    expect(
+      me.agent_invites.map((i: { workspace_name: string }) => i.workspace_name),
+    ).toContain('Beta');
+    const owned = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.ownerUserId, scoped.user.id));
+    expect(owned).toHaveLength(1);
+  });
+
+  it('a pending invite does not block the personal workspace', async () => {
+    const invited = await makeUser('pending@x.test', null);
+    await db.insert(memberships).values({
+      userId: invited.user.id,
+      workspaceId: wsA,
+      role: 'member',
+    });
+    const cookie = await loginCookie('pending@x.test');
+    const me = await (await app.request('/auth/me', { headers: { cookie } })).json();
+    expect(me.workspace.name).toBe("pending's workspace");
+    expect(me.invites).toHaveLength(1); // Alpha invite still waiting
+  });
+
+  it('does not duplicate a workspace the user already owns', async () => {
+    const u = await makeUser('owner@x.test', null);
+    const [ws] = await db
+      .insert(workspaces)
+      .values({ name: 'Mine', ownerUserId: u.user.id })
+      .returning();
+    await db.insert(memberships).values({
+      userId: u.user.id,
+      workspaceId: ws.id,
+      role: 'admin',
+      acceptedAt: new Date(),
+    });
+    await loginCookie('owner@x.test');
+    const owned = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.ownerUserId, u.user.id));
+    expect(owned).toHaveLength(1);
   });
 });
 

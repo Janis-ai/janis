@@ -117,6 +117,24 @@ export default function Settings() {
     },
   });
 
+  const [wsName, setWsName] = useState('');
+  const [wsNameMsg, setWsNameMsg] = useState('');
+  const meWsId = me?.workspace?.id;
+  useEffect(() => {
+    if (meWsId) setWsName(me?.workspace?.name ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meWsId]);
+  const renameWorkspace = useMutation({
+    mutationFn: (name: string) =>
+      api('/api/workspace', { method: 'PATCH', body: JSON.stringify({ name }) }),
+    onSuccess: () => {
+      setWsNameMsg('Workspace renamed.');
+      void qc.invalidateQueries({ queryKey: ['me'] });
+      void qc.invalidateQueries({ queryKey: ['workspace'] });
+    },
+    onError: (e) => setWsNameMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+
   const deleteWorkspace = useMutation({
     mutationFn: () => api('/api/workspace', { method: 'DELETE' }),
     onSuccess: () => {
@@ -236,7 +254,39 @@ export default function Settings() {
 
       <div className="card">
         <strong>Workspace</strong>
-        <div className="muted" style={{ marginTop: 6 }}>{me?.workspace?.name}</div>
+        {me?.user.role === 'admin' && me.workspace ? (
+          <>
+            <form
+              className="row"
+              style={{ marginTop: 6 }}
+              onSubmit={(e) => {
+                e.preventDefault();
+                const name = wsName.trim();
+                if (name && name !== me.workspace?.name) renameWorkspace.mutate(name);
+              }}
+            >
+              <input
+                style={{ maxWidth: 240 }}
+                value={wsName}
+                onChange={(e) => setWsName(e.target.value)}
+                maxLength={120}
+              />
+              <button
+                className="btn"
+                disabled={
+                  renameWorkspace.isPending ||
+                  !wsName.trim() ||
+                  wsName.trim() === me.workspace.name
+                }
+              >
+                {renameWorkspace.isPending ? 'Saving…' : 'Rename'}
+              </button>
+            </form>
+            {wsNameMsg && <div className="muted" style={{ marginTop: 8 }}>{wsNameMsg}</div>}
+          </>
+        ) : (
+          <div className="muted" style={{ marginTop: 6 }}>{me?.workspace?.name}</div>
+        )}
       </div>
 
       {me?.user.role === 'admin' && <DefaultLlmCard />}

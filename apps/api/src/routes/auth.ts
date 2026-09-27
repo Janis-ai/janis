@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq, gt, isNotNull, isNull, ne } from 'drizzle-orm';
+import { and, asc, eq, gt, isNotNull, isNull, ne } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { Context } from 'hono';
 import type { Db } from '../db/client.js';
@@ -96,8 +96,54 @@ export function authRoutes(db: Db) {
     return list;
   };
 
+  /** Every account owns a workspace. Users created by an invite or agent
+   *  grant skip provisioning (they hold only a pending membership or an
+   *  agent_members row), so heal lazily at login — otherwise an invited
+   *  teammate sees the shared agent and nothing of their own. */
+  const ensurePersonalWorkspace = async (userId: string) => {
+    const [owned] = await db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(eq(workspaces.ownerUserId, userId))
+      .limit(1);
+    if (owned) return;
+    const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!u) return;
+    // Don't let the fresh workspace steal the landing of a user who already
+    // belongs to one — pin an existing membership as "last used" first so
+    // initialWorkspace's find() keeps them where they were.
+    if (!u.lastWorkspaceId) {
+      const [existing] = await db
+        .select({ workspaceId: memberships.workspaceId })
+        .from(memberships)
+        .where(and(eq(memberships.userId, userId), isNotNull(memberships.acceptedAt)))
+        .orderBy(asc(memberships.createdAt))
+        .limit(1);
+      if (existing) {
+        await db
+          .update(users)
+          .set({ lastWorkspaceId: existing.workspaceId })
+          .where(eq(users.id, userId));
+      }
+    }
+    const base = u.name && u.name !== u.email ? u.name : u.email.split('@')[0];
+    await db.transaction(async (tx) => {
+      const [ws] = await tx
+        .insert(workspaces)
+        .values({ name: `${base}'s workspace`, plan: env.defaultPlan, ownerUserId: u.id })
+        .returning();
+      await tx.insert(memberships).values({
+        userId: u.id,
+        workspaceId: ws.id,
+        role: 'admin',
+        acceptedAt: new Date(),
+      });
+    });
+  };
+
   const issueSession = async (c: Context, userId: string, workspaceId?: string) => {
     const { token, id } = generateSessionToken();
+    await ensurePersonalWorkspace(userId);
     const wsId = workspaceId ?? (await initialWorkspace(userId));
     await db.insert(sessions).values({
       id,
@@ -143,6 +189,10 @@ export function authRoutes(db: Db) {
       .where(and(eq(sessions.id, sha256(token)), gt(sessions.expiresAt, new Date())))
       .limit(1);
     if (!row) return c.json({ error: 'unauthenticated' }, 401);
+
+    // Sessions outlive logins — heal here too so an invited teammate with a
+    // live session gets their personal workspace without signing in again.
+    await ensurePersonalWorkspace(row.user.id);
 
     const mems = await db
       .select({ membership: memberships, workspace: workspaces })
@@ -326,7 +376,7 @@ export function authRoutes(db: Db) {
   };
 
   // Accept a pending invite — joins the workspace and points the session at
-  // it when the session has no active workspace yet.
+  // it (accepting is explicit intent to go there, not just a background join).
   app.post('/invites/:id/accept', async (c) => {
     const row = await sessionUser(c);
     if (!row) return c.json({ error: 'unauthenticated' }, 401);
@@ -342,12 +392,10 @@ export function authRoutes(db: Db) {
       )
       .returning();
     if (!mem) return c.json({ error: 'not found' }, 404);
-    if (!row.session.workspaceId) {
-      await db
-        .update(sessions)
-        .set({ workspaceId: mem.workspaceId })
-        .where(eq(sessions.id, row.session.id));
-    }
+    await db
+      .update(sessions)
+      .set({ workspaceId: mem.workspaceId })
+      .where(eq(sessions.id, row.session.id));
     await db
       .update(users)
       .set({ lastWorkspaceId: mem.workspaceId })
@@ -419,7 +467,9 @@ export function authRoutes(db: Db) {
     }),
   );
 
-  /** Existing user by verified provider email, else provision workspace+admin. */
+  /** Existing user by verified provider email, else create the account. The
+   *  personal workspace is provisioned in issueSession so invite-created
+   *  users heal on their first login too. */
   const findOrProvisionUser = async (rawEmail: string, name: string) => {
     const email = rawEmail.trim().toLowerCase();
     const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
@@ -428,17 +478,6 @@ export function authRoutes(db: Db) {
       .insert(users)
       .values({ email, name: name || email })
       .returning();
-    const [ws] = await db
-      .insert(workspaces)
-      .values({
-        name: `${name || email.split('@')[0]}'s workspace`,
-        plan: env.defaultPlan,
-        ownerUserId: user.id,
-      })
-      .returning();
-    await db
-      .insert(memberships)
-      .values({ userId: user.id, workspaceId: ws.id, role: 'admin', acceptedAt: new Date() });
     return user;
   };
 

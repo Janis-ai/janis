@@ -12,10 +12,6 @@ export async function ensureSeed(db: Db): Promise<void> {
   const [anyUser] = await db.select({ id: users.id }).from(users).limit(1);
   if (anyUser) return;
 
-  const [workspace] = await db
-    .insert(workspaces)
-    .values({ name: 'Default', plan: env.defaultPlan })
-    .returning();
   const [admin] = await db
     .insert(users)
     .values({
@@ -23,6 +19,10 @@ export async function ensureSeed(db: Db): Promise<void> {
       name: 'Admin',
       passwordHash: await hashPassword(env.seedAdminPassword),
     })
+    .returning();
+  const [workspace] = await db
+    .insert(workspaces)
+    .values({ name: 'Default', plan: env.defaultPlan, ownerUserId: admin.id })
     .returning();
   await db.insert(memberships).values({
     userId: admin.id,

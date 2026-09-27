@@ -34,6 +34,7 @@ import { stripe } from '../lib/stripe.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
 const updateWorkspace = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
   llm_config: z
     .object({
       provider: z.string().optional(),
@@ -83,6 +84,13 @@ export function workspaceRoutes(db: Db) {
       .limit(1);
     if (!ws) return c.json({ error: 'not found' }, 404);
 
+    if (body.name !== undefined) {
+      await db
+        .update(workspaces)
+        .set({ name: body.name })
+        .where(eq(workspaces.id, workspaceId));
+      ws.name = body.name;
+    }
     if (body.llm_config === null) {
       await db.update(workspaces).set({ llmConfig: {} }).where(eq(workspaces.id, workspaceId));
       return c.json({ workspace: { id: ws.id, name: ws.name, llm_config: {} } });

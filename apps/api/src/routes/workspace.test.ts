@@ -144,6 +144,56 @@ beforeAll(async () => {
   });
 });
 
+describe('PATCH /api/workspace', () => {
+  it('admin can rename the workspace', async () => {
+    const res = await app.request('/api/workspace', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ name: 'Renamed Co' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.workspace.name).toBe('Renamed Co');
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, wsId));
+    expect(ws.name).toBe('Renamed Co');
+  });
+
+  it('rejects blank names and member rename attempts', async () => {
+    const blank = await app.request('/api/workspace', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ name: '   ' }),
+    });
+    expect(blank.status).toBe(400);
+
+    const [member] = await db
+      .insert(users)
+      .values({ email: 'pm@b.c', name: 'PM', passwordHash: 'x' })
+      .returning();
+    await db.insert(memberships).values({
+      userId: member.id,
+      workspaceId: wsId,
+      role: 'member',
+      acceptedAt: new Date(),
+    });
+    const { token, id } = generateSessionToken();
+    await db.insert(sessions).values({
+      id,
+      userId: member.id,
+      workspaceId: wsId,
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    const res = await app.request('/api/workspace', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: `janis_session=${token}` },
+      body: JSON.stringify({ name: 'Nope' }),
+    });
+    expect(res.status).toBe(403);
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, wsId));
+    expect(ws.name).toBe('Renamed Co');
+  });
+});
+
 describe('DELETE /api/workspace', () => {
   it('rejects non-admins', async () => {
     const [ws2] = await db.insert(workspaces).values({ name: 'Other' }).returning();
@@ -177,7 +227,7 @@ describe('DELETE /api/workspace', () => {
     // survive now (accounts are global; only memberships are scoped)
     const remaining = await counts();
     expect(remaining[0]).toBe(1); // workspaces: only ws2
-    expect(remaining[1]).toBe(2); // users: admin + member rows both survive
+    expect(remaining[1]).toBe(3); // users: admin + both member rows survive
     expect(remaining[2]).toBe(1); // memberships: only member's on ws2
     expect(remaining[3]).toBe(1); // sessions: only member's (admin's was pointed at ws)
     const rest = remaining.slice(4);
