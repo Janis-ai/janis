@@ -1006,7 +1006,32 @@ export async function deliverToChannel(
     .innerJoin(conversations, eq(channelBindings.conversationId, conversations.id))
     .where(eq(channelBindings.conversationId, conversationId))
     .limit(1);
-  if (!row || (!text.trim() && !attachments?.length)) return { delivered: true };
+  if (!text.trim() && !attachments?.length) return { delivered: true };
+  if (!row) {
+    // No binding: external agents (webhook / SDK socket) deliver outside
+    // channels, so binding-free conversations are normal for them. A hosted
+    // agent's conversation without a binding is orphaned — its channel was
+    // deleted out from under it and nothing can reach the customer. Report
+    // that instead of stamping "Delivered" on a reply that went nowhere.
+    const [conv] = await db
+      .select({ agentId: conversations.agentId })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    const [agent] = conv
+      ? await db.select().from(agents).where(eq(agents.id, conv.agentId)).limit(1)
+      : [];
+    if (agent && !agent.hosted) return { delivered: true };
+    const error =
+      'conversation has no channel binding — its channel may have been deleted; the customer cannot be reached';
+    if (opts?.messageId) {
+      await stampDelivery(db, agent?.workspaceId, opts.messageId, {
+        delivery_error: error,
+        delivery_retryable: false,
+      });
+    }
+    return { delivered: false, error, retryable: false };
+  }
   // Self-hosted SDK bots receive operator/agent messages over their
   // registered socket — the channel binding is transcript bookkeeping only.
   const [agent] = await db

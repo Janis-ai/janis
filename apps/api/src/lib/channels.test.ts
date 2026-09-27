@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  deliverToChannel,
   fetchPlatformProfile,
   parseMetaWebhook,
   sendChannelMessage,
@@ -7,6 +8,13 @@ import {
 } from './channels.js';
 import type { channels } from '../db/schema.js';
 import { createHmac } from 'node:crypto';
+import { PGlite } from '@electric-sql/pglite';
+import { drizzle } from 'drizzle-orm/pglite';
+import { migrate } from 'drizzle-orm/pglite/migrator';
+import { eq } from 'drizzle-orm';
+import type { Db } from '../db/client.js';
+import * as schema from '../db/schema.js';
+import { agents, channelBindings, channels as channelsTable, conversations, messages, workspaces } from '../db/schema.js';
 
 describe('parseMetaWebhook', () => {
   it('parses messenger text messages', () => {
@@ -575,5 +583,67 @@ describe('verifyMetaSignature', () => {
 
   it('accepts anything when no app secret is configured (dev mode)', () => {
     expect(verifyMetaSignature('', 'body', undefined)).toBe(true);
+  });
+});
+
+describe('deliverToChannel on conversations without a binding', () => {
+  let db: Db;
+  let wsId: string;
+
+  const makeAgent = async (hosted: boolean) => {
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: wsId, name: hosted ? 'HostedBot' : 'HookBot', hosted })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: `conv:${agent.id}` })
+      .returning();
+    return { agent, conv };
+  };
+
+  beforeAll(async () => {
+    const client = new PGlite();
+    db = drizzle(client, { schema }) as unknown as Db;
+    await migrate(db as never, { migrationsFolder: './drizzle' });
+    const [ws] = await db.insert(workspaces).values({ name: 'Delivery WS' }).returning();
+    wsId = ws.id;
+  });
+
+  it('a hosted agent reply on an unbound conversation reports failure', async () => {
+    const { conv } = await makeAgent(true);
+    const [msg] = await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'human', text: 'hi' })
+      .returning();
+    const res = await deliverToChannel(db, conv.id, 'hi', undefined, { messageId: msg.id });
+    expect(res.delivered).toBe(false);
+    expect(res.error).toContain('no channel');
+    expect(res.retryable).toBe(false);
+    const [stamped] = await db.select().from(messages).where(eq(messages.id, msg.id));
+    expect((stamped.payload as { delivery_error?: string }).delivery_error).toContain(
+      'no channel',
+    );
+  });
+
+  it('external (webhook/socket) agents stay delivered — no binding is normal', async () => {
+    const { conv } = await makeAgent(false);
+    const res = await deliverToChannel(db, conv.id, 'hi');
+    expect(res.delivered).toBe(true);
+  });
+
+  it('a bound webchat conversation still reports delivered', async () => {
+    const { agent, conv } = await makeAgent(true);
+    const [ch] = await db
+      .insert(channelsTable)
+      .values({ workspaceId: wsId, agentId: agent.id, kind: 'webchat', name: 'wc' })
+      .returning();
+    await db.insert(channelBindings).values({
+      channelId: ch.id,
+      conversationId: conv.id,
+      platformUserId: 'u:1',
+    });
+    const res = await deliverToChannel(db, conv.id, 'hi');
+    expect(res.delivered).toBe(true);
   });
 });
