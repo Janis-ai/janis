@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useMe } from '../api/hooks';
@@ -47,6 +47,17 @@ export default function Layout() {
   const hasAsk = Boolean(data?.support_channel_id);
   const hasBoth = hasAsk && Boolean(testRail);
   const railVisible = railOpen && ((railTab === 'ask' && hasAsk) || (railTab === 'test' && testRail));
+
+  // At ≤720px the rail is position:fixed over the whole view — a nav click
+  // beneath it lands on an invisible page, so fold the rail on navigation.
+  // Declared before the ?rail= consumer so a deeplinked rail still opens.
+  const location = useLocation();
+  const prevPath = useRef(location.pathname);
+  useEffect(() => {
+    if (location.pathname === prevPath.current) return;
+    prevPath.current = location.pathname;
+    if (window.matchMedia('(max-width: 720px)').matches) setRailOpen(false);
+  }, [location.pathname]);
 
   // Deeplinks: ?rail=ask | ?rail=test&agent=<id> — merged into the existing
   // params so page params like ?tab= survive. Consumed once per combo.
