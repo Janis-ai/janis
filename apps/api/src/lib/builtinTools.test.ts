@@ -24,6 +24,7 @@ const CONV3 = 'cccccccc-0000-4000-8000-000000000009';
 const USER4 = 'bbbbbbbb-0000-4000-8000-00000000000a';
 const CONV4 = 'cccccccc-0000-4000-8000-00000000000b';
 
+const siCalls: { id: string; method: string }[] = [];
 const accountStatus = () => BUILTIN_TOOLS.find((b) => b.name === 'account_status')!;
 const changePlan = () => BUILTIN_TOOLS.find((b) => b.name === 'change_plan')!;
 const ctx = (convId: string) => ({ db, convId, workspaceId: WS });
@@ -132,6 +133,7 @@ describe('change_plan builtin', () => {
     };
     // The Stripe client binds global fetch at construction — one dispatcher
     // stub installed before the first Stripe call covers every request.
+    siCalls.length = 0;
     vi.stubGlobal(
       'fetch',
       vi.fn((u: unknown, init?: RequestInit) => {
@@ -144,7 +146,12 @@ describe('change_plan builtin', () => {
           );
         }
         if (url.includes('/v1/subscription_items/')) {
+          siCalls.push({ id: url.split('/v1/subscription_items/')[1], method });
           return Promise.resolve(jsonRes({ id: 'si_x' }));
+        }
+        if (url.includes('/v1/prices/')) {
+          // the target plan's metered price — resolves to the messages meter
+          return Promise.resolve(jsonRes({ id: 'price_MP', recurring: { meter: 'mtr_msgs' } }));
         }
         if (url.includes('/v1/subscriptions/sub_1')) {
           if (method === 'GET') {
@@ -154,7 +161,17 @@ describe('change_plan builtin', () => {
                 items: {
                   data: [
                     { id: 'si_base', price: { id: 'price_S' } },
-                    { id: 'si_meter', price: { id: 'price_MS' } },
+                    // an older-generation overage price — NOT in
+                    // env.stripeMeterPrices; matched by meter id instead
+                    {
+                      id: 'si_meter',
+                      price: { id: 'price_MS_OLD', recurring: { meter: 'mtr_msgs' } },
+                    },
+                    // the LLM item bills a different meter — never swapped
+                    {
+                      id: 'si_llm',
+                      price: { id: 'price_LL_OLD', recurring: { meter: 'mtr_llm' } },
+                    },
                   ],
                 },
               }),
@@ -208,6 +225,9 @@ describe('change_plan builtin', () => {
     expect(out.changed).toBe(true);
     const [w] = await db.select().from(workspaces).where(eq(workspaces.id, WS3));
     expect(w.plan).toBe('pro');
+    // the old-generation overage item was matched by meter and swapped;
+    // the LLM item (different meter) was left alone
+    expect(siCalls.map((c) => c.id).sort()).toEqual(['si_base', 'si_meter']);
   });
 
   it('downgrade cancels the subscription at period end', async () => {

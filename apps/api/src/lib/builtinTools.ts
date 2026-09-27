@@ -211,8 +211,20 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
             (p): p is string => Boolean(p) && p !== env.stripeMeterPrices.llm,
           ),
         );
+        // Match the message-overage item by its *meter*, not the price id —
+        // prices get re-created (e.g. moved onto the "Janis message usage"
+        // product) while the meter is constant across generations. Price-id
+        // matching stays as a fallback when the price fetch fails.
+        const meterId = meterPrice
+          ? await s.prices
+              .retrieve(meterPrice)
+              .then((p) => p.recurring?.meter ?? null)
+              .catch(() => null)
+          : null;
         const baseItem = sub.items.data.find((i) => planForPrice(i.price.id));
-        const meterItem = sub.items.data.find((i) => meterIds.has(i.price.id));
+        const meterItem = sub.items.data.find(
+          (i) => meterIds.has(i.price.id) || (meterId != null && i.price.recurring?.meter === meterId),
+        );
         if (baseItem) {
           await s.subscriptionItems.update(baseItem.id, {
             price: priceId,
