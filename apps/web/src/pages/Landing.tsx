@@ -82,7 +82,7 @@ const FEATURES = [
   {
     icon: 'handover',
     title: 'Take over from anywhere',
-    body: 'Escalations land with an AI brief. Step in from the Janis console — or reply in Slack right in the thread, with /pause, /resume, /note and /teach.',
+    body: 'Escalations land with an AI brief. Step in from the Janis console — or reply in Slack right in the thread and the customer sees you, not a bot.',
   },
   {
     icon: 'flag',
