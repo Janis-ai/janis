@@ -261,7 +261,9 @@ describe('resolved-by-behavior', () => {
     const gaps = await detectKnowledgeGaps(db, agent.id);
     const hit = gaps.find((g) => g.questions.some((q) => q.includes('export')));
     expect(hit).toBeTruthy();
-    expect(hit!.handled).toContain('how do i export my data?');
+    // the "since answered" display only counts answers newer than the last
+    // escalation — an older handled occurrence isn't evidence of resolution
+    expect(hit!.handled).not.toContain('how do i export my data?');
   });
 });
 

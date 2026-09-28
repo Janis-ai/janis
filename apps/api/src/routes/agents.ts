@@ -614,19 +614,27 @@ export function agentRoutes(db: Db) {
     if (covered.length) {
       const cfg = (agent.config ?? {}) as Record<string, unknown> & {
         dismissed_gaps?: string[];
+        dismissed_gap_times?: Record<string, string>;
       };
       const dismissed = new Set(cfg.dismissed_gaps ?? []);
+      const times = { ...(cfg.dismissed_gap_times ?? {}) };
+      const now = new Date().toISOString();
       for (const k of covered) {
         dismissed.add(k);
+        times[k] = now;
         // store every phrasing too — a reclustered group keeps all dismissed
-        // variants and stays hidden until a genuinely new phrasing appears
+        // variants and stays hidden until it escalates again
         for (const q of clusters.find((cl) => cl.key === k)?.questions ?? []) {
-          dismissed.add(q.toLowerCase().slice(0, 60));
+          const qk = q.toLowerCase().slice(0, 60);
+          dismissed.add(qk);
+          times[qk] = now;
         }
       }
       await db
         .update(agents)
-        .set({ config: { ...cfg, dismissed_gaps: [...dismissed] } })
+        .set({
+          config: { ...cfg, dismissed_gaps: [...dismissed], dismissed_gap_times: times },
+        })
         .where(eq(agents.id, agent.id));
     }
     return c.json({ covered });

@@ -252,38 +252,35 @@ export async function detectKnowledgeGaps(
           )
         : null;
     let merge: number[][] = [];
-    let resolvedMap: Record<string, number[]> = {};
+    const resolvedMap: Record<string, number[]> = {};
     if (text) {
       try {
         const parsed = JSON.parse(
           text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1),
         ) as { merge?: number[][]; resolved?: Record<string, number[]> };
         merge = (parsed.merge ?? []).filter((g) => Array.isArray(g));
-        resolvedMap = parsed.resolved ?? {};
+        Object.assign(resolvedMap, parsed.resolved ?? {});
       } catch {
         /* fall through to lexical-only */
       }
-    } else {
-      // No LLM: conservative lexical merge — a handled question resolves a
-      // cluster only on strong overlap, and only when it's newer than the
-      // cluster's last escalation.
-      const covered = new Set<number>();
-      clusters.forEach((cl, i) => {
-        const hit = handled.some(
-          (h) =>
-            h.at.getTime() > lastEsc[i] &&
-            cl.members.some((m) => {
-              const j = jaccard(h.words, m.words);
-              const subset =
-                Math.min(h.words.size, m.words.size) >= 2 &&
-                [...h.words].every((w) => m.words.has(w));
-              return j >= 0.5 || subset;
-            }),
-        );
-        if (hit) covered.add(i);
-      });
-      for (const i of covered) resolvedMap[String(i + 1)] = [-1];
     }
+    // Lexical floor — always runs, unioned with the LLM's mapping: a handled
+    // question resolves a cluster on strong overlap when it's newer than the
+    // cluster's last escalation, even when the LLM misses the intent match.
+    clusters.forEach((cl, i) => {
+      const hit = handled.some(
+        (h) =>
+          h.at.getTime() > lastEsc[i] &&
+          cl.members.some((m) => {
+            const j = jaccard(h.words, m.words);
+            const subset =
+              Math.min(h.words.size, m.words.size) >= 2 &&
+              [...h.words].every((w) => m.words.has(w));
+            return j >= 0.5 || subset;
+          }),
+      );
+      if (hit) resolvedMap[String(i + 1)] = [...(resolvedMap[String(i + 1)] ?? []), -1];
+    });
 
     // Apply intent merges (union-find over cluster indices).
     const parent = clusters.map((_, i) => i);
@@ -323,11 +320,17 @@ export async function detectKnowledgeGaps(
     }
     for (const root of resolvedRoots) merged.delete(root);
 
-    // Attach same-intent handled questions to surviving clusters for display.
-    const finalClusters = [...merged.values()].map((cl) => ({
+    // Attach same-intent handled questions to surviving clusters for display —
+    // only those answered AFTER the cluster's last escalation, so "agent has
+    // since answered" is always literally true.
+    const finalClusters = [...merged.entries()].map(([root, cl]) => ({
       members: cl.members.sort((a, b) => b.at.getTime() - a.at.getTime()),
       handledQs: handled
-        .filter((h) => cl.members.some((m) => jaccard(h.words, m.words) >= 0.5))
+        .filter(
+          (h) =>
+            h.at.getTime() > (mergedLastEsc.get(root) ?? 0) &&
+            cl.members.some((m) => jaccard(h.words, m.words) >= 0.5),
+        )
         .map((h) => h.question)
         .slice(0, 3),
     }));

@@ -245,9 +245,12 @@ export const AgentConfig = z.object({
     })
     .optional(),
   // knowledge-gap UI: dismissed "LEARN:" self-reports and gap clusters stay
-  // hidden by key
+  // hidden by key. dismissed_gap_times records when each key was dismissed —
+  // a gap resurfaces only if it escalates again after that, not when a new
+  // phrasing of the same question merely appears.
   dismissed_learnings: z.array(z.string().max(400)).optional(),
   dismissed_gaps: z.array(z.string().max(400)).optional(),
+  dismissed_gap_times: z.record(z.string(), z.string()).optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 
