@@ -19,7 +19,7 @@ import { railBus } from '../lib/railBus';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
-type Tab = 'integrations' | 'escalation' | 'tools' | 'connection';
+type Tab = 'integrations' | 'escalation' | 'tools' | 'tests' | 'connection';
 
 export default function AgentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -57,10 +57,11 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const [params, setParams] = useSearchParams();
   const tabParam = params.get('tab') as Tab | null;
   const tab: Tab =
-    tabParam && ['integrations', 'escalation', 'tools', 'connection'].includes(tabParam)
+    tabParam && ['integrations', 'escalation', 'tools', 'tests', 'connection'].includes(tabParam)
       ? tabParam
       : 'connection';
-  const activeTab: Tab = tab === 'tools' && !agent.hosted ? 'connection' : tab;
+  const activeTab: Tab =
+    (tab === 'tools' || tab === 'tests') && !agent.hosted ? 'connection' : tab;
   const setTab = (t: Tab) => setParams(t === 'connection' ? {} : { tab: t });
   const [freshSecret, setFreshSecret] = useState<{ label: string; value: string } | null>(
     () => (location.state as { freshSecret?: { label: string; value: string } })?.freshSecret ?? null,
@@ -152,7 +153,12 @@ function AgentEditor({ agent }: { agent: Agent }) {
     { key: 'connection', label: 'Engine' },
     { key: 'integrations', label: 'Channels' },
     { key: 'escalation', label: 'Escalation' },
-    ...(agent.hosted ? [{ key: 'tools' as Tab, label: 'Tools' }] : []),
+    ...(agent.hosted
+      ? [
+          { key: 'tools' as Tab, label: 'Tools' },
+          { key: 'tests' as Tab, label: 'Tests' },
+        ]
+      : []),
   ];
 
   const saveAll = () =>
@@ -232,6 +238,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
         />
       )}
       {activeTab === 'tools' && agent.hosted && <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />}
+      {activeTab === 'tests' && agent.hosted && <TestsTab agentId={agent.id} isAdmin={isAdmin} />}
       {activeTab === 'connection' && (
         <ConnectionTab
           agent={agent}
@@ -1225,26 +1232,66 @@ function ToolsTab({
       />
       {showCustom && (
       <>
-      <label>Custom API actions — call any API (JSON array, GET/POST/PUT/PATCH/DELETE, {'{param}'} URL placeholders, "approval": true gates a call behind teammate sign-off). Integration tools are managed on the cards above, not here.</label>
-      <textarea
-        rows={4}
-        className="mono"
-        placeholder={'[\n  {\n    "name": "lookup_order",\n    "description": "Look up an order in our POS by order number",\n    "method": "GET",\n    "url": "https://api.acme-pos.com/orders/{order_id}",\n    "headers": { "authorization": "Bearer {{secrets.POS_API_KEY}}" },\n    "params": { "order_id": "the order number the user gave" }\n  }\n]'}
-        value={toolsJson}
-        onChange={(e) => setToolsJson(e.target.value)}
-        onBlur={() => {
-          try {
-            const parsed: NonNullable<AgentConfig['tools']> = toolsJson.trim()
-              ? JSON.parse(toolsJson)
-              : [];
-            setCfg({ ...cfg, tools: [...managedTools, ...parsed] });
-            setToolsError('');
-          } catch {
-            setToolsError('invalid JSON — not saved until it parses');
+      <label>Custom API actions — the agent calls your backend: order lookups, refunds, subscription changes, bookings. {'{param}'} placeholders in the URL become arguments; "needs approval" parks a call for teammate sign-off.</label>
+      {customTools.map((t) => (
+        <div key={t.name} className="card" style={{ background: 'var(--panel-2)', padding: 10 }}>
+          <div className="row">
+            <span className="mono grow" style={{ fontSize: 13 }}>{t.name}</span>
+            <span className="badge">{t.method}</span>
+            {t.approval && <span className="badge warn">needs approval</span>}
+            {isAdmin && (
+              <button
+                className="btn sm"
+                title="Remove action"
+                onClick={() =>
+                  setCfg({
+                    ...cfg,
+                    tools: [...managedTools, ...customTools.filter((x) => x !== t)],
+                  })
+                }
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <div className="muted mono" style={{ fontSize: 11, marginTop: 4, overflowWrap: 'anywhere' }}>
+            {t.url}
+          </div>
+          {t.description && <div style={{ fontSize: 12, marginTop: 4 }}>{t.description}</div>}
+        </div>
+      ))}
+      {isAdmin && (
+        <CustomToolForm
+          onAdd={(tool) =>
+            setCfg({ ...cfg, tools: [...managedTools, ...customTools, tool] })
           }
-        }}
-      />
-      {toolsError && <div className="error">{toolsError}</div>}
+        />
+      )}
+      <details>
+        <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>
+          edit as JSON
+        </summary>
+        <textarea
+          rows={4}
+          className="mono"
+          style={{ marginTop: 8 }}
+          placeholder={'[\n  {\n    "name": "lookup_order",\n    "description": "Look up an order in our POS by order number",\n    "method": "GET",\n    "url": "https://api.acme-pos.com/orders/{order_id}",\n    "headers": { "authorization": "Bearer {{secrets.POS_API_KEY}}" },\n    "params": { "order_id": "the order number the user gave" }\n  }\n]'}
+          value={toolsJson}
+          onChange={(e) => setToolsJson(e.target.value)}
+          onBlur={() => {
+            try {
+              const parsed: NonNullable<AgentConfig['tools']> = toolsJson.trim()
+                ? JSON.parse(toolsJson)
+                : [];
+              setCfg({ ...cfg, tools: [...managedTools, ...parsed] });
+              setToolsError('');
+            } catch {
+              setToolsError('invalid JSON — not saved until it parses');
+            }
+          }}
+        />
+        {toolsError && <div className="error">{toolsError}</div>}
+      </details>
       </>
       )}
       <label>
@@ -2085,6 +2132,380 @@ function Secrets({ agentId }: { agentId: string }) {
         </button>
       </form>
       {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
+// ── Regression tests — real transcripts replayed against current config ──
+
+interface AgentTestRun {
+  at: string;
+  passed: boolean | null;
+  reason: string;
+  reply: string | null;
+  control?: 'handoff' | 'offer' | 'cancel';
+  tools?: { name: string; gated?: boolean; outcome: string }[];
+  model?: string;
+}
+
+interface AgentTest {
+  id: string;
+  name: string;
+  turns: { role: 'customer' | 'agent'; text: string }[];
+  expectation: string;
+  source_conversation_id?: string | null;
+  last_run?: AgentTestRun | null;
+  created_at: string;
+}
+
+function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['agent-tests', agentId],
+    queryFn: () => api<{ tests: AgentTest[] }>(`/api/agents/${agentId}/tests`),
+  });
+  const [running, setRunning] = useState<string | 'all' | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newMsg, setNewMsg] = useState('');
+  const [newExpectation, setNewExpectation] = useState('');
+  const [err, setErr] = useState('');
+
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
+
+  const runOne = useMutation({
+    mutationFn: (testId: string) =>
+      api(`/api/agents/${agentId}/tests/${testId}/run`, { method: 'POST' }),
+    onSuccess: invalidate,
+    onError: (e) => setErr(e.message),
+    onSettled: () => setRunning(null),
+  });
+  const runAll = useMutation({
+    mutationFn: () => api(`/api/agents/${agentId}/tests-run-all`, { method: 'POST' }),
+    onSuccess: invalidate,
+    onError: (e) => setErr(e.message),
+    onSettled: () => setRunning(null),
+  });
+  const del = useMutation({
+    mutationFn: (testId: string) =>
+      api(`/api/agents/${agentId}/tests/${testId}`, { method: 'DELETE' }),
+    onSuccess: invalidate,
+    onError: (e) => setErr(e.message),
+  });
+  const create = useMutation({
+    mutationFn: () =>
+      api(`/api/agents/${agentId}/tests`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: newName.trim(),
+          expectation: newExpectation.trim(),
+          turns: [{ role: 'customer', text: newMsg.trim() }],
+        }),
+      }),
+    onSuccess: () => {
+      setNewOpen(false);
+      setNewName('');
+      setNewMsg('');
+      setNewExpectation('');
+      invalidate();
+    },
+    onError: (e) => setErr(e.message),
+  });
+
+  const tests = data?.tests ?? [];
+  const passed = tests.filter((t) => t.last_run?.passed === true).length;
+  const failed = tests.filter((t) => t.last_run?.passed === false).length;
+
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+      <ReadOnly off={!isAdmin}>
+      <div className="row">
+        <label className="grow" style={{ margin: 0 }}>
+          Regression tests — saved conversations replayed against this agent's current setup
+        </label>
+        {tests.length > 0 && (
+          <button
+            className="btn sm"
+            disabled={running !== null}
+            onClick={() => { setRunning('all'); runAll.mutate(); }}
+          >
+            {running === 'all' ? 'Running…' : 'Run all'}
+          </button>
+        )}
+        <button className="btn sm" onClick={() => setNewOpen((v) => !v)}>
+          + New test
+        </button>
+      </div>
+      <div className="muted" style={{ fontSize: 12 }}>
+        Save a transcript from any conversation ("Save as test"), then replay it after prompt,
+        knowledge, or tool changes. Replays never message customers and never execute tools —
+        gated actions are only proposed. Add an expectation and each run is judged against it.
+        {tests.length > 0 && (
+          <span>
+            {' '}
+            · <span style={{ color: 'var(--accent)' }}>{passed} passing</span>
+            {failed > 0 && <span style={{ color: 'var(--danger)' }}> · {failed} failing</span>}
+          </span>
+        )}
+      </div>
+      {err && <div className="error">{err}</div>}
+
+      {newOpen && (
+        <div className="card" style={{ background: 'var(--panel-2)' }}>
+          <input
+            placeholder="Test name — e.g. angry refund request"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            style={{ width: '100%', marginBottom: 8 }}
+          />
+          <textarea
+            rows={2}
+            placeholder="Customer message — what the customer says"
+            value={newMsg}
+            onChange={(e) => setNewMsg(e.target.value)}
+            style={{ width: '100%', marginBottom: 8 }}
+          />
+          <textarea
+            rows={2}
+            placeholder="Expectation — what a good reply does (judged by AI each run)"
+            value={newExpectation}
+            onChange={(e) => setNewExpectation(e.target.value)}
+            style={{ width: '100%' }}
+          />
+          <div className="row" style={{ marginTop: 8 }}>
+            <button
+              className="btn primary sm"
+              disabled={!newName.trim() || !newMsg.trim() || create.isPending}
+              onClick={() => create.mutate()}
+            >
+              {create.isPending ? 'Saving…' : 'Create test'}
+            </button>
+            <button className="btn sm" onClick={() => setNewOpen(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {tests.length === 0 && !newOpen && (
+        <div className="muted" style={{ fontSize: 13 }}>
+          No tests yet. Open a conversation — especially one a human had to rescue — and hit
+          "Save as test" to lock in what a good reply looks like.
+        </div>
+      )}
+
+      {tests.map((t) => {
+        const run = t.last_run;
+        const open = expanded === t.id;
+        return (
+          <div key={t.id} className="card" style={{ background: 'var(--panel-2)', padding: 12 }}>
+            <div className="row">
+              <button
+                className="btn sm"
+                disabled={running !== null}
+                onClick={() => { setRunning(t.id); runOne.mutate(t.id); }}
+              >
+                {running === t.id ? 'Running…' : '▶ Run'}
+              </button>
+              <span className="grow" style={{ fontWeight: 600 }}>{t.name}</span>
+              {run && (
+                <span
+                  className={`badge ${run.passed === true ? 'active' : run.passed === false ? 'warn' : ''}`}
+                  title={run.reason}
+                >
+                  {run.passed === true ? '✓ pass' : run.passed === false ? '✗ fail' : 'ran'}
+                </span>
+              )}
+              {isAdmin && (
+                <button
+                  className="btn sm"
+                  title="Delete test"
+                  onClick={() => del.mutate(t.id)}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            {t.expectation && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                expects: {t.expectation}
+              </div>
+            )}
+            {run && (
+              <div style={{ fontSize: 12, marginTop: 6 }}>
+                {run.reason && <div className="muted">{run.reason}</div>}
+                {run.reply && (
+                  <>
+                    <button
+                      className="inspector-toggle"
+                      style={{ marginTop: 4 }}
+                      onClick={() => setExpanded(open ? null : t.id)}
+                    >
+                      {open ? '▾ hide reply' : '▸ show reply'}
+                    </button>
+                    {open && (
+                      <div className="inspector-panel" style={{ maxWidth: '100%', marginTop: 6 }}>
+                        <div style={{ whiteSpace: 'pre-wrap' }}>{run.reply}</div>
+                        {run.control && (
+                          <div className="muted" style={{ marginTop: 6 }}>
+                            ended with [{run.control === 'handoff' ? 'HANDOFF' : run.control === 'offer' ? 'OFFER_HUMAN' : 'CANCEL_HANDOFF'}]
+                          </div>
+                        )}
+                        {run.tools?.length ? (
+                          <div className="muted" style={{ marginTop: 6 }}>
+                            tools: {run.tools.map((x) => `${x.name} (${x.outcome})`).join(', ')}
+                          </div>
+                        ) : null}
+                        {run.model && (
+                          <div className="muted" style={{ marginTop: 6 }}>model: {run.model}</div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+            {t.source_conversation_id && (
+              <div style={{ marginTop: 6 }}>
+                <Link to={`/conversations/${t.source_conversation_id}`} className="muted" style={{ fontSize: 12 }}>
+                  view source conversation →
+                </Link>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      </ReadOnly>
+    </div>
+  );
+}
+
+/** Form → config.tools entry. Lines-based params/headers keep it simple:
+ *  "name — description" and "Header-Name: value". */
+function CustomToolForm({
+  onAdd,
+}: {
+  onAdd: (tool: NonNullable<AgentConfig['tools']>[number]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [desc, setDesc] = useState('');
+  const [method, setMethod] = useState<'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'>('GET');
+  const [url, setUrl] = useState('');
+  const [paramsText, setParamsText] = useState('');
+  const [headersText, setHeadersText] = useState('');
+  const [approval, setApproval] = useState(false);
+  const [err, setErr] = useState('');
+
+  const parseLines = (text: string) =>
+    Object.fromEntries(
+      text
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .map((l) => {
+          const i = l.indexOf(':') >= 0 ? l.indexOf(':') : l.indexOf('—');
+          return i >= 0
+            ? [l.slice(0, i).trim(), l.slice(i + 1).trim()]
+            : [l, ''];
+        }),
+    );
+
+  const submit = () => {
+    const n = name.trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+    if (!n) return setErr('name the action (e.g. lookup_order)');
+    if (!/^https?:\/\/|^\{\{/.test(url.trim()))
+      return setErr('URL must start with https:// (http only works for localhost in dev)');
+    const tool: NonNullable<AgentConfig['tools']>[number] = {
+      name: n,
+      description: desc.trim() || `Call ${n}`,
+      method,
+      url: url.trim(),
+      ...(headersText.trim() ? { headers: parseLines(headersText) } : {}),
+      ...(paramsText.trim() ? { params: parseLines(paramsText) } : {}),
+      ...(method !== 'GET' && method !== 'DELETE' ? {} : {}),
+      ...(approval ? { approval: true } : {}),
+    };
+    onAdd(tool);
+    setName('');
+    setDesc('');
+    setUrl('');
+    setParamsText('');
+    setHeadersText('');
+    setApproval(false);
+    setErr('');
+    setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <button className="btn sm" onClick={() => setOpen(true)}>
+        + Add custom action
+      </button>
+    );
+  }
+  return (
+    <div className="card" style={{ background: 'var(--panel-2)', padding: 12 }}>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <input
+          className="grow"
+          placeholder="name — e.g. lookup_order"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
+          {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => (
+            <option key={m}>{m}</option>
+          ))}
+        </select>
+      </div>
+      <input
+        placeholder="endpoint — https://api.example.com/orders/{order_id}"
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        className="mono"
+        style={{ width: '100%', fontSize: 12, marginBottom: 8 }}
+      />
+      <input
+        placeholder="what it does — e.g. Look up an order and return status + tracking"
+        value={desc}
+        onChange={(e) => setDesc(e.target.value)}
+        style={{ width: '100%', marginBottom: 8 }}
+      />
+      <textarea
+        rows={2}
+        placeholder={'arguments, one per line — name: what it is\norder_id: the order number the customer gave'}
+        value={paramsText}
+        onChange={(e) => setParamsText(e.target.value)}
+        style={{ width: '100%', marginBottom: 8 }}
+      />
+      <textarea
+        rows={2}
+        placeholder={'headers (optional), one per line\nauthorization: Bearer {{secrets.POS_API_KEY}}'}
+        value={headersText}
+        onChange={(e) => setHeadersText(e.target.value)}
+        className="mono"
+        style={{ width: '100%', fontSize: 12, marginBottom: 8 }}
+      />
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+        <input
+          type="checkbox"
+          checked={approval}
+          onChange={(e) => setApproval(e.target.checked)}
+        />
+        Needs approval — the agent proposes this action; a teammate must approve before it runs
+      </label>
+      {err && <div className="error" style={{ marginTop: 8 }}>{err}</div>}
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="btn primary sm" onClick={submit}>
+          Add action
+        </button>
+        <button className="btn sm" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+        <span className="muted" style={{ fontSize: 12 }}>
+          Remember to hit Save above — actions are stored with the agent.
+        </span>
+      </div>
     </div>
   );
 }

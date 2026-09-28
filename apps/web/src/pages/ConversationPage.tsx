@@ -134,6 +134,10 @@ export default function ConversationPage() {
   const [fetchingNewer, setFetchingNewer] = useState(false);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [inspectorFor, setInspectorFor] = useState<string | null>(null);
+  const [testSaveOpen, setTestSaveOpen] = useState(false);
+  const [testName, setTestName] = useState('');
+  const [testExpectation, setTestExpectation] = useState('');
+  const [testSaved, setTestSaved] = useState(false);
   const jumpedFor = useRef('');
   const olderFor = useRef('');
   if (olderFor.current !== id) {
@@ -347,6 +351,24 @@ export default function ConversationPage() {
     suggest.mutate();
   };
 
+  const saveTest = useMutation({
+    mutationFn: () =>
+      api(`/api/agents/${c.agent_id}/tests`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: testName.trim(),
+          expectation: testExpectation.trim(),
+          conversation_id: id,
+        }),
+      }),
+    onSuccess: () => {
+      setTestSaved(true);
+      setTestName('');
+      setTestExpectation('');
+    },
+    onError: (e) => setError(e.message),
+  });
+
   // Dismiss EVERY pending suggestion — otherwise the next one in the queue
   // slides into the card and it feels like dismiss loads another iteration.
   const dismissSuggestions = async () => {
@@ -548,8 +570,56 @@ export default function ConversationPage() {
           >
             {c.is_unread ? 'Mark as read' : 'Mark unread'}
           </button>
+          {agent?.hosted && (
+            <button
+              className="btn"
+              title="Save this transcript as a regression test — replay it after prompt or knowledge changes"
+              onClick={() => setTestSaveOpen((v) => !v)}
+            >
+              Save as test
+            </button>
+          )}
           <StateBadge state={c.state} />
         </div>
+
+        {testSaveOpen && (
+          <div className="card" style={{ marginTop: 8 }}>
+            <label>Save this conversation as a regression test</label>
+            <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+              The transcript (up to the customer's last message) is replayed against the agent's
+              current setup — no customer sees it, no action runs. Use it to prove a prompt or
+              knowledge fix works, or to catch a regression later.
+            </div>
+            <input
+              placeholder="Test name — e.g. refund request must hand off"
+              value={testName}
+              onChange={(e) => setTestName(e.target.value)}
+              style={{ width: '100%', marginBottom: 8 }}
+            />
+            <textarea
+              rows={2}
+              placeholder="What a good reply does now — e.g. answers from the returns policy and never offers a refund without approval"
+              value={testExpectation}
+              onChange={(e) => setTestExpectation(e.target.value)}
+              style={{ width: '100%' }}
+            />
+            <div className="row" style={{ marginTop: 8 }}>
+              <button
+                className="btn primary sm"
+                disabled={!testName.trim() || saveTest.isPending}
+                onClick={() => saveTest.mutate()}
+              >
+                {saveTest.isPending ? 'Saving…' : 'Save test'}
+              </button>
+              <button className="btn sm" onClick={() => setTestSaveOpen(false)}>Cancel</button>
+              {testSaved && (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Saved — run it from the agent's Tests tab.
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {openAlerts.length > 0 && (
           <div className="card" style={{ borderColor: 'var(--warn)' }}>

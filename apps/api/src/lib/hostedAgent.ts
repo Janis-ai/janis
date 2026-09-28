@@ -392,7 +392,7 @@ const LINK_GUARD_RETRY =
 /** complete() + link guard; if the guard stripped dead links, give the model
  * one retry with an explanation so the rewrite doesn't promise a link that
  * isn't there. Token counts are summed across both calls. */
-async function generateReply(
+export async function generateReply(
   llm: LlmSettings,
   prompt: string,
   msgs: { role: string; content: string | ContentPart[] }[],
@@ -563,7 +563,7 @@ function flattenToolHistory(msgs: ChatMsg[]): void {
 }
 
 /** Chat completion with an OpenAI-style tool-call loop (max 4 rounds). */
-async function complete(
+export async function complete(
   llm: LlmSettings,
   system: string,
   history: { role: string; content: string | ContentPart[] }[],

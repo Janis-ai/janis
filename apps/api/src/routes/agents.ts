@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentConnections, agentMembers, agentSecrets, channels, conversations, knowledgeFiles, memberships, slackInstallations, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentConnections, agentMembers, agentSecrets, agentTests, channels, conversations, knowledgeFiles, memberships, slackInstallations, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import {
   adminOnly,
   agentAdminOnly,
@@ -27,6 +27,7 @@ import {
 } from '../services/knowledgeGaps.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
+import { runAgentTest, turnsFromConversation } from '../lib/agentTests.js';
 import { effectiveMeteredModel } from '../lib/llm.js';
 import { llmModelsResult } from '../lib/llmModels.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
@@ -1110,6 +1111,138 @@ export function agentRoutes(db: Db) {
       .returning();
     if (!row) return c.json({ error: 'not found' }, 404);
     return c.json({ ok: true });
+  });
+
+  // ── Regression tests — saved transcripts replayed against current config ──
+  // The flywheel's closing loop: rescue → gap → fix → proof it can't regress.
+
+  const toTest = (t: typeof agentTests.$inferSelect) => ({
+    id: t.id,
+    name: t.name,
+    turns: t.turns,
+    expectation: t.expectation,
+    source_conversation_id: t.sourceConversationId,
+    last_run: t.lastRun,
+    created_at: t.createdAt.toISOString(),
+  });
+
+  app.get('/:id/tests', agentMember, async (c) => {
+    const rows = await db
+      .select()
+      .from(agentTests)
+      .where(eq(agentTests.agentId, c.req.param('id')))
+      .orderBy(asc(agentTests.createdAt));
+    return c.json({ tests: rows.map(toTest) });
+  });
+
+  const testBody = z.object({
+    name: z.string().min(1).max(120),
+    expectation: z.string().max(4000).default(''),
+    turns: z
+      .array(z.object({ role: z.enum(['customer', 'agent']), text: z.string().min(1) }))
+      .max(60)
+      .optional(),
+    conversation_id: z.string().optional(),
+  });
+
+  app.post('/:id/tests', agentAdmin, zValidator('json', testBody), async (c) => {
+    const agentId = c.req.param('id')!;
+    const b = c.req.valid('json');
+    let turns = b.turns ?? [];
+    let sourceConversationId: string | null = null;
+    if (b.conversation_id) {
+      const [conv] = await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(and(eq(conversations.id, b.conversation_id), eq(conversations.agentId, agentId)))
+        .limit(1);
+      if (!conv) return c.json({ error: 'conversation not found' }, 404);
+      sourceConversationId = conv.id;
+      if (!turns.length) turns = await turnsFromConversation(db, conv.id);
+    }
+    if (!turns.length) return c.json({ error: 'no turns — supply turns or a conversation_id' }, 400);
+    const [row] = await db
+      .insert(agentTests)
+      .values({
+        workspaceId: c.get('workspaceId'),
+        agentId,
+        name: b.name,
+        expectation: b.expectation,
+        turns: turns as never,
+        sourceConversationId,
+      })
+      .returning();
+    return c.json({ test: toTest(row) }, 201);
+  });
+
+  app.patch('/:id/tests/:testId', agentAdmin, zValidator('json', testBody.partial()), async (c) => {
+    const b = c.req.valid('json');
+    const [row] = await db
+      .update(agentTests)
+      .set({
+        ...(b.name !== undefined ? { name: b.name } : {}),
+        ...(b.expectation !== undefined ? { expectation: b.expectation } : {}),
+        ...(b.turns !== undefined ? { turns: b.turns as never } : {}),
+      })
+      .where(and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, c.req.param('id'))))
+      .returning();
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({ test: toTest(row) });
+  });
+
+  app.delete('/:id/tests/:testId', agentAdmin, async (c) => {
+    const [row] = await db
+      .delete(agentTests)
+      .where(and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, c.req.param('id'))))
+      .returning({ id: agentTests.id });
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({ ok: true });
+  });
+
+  // Replay one test — runs the real pipeline in testRun mode: no tool call
+  // executes, gated calls are only proposed, nothing reaches a customer.
+  app.post('/:id/tests/:testId/run', agentMember, async (c) => {
+    const [agent] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, c.req.param('id')))
+      .limit(1);
+    if (!agent?.hosted) return c.json({ error: 'tests replay through the hosted agent' }, 400);
+    const [test] = await db
+      .select()
+      .from(agentTests)
+      .where(and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, agent.id)))
+      .limit(1);
+    if (!test) return c.json({ error: 'not found' }, 404);
+    const run = await runAgentTest(db, agent, test);
+    const [updated] = await db
+      .update(agentTests)
+      .set({ lastRun: run as never })
+      .where(eq(agentTests.id, test.id))
+      .returning();
+    return c.json({ test: toTest(updated), run });
+  });
+
+  // Run every saved case — the "did my prompt/KB change regress anything" gate.
+  app.post('/:id/tests-run-all', agentMember, async (c) => {
+    const [agent] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, c.req.param('id')))
+      .limit(1);
+    if (!agent?.hosted) return c.json({ error: 'tests replay through the hosted agent' }, 400);
+    const rows = await db
+      .select()
+      .from(agentTests)
+      .where(eq(agentTests.agentId, agent.id))
+      .orderBy(asc(agentTests.createdAt));
+    const results: { id: string; passed: boolean | null; reason: string }[] = [];
+    for (const test of rows) {
+      const run = await runAgentTest(db, agent, test);
+      await db.update(agentTests).set({ lastRun: run as never }).where(eq(agentTests.id, test.id));
+      results.push({ id: test.id, passed: run.passed, reason: run.reason });
+    }
+    return c.json({ results });
   });
 
   return app;

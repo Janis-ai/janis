@@ -528,6 +528,35 @@ export const knowledgeFiles = pgTable(
   (t) => [index('knowledge_files_agent').on(t.agentId)],
 );
 
+/**
+ * Saved regression cases for hosted agents — a transcript slice lifted from
+ * a real (usually rescued) conversation plus the operator's expectation.
+ * Replays run the agent pipeline in testRun mode (no tool executes, gated
+ * calls are only proposed) and an LLM judge scores the reply.
+ */
+export const agentTests = pgTable(
+  'agent_tests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    name: text('name').notNull(),
+    /** Ordered transcript turns — {role:'customer'|'agent'|'operator',text}. */
+    turns: jsonb('turns').notNull().default([]),
+    /** What a good reply looks like now — free text the judge checks. */
+    expectation: text('expectation').notNull().default(''),
+    sourceConversationId: uuid('source_conversation_id'),
+    /** {at, passed, reason, reply, tools, model} — last replay outcome. */
+    lastRun: jsonb('last_run'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('agent_tests_agent').on(t.agentId)],
+);
+
 // Per-agent secrets (API keys for tool calls) — AES-256-GCM encrypted at rest.
 // Write-only via the API: values are never returned after creation.
 export const agentSecrets = pgTable(
