@@ -344,6 +344,13 @@
       "when": 1790618860845,
       "tag": "0048_illegal_darwin",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1790623186194,
+      "tag": "0049_brave_warhawk",
+      "breakpoints": true
     }
   ]
 }

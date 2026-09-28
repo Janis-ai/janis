@@ -1131,6 +1131,7 @@ export function agentRoutes(db: Db) {
     expectation: t.expectation,
     source_conversation_id: t.sourceConversationId,
     source_message_id: t.sourceMessageId,
+    original_reply: t.originalReply,
     last_run: t.lastRun,
     created_at: t.createdAt.toISOString(),
   });
@@ -1197,6 +1198,9 @@ export function agentRoutes(db: Db) {
               turns: full.slice(Math.max(0, end + 1 - 16), end + 1) as never,
               sourceConversationId,
               sourceMessageId: full[end].mid ?? null,
+              // what followed the trigger in the real transcript — usually the
+              // agent's actual reply, or a marker like "(passed to a human…)"
+              originalReply: full[end + 1]?.text ?? null,
             })),
           )
           .returning();
@@ -1231,6 +1235,23 @@ export function agentRoutes(db: Db) {
       .returning();
     if (!row) return c.json({ error: 'not found' }, 404);
     return c.json({ test: toTest(row) });
+  });
+
+  // DELETE /:id/tests?source=<conversationId> — remove a whole saved batch at
+  // once; the Tests tab groups a split transcript's tests under one card.
+  app.delete('/:id/tests', agentAdmin, async (c) => {
+    const source = c.req.query('source');
+    if (!source) return c.json({ error: 'source=<conversation_id> required' }, 400);
+    const rows = await db
+      .delete(agentTests)
+      .where(
+        and(
+          eq(agentTests.agentId, c.req.param('id')),
+          eq(agentTests.sourceConversationId, source),
+        ),
+      )
+      .returning({ id: agentTests.id });
+    return c.json({ deleted: rows.length });
   });
 
   app.delete('/:id/tests/:testId', agentAdmin, async (c) => {

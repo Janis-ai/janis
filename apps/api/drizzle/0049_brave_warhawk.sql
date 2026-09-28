@@ -1,0 +1,1 @@
+ALTER TABLE "agent_tests" ADD COLUMN "original_reply" text;

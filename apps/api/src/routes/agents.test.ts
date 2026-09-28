@@ -687,6 +687,9 @@ describe('save-as-test splits at rescue points', () => {
     const byText = Object.fromEntries(inserted.map((m) => [m.text, m.id]));
     expect(body.tests[0].source_message_id).toBe(byText['what about shipping to France?']);
     expect(body.tests[1].source_message_id).toBe(byText['and bulk discounts?']);
+    // each test keeps what actually happened next in the real conversation
+    expect(body.tests[0].original_reply).toBe('(human operator) yes we ship to France');
+    expect(body.tests[1].original_reply).toBe('(passed to a human teammate)');
   });
 
   it('falls back to one test on the last customer message when nothing escalated', async () => {

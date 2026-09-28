@@ -42,6 +42,8 @@ export interface TestRunResult {
   control?: 'handoff' | 'offer' | 'cancel';
   tools: InspectorToolCall[];
   model?: string;
+  /** What grounded the reply — mirrors the conversation inspector payload. */
+  context?: { prompt: 'custom' | 'default'; kb: string[]; knowledge: string[] };
 }
 
 /** The whole transcript as model-facing turns (no tail trim). */
@@ -169,6 +171,13 @@ export async function runAgentTest(
   if (!llm.apiKey) return { ...base, reason: 'no LLM configured for this agent' };
 
   const docs = await loadKnowledgeDocs(db, agent.id);
+  // same grounding summary the "why this reply" inspector stamps
+  const acfg = (agent.config ?? {}) as { knowledge?: string[]; system_prompt?: string };
+  const context = {
+    prompt: (acfg.system_prompt ? 'custom' : 'default') as 'custom' | 'default',
+    kb: docs.map((d) => d.name),
+    knowledge: (acfg.knowledge ?? []).slice(0, 20),
+  };
   const secrets = {
     ...(await loadSecretsMap(db, agent.id)),
     ...(await connectionSecrets(db, agent.id)),
@@ -209,7 +218,7 @@ export async function runAgentTest(
       byok: llm.byok,
     });
   }
-  if (!gen.text?.trim()) return { ...base, tools: gen.toolCalls, model: gen.model, reason: 'agent produced no reply' };
+  if (!gen.text?.trim()) return { ...base, tools: gen.toolCalls, model: gen.model, context, reason: 'agent produced no reply' };
 
   const reply = extractButtons(extractLearns(gen.text).text).text;
   const tag = controlTag(gen.text);
@@ -221,6 +230,7 @@ export async function runAgentTest(
       control: tag?.kind,
       tools: gen.toolCalls,
       model: gen.model,
+      context,
       reason: 'no expectation set — add one so runs can be judged',
     };
   }
@@ -258,7 +268,7 @@ export async function runAgentTest(
 
   const match = judged.text?.match(/\{[\s\S]*"pass"[\s\S]*\}/);
   if (!match) {
-    return { ...base, reply, control: tag?.kind, tools: gen.toolCalls, model: gen.model, reason: 'judge returned no verdict' };
+    return { ...base, reply, control: tag?.kind, tools: gen.toolCalls, model: gen.model, context, reason: 'judge returned no verdict' };
   }
   try {
     const v = JSON.parse(match[0]) as { pass?: boolean; reason?: string };
@@ -270,8 +280,9 @@ export async function runAgentTest(
       control: tag?.kind,
       tools: gen.toolCalls,
       model: gen.model,
+      context,
     };
   } catch {
-    return { ...base, reply, control: tag?.kind, tools: gen.toolCalls, model: gen.model, reason: 'judge verdict unreadable' };
+    return { ...base, reply, control: tag?.kind, tools: gen.toolCalls, model: gen.model, context, reason: 'judge verdict unreadable' };
   }
 }

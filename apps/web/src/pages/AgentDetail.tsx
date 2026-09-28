@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
@@ -2187,6 +2187,7 @@ interface AgentTestRun {
   control?: 'handoff' | 'offer' | 'cancel';
   tools?: { name: string; gated?: boolean; outcome: string }[];
   model?: string;
+  context?: { prompt: 'custom' | 'default'; kb: string[]; knowledge: string[] };
 }
 
 interface AgentTest {
@@ -2196,6 +2197,7 @@ interface AgentTest {
   expectation: string;
   source_conversation_id?: string | null;
   source_message_id?: string | null;
+  original_reply?: string | null;
   last_run?: AgentTestRun | null;
   created_at: string;
 }
@@ -2232,6 +2234,12 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
   const del = useMutation({
     mutationFn: (testId: string) =>
       api(`/api/agents/${agentId}/tests/${testId}`, { method: 'DELETE' }),
+    onSuccess: invalidate,
+    onError: (e) => setErr(e.message),
+  });
+  const delGroup = useMutation({
+    mutationFn: (sourceConvId: string) =>
+      api(`/api/agents/${agentId}/tests?source=${sourceConvId}`, { method: 'DELETE' }),
     onSuccess: invalidate,
     onError: (e) => setErr(e.message),
   });
@@ -2336,10 +2344,11 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
         </div>
       )}
 
-      {tests.map((t) => {
-        const run = t.last_run;
-        const open = expanded === t.id;
-        return (
+      {(() => {
+        const renderTest = (t: AgentTest) => {
+          const run = t.last_run;
+          const open = expanded === t.id;
+          return (
           <div key={t.id} className="card" style={{ background: 'var(--panel-2)', padding: 12 }}>
             <div className="row">
               <button
@@ -2443,11 +2452,24 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
                                   </div>
                                 );
                               })}
+                              {t.original_reply && (
+                                <>
+                                  <div
+                                    className="muted"
+                                    style={{ fontSize: 11, margin: '6px 0 3px' }}
+                                  >
+                                    ↳ original reply — what the agent actually did then:
+                                  </div>
+                                  <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>
+                                    {t.original_reply}
+                                  </div>
+                                </>
+                              )}
                               <div
                                 className="muted"
                                 style={{ fontSize: 11, margin: '6px 0 3px' }}
                               >
-                                ↳ agent's replayed reply (never sent, tools stubbed):
+                                ↳ replayed now — current setup (never sent, tools stubbed):
                               </div>
                               <div style={{ whiteSpace: 'pre-wrap' }}>{run.reply}</div>
                             </>
@@ -2465,6 +2487,14 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
                         ) : null}
                         {run.model && (
                           <div className="muted" style={{ marginTop: 6 }}>model: {run.model}</div>
+                        )}
+                        {run.context && (
+                          <div className="muted" style={{ marginTop: 6 }}>
+                            grounded on: {run.context.prompt} prompt
+                            {run.context.knowledge.length > 0 &&
+                              ` · ${run.context.knowledge.length} knowledge snippet${run.context.knowledge.length === 1 ? '' : 's'}`}
+                            {run.context.kb.length > 0 && ` · ${run.context.kb.join(', ')}`}
+                          </div>
                         )}
                       </div>
                     )}
@@ -2484,8 +2514,63 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
               </div>
             )}
           </div>
+          );
+        };
+        // Tests split from one conversation group under a collapsible card —
+        // a rescued transcript can yield a batch that would otherwise flood
+        // the list (and can only be deleted one at a time).
+        const byConv = new Map<string, AgentTest[]>();
+        const solo: AgentTest[] = [];
+        for (const t of tests) {
+          if (t.source_conversation_id) {
+            const g = byConv.get(t.source_conversation_id) ?? [];
+            g.push(t);
+            byConv.set(t.source_conversation_id, g);
+          } else solo.push(t);
+        }
+        return (
+          <>
+            {[...byConv.entries()].map(([convId, ts]) =>
+              ts.length === 1 ? (
+                <Fragment key={convId}>{renderTest(ts[0])}</Fragment>
+              ) : (
+                <details
+                  key={convId}
+                  className="card"
+                  style={{ background: 'var(--panel-2)', padding: 12 }}
+                >
+                  <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+                    {ts[0].name.replace(/\s+#\d+$/, '')} — {ts.length} tests
+                    <span className="muted" style={{ fontWeight: 400 }}>
+                      {' '}· {ts.filter((x) => x.last_run?.passed === true).length} passing
+                      {ts.some((x) => x.last_run?.passed === false) &&
+                        ` · ${ts.filter((x) => x.last_run?.passed === false).length} failing`}
+                    </span>
+                  </summary>
+                  <div className="row" style={{ margin: '8px 0' }}>
+                    <span className="grow muted" style={{ fontSize: 12 }}>
+                      split from one conversation — one rescue point each
+                    </span>
+                    {isAdmin && (
+                      <button
+                        className="btn sm"
+                        disabled={delGroup.isPending}
+                        onClick={() => delGroup.mutate(convId)}
+                      >
+                        {delGroup.isPending ? 'Deleting…' : 'Delete all'}
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {ts.map(renderTest)}
+                  </div>
+                </details>
+              ),
+            )}
+            {solo.map(renderTest)}
+          </>
         );
-      })}
+      })()}
       </ReadOnly>
     </div>
   );

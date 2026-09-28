@@ -552,6 +552,9 @@ export const agentTests = pgTable(
     sourceConversationId: uuid('source_conversation_id'),
     /** The customer message the test replays — deep-link target (?msg=). */
     sourceMessageId: uuid('source_message_id'),
+    /** The turn right after the trigger in the source transcript — the agent's
+     *  real answer or a marker like "(passed to a human teammate)". */
+    originalReply: text('original_reply'),
     /** {at, passed, reason, reply, tools, model} — last replay outcome. */
     lastRun: jsonb('last_run'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
