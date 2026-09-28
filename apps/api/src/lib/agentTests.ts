@@ -28,6 +28,8 @@ type AgentTestRow = typeof agentTests.$inferSelect;
 export interface TestTurn {
   role: 'customer' | 'agent';
   text: string;
+  /** Source message id — lets the UI deep-link a test to the prompt it replays. */
+  mid?: string;
 }
 
 export interface TestRunResult {
@@ -66,23 +68,23 @@ export async function transcriptTurns(db: Db, convId: string): Promise<TestTurn[
     const via = (m.payload as { via?: string; internal?: boolean } | undefined)?.via;
     if ((m.payload as { internal?: boolean } | undefined)?.internal && m.direction === 'human') {
       // internal operator notes — the same markers transcriptFor emits
-      if (f?.action_request) turns.push({ role: 'agent', text: '(an action was submitted for teammate approval)' });
-      else if (f?.action_result) turns.push({ role: 'agent', text: `(${m.text})` });
-      else if (f?.handoff_offer) turns.push({ role: 'agent', text: '(a human teammate was offered)' });
+      if (f?.action_request) turns.push({ role: 'agent', text: '(an action was submitted for teammate approval)', mid: m.id });
+      else if (f?.action_result) turns.push({ role: 'agent', text: `(${m.text})`, mid: m.id });
+      else if (f?.handoff_offer) turns.push({ role: 'agent', text: '(a human teammate was offered)', mid: m.id });
       else continue; // teach notes, approvals housekeeping — not in the transcript
       continue;
     }
-    if (f?.action_request) turns.push({ role: 'agent', text: '(an action was submitted for teammate approval)' });
-    else if (f?.action_result) turns.push({ role: 'agent', text: `(${m.text})` });
+    if (f?.action_request) turns.push({ role: 'agent', text: '(an action was submitted for teammate approval)', mid: m.id });
+    else if (f?.action_result) turns.push({ role: 'agent', text: `(${m.text})`, mid: m.id });
     else if (f?.failure || f?.help_requested || f?.custom_alert)
-      turns.push({ role: 'agent', text: '(passed to a human teammate)' });
-    else if (f?.handoff_offer) turns.push({ role: 'agent', text: '(a human teammate was offered)' });
+      turns.push({ role: 'agent', text: '(passed to a human teammate)', mid: m.id });
+    else if (f?.handoff_offer) turns.push({ role: 'agent', text: '(a human teammate was offered)', mid: m.id });
     else if (via === 'handoff')
-      turns.push({ role: 'agent', text: '(the customer was told a human teammate is joining)' });
-    else if (via === 'status') turns.push({ role: 'agent', text: '(a status update was sent to the customer)' });
-    else if (m.direction === 'in') turns.push({ role: 'customer', text: m.text });
-    else if (m.direction === 'human') turns.push({ role: 'agent', text: `(human operator) ${m.text}` });
-    else turns.push({ role: 'agent', text: m.text });
+      turns.push({ role: 'agent', text: '(the customer was told a human teammate is joining)', mid: m.id });
+    else if (via === 'status') turns.push({ role: 'agent', text: '(a status update was sent to the customer)', mid: m.id });
+    else if (m.direction === 'in') turns.push({ role: 'customer', text: m.text, mid: m.id });
+    else if (m.direction === 'human') turns.push({ role: 'agent', text: `(human operator) ${m.text}`, mid: m.id });
+    else turns.push({ role: 'agent', text: m.text, mid: m.id });
   }
 
   return turns;

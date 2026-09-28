@@ -655,7 +655,7 @@ describe('save-as-test splits at rescue points', () => {
       .values({ agentId, externalId: 'webchat:vis_split' })
       .returning();
     const seq = (i: number) => new Date(1_700_000_000_000 + i * 1000);
-    await db.insert(messages).values([
+    const inserted = await db.insert(messages).values([
       { conversationId: conv.id, direction: 'in', text: 'how do refunds work?', createdAt: seq(0) },
       { conversationId: conv.id, direction: 'out', text: 'within 30 days', createdAt: seq(1) },
       { conversationId: conv.id, direction: 'in', text: 'what about shipping to France?', createdAt: seq(2) },
@@ -666,7 +666,7 @@ describe('save-as-test splits at rescue points', () => {
       { conversationId: conv.id, direction: 'out', text: 'let me get help', flags: { failure: true }, createdAt: seq(5) },
       { conversationId: conv.id, direction: 'in', text: 'ok thanks', createdAt: seq(6) },
       { conversationId: conv.id, direction: 'out', text: 'anytime!', createdAt: seq(7) },
-    ]);
+    ]).returning();
     const res2 = await app.request(`/api/agents/${agentId}/tests`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', cookie: parentCookie },
@@ -683,6 +683,10 @@ describe('save-as-test splits at rescue points', () => {
     expect(body.tests[0].turns.at(-1).text).toBe('what about shipping to France?');
     expect(body.tests[1].name).toBe('rescue transcript #2');
     expect(body.tests[1].turns.at(-1).text).toBe('and bulk discounts?');
+    // deep-link target: each test points at the customer message it replays
+    const byText = Object.fromEntries(inserted.map((m) => [m.text, m.id]));
+    expect(body.tests[0].source_message_id).toBe(byText['what about shipping to France?']);
+    expect(body.tests[1].source_message_id).toBe(byText['and bulk discounts?']);
   });
 
   it('falls back to one test on the last customer message when nothing escalated', async () => {

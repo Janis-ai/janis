@@ -550,6 +550,8 @@ export const agentTests = pgTable(
     /** What a good reply looks like now — free text the judge checks. */
     expectation: text('expectation').notNull().default(''),
     sourceConversationId: uuid('source_conversation_id'),
+    /** The customer message the test replays — deep-link target (?msg=). */
+    sourceMessageId: uuid('source_message_id'),
     /** {at, passed, reason, reply, tools, model} — last replay outcome. */
     lastRun: jsonb('last_run'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

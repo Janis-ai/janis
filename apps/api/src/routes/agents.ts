@@ -1130,6 +1130,7 @@ export function agentRoutes(db: Db) {
     turns: t.turns,
     expectation: t.expectation,
     source_conversation_id: t.sourceConversationId,
+    source_message_id: t.sourceMessageId,
     last_run: t.lastRun,
     created_at: t.createdAt.toISOString(),
   });
@@ -1188,6 +1189,7 @@ export function agentRoutes(db: Db) {
               expectation: b.expectation,
               turns: full.slice(Math.max(0, end + 1 - 16), end + 1) as never,
               sourceConversationId,
+              sourceMessageId: full[end].mid ?? null,
             })),
           )
           .returning();

@@ -2178,6 +2178,7 @@ interface AgentTest {
   turns: { role: 'customer' | 'agent'; text: string }[];
   expectation: string;
   source_conversation_id?: string | null;
+  source_message_id?: string | null;
   last_run?: AgentTestRun | null;
   created_at: string;
 }
@@ -2439,7 +2440,11 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
             )}
             {t.source_conversation_id && (
               <div style={{ marginTop: 6 }}>
-                <Link to={`/conversations/${t.source_conversation_id}`} className="muted" style={{ fontSize: 12 }}>
+                <Link
+                  to={`/conversations/${t.source_conversation_id}${t.source_message_id ? `?msg=${t.source_message_id}` : ''}`}
+                  className="muted"
+                  style={{ fontSize: 12 }}
+                >
                   view source conversation →
                 </Link>
               </div>

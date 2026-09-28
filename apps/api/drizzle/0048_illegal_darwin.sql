@@ -1,0 +1,1 @@
+ALTER TABLE "agent_tests" ADD COLUMN "source_message_id" uuid;
