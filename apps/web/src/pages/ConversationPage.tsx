@@ -1097,6 +1097,8 @@ interface InspectorData {
   prompt_tokens?: number;
   completion_tokens?: number;
   kb?: string[];
+  knowledge?: string[];
+  prompt?: 'custom' | 'default';
   tools?: { name: string; gated?: boolean; outcome: string }[];
 }
 
@@ -1126,10 +1128,28 @@ function InspectorPanel({ data }: { data: unknown }) {
           </span>
         </div>
       )}
+      {d.prompt && (
+        <div className="inspector-row">
+          <span className="muted">prompt</span>
+          <span>{d.prompt === 'custom' ? 'custom system prompt' : 'default'}</span>
+        </div>
+      )}
       <div className="inspector-row">
         <span className="muted">knowledge</span>
-        <span>{d.kb?.length ? d.kb.join(', ') : 'none loaded'}</span>
+        <span>
+          {[
+            ...(d.knowledge?.length
+              ? [`${d.knowledge.length} snippet${d.knowledge.length === 1 ? '' : 's'}`]
+              : []),
+            ...(d.kb ?? []),
+          ].join(' · ') || 'none loaded'}
+        </span>
       </div>
+      {d.knowledge?.map((k, i) => (
+        <div key={`k${i}`} className="inspector-tool">
+          <span>{k}</span>
+        </div>
+      ))}
       <div className="inspector-row">
         <span className="muted">tools</span>
         <span>{d.tools?.length ? `${d.tools.length} called` : 'none'}</span>

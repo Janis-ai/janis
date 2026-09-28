@@ -1415,13 +1415,18 @@ async function replyAsHostedAgent(
     // buttons on Messenger/WhatsApp, chips on webchat
     const buttonFlag = buttons.length ? { quick_replies: buttons } : {};
     // "Why did it say that?" — model/token/tool trace stamped on the stored
-    // reply; the console renders it as the per-message inspector.
+    // reply; the console renders it as the per-message inspector. Knowledge
+    // comes from two prompt sources: curated snippets (config.knowledge,
+    // where approved gap fixes land) and uploaded files.
+    const acfg = (agent.config ?? {}) as { knowledge?: string[]; system_prompt?: string };
     const inspectorFlag = {
       inspector: {
         model,
         prompt_tokens: promptTokens,
         completion_tokens: completionTokens,
         kb: docs.map((d) => d.name),
+        knowledge: (acfg.knowledge ?? []).slice(0, 20),
+        prompt: acfg.system_prompt ? 'custom' : 'default',
         tools: gen.toolCalls,
       },
     };
