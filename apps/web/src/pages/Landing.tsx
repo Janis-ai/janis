@@ -132,7 +132,7 @@ type Beat = {
 
 /** Beats up to the pending card — the demo pauses there for the visitor. */
 const PRE: Beat[] = [
-  { kind: 'in', text: 'My order #1042 arrived damaged — can I get a refund?', customer: true },
+  { kind: 'in', text: 'My order #1042 arrived damaged — can I get a refund?', wait: 350, customer: true },
   { kind: 'typing', wait: 1400, customer: true },
   {
     kind: 'out',
@@ -280,7 +280,7 @@ function DemoStrip() {
     const cls = customer ? (b.kind === 'in' ? 'cust-in' : 'cust-out') : b.kind;
     return (
       <div key={i} className={`demo-msg ${cls}`}>
-        {!customer && <div className="demo-who">{b.kind === 'in' ? 'Jordan Lee' : 'Janis'}</div>}
+        {!customer && <div className="demo-who">{b.kind === 'in' ? 'Jordan Lee' : 'AI Agent'}</div>}
         {b.text}
       </div>
     );
