@@ -725,8 +725,20 @@ details summary:hover { color: var(--text); }
 }
 .demo-card.approved { border-left-color: #34d399; }
 .demo-card.denied { border-left-color: var(--danger, #f87171); }
+.demo-card.waiting { animation: demo-ring 1.8s ease-in-out infinite; }
+@keyframes demo-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(94,234,212,.4); }
+  50% { box-shadow: 0 0 0 8px rgba(94,234,212,0); }
+}
+.demo-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
+.demo-card-title { font-weight: 600; font-size: 13.5px; }
+.demo-card-turn {
+  font-size: 11px; font-weight: 700; letter-spacing: .3px; padding: 2px 8px;
+  border-radius: 999px; background: rgba(245,158,11,.18); color: #f5b545;
+}
+.demo-card-desc { font-size: 13px; margin-bottom: 6px; }
 .demo-card-tool { font-family: var(--mono, monospace); font-size: 13px; font-weight: 600; }
-.demo-card-args { color: var(--muted); font-size: 12.5px; margin: 2px 0 8px; font-family: var(--mono, monospace); }
+.demo-card-args { color: var(--muted); font-size: 12px; margin: 2px 0 8px; font-family: var(--mono, monospace); }
 .demo-card-btns { display: flex; gap: 8px; }
 .demo-btn {
   font-size: 12.5px; padding: 5px 12px; border-radius: 7px; cursor: pointer;
@@ -736,13 +748,13 @@ details summary:hover { color: var(--text); }
 .demo-btn.primary { background: var(--accent); border-color: var(--accent); color: #0b2b26; font-weight: 600; }
 .demo-btn.primary:hover { color: #0b2b26; filter: brightness(1.08); }
 .demo-card-wait { font-size: 12px; color: var(--muted); font-style: italic; margin-top: 8px; }
-.demo-card.waiting .demo-btn.primary { animation: demo-pulse 1.6s ease-in-out infinite; }
-@keyframes demo-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(94,234,212,.45); }
-  50% { box-shadow: 0 0 0 7px rgba(94,234,212,0); }
-}
 .demo-card-done { color: #34d399; font-size: 13px; animation: demo-in .3s ease; }
 .demo-card-done.denied { color: var(--danger, #f87171); }
+.demo-note-cta {
+  background: none; border: none; padding: 0; font: inherit; font-style: normal;
+  color: var(--accent); cursor: pointer; white-space: nowrap;
+}
+.demo-note-cta:hover { text-decoration: underline; }
 .demo-note {
   align-self: center; text-align: center; color: var(--muted); font-size: 12.5px;
   font-style: italic; max-width: 380px; animation: demo-in .5s ease; margin-top: 4px;

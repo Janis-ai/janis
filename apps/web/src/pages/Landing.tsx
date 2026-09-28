@@ -155,6 +155,7 @@ const POST = {
       wait: 2400,
       customer: true,
     },
+    { kind: 'sys', text: 'Janis \u26a1 agent resumed', wait: 900 },
     { kind: 'note', text: 'The customer saw a seamless answer. The action ran only after a human approved it.' },
   ],
   denied: (): Beat[] => [
@@ -166,6 +167,7 @@ const POST = {
       wait: 2400,
       customer: true,
     },
+    { kind: 'sys', text: 'Janis \u26a1 agent resumed', wait: 900 },
     { kind: 'note', text: 'Nothing runs without a human. Denied actions never execute.' },
   ],
 };
@@ -176,6 +178,14 @@ const APPROVE_TIMEOUT = 6500;
 const CARD_STEP = PRE.length; // card is the last PRE beat — visible when step reaches this
 
 type Decision = { ok: boolean; you: boolean };
+
+/** Opens the dogfooded webchat widget — the bubble click is the widget API. */
+function openWidget() {
+  const panel = document.getElementById('janis-panel');
+  if (!panel?.classList.contains('open')) {
+    document.getElementById('janis-bubble')?.click();
+  }
+}
 
 /** Interactive replay of the approval flow — the visitor plays the operator. */
 function DemoStrip() {
@@ -228,8 +238,12 @@ function DemoStrip() {
           key={i}
           className={`demo-card${decision ? (decision.ok ? ' approved' : ' denied') : ' waiting'}`}
         >
-          <div className="demo-card-tool">propose_refund</div>
-          <div className="demo-card-args">{'{ "order": "#1042", "amount": "49.00" }'}</div>
+          <div className="demo-card-head">
+            <span className="demo-card-title">Refund approval</span>
+            {!decision && <span className="demo-card-turn">Your turn</span>}
+          </div>
+          <div className="demo-card-desc">Janis needs your approval to refund order #1042.</div>
+          <div className="demo-card-args">propose_refund · {'{ "order": "#1042", "amount": "49.00" }'}</div>
           {decision ? (
             <div className={`demo-card-done${decision.ok ? '' : ' denied'}`}>
               {decision.ok
@@ -249,7 +263,7 @@ function DemoStrip() {
                   Deny
                 </button>
               </div>
-              <div className="demo-card-wait">This one’s live — try clicking it.</div>
+              <div className="demo-card-wait">Try it yourself — you’re the human in the loop.</div>
             </>
           )}
         </div>
@@ -283,7 +297,12 @@ function DemoStrip() {
           <div className="demo-body">{shown.map((b, i) => renderBeat(b, i, 'operator'))}</div>
         </div>
       </div>
-      {note && <div className="demo-note">{note.text}</div>}
+      {note && (
+        <div className="demo-note">
+          {note.text}{' '}
+          <button className="demo-note-cta" onClick={openWidget}>Try Janis live →</button>
+        </div>
+      )}
     </>
   );
 }
@@ -292,13 +311,6 @@ function DemoStrip() {
 export default function Landing() {
   const { data } = useMe();
   const cta = data ? { to: '/conversations', label: 'Open console' } : { to: '/login', label: 'Get started' };
-  const openWidget = () => {
-    const panel = document.getElementById('janis-panel');
-    if (!panel?.classList.contains('open')) {
-      document.getElementById('janis-bubble')?.click();
-    }
-  };
-
   // Dogfood the web-chat widget on the marketing site. Same-origin so the
   // visitor's Janis session (when logged in) identifies them automatically;
   // on top of that we fetch a signed identity and hand it to the widget.
@@ -348,16 +360,13 @@ export default function Landing() {
           <Link className="btn primary lg" to={cta.to}>{data ? 'Open console' : 'Get started free'}</Link>
           <button className="btn lg" onClick={openWidget}>Try Janis live</button>
         </div>
-        <p className="landing-fine">
-          Free plan available · No credit card required · The chat bubble in the
-          corner is Janis — running on Janis.
-        </p>
+        <p className="landing-fine">Free plan available · No credit card required</p>
       </section>
 
       <section className="landing-steps landing-demo">
         <h2>Watch the handoff happen</h2>
         <p className="landing-sub">
-          AI drafts the action. A human approves it. The customer just sees a fast answer.
+          When your agent needs help, your team steps in. The conversation never loses its place.
         </p>
         <DemoStrip />
         <p className="landing-fine">
