@@ -388,6 +388,40 @@ describe('webchat widget endpoints', () => {
     expect(extMsgs.some((m: { action?: unknown }) => m.action)).toBe(false);
   });
 
+  // Regression: the test rail showed the visitor's first message above the
+  // greeting. The transcript contract is greeting row first, so the rail's
+  // echoed bubble (sorted by server timestamp once delivered) lands below it.
+  it('stores the greeting before the first inbound on internal test channels', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [ws] = await db.select().from(workspaces).limit(1);
+    const [agent] = await db.select().from(agents).limit(1);
+    const [internalChannel] = await db
+      .insert(channels)
+      .values({
+        workspaceId: ws.id,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Ask Janis',
+        credentials: { internal: true },
+      })
+      .returning();
+
+    const visitor = 'vis_greeting_order';
+    await app.request(`/chat/${internalChannel.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: visitor, text: 'who are you?' }),
+    });
+    const res = await app.request(
+      `/chat/${internalChannel.id}/messages?visitor_id=${visitor}`,
+    );
+    const msgs = (await res.json()).messages;
+    expect(msgs[0].direction).toBe('out');
+    expect(msgs[0].text).toBeTruthy(); // the greeting
+    expect(msgs[1].direction).toBe('in');
+    expect(msgs[1].text).toBe('who are you?');
+  });
+
   it('rejects uploads with a bad visitor id and foreign attachment urls', async () => {
     const fd = new FormData();
     fd.append('visitor_id', 'x');

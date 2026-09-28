@@ -2,6 +2,13 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
+import {
+  reconcilePoll,
+  timelineItems,
+  type Attachment,
+  type ChatMsg,
+  type OutEntry,
+} from '../lib/chatTimeline';
 
 interface ChatConfig {
   agent_name: string;
@@ -9,39 +16,6 @@ interface ChatConfig {
   greeting: string | null;
   quick_replies: string[];
   logo_url: string | null;
-}
-
-interface Attachment {
-  name: string;
-  url: string;
-  type: string;
-  size: number;
-}
-
-interface ChatMsg {
-  id: string;
-  direction: string;
-  text: string;
-  created_at: string;
-  attachments?: Attachment[];
-  quick_replies?: (string | { type: 'email' | 'phone' })[];
-  author?: { name: string; avatar: string | null };
-  action?: {
-    id: string;
-    tool: string;
-    args: Record<string, unknown>;
-    status: string;
-    decided_by?: string;
-    result?: string;
-  };
-}
-
-interface OutEntry {
-  localId: string;
-  text: string;
-  attachments: Attachment[];
-  status: 'pending' | 'failed' | 'delivered' | 'sent';
-  ts: string;
 }
 
 interface PendingFile {
@@ -278,33 +252,13 @@ export function AskJanis({
       setConvState(d.state);
       if (d.conversation_id) setConvId(d.conversation_id);
       if (d.has_more !== undefined) setHasMore(d.has_more);
-      const fresh: ChatMsg[] = [];
-      const next = [...outboxRef.current];
-      for (const m of d.messages) {
-        if (m.direction === 'in') {
-          const i = next.findIndex(
-            (o) =>
-              o.status === 'pending' &&
-              (o.text === m.text ||
-                (o.attachments.length > 0 && (m.attachments ?? []).length > 0)),
-          );
-          if (i >= 0) {
-            // one receipt at a time — demote any prior 'delivered' to 'sent'
-            for (let j = 0; j < next.length; j++) {
-              if (next[j].status === 'delivered') next[j] = { ...next[j], status: 'sent' };
-            }
-            next[i] = { ...next[i], status: 'delivered' };
-            if (m.id) seen.current.add(m.id);
-            if (!lastTs.current || m.created_at > lastTs.current) lastTs.current = m.created_at;
-            continue;
-          }
-        }
-        if (m.id && seen.current.has(m.id)) continue;
-        if (m.id) seen.current.add(m.id);
-        fresh.push(m);
-        if (!lastTs.current || m.created_at > lastTs.current) lastTs.current = m.created_at;
-        if (!oldestTs.current || m.created_at < oldestTs.current) oldestTs.current = m.created_at;
-      }
+      const { outbox: next, fresh, maxTs, minTs } = reconcilePoll(
+        outboxRef.current,
+        d.messages,
+        seen.current,
+      );
+      if (maxTs && (!lastTs.current || maxTs > lastTs.current)) lastTs.current = maxTs;
+      if (minTs && (!oldestTs.current || minTs < oldestTs.current)) oldestTs.current = minTs;
       setOb(() => next);
       // A reply landing this round ends the dots — and the typing flags in
       // this same response may be stale relative to it, so don't re-assert
@@ -547,9 +501,7 @@ export function AskJanis({
             {linkify(cfg.greeting, navigate)}
           </div>
         )}
-        {[...msgs.map((m) => ({ key: m.id, ts: m.created_at, kind: 'msg' as const, m })),
-          ...outbox.map((o) => ({ key: o.localId, ts: o.ts, kind: 'out' as const, o }))]
-          .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
+        {timelineItems(msgs, outbox)
           .map((item, idx, arr) => {
             // Sender label only opens a run — consecutive bubbles from the
             // same sender don't each need the name/avatar. Human replies get
