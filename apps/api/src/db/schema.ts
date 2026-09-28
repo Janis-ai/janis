@@ -167,6 +167,11 @@ export const conversations = pgTable(
     pauseMinutes: integer('pause_minutes'), // per-takeover duration override (null = agent default, -1 = never)
     isStarred: boolean('is_starred').notNull().default(false),
     isUnread: boolean('is_unread').notNull().default(false),
+    // CSAT: prompt sent on archive; the customer's next reply carries the
+    // rating and is captured in csatScore instead of reaching the agent
+    csatPending: boolean('csat_pending').notNull().default(false),
+    csatScore: integer('csat_score'),
+    csatAskedAt: timestamp('csat_asked_at', { withTimezone: true }),
     // Rolling agent memory: everything before summaryUpTo is folded into
     // agentSummary so the hosted agent remembers the whole conversation
     agentSummary: text('agent_summary'),
@@ -456,7 +461,7 @@ export const channels = pgTable('channels', {
     .notNull()
     .references(() => agents.id),
   kind: text('kind', {
-    enum: ['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail'],
+    enum: ['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'voice'],
   }).notNull(),
   name: text('name').notNull(),
   // {page_id, page_access_token, verify_token, phone_number_id} — secrets never leave the API

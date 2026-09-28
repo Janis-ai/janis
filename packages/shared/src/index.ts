@@ -305,7 +305,7 @@ export type Agent = z.infer<typeof Agent>;
 /** A hosted messaging channel (Meta), embeddable webchat, or inbound email. Tokens are never exposed to the console. */
 export const Channel = z.object({
   id: z.string(),
-  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail']),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'voice']),
   name: z.string(),
   agent_id: z.string(),
   agent_name: z.string(),
@@ -362,6 +362,9 @@ export const Conversation = z.object({
   is_starred: z.boolean(),
   is_unread: z.boolean(),
   human_since: z.string().nullable(),
+  /** 1–5 rating captured from the post-resolution CSAT prompt, if answered */
+  csat_score: z.number().nullable(),
+  csat_pending: z.boolean(),
   created_at: z.string(),
 });
 export type Conversation = z.infer<typeof Conversation>;

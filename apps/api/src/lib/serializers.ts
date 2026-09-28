@@ -83,6 +83,8 @@ export function toConversation(row: Row<typeof conversations>, openAlertCount = 
     is_starred: row.isStarred,
     is_unread: row.isUnread,
     human_since: iso(row.humanSince),
+    csat_score: row.csatScore,
+    csat_pending: row.csatPending,
     created_at: iso(row.createdAt)!,
   };
 }

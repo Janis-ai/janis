@@ -32,16 +32,21 @@ import { toChannel } from '../lib/serializers.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 
 const createChannel = z.object({
-  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email']),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'voice']),
   name: z.string().min(1).max(120),
   agent_id: z.string().uuid(),
   page_id: z.string().optional(), // messenger / instagram
   phone_number_id: z.string().optional(), // whatsapp
   access_token: z.string().min(1).optional(), // not required for webchat/email
   verify_token: z.string().optional(), // auto-generated if absent
-  greeting: z.string().max(500).optional(), // webchat
+  greeting: z.string().max(500).optional(), // webchat + voice (spoken opener)
   quick_replies: z.array(z.string().min(1).max(120)).max(8).optional(), // webchat
   from_name: z.string().max(120).optional(), // email: From display name
+  // voice (Twilio)
+  twilio_account_sid: z.string().optional(),
+  twilio_auth_token: z.string().optional(),
+  phone_number: z.string().optional(), // the channel's E.164 number
+  forward_to: z.string().optional(), // human handoff bridges the call here
 });
 
 const patchChannel = z.object({
@@ -130,6 +135,14 @@ export function channelApiRoutes(db: Db) {
     if (body.kind === 'whatsapp' && !body.phone_number_id) {
       return c.json({ error: 'phone_number_id required for whatsapp' }, 400);
     }
+    if (body.kind === 'voice') {
+      if (!body.twilio_account_sid || !body.twilio_auth_token || !body.phone_number) {
+        return c.json(
+          { error: 'twilio_account_sid, twilio_auth_token and phone_number required for voice' },
+          400,
+        );
+      }
+    }
     if (body.kind === 'messenger' || body.kind === 'instagram') {
       if (!body.page_id) {
         return c.json({ error: 'page_id required for messenger/instagram' }, 400);
@@ -145,6 +158,10 @@ export function channelApiRoutes(db: Db) {
       access_token: body.access_token,
       verify_token: body.verify_token || randomBytes(16).toString('hex'),
       greeting: body.greeting,
+      twilio_account_sid: body.twilio_account_sid,
+      twilio_auth_token: body.twilio_auth_token,
+      phone_number: body.phone_number,
+      forward_to: body.forward_to,
       quick_replies: body.quick_replies,
     };
     if (body.kind === 'email') {

@@ -11,6 +11,7 @@ import {
   ensureAccessToken,
   sendMessage as sendGmailMessage,
 } from './gmail.js';
+import { voiceDeliver } from './voiceBridge.js';
 
 type ChannelRow = typeof channels.$inferSelect;
 
@@ -60,6 +61,11 @@ export interface ChannelCredentials {
   token_expiry?: number;
   email_address?: string;
   gmail_cursor?: number;
+  // voice (Twilio): number config + signature token. forward_to bridges the
+  // live call to a human's phone when a teammate owns the conversation.
+  twilio_account_sid?: string;
+  twilio_auth_token?: string;
+  forward_to?: string;
 }
 
 export interface AttachmentRef {
@@ -1031,6 +1037,20 @@ export async function deliverToChannel(
       });
     }
     return { delivered: false, error, retryable: false };
+  }
+  // Voice is turn-based — Twilio holds the line and the reply is spoken in
+  // the next webhook response, not pushed. Queue it for the /voice/turn loop.
+  if (row.channel.kind === 'voice') {
+    voiceDeliver(conversationId, text);
+    if (opts?.messageId) {
+      const [a] = await db
+        .select({ workspaceId: agents.workspaceId })
+        .from(agents)
+        .where(eq(agents.id, row.conv.agentId))
+        .limit(1);
+      await stampDelivery(db, a?.workspaceId, opts.messageId, { delivered: true });
+    }
+    return { delivered: true };
   }
   // Self-hosted SDK bots receive operator/agent messages over their
   // registered socket — the channel binding is transcript bookkeeping only.

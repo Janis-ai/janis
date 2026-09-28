@@ -180,6 +180,37 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     },
   });
 
+  // Voice — Twilio number + creds; the webhook URL lives on the channel card.
+  const [voiceForm, setVoiceForm] = useState({
+    sid: '',
+    token: '',
+    number: '',
+    forward_to: '',
+    greeting: '',
+  });
+  const createVoice = useMutation({
+    mutationFn: () =>
+      api('/api/channels', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'voice',
+          name: `${agent.name} voice`,
+          agent_id: agentId,
+          twilio_account_sid: voiceForm.sid,
+          twilio_auth_token: voiceForm.token,
+          phone_number: voiceForm.number,
+          forward_to: voiceForm.forward_to || undefined,
+          greeting: voiceForm.greeting || undefined,
+        }),
+      }),
+    onSuccess: () => {
+      setVoiceForm({ sid: '', token: '', number: '', forward_to: '', greeting: '' });
+      setError('');
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+    },
+    onError: (e) => setError(e.message),
+  });
+
   const removeChannel = useMutation({
     mutationFn: (channelId: string) => api(`/api/channels/${channelId}`, { method: 'DELETE' }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
@@ -610,6 +641,64 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               at your inbound provider, or forward an existing mailbox to it.
             </div>
           )}
+        </details>
+      </div>
+
+      {/* Voice — Twilio number answers calls: caller speech is transcribed,
+          the agent replies with TTS, and the transcript lands in the inbox. */}
+      <div className="card">
+        <details className="appearance-details">
+          <summary>
+            <span className="details-title">Voice — Twilio phone number</span>
+            <span className="details-sub">
+              callers talk, the agent speaks — the whole call lands in the inbox
+            </span>
+          </summary>
+          <form
+            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, maxWidth: 520 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              createVoice.mutate();
+            }}
+          >
+            <input
+              placeholder="Twilio Account SID (AC…)"
+              value={voiceForm.sid}
+              onChange={(e) => setVoiceForm({ ...voiceForm, sid: e.target.value })}
+              required
+            />
+            <input
+              placeholder="Twilio Auth Token"
+              value={voiceForm.token}
+              onChange={(e) => setVoiceForm({ ...voiceForm, token: e.target.value })}
+              required
+            />
+            <input
+              placeholder="Phone number — E.164, e.g. +15551234567"
+              value={voiceForm.number}
+              onChange={(e) => setVoiceForm({ ...voiceForm, number: e.target.value })}
+              required
+            />
+            <input
+              placeholder="Forward-to number when a human takes over (optional)"
+              value={voiceForm.forward_to}
+              onChange={(e) => setVoiceForm({ ...voiceForm, forward_to: e.target.value })}
+            />
+            <input
+              placeholder="Spoken greeting (optional)"
+              value={voiceForm.greeting}
+              onChange={(e) => setVoiceForm({ ...voiceForm, greeting: e.target.value })}
+            />
+            <div>
+              <button className="btn" disabled={createVoice.isPending}>Add voice channel</button>
+            </div>
+          </form>
+          <div className="muted" style={{ marginTop: 10 }}>
+            Then in the Twilio console, set the number's{' '}
+            <em>Voice → "A call comes in"</em> webhook to the URL on the channel card.
+            Callers are transcribed turn-by-turn; the agent's reply is spoken, and when a
+            human takes over the call can bridge straight to the forward-to number.
+          </div>
         </details>
       </div>
 

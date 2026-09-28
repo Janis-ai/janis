@@ -16,6 +16,7 @@ export const KIND_LABEL: Record<string, string> = {
   webchat: 'Web chat',
   email: 'Email',
   gmail: 'Gmail',
+  voice: 'Voice',
 };
 
 /** Comma- or newline-separated text → trimmed array of quick-reply labels. */
@@ -180,7 +181,25 @@ export function ChannelCard({
           </div>
         </details>
       )}
-      {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && ch.kind !== 'email' && ch.kind !== 'gmail' && (
+      {ch.kind === 'voice' && (
+        <details className="webhook-details" open style={{ marginTop: 8 }}>
+          <summary>
+            <span className="details-title">Twilio voice webhook</span>
+            <span className="details-sub">paste this on the number in the Twilio console</span>
+          </summary>
+          <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
+            {apiOrigin}/voice/{ch.id}/incoming
+          </div>
+          <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
+            Twilio console → Phone Numbers → your number → Voice → "A call comes in": POST to
+            the URL above. Optionally point "Call status changes" at{' '}
+            <span className="mono">{apiOrigin}/voice/{ch.id}/status</span> so hangups close the
+            call cleanly. Callers are transcribed, the agent answers by voice, and the call
+            lands in this inbox as a normal conversation.
+          </div>
+        </details>
+      )}
+      {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && ch.kind !== 'email' && ch.kind !== 'gmail' && ch.kind !== 'voice' && (
       <details className="webhook-details">
         <summary>Webhook details</summary>
         <div className="mono" style={{ marginTop: 6 }}>

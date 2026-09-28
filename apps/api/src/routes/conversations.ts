@@ -30,6 +30,7 @@ import {
   teachAgent,
 } from '../services/takeover.js';
 import { requestSuggestion } from '../services/suggestions.js';
+import { sendCsatPrompt } from '../lib/csat.js';
 import { fetchAvatar } from '../lib/avatar.js';
 import { markOperatorTyping, shouldRelayTyping } from '../lib/typingState.js';
 import {
@@ -598,6 +599,12 @@ export function conversationRoutes(db: Db) {
         const b = await channelBindingFor(db, owned.id);
         if (b) await releaseThreadControl(b.channel, b.platformUserId);
       })();
+    }
+
+    // Archiving resolves the conversation — send the one-shot CSAT prompt so
+    // the customer's next reply lands as a rating, not another turn.
+    if (body.state === 'archived' && owned.state !== 'archived') {
+      void sendCsatPrompt(db, row).catch(() => {});
     }
 
     // Manually un-flagging back to the agent resolves open alerts — same

@@ -20,6 +20,7 @@ import { rehostAttachments } from '../lib/uploads.js';
 import { toMessage } from '../lib/serializers.js';
 import { bus } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
+import { captureCsat } from '../lib/csat.js';
 import { env } from '../env.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { processEvents } from './ingest.js';
@@ -421,6 +422,13 @@ export async function handleChannelMessage(
     const e = err as { code?: string; constraint_name?: string };
     if (e.code === '23505' && e.constraint_name === 'messages_in_mid') return;
     throw err;
+  }
+
+  // A pending CSAT prompt turns this reply into a rating — it's already in
+  // the transcript; record the score and thank them without waking the agent.
+  if (conv.csatPending) {
+    if (await captureCsat(db, conv, msg.text ?? '')) return;
+    conv = { ...conv, csatPending: false };
   }
 
   // Forward to the agent unless a human owns it — needs_human is just a

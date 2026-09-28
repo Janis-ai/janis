@@ -292,5 +292,50 @@ export function reportRoutes(db: Db) {
     });
   });
 
+  // GET /csat?days=30 — post-resolution ratings: average score, distribution,
+  // and what share of prompted customers answered.
+  app.get('/csat', async (c) => {
+    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+
+    const rows = await db
+      .select({
+        id: conversations.id,
+        score: conversations.csatScore,
+        askedAt: conversations.csatAskedAt,
+        pending: conversations.csatPending,
+        createdAt: conversations.createdAt,
+      })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(
+        and(
+          ...agentVis(c.get('workspaceId'), c.get('agentScope')),
+          gt(conversations.csatAskedAt, cutoff),
+          ...drillFilters(c),
+        ),
+      );
+
+    const dist = [0, 0, 0, 0, 0];
+    let sum = 0;
+    let answered = 0;
+    for (const r of rows) {
+      if (r.score === null) continue;
+      answered++;
+      sum += r.score;
+      dist[Math.min(Math.max(r.score, 1), 5) - 1]++;
+    }
+    return c.json({
+      days,
+      prompted: rows.length,
+      answered,
+      response_rate: rows.length ? Math.round((answered / rows.length) * 100) : null,
+      avg_score: answered ? Math.round((sum / answered) * 100) / 100 : null,
+      // share of 4–5 ratings — the industry CSAT headline
+      satisfied_pct: answered ? Math.round(((dist[3] + dist[4]) / answered) * 100) : null,
+      distribution: dist.map((n, i) => ({ score: i + 1, count: n })),
+    });
+  });
+
   return app;
 }

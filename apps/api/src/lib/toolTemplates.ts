@@ -58,7 +58,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     id: 'shopify',
     name: 'Shopify',
     category: 'E-commerce',
-    blurb: 'Look up orders and a customer’s order history — answers "where is my order".',
+    blurb: 'Track and look up orders, cancel, edit addresses, create draft orders — money-moving actions wait for teammate approval.',
     docs_url: 'https://shopify.dev/docs/api/admin-rest',
     fields: [
       { key: 'shop', label: 'Shop domain', placeholder: 'mystore.myshopify.com' },
@@ -116,6 +116,21 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         params: {
           draft_order:
             'JSON object, e.g. {"line_items":[{"title":"…","price":"19.99","quantity":1}],"email":"customer@email.com","note":"…"}',
+        },
+      },
+      {
+        name: 'shopify_update_shipping_address',
+        label: 'Update shipping address',
+        description:
+          'Change the shipping address on an unfulfilled Shopify order by numeric order id (from shopify_lookup_order). Needs a teammate to approve.',
+        method: 'PUT',
+        approval: true,
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders/{order_id}.json',
+        headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        params: {
+          order_id: 'numeric Shopify order id',
+          order:
+            'JSON object, e.g. {"id":123,"shipping_address":{"address1":"123 Main St","city":"Austin","province":"TX","zip":"78701","country_code":"US"}} — replaces the shipping address',
         },
       },
       {

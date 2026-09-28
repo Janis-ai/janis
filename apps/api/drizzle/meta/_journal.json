@@ -351,6 +351,13 @@
       "when": 1790623186194,
       "tag": "0049_brave_warhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1790632283227,
+      "tag": "0050_csat",
+      "breakpoints": true
     }
   ]
 }

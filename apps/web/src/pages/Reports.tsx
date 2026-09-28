@@ -32,6 +32,16 @@ interface ContainmentMetrics {
   series: { date: string; total: number; contained: number }[];
 }
 
+interface CsatMetrics {
+  days: number;
+  prompted: number;
+  answered: number;
+  response_rate: number | null;
+  avg_score: number | null;
+  satisfied_pct: number | null;
+  distribution: { score: number; count: number }[];
+}
+
 const fmtMin = (m: number | null) =>
   m === null ? '—' : m < 60 ? `${Math.round(m)}m` : `${(m / 60).toFixed(1)}h`;
 
@@ -78,6 +88,10 @@ export default function Reports() {
   const containment = useQuery({
     queryKey: ['containment-metrics', agentId, channelId],
     queryFn: () => api<ContainmentMetrics>(`/api/reports/containment?${qs}`),
+  });
+  const csat = useQuery({
+    queryKey: ['csat-metrics', agentId, channelId],
+    queryFn: () => api<CsatMetrics>(`/api/reports/csat?${qs}`),
   });
   const qc = useQueryClient();
 
@@ -153,6 +167,54 @@ export default function Reports() {
                 counted in the total, in neither column.
               </div>
             )}
+          </div>
+        );
+      })()}
+
+      {/* CSAT — post-resolution customer ratings */}
+      {(() => {
+        const s = csat.data;
+        if (!s || s.prompted === 0) return null;
+        const max = Math.max(...s.distribution.map((d) => d.count), 1);
+        return (
+          <div className="card">
+            <div className="row">
+              <strong className="grow">Customer satisfaction — last {s.days} days</strong>
+            </div>
+            <div className="metric-grid" style={{ marginTop: 10 }}>
+              <div className="metric">
+                <div className="metric-num">{s.avg_score === null ? '—' : s.avg_score.toFixed(1)}</div>
+                <div className="muted">avg rating (1–5)</div>
+              </div>
+              <div className="metric">
+                <div className="metric-num">{s.satisfied_pct === null ? '—' : `${s.satisfied_pct}%`}</div>
+                <div className="muted">rated 4–5</div>
+              </div>
+              <div className="metric"><div className="metric-num">{s.answered}</div><div className="muted">ratings</div></div>
+              <div className="metric">
+                <div className="metric-num">{s.response_rate === null ? '—' : `${s.response_rate}%`}</div>
+                <div className="muted">answered the prompt</div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', height: 44, marginTop: 12 }}>
+              {s.distribution.map((d) => (
+                <div key={d.score} style={{ flex: 1, textAlign: 'center' }}>
+                  <div
+                    style={{
+                      height: Math.max((d.count / max) * 36, d.count ? 3 : 0),
+                      background: 'var(--accent)',
+                      borderRadius: 3,
+                      opacity: 0.5 + 0.5 * (d.score / 5),
+                    }}
+                    title={`${d.count} rated ${d.score}`}
+                  />
+                  <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{d.score}</div>
+                </div>
+              ))}
+            </div>
+            <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+              Customers are asked to rate 1–5 when a conversation is archived.
+            </div>
           </div>
         );
       })()}
