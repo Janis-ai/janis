@@ -301,8 +301,8 @@ export default function Landing() {
         </p>
         <DemoStrip />
         <p className="landing-fine">
-          Try it for real — ask the Janis bot in the corner for a refund and watch
-          the approval card appear.
+          Try it for real — stump the Janis bot in the corner and watch it call
+          in a human teammate. That alert lands in a real inbox.
         </p>
       </section>
 
