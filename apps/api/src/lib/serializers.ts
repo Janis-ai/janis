@@ -177,6 +177,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     inbound_address?: string;
     email_address?: string;
     from_name?: string;
+    hosted?: boolean;
   };
   return {
     id: row.id,
@@ -188,11 +189,13 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
       page_id: creds.page_id,
       phone_number_id: creds.phone_number_id,
       username: row.kind === 'instagram' ? creds.username : undefined,
-      phone_number: row.kind === 'whatsapp' ? creds.phone_number : undefined,
+      phone_number:
+        row.kind === 'whatsapp' || row.kind === 'voice' ? creds.phone_number : undefined,
       verify_token: creds.verify_token ?? '',
       via: creds.via === 'oauth' || creds.via === 'manual' ? creds.via : undefined,
       chat_url: channelChatUrl(row),
       identity_secret: row.kind === 'webchat' ? creds.identity_secret : undefined,
+      hosted: row.kind === 'voice' && creds.hosted ? true : undefined,
       show_operator: row.kind === 'webchat' ? creds.show_operator === true : undefined,
       inbound_address: row.kind === 'email' ? creds.inbound_address : undefined,
       email_address: row.kind === 'gmail' ? creds.email_address : undefined,

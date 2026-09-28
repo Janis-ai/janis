@@ -41,6 +41,7 @@ def read_env(path):
 envs = read_env('apps/api/.env')
 envs.update(read_env('apps/api/.env.production'))
 
+SECRET_BINDINGS = []
 db_url = envs.pop('DATABASE_URL', '')
 # A unix-socket DATABASE_URL (...?host=/cloudsql/PROJ:REGION:INSTANCE) needs the
 # Cloud SQL connector attached to the service — deploy adds the flag below.
@@ -69,8 +70,31 @@ if db_url:
                     '--member', f'serviceAccount:{PROJECT_NUMBER}-compute@developer.gserviceaccount.com',
                     '--role', 'roles/secretmanager.secretAccessor'],
                    capture_output=True)
+    SECRET_BINDINGS.append('DATABASE_URL=janis-database-url:latest')
 else:
     envs['PGLITE_DIR'] = '/app/data/pglite'
+
+# Hosted voice — the master Twilio auth token goes through Secret Manager,
+# not plain env vars (same pattern as DATABASE_URL).
+twilio_token = envs.pop('TWILIO_AUTH_TOKEN', '')
+if twilio_token:
+    r = subprocess.run(
+        ['gcloud', 'secrets', 'describe', 'janis-twilio-auth-token', '--project', PROJECT],
+        capture_output=True)
+    if r.returncode != 0:
+        subprocess.run(['gcloud', 'secrets', 'create', 'janis-twilio-auth-token',
+                        '--project', PROJECT, '--replication-policy', 'automatic',
+                        '--data-file', '-'], input=twilio_token.encode(), check=True)
+    else:
+        subprocess.run(['gcloud', 'secrets', 'versions', 'add', 'janis-twilio-auth-token',
+                        '--project', PROJECT, '--data-file', '-'],
+                       input=twilio_token.encode(), check=True)
+    subprocess.run(['gcloud', 'secrets', 'add-iam-policy-binding', 'janis-twilio-auth-token',
+                    '--project', PROJECT,
+                    '--member', f'serviceAccount:{PROJECT_NUMBER}-compute@developer.gserviceaccount.com',
+                    '--role', 'roles/secretmanager.secretAccessor'],
+                   capture_output=True)
+    SECRET_BINDINGS.append('TWILIO_AUTH_TOKEN=janis-twilio-auth-token:latest')
 
 # Attachments write to the FUSE bucket in both modes — container-local
 # storage would lose them on every redeploy/instance recycle.
@@ -83,15 +107,22 @@ public_origin = envs.pop('PUBLIC_ORIGIN', '') or os.environ['BASE']
 envs['API_ORIGIN'] = envs['WEB_ORIGIN'] = public_origin
 if 'SESSION_SECRET' not in envs:
     envs['SESSION_SECRET'] = secrets.token_urlsafe(32)
+# Always rewrite — a stale file from an earlier deploy must not attach
+# secrets this run doesn't mean to.
+open('/tmp/janis-secrets.txt', 'w').write(','.join(SECRET_BINDINGS))
 yaml.safe_dump(envs, open('/tmp/janis-env.yaml', 'w'))
 print('DATABASE_URL' if db_url else 'PGlite', 'mode')
 PY
 
 # DATABASE_URL mode: no volume. PGlite mode: FUSE bucket for persistence.
+SECRETS=$(cat /tmp/janis-secrets.txt 2>/dev/null || true)
+SECRETS_FLAG=()
+[ -n "$SECRETS" ] && SECRETS_FLAG=(--update-secrets "$SECRETS")
 if python3 -c "import yaml; exit(0 if 'PGLITE_DIR' in yaml.safe_load(open('/tmp/janis-env.yaml')) else 1)"; then
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
     --max-instances 1 --memory 1Gi --no-cpu-throttling \
+    "${SECRETS_FLAG[@]}" \
     --add-volume name=data,type=cloud-storage,bucket=janis-data-$PROJECT \
     --add-volume-mount volume=data,mount-path=/app/data \
     --env-vars-file /tmp/janis-env.yaml
@@ -106,9 +137,9 @@ else
     --memory 1Gi --no-cpu-throttling \
     --max-instances 1 \
     "${EXTRA[@]}" \
+    "${SECRETS_FLAG[@]}" \
     --add-volume name=data,type=cloud-storage,bucket=janis-data-$PROJECT \
     --add-volume-mount volume=data,mount-path=/app/data \
-    --update-secrets "DATABASE_URL=janis-database-url:latest" \
     --env-vars-file /tmp/janis-env.yaml
 fi
 echo "Deployed: $BASE"

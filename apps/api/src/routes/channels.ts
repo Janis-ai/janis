@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { and, eq } from 'drizzle-orm';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import { agents, channelBindings, channels } from '../db/schema.js';
@@ -47,6 +48,10 @@ const createChannel = z.object({
   twilio_auth_token: z.string().optional(),
   phone_number: z.string().optional(), // the channel's E.164 number
   forward_to: z.string().optional(), // human handoff bridges the call here
+  // hosted voice: Janis provisions the number under our Twilio account —
+  // phone_number is one the customer picked from /channels/voice-numbers
+  hosted: z.boolean().optional(),
+  country: z.string().length(2).optional(),
 });
 
 const patchChannel = z.object({
@@ -102,6 +107,23 @@ export function channelApiRoutes(db: Db) {
     });
   });
 
+  // Hosted voice: list buyable numbers so the customer can pick one. Must
+  // register before /:id or "voice-numbers" would be read as a channel id.
+  app.get('/voice-numbers', async (c) => {
+    const { hostedVoiceCreds, searchVoiceNumbers } = await import('../lib/twilio.js');
+    if (!hostedVoiceCreds()) return c.json({ configured: false, numbers: [] });
+    try {
+      const numbers = await searchVoiceNumbers(
+        (c.req.query('country') ?? env.twilioVoiceCountry).toUpperCase(),
+        { areaCode: c.req.query('area_code'), contains: c.req.query('contains') },
+      );
+      return c.json({ configured: true, numbers });
+    } catch (err) {
+      const e = err as { message?: string };
+      return c.json({ error: e.message ?? 'number search failed' }, 400);
+    }
+  });
+
   app.get('/:id', async (c) => {
     const [row] = await db
       .select({ channel: channels, agentName: agents.name })
@@ -135,13 +157,16 @@ export function channelApiRoutes(db: Db) {
     if (body.kind === 'whatsapp' && !body.phone_number_id) {
       return c.json({ error: 'phone_number_id required for whatsapp' }, 400);
     }
-    if (body.kind === 'voice') {
+    if (body.kind === 'voice' && !body.hosted) {
       if (!body.twilio_account_sid || !body.twilio_auth_token || !body.phone_number) {
         return c.json(
           { error: 'twilio_account_sid, twilio_auth_token and phone_number required for voice' },
           400,
         );
       }
+    }
+    if (body.kind === 'voice' && body.hosted && !body.phone_number) {
+      return c.json({ error: 'phone_number required — pick one from /channels/voice-numbers' }, 400);
     }
     if (body.kind === 'messenger' || body.kind === 'instagram') {
       if (!body.page_id) {
@@ -169,6 +194,36 @@ export function channelApiRoutes(db: Db) {
       // routed to this channel by matching the To: header against it.
       credentials.inbound_address = `ch_${randomBytes(4).toString('hex')}@${env.emailInboundDomain}`;
       credentials.from_name = body.from_name;
+    }
+    if (body.kind === 'voice' && body.hosted) {
+      // Janis-hosted: provision the number under a dedicated Twilio
+      // subaccount with the webhooks prewired. The subaccount's auth token is
+      // what signs inbound webhooks — stored as the channel's creds.
+      const { provisionVoiceNumber } = await import('../lib/twilio.js');
+      const channelId = randomUUID();
+      const p = await provisionVoiceNumber(channelId, body.phone_number!, body.name).catch((err) => {
+        throw new HTTPException(400, {
+          message: `number provisioning failed: ${(err as Error).message}`,
+        });
+      });
+      credentials.twilio_account_sid = p.subSid;
+      credentials.twilio_auth_token = p.subToken;
+      credentials.phone_number = p.number;
+      credentials.hosted = true;
+      credentials.twilio_number_sid = p.numberSid;
+      const [row] = await db
+        .insert(channels)
+        .values({
+          id: channelId,
+          workspaceId: c.get('workspaceId'),
+          agentId: body.agent_id,
+          kind: body.kind,
+          name: body.name,
+          credentials,
+        })
+        .returning();
+      invalidateChannelCache();
+      return c.json({ channel: toChannel(row, agent.name) }, 201);
     }
     const [row] = await db
       .insert(channels)
@@ -264,7 +319,12 @@ export function channelApiRoutes(db: Db) {
 
   app.delete('/:id', async (c) => {
     const [row] = await db
-      .select({ id: channels.id, agentId: channels.agentId })
+      .select({
+        id: channels.id,
+        agentId: channels.agentId,
+        kind: channels.kind,
+        credentials: channels.credentials,
+      })
       .from(channels)
       .where(and(eq(channels.id, c.req.param('id')), eq(channels.workspaceId, c.get('workspaceId'))))
       .limit(1);
@@ -273,6 +333,13 @@ export function channelApiRoutes(db: Db) {
       db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
     );
     if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
+    // Hosted voice: release the number + close the subaccount so nothing
+    // keeps billing after the channel is gone.
+    const creds = row.credentials as ChannelCredentials;
+    if (row.kind === 'voice' && creds?.hosted && creds.twilio_account_sid) {
+      const { deprovisionVoiceNumber } = await import('../lib/twilio.js');
+      void deprovisionVoiceNumber(creds.twilio_account_sid, creds.twilio_number_sid);
+    }
     // Bindings reference channels without cascade — remove them first.
     await db.delete(channelBindings).where(eq(channelBindings.channelId, row.id));
     await db.delete(channels).where(eq(channels.id, row.id));

@@ -322,6 +322,8 @@ export const Channel = z.object({
     // webchat: shared secret for HMAC-signed visitor identity — visible to
     // workspace members (like verify_token), never to widget visitors
     identity_secret: z.string().optional(),
+    // voice: Janis provisioned the number — no Twilio console setup needed
+    hosted: z.boolean().optional(),
     // webchat: show operator name/avatar on human replies — off by default
     show_operator: z.boolean().optional(),
     // email: the channel's unique inbound address + From display name

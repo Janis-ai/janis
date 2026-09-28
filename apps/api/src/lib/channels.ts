@@ -63,8 +63,12 @@ export interface ChannelCredentials {
   gmail_cursor?: number;
   // voice (Twilio): number config + signature token. forward_to bridges the
   // live call to a human's phone when a teammate owns the conversation.
+  // Hosted (Janis-provisioned) numbers: account/token are the channel's own
+  // Twilio subaccount; twilio_number_sid is needed to release it on delete.
   twilio_account_sid?: string;
   twilio_auth_token?: string;
+  hosted?: boolean;
+  twilio_number_sid?: string;
   forward_to?: string;
 }
 

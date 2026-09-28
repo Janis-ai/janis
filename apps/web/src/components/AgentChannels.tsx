@@ -180,13 +180,39 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     },
   });
 
-  // Voice — Twilio number + creds; the webhook URL lives on the channel card.
+  // Voice — Janis-hosted number (search + pick) or bring-your-own Twilio
+  // creds; the webhook URL lives on the channel card.
+  const [voiceMode, setVoiceMode] = useState<'hosted' | 'byo'>('hosted');
+  const [areaCode, setAreaCode] = useState('');
+  const [foundNumbers, setFoundNumbers] = useState<
+    { phone_number: string; friendly_name: string; locality?: string; region?: string }[] | null
+  >(null);
+  const [hostedConfigured, setHostedConfigured] = useState(true);
+  const [pickedNumber, setPickedNumber] = useState('');
   const [voiceForm, setVoiceForm] = useState({
     sid: '',
     token: '',
     number: '',
     forward_to: '',
     greeting: '',
+  });
+  const searchNumbers = useMutation({
+    mutationFn: () =>
+      api<{ configured: boolean; numbers: typeof foundNumbers }>(
+        `/api/channels/voice-numbers?area_code=${encodeURIComponent(areaCode)}`,
+      ),
+    onSuccess: (r) => {
+      if (!r.configured) {
+        setHostedConfigured(false);
+        setVoiceMode('byo');
+        setError('Hosted numbers are not enabled on this deployment — use your own Twilio creds.');
+        return;
+      }
+      setFoundNumbers(r.numbers);
+      setPickedNumber(r.numbers?.[0]?.phone_number ?? '');
+      setError('');
+    },
+    onError: (e) => setError(e.message),
   });
   const createVoice = useMutation({
     mutationFn: () =>
@@ -196,15 +222,21 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           kind: 'voice',
           name: `${agent.name} voice`,
           agent_id: agentId,
-          twilio_account_sid: voiceForm.sid,
-          twilio_auth_token: voiceForm.token,
-          phone_number: voiceForm.number,
+          ...(voiceMode === 'hosted'
+            ? { hosted: true, phone_number: pickedNumber }
+            : {
+                twilio_account_sid: voiceForm.sid,
+                twilio_auth_token: voiceForm.token,
+                phone_number: voiceForm.number,
+              }),
           forward_to: voiceForm.forward_to || undefined,
           greeting: voiceForm.greeting || undefined,
         }),
       }),
     onSuccess: () => {
       setVoiceForm({ sid: '', token: '', number: '', forward_to: '', greeting: '' });
+      setFoundNumbers(null);
+      setPickedNumber('');
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
     },
@@ -654,31 +686,87 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               callers talk, the agent speaks — the whole call lands in the inbox
             </span>
           </summary>
+          <div className="row" style={{ marginTop: 12, gap: 8 }}>
+            <button
+              className={`btn ${voiceMode === 'hosted' ? 'primary' : ''}`}
+              onClick={() => setVoiceMode('hosted')}
+              disabled={!hostedConfigured}
+            >
+              Get a number
+            </button>
+            <button
+              className={`btn ${voiceMode === 'byo' ? 'primary' : ''}`}
+              onClick={() => setVoiceMode('byo')}
+            >
+              Use my Twilio account
+            </button>
+          </div>
           <form
-            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, maxWidth: 520 }}
+            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, maxWidth: 520 }}
             onSubmit={(e) => {
               e.preventDefault();
-              createVoice.mutate();
+              if (voiceMode === 'hosted') createVoice.mutate();
+              else createVoice.mutate();
             }}
           >
-            <input
-              placeholder="Twilio Account SID (AC…)"
-              value={voiceForm.sid}
-              onChange={(e) => setVoiceForm({ ...voiceForm, sid: e.target.value })}
-              required
-            />
-            <input
-              placeholder="Twilio Auth Token"
-              value={voiceForm.token}
-              onChange={(e) => setVoiceForm({ ...voiceForm, token: e.target.value })}
-              required
-            />
-            <input
-              placeholder="Phone number — E.164, e.g. +15551234567"
-              value={voiceForm.number}
-              onChange={(e) => setVoiceForm({ ...voiceForm, number: e.target.value })}
-              required
-            />
+            {voiceMode === 'hosted' ? (
+              <>
+                <div className="row" style={{ gap: 8 }}>
+                  <input
+                    style={{ width: 130 }}
+                    placeholder="Area code (e.g. 415)"
+                    value={areaCode}
+                    onChange={(e) => setAreaCode(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={searchNumbers.isPending}
+                    onClick={() => searchNumbers.mutate()}
+                  >
+                    {searchNumbers.isPending ? 'Searching…' : 'Find numbers'}
+                  </button>
+                </div>
+                {foundNumbers !== null &&
+                  (foundNumbers.length ? (
+                    <select
+                      value={pickedNumber}
+                      onChange={(e) => setPickedNumber(e.target.value)}
+                    >
+                      {foundNumbers.map((n) => (
+                        <option key={n.phone_number} value={n.phone_number}>
+                          {n.friendly_name}
+                          {n.locality ? ` — ${n.locality}` : ''}
+                          {n.region ? `, ${n.region}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="muted">No numbers in that area code — try another.</div>
+                  ))}
+              </>
+            ) : (
+              <>
+                <input
+                  placeholder="Twilio Account SID (AC…)"
+                  value={voiceForm.sid}
+                  onChange={(e) => setVoiceForm({ ...voiceForm, sid: e.target.value })}
+                  required
+                />
+                <input
+                  placeholder="Twilio Auth Token"
+                  value={voiceForm.token}
+                  onChange={(e) => setVoiceForm({ ...voiceForm, token: e.target.value })}
+                  required
+                />
+                <input
+                  placeholder="Phone number — E.164, e.g. +15551234567"
+                  value={voiceForm.number}
+                  onChange={(e) => setVoiceForm({ ...voiceForm, number: e.target.value })}
+                  required
+                />
+              </>
+            )}
             <input
               placeholder="Forward-to number when a human takes over (optional)"
               value={voiceForm.forward_to}
@@ -690,14 +778,20 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               onChange={(e) => setVoiceForm({ ...voiceForm, greeting: e.target.value })}
             />
             <div>
-              <button className="btn" disabled={createVoice.isPending}>Add voice channel</button>
+              <button
+                className="btn"
+                disabled={
+                  createVoice.isPending || (voiceMode === 'hosted' && !pickedNumber)
+                }
+              >
+                {voiceMode === 'hosted' ? 'Get this number' : 'Add voice channel'}
+              </button>
             </div>
           </form>
           <div className="muted" style={{ marginTop: 10 }}>
-            Then in the Twilio console, set the number's{' '}
-            <em>Voice → "A call comes in"</em> webhook to the URL on the channel card.
-            Callers are transcribed turn-by-turn; the agent's reply is spoken, and when a
-            human takes over the call can bridge straight to the forward-to number.
+            {voiceMode === 'hosted'
+              ? 'Janis provisions the number and wires it up — callers are transcribed turn-by-turn, the agent answers by voice, and a human takeover can bridge straight to the forward-to number.'
+              : 'Then in the Twilio console, set the number\'s Voice → "A call comes in" webhook to the URL on the channel card. Callers are transcribed turn-by-turn; the agent\'s reply is spoken, and when a human takes over the call can bridge straight to the forward-to number.'}
           </div>
         </details>
       </div>

@@ -19,6 +19,11 @@ export const env = {
   // svix webhook secret verifying Resend's email.received posts
   emailInboundDomain: process.env.EMAIL_INBOUND_DOMAIN ?? 'inbound.janis.ai',
   resendInboundSecret: process.env.RESEND_INBOUND_SECRET ?? '',
+  // Hosted voice — master Twilio account that provisions per-channel
+  // subaccounts + numbers. Empty = BYO-creds voice only.
+  twilioAccountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
+  twilioAuthToken: process.env.TWILIO_AUTH_TOKEN ?? '',
+  twilioVoiceCountry: process.env.TWILIO_VOICE_COUNTRY ?? 'US',
   seedAdminEmail: process.env.SEED_ADMIN_EMAIL ?? 'admin@janis.local',
   seedAdminPassword: process.env.SEED_ADMIN_PASSWORD ?? 'janis-admin',
   // Email+password sign-in — OAuth is the product login; password auth stays

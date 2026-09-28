@@ -181,7 +181,19 @@ export function ChannelCard({
           </div>
         </details>
       )}
-      {ch.kind === 'voice' && (
+      {ch.kind === 'voice' && ch.meta.hosted && (
+        <details className="webhook-details" open style={{ marginTop: 8 }}>
+          <summary>
+            <span className="details-title">{ch.meta.phone_number}</span>
+            <span className="details-sub">provisioned by Janis — no setup needed</span>
+          </summary>
+          <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
+            This number is live — calls answer now. Callers are transcribed, the agent
+            answers by voice, and the call lands in this inbox as a normal conversation.
+          </div>
+        </details>
+      )}
+      {ch.kind === 'voice' && !ch.meta.hosted && (
         <details className="webhook-details" open style={{ marginTop: 8 }}>
           <summary>
             <span className="details-title">Twilio voice webhook</span>
