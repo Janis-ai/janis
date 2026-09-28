@@ -23,14 +23,6 @@ type Tab = 'integrations' | 'escalation' | 'tools' | 'tests' | 'connection';
 
 export default function AgentDetail() {
   const { id } = useParams<{ id: string }>();
-  const [params] = useSearchParams();
-  // ?from=/conversations/<id>[?…]&scroll=<px> — set by the conversation's
-  // Details-panel agent link so there's a way back to the same spot.
-  const from = params.get('from');
-  const backTo =
-    from && from.startsWith('/conversations/')
-      ? `${from}${from.includes('?') ? '&' : '?'}scroll=${params.get('scroll') ?? 0}`
-      : null;
   const { data } = useAgents();
   const agent = data?.agents.find((a) => a.id === id);
 
@@ -44,16 +36,7 @@ export default function AgentDetail() {
   }
   if (!agent) return null;
   // key remounts the editor (and its drafts) when navigating between agents
-  return (
-    <>
-      {backTo && (
-        <Link to={backTo} className="muted" style={{ display: 'inline-block', marginBottom: 8 }}>
-          ← Back to conversation
-        </Link>
-      )}
-      <AgentEditor key={agent.id} agent={agent} />
-    </>
-  );
+  return <AgentEditor key={agent.id} agent={agent} />;
 }
 
 function AgentEditor({ agent }: { agent: Agent }) {
@@ -79,7 +62,22 @@ function AgentEditor({ agent }: { agent: Agent }) {
       : 'connection';
   const activeTab: Tab =
     (tab === 'tools' || tab === 'tests') && !agent.hosted ? 'connection' : tab;
-  const setTab = (t: Tab) => setParams(t === 'connection' ? {} : { tab: t });
+  // merge — the URL may carry breadcrumb state (?from/&scroll=) or the rail's
+  // ?rail= that a wholesale replace would wipe on every tab click
+  const setTab = (t: Tab) =>
+    setParams((prev) => {
+      const p = new URLSearchParams(prev);
+      if (t === 'connection') p.delete('tab');
+      else p.set('tab', t);
+      return p;
+    });
+  // ?from=/conversations/<id>[?…]&scroll=<px> — set by the conversation's
+  // Details-panel agent link so there's a way back to the same spot.
+  const fromParam = params.get('from');
+  const backToConv =
+    fromParam && fromParam.startsWith('/conversations/')
+      ? `${fromParam}${fromParam.includes('?') ? '&' : '?'}scroll=${params.get('scroll') ?? 0}`
+      : null;
   const [freshSecret, setFreshSecret] = useState<{ label: string; value: string } | null>(
     () => (location.state as { freshSecret?: { label: string; value: string } })?.freshSecret ?? null,
   );
@@ -191,6 +189,15 @@ function AgentEditor({ agent }: { agent: Agent }) {
       <div className="agent-head">
         <div className="row" style={{ alignItems: 'center' }}>
           <Link to="/agents" className="muted">← Agents</Link>
+          {backToConv && (
+            <Link
+              to={backToConv}
+              style={{ color: 'var(--accent)', fontSize: 13, whiteSpace: 'nowrap' }}
+              title="Return to the conversation at the same scroll spot"
+            >
+              ← conversation
+            </Link>
+          )}
           <input
             className="grow"
             style={{ fontWeight: 700, minWidth: 0 }}
