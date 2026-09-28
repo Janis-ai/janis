@@ -330,6 +330,13 @@
       "when": 1790531222326,
       "tag": "0046_charming_luckman",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1790610288245,
+      "tag": "0047_goofy_goblin_queen",
+      "breakpoints": true
     }
   ]
 }
