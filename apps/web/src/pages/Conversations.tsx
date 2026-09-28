@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import type { Conversation } from '@janis/shared';
 import { useConversations, useAgents, useSearch } from '../api/hooks';
 import { Avatar, channelLabel, displayName, Empty, StateBadge, timeAgo } from '../components/bits';
@@ -22,6 +22,7 @@ const STATE_GROUPS: { label: string; options: [value: string, label: string][] }
     options: [
       ['handoff_offer', 'Handoff offered'],
       ['failure', 'Errors'],
+      ['overdue', 'Overdue'],
     ],
   },
   {
@@ -84,6 +85,16 @@ function ConvRow({ c, agentName }: { c: Conversation; agentName?: string }) {
 export default function Conversations() {
   const [tab, setTab] = useSticky<'attention' | 'all'>('conv.tab', 'all');
   const [state, setState] = useSticky('conv.state', '');
+  // Deep links seed the filter (e.g. Reports' "N overdue" badge → ?state=overdue)
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const s = params.get('state');
+    if (!s) return;
+    setState(s);
+    params.delete('state');
+    setParams(params, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [agentId, setAgentId] = useSticky('conv.agent', '');
   const [mine, setMine] = useSticky('conv.mine', false);
   const [query, setQuery] = useSticky('conv.query', '');

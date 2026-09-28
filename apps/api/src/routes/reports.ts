@@ -1,17 +1,42 @@
 import { Hono } from 'hono';
-import { and, asc, eq, gt, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, alerts, conversations, messages, pendingActions } from '../db/schema.js';
+import { agents, alerts, channelBindings, conversations, messages, pendingActions } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentVis } from '../lib/access.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Drill-down filters shared by the report endpoints: a single agent, and a
+ * single channel (conversations bind one channel each). */
+function drillFilters(c: { req: { query: (k: string) => string | undefined } }): SQL[] {
+  const q = (k: string) => {
+    const v = c.req.query(k);
+    return v && UUID.test(v) ? v : undefined;
+  };
+  const agentId = q('agent_id');
+  const channelId = q('channel_id');
+  const conds: SQL[] = [];
+  if (agentId) conds.push(eq(conversations.agentId, agentId));
+  if (channelId)
+    conds.push(
+      sql`exists (
+        select 1 from ${channelBindings}
+        where ${channelBindings.conversationId} = ${conversations.id}
+          and ${channelBindings.channelId} = ${channelId}
+      )`,
+    );
+  return conds;
+}
 
 /** Handoff metrics for the Reports page — mounted at /api/reports. */
 export function reportRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
 
-  // GET /handoffs?days=30 — volume, response times, unresolved/overdue counts.
+  // GET /handoffs?days=30&agent_id=&channel_id= — volume, response times,
+  // unresolved/overdue counts. Drill down per agent, then per channel.
   app.get('/handoffs', async (c) => {
     const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
     const cutoff = new Date(Date.now() - days * 86_400_000);
@@ -31,6 +56,7 @@ export function reportRoutes(db: Db) {
           gt(alerts.createdAt, cutoff),
           ne(alerts.type, 'sla'), // sla alerts are re-alerts, not new handoffs
           ne(alerts.type, 'keyword'),
+          ...drillFilters(c),
         ),
       )
       .orderBy(asc(alerts.createdAt));
@@ -131,7 +157,13 @@ export function reportRoutes(db: Db) {
       })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(and(...agentVis(c.get('workspaceId'), c.get('agentScope')), gt(conversations.createdAt, cutoff)));
+      .where(
+        and(
+          ...agentVis(c.get('workspaceId'), c.get('agentScope')),
+          gt(conversations.createdAt, cutoff),
+          ...drillFilters(c),
+        ),
+      );
 
     const convIds = convs.map((v) => v.id);
     if (!convIds.length) {

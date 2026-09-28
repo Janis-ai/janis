@@ -182,6 +182,39 @@ describe('signal filters', () => {
     expect(await list('failure')).toContain(failing.id);
     expect(await list('failure')).not.toContain((await makeConversation('fine')).id);
   });
+
+  it('overdue filters to needs_human conversations waiting past the agent SLA', async () => {
+    const hourAgo = new Date(Date.now() - 60 * 60_000);
+    // agent has no sla_minutes configured → default 15m, so an hour-old handoff
+    // alert on a needs_human conversation counts as overdue
+    const stale = await makeConversation('overdue-stale');
+    await db
+      .update(conversations)
+      .set({ state: 'needs_human' })
+      .where(eq(conversations.id, stale.id));
+    await db
+      .insert(alerts)
+      .values({ conversationId: stale.id, type: 'help_request', createdAt: hourAgo });
+
+    // open alert, but inside the SLA window
+    const fresh = await makeConversation('overdue-fresh');
+    await db
+      .update(conversations)
+      .set({ state: 'needs_human' })
+      .where(eq(conversations.id, fresh.id));
+    await db.insert(alerts).values({ conversationId: fresh.id, type: 'help_request' });
+
+    // old alert, but the conversation was claimed/archived — no longer waiting
+    const handled = await makeConversation('overdue-handled');
+    await db
+      .insert(alerts)
+      .values({ conversationId: handled.id, type: 'help_request', createdAt: hourAgo });
+
+    const ids = await list('overdue');
+    expect(ids).toContain(stale.id);
+    expect(ids).not.toContain(fresh.id);
+    expect(ids).not.toContain(handled.id);
+  });
 });
 
 describe('message windows', () => {

@@ -8,7 +8,7 @@ import { agentScopeCond, type AgentScope } from './access.js';
  * signals — all ride the same param as the four real lifecycle states. */
 export const convListQuery = z.object({
   state: z
-    .enum(['active', 'needs_human', 'human', 'archived', 'unread', 'starred', 'handoff_offer', 'failure'])
+    .enum(['active', 'needs_human', 'human', 'archived', 'unread', 'starred', 'handoff_offer', 'failure', 'overdue'])
     .optional(),
   agent_id: z.string().uuid().optional(),
   attention: z.enum(['1', 'true']).optional(), // needs_human OR has open alerts
@@ -35,6 +35,18 @@ export function convListConditions(
         where ${alerts.conversationId} = ${conversations.id}
           and ${alerts.status} = 'open'
           and ${alerts.type} = ${q.state}
+      )`,
+    );
+  else if (q.state === 'overdue')
+    // still waiting on a human past the agent's SLA — same definition the
+    // Reports handoff card uses (config.sla_minutes, default 15)
+    conditions.push(
+      eq(conversations.state, 'needs_human'),
+      sql`exists (
+        select 1 from ${alerts}
+        where ${alerts.conversationId} = ${conversations.id}
+          and ${alerts.status} = 'open'
+          and ${alerts.createdAt} < now() - interval '1 minute' * coalesce((${agents.config} ->> 'sla_minutes')::int, 15)
       )`,
     );
   else if (q.state) conditions.push(eq(conversations.state, q.state));

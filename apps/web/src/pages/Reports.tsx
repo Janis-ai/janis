@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
-import { useDigests } from '../api/hooks';
-import { Empty } from '../components/bits';
+import { useAgents, useChannels, useDigests } from '../api/hooks';
+import { Empty, channelLabel } from '../components/bits';
 
 interface HandoffMetrics {
   days: number;
@@ -64,13 +65,19 @@ function TrendChart({ series }: { series: { date: string; total: number; contain
 /** Daily digests + handoff/escalation metrics. */
 export default function Reports() {
   const { data } = useDigests();
+  // Drill-down: overall → per agent → per channel of that agent.
+  const [agentId, setAgentId] = useState('');
+  const [channelId, setChannelId] = useState('');
+  const { data: agents } = useAgents();
+  const { data: chans } = useChannels();
+  const qs = `days=30${agentId ? `&agent_id=${agentId}` : ''}${channelId ? `&channel_id=${channelId}` : ''}`;
   const metrics = useQuery({
-    queryKey: ['handoff-metrics'],
-    queryFn: () => api<HandoffMetrics>('/api/reports/handoffs?days=30'),
+    queryKey: ['handoff-metrics', agentId, channelId],
+    queryFn: () => api<HandoffMetrics>(`/api/reports/handoffs?${qs}`),
   });
   const containment = useQuery({
-    queryKey: ['containment-metrics'],
-    queryFn: () => api<ContainmentMetrics>('/api/reports/containment?days=30'),
+    queryKey: ['containment-metrics', agentId, channelId],
+    queryFn: () => api<ContainmentMetrics>(`/api/reports/containment?${qs}`),
   });
   const qc = useQueryClient();
 
@@ -87,6 +94,33 @@ export default function Reports() {
         <button className="btn" onClick={() => generate.mutate()} disabled={generate.isPending}>
           {generate.isPending ? 'Generating…' : 'Generate digest now'}
         </button>
+      </div>
+
+      <div className="filters">
+        <select
+          value={agentId}
+          onChange={(e) => {
+            setAgentId(e.target.value);
+            // a channel from another agent would silently zero the results
+            if (channelId && !chans?.channels.some((ch) => ch.id === channelId && ch.agent_id === e.target.value))
+              setChannelId('');
+          }}
+        >
+          <option value="">All agents</option>
+          {agents?.agents.map((a) => (
+            <option key={a.id} value={a.id}>{a.name}</option>
+          ))}
+        </select>
+        <select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
+          <option value="">All channels</option>
+          {(chans?.channels ?? [])
+            .filter((ch) => !agentId || ch.agent_id === agentId)
+            .map((ch) => (
+              <option key={ch.id} value={ch.id}>
+                {channelLabel(ch.kind)}{ch.name ? ` · ${ch.name}` : ''}
+              </option>
+            ))}
+        </select>
       </div>
 
       {/* Containment — share of conversations the agent handled alone */}
@@ -127,7 +161,11 @@ export default function Reports() {
       <div className="card">
         <div className="row">
           <strong className="grow">Handoffs — last {m?.days ?? 30} days</strong>
-          {m && m.overdue > 0 && <span className="badge needs_human">{m.overdue} overdue</span>}
+          {m && m.overdue > 0 && (
+            <Link to="/conversations?state=overdue" className="badge needs_human">
+              {m.overdue} overdue
+            </Link>
+          )}
         </div>
         {m ? (
           <>

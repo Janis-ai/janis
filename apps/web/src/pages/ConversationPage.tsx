@@ -1041,7 +1041,10 @@ export default function ConversationPage() {
             <div>Email: {p.email ?? '—'}</div>
             {p.phone && <div>Phone: {p.phone}</div>}
             <div>User id: {p.id ?? c.external_id}</div>
-            <div>Agent: {agent?.name ?? '—'}</div>
+            <div>
+              Agent:{' '}
+              {agent ? <Link to={`/agents/${c.agent_id}`}>{agent.name}</Link> : '—'}
+            </div>
             {extraProfile.map(([k, v]) => (
               <div key={k}>{k}: {String(v)}</div>
             ))}
