@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentConnections, agents, conversations, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
+import { agentConnections, agents, channelBindings, channels, conversations, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { env } from '../env.js';
@@ -753,5 +753,55 @@ describe('save-as-test splits at rescue points', () => {
     // only the bare-deflection prompt is a checkpoint — not the answered one
     expect(body.tests).toHaveLength(1);
     expect(body.tests[0].turns.at(-1).text).toBe('what about enterprise?');
+  });
+});
+
+describe('DELETE /agents/:id', () => {
+  it('cascades through conversations, channels, and agent-scoped rows', async () => {
+    const res = await postAgent(parentCookie);
+    const agentId = (await res.json()).agent.id as string;
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'webchat:vis_del' })
+      .returning();
+    await db.insert(messages).values([
+      { conversationId: conv.id, direction: 'in', text: 'hi' },
+      { conversationId: conv.id, direction: 'out', text: 'hello' },
+    ]);
+    // a saved test referencing the conversation (source ids are plain uuids)
+    await app.request(`/api/agents/${agentId}/tests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ name: 't', expectation: 'e', conversation_id: conv.id }),
+    });
+    // test channel + binding — the rows a used agent actually has
+    const [chan] = await db
+      .insert(channels)
+      .values({
+        workspaceId: (await db.select().from(agents).where(eq(agents.id, agentId)))[0].workspaceId,
+        agentId,
+        kind: 'webchat',
+        name: 'Test channel',
+        credentials: { internal: true },
+      })
+      .returning();
+    await db
+      .insert(channelBindings)
+      .values({ channelId: chan.id, conversationId: conv.id, platformUserId: 'vis_del' });
+    const del = await app.request(`/api/agents/${agentId}`, {
+      method: 'DELETE',
+      headers: { cookie: parentCookie },
+    });
+    expect(del.status).toBe(200);
+    const [gone] = await db.select().from(agents).where(eq(agents.id, agentId));
+    expect(gone).toBeUndefined();
+    const convs = await db.select().from(conversations).where(eq(conversations.agentId, agentId));
+    expect(convs).toHaveLength(0);
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(msgs).toHaveLength(0);
+    const chans = await db.select().from(channels).where(eq(channels.agentId, agentId));
+    expect(chans).toHaveLength(0);
+    const binds = await db.select().from(channelBindings).where(eq(channelBindings.channelId, chan.id));
+    expect(binds).toHaveLength(0);
   });
 });

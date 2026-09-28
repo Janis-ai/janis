@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentConnections, agentMembers, agentSecrets, agentTests, channels, conversations, knowledgeFiles, memberships, slackInstallations, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentConnections, agentMembers, agentSecrets, agentTests, alertRules, alerts, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import {
   adminOnly,
   agentAdminOnly,
@@ -881,10 +881,47 @@ export function agentRoutes(db: Db) {
   });
 
   app.delete('/:id', agentAdmin, async (c) => {
-    const [row] = await db
-      .delete(agents)
-      .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
-      .returning();
+    const agentId = c.req.param('id');
+    const workspaceId = c.get('workspaceId');
+    // No ON DELETE CASCADE in the schema — remove dependent rows leaf-first.
+    const convIds = (
+      await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(eq(conversations.agentId, agentId))
+    ).map((r) => r.id);
+    const chanIds = (
+      await db.select({ id: channels.id }).from(channels).where(eq(channels.agentId, agentId))
+    ).map((r) => r.id);
+    const [row] = await db.transaction(async (tx) => {
+      // Rows keyed by agent that also hold conv/message refs go first.
+      await tx.delete(pendingActions).where(eq(pendingActions.agentId, agentId));
+      await tx.delete(usageEvents).where(eq(usageEvents.agentId, agentId));
+      if (convIds.length) {
+        await tx.delete(alerts).where(inArray(alerts.conversationId, convIds));
+        await tx.delete(suggestions).where(inArray(suggestions.conversationId, convIds));
+        await tx.delete(slackThreads).where(inArray(slackThreads.conversationId, convIds));
+        await tx.delete(channelBindings).where(inArray(channelBindings.conversationId, convIds));
+        await tx.delete(messages).where(inArray(messages.conversationId, convIds));
+        await tx.delete(conversations).where(inArray(conversations.id, convIds));
+      }
+      if (chanIds.length) {
+        await tx.delete(channelBindings).where(inArray(channelBindings.channelId, chanIds));
+        await tx.delete(channels).where(inArray(channels.id, chanIds));
+      }
+      await tx.delete(agentTests).where(eq(agentTests.agentId, agentId));
+      await tx.delete(knowledgeFiles).where(eq(knowledgeFiles.agentId, agentId));
+      await tx.delete(savedReplies).where(eq(savedReplies.agentId, agentId));
+      await tx.delete(alertRules).where(eq(alertRules.agentId, agentId));
+      await tx.delete(agentSecrets).where(eq(agentSecrets.agentId, agentId));
+      await tx.delete(agentConnections).where(eq(agentConnections.agentId, agentId));
+      await tx.delete(agentMembers).where(eq(agentMembers.agentId, agentId));
+      await tx.delete(webhookDeliveries).where(eq(webhookDeliveries.agentId, agentId));
+      return tx
+        .delete(agents)
+        .where(and(eq(agents.id, agentId), eq(agents.workspaceId, workspaceId)))
+        .returning();
+    });
     if (!row) return c.json({ error: 'not found' }, 404);
     return c.json({ ok: true });
   });
