@@ -2349,6 +2349,14 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
                 </button>
               )}
             </div>
+            {(() => {
+              const lastCustomer = [...t.turns].reverse().find((x) => x.role === 'customer');
+              return lastCustomer ? (
+                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                  responds to: "{lastCustomer.text.length > 90 ? `${lastCustomer.text.slice(0, 90)}…` : lastCustomer.text}"
+                </div>
+              ) : null;
+            })()}
             {t.expectation && (
               <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
                 expects: {t.expectation}
@@ -2364,11 +2372,51 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
                       style={{ marginTop: 4 }}
                       onClick={() => setExpanded(open ? null : t.id)}
                     >
-                      {open ? '▾ hide reply' : '▸ show reply'}
+                      {open ? '▾ hide replay' : '▸ show replay'}
                     </button>
                     {open && (
                       <div className="inspector-panel" style={{ maxWidth: '100%', marginTop: 6 }}>
-                        <div style={{ whiteSpace: 'pre-wrap' }}>{run.reply}</div>
+                        {/* The replay answers the last customer turn — show the
+                            transcript tail so the reply has visible context. */}
+                        {(() => {
+                          const shown = t.turns.slice(-4);
+                          const omitted = t.turns.length - shown.length;
+                          return (
+                            <>
+                              {omitted > 0 && (
+                                <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
+                                  …{omitted} earlier turn{omitted === 1 ? '' : 's'} in the replayed transcript
+                                </div>
+                              )}
+                              {shown.map((turn, i) => {
+                                const trigger = i === shown.length - 1 && turn.role === 'customer';
+                                return (
+                                  <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 3, fontSize: 12 }}>
+                                    <span
+                                      className="mono muted"
+                                      style={{ minWidth: 58, flexShrink: 0, fontSize: 11 }}
+                                    >
+                                      {turn.role}
+                                    </span>
+                                    <span
+                                      className={trigger ? '' : 'muted'}
+                                      style={trigger ? { fontWeight: 600 } : undefined}
+                                    >
+                                      {turn.text}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                              <div
+                                className="muted"
+                                style={{ fontSize: 11, margin: '6px 0 3px' }}
+                              >
+                                ↳ agent's replayed reply (never sent, tools stubbed):
+                              </div>
+                              <div style={{ whiteSpace: 'pre-wrap' }}>{run.reply}</div>
+                            </>
+                          );
+                        })()}
                         {run.control && (
                           <div className="muted" style={{ marginTop: 6 }}>
                             ended with [{run.control === 'handoff' ? 'HANDOFF' : run.control === 'offer' ? 'OFFER_HUMAN' : 'CANCEL_HANDOFF'}]
