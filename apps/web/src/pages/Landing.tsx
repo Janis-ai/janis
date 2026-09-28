@@ -317,7 +317,7 @@ function DemoStrip() {
             <button className="btn" onClick={() => { setStep(0); setDecision(null); }}>
               ↻ Replay demo
             </button>
-            <button className="btn primary" onClick={openWidget}>Chat with a live agent →</button>
+            <button className="btn primary" onClick={openWidget}>Chat with our AI agent →</button>
           </div>
         </div>
       )}
@@ -376,7 +376,7 @@ export default function Landing() {
         </p>
         <div className="row" style={{ justifyContent: 'center', gap: 12 }}>
           <Link className="btn primary lg" to={cta.to}>{data ? 'Open console' : 'Get started free'}</Link>
-          <button className="btn lg" onClick={openWidget}>Chat with a live agent</button>
+          <button className="btn lg" onClick={openWidget}>Chat with our AI agent</button>
         </div>
         <p className="landing-fine">Free plan available · No credit card required</p>
       </section>
