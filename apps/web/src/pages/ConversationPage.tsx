@@ -839,7 +839,26 @@ export default function ConversationPage() {
               <div className="inspector-wrap">
                 <button
                   className="inspector-toggle"
-                  onClick={() => setInspectorFor(inspectorFor === m.id ? null : m.id)}
+                  onClick={() => {
+                    const opening = inspectorFor !== m.id;
+                    setInspectorFor(opening ? m.id : null);
+                    if (!opening) return;
+                    // Reveal the panel: bottom-anchored when it fits the
+                    // viewport, top-pinned when it's taller.
+                    requestAnimationFrame(() => {
+                      const el = transcriptRef.current;
+                      const panel = el?.querySelector<HTMLElement>('.inspector-panel');
+                      if (!el || !panel) return;
+                      const elRect = el.getBoundingClientRect();
+                      const pRect = panel.getBoundingClientRect();
+                      const pTop = pRect.top - elRect.top + el.scrollTop;
+                      const pBottom = pRect.bottom - elRect.top + el.scrollTop;
+                      el.scrollTo({
+                        top: pRect.height <= el.clientHeight ? pBottom - el.clientHeight : pTop - 12,
+                        behavior: 'smooth',
+                      });
+                    });
+                  }}
                 >
                   ✦ why this reply
                 </button>
