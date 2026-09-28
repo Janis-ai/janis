@@ -370,9 +370,9 @@ export default function Landing() {
       <section className="landing-hero">
         <h1>Your AI agent has a help button.</h1>
         <p>
-          Let AI handle customer conversations across every channel. When it
-          needs help — or your approval — a human steps in, and your agent
-          picks up right where it left off.
+          AI handles customer conversations across every channel. When it needs
+          help or approval, your team steps in. Then your agent picks up right
+          where it left off.
         </p>
         <div className="row" style={{ justifyContent: 'center', gap: 12 }}>
           <Link className="btn primary lg" to={cta.to}>{data ? 'Open console' : 'Get started free'}</Link>
@@ -384,7 +384,7 @@ export default function Landing() {
       <section className="landing-steps landing-demo">
         <h2>Watch the handoff happen</h2>
         <p className="landing-sub">
-          When your agent needs help, your team steps in. The conversation never loses its place.
+          See how Janis gets human approval without interrupting the conversation.
         </p>
         <DemoStrip />
       </section>
