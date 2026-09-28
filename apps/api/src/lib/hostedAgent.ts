@@ -402,15 +402,15 @@ async function generateReply(
   ctx: AgentRunContext | undefined,
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
-): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string }> {
+): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[] }> {
   const first = await complete(llm, prompt, msgs, tools, secrets, ctx, builtins, onStall);
   const draft = first.text;
   if (!draft) {
-    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, fixed: [], stripped: [], verified: [], unverified: [] };
+    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, fixed: [], stripped: [], verified: [], unverified: [] };
   }
   const guard = await guardReplyLinks(draft, blessedUrls);
   if (!guard.stripped.length) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, ...guard };
   }
   const retry = await complete(
     llm,
@@ -426,13 +426,14 @@ async function generateReply(
     builtins,
   ).catch(() => null);
   if (!retry?.text) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, ...guard };
   }
   const g2 = await guardReplyLinks(retry.text, blessedUrls);
   return {
     promptTokens: first.promptTokens + retry.promptTokens,
     completionTokens: first.completionTokens + retry.completionTokens,
     model: retry.model,
+    toolCalls: [...first.toolCalls, ...retry.toolCalls],
     ...g2,
   };
 }
@@ -447,6 +448,9 @@ export interface AgentRunContext {
   agent?: AgentRow;
   /** Suggestion drafting — gated tools describe intent, never create approvals. */
   suggesting?: boolean;
+  /** Regression-test replay — no tool executes (even reads); every call is
+   *  recorded in the trace and reported to the model as a simulated success. */
+  testRun?: boolean;
 }
 
 const SAVE_PROFILE_TOOL = 'save_user_profile';
@@ -487,6 +491,15 @@ export async function saveUserProfile(
   return `saved: ${Object.keys(update).join(', ')}`;
 }
 
+/** One tool call from a run — surfaced on the message inspector so an
+ *  operator can see exactly what the agent did for a reply. */
+export interface InspectorToolCall {
+  name: string;
+  /** approval-gated tool — the call is/was proposed, not executed. */
+  gated?: boolean;
+  outcome: 'ran' | 'failed' | 'proposed' | 'simulated';
+}
+
 interface Completion {
   text: string | null;
   promptTokens: number;
@@ -494,6 +507,7 @@ interface Completion {
   /** Wire id of the model that actually produced the response — differs from
    *  the configured model when the fallback answered. Bill against this. */
   model: string;
+  toolCalls: InspectorToolCall[];
 }
 
 /** OpenAI-compat multimodal content part — Gemini accepts image_url parts. */
@@ -559,7 +573,7 @@ async function complete(
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
 ): Promise<Completion> {
-  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model };
+  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [] };
   if (!llm.apiKey) return empty;
 
   const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
@@ -620,6 +634,7 @@ async function complete(
   let promptTokens = 0;
   let completionTokens = 0;
   let servedModel = llm.model;
+  const toolCalls: InspectorToolCall[] = [];
 
   for (let round = 0; round < 4; round++) {
     // Retry network timeouts and transient upstream errors (429 / 5xx —
@@ -748,7 +763,7 @@ async function complete(
     if (!calls.length) {
       const text = msg?.content?.trim() ?? null;
       completionTokens += json.usage?.completion_tokens ?? (text ? Math.ceil(text.length / 4) : 0);
-      return { text, promptTokens, completionTokens, model: servedModel };
+      return { text, promptTokens, completionTokens, model: servedModel, toolCalls };
     }
 
     completionTokens += json.usage?.completion_tokens ?? 0;
@@ -759,31 +774,45 @@ async function complete(
     for (const call of calls) {
       const tool = tools.find((t) => t.name === call.function.name);
       const builtin = builtins.find((b) => b.name === call.function.name);
+      const gated = !!tool?.approval && !!ctx?.agent;
+      let outcome: InspectorToolCall['outcome'] = 'ran';
       let result: string;
       try {
         const args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
-        result =
-          call.function.name === SAVE_PROFILE_TOOL && ctx
-            ? await saveUserProfile(ctx, args)
-            : builtin
-              ? await builtin.run(
-                  Object.fromEntries(Object.entries(args).map(([k, v]) => [k, String(v)])),
-                  ctx,
-                )
-              : tool
-                ? tool.approval && ctx?.agent
-                  ? ctx.suggesting
-                    ? 'approval_required: this action needs a human teammate to approve it before it runs — describe it in the suggestion rather than claiming it was done'
-                    : await requestToolApproval(ctx.db, ctx.agent, ctx.convId, tool, args)
-                  : await callTool(tool, args, secrets)
-                : `error: unknown tool ${call.function.name}`;
+        if (ctx?.testRun) {
+          outcome = gated ? 'proposed' : 'simulated';
+          result = gated
+            ? 'approval_required: gated action — in a live conversation this would pause for teammate approval; treat it as proposed, not done'
+            : `simulated: ${call.function.name} returned successfully (test run — no real request was made)`;
+        } else {
+          result =
+            call.function.name === SAVE_PROFILE_TOOL && ctx
+              ? await saveUserProfile(ctx, args)
+              : builtin
+                ? await builtin.run(
+                    Object.fromEntries(Object.entries(args).map(([k, v]) => [k, String(v)])),
+                    ctx,
+                  )
+                : tool
+                  ? gated
+                    ? ctx!.suggesting
+                      ? 'approval_required: this action needs a human teammate to approve it before it runs — describe it in the suggestion rather than claiming it was done'
+                      : await requestToolApproval(ctx!.db, ctx!.agent!, ctx!.convId, tool, args)
+                    : await callTool(tool, args, secrets)
+                  : `error: unknown tool ${call.function.name}`;
+          if (result.startsWith('error')) outcome = 'failed';
+          else if (result.startsWith('pending_approval') || result.startsWith('approval_required'))
+            outcome = 'proposed';
+        }
       } catch (err) {
+        outcome = 'failed';
         result = `error: ${err instanceof Error ? err.message : 'tool failed'}`;
       }
+      toolCalls.push({ name: call.function.name, gated, outcome });
       msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
     }
   }
-  return { text: null, promptTokens, completionTokens, model: servedModel };
+  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls };
 }
 
 const RECENT_WINDOW = 20;
@@ -1385,6 +1414,17 @@ async function replyAsHostedAgent(
     // model-emitted tappable choices ride payload.quick_replies → native
     // buttons on Messenger/WhatsApp, chips on webchat
     const buttonFlag = buttons.length ? { quick_replies: buttons } : {};
+    // "Why did it say that?" — model/token/tool trace stamped on the stored
+    // reply; the console renders it as the per-message inspector.
+    const inspectorFlag = {
+      inspector: {
+        model,
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        kb: docs.map((d) => d.name),
+        tools: gen.toolCalls,
+      },
+    };
     if (promptTokens || completionTokens) {
       await recordLlmUsage(db, {
         workspaceId: agent.workspaceId,
@@ -1455,7 +1495,7 @@ async function replyAsHostedAgent(
           type: 'message_out',
           conversation_id: externalId,
           text: partial,
-          payload: { via: 'hosted', ...linkFlag, ...buttonFlag },
+          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag },
         });
       }
       events.push({
@@ -1477,7 +1517,7 @@ async function replyAsHostedAgent(
           type: 'message_out',
           conversation_id: externalId,
           text: partial,
-          payload: { via: 'hosted', ...linkFlag, ...buttonFlag },
+          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag },
         });
       }
       events.push({
@@ -1508,8 +1548,8 @@ async function replyAsHostedAgent(
           conversation_id: externalId,
           text: partial,
           payload: offeredBefore
-            ? { via: 'hosted', ...linkFlag, ...buttonFlag }
-            : { via: 'hosted', quick_replies: OFFER_CHOICES, ...linkFlag },
+            ? { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag }
+            : { via: 'hosted', quick_replies: OFFER_CHOICES, ...linkFlag, ...inspectorFlag },
         });
       }
       if (!offeredBefore) {
@@ -1523,7 +1563,7 @@ async function replyAsHostedAgent(
       return;
     }
     await emit([
-      { type: 'message_out', conversation_id: externalId, text: reply, payload: { via: 'hosted', ...linkFlag, ...buttonFlag } },
+      { type: 'message_out', conversation_id: externalId, text: reply, payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag } },
     ]);
     console.log(`[hosted] ${agent.name} replied in ${Date.now() - t0}ms`);
   } catch (err) {

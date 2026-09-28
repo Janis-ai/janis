@@ -133,6 +133,7 @@ export default function ConversationPage() {
   } | null>(null);
   const [fetchingNewer, setFetchingNewer] = useState(false);
   const [highlight, setHighlight] = useState<string | null>(null);
+  const [inspectorFor, setInspectorFor] = useState<string | null>(null);
   const jumpedFor = useRef('');
   const olderFor = useRef('');
   if (olderFor.current !== id) {
@@ -739,6 +740,17 @@ export default function ConversationPage() {
                 </div>
               ))}
             </div>
+            {m.direction === 'out' && m.payload.inspector && (
+              <div className="inspector-wrap">
+                <button
+                  className="inspector-toggle"
+                  onClick={() => setInspectorFor(inspectorFor === m.id ? null : m.id)}
+                >
+                  ✦ why this reply
+                </button>
+                {inspectorFor === m.id && <InspectorPanel data={m.payload.inspector} />}
+              </div>
+            )}
             {i === lastDeliveredIdx && (
               <div className="receipt">Delivered</div>
             )}
@@ -1004,6 +1016,62 @@ function TagEditor({
         <input className="grow" placeholder="add tag" value={draft} onChange={(e) => setDraft(e.target.value)} />
         <button className="btn">+</button>
       </form>
+    </div>
+  );
+}
+
+// "Why did it say that?" — per-reply trace stamped by the hosted pipeline
+// (model, tokens, knowledge context, tool calls) rendered under the bubble.
+interface InspectorData {
+  model?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  kb?: string[];
+  tools?: { name: string; gated?: boolean; outcome: string }[];
+}
+
+const TOOL_OUTCOME: Record<string, string> = {
+  ran: 'ran',
+  failed: 'failed',
+  proposed: 'proposed — needs approval',
+  simulated: 'simulated (test run)',
+};
+
+function InspectorPanel({ data }: { data: unknown }) {
+  const d = (data ?? {}) as InspectorData;
+  return (
+    <div className="inspector-panel">
+      <div className="inspector-title">How this reply was produced</div>
+      {d.model && (
+        <div className="inspector-row">
+          <span className="muted">model</span>
+          <span className="mono">{d.model}</span>
+        </div>
+      )}
+      {((d.prompt_tokens ?? 0) + (d.completion_tokens ?? 0)) > 0 && (
+        <div className="inspector-row">
+          <span className="muted">tokens</span>
+          <span>
+            {d.prompt_tokens ?? 0} in · {d.completion_tokens ?? 0} out
+          </span>
+        </div>
+      )}
+      <div className="inspector-row">
+        <span className="muted">knowledge</span>
+        <span>{d.kb?.length ? d.kb.join(', ') : 'none loaded'}</span>
+      </div>
+      <div className="inspector-row">
+        <span className="muted">tools</span>
+        <span>{d.tools?.length ? `${d.tools.length} called` : 'none'}</span>
+      </div>
+      {d.tools?.map((t, i) => (
+        <div key={i} className="inspector-tool">
+          <span className="mono">{t.name}</span>
+          <span className={`inspector-outcome ${t.outcome}`}>
+            {TOOL_OUTCOME[t.outcome] ?? t.outcome}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
