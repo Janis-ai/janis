@@ -146,7 +146,10 @@ const JUDGE_SYSTEM =
   'You are grading a hosted customer-support AI agent in a regression test. ' +
   'The operator saved a real conversation and stated what a good reply should do. ' +
   'Judge whether the reply accomplishes the expectation — wording does not need ' +
-  'to match. Reply with ONLY a JSON object {"pass": true|false, "reason": "one sentence"}.';
+  'to match. The transcript shows prior context for realism: parenthesized ' +
+  'markers like "(passed to a human teammate)" describe what happened EARLIER ' +
+  'in the conversation, not the reply being graded — grade only the reply. ' +
+  'Reply with ONLY a JSON object {"pass": true|false, "reason": "one sentence"}.';
 
 /** Replay a saved test against the agent's CURRENT config — nothing executes
  *  (testRun stubs every tool call; gated calls are only proposed), nothing is
@@ -218,7 +221,16 @@ export async function runAgentTest(
       byok: llm.byok,
     });
   }
-  if (!gen.text?.trim()) return { ...base, tools: gen.toolCalls, model: gen.model, context, reason: 'agent produced no reply' };
+  if (!gen.text?.trim())
+    return {
+      ...base,
+      tools: gen.toolCalls,
+      model: gen.model,
+      context,
+      reason: gen.toolCalls.length
+        ? `agent produced no reply — it kept calling tools (${gen.toolCalls.map((t) => t.name).join(', ')}) without wrapping up`
+        : 'agent produced no reply',
+    };
 
   const reply = extractButtons(extractLearns(gen.text).text).text;
   const tag = controlTag(gen.text);

@@ -782,7 +782,7 @@ export async function complete(
         if (ctx?.testRun) {
           outcome = gated ? 'proposed' : 'simulated';
           result = gated
-            ? 'approval_required: gated action — in a live conversation this would pause for teammate approval; treat it as proposed, not done'
+            ? 'approval_required: this action needs a human teammate to approve it before it runs — it is now queued for review; tell the customer it is pending approval rather than calling the tool again'
             : `simulated: ${call.function.name} returned successfully (test run — no real request was made)`;
         } else {
           result =

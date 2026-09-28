@@ -2400,7 +2400,7 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
             {run && (
               <div style={{ fontSize: 12, marginTop: 6 }}>
                 {run.reason && <div className="muted">{run.reason}</div>}
-                {run.reply && (
+                {(run.reply || (run.tools?.length ?? 0) > 0) && (
                   <>
                     <button
                       className="inspector-toggle"
@@ -2478,7 +2478,13 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
                               >
                                 ↳ replayed now — current setup (never sent, tools stubbed):
                               </div>
-                              <div style={{ whiteSpace: 'pre-wrap' }}>{run.reply}</div>
+                              {run.reply ? (
+                                <div style={{ whiteSpace: 'pre-wrap' }}>{run.reply}</div>
+                              ) : (
+                                <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>
+                                  (no text reply — the replay ended on tool calls, above)
+                                </div>
+                              )}
                             </>
                           );
                         })()}

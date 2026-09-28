@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, conversations, messages, uploads, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, transcriptFor } from './hostedAgent.js';
+import { blessedUrlsFor, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, transcriptFor } from './hostedAgent.js';
 
 let db: Db;
 let convId: string;
@@ -278,5 +278,74 @@ describe('extractButtons', () => {
     );
     expect(r.text).toBe('Could I get your email?');
     expect(r.buttons).toEqual([{ type: 'email' }, 'skip for now', { type: 'phone' }]);
+  });
+});
+
+describe('testRun tool stubbing', () => {
+  const fetchMock = vi.fn();
+  const llm = { apiKey: 'k', baseUrl: 'https://llm.example', model: 'm', byok: false };
+  const gatedTool = {
+    name: 'create_refund',
+    description: 'issue a refund',
+    method: 'POST' as const,
+    url: 'https://api.example/refund',
+    approval: true,
+  };
+  const toolCall = (id: string) => ({
+    id,
+    function: { name: 'create_refund', arguments: '{"order":"5"}' },
+  });
+  const reply = (body: object) =>
+    new Response(JSON.stringify({ choices: [{ message: body }], usage: {} }), { status: 200 });
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('tells the model a gated call is queued so it wraps up instead of re-calling', async () => {
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: wsId, name: 'T', apiKeyHash: 'h-t', apiKeyPreview: 'p', hosted: true })
+      .returning();
+    fetchMock
+      .mockResolvedValueOnce(reply({ tool_calls: [toolCall('c1')] }))
+      .mockResolvedValueOnce(reply({ content: 'Your refund request is pending approval.' }));
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'refund me' }], [gatedTool], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+      agent,
+      testRun: true,
+    });
+    expect(r.text).toBe('Your refund request is pending approval.');
+    expect(r.toolCalls).toEqual([{ name: 'create_refund', gated: true, outcome: 'proposed' }]);
+    // the tool result fed back says "queued for review", not "treat as proposed, not done"
+    const round2 = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    const toolMsg = round2.messages.find((m: { role: string }) => m.role === 'tool');
+    expect(toolMsg.content).toContain('queued for review');
+    // and the real endpoint was never hit
+    expect(fetchMock.mock.calls.every((c) => String(c[0]).includes('llm.example'))).toBe(true);
+  });
+
+  it('returns no text when the model loops on tool calls for all 4 rounds', async () => {
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: wsId, name: 'T2', apiKeyHash: 'h-t2', apiKeyPreview: 'p', hosted: true })
+      .returning();
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(reply({ tool_calls: [toolCall('c')] })),
+    );
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'refund me' }], [gatedTool], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+      agent,
+      testRun: true,
+    });
+    expect(r.text).toBeNull();
+    expect(r.toolCalls).toHaveLength(4);
+    expect(r.toolCalls.every((t) => t.outcome === 'proposed')).toBe(true);
   });
 });
