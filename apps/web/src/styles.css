@@ -683,12 +683,24 @@ details summary:hover { color: var(--text); }
 @media (max-width: 720px) {
   .push-banner { left: 60px; padding: 12px 14px; }
 }
-.landing-nav { display: flex; align-items: center; justify-content: space-between; padding: 8px 0 56px; }
+.landing-nav { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 8px 0 56px; }
 .landing-logo { height: 34px; }
-.landing-hero { text-align: center; padding: 32px 16px 64px; }
+.landing-nav-links { display: flex; align-items: center; gap: 24px; font-size: 14px; }
+.landing-nav-links a { color: var(--muted); text-decoration: none; }
+.landing-nav-links a:hover { color: var(--text); }
+.landing-hero { text-align: center; padding: 32px 16px 48px; }
 .landing-hero h1 { font-size: 52px; line-height: 1.08; letter-spacing: -1.5px; margin: 0 0 18px; }
 .landing-hero p { color: var(--muted); font-size: 18px; line-height: 1.6; max-width: 640px; margin: 0 auto 30px; }
 .landing-fine { font-size: 13px; color: var(--muted); margin-top: 14px; }
+.landing-try { font-size: 14px; color: var(--accent); margin-top: 18px; }
+.landing-shot { margin: 0 0 64px; }
+.landing-shot figure { margin: 0; }
+.landing-shot img {
+  display: block; width: 100%; height: auto; border-radius: 12px;
+  border: 1px solid var(--border); box-shadow: 0 24px 64px rgba(0,0,0,.45);
+}
+.landing-shot figcaption { text-align: center; font-size: 14px; margin-top: 14px; }
+.landing-steps[id], .landing-pricing[id] { scroll-margin-top: 24px; }
 .btn.lg { padding: 12px 22px; font-size: 15px; }
 .landing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 14px 0 56px; }
 .landing-grid .card + .card { margin-top: 0; }
@@ -727,4 +739,5 @@ details summary:hover { color: var(--text); }
 @media (max-width: 720px) {
   .landing-hero h1 { font-size: 36px; }
   .landing-grid, .landing-grid.four { grid-template-columns: 1fr; }
+  .landing-nav-links { display: none; }
 }

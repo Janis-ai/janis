@@ -163,18 +163,23 @@ export default function Landing() {
     <div className="landing">
       <header className="landing-nav">
         <img className="landing-logo" src="/img/janis-top.png" alt="Janis" />
+        <nav className="landing-nav-links">
+          <a href="#how">How it works</a>
+          <a href="#pricing">Pricing</a>
+          <Link to="/docs">Developer docs</Link>
+        </nav>
         <Link className="btn" to={cta.to}>{cta.label}</Link>
       </header>
 
       <section className="landing-hero">
         <h1>Your AI agent has a help button.</h1>
         <p>
-          AI and humans working together. Janis answers your customers on
-          Messenger, Instagram, WhatsApp, email, and web chat — autonomous by
-          default, with a human checkpoint exactly where you draw it.
+          Let AI handle customer conversations across every channel. When it
+          needs help — or your approval — a human steps in, and your agent
+          picks up right where it left off.
         </p>
         <div className="row" style={{ justifyContent: 'center', gap: 12 }}>
-          <Link className="btn primary lg" to={cta.to}>{cta.label}</Link>
+          <Link className="btn primary lg" to={cta.to}>{data ? 'Open console' : 'Get started free'}</Link>
           {data ? (
             <a
               className="btn lg"
@@ -187,10 +192,26 @@ export default function Landing() {
               Sign out
             </a>
           ) : (
-            <a className="btn lg" href="/login">Sign in</a>
+            <a className="btn lg" href="#how">See how it works</a>
           )}
         </div>
         <p className="landing-fine">Free plan available · No credit card required</p>
+        <p className="landing-try">
+          Try it now — the chat bubble in the corner is Janis, running on Janis.
+        </p>
+      </section>
+
+      <section className="landing-shot">
+        <figure>
+          <img
+            src="/img/landing-takeover.png"
+            alt="The Janis console: the hosted agent answers a customer's shipping question, an operator takes over with one click, and the agent stands by to resume."
+          />
+          <figcaption className="muted">
+            A real takeover — the agent answers, an operator steps in from the
+            console (or Slack), then the agent resumes when the human is done.
+          </figcaption>
+        </figure>
       </section>
 
       <section className="landing-grid">
@@ -203,7 +224,7 @@ export default function Landing() {
         ))}
       </section>
 
-      <section className="landing-steps">
+      <section className="landing-steps" id="how">
         <h2>How it works</h2>
         <div className="landing-grid four">
           {STEPS.map(([title, body], i) => (
@@ -240,12 +261,12 @@ export default function Landing() {
         </div>
       </section>
 
-      <section className="landing-pricing">
+      <section className="landing-pricing" id="pricing">
         <h2>Simple pricing</h2>
         <p className="muted" style={{ textAlign: 'center', margin: '0 0 24px' }}>
           Every plan includes the console, unlimited seats and channels, alerts, and digests.
-          You pay for messages — not seats. LLM tokens run at cost + margin on our platform
-          key — or bring your own key and the LLM line drops to $0.
+          You pay for messages — not seats. LLM tokens are metered at provider rates on
+          our platform key — or bring your own key and the LLM line drops to $0.
         </p>
         <div className="landing-grid four">
           {PRICING.map((p) => (
@@ -268,7 +289,7 @@ export default function Landing() {
         </p>
         <p className="landing-fine">
           Bring your own OpenAI-compatible LLM key (OpenAI, Gemini, …): tokens run on your
-          provider account and Janis bills $0 for them — no markup, ever. You'll still see
+          provider account and Janis bills $0 for them. You'll still see
           exact token counts in Billing.
         </p>
       </section>
