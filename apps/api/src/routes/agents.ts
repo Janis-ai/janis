@@ -1177,7 +1177,14 @@ export function agentRoutes(db: Db) {
         for (let i = full.length - 1; i >= 0; i--) {
           if (full[i].role === 'customer') { lastCustomer = i; break; }
         }
-        const ends = points.length ? points : lastCustomer >= 0 ? [lastCustomer] : [];
+        // Dedupe identical trigger prompts (keep the last occurrence — richest
+        // context) and cap: a pathological transcript can yield dozens of
+        // rescue points, and every test costs an LLM + judge call to run.
+        const seen = new Map<string, number>();
+        for (const p of points) seen.set(full[p].text.trim().toLowerCase(), p);
+        const ends = points.length
+          ? [...seen.values()].sort((a, b) => a - b).slice(-10)
+          : lastCustomer >= 0 ? [lastCustomer] : [];
         if (!ends.length) return c.json({ error: 'no turns — supply turns or a conversation_id' }, 400);
         const rows = await db
           .insert(agentTests)

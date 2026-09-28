@@ -1,4 +1,4 @@
-import { asc, eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agentTests, agents, messages } from '../db/schema.js';
 import { enabledBuiltins } from './builtinTools.js';
@@ -46,12 +46,14 @@ export interface TestRunResult {
 
 /** The whole transcript as model-facing turns (no tail trim). */
 export async function transcriptTurns(db: Db, convId: string): Promise<TestTurn[]> {
+  // Most recent window — the rescues worth testing are usually at the tail.
   const rows = await db
     .select()
     .from(messages)
     .where(eq(messages.conversationId, convId))
-    .orderBy(asc(messages.createdAt))
+    .orderBy(desc(messages.createdAt))
     .limit(400);
+  rows.reverse();
 
   const turns: TestTurn[] = [];
   for (const m of rows) {
@@ -115,16 +117,20 @@ const RESCUE_MARKERS = [
   '(the customer was told a human teammate is joining)',
   '(human operator)',
 ];
+const OFFER_MARKER = '(a human teammate was offered)';
 
 /** Indices of customer turns that preceded a human intervention — each is
  *  a "formerly failed" prompt worth its own regression test. A customer
  *  turn is a checkpoint when a rescue marker appears before the next
- *  customer turn. */
+ *  customer turn. Exception: a handoff *offer* only counts when it directly
+ *  follows the customer turn — an agent reply in between means the agent
+ *  answered and then courteously offered a human, which isn't a failure. */
 export function checkpointIndices(turns: TestTurn[]): number[] {
   const points: number[] = [];
   for (let i = 0; i < turns.length; i++) {
     if (turns[i].role !== 'customer') continue;
     for (let j = i + 1; j < turns.length && turns[j].role !== 'customer'; j++) {
+      if (turns[j].text.startsWith(OFFER_MARKER) && j > i + 1) continue;
       if (RESCUE_MARKERS.some((m) => turns[j].text.startsWith(m))) {
         points.push(i);
         break;

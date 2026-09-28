@@ -718,4 +718,37 @@ describe('save-as-test splits at rescue points', () => {
     expect(body.tests[0].name).toBe('clean transcript');
     expect(body.tests[0].turns.at(-1).text).toBe('hours?');
   });
+
+  it('ignores courtesy handoff offers that follow a real answer', async () => {
+    const res = await postAgent(parentCookie);
+    const agentId = (await res.json()).agent.id as string;
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'webchat:vis_offer' })
+      .returning();
+    const seq = (i: number) => new Date(1_700_000_000_000 + i * 1000);
+    await db.insert(messages).values([
+      { conversationId: conv.id, direction: 'in', text: 'how does billing work?', createdAt: seq(0) },
+      // agent answered, THEN offered a human — courtesy, not a rescue
+      { conversationId: conv.id, direction: 'out', text: 'Stripe handles it — want a human anyway?', createdAt: seq(1) },
+      { conversationId: conv.id, direction: 'out', text: 'Offered a human: awaiting reply', flags: { handoff_offer: true }, createdAt: seq(2) },
+      // a bare offer directly after a customer turn IS a deflection → checkpoint
+      { conversationId: conv.id, direction: 'in', text: 'what about enterprise?', createdAt: seq(3) },
+      { conversationId: conv.id, direction: 'out', text: 'Offered a human: awaiting reply', flags: { handoff_offer: true }, createdAt: seq(4) },
+    ]);
+    const res2 = await app.request(`/api/agents/${agentId}/tests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({
+        name: 'offers',
+        expectation: 'answers directly',
+        conversation_id: conv.id,
+      }),
+    });
+    expect(res2.status).toBe(201);
+    const body = await res2.json();
+    // only the bare-deflection prompt is a checkpoint — not the answered one
+    expect(body.tests).toHaveLength(1);
+    expect(body.tests[0].turns.at(-1).text).toBe('what about enterprise?');
+  });
 });

@@ -2175,7 +2175,7 @@ interface AgentTestRun {
 interface AgentTest {
   id: string;
   name: string;
-  turns: { role: 'customer' | 'agent'; text: string }[];
+  turns: { role: 'customer' | 'agent'; text: string; mid?: string }[];
   expectation: string;
   source_conversation_id?: string | null;
   source_message_id?: string | null;
@@ -2392,6 +2392,7 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
                               )}
                               {shown.map((turn, i) => {
                                 const trigger = i === shown.length - 1 && turn.role === 'customer';
+                                const linked = turn.mid && t.source_conversation_id;
                                 return (
                                   <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 3, fontSize: 12 }}>
                                     <span
@@ -2400,12 +2401,28 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
                                     >
                                       {turn.role}
                                     </span>
-                                    <span
-                                      className={trigger ? '' : 'muted'}
-                                      style={trigger ? { fontWeight: 600 } : undefined}
-                                    >
-                                      {turn.text}
-                                    </span>
+                                    {linked ? (
+                                      <Link
+                                        to={`/conversations/${t.source_conversation_id}?msg=${turn.mid}`}
+                                        className={trigger ? '' : 'muted'}
+                                        style={{
+                                          ...(trigger ? { fontWeight: 600 } : {}),
+                                          textDecoration: 'underline',
+                                          textDecorationStyle: 'dotted',
+                                          textUnderlineOffset: 3,
+                                        }}
+                                        title="Open this message in the conversation"
+                                      >
+                                        {turn.text}
+                                      </Link>
+                                    ) : (
+                                      <span
+                                        className={trigger ? '' : 'muted'}
+                                        style={trigger ? { fontWeight: 600 } : undefined}
+                                      >
+                                        {turn.text}
+                                      </span>
+                                    )}
                                   </div>
                                 );
                               })}

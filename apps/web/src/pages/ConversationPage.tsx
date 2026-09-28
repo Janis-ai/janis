@@ -1043,7 +1043,13 @@ export default function ConversationPage() {
             <div>User id: {p.id ?? c.external_id}</div>
             <div>
               Agent:{' '}
-              {agent ? <Link to={`/agents/${c.agent_id}`}>{agent.name}</Link> : '—'}
+              {agent ? (
+                <Link to={`/agents/${c.agent_id}`} style={{ color: 'var(--accent)' }}>
+                  {agent.name} →
+                </Link>
+              ) : (
+                '—'
+              )}
             </div>
             {extraProfile.map(([k, v]) => (
               <div key={k}>{k}: {String(v)}</div>
