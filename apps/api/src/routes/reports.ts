@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { and, asc, eq, gt, inArray, ne } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, alerts, conversations, messages } from '../db/schema.js';
+import { agents, alerts, conversations, messages, pendingActions } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentVis } from '../lib/access.js';
 
@@ -111,6 +111,123 @@ export function reportRoutes(db: Db) {
       unresolved,
       overdue,
       stale: staleList.sort((a, b) => b.waiting_min - a.waiting_min).slice(0, 5),
+    });
+  });
+
+  // GET /containment?days=30 — what the agent handled alone. The support-AI
+  // headline number: share of conversations that never needed a human.
+  // "Escalated" = an alert (help request, failure, approval…) fired or a
+  // human sent a message or took over; "contained" = the agent replied and
+  // none of that happened.
+  app.get('/containment', async (c) => {
+    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+
+    const convs = await db
+      .select({
+        id: conversations.id,
+        state: conversations.state,
+        createdAt: conversations.createdAt,
+      })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(...agentVis(c.get('workspaceId'), c.get('agentScope')), gt(conversations.createdAt, cutoff)));
+
+    const convIds = convs.map((v) => v.id);
+    if (!convIds.length) {
+      return c.json({
+        days,
+        total: 0,
+        contained: 0,
+        escalated: 0,
+        no_reply: 0,
+        containment_rate: null,
+        approvals_requested: 0,
+        avg_handoff_min: null,
+        median_handoff_min: null,
+      });
+    }
+
+    const msgs = await db
+      .select({
+        convId: messages.conversationId,
+        direction: messages.direction,
+        createdAt: messages.createdAt,
+        payload: messages.payload,
+      })
+      .from(messages)
+      .where(inArray(messages.conversationId, convIds))
+      .orderBy(asc(messages.createdAt));
+
+    const convAlerts = await db
+      .select({ convId: alerts.conversationId, type: alerts.type, createdAt: alerts.createdAt })
+      .from(alerts)
+      .where(and(inArray(alerts.conversationId, convIds), ne(alerts.type, 'sla')));
+
+    const approvalRows = await db
+      .select({ convId: pendingActions.conversationId })
+      .from(pendingActions)
+      .where(inArray(pendingActions.conversationId, convIds));
+
+    // Escalating alert types — approval_request is gated action, not a
+    // failure of containment, so it doesn't count as escalation here.
+    const ESCALATING = new Set(['failure', 'help_request', 'handoff_offer', 'custom', 'keyword']);
+    const alertsByConv = new Map<string, Date[]>();
+    for (const a of convAlerts) {
+      if (!ESCALATING.has(a.type)) continue;
+      const list = alertsByConv.get(a.convId) ?? [];
+      list.push(a.createdAt);
+      alertsByConv.set(a.convId, list);
+    }
+    const firstAgentReply = new Map<string, Date>();
+    const firstHumanMsg = new Map<string, Date>();
+    for (const m of msgs) {
+      const p = m.payload as { internal?: boolean; via?: string } | undefined;
+      if (p?.internal) continue; // approval cards/notes — never customer-facing
+      if (m.direction === 'out' && p?.via !== 'operator' && !firstAgentReply.has(m.convId))
+        firstAgentReply.set(m.convId, m.createdAt);
+      // 'human' rows and 'out' messages sent via the operator composer both
+      // mean a person touched the conversation.
+      if ((m.direction === 'human' || p?.via === 'operator') && !firstHumanMsg.has(m.convId))
+        firstHumanMsg.set(m.convId, m.createdAt);
+    }
+
+    let contained = 0;
+    let escalated = 0;
+    let noReply = 0;
+    const handoffMins: number[] = [];
+    for (const conv of convs) {
+      const replied = firstAgentReply.has(conv.id);
+      const humanMsg = firstHumanMsg.get(conv.id);
+      const firstAlert = alertsByConv.get(conv.id)?.[0];
+      const intervention = [humanMsg, firstAlert]
+        .filter((d): d is Date => !!d)
+        .sort((a, b) => a.getTime() - b.getTime())[0];
+      if (!replied) {
+        noReply++;
+      } else if (intervention) {
+        escalated++;
+        handoffMins.push((intervention.getTime() - conv.createdAt.getTime()) / 60_000);
+      } else {
+        contained++;
+      }
+    }
+
+    handoffMins.sort((a, b) => a - b);
+    return c.json({
+      days,
+      total: convs.length,
+      contained,
+      escalated,
+      no_reply: noReply,
+      containment_rate: convs.length ? Math.round((contained / convs.length) * 100) : null,
+      approvals_requested: approvalRows.length,
+      avg_handoff_min: handoffMins.length
+        ? Math.round((handoffMins.reduce((s, v) => s + v, 0) / handoffMins.length) * 10) / 10
+        : null,
+      median_handoff_min: handoffMins.length
+        ? Math.round(handoffMins[Math.floor(handoffMins.length / 2)] * 10) / 10
+        : null,
     });
   });
 

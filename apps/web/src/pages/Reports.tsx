@@ -16,6 +16,18 @@ interface HandoffMetrics {
   stale: { id: string; name: string; waiting_min: number }[];
 }
 
+interface ContainmentMetrics {
+  days: number;
+  total: number;
+  contained: number;
+  escalated: number;
+  no_reply: number;
+  containment_rate: number | null;
+  approvals_requested: number;
+  avg_handoff_min: number | null;
+  median_handoff_min: number | null;
+}
+
 const fmtMin = (m: number | null) =>
   m === null ? '—' : m < 60 ? `${Math.round(m)}m` : `${(m / 60).toFixed(1)}h`;
 
@@ -25,6 +37,10 @@ export default function Reports() {
   const metrics = useQuery({
     queryKey: ['handoff-metrics'],
     queryFn: () => api<HandoffMetrics>('/api/reports/handoffs?days=30'),
+  });
+  const containment = useQuery({
+    queryKey: ['containment-metrics'],
+    queryFn: () => api<ContainmentMetrics>('/api/reports/containment?days=30'),
   });
   const qc = useQueryClient();
 
@@ -42,6 +58,38 @@ export default function Reports() {
           {generate.isPending ? 'Generating…' : 'Generate digest now'}
         </button>
       </div>
+
+      {/* Containment — share of conversations the agent handled alone */}
+      {(() => {
+        const k = containment.data;
+        if (!k) return null;
+        return (
+          <div className="card">
+            <div className="row">
+              <strong className="grow">Containment — last {k.days} days</strong>
+            </div>
+            <div className="metric-grid" style={{ marginTop: 10 }}>
+              <div className="metric">
+                <div className="metric-num">
+                  {k.containment_rate === null ? '—' : `${k.containment_rate}%`}
+                </div>
+                <div className="muted">handled without a human</div>
+              </div>
+              <div className="metric"><div className="metric-num">{k.total}</div><div className="muted">conversations</div></div>
+              <div className="metric"><div className="metric-num">{k.contained}</div><div className="muted">agent only</div></div>
+              <div className="metric"><div className="metric-num">{k.escalated}</div><div className="muted">needed a human</div></div>
+              <div className="metric"><div className="metric-num">{k.approvals_requested}</div><div className="muted">approvals requested</div></div>
+              <div className="metric"><div className="metric-num">{fmtMin(k.avg_handoff_min)}</div><div className="muted">avg time to handoff</div></div>
+            </div>
+            {k.no_reply > 0 && (
+              <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+                {k.no_reply} conversation{k.no_reply === 1 ? '' : 's'} got no agent reply at all —
+                counted in the total, in neither column.
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Handoff metrics — last 30 days */}
       <div className="card">
