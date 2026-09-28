@@ -15,7 +15,7 @@ npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod)
 ## Verify after every change
 
 1. `npm run typecheck` (root — all workspaces)
-2. `npm test -w apps/api`
+2. `npm test -w apps/api` and `npm test -w apps/web`
 3. `./scripts/smoke.sh` — checks web 200s, API health, login, all key endpoints,
    and that the SSE stream delivers a live event. Run this **before telling the
    user to reload the Devin preview** — it catches dead servers, CORS breaks,
@@ -28,7 +28,9 @@ npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod)
 - Devin preview proxies :5173 — API CORS echoes localhost/127.0.0.1 origins.
 
 ## Gotchas
-- Do NOT run the API with .pglite inside an iCloud/Dropbox-synced dir — file sync corrupts the live DB. This repo is under iCloud Drive, so apps/api/.env sets PGLITE_DIR=~/.janis/pglite.
+- Repo lives at ~/repos/janis (moved out of iCloud Drive — sync was corrupting
+  files mid-edit). Do NOT run the API with .pglite inside a synced dir;
+  apps/api/.env sets PGLITE_DIR=~/.janis/pglite.
 - Only ONE tsx watch may run against a PGlite dir at a time; kill extras (pkill -f "tsx watch src/index.ts") before restarting.
 
 ## Billing / Stripe
