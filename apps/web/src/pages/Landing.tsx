@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMe } from '../api/hooks';
 import { api } from '../api/client';
@@ -124,6 +124,68 @@ const STEPS = [
   ['Hand it back', 'Resume the agent; the exchange becomes training data.'],
 ];
 
+type Beat =
+  | { kind: 'in' | 'out'; text: string }
+  | { kind: 'card' }
+  | { kind: 'flip' } // invisible beat — the card resolves before the agent replies
+  | { kind: 'note'; text: string };
+
+const SCRIPT: Beat[] = [
+  { kind: 'in', text: 'Can I get a refund on my order?' },
+  { kind: 'out', text: 'Absolutely — let me put that through for you.' },
+  { kind: 'card' },
+  { kind: 'flip' },
+  { kind: 'out', text: 'Done — your refund for $49.00 is on its way. Anything else?' },
+  { kind: 'note', text: 'The customer saw a seamless conversation. A teammate approved the action in one click.' },
+];
+
+const STEP_MS = 1700;
+const HOLD_MS = 6000;
+
+/** Scripted replay of the approval flow — loops forever. */
+function DemoStrip() {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(
+      () => setStep((s) => (s >= SCRIPT.length ? 0 : s + 1)),
+      step >= SCRIPT.length ? HOLD_MS : STEP_MS,
+    );
+    return () => clearTimeout(t);
+  }, [step]);
+
+  const approved = step >= 4; // card flips to approved when the agent confirms
+  return (
+    <div className="demo-window">
+      <div className="demo-header">
+        <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
+        <span className="demo-title">Customer · Web chat</span>
+      </div>
+      <div className="demo-body">
+        {SCRIPT.slice(0, step).map((b, i) =>
+          b.kind === 'card' ? (
+            <div key={i} className={`demo-card${approved ? ' approved' : ''}`}>
+              <div className="demo-card-tool">propose_refund</div>
+              <div className="demo-card-args">order #1042 · $49.00</div>
+              {approved ? (
+                <div className="demo-card-done">✓ Approved by Mike — ran successfully</div>
+              ) : (
+                <div className="demo-card-btns">
+                  <span className="demo-btn primary">Approve &amp; run</span>
+                  <span className="demo-btn">Deny</span>
+                </div>
+              )}
+            </div>
+          ) : b.kind === 'note' ? (
+            <div key={i} className="demo-note">{b.text}</div>
+          ) : b.kind === 'flip' ? null : (
+            <div key={i} className={`demo-msg ${b.kind}`}>{b.text}</div>
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** Public landing page — also satisfies the OAuth consent screen home URL. */
 export default function Landing() {
   const { data } = useMe();
@@ -201,17 +263,16 @@ export default function Landing() {
         </p>
       </section>
 
-      <section className="landing-shot">
-        <figure>
-          <img
-            src="/img/landing-takeover.png"
-            alt="The Janis console: the hosted agent answers a customer's shipping question, an operator takes over with one click, and the agent stands by to resume."
-          />
-          <figcaption className="muted">
-            A real takeover — the agent answers, an operator steps in from the
-            console (or Slack), then the agent resumes when the human is done.
-          </figcaption>
-        </figure>
+      <section className="landing-steps landing-demo">
+        <h2>Watch the handoff happen</h2>
+        <p className="landing-sub">
+          AI drafts the action. A human approves it. The customer just sees a fast answer.
+        </p>
+        <DemoStrip />
+        <p className="landing-fine">
+          Try it for real — ask the Janis bot in the corner for a refund and watch
+          the approval card appear.
+        </p>
       </section>
 
       <section className="landing-grid">
