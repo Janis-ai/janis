@@ -1817,16 +1817,28 @@ function KnowledgeGaps({ agentId, config }: { agentId: string; config: AgentConf
     mutationFn: (v: {
       field: 'dismissed_learnings' | 'dismissed_gaps';
       keys: string[];
-    }) =>
-      api(`/api/agents/${agentId}`, {
+    }) => {
+      const now = new Date().toISOString();
+      return api(`/api/agents/${agentId}`, {
         method: 'PATCH',
         body: JSON.stringify({
           config: {
             ...config,
             [v.field]: [...new Set([...(config[v.field] ?? []), ...v.keys])],
+            // gaps get dismissal timestamps — they may legitimately resurface
+            // if the question escalates AGAIN after the dismissal
+            ...(v.field === 'dismissed_gaps'
+              ? {
+                  dismissed_gap_times: {
+                    ...(config.dismissed_gap_times ?? {}),
+                    ...Object.fromEntries(v.keys.map((k) => [k, now])),
+                  },
+                }
+              : {}),
           },
         }),
-      }),
+      });
+    },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['agents'] }),
     onError: (e) => setError(e.message),
   });
@@ -1873,14 +1885,26 @@ function KnowledgeGaps({ agentId, config }: { agentId: string; config: AgentConf
 
   const dismissedL = new Set(config.dismissed_learnings ?? []);
   const dismissedG = new Set(config.dismissed_gaps ?? []);
+  const dismissTimes = config.dismissed_gap_times ?? {};
   const gapKey = (q: string) => q.toLowerCase().slice(0, 60);
-  // a cluster stays dismissed while every visible phrasing was dismissed —
-  // a new phrasing of the same intent resurfaces it
-  const gaps = (data?.gaps ?? []).filter(
-    (g) =>
-      !dismissedG.has(g.key) &&
-      !g.questions.every((q) => dismissedG.has(gapKey(q))),
-  );
+  // A dismissed cluster stays hidden until it escalates AGAIN after the
+  // dismissal — a new phrasing of the same question doesn't resurface it, a
+  // new occurrence does. Entries without a timestamp (pre-timestamp
+  // dismissals) stay hidden permanently.
+  const gapDismissed = (g: Gap) => {
+    const covered =
+      dismissedG.has(g.key) ||
+      (g.questions.length > 0 && g.questions.every((q) => dismissedG.has(gapKey(q))));
+    if (!covered) return false;
+    const times = [g.key, ...g.questions.map(gapKey)]
+      .map((k) => dismissTimes[k])
+      .filter((t): t is string => !!t)
+      .map((t) => Date.parse(t))
+      .filter(Number.isFinite);
+    if (!times.length) return true; // legacy dismissal — never resurface
+    return Date.parse(g.last_seen) <= Math.max(...times);
+  };
+  const gaps = (data?.gaps ?? []).filter((g) => !gapDismissed(g));
   const learnings = (data?.learnings ?? []).filter((l) => !dismissedL.has(l.key));
   const [page, setPage] = useState(0);
   const PAGE = 5;
