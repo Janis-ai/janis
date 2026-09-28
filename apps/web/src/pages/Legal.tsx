@@ -21,10 +21,16 @@ Third parties
 We share data with providers strictly as needed to run the service: Meta (channel messaging), Slack (workspace integration), Google (sign-in), Stripe (payments), and AI model providers (when a hosted agent or AI suggestion generates a reply). We do not sell your data.
 
 Retention
-Conversation and account data are retained while your account is active. You may request deletion by contacting us.
+Conversation and account data are retained while your account is active. Disconnecting a channel deletes its stored credentials and tokens. You may request full deletion of your account and data by contacting us.
 
-Security
-Credentials and tokens are stored server-side and never exposed to end users. Payment card data is handled entirely by Stripe and never touches our servers.
+How we protect your data
+- Encryption in transit: all traffic between your browser, our servers, and third-party APIs (Google, Meta, Slack, Stripe) uses TLS/HTTPS.
+- Encryption at rest: sensitive secrets — agent API keys, OAuth client credentials, and connected-app secrets — are encrypted with AES-256-GCM before they are written to our database.
+- OAuth tokens: Google access and refresh tokens are stored server-side only and are never exposed to browsers, end users, or other workspaces. They are used exclusively by our backend to read inbound mail and send replies you or your agent initiate.
+- Access controls: conversation data, customer profiles, and integration credentials are isolated per workspace and accessible only to authenticated members of that workspace. Administrative access is restricted to authorized personnel.
+- Least privilege: we request only the narrow OAuth scopes required for the features you enable (e.g. gmail.readonly and gmail.send for the Gmail channel — we never request permission to modify or delete mail).
+- Payment data: card details are handled entirely by Stripe and never touch our servers.
+- Deletion and revocation: you can disconnect any channel at any time, which removes its stored tokens; revoking Janis's access in your Google account (myaccount.google.com/permissions) also stops all data access.
 
 Contact
 Questions: support@janis.ai
