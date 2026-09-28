@@ -13,11 +13,16 @@ const ruleConfig = z.object({
   keywords: z.array(z.string()).optional(),
   inactivity_minutes: z.number().min(1).max(1440).optional(),
   enabled: z.boolean().default(true),
+  // automation actions
+  assign_to: z.string().uuid().optional(),
+  assignees: z.array(z.string().uuid()).optional(),
+  tag: z.string().min(1).max(60).optional(),
+  next: z.number().int().min(0).optional(),
 });
 
 const createRule = z.object({
   agent_id: z.string().uuid(),
-  kind: z.enum(['keyword', 'failure', 'handoff_request', 'inactivity', 'custom_alert']),
+  kind: z.enum(['keyword', 'failure', 'handoff_request', 'inactivity', 'custom_alert', 'auto_assign']),
   config: ruleConfig,
 });
 

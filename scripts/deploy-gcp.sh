@@ -42,8 +42,16 @@ envs = read_env('apps/api/.env')
 envs.update(read_env('apps/api/.env.production'))
 
 db_url = envs.pop('DATABASE_URL', '')
+# A unix-socket DATABASE_URL (...?host=/cloudsql/PROJ:REGION:INSTANCE) needs the
+# Cloud SQL connector attached to the service — deploy adds the flag below.
+cloudsql = ''
 if db_url:
     envs.pop('PGLITE_DIR', None)
+    import re
+    m = re.search(r'host=/cloudsql/([^&\s]+)', db_url)
+    if m:
+        cloudsql = m.group(1)
+        open('/tmp/janis-cloudsql.txt', 'w').write(cloudsql)
     r = subprocess.run(
         ['gcloud', 'secrets', 'describe', 'janis-database-url', '--project', PROJECT],
         capture_output=True)
@@ -88,9 +96,16 @@ if python3 -c "import yaml; exit(0 if 'PGLITE_DIR' in yaml.safe_load(open('/tmp/
     --add-volume-mount volume=data,mount-path=/app/data \
     --env-vars-file /tmp/janis-env.yaml
 else
+  # Still single-instance: the voice bridge, Gmail poller and inactivity
+  # sweeper are in-process — safe on Postgres but not yet multi-instance safe.
+  CLOUDSQL=$(cat /tmp/janis-cloudsql.txt 2>/dev/null || true)
+  EXTRA=()
+  [ -n "$CLOUDSQL" ] && EXTRA+=(--add-cloudsql-instances "$CLOUDSQL")
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
     --memory 1Gi --no-cpu-throttling \
+    --max-instances 1 \
+    "${EXTRA[@]}" \
     --add-volume name=data,type=cloud-storage,bucket=janis-data-$PROJECT \
     --add-volume-mount volume=data,mount-path=/app/data \
     --update-secrets "DATABASE_URL=janis-database-url:latest" \

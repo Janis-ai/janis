@@ -51,6 +51,14 @@ bucket janis-data-janis-prod-mn via FUSE mount at /app/data (demo-grade — use
 DATABASE_URL + managed Postgres for real load; keep --max-instances 1 with
 PGlite: single writer only).
 
+Postgres cutover: provision Cloud SQL, run the auth proxy, rsync the bucket's
+pglite dir, then `DATABASE_URL=… PGLITE_DIR=… npm run migrate-to-pg -w apps/api --
+--apply` (idempotent — re-run to catch stragglers). Set DATABASE_URL in
+apps/api/.env.production and redeploy — deploy-gcp.sh stores it in Secret
+Manager and attaches the Cloud SQL connector when the URL uses a
+/cloudsql/… host. --max-instances stays 1: voice bridge, Gmail poller and
+sweeper are still in-process.
+
 ## Shared package
 
 @janis/shared resolves to dist/ in all consumers (prod Node can't load .ts).

@@ -411,10 +411,15 @@ export type Suggestion = z.infer<typeof Suggestion>;
 export const AlertRule = z.object({
   id: z.string(),
   agent_id: z.string(),
-  kind: z.enum(['keyword', 'failure', 'handoff_request', 'inactivity', 'custom_alert']),
+  kind: z.enum(['keyword', 'failure', 'handoff_request', 'inactivity', 'custom_alert', 'auto_assign']),
   config: z.object({
     keywords: z.array(z.string()).optional(),
     inactivity_minutes: z.number().optional(),
+    // automation actions — keyword matches / inactivity fires / new
+    // conversations can assign the thread or tag it
+    assign_to: z.string().optional(), // user id
+    assignees: z.array(z.string()).optional(), // auto_assign: round-robin pool
+    tag: z.string().optional(),
     enabled: z.boolean(),
   }),
   created_at: z.string(),

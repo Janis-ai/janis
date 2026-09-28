@@ -17,7 +17,7 @@ import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { railBus } from '../lib/railBus';
 
-const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert'] as const;
+const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert', 'auto_assign'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
 type Tab = 'integrations' | 'escalation' | 'tools' | 'tests' | 'connection';
 
@@ -651,6 +651,12 @@ function EscalationTab({
   const [kind, setKind] = useState<(typeof RULE_KINDS)[number]>('keyword');
   const [keywords, setKeywords] = useState('');
   const [minutes, setMinutes] = useState('15');
+  const [assignTo, setAssignTo] = useState('');
+  const [ruleTag, setRuleTag] = useState('');
+  const [pool, setPool] = useState<string[]>([]);
+  const { data: members } = useAgentMembers(agent.id);
+  const teammateName = (id: string) =>
+    members?.members.find((m) => m.user_id === id)?.name ?? 'a teammate';
 
   return (
     <>
@@ -707,20 +713,29 @@ function EscalationTab({
       </div>
 
       <div className="card" style={{ marginTop: 12 }}>
-        <strong>Alert rules</strong>
+        <strong>Alert &amp; routing rules</strong>
         {rules.map((r) => (
           <div key={r.id} className="row muted" style={{ marginTop: 6 }}>
             <span className="grow">
-              {r.kind}
+              {r.kind === 'auto_assign' ? 'auto-assign new conversations' : r.kind}
               {r.config.keywords?.length ? `: ${r.config.keywords.join(', ')}` : ''}
               {r.config.inactivity_minutes ? ` (${r.config.inactivity_minutes}m)` : ''}
+              {r.config.assign_to ? ` → ${teammateName(r.config.assign_to)}` : ''}
+              {r.config.assignees?.length
+                ? ` → ${r.config.assignees.map(teammateName).join(', ')} (round robin)`
+                : ''}
+              {r.config.tag ? ` +tag:${r.config.tag}` : ''}
             </span>
             <button className="btn danger" onClick={() => onDeleteRule(r.id)}>✕</button>
           </div>
         ))}
         <div className="row" style={{ marginTop: 8 }}>
           <select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
-            {RULE_KINDS.map((k) => <option key={k}>{k}</option>)}
+            {RULE_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {k === 'auto_assign' ? 'auto-assign' : k}
+              </option>
+            ))}
           </select>
           {kind === 'keyword' && (
             <input
@@ -739,8 +754,45 @@ function EscalationTab({
               onChange={(e) => setMinutes(e.target.value)}
             />
           )}
+          {(kind === 'keyword' || kind === 'inactivity') && (
+            <>
+              <select value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
+                <option value="">no assignee</option>
+                {(members?.members ?? []).map((m) => (
+                  <option key={m.user_id} value={m.user_id}>{m.name}</option>
+                ))}
+              </select>
+              <input
+                style={{ width: 110 }}
+                placeholder="+ tag"
+                value={ruleTag}
+                onChange={(e) => setRuleTag(e.target.value)}
+              />
+            </>
+          )}
+          {kind === 'auto_assign' && (
+            <span className="muted" style={{ fontSize: 12 }}>
+              {(members?.members ?? []).map((m) => (
+                <label key={m.user_id} className="check-label" style={{ marginRight: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={pool.includes(m.user_id)}
+                    onChange={(e) =>
+                      setPool(
+                        e.target.checked
+                          ? [...pool, m.user_id]
+                          : pool.filter((id) => id !== m.user_id),
+                      )
+                    }
+                  />
+                  {m.name}
+                </label>
+              ))}
+            </span>
+          )}
           <button
             className="btn"
+            disabled={kind === 'auto_assign' && pool.length === 0}
             onClick={() =>
               onAddRule(kind, {
                 enabled: true,
@@ -748,11 +800,18 @@ function EscalationTab({
                   ? { keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean) }
                   : {}),
                 ...(kind === 'inactivity' ? { inactivity_minutes: Number(minutes) } : {}),
+                ...(assignTo ? { assign_to: assignTo } : {}),
+                ...(ruleTag.trim() ? { tag: ruleTag.trim() } : {}),
+                ...(kind === 'auto_assign' ? { assignees: pool, next: 0 } : {}),
               })
             }
           >
             Add rule
           </button>
+        </div>
+        <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+          auto-assign hands every new conversation to the next teammate in the pool; keyword and
+          inactivity rules can also assign the thread and tag it when they fire.
         </div>
       </div>
 

@@ -4,6 +4,7 @@ import type { Db } from '../db/client.js';
 import {
   agents,
   alerts,
+  alertRules,
   channelBindings,
   channels,
   conversations,
@@ -21,6 +22,7 @@ import { toMessage } from '../lib/serializers.js';
 import { bus } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { captureCsat } from '../lib/csat.js';
+import { pickAutoAssignee } from '../lib/rules.js';
 import { env } from '../env.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { processEvents } from './ingest.js';
@@ -313,6 +315,32 @@ export async function handleChannelMessage(
       conversationId: conv.id,
       platformUserId: participantId,
     });
+    // Routing: an auto_assign rule picks the owner — fixed assignee or a
+    // round-robin pool whose cursor persists on the rule config.
+    const assignRules = await db
+      .select()
+      .from(alertRules)
+      .where(and(eq(alertRules.agentId, agent.id), eq(alertRules.kind, 'auto_assign')));
+    const pick = pickAutoAssignee(assignRules);
+    if (pick) {
+      await db
+        .update(conversations)
+        .set({ assigneeId: pick.userId })
+        .where(eq(conversations.id, conv.id));
+      conv = { ...conv, assigneeId: pick.userId };
+      const cfg = (assignRules.find((r) => r.id === pick.ruleId)?.config ?? {}) as Record<
+        string,
+        unknown
+      >;
+      await db
+        .update(alertRules)
+        .set({ config: { ...cfg, next: pick.next } })
+        .where(eq(alertRules.id, pick.ruleId));
+      bus.publish(agent.workspaceId, {
+        type: 'conversation',
+        data: { id: conv.id, state: conv.state },
+      });
+    }
     // Greeting — a real outbound message stored before the inbound so the
     // transcript opens with it. Only fires on deliberate openers: a Meta
     // postback tap (Get Started/menu), or webchat/internal channels where

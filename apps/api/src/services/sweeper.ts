@@ -4,7 +4,7 @@ import { agents, alertRules, alerts, conversations, messages } from '../db/schem
 import { bus } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
-import { inactivityThresholds } from '../lib/rules.js';
+import { inactivityActions, inactivityThresholds } from '../lib/rules.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
@@ -127,9 +127,25 @@ export async function sweep(db: Db): Promise<number> {
         detail: `no agent response for ${minutes}m`,
       });
       if (!created) continue;
+      // Automation on the escalation: the rule can route the stale thread to
+      // a teammate and tag it — "unanswered 15m → assign to on-call".
+      const actions = inactivityActions(rules.filter((r) => r.agentId === agentId));
+      const assignTo = actions.find((a) => a.assignTo)?.assignTo;
+      const tags = actions.some((a) => a.tag)
+        ? [
+            ...new Set([
+              ...conversation.tags,
+              ...actions.map((a) => a.tag).filter((t): t is string => !!t),
+            ]),
+          ]
+        : conversation.tags;
       await db
         .update(conversations)
-        .set({ state: 'needs_human' })
+        .set({
+          state: 'needs_human',
+          ...(assignTo ? { assigneeId: assignTo } : {}),
+          ...(tags.length !== conversation.tags.length ? { tags } : {}),
+        })
         .where(eq(conversations.id, conversation.id));
       const n = await alertNotification(db, alert, conversation, agent);
       bus.publish(agent.workspaceId, {

@@ -137,6 +137,9 @@ export function toAlertRule(row: Row<typeof alertRules>): AlertRule {
     keywords?: string[];
     inactivity_minutes?: number;
     enabled?: boolean;
+    assign_to?: string;
+    assignees?: string[];
+    tag?: string;
   };
   return {
     id: row.id,
@@ -145,6 +148,9 @@ export function toAlertRule(row: Row<typeof alertRules>): AlertRule {
     config: {
       keywords: config.keywords,
       inactivity_minutes: config.inactivity_minutes,
+      assign_to: config.assign_to,
+      assignees: config.assignees,
+      tag: config.tag,
       enabled: config.enabled !== false,
     },
     created_at: iso(row.createdAt)!,

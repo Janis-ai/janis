@@ -13,7 +13,7 @@ import { bus } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { enrichHandoff } from '../lib/handoff.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
-import { evaluateEvent } from '../lib/rules.js';
+import { evaluateActions, evaluateEvent } from '../lib/rules.js';
 import { mirrorToSlack, postSlackAlert, setSlackThreadStatus } from '../lib/slack.js';
 import { agentEligibleMembers } from '../lib/members.js';
 import { deliverToChannel, type AttachmentRef } from '../lib/channels.js';
@@ -230,11 +230,22 @@ export async function processEvents(
     // human who took over owns the release decision.
     if (event.type === 'handoff_cancelled' && state === 'needs_human') state = 'active';
 
+    // Automation: keyword rules can route the thread alongside their alert —
+    // assign to a teammate (only when unassigned, so a routed thread doesn't
+    // steal someone's queue) and/or tag it.
+    const actions = evaluateActions(event, rules);
+    const assignTo = actions.find((a) => a.assignTo)?.assignTo;
+    const mergedTags = actions.some((a) => a.tag)
+      ? [...new Set([...conv.tags, ...actions.map((a) => a.tag).filter((t): t is string => !!t)])]
+      : conv.tags;
+
     const preview = eventText(event);
     const [updated] = await db
       .update(conversations)
       .set({
         state,
+        ...(assignTo && !conv.assigneeId ? { assigneeId: assignTo } : {}),
+        ...(mergedTags.length !== conv.tags.length ? { tags: mergedTags } : {}),
         lastMessageAt: event.timestamp ? new Date(event.timestamp) : new Date(),
         lastMessagePreview: preview?.slice(0, 140) ?? conv.lastMessagePreview,
         lastMessageDirection: directionFor(event),

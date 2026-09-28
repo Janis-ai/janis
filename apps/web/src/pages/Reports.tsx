@@ -42,6 +42,16 @@ interface CsatMetrics {
   distribution: { score: number; count: number }[];
 }
 
+interface OperatorStat {
+  user_id: string;
+  name: string;
+  conversations: number;
+  replies: number;
+  median_first_response_min: number | null;
+  median_resolution_min: number | null;
+  assigned_now: number;
+}
+
 const fmtMin = (m: number | null) =>
   m === null ? '—' : m < 60 ? `${Math.round(m)}m` : `${(m / 60).toFixed(1)}h`;
 
@@ -92,6 +102,10 @@ export default function Reports() {
   const csat = useQuery({
     queryKey: ['csat-metrics', agentId, channelId],
     queryFn: () => api<CsatMetrics>(`/api/reports/csat?${qs}`),
+  });
+  const operators = useQuery({
+    queryKey: ['operator-metrics', agentId, channelId],
+    queryFn: () => api<{ days: number; operators: OperatorStat[] }>(`/api/reports/operators?${qs}`),
   });
   const qc = useQueryClient();
 
@@ -215,6 +229,43 @@ export default function Reports() {
             <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
               Customers are asked to rate 1–5 when a conversation is archived.
             </div>
+          </div>
+        );
+      })()}
+
+      {/* Team — per-operator workload + responsiveness */}
+      {(() => {
+        const ops = operators.data?.operators ?? [];
+        if (!ops.length) return null;
+        return (
+          <div className="card">
+            <div className="row">
+              <strong className="grow">Team — last {operators.data?.days ?? 30} days</strong>
+            </div>
+            <table className="docs-table" style={{ marginTop: 10 }}>
+              <thead>
+                <tr className="muted">
+                  <th style={{ textAlign: 'left' }}>Teammate</th>
+                  <th>Conversations</th>
+                  <th>Replies</th>
+                  <th>Median 1st response</th>
+                  <th>Median resolution</th>
+                  <th>Assigned now</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ops.map((o) => (
+                  <tr key={o.user_id}>
+                    <td>{o.name}</td>
+                    <td style={{ textAlign: 'center' }}>{o.conversations}</td>
+                    <td style={{ textAlign: 'center' }}>{o.replies}</td>
+                    <td style={{ textAlign: 'center' }}>{fmtMin(o.median_first_response_min)}</td>
+                    <td style={{ textAlign: 'center' }}>{fmtMin(o.median_resolution_min)}</td>
+                    <td style={{ textAlign: 'center' }}>{o.assigned_now}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         );
       })()}

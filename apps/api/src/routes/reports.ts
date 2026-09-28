@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { and, asc, eq, gt, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, alerts, channelBindings, conversations, messages, pendingActions } from '../db/schema.js';
+import { agents, alerts, channelBindings, conversations, messages, pendingActions, users as usersTable } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentVis } from '../lib/access.js';
 
@@ -334,6 +334,130 @@ export function reportRoutes(db: Db) {
       // share of 4–5 ratings — the industry CSAT headline
       satisfied_pct: answered ? Math.round(((dist[3] + dist[4]) / answered) * 100) : null,
       distribution: dist.map((n, i) => ({ score: i + 1, count: n })),
+    });
+  });
+
+  // GET /operators?days=30 — per-teammate workload + responsiveness: how many
+  // conversations each operator touched, replies sent, median first-response
+  // and resolution times, and what's currently sitting in their name.
+  app.get('/operators', async (c) => {
+    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const scope = agentVis(c.get('workspaceId'), c.get('agentScope'));
+
+    const convs = await db
+      .select({
+        id: conversations.id,
+        assigneeId: conversations.assigneeId,
+        createdAt: conversations.createdAt,
+        archivedAt: conversations.archivedAt,
+      })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(...scope, gt(conversations.createdAt, cutoff), ...drillFilters(c)));
+    if (!convs.length) return c.json({ days, operators: [] });
+    const convIds = convs.map((v) => v.id);
+    const convById = new Map(convs.map((v) => [v.id, v]));
+
+    // Human-authored transcript lines — 'human' rows and operator sends
+    // (via:'operator' on out messages) both carry authorId = the user.
+    const rows = await db
+      .select({
+        convId: messages.conversationId,
+        authorId: messages.authorId,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .where(
+        and(
+          inArray(messages.conversationId, convIds),
+          sql`${messages.authorId} is not null`,
+        ),
+      )
+      .orderBy(asc(messages.createdAt));
+
+    // Currently assigned (open workload) — not window-limited.
+    const assigned = await db
+      .select({ assigneeId: conversations.assigneeId })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(
+        and(
+          ...scope,
+          sql`${conversations.assigneeId} is not null`,
+          ne(conversations.state, 'archived'),
+          ...drillFilters(c),
+        ),
+      );
+    const assignedNow = new Map<string, number>();
+    for (const a of assigned) {
+      assignedNow.set(a.assigneeId!, (assignedNow.get(a.assigneeId!) ?? 0) + 1);
+    }
+
+    interface Stat {
+      convs: Set<string>;
+      replies: number;
+      firstResp: number[]; // ms, conv created → their first message
+      resolution: number[]; // ms, conv created → archived (convs they touched)
+      assigned: number;
+    }
+    const stats = new Map<string, Stat>();
+    const stat = (uid: string) => {
+      let s = stats.get(uid);
+      if (!s) {
+        s = { convs: new Set(), replies: 0, firstResp: [], resolution: [], assigned: 0 };
+        stats.set(uid, s);
+      }
+      return s;
+    };
+    // First message per operator per conversation, in time order
+    const seen = new Set<string>();
+    for (const m of rows) {
+      const s = stat(m.authorId!);
+      s.convs.add(m.convId);
+      s.replies++;
+      const key = `${m.authorId}:${m.convId}`;
+      const conv = convById.get(m.convId);
+      if (!seen.has(key) && conv) {
+        seen.add(key);
+        s.firstResp.push(m.createdAt.getTime() - conv.createdAt.getTime());
+      }
+    }
+    for (const [uid, s] of stats) {
+      for (const convId of s.convs) {
+        const conv = convById.get(convId);
+        if (conv?.archivedAt) s.resolution.push(conv.archivedAt.getTime() - conv.createdAt.getTime());
+      }
+      s.assigned = assignedNow.get(uid) ?? 0;
+    }
+
+    const ids = [...stats.keys(), ...assignedNow.keys()];
+    const users = ids.length
+      ? await db
+          .select({ id: usersTable.id, name: usersTable.name, email: usersTable.email })
+          .from(usersTable)
+          .where(inArray(usersTable.id, [...new Set(ids)]))
+      : [];
+    const nameOf = new Map(users.map((u) => [u.id, u.name || u.email]));
+
+    const med = (ms: number[]) =>
+      ms.length
+        ? Math.round((ms.sort((a, b) => a - b)[Math.floor(ms.length / 2)] / 60_000) * 10) / 10
+        : null;
+
+    return c.json({
+      days,
+      operators: [...stats.entries()]
+        .map(([uid, s]) => ({
+          user_id: uid,
+          name: nameOf.get(uid) ?? 'unknown',
+          conversations: s.convs.size,
+          replies: s.replies,
+          median_first_response_min: med(s.firstResp),
+          median_resolution_min: med(s.resolution),
+          assigned_now: s.assigned,
+        }))
+        .sort((a, b) => b.conversations - a.conversations),
     });
   });
 

@@ -585,6 +585,9 @@ export function conversationRoutes(db: Db) {
         ...(body.tags !== undefined ? { tags: body.tags } : {}),
         ...(body.assignee_id !== undefined ? { assigneeId: body.assignee_id } : {}),
         ...(body.state !== undefined ? { state: body.state } : {}),
+        // stamp resolution time; a reopen clears it so re-archiving re-times
+        ...(body.state === 'archived' ? { archivedAt: new Date() } : {}),
+        ...(body.state !== undefined && body.state !== 'archived' ? { archivedAt: null } : {}),
         ...(body.is_starred !== undefined ? { isStarred: body.is_starred } : {}),
         ...(body.is_unread !== undefined ? { isUnread: body.is_unread } : {}),
       })

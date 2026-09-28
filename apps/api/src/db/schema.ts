@@ -172,6 +172,8 @@ export const conversations = pgTable(
     csatPending: boolean('csat_pending').notNull().default(false),
     csatScore: integer('csat_score'),
     csatAskedAt: timestamp('csat_asked_at', { withTimezone: true }),
+    // Set when an operator archives — feeds CSAT timing + resolution metrics
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     // Rolling agent memory: everything before summaryUpTo is folded into
     // agentSummary so the hosted agent remembers the whole conversation
     agentSummary: text('agent_summary'),
@@ -290,7 +292,7 @@ export const alertRules = pgTable('alert_rules', {
     .notNull()
     .references(() => agents.id),
   kind: text('kind', {
-    enum: ['keyword', 'failure', 'handoff_request', 'inactivity', 'custom_alert'],
+    enum: ['keyword', 'failure', 'handoff_request', 'inactivity', 'custom_alert', 'auto_assign'],
   }).notNull(),
   config: jsonb('config').notNull().default({ enabled: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

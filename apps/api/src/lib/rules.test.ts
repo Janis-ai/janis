@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { IngestEvent } from '@janis/shared';
-import { evaluateEvent, inactivityThresholds } from './rules.js';
+import { evaluateActions, evaluateEvent, inactivityThresholds, pickAutoAssignee } from './rules.js';
 import type { alertRules } from '../db/schema.js';
 
 const rule = (
@@ -50,5 +50,48 @@ describe('inactivityThresholds', () => {
       rule('keyword', { enabled: true, keywords: ['x'] }),
     ];
     expect(inactivityThresholds(rules)).toEqual([10]);
+  });
+});
+
+describe('evaluateActions', () => {
+  it('returns assign/tag actions for matching keyword rules', () => {
+    const rules = [
+      rule('keyword', { enabled: true, keywords: ['refund'], assign_to: 'u1', tag: 'billing' }),
+      rule('keyword', { enabled: true, keywords: ['lawyer'], tag: 'legal' }),
+    ];
+    expect(
+      evaluateActions(evt({ type: 'message_in', text: 'I want a refund and a lawyer' }), rules),
+    ).toEqual([
+      { assignTo: 'u1', tag: 'billing' },
+      { assignTo: undefined, tag: 'legal' },
+    ]);
+    expect(evaluateActions(evt({ type: 'message_in', text: 'hello' }), rules)).toEqual([]);
+    // non-inbound events never trigger actions
+    expect(evaluateActions(evt({ type: 'message_out', text: 'refund' }), rules)).toEqual([]);
+  });
+
+  it('skips keyword rules with no actions attached', () => {
+    const rules = [rule('keyword', { enabled: true, keywords: ['refund'] })];
+    expect(evaluateActions(evt({ type: 'message_in', text: 'refund' }), rules)).toEqual([]);
+  });
+});
+
+describe('pickAutoAssignee', () => {
+  it('returns a fixed assignee', () => {
+    const rules = [rule('auto_assign', { enabled: true, assign_to: 'u9' })];
+    expect(pickAutoAssignee(rules)).toEqual({ userId: 'u9', ruleId: 'r1', next: 0 });
+  });
+
+  it('round-robins through the assignees pool', () => {
+    const rules = [rule('auto_assign', { enabled: true, assignees: ['u1', 'u2'], next: 0 })];
+    expect(pickAutoAssignee(rules)).toEqual({ userId: 'u1', ruleId: 'r1', next: 1 });
+    const advanced = [rule('auto_assign', { enabled: true, assignees: ['u1', 'u2'], next: 3 })];
+    expect(pickAutoAssignee(advanced)).toEqual({ userId: 'u2', ruleId: 'r1', next: 2 });
+  });
+
+  it('returns null when disabled or pool empty', () => {
+    expect(pickAutoAssignee([rule('auto_assign', { enabled: false, assignees: ['u1'] })])).toBeNull();
+    expect(pickAutoAssignee([rule('auto_assign', { enabled: true })])).toBeNull();
+    expect(pickAutoAssignee([rule('keyword', { enabled: true, keywords: ['x'] })])).toBeNull();
   });
 });
