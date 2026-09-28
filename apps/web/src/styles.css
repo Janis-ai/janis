@@ -266,7 +266,7 @@ button, input, select, textarea { font: inherit; }
 .composer-bar { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 .composer-bar .btn { padding: 6px 12px; white-space: nowrap; }
 .composer-bar .btn.icon { padding: 6px 8px; }
-.composer-bar select { min-width: 0; max-width: 140px; }
+.composer-bar select { min-width: 0; max-width: 175px; font-size: 12px; }
 .btn.icon { padding: 9px 10px; }
 .attach-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .attach-chip {
