@@ -1,7 +1,6 @@
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMe } from '../api/hooks';
-import { api } from '../api/client';
 import { SiteFooter } from '../components/bits';
 
 // Inline stroke glyphs — the old PNG set only had three distinct images,
@@ -128,92 +127,164 @@ type Beat = {
   kind: 'in' | 'out' | 'card' | 'sys' | 'note' | 'typing';
   text?: string;
   wait?: number; // delay before this beat appears
+  customer?: boolean; // also visible in the customer pane
 };
 
-/** Mirrors the console transcript: system beats, card, typing dots, receipts. */
-const SCRIPT: Beat[] = [
-  { kind: 'in', text: 'My order #1042 arrived damaged — can I get a refund?' },
-  { kind: 'typing', wait: 1400 },
+/** Beats up to the pending card — the loop pauses there for the visitor. */
+const PRE: Beat[] = [
+  { kind: 'in', text: 'My order #1042 arrived damaged — can I get a refund?', customer: true },
+  { kind: 'typing', wait: 1400, customer: true },
   {
     kind: 'out',
-    text: 'A refund needs a teammate\u2019s sign-off \u2014 let me send this for approval.',
-    wait: 2200,
+    text: 'I can help with that — I just need a teammate to approve the refund.',
+    wait: 2400,
+    customer: true,
   },
-  { kind: 'sys', text: 'Operator \u26a1 approval requested \u2014 propose_refund', wait: 900 },
+  { kind: 'sys', text: 'Operator \u26a1 approval requested — propose_refund', wait: 900 },
   { kind: 'card' },
-  { kind: 'sys', text: 'Mike \u26a1 action approved', wait: 3400 },
-  { kind: 'typing', wait: 1400 },
-  { kind: 'out', text: 'Done \u2014 your refund for $49.00 is on its way. Anything else?', wait: 2400 },
-  { kind: 'note', text: 'The customer saw a seamless answer. A teammate approved the action in one click.' },
 ];
 
-const STEP_MS = 1700;
-const HOLD_MS = 6000;
-const APPROVED_STEP = SCRIPT.findIndex((b) => b.text?.includes('action approved')) + 1;
-const LAST_OUT = SCRIPT.reduce((last, b, i) => (b.kind === 'out' ? i : last), -1);
+/** Endings branch on what the visitor (or the auto-approver) did. */
+const POST = {
+  approved: (you: boolean): Beat[] => [
+    { kind: 'sys', text: `${you ? 'You' : 'Mike'} \u26a1 action approved`, wait: 800 },
+    { kind: 'typing', wait: 1300, customer: true },
+    {
+      kind: 'out',
+      text: 'Done \u2014 your refund for $49.00 is on its way. Anything else?',
+      wait: 2400,
+      customer: true,
+    },
+    { kind: 'note', text: 'The customer saw a seamless answer. The action ran only after a human approved it.' },
+  ],
+  denied: (): Beat[] => [
+    { kind: 'sys', text: 'You \u26a1 action denied', wait: 800 },
+    { kind: 'typing', wait: 1300, customer: true },
+    {
+      kind: 'out',
+      text: 'I wasn\u2019t able to approve that refund — the team will follow up with you directly.',
+      wait: 2400,
+      customer: true,
+    },
+    { kind: 'note', text: 'Nothing runs without a human. Denied actions never execute.' },
+  ],
+};
 
-/** Scripted replay of the approval flow — loops forever. */
+const STEP_MS = 1700;
+const HOLD_MS = 6500;
+const APPROVE_TIMEOUT = 6500;
+const CARD_STEP = PRE.length; // card is the last PRE beat — visible when step reaches this
+
+type Decision = { ok: boolean; you: boolean };
+
+/** Interactive replay of the approval flow — the visitor plays the operator. */
 function DemoStrip() {
   const [step, setStep] = useState(0);
-  useEffect(() => {
-    const t = setTimeout(
-      () => setStep((s) => (s >= SCRIPT.length ? 0 : s + 1)),
-      step >= SCRIPT.length ? HOLD_MS : SCRIPT[step]?.wait ?? STEP_MS,
-    );
-    return () => clearTimeout(t);
-  }, [step]);
+  const [decision, setDecision] = useState<Decision | null>(null);
 
-  const approved = step >= APPROVED_STEP;
+  const post = decision ? (decision.ok ? POST.approved(decision.you) : POST.denied()) : [];
+  const beats = [...PRE, ...post];
+  const shown = beats.slice(0, step);
+  const note = shown.find((b) => b.kind === 'note');
+
+  useEffect(() => {
+    // Pending card: wait for the visitor to click, then auto-approve so the
+    // loop keeps moving for people who just watch.
+    if (step >= CARD_STEP && !decision) {
+      const t = setTimeout(() => setDecision({ ok: true, you: false }), APPROVE_TIMEOUT);
+      return () => clearTimeout(t);
+    }
+    const t = setTimeout(() => {
+      if (step >= beats.length) {
+        setStep(0);
+        setDecision(null);
+      } else {
+        setStep(step + 1);
+      }
+    }, step >= beats.length ? HOLD_MS : beats[step]?.wait ?? STEP_MS);
+    return () => clearTimeout(t);
+  }, [step, decision]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const renderBeat = (b: Beat, i: number, pane: 'customer' | 'operator') => {
+    if (pane === 'customer' && !b.customer) return null;
+    if (b.kind === 'note') return null;
+    if (b.kind === 'typing') {
+      // Typing indicators are ephemeral — gone once the reply lands.
+      if (i !== step - 1) return null;
+      return (
+        <div key={i} className={`demo-msg demo-typing ${pane === 'customer' ? 'cust-out' : 'out'}`}>
+          <span className="conv-typing">
+            <span className="dot" /><span className="dot" /><span className="dot" />
+          </span>
+        </div>
+      );
+    }
+    if (b.kind === 'sys') {
+      return <div key={i} className="demo-note">{b.text}</div>;
+    }
+    if (b.kind === 'card') {
+      return (
+        <div
+          key={i}
+          className={`demo-card${decision ? (decision.ok ? ' approved' : ' denied') : ' waiting'}`}
+        >
+          <div className="demo-card-tool">propose_refund</div>
+          <div className="demo-card-args">{'{ "order": "#1042", "amount": "49.00" }'}</div>
+          {decision ? (
+            <div className={`demo-card-done${decision.ok ? '' : ' denied'}`}>
+              {decision.ok
+                ? `✓ Approved by ${decision.you ? 'you' : 'Mike'} — ran successfully`
+                : '✗ Denied by you — never ran'}
+            </div>
+          ) : (
+            <>
+              <div className="demo-card-btns">
+                <button
+                  className="demo-btn primary"
+                  onClick={() => setDecision({ ok: true, you: true })}
+                >
+                  Approve &amp; run
+                </button>
+                <button className="demo-btn" onClick={() => setDecision({ ok: false, you: true })}>
+                  Deny
+                </button>
+              </div>
+              <div className="demo-card-wait">This one’s live — try clicking it.</div>
+            </>
+          )}
+        </div>
+      );
+    }
+    const customer = pane === 'customer';
+    const cls = customer ? (b.kind === 'in' ? 'cust-in' : 'cust-out') : b.kind;
+    return (
+      <div key={i} className={`demo-msg ${cls}`}>
+        {!customer && <div className="demo-who">{b.kind === 'in' ? 'Jordan Lee' : 'Janis'}</div>}
+        {b.text}
+      </div>
+    );
+  };
+
   return (
-    <div className="demo-window">
-      <div className="demo-header">
-        <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
-        <span className="demo-title">Jordan Lee · Web chat</span>
+    <>
+      <div className="demo-split">
+        <div className="demo-window">
+          <div className="demo-header">
+            <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
+            <span className="demo-title">What the customer sees</span>
+          </div>
+          <div className="demo-body">{shown.map((b, i) => renderBeat(b, i, 'customer'))}</div>
+        </div>
+        <div className="demo-window">
+          <div className="demo-header">
+            <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
+            <span className="demo-title">What your team sees</span>
+          </div>
+          <div className="demo-body">{shown.map((b, i) => renderBeat(b, i, 'operator'))}</div>
+        </div>
       </div>
-      <div className="demo-body">
-        {SCRIPT.slice(0, step).map((b, i) => {
-          if (b.kind === 'card') {
-            return (
-              <div key={i} className={`demo-card${approved ? ' approved' : ''}`}>
-                <div className="demo-card-tool">propose_refund</div>
-                <div className="demo-card-args">{'{ "order": "#1042", "amount": "49.00" }'}</div>
-                {approved ? (
-                  <div className="demo-card-done">✓ Approved by Mike — ran successfully</div>
-                ) : (
-                  <div className="demo-card-btns">
-                    <span className="demo-btn primary">Approve &amp; run</span>
-                    <span className="demo-btn">Deny</span>
-                  </div>
-                )}
-              </div>
-            );
-          }
-          if (b.kind === 'typing') {
-            // Typing indicators are ephemeral — gone once the reply lands.
-            if (i !== step - 1) return null;
-            return (
-              <div key={i} className="demo-msg out demo-typing">
-                <span className="conv-typing">
-                  <span className="dot" /><span className="dot" /><span className="dot" />
-                </span>
-              </div>
-            );
-          }
-          if (b.kind === 'sys' || b.kind === 'note') {
-            return <div key={i} className="demo-note">{b.text}</div>;
-          }
-          return (
-            <Fragment key={i}>
-              <div className={`demo-msg ${b.kind}`}>
-                <div className="demo-who">{b.kind === 'in' ? 'Jordan Lee' : 'Janis'}</div>
-                {b.text}
-              </div>
-              {i === LAST_OUT && <div className="demo-receipt">Delivered</div>}
-            </Fragment>
-          );
-        })}
-      </div>
-    </div>
+      {note && <div className="demo-note">{note.text}</div>}
+    </>
   );
 }
 
@@ -221,9 +292,11 @@ function DemoStrip() {
 export default function Landing() {
   const { data } = useMe();
   const cta = data ? { to: '/conversations', label: 'Open console' } : { to: '/login', label: 'Get started' };
-  const signOut = async () => {
-    await api('/auth/logout', { method: 'POST' });
-    window.location.href = '/';
+  const openWidget = () => {
+    const panel = document.getElementById('janis-panel');
+    if (!panel?.classList.contains('open')) {
+      document.getElementById('janis-bubble')?.click();
+    }
   };
 
   // Dogfood the web-chat widget on the marketing site. Same-origin so the
@@ -273,24 +346,11 @@ export default function Landing() {
         </p>
         <div className="row" style={{ justifyContent: 'center', gap: 12 }}>
           <Link className="btn primary lg" to={cta.to}>{data ? 'Open console' : 'Get started free'}</Link>
-          {data ? (
-            <a
-              className="btn lg"
-              href="/login"
-              onClick={(e) => {
-                e.preventDefault();
-                void signOut();
-              }}
-            >
-              Sign out
-            </a>
-          ) : (
-            <a className="btn lg" href="#how">See how it works</a>
-          )}
+          <button className="btn lg" onClick={openWidget}>Try Janis live</button>
         </div>
-        <p className="landing-fine">Free plan available · No credit card required</p>
-        <p className="landing-try">
-          Try it now — the chat bubble in the corner is Janis, running on Janis.
+        <p className="landing-fine">
+          Free plan available · No credit card required · The chat bubble in the
+          corner is Janis — running on Janis.
         </p>
       </section>
 
