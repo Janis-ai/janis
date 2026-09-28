@@ -137,7 +137,7 @@ export default function ConversationPage() {
   const [testSaveOpen, setTestSaveOpen] = useState(false);
   const [testName, setTestName] = useState('');
   const [testExpectation, setTestExpectation] = useState('');
-  const [testSaved, setTestSaved] = useState(false);
+  const [testSaved, setTestSaved] = useState(0);
   const jumpedFor = useRef('');
   const olderFor = useRef('');
   if (olderFor.current !== id) {
@@ -361,8 +361,9 @@ export default function ConversationPage() {
           conversation_id: id,
         }),
       }),
-    onSuccess: () => {
-      setTestSaved(true);
+    onSuccess: (d) => {
+      const saved = (d as { tests?: unknown[] }).tests;
+      setTestSaved(saved?.length ?? 1);
       setTestName('');
       setTestExpectation('');
     },
@@ -586,11 +587,13 @@ export default function ConversationPage() {
           <div className="card" style={{ marginTop: 8 }}>
             {testSaved ? (
               <>
-                <label>Test saved</label>
+                <label>{testSaved > 1 ? `${testSaved} tests saved` : 'Test saved'}</label>
                 <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
-                  It lives on the agent's Tests tab — run it there after a prompt or
-                  knowledge change to prove the fix, or run all tests to catch a
-                  regression. Replays never message the customer or call your APIs.
+                  {testSaved > 1
+                    ? 'One per point where a human had to step in — each replays the conversation up to that prompt. '
+                    : 'It replays the conversation up to the customer\u2019s last message. '}
+                  Run them from the agent's Tests tab after a prompt or knowledge
+                  change — replays never message the customer or call your APIs.
                 </div>
                 <div className="row" style={{ marginTop: 4 }}>
                   <Link
@@ -601,11 +604,11 @@ export default function ConversationPage() {
                   </Link>
                   <button
                     className="btn sm"
-                    onClick={() => setTestSaved(false)}
+                    onClick={() => setTestSaved(0)}
                   >
                     Save another
                   </button>
-                  <button className="btn sm" onClick={() => { setTestSaveOpen(false); setTestSaved(false); }}>
+                  <button className="btn sm" onClick={() => { setTestSaveOpen(false); setTestSaved(0); }}>
                     Done
                   </button>
                 </div>

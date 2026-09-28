@@ -42,14 +42,8 @@ export interface TestRunResult {
   model?: string;
 }
 
-/** Model-facing turns for a conversation — the same rules transcriptFor
- *  applies to stored messages, so a replayed test sees what the live agent
- *  saw. Internal event rows become the same neutral markers. */
-export async function turnsFromConversation(
-  db: Db,
-  convId: string,
-  limit = 16,
-): Promise<TestTurn[]> {
+/** The whole transcript as model-facing turns (no tail trim). */
+export async function transcriptTurns(db: Db, convId: string): Promise<TestTurn[]> {
   const rows = await db
     .select()
     .from(messages)
@@ -91,11 +85,51 @@ export async function turnsFromConversation(
     else turns.push({ role: 'agent', text: m.text });
   }
 
+  return turns;
+}
+
+/** Model-facing turns for a conversation, trimmed to end at the last
+ *  customer turn — the same rules transcriptFor applies to stored
+ *  messages, so a replayed test sees what the live agent saw. */
+export async function turnsFromConversation(
+  db: Db,
+  convId: string,
+  limit = 16,
+): Promise<TestTurn[]> {
+  const turns = await transcriptTurns(db, convId);
   // The replay answers the customer's last message — trailing agent turns
   // are the reply being regenerated, not context.
   const tail = turns.slice(-limit);
   while (tail.length && tail[tail.length - 1].role !== 'customer') tail.pop();
   return tail;
+}
+
+/** Agent turns that mean a human entered the loop — the signals transcript
+ *  turns emit for escalation. Approval requests are excluded: gating an
+ *  action is the product working as designed, not a failure. */
+const RESCUE_MARKERS = [
+  '(passed to a human teammate)',
+  '(a human teammate was offered)',
+  '(the customer was told a human teammate is joining)',
+  '(human operator)',
+];
+
+/** Indices of customer turns that preceded a human intervention — each is
+ *  a "formerly failed" prompt worth its own regression test. A customer
+ *  turn is a checkpoint when a rescue marker appears before the next
+ *  customer turn. */
+export function checkpointIndices(turns: TestTurn[]): number[] {
+  const points: number[] = [];
+  for (let i = 0; i < turns.length; i++) {
+    if (turns[i].role !== 'customer') continue;
+    for (let j = i + 1; j < turns.length && turns[j].role !== 'customer'; j++) {
+      if (RESCUE_MARKERS.some((m) => turns[j].text.startsWith(m))) {
+        points.push(i);
+        break;
+      }
+    }
+  }
+  return points;
 }
 
 const JUDGE_SYSTEM =

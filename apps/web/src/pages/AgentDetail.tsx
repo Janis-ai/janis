@@ -2262,7 +2262,8 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
         </button>
       </div>
       <div className="muted" style={{ fontSize: 12 }}>
-        Save a transcript from any conversation ("Save as test"), then replay it after prompt,
+        Save a transcript from any conversation ("Save as test") — each point where a
+        human had to step in becomes its own test — then replay after prompt,
         knowledge, or tool changes. Replays never message customers and never execute tools —
         gated actions are only proposed. Add an expectation and each run is judged against it.
         {tests.length > 0 && (

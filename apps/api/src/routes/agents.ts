@@ -27,7 +27,7 @@ import {
 } from '../services/knowledgeGaps.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
-import { runAgentTest, turnsFromConversation } from '../lib/agentTests.js';
+import { checkpointIndices, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { effectiveMeteredModel } from '../lib/llm.js';
 import { llmModelsResult } from '../lib/llmModels.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
@@ -1166,7 +1166,33 @@ export function agentRoutes(db: Db) {
         .limit(1);
       if (!conv) return c.json({ error: 'conversation not found' }, 404);
       sourceConversationId = conv.id;
-      if (!turns.length) turns = await turnsFromConversation(db, conv.id);
+      if (!turns.length) {
+        // A transcript with human rescues is several tests: one per customer
+        // message that led to intervention — each replayed with the context
+        // up to that point. No rescues → one test at the last customer turn.
+        const full = await transcriptTurns(db, conv.id);
+        const points = checkpointIndices(full);
+        let lastCustomer = -1;
+        for (let i = full.length - 1; i >= 0; i--) {
+          if (full[i].role === 'customer') { lastCustomer = i; break; }
+        }
+        const ends = points.length ? points : lastCustomer >= 0 ? [lastCustomer] : [];
+        if (!ends.length) return c.json({ error: 'no turns — supply turns or a conversation_id' }, 400);
+        const rows = await db
+          .insert(agentTests)
+          .values(
+            ends.map((end, i) => ({
+              workspaceId: c.get('workspaceId'),
+              agentId,
+              name: ends.length > 1 ? `${b.name} #${i + 1}` : b.name,
+              expectation: b.expectation,
+              turns: full.slice(Math.max(0, end + 1 - 16), end + 1) as never,
+              sourceConversationId,
+            })),
+          )
+          .returning();
+        return c.json({ test: toTest(rows[0]), tests: rows.map(toTest) }, 201);
+      }
     }
     if (!turns.length) return c.json({ error: 'no turns — supply turns or a conversation_id' }, 400);
     const [row] = await db

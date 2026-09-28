@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentConnections, agents, memberships, sessions, users, workspaces } from '../db/schema.js';
+import { agentConnections, agents, conversations, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { env } from '../env.js';
@@ -643,5 +643,75 @@ describe('knowledge-gaps approve', () => {
       'Refunds are accepted within 30 days.',
       'Shipping is flat-rate.',
     ]);
+  });
+});
+
+describe('save-as-test splits at rescue points', () => {
+  it('creates one test per customer prompt that preceded a human intervention', async () => {
+    const res = await postAgent(parentCookie);
+    const agentId = (await res.json()).agent.id as string;
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'webchat:vis_split' })
+      .returning();
+    const seq = (i: number) => new Date(1_700_000_000_000 + i * 1000);
+    await db.insert(messages).values([
+      { conversationId: conv.id, direction: 'in', text: 'how do refunds work?', createdAt: seq(0) },
+      { conversationId: conv.id, direction: 'out', text: 'within 30 days', createdAt: seq(1) },
+      { conversationId: conv.id, direction: 'in', text: 'what about shipping to France?', createdAt: seq(2) },
+      // operator answered — checkpoint #1 (the customer turn before it)
+      { conversationId: conv.id, direction: 'human', text: 'yes we ship to France', createdAt: seq(3) },
+      { conversationId: conv.id, direction: 'in', text: 'and bulk discounts?', createdAt: seq(4) },
+      // failure flag → "(passed to a human teammate)" — checkpoint #2
+      { conversationId: conv.id, direction: 'out', text: 'let me get help', flags: { failure: true }, createdAt: seq(5) },
+      { conversationId: conv.id, direction: 'in', text: 'ok thanks', createdAt: seq(6) },
+      { conversationId: conv.id, direction: 'out', text: 'anytime!', createdAt: seq(7) },
+    ]);
+    const res2 = await app.request(`/api/agents/${agentId}/tests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({
+        name: 'rescue transcript',
+        expectation: 'handles without a human',
+        conversation_id: conv.id,
+      }),
+    });
+    expect(res2.status).toBe(201);
+    const body = await res2.json();
+    expect(body.tests).toHaveLength(2);
+    expect(body.tests[0].name).toBe('rescue transcript #1');
+    expect(body.tests[0].turns.at(-1).text).toBe('what about shipping to France?');
+    expect(body.tests[1].name).toBe('rescue transcript #2');
+    expect(body.tests[1].turns.at(-1).text).toBe('and bulk discounts?');
+  });
+
+  it('falls back to one test on the last customer message when nothing escalated', async () => {
+    const res = await postAgent(parentCookie);
+    const agentId = (await res.json()).agent.id as string;
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'webchat:vis_clean' })
+      .returning();
+    const seq = (i: number) => new Date(1_700_000_000_000 + i * 1000);
+    await db.insert(messages).values([
+      { conversationId: conv.id, direction: 'in', text: 'hi', createdAt: seq(0) },
+      { conversationId: conv.id, direction: 'out', text: 'hello!', createdAt: seq(1) },
+      { conversationId: conv.id, direction: 'in', text: 'hours?', createdAt: seq(2) },
+      { conversationId: conv.id, direction: 'out', text: '9 to 5', createdAt: seq(3) },
+    ]);
+    const res2 = await app.request(`/api/agents/${agentId}/tests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({
+        name: 'clean transcript',
+        expectation: 'answers politely',
+        conversation_id: conv.id,
+      }),
+    });
+    expect(res2.status).toBe(201);
+    const body = await res2.json();
+    expect(body.tests).toHaveLength(1);
+    expect(body.tests[0].name).toBe('clean transcript');
+    expect(body.tests[0].turns.at(-1).text).toBe('hours?');
   });
 });
