@@ -1272,9 +1272,9 @@ function ToolsTab({
           edit as JSON
         </summary>
         <textarea
-          rows={4}
+          rows={12}
           className="mono"
-          style={{ marginTop: 8 }}
+          style={{ marginTop: 8, width: '100%', minHeight: 200, resize: 'vertical' }}
           placeholder={'[\n  {\n    "name": "lookup_order",\n    "description": "Look up an order in our POS by order number",\n    "method": "GET",\n    "url": "https://api.acme-pos.com/orders/{order_id}",\n    "headers": { "authorization": "Bearer {{secrets.POS_API_KEY}}" },\n    "params": { "order_id": "the order number the user gave" }\n  }\n]'}
           value={toolsJson}
           onChange={(e) => setToolsJson(e.target.value)}

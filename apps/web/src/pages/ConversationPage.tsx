@@ -584,40 +584,65 @@ export default function ConversationPage() {
 
         {testSaveOpen && (
           <div className="card" style={{ marginTop: 8 }}>
-            <label>Save this conversation as a regression test</label>
-            <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
-              The transcript (up to the customer's last message) is replayed against the agent's
-              current setup — no customer sees it, no action runs. Use it to prove a prompt or
-              knowledge fix works, or to catch a regression later.
-            </div>
-            <input
-              placeholder="Test name — e.g. refund request must hand off"
-              value={testName}
-              onChange={(e) => setTestName(e.target.value)}
-              style={{ width: '100%', marginBottom: 8 }}
-            />
-            <textarea
-              rows={2}
-              placeholder="What a good reply does now — e.g. answers from the returns policy and never offers a refund without approval"
-              value={testExpectation}
-              onChange={(e) => setTestExpectation(e.target.value)}
-              style={{ width: '100%' }}
-            />
-            <div className="row" style={{ marginTop: 8 }}>
-              <button
-                className="btn primary sm"
-                disabled={!testName.trim() || saveTest.isPending}
-                onClick={() => saveTest.mutate()}
-              >
-                {saveTest.isPending ? 'Saving…' : 'Save test'}
-              </button>
-              <button className="btn sm" onClick={() => setTestSaveOpen(false)}>Cancel</button>
-              {testSaved && (
-                <span className="muted" style={{ fontSize: 12 }}>
-                  Saved — run it from the agent's Tests tab.
-                </span>
-              )}
-            </div>
+            {testSaved ? (
+              <>
+                <label>Test saved</label>
+                <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+                  It lives on the agent's Tests tab — run it there after a prompt or
+                  knowledge change to prove the fix, or run all tests to catch a
+                  regression. Replays never message the customer or call your APIs.
+                </div>
+                <div className="row" style={{ marginTop: 4 }}>
+                  <Link
+                    className="btn primary sm"
+                    to={`/agents/${c.agent_id}?tab=tests`}
+                  >
+                    Open Tests tab →
+                  </Link>
+                  <button
+                    className="btn sm"
+                    onClick={() => setTestSaved(false)}
+                  >
+                    Save another
+                  </button>
+                  <button className="btn sm" onClick={() => { setTestSaveOpen(false); setTestSaved(false); }}>
+                    Done
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <label>Save this conversation as a regression test</label>
+                <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+                  The transcript (up to the customer's last message) is replayed against the agent's
+                  current setup — no customer sees it, no action runs. Use it to prove a prompt or
+                  knowledge fix works, or to catch a regression later.
+                </div>
+                <input
+                  placeholder="Test name — e.g. refund request must hand off"
+                  value={testName}
+                  onChange={(e) => setTestName(e.target.value)}
+                  style={{ width: '100%', marginBottom: 8 }}
+                />
+                <textarea
+                  rows={2}
+                  placeholder="What a good reply does now — e.g. answers from the returns policy and never offers a refund without approval"
+                  value={testExpectation}
+                  onChange={(e) => setTestExpectation(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+                <div className="row" style={{ marginTop: 8 }}>
+                  <button
+                    className="btn primary sm"
+                    disabled={!testName.trim() || saveTest.isPending}
+                    onClick={() => saveTest.mutate()}
+                  >
+                    {saveTest.isPending ? 'Saving…' : 'Save test'}
+                  </button>
+                  <button className="btn sm" onClick={() => setTestSaveOpen(false)}>Cancel</button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
