@@ -384,7 +384,8 @@ export default function Landing() {
       <section className="landing-steps landing-demo">
         <h2>Watch the handoff happen</h2>
         <p className="landing-sub">
-          Watch Janis ask for approval, then pick up right where it left off.
+          See how Janis asks for help. You’re the human — approve or deny the
+          request yourself.
         </p>
         <DemoStrip />
       </section>
