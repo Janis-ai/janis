@@ -24,12 +24,42 @@ interface ContainmentMetrics {
   no_reply: number;
   containment_rate: number | null;
   approvals_requested: number;
+  approvals_pending: number;
   avg_handoff_min: number | null;
   median_handoff_min: number | null;
+  median_decision_min: number | null;
+  series: { date: string; total: number; contained: number }[];
 }
 
 const fmtMin = (m: number | null) =>
   m === null ? '—' : m < 60 ? `${Math.round(m)}m` : `${(m / 60).toFixed(1)}h`;
+
+/** Daily containment-rate trend — one polyline over cohort days that had
+ * traffic; days with no conversations are skipped (a 0-volume day isn't a
+ * data point). */
+function TrendChart({ series }: { series: { date: string; total: number; contained: number }[] }) {
+  const pts = series.filter((d) => d.total > 0);
+  if (pts.length < 2) return null;
+  const W = 560;
+  const H = 56;
+  const PAD = 4;
+  const x = (i: number) => PAD + (i * (W - 2 * PAD)) / (pts.length - 1);
+  const y = (rate: number) => H - PAD - (rate * (H - 2 * PAD)) / 100;
+  const path = pts
+    .map((d, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y((d.contained / d.total) * 100).toFixed(1)}`)
+    .join(' ');
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 56, marginTop: 10, display: 'block' }}>
+      <line x1={PAD} x2={W - PAD} y1={y(100)} y2={y(100)} stroke="var(--border)" strokeDasharray="3 4" strokeWidth="1" />
+      <path d={path} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+      {pts.map((d, i) => (
+        <circle key={d.date} cx={x(i)} cy={y((d.contained / d.total) * 100)} r="2.5" fill="var(--accent)">
+          <title>{`${d.date}: ${Math.round((d.contained / d.total) * 100)}% of ${d.total} handled without a human`}</title>
+        </circle>
+      ))}
+    </svg>
+  );
+}
 
 /** Daily digests + handoff/escalation metrics. */
 export default function Reports() {
@@ -79,8 +109,10 @@ export default function Reports() {
               <div className="metric"><div className="metric-num">{k.contained}</div><div className="muted">agent only</div></div>
               <div className="metric"><div className="metric-num">{k.escalated}</div><div className="muted">needed a human</div></div>
               <div className="metric"><div className="metric-num">{k.approvals_requested}</div><div className="muted">approvals requested</div></div>
+              <div className="metric"><div className="metric-num">{fmtMin(k.median_decision_min)}</div><div className="muted">median approval turnaround</div></div>
               <div className="metric"><div className="metric-num">{fmtMin(k.avg_handoff_min)}</div><div className="muted">avg time to handoff</div></div>
             </div>
+            <TrendChart series={k.series} />
             {k.no_reply > 0 && (
               <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
                 {k.no_reply} conversation{k.no_reply === 1 ? '' : 's'} got no agent reply at all —

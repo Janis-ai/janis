@@ -143,8 +143,11 @@ export function reportRoutes(db: Db) {
         no_reply: 0,
         containment_rate: null,
         approvals_requested: 0,
+        approvals_pending: 0,
         avg_handoff_min: null,
         median_handoff_min: null,
+        median_decision_min: null,
+        series: [],
       });
     }
 
@@ -165,7 +168,12 @@ export function reportRoutes(db: Db) {
       .where(and(inArray(alerts.conversationId, convIds), ne(alerts.type, 'sla')));
 
     const approvalRows = await db
-      .select({ convId: pendingActions.conversationId })
+      .select({
+        convId: pendingActions.conversationId,
+        status: pendingActions.status,
+        createdAt: pendingActions.createdAt,
+        decidedAt: pendingActions.decidedAt,
+      })
       .from(pendingActions)
       .where(inArray(pendingActions.conversationId, convIds));
 
@@ -196,6 +204,9 @@ export function reportRoutes(db: Db) {
     let escalated = 0;
     let noReply = 0;
     const handoffMins: number[] = [];
+    // Daily cohorts for the trend line — a conversation counts toward the
+    // day it opened; escalations later in its life still mark it escalated.
+    const byDay = new Map<string, { total: number; contained: number }>();
     for (const conv of convs) {
       const replied = firstAgentReply.has(conv.id);
       const humanMsg = firstHumanMsg.get(conv.id);
@@ -203,6 +214,9 @@ export function reportRoutes(db: Db) {
       const intervention = [humanMsg, firstAlert]
         .filter((d): d is Date => !!d)
         .sort((a, b) => a.getTime() - b.getTime())[0];
+      const day = conv.createdAt.toISOString().slice(0, 10);
+      const bucket = byDay.get(day) ?? { total: 0, contained: 0 };
+      bucket.total++;
       if (!replied) {
         noReply++;
       } else if (intervention) {
@@ -210,8 +224,16 @@ export function reportRoutes(db: Db) {
         handoffMins.push((intervention.getTime() - conv.createdAt.getTime()) / 60_000);
       } else {
         contained++;
+        bucket.contained++;
       }
+      byDay.set(day, bucket);
     }
+
+    // How long gated actions sit with a human — request to approve/deny.
+    const decisionMins = approvalRows
+      .filter((a) => a.decidedAt)
+      .map((a) => (a.decidedAt!.getTime() - a.createdAt.getTime()) / 60_000)
+      .sort((a, b) => a - b);
 
     handoffMins.sort((a, b) => a - b);
     return c.json({
@@ -222,12 +244,19 @@ export function reportRoutes(db: Db) {
       no_reply: noReply,
       containment_rate: convs.length ? Math.round((contained / convs.length) * 100) : null,
       approvals_requested: approvalRows.length,
+      approvals_pending: approvalRows.filter((a) => a.status === 'pending').length,
       avg_handoff_min: handoffMins.length
         ? Math.round((handoffMins.reduce((s, v) => s + v, 0) / handoffMins.length) * 10) / 10
         : null,
       median_handoff_min: handoffMins.length
         ? Math.round(handoffMins[Math.floor(handoffMins.length / 2)] * 10) / 10
         : null,
+      median_decision_min: decisionMins.length
+        ? Math.round(decisionMins[Math.floor(decisionMins.length / 2)] * 10) / 10
+        : null,
+      series: [...byDay.entries()]
+        .map(([date, v]) => ({ date, total: v.total, contained: v.contained }))
+        .sort((a, b) => (a.date < b.date ? -1 : 1)),
     });
   });
 
