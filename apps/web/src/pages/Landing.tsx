@@ -309,21 +309,15 @@ function DemoStrip() {
           <span className="demo-complete-pill">Handoff complete</span>
           <strong>
             {decision.ok
-              ? 'The customer got their refund. Your agent never lost its place.'
-              : 'The refund never ran — your agent handled it, and stayed on the conversation.'}
+              ? 'Refund approved. Customer notified.'
+              : 'Action denied. Nothing ran without a human.'}
           </strong>
-          <p className="muted">
-            Now try it for real — challenge the Janis bot and watch it call in a
-            human teammate.
-          </p>
+          <p className="muted">Janis picked up right where it left off.</p>
           <div className="row" style={{ justifyContent: 'center', gap: 14, alignItems: 'center' }}>
-            <button className="btn primary" onClick={openWidget}>Try Janis live →</button>
-            <button
-              className="demo-note-cta"
-              onClick={() => { setStep(0); setDecision(null); }}
-            >
+            <button className="btn" onClick={() => { setStep(0); setDecision(null); }}>
               ↻ Replay demo
             </button>
+            <button className="btn primary" onClick={openWidget}>Try Janis live →</button>
           </div>
         </div>
       )}
