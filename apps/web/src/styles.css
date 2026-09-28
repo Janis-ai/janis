@@ -711,8 +711,11 @@ details summary:hover { color: var(--text); }
   max-width: 80%; padding: 9px 13px; border-radius: 14px; font-size: 14px; line-height: 1.45;
   animation: demo-in .35s ease;
 }
-.demo-msg.in { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
-.demo-msg.out { align-self: flex-start; background: rgba(255,255,255,.07); border-bottom-left-radius: 4px; }
+.demo-msg.in { align-self: flex-start; background: var(--panel-2); border-bottom-left-radius: 4px; }
+.demo-msg.out { align-self: flex-end; background: #1d3a5f; border-bottom-right-radius: 4px; }
+.demo-who { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.demo-typing { padding: 8px 12px; }
+.demo-receipt { align-self: flex-end; font-size: 11px; color: var(--muted); padding: 0 4px; margin-top: -6px; }
 .demo-card {
   align-self: stretch; border: 1px solid var(--accent-dim); border-left: 3px solid var(--accent);
   border-radius: 10px; padding: 10px 12px; background: rgba(91,33,182,.08);
@@ -720,7 +723,7 @@ details summary:hover { color: var(--text); }
 }
 .demo-card.approved { border-left-color: #34d399; }
 .demo-card-tool { font-family: var(--mono, monospace); font-size: 13px; font-weight: 600; }
-.demo-card-args { color: var(--muted); font-size: 12.5px; margin: 2px 0 8px; }
+.demo-card-args { color: var(--muted); font-size: 12.5px; margin: 2px 0 8px; font-family: var(--mono, monospace); }
 .demo-card-btns { display: flex; gap: 8px; }
 .demo-btn {
   font-size: 12.5px; padding: 5px 12px; border-radius: 7px;

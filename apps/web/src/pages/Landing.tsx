@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMe } from '../api/hooks';
 import { api } from '../api/client';
@@ -124,23 +124,33 @@ const STEPS = [
   ['Hand it back', 'Resume the agent; the exchange becomes training data.'],
 ];
 
-type Beat =
-  | { kind: 'in' | 'out'; text: string }
-  | { kind: 'card' }
-  | { kind: 'flip' } // invisible beat — the card resolves before the agent replies
-  | { kind: 'note'; text: string };
+type Beat = {
+  kind: 'in' | 'out' | 'card' | 'sys' | 'note' | 'typing';
+  text?: string;
+  wait?: number; // delay before this beat appears
+};
 
+/** Mirrors the console transcript: system beats, card, typing dots, receipts. */
 const SCRIPT: Beat[] = [
-  { kind: 'in', text: 'Can I get a refund on my order?' },
-  { kind: 'out', text: 'Absolutely — let me put that through for you.' },
+  { kind: 'in', text: 'My order #1042 arrived damaged — can I get a refund?' },
+  { kind: 'typing', wait: 1400 },
+  {
+    kind: 'out',
+    text: 'A refund needs a teammate\u2019s sign-off \u2014 let me send this for approval.',
+    wait: 2200,
+  },
+  { kind: 'sys', text: 'Operator \u26a1 approval requested \u2014 propose_refund', wait: 900 },
   { kind: 'card' },
-  { kind: 'flip' },
-  { kind: 'out', text: 'Done — your refund for $49.00 is on its way. Anything else?' },
-  { kind: 'note', text: 'The customer saw a seamless conversation. A teammate approved the action in one click.' },
+  { kind: 'sys', text: 'Mike \u26a1 action approved', wait: 3400 },
+  { kind: 'typing', wait: 1400 },
+  { kind: 'out', text: 'Done \u2014 your refund for $49.00 is on its way. Anything else?', wait: 2400 },
+  { kind: 'note', text: 'The customer saw a seamless answer. A teammate approved the action in one click.' },
 ];
 
 const STEP_MS = 1700;
 const HOLD_MS = 6000;
+const APPROVED_STEP = SCRIPT.findIndex((b) => b.text?.includes('action approved')) + 1;
+const LAST_OUT = SCRIPT.reduce((last, b, i) => (b.kind === 'out' ? i : last), -1);
 
 /** Scripted replay of the approval flow — loops forever. */
 function DemoStrip() {
@@ -148,39 +158,60 @@ function DemoStrip() {
   useEffect(() => {
     const t = setTimeout(
       () => setStep((s) => (s >= SCRIPT.length ? 0 : s + 1)),
-      step >= SCRIPT.length ? HOLD_MS : STEP_MS,
+      step >= SCRIPT.length ? HOLD_MS : SCRIPT[step]?.wait ?? STEP_MS,
     );
     return () => clearTimeout(t);
   }, [step]);
 
-  const approved = step >= 4; // card flips to approved when the agent confirms
+  const approved = step >= APPROVED_STEP;
   return (
     <div className="demo-window">
       <div className="demo-header">
         <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
-        <span className="demo-title">Customer · Web chat</span>
+        <span className="demo-title">Jordan Lee · Web chat</span>
       </div>
       <div className="demo-body">
-        {SCRIPT.slice(0, step).map((b, i) =>
-          b.kind === 'card' ? (
-            <div key={i} className={`demo-card${approved ? ' approved' : ''}`}>
-              <div className="demo-card-tool">propose_refund</div>
-              <div className="demo-card-args">order #1042 · $49.00</div>
-              {approved ? (
-                <div className="demo-card-done">✓ Approved by Mike — ran successfully</div>
-              ) : (
-                <div className="demo-card-btns">
-                  <span className="demo-btn primary">Approve &amp; run</span>
-                  <span className="demo-btn">Deny</span>
-                </div>
-              )}
-            </div>
-          ) : b.kind === 'note' ? (
-            <div key={i} className="demo-note">{b.text}</div>
-          ) : b.kind === 'flip' ? null : (
-            <div key={i} className={`demo-msg ${b.kind}`}>{b.text}</div>
-          ),
-        )}
+        {SCRIPT.slice(0, step).map((b, i) => {
+          if (b.kind === 'card') {
+            return (
+              <div key={i} className={`demo-card${approved ? ' approved' : ''}`}>
+                <div className="demo-card-tool">propose_refund</div>
+                <div className="demo-card-args">{'{ "order": "#1042", "amount": "49.00" }'}</div>
+                {approved ? (
+                  <div className="demo-card-done">✓ Approved by Mike — ran successfully</div>
+                ) : (
+                  <div className="demo-card-btns">
+                    <span className="demo-btn primary">Approve &amp; run</span>
+                    <span className="demo-btn">Deny</span>
+                  </div>
+                )}
+              </div>
+            );
+          }
+          if (b.kind === 'typing') {
+            // Typing indicators are ephemeral — gone once the reply lands.
+            if (i !== step - 1) return null;
+            return (
+              <div key={i} className="demo-msg out demo-typing">
+                <span className="conv-typing">
+                  <span className="dot" /><span className="dot" /><span className="dot" />
+                </span>
+              </div>
+            );
+          }
+          if (b.kind === 'sys' || b.kind === 'note') {
+            return <div key={i} className="demo-note">{b.text}</div>;
+          }
+          return (
+            <Fragment key={i}>
+              <div className={`demo-msg ${b.kind}`}>
+                <div className="demo-who">{b.kind === 'in' ? 'Jordan Lee' : 'Janis'}</div>
+                {b.text}
+              </div>
+              {i === LAST_OUT && <div className="demo-receipt">Delivered</div>}
+            </Fragment>
+          );
+        })}
       </div>
     </div>
   );
