@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMe } from '../api/hooks';
 import { SiteFooter } from '../components/bits';
@@ -124,13 +124,13 @@ const STEPS = [
 ];
 
 type Beat = {
-  kind: 'in' | 'out' | 'card' | 'sys' | 'note' | 'typing';
+  kind: 'in' | 'out' | 'card' | 'sys' | 'typing';
   text?: string;
   wait?: number; // delay before this beat appears
   customer?: boolean; // also visible in the customer pane
 };
 
-/** Beats up to the pending card — the loop pauses there for the visitor. */
+/** Beats up to the pending card — the demo pauses there for the visitor. */
 const PRE: Beat[] = [
   { kind: 'in', text: 'My order #1042 arrived damaged — can I get a refund?', customer: true },
   { kind: 'typing', wait: 1400, customer: true },
@@ -144,7 +144,7 @@ const PRE: Beat[] = [
   { kind: 'card' },
 ];
 
-/** Endings branch on what the visitor (or the auto-approver) did. */
+/** Endings branch on what the visitor did. */
 const POST = {
   approved: (you: boolean): Beat[] => [
     { kind: 'sys', text: `${you ? 'You' : 'Mike'} \u26a1 action approved`, wait: 800 },
@@ -156,7 +156,6 @@ const POST = {
       customer: true,
     },
     { kind: 'sys', text: 'Janis \u26a1 agent resumed', wait: 900 },
-    { kind: 'note', text: 'The customer saw a seamless answer. The action ran only after a human approved it.' },
   ],
   denied: (): Beat[] => [
     { kind: 'sys', text: 'You \u26a1 action denied', wait: 800 },
@@ -168,13 +167,10 @@ const POST = {
       customer: true,
     },
     { kind: 'sys', text: 'Janis \u26a1 agent resumed', wait: 900 },
-    { kind: 'note', text: 'Nothing runs without a human. Denied actions never execute.' },
   ],
 };
 
 const STEP_MS = 1700;
-const HOLD_MS = 6500;
-const APPROVE_TIMEOUT = 6500;
 const CARD_STEP = PRE.length; // card is the last PRE beat — visible when step reaches this
 
 type Decision = { ok: boolean; you: boolean };
@@ -187,37 +183,40 @@ function openWidget() {
   }
 }
 
-/** Interactive replay of the approval flow — the visitor plays the operator. */
+/** Interactive replay of the approval flow. Plays once when scrolled into
+ * view, pauses on the approval card until the visitor acts, then holds the
+ * completed state — the ending is the evidence. */
 function DemoStrip() {
   const [step, setStep] = useState(0);
   const [decision, setDecision] = useState<Decision | null>(null);
+  const [visible, setVisible] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || visible) return;
+    const io = new IntersectionObserver(
+      ([e]) => e.isIntersecting && setVisible(true),
+      { threshold: 0.25 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visible]);
 
   const post = decision ? (decision.ok ? POST.approved(decision.you) : POST.denied()) : [];
   const beats = [...PRE, ...post];
   const shown = beats.slice(0, step);
-  const note = shown.find((b) => b.kind === 'note');
+  const done = step >= beats.length && !!decision;
 
   useEffect(() => {
-    // Pending card: wait for the visitor to click, then auto-approve so the
-    // loop keeps moving for people who just watch.
-    if (step >= CARD_STEP && !decision) {
-      const t = setTimeout(() => setDecision({ ok: true, you: false }), APPROVE_TIMEOUT);
-      return () => clearTimeout(t);
-    }
-    const t = setTimeout(() => {
-      if (step >= beats.length) {
-        setStep(0);
-        setDecision(null);
-      } else {
-        setStep(step + 1);
-      }
-    }, step >= beats.length ? HOLD_MS : beats[step]?.wait ?? STEP_MS);
+    if (!visible || done) return;
+    if (step >= CARD_STEP && !decision) return; // pending — waits for the visitor
+    const t = setTimeout(() => setStep(step + 1), beats[step]?.wait ?? STEP_MS);
     return () => clearTimeout(t);
-  }, [step, decision]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, decision, visible]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const renderBeat = (b: Beat, i: number, pane: 'customer' | 'operator') => {
     if (pane === 'customer' && !b.customer) return null;
-    if (b.kind === 'note') return null;
     if (b.kind === 'typing') {
       // Typing indicators are ephemeral — gone once the reply lands.
       if (i !== step - 1) return null;
@@ -263,7 +262,15 @@ function DemoStrip() {
                   Deny
                 </button>
               </div>
-              <div className="demo-card-wait">Try it yourself — you’re the human in the loop.</div>
+              <div className="demo-card-wait">
+                Try it yourself — you’re the human in the loop.{' '}
+                <button
+                  className="demo-note-cta"
+                  onClick={() => setDecision({ ok: true, you: false })}
+                >
+                  or watch automatically
+                </button>
+              </div>
             </>
           )}
         </div>
@@ -281,7 +288,7 @@ function DemoStrip() {
 
   return (
     <>
-      <div className="demo-split">
+      <div className="demo-split" ref={ref}>
         <div className="demo-window">
           <div className="demo-header">
             <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
@@ -297,10 +304,27 @@ function DemoStrip() {
           <div className="demo-body">{shown.map((b, i) => renderBeat(b, i, 'operator'))}</div>
         </div>
       </div>
-      {note && (
-        <div className="demo-note">
-          {note.text}{' '}
-          <button className="demo-note-cta" onClick={openWidget}>Try Janis live →</button>
+      {done && (
+        <div className="demo-complete">
+          <span className="demo-complete-pill">Handoff complete</span>
+          <strong>
+            {decision.ok
+              ? 'The customer got their refund. Your agent never lost its place.'
+              : 'The refund never ran — your agent handled it, and stayed on the conversation.'}
+          </strong>
+          <p className="muted">
+            Now try it for real — challenge the Janis bot and watch it call in a
+            human teammate.
+          </p>
+          <div className="row" style={{ justifyContent: 'center', gap: 14, alignItems: 'center' }}>
+            <button className="btn primary" onClick={openWidget}>Try Janis live →</button>
+            <button
+              className="demo-note-cta"
+              onClick={() => { setStep(0); setDecision(null); }}
+            >
+              ↻ Replay demo
+            </button>
+          </div>
         </div>
       )}
     </>
@@ -369,10 +393,6 @@ export default function Landing() {
           When your agent needs help, your team steps in. The conversation never loses its place.
         </p>
         <DemoStrip />
-        <p className="landing-fine">
-          Try it for real — stump the Janis bot in the corner and watch it call
-          in a human teammate. That alert lands in a real inbox.
-        </p>
       </section>
 
       <section className="landing-grid">

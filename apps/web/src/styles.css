@@ -755,6 +755,17 @@ details summary:hover { color: var(--text); }
   color: var(--accent); cursor: pointer; white-space: nowrap;
 }
 .demo-note-cta:hover { text-decoration: underline; }
+.demo-complete {
+  text-align: center; max-width: 560px; margin: 18px auto 0; padding: 22px 24px;
+  border: 1px solid var(--accent-dim); border-radius: 14px;
+  background: rgba(94,234,212,.05); animation: demo-in .5s ease;
+}
+.demo-complete strong { display: block; font-size: 18px; margin: 8px 0 8px; }
+.demo-complete p { margin: 0 0 16px; font-size: 14px; }
+.demo-complete-pill {
+  display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .4px;
+  padding: 3px 10px; border-radius: 999px; background: rgba(52,211,153,.15); color: #34d399;
+}
 .demo-note {
   align-self: center; text-align: center; color: var(--muted); font-size: 12.5px;
   font-style: italic; max-width: 380px; animation: demo-in .5s ease; margin-top: 4px;
