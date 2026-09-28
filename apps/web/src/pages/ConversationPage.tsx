@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
@@ -32,8 +32,11 @@ interface OutEntry {
 
 export default function ConversationPage() {
   const { id = '' } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const jumpMsg = searchParams.get('msg'); // search-result deep link
+  const returnScroll = searchParams.get('scroll'); // agent-page breadcrumb round-trip
   const { data, error: loadError } = useConversation(id);
   const { data: agents } = useAgents();
   const { data: users } = useUsers();
@@ -48,6 +51,9 @@ export default function ConversationPage() {
   // stay glued to the bottom while the user is near it — attachments loading
   // late (images) grow the transcript, so we re-snap whenever they render
   const stickRef = useRef(true);
+  // Returning via the agent-page breadcrumb restores scroll — disarm the
+  // bottom-stick before the snap effect below can run.
+  if (returnScroll) stickRef.current = false;
   const snapToBottom = (behavior: ScrollBehavior = 'auto') => {
     if (stickRef.current) bottomRef.current?.scrollIntoView({ behavior });
   };
@@ -116,6 +122,21 @@ export default function ConversationPage() {
     // jump windows clear stickRef, so this is a no-op until "Jump to latest"
     snapToBottom(initial ? 'auto' : 'smooth');
   }, [data?.messages.length, outbox.length, visitorTyping, agentTyping, id]);
+
+  // ?scroll=<px> return trip — restore the transcript position once the
+  // messages render, then drop the param so refetches don't re-pin it.
+  const restoredFor = useRef('');
+  useLayoutEffect(() => {
+    if (!returnScroll || !data?.messages.length || restoredFor.current === id) return;
+    const el = transcriptRef.current;
+    if (!el) return;
+    restoredFor.current = id;
+    el.scrollTop = Number(returnScroll) || 0;
+    const p = new URLSearchParams(searchParams);
+    p.delete('scroll');
+    setSearchParams(p, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, returnScroll, id]);
 
   // History back-fill — the initial query returns the latest page; scrolling
   // to the top fetches the page before the oldest rendered message and
@@ -1044,7 +1065,20 @@ export default function ConversationPage() {
             <div>
               Agent:{' '}
               {agent ? (
-                <Link to={`/agents/${c.agent_id}`} style={{ color: 'var(--accent)' }}>
+                <Link
+                  to={`/agents/${c.agent_id}`}
+                  style={{ color: 'var(--accent)' }}
+                  onClick={(e) => {
+                    // carry a return path + transcript offset so the agent
+                    // page can offer "← back to conversation"
+                    e.preventDefault();
+                    const from = `${location.pathname}${location.search}`;
+                    const sp = Math.round(transcriptRef.current?.scrollTop ?? 0);
+                    navigate(
+                      `/agents/${c.agent_id}?from=${encodeURIComponent(from)}${sp ? `&scroll=${sp}` : ''}`,
+                    );
+                  }}
+                >
                   {agent.name} →
                 </Link>
               ) : (

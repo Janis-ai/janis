@@ -23,6 +23,14 @@ type Tab = 'integrations' | 'escalation' | 'tools' | 'tests' | 'connection';
 
 export default function AgentDetail() {
   const { id } = useParams<{ id: string }>();
+  const [params] = useSearchParams();
+  // ?from=/conversations/<id>[?…]&scroll=<px> — set by the conversation's
+  // Details-panel agent link so there's a way back to the same spot.
+  const from = params.get('from');
+  const backTo =
+    from && from.startsWith('/conversations/')
+      ? `${from}${from.includes('?') ? '&' : '?'}scroll=${params.get('scroll') ?? 0}`
+      : null;
   const { data } = useAgents();
   const agent = data?.agents.find((a) => a.id === id);
 
@@ -36,7 +44,16 @@ export default function AgentDetail() {
   }
   if (!agent) return null;
   // key remounts the editor (and its drafts) when navigating between agents
-  return <AgentEditor key={agent.id} agent={agent} />;
+  return (
+    <>
+      {backTo && (
+        <Link to={backTo} className="muted" style={{ display: 'inline-block', marginBottom: 8 }}>
+          ← Back to conversation
+        </Link>
+      )}
+      <AgentEditor key={agent.id} agent={agent} />
+    </>
+  );
 }
 
 function AgentEditor({ agent }: { agent: Agent }) {
