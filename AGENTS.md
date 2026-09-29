@@ -150,8 +150,13 @@ before typecheck/tests/dev.
   paths (login 10/min/IP, chat writes 600/hr/channel-token via
   CHAT_TOKEN_HOURLY_MAX, chat uploads 60/hr via CHAT_TOKEN_UPLOAD_HOURLY_MAX)
   — caps hold across instances and rotated IPs. Fails open on DB error.
-  Remaining: per-workspace spend ceilings/circuit breakers, CAPTCHA on
-  widget after N messages, blocklisting repeat offenders.
+  Spend circuit breaker: DONE — llmSpendOverCap sums rolling-24h
+  llm_tokens cost per workspace; over LLM_DAILY_CAP_MICROS (default
+  $25, 0 disables) replyAsHostedAgent + suggestion gen pause and
+  escalate via handoff_request (deduped alert, customer gets handoff
+  notice). BYOK rows cost 0 — never trip.
+  Remaining: CAPTCHA on widget after N messages, blocklisting repeat
+  offenders, per-plan cap tiers.
 - Backup/restore runbook (Neon PITR exists — unrehearsed), load test (k6).
 
 **Enterprise checklist (untouched — gates mid-market only)**

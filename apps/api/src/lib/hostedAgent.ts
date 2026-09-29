@@ -4,7 +4,7 @@ import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, helpArticles, knowledgeFiles, messages, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
-import { recordLlmUsage } from './usage.js';
+import { recordLlmUsage, llmSpendOverCap } from './usage.js';
 import { loadSecretsMap } from './secrets.js';
 import { connectionSecrets } from './connections.js';
 import { enabledBuiltins, type BuiltinTool } from './builtinTools.js';
@@ -1171,6 +1171,9 @@ export async function runHostedEvent(
       .where(eq(conversations.id, convId))
       .limit(1);
     if (!conv) return;
+    // Suggestions burn the same key — pause them while the workspace is over
+    // its 24h spend ceiling.
+    if ((await llmSpendOverCap(db, agent.workspaceId)) != null) return;
     const llm = await llmFor(db, agent);
     void foldConversationMemory(db, agent, conv, llm);
     const history = await transcriptFor(db, convId, await fileAnalysisAllowed(db, agent.workspaceId));
@@ -1372,6 +1375,22 @@ async function replyAsHostedAgent(
   const emit = (e: Parameters<typeof processEvents>[2]) => processEvents(db, agent, e);
 
   try {
+    // AI-spend circuit breaker — over the rolling-24h cap, escalate to a human
+    // instead of generating (and burning). The handoff notice tells the
+    // customer someone will join; repeat inbounds dedupe on the open alert.
+    const spentToday = await llmSpendOverCap(db, agent.workspaceId);
+    if (spentToday != null) {
+      await emit([
+        {
+          type: 'handoff_request',
+          conversation_id: externalId,
+          reason: `AI paused — workspace hit its 24h AI spend ceiling ($${(
+            spentToday / 1e6
+          ).toFixed(2)}; LLM_DAILY_CAP_MICROS). Replies resume as spend rolls out of the window.`,
+        },
+      ]);
+      return;
+    }
     const llm = await llmFor(db, agent);
     // Fold memory alongside the reply — the summary only matters for future
     // turns, so blocking on it adds a whole LLM call to every reply.

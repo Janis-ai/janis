@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { usageEvents, workspaces } from '../db/schema.js';
 import { billingConfig, currentPeriod, llmCostMicros, pricedRateFor } from './billing.js';
@@ -69,6 +69,30 @@ export async function recordLlmUsage(
   } catch {
     // metering failure is never worth breaking a conversation
   }
+}
+
+/**
+ * AI-spend circuit breaker — rolling 24h sum of Janis-keyed LLM cost for the
+ * workspace. BYOK rows record costMicros=0, so customer-key agents never trip
+ * it. Returns the running total (micro-USD) when at/over LLM_DAILY_CAP_MICROS;
+ * callers skip the LLM call and escalate to a human instead — protects both
+ * the customer's metered bill and Janis's provider key. 0 disables.
+ */
+export async function llmSpendOverCap(db: Db, workspaceId: string): Promise<number | null> {
+  const cap = env.llmDailyCapMicros;
+  if (!cap) return null;
+  const [row] = await db
+    .select({ total: sql<number>`coalesce(sum(${usageEvents.costMicros}), 0)` })
+    .from(usageEvents)
+    .where(
+      and(
+        eq(usageEvents.workspaceId, workspaceId),
+        eq(usageEvents.kind, 'llm_tokens'),
+        gt(usageEvents.createdAt, new Date(Date.now() - 86_400_000)),
+      ),
+    );
+  const total = Number(row?.total ?? 0);
+  return total >= cap ? total : null;
 }
 
 /**

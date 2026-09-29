@@ -168,4 +168,7 @@ export const env = {
   // them if a specific channel is abused.
   chatTokenHourlyMax: Number(process.env.CHAT_TOKEN_HOURLY_MAX ?? 600),
   chatTokenUploadHourlyMax: Number(process.env.CHAT_TOKEN_UPLOAD_HOURLY_MAX ?? 60),
+  // Rolling-24h micro-USD ceiling on Janis-keyed LLM spend per workspace —
+  // hitting it pauses AI replies and escalates to humans. 0 disables.
+  llmDailyCapMicros: Number(process.env.LLM_DAILY_CAP_MICROS ?? 25_000_000),
 };

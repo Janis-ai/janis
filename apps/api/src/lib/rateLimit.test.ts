@@ -7,6 +7,9 @@ import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { dbRateLimit, rateLimit } from './rateLimit.js';
+import { llmSpendOverCap } from './usage.js';
+import { env } from '../env.js';
+import { workspaces, usageEvents } from '../db/schema.js';
 
 let db: Db;
 
@@ -110,5 +113,58 @@ describe('rateLimit (in-memory)', () => {
     const app = testApp(rateLimit({ windowMs: 60_000, max: 1, methods: ['POST'] }), '/r/:token');
     expect((await app.request('/r/x', { method: 'POST' })).status).toBe(200);
     expect((await app.request('/r/x', { method: 'POST' })).status).toBe(429);
+  });
+});
+
+describe('llmSpendOverCap', () => {
+  it('null under the cap, total at/over it', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'cap-ws' }).returning();
+    const prev = env.llmDailyCapMicros;
+    env.llmDailyCapMicros = 1000;
+    try {
+      expect(await llmSpendOverCap(db, ws.id)).toBeNull();
+      await db.insert(usageEvents).values({
+        workspaceId: ws.id, kind: 'llm_tokens', costMicros: 600, period: '2026-09',
+      });
+      expect(await llmSpendOverCap(db, ws.id)).toBeNull();
+      await db.insert(usageEvents).values({
+        workspaceId: ws.id, kind: 'llm_tokens', costMicros: 500, period: '2026-09',
+      });
+      expect(await llmSpendOverCap(db, ws.id)).toBe(1100);
+    } finally {
+      env.llmDailyCapMicros = prev;
+    }
+  });
+
+  it('ignores zero-cost (BYOK) and other-workspace rows', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'cap-ws2' }).returning();
+    const [other] = await db.insert(workspaces).values({ name: 'cap-ws3' }).returning();
+    const prev = env.llmDailyCapMicros;
+    env.llmDailyCapMicros = 100;
+    try {
+      await db.insert(usageEvents).values({
+        workspaceId: ws.id, kind: 'llm_tokens', costMicros: 0, period: '2026-09',
+      });
+      await db.insert(usageEvents).values({
+        workspaceId: other.id, kind: 'llm_tokens', costMicros: 9999, period: '2026-09',
+      });
+      expect(await llmSpendOverCap(db, ws.id)).toBeNull();
+    } finally {
+      env.llmDailyCapMicros = prev;
+    }
+  });
+
+  it('is disabled when the cap is 0', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'cap-ws4' }).returning();
+    const prev = env.llmDailyCapMicros;
+    env.llmDailyCapMicros = 0;
+    try {
+      await db.insert(usageEvents).values({
+        workspaceId: ws.id, kind: 'llm_tokens', costMicros: 999999, period: '2026-09',
+      });
+      expect(await llmSpendOverCap(db, ws.id)).toBeNull();
+    } finally {
+      env.llmDailyCapMicros = prev;
+    }
   });
 });
