@@ -181,6 +181,9 @@ export function createApp(db: Db) {
     }
   }
   if (indexHtml) {
+    // The static middleware serves index.html from disk for `/` — return the
+    // mutated copy (GA injection happens in-memory, above).
+    app.get('/', (c) => c.html(indexHtml));
     app.use('/*', serveStatic({ root: webDist }));
     app.get('*', async (c) => {
       // Unknown API-ish paths should 404, not render the SPA
