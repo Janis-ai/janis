@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alertRules, alerts, busEvents, conversations, knowledgeFiles, messages, rateLimits, sweeperLocks, typingState } from '../db/schema.js';
+import { agents, alertRules, alerts, busEvents, conversations, knowledgeFiles, messages, rateLimits, sweeperLocks, typingState, webhookDeliveries } from '../db/schema.js';
 import { bus, INSTANCE_ID } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
@@ -60,6 +60,7 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
       void sweepKnowledge(db).catch((err) => console.error('sweepKnowledge error:', err));
       void sweepSnoozes(db).catch((err) => console.error('sweepSnoozes error:', err));
       void sweepWebhookRetries(db).catch((err) => console.error('sweepWebhookRetries error:', err));
+      void sweepDeliveryFailures(db).catch((err) => console.error('sweepDeliveryFailures error:', err));
       void db
         .delete(busEvents)
         .where(lt(busEvents.createdAt, new Date(Date.now() - 10 * 60_000)))
@@ -76,6 +77,34 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
   }, intervalMs);
   timer.unref();
   return () => clearInterval(timer);
+}
+
+/**
+ * Platform-health signal for monitoring: when outbound webhook failures spike
+ * (a customer's endpoint down, or our egress broken), emit a structured ERROR
+ * line that a Cloud Logging log-based alert can match on `janis.alert`. A dead
+ * sweeper can't self-report — that's what the public /status probe covers.
+ */
+export async function sweepDeliveryFailures(db: Db): Promise<void> {
+  const since = new Date(Date.now() - 60 * 60_000);
+  const rows = await db
+    .select({ status: webhookDeliveries.status, n: sql<number>`count(*)::int` })
+    .from(webhookDeliveries)
+    .where(gt(webhookDeliveries.createdAt, since))
+    .groupBy(webhookDeliveries.status);
+  const total = rows.reduce((s, r) => s + r.n, 0);
+  const failed = rows.find((r) => r.status === 'failed')?.n ?? 0;
+  if (total >= 10 && failed / total > 0.5) {
+    console.error(
+      JSON.stringify({
+        severity: 'ERROR',
+        message: `janis.alert webhook_delivery_spike: ${failed}/${total} deliveries failed in the last hour`,
+        alert: 'webhook_delivery_spike',
+        failed,
+        total,
+      }),
+    );
+  }
 }
 
 /** Expired snoozes resurface as unread — the "reminder" half of snooze.

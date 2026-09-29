@@ -53,6 +53,10 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     staleTime: 60_000,
     enabled: isAdmin,
   });
+  // The asset picker collapses to a summary row once set up — it only opens on
+  // a fresh OAuth return (?meta_connect=) or an explicit Manage click, so a
+  // long Page list doesn't bury the other channel cards.
+  const [pickerOpen, setPickerOpen] = useState(Boolean(params.get('meta_connect')));
   const connectId =
     params.get('meta_connect') ?? (session.data?.connected ? session.data.connect_id ?? '' : '');
   const disconnect = useMutation({
@@ -65,7 +69,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   const pending = useQuery({
     queryKey: ['meta-pending', connectId],
     queryFn: () => api<PendingAssets>(`/api/meta/pending?id=${connectId}`),
-    enabled: Boolean(connectId),
+    // skip the Meta API call entirely while the picker is collapsed
+    enabled: pickerOpen && Boolean(connectId),
     retry: false,
   });
 
@@ -384,10 +389,19 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
 
       {/* Meta connect (primary path) or the pending asset picker */}
-      {connectId ? (
+      {connectId && pickerOpen ? (
         <div className="card connect-card">
           <div className="row">
             <strong className="grow">Meta connected — pick what to link to {agent.name}</strong>
+            <button
+              className="btn"
+              onClick={() => {
+                dropParams('meta_connect');
+                setPickerOpen(false);
+              }}
+            >
+              Done
+            </button>
             <a href={`/api/meta/connect?agent=${agentId}`} onClick={() => dropParams('meta_connect')}>Switch account</a>
             <button className="btn" onClick={() => disconnect.mutate()}>Disconnect</button>
           </div>
@@ -508,6 +522,28 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               {!hasAssets && <Empty>No Pages or WhatsApp numbers found on that Meta login.</Empty>}
             </>
           )}
+        </div>
+      ) : session.data?.connected ? (
+        <div className="card connect-card">
+          <div className="row">
+            <div className="grow">
+              <strong>Meta connected</strong>
+              <div className="muted" style={{ marginTop: 4 }}>
+                {(() => {
+                  const linked = channels.filter((ch) =>
+                    ['messenger', 'instagram', 'whatsapp'].includes(ch.kind),
+                  );
+                  return linked.length
+                    ? `${linked.length} channel${linked.length === 1 ? '' : 's'} linked to ${agent.name} — more Pages and numbers are available on this Meta login.`
+                    : 'No channels linked to this agent yet — Pages, Instagram, and WhatsApp numbers are ready to connect.';
+                })()}
+              </div>
+            </div>
+            <button className="btn" onClick={() => setPickerOpen(true)}>Manage</button>
+            <button className="btn" disabled={disconnect.isPending} onClick={() => disconnect.mutate()}>
+              Disconnect
+            </button>
+          </div>
         </div>
       ) : session.isPending ? (
         <div className="card connect-card">

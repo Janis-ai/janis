@@ -143,7 +143,20 @@ before typecheck/tests/dev.
   filters blob mirrors list params; Views picker + "💾 Save view" in the list.
 - Bulk actions: DONE — row checkboxes + select-all, sticky action bar →
   POST /api/conversations/bulk (archive/unarchive/assign/tag/mark/star/snooze).
-- Conversation merge/split; unified contact profiles across channels.
+- Contacts: DONE (v1) — contacts + contact_identities tables, conversations
+  carry contact_id, lib/contacts.ts resolves (channel, platform_user_id) →
+  contact with cross-channel merge on email/phone; GET/PATCH /api/contacts,
+  POST /:id/merge, /contacts UI with dup detection, contact card on the
+  conversation sidebar. Still missing: conversation merge/split, contact
+  import, custom fields, company grouping.
+- Webhook ops: DONE — deliveries list on the agent page (payload, attempts,
+  next_attempt_at), POST /api/agents/:id/deliveries/:did/replay re-sends a
+  failed delivery with a fresh signature + full retry budget.
+- Status/monitoring: DONE (basic) — GET /status probes db + sweeper-leader
+  liveness (503 when degraded), /status web page, sweepDeliveryFailures logs
+  a `janis.alert` ERROR marker on webhook-failure spikes (attach a Cloud
+  Logging log-based alert to it). Still missing: real SLO dashboards, uptime
+  history, third-party status page.
 - SLA timers + breach alerts (business-hours-aware).
 - Mobile polish on conversation screen (operators live on phones).
 

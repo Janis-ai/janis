@@ -449,6 +449,13 @@
       "when": 1790740000000,
       "tag": "0063_connect",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1790790000000,
+      "tag": "0064_contacts",
+      "breakpoints": true
     }
   ]
 }

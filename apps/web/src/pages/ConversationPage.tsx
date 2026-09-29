@@ -1211,6 +1211,20 @@ export default function ConversationPage() {
 
         <TagEditor conversation={c} onSave={(tags) => patch.mutate({ tags })} />
 
+        {c.contact_id && (
+          <div className="card">
+            <strong>Customer</strong>
+            <div style={{ marginTop: 8 }}>
+              <Link to={`/contacts/${c.contact_id}`} style={{ color: 'var(--accent)' }}>
+                View customer record →
+              </Link>
+            </div>
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              Unified across channels — all this person's conversations live there.
+            </div>
+          </div>
+        )}
+
       </aside>
     </div>
   );

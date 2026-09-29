@@ -1645,6 +1645,12 @@ function ConnectionTab({
   const [testMsg, setTestMsg] = useState('');
   const [showDeliveries, setShowDeliveries] = useState(false);
   const { data: deliveries } = useDeliveries(showDeliveries ? agent.id : null);
+  const qcLocal = useQueryClient();
+  const replay = useMutation({
+    mutationFn: (deliveryId: string) =>
+      api(`/api/agents/${agent.id}/deliveries/${deliveryId}/replay`, { method: 'POST' }),
+    onSettled: () => void qcLocal.invalidateQueries({ queryKey: ['deliveries'] }),
+  });
   const onTestChat = async (text: string) => {
     const r = await api<{ conversation_id: string | null }>(`/api/agents/${agent.id}/chat`, {
       method: 'POST',
@@ -1760,13 +1766,29 @@ function ConnectionTab({
           <div className="muted" style={{ marginTop: 10 }}>
             {deliveries?.deliveries.length === 0 && <div>No deliveries yet.</div>}
             {deliveries?.deliveries.map((d) => (
-              <div key={d.id} className="row" style={{ marginTop: 4 }}>
-                <span className={`badge ${d.status === 'delivered' ? 'active' : 'needs_human'}`}>
-                  {d.status}
-                </span>
-                <span className="mono">{d.type}</span>
-                <span className="grow">{d.last_error ?? ''}</span>
-                <span>{timeAgo(d.created_at)}</span>
+              <div key={d.id} style={{ marginTop: 4 }}>
+                <div className="row">
+                  <span className={`badge ${d.status === 'delivered' ? 'active' : 'needs_human'}`}>
+                    {d.status}
+                  </span>
+                  <span className="mono">{d.type}</span>
+                  <span className="grow">{d.last_error ?? ''}</span>
+                  {d.attempts > 1 && <span>×{d.attempts}</span>}
+                  <span>{timeAgo(d.created_at)}</span>
+                  {isAdmin && d.status === 'failed' && (
+                    <button className="btn" disabled={replay.isPending} onClick={() => replay.mutate(d.id)}>
+                      Replay
+                    </button>
+                  )}
+                </div>
+                <details style={{ marginTop: 2 }}>
+                  <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>
+                    payload
+                  </summary>
+                  <pre style={{ fontSize: 11, overflow: 'auto', margin: '4px 0 0' }}>
+                    {JSON.stringify(d.payload, null, 2)}
+                  </pre>
+                </details>
               </div>
             ))}
           </div>

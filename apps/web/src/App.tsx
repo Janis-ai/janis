@@ -17,6 +17,8 @@ import Reports from './pages/Reports';
 import Billing from './pages/Billing';
 import Settings from './pages/Settings';
 import { HelpCenter, HelpArticle, HelpDomain } from './pages/HelpCenter';
+import { Status } from './pages/Status';
+import { Contacts, ContactDetail } from './pages/Contacts';
 import { finishOpenRouterCallback } from './lib/openrouterAuth';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -133,6 +135,7 @@ export default function App() {
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/terms" element={<Terms />} />
         <Route path="/docs" element={<Docs />} />
+        <Route path="/status" element={<Status />} />
         <Route path="/llm/callback" element={<LlmCallback />} />
         <Route path="/help/:agentId" element={<HelpCenter />} />
         <Route path="/help/:agentId/:articleId" element={<HelpArticle />} />
@@ -147,6 +150,8 @@ export default function App() {
           <Route path="/inbox" element={<Navigate to="/conversations" replace />} />
           <Route path="/channels" element={<Navigate to="/conversations" replace />} />
           <Route path="/conversations/:id" element={<ConversationPage />} />
+          <Route path="/contacts" element={<Contacts />} />
+          <Route path="/contacts/:id" element={<ContactDetail />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/agents/:id" element={<AgentDetail />} />
           <Route path="/reports" element={<Reports />} />

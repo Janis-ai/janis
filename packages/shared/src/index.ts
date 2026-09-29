@@ -382,6 +382,8 @@ export const Conversation = z.object({
   csat_pending: z.boolean(),
   /** Semantic topic label — set by the classifier or a BYO agent's payload. */
   intent: z.string().nullable(),
+  /** Unified customer record this conversation's identity resolved to. */
+  contact_id: z.string().nullable().optional(),
   created_at: z.string(),
 });
 export type Conversation = z.infer<typeof Conversation>;
@@ -535,6 +537,8 @@ export const WebhookDelivery = z.object({
   status: z.enum(['pending', 'delivered', 'failed']),
   attempts: z.number(),
   last_error: z.string().nullable(),
+  next_attempt_at: z.string().nullable().optional(),
+  payload: z.unknown().optional(),
   created_at: z.string(),
 });
 export type WebhookDelivery = z.infer<typeof WebhookDelivery>;

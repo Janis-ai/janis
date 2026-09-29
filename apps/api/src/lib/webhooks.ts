@@ -178,6 +178,39 @@ async function attempt(
 }
 
 /**
+ * Operator-initiated replay of a failed delivery: resets the retry budget and
+ * re-attempts immediately with a fresh signature. Only failed rows replay —
+ * pending/delivered ones are either in flight or done.
+ */
+export async function replayDelivery(
+  db: Db,
+  deliveryId: string,
+  agent: AgentRow,
+): Promise<boolean> {
+  const [d] = await db
+    .update(webhookDeliveries)
+    .set({ status: 'pending', attempts: 0, lastError: null, nextAttemptAt: null })
+    .where(
+      and(
+        eq(webhookDeliveries.id, deliveryId),
+        eq(webhookDeliveries.agentId, agent.id),
+        eq(webhookDeliveries.status, 'failed'),
+      ),
+    )
+    .returning();
+  if (!d) return false;
+  if (!agent.webhookUrl) {
+    await db
+      .update(webhookDeliveries)
+      .set({ status: 'failed', lastError: 'no webhook_url configured' })
+      .where(eq(webhookDeliveries.id, d.id));
+    return true;
+  }
+  await attempt(db, d.id, agent, JSON.stringify(d.payload), 0);
+  return true;
+}
+
+/**
  * Retry deliveries whose scheduled attempt is long overdue — the in-process
  * setTimeout chain dies with its instance (deploy, crash, OOM). Runs under
  * the sweeper's leader lock, so exactly one instance reclaims. The 30s grace

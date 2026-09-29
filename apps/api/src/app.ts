@@ -6,6 +6,8 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { HTTPException } from 'hono/http-exception';
+import { eq, sql } from 'drizzle-orm';
+import { sweeperLocks } from './db/schema.js';
 import type { Db } from './db/client.js';
 import { env } from './env.js';
 import { reportError } from './lib/errorReporting.js';
@@ -15,6 +17,7 @@ import { authRoutes } from './routes/auth.js';
 import { v1Routes } from './routes/v1.js';
 import { agentRoutes } from './routes/agents.js';
 import { conversationRoutes } from './routes/conversations.js';
+import { contactRoutes } from './routes/contacts.js';
 import { actionRoutes } from './routes/actions.js';
 import { alertRoutes } from './routes/alerts.js';
 import { ruleRoutes } from './routes/rules.js';
@@ -70,6 +73,31 @@ export function createApp(db: Db) {
   app.use('/chat/*', cors({ origin: '*' }));
 
   app.get('/health', (c) => c.json({ ok: true, service: 'janis-api' }));
+
+  // Public status probe — db connectivity + background-work liveness. The
+  // sweeper rewrites its leader lock's expires_at every interval, so a
+  // non-expired lock means background work is alive somewhere.
+  app.get('/status', async (c) => {
+    const checks: Record<string, 'ok' | 'degraded'> = {};
+    try {
+      await db.execute(sql`select 1`);
+      checks.db = 'ok';
+    } catch {
+      checks.db = 'degraded';
+    }
+    try {
+      const [lock] = await db
+        .select({ expiresAt: sweeperLocks.expiresAt })
+        .from(sweeperLocks)
+        .where(eq(sweeperLocks.name, 'sweeper'))
+        .limit(1);
+      checks.background = lock && lock.expiresAt > new Date() ? 'ok' : 'degraded';
+    } catch {
+      checks.background = 'degraded';
+    }
+    const ok = checks.db === 'ok' && checks.background === 'ok';
+    return c.json({ ok, checks, ts: new Date().toISOString() }, ok ? 200 : 503);
+  });
 
   // Public plan catalog — the landing page's pricing cards read this so the
   // site can never drift from what billing actually charges.
@@ -173,6 +201,7 @@ export function createApp(db: Db) {
   api.route('/agents', agentRoutes(db));
   api.route('/tool-templates', toolTemplateRoutes(db));
   api.route('/conversations', conversationRoutes(db));
+  api.route('/contacts', contactRoutes(db));
   api.route('/actions', actionRoutes(db));
   api.route('/alerts', alertRoutes(db));
   api.route('/rules', ruleRoutes(db));

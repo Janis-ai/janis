@@ -14,7 +14,7 @@ import {
 } from '../middleware/sessionAuth.js';
 import { generateApiKey, generateWebhookSecret } from '../lib/crypto.js';
 import { env } from '../env.js';
-import { deliverWebhook } from '../lib/webhooks.js';
+import { deliverWebhook, replayDelivery } from '../lib/webhooks.js';
 import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
 import { fetchUrlText, refreshKnowledgeSource } from '../lib/urlSource.js';
 import {
@@ -413,7 +413,7 @@ export function agentRoutes(db: Db) {
       .from(webhookDeliveries)
       .where(eq(webhookDeliveries.agentId, owned.id))
       .orderBy(desc(webhookDeliveries.createdAt))
-      .limit(20);
+      .limit(50);
     return c.json({
       deliveries: rows.map((r) => ({
         id: r.id,
@@ -421,9 +421,24 @@ export function agentRoutes(db: Db) {
         status: r.status,
         attempts: r.attempts,
         last_error: r.lastError,
+        next_attempt_at: r.nextAttemptAt?.toISOString() ?? null,
+        payload: r.payload,
         created_at: r.createdAt.toISOString(),
       })),
     });
+  });
+
+  // Replay a failed delivery — fresh signature, fresh retry budget.
+  app.post('/:id/deliveries/:deliveryId/replay', agentAdmin, async (c) => {
+    const [agent] = await db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
+      .limit(1);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const ok = await replayDelivery(db, c.req.param('deliveryId'), agent);
+    if (!ok) return c.json({ error: 'delivery not found or not failed' }, 404);
+    return c.json({ ok: true });
   });
 
   // Test chat — try the agent without wiring a channel. One test conversation

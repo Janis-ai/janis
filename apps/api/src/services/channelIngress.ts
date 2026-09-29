@@ -1,5 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { UserProfile } from '@janis/shared';
+import { contactForBinding, linkConversationContact } from '../lib/contacts.js';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -280,6 +281,13 @@ export async function handleChannelMessage(
         conversationId: conv.id,
         platformUserId: participantId,
       });
+      const contactId = await contactForBinding(db, {
+        workspaceId: agent.workspaceId,
+        channelId: channel.id,
+        platformUserId: participantId,
+        profile: conv.userProfile as UserProfile,
+      });
+      if (contactId) await linkConversationContact(db, conv.id, contactId);
     }
     const [open] = await db
       .select({ id: alerts.id })
@@ -397,6 +405,21 @@ export async function handleChannelMessage(
         .where(eq(conversations.id, conv.id));
       conv = { ...conv, userProfile: { ...profile, ...updates } };
     }
+  }
+
+  // Contact spine — resolve (channel, platformUserId) to a workspace contact
+  // and link the conversation. Runs once per conversation (linked rows skip);
+  // never blocks ingest — a failure just leaves contact_id null.
+  if (!conv.contactId) {
+    const profile = (conv.userProfile ?? {}) as UserProfile;
+    void contactForBinding(db, {
+      workspaceId: agent.workspaceId,
+      channelId: channel.id,
+      platformUserId: participantId,
+      profile,
+    })
+      .then((contactId) => linkConversationContact(db, conv.id, contactId))
+      .catch(() => {});
   }
 
   // Dedup: the same Meta event can reach us twice — once via the direct app

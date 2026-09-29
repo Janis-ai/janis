@@ -202,12 +202,64 @@ export const conversations = pgTable(
     // agentSummary so the hosted agent remembers the whole conversation
     agentSummary: text('agent_summary'),
     summaryUpTo: timestamp('summary_up_to', { withTimezone: true }),
+    // Unified customer record — resolved from channel identities via
+    // contactForBinding; null for conversations predating contacts or those
+    // whose identity never carried a matchable signal.
+    contactId: uuid('contact_id').references(() => contacts.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex('conversations_agent_external').on(t.agentId, t.externalId),
     index('conversations_agent_state').on(t.agentId, t.state),
     index('conversations_snoozed').on(t.snoozedUntil),
+    index('conversations_contact').on(t.contactId),
+  ],
+);
+
+/** Unified customer record — one row per real person across channels.
+ * Identities (page PSID, phone number, email visitor id) attach via
+ * contact_identities; conversations carry contact_id so "same person texted
+ * then emailed" is one record, not two threads. */
+export const contacts = pgTable(
+  'contacts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    name: text('name'),
+    email: text('email'),
+    phone: text('phone'),
+    avatarUrl: text('avatar_url'),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('contacts_ws').on(t.workspaceId),
+    index('contacts_ws_email').on(t.workspaceId, t.email),
+    index('contacts_ws_phone').on(t.workspaceId, t.phone),
+  ],
+);
+
+/** A person's identity on one channel — the join between a contact and the
+ * (channel, platform user id) pair that channel_bindings already keys on. */
+export const contactIdentities = pgTable(
+  'contact_identities',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => contacts.id),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => channels.id),
+    platformUserId: text('platform_user_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('contact_identities_channel_user').on(t.channelId, t.platformUserId),
+    index('contact_identities_contact').on(t.contactId),
   ],
 );
 
