@@ -86,7 +86,7 @@ export function HelpCenter({ agent }: { agent: Agent }) {
 
   return (
     <div>
-      <div className="card">
+      <div className="card" style={{ marginTop: 12 }}>
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <div>
             <strong>Public help center</strong>
