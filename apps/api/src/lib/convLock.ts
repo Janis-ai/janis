@@ -83,5 +83,9 @@ export async function newestInboundIsPending(db: Db, convId: string): Promise<bo
     .from(messages)
     .where(sql`${messages.conversationId} = ${convId}`);
   if (!row?.lastIn) return false;
-  return !row.lastReply || row.lastIn > row.lastReply;
+  // postgres-js hands raw sql`` aggregates back unparsed — coerce so the
+  // comparison is numeric on both drivers.
+  const lastIn = +new Date(row.lastIn);
+  const lastReply = row.lastReply ? +new Date(row.lastReply) : 0;
+  return lastIn > lastReply;
 }

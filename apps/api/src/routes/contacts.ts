@@ -68,7 +68,9 @@ export function contactRoutes(db: Db) {
     return c.json({
       contacts: rows.map((r) => ({
         ...toContact(r.contact, { identities: idCount.get(r.contact.id) ?? 0, conversations: r.convCount }),
-        last_message_at: r.lastMessageAt?.toISOString() ?? null,
+        // postgres-js returns aggregate timestamps as strings, PGlite as
+        // Date — coerce rather than trusting the driver.
+        last_message_at: r.lastMessageAt ? new Date(r.lastMessageAt).toISOString() : null,
       })),
     });
   });
