@@ -20,17 +20,45 @@ const createCampaign = z.object({
       body_params: z.array(z.string().max(1024)).max(20).optional(),
     })
     .optional(),
-  segment: z.object({ q: z.string().max(200).optional() }).optional(),
+  segment: z
+    .object({
+      q: z.string().max(200).optional(),
+      has_email: z.boolean().optional(),
+      has_phone: z.boolean().optional(),
+      active_within_days: z.number().int().min(1).max(365).optional(),
+      never_replied: z.boolean().optional(),
+    })
+    .optional(),
+  /** Drip follow-ups — each step reaches prior-step recipients who haven't
+   *  replied, delay_minutes after the previous step. */
+  steps: z
+    .array(
+      z.object({
+        delay_minutes: z.number().int().min(1).max(60 * 24 * 30),
+        text: z.string().max(4000).optional(),
+        subject: z.string().max(200).optional(),
+        whatsapp_template: z
+          .object({
+            name: z.string().min(1),
+            language: z.string().max(20).optional(),
+            body_params: z.array(z.string().max(1024)).max(20).optional(),
+          })
+          .optional(),
+      }),
+    )
+    .max(10)
+    .optional(),
   /** ISO timestamp — presence schedules; absence leaves a draft. */
   scheduled_at: z.string().datetime().optional(),
 });
 
-type SendStatus = { status: string };
+type SendStatus = { status: string; repliedAt?: Date | null };
 
 function stats(rows: SendStatus[]) {
   return {
     total: rows.length,
     sent: rows.filter((r) => r.status === 'sent').length,
+    replied: rows.filter((r) => r.repliedAt).length,
     failed: rows.filter((r) => r.status === 'failed').length,
     pending: rows.filter((r) => r.status === 'pending').length,
     skipped: rows.filter((r) => r.status === 'skipped_opted_out').length,
@@ -55,7 +83,7 @@ export function campaignRoutes(db: Db) {
     const withStats = await Promise.all(
       rows.map(async ({ campaign, channelName, channelKind }) => {
         const sends = await db
-          .select({ status: campaignSends.status })
+          .select({ status: campaignSends.status, repliedAt: campaignSends.repliedAt })
           .from(campaignSends)
           .where(eq(campaignSends.campaignId, campaign.id));
         return {
@@ -113,6 +141,11 @@ export function campaignRoutes(db: Db) {
     if (!body.text.trim() && !body.whatsapp_template) {
       return c.json({ error: 'text or whatsapp_template required' }, 400);
     }
+    for (const [i, s] of (body.steps ?? []).entries()) {
+      if (!s.text?.trim() && !s.whatsapp_template) {
+        return c.json({ error: `step ${i + 1} needs text or whatsapp_template` }, 400);
+      }
+    }
     const scheduled = body.scheduled_at ? new Date(body.scheduled_at) : null;
     const [row] = await db
       .insert(campaigns)
@@ -130,6 +163,7 @@ export function campaignRoutes(db: Db) {
             }
           : null,
         segment: body.segment ?? {},
+        steps: body.steps ?? [],
         scheduledAt: scheduled,
         status: scheduled ? 'scheduled' : 'draft',
         createdBy: c.get('user').id,
@@ -171,15 +205,18 @@ export function campaignRoutes(db: Db) {
         status: campaign.status,
         scheduled_at: campaign.scheduledAt?.toISOString() ?? null,
         segment: campaign.segment,
+        steps: campaign.steps,
       },
       stats: stats(sends),
       sends: sends.map((s) => ({
         id: s.id,
         recipient: s.recipient,
+        step: s.stepIndex,
         status: s.status,
         error: s.error,
         conversation_id: s.conversationId,
         sent_at: s.sentAt?.toISOString() ?? null,
+        replied_at: s.repliedAt ? new Date(s.repliedAt).toISOString() : null,
       })),
     });
   });

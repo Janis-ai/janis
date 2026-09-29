@@ -446,36 +446,43 @@
     {
       "idx": 63,
       "version": "7",
-      "when": 1790740000000,
+      "when": 1790710000000,
       "tag": "0063_connect",
       "breakpoints": true
     },
     {
       "idx": 64,
       "version": "7",
-      "when": 1790790000000,
+      "when": 1790711000000,
       "tag": "0064_contacts",
       "breakpoints": true
     },
     {
       "idx": 65,
       "version": "7",
-      "when": 1790880000000,
+      "when": 1790712000000,
       "tag": "0065_audit_log",
       "breakpoints": true
     },
     {
       "idx": 66,
       "version": "7",
-      "when": 1790970000000,
+      "when": 1790713000000,
       "tag": "0066_outbound_ops",
       "breakpoints": true
     },
     {
       "idx": 67,
       "version": "7",
-      "when": 1791000000000,
+      "when": 1790714000000,
       "tag": "0067_contact_alt_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1790730000000,
+      "tag": "0068_campaign_depth",
       "breakpoints": true
     }
   ]

@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { UserProfile } from '@janis/shared';
 import { contactForBinding, linkConversationContact } from '../lib/contacts.js';
 import type { Db } from '../db/client.js';
@@ -6,6 +6,7 @@ import {
   agents,
   alerts,
   alertRules,
+  campaignSends,
   channelBindings,
   channels,
   conversations,
@@ -483,6 +484,13 @@ export async function handleChannelMessage(
     if (e.code === '23505' && e.constraint_name === 'messages_in_mid') return;
     throw err;
   }
+
+  // Campaign reply attribution — an inbound on a conversation a campaign
+  // sent to marks those sends replied (also what stops a drip sequence).
+  await db
+    .update(campaignSends)
+    .set({ repliedAt: new Date() })
+    .where(and(eq(campaignSends.conversationId, conv.id), isNull(campaignSends.repliedAt)));
 
   // A pending CSAT prompt turns this reply into a rating — it's already in
   // the transcript; record the score and thank them without waking the agent.

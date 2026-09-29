@@ -5,7 +5,7 @@ import { agentMembers, agents, conversations, users } from '../db/schema.js';
 /** Effective role on an agent. 'owner' outranks admin and always wins —
  * set via agents.owner_user_id, never stored on agent_members rows. The
  * storage-only 'hidden' row role resolves to null (no access). */
-export type AgentRole = 'owner' | 'admin' | 'member';
+export type AgentRole = 'owner' | 'admin' | 'member' | 'viewer';
 
 export const isAdminRole = (r: AgentRole | null | undefined): boolean =>
   r === 'admin' || r === 'owner';

@@ -298,7 +298,7 @@ export function toSuggestion(row: Row<typeof suggestions>): Suggestion {
 
 export function toWorkspaceUser(
   row: Row<typeof users>,
-  role: 'owner' | 'admin' | 'member' = 'member',
+  role: 'owner' | 'admin' | 'member' | 'viewer' = 'member',
 ): WorkspaceUser {
   const prefs = (row.notifyPrefs ?? {}) as { push?: boolean; email?: boolean; sound?: boolean };
   return {

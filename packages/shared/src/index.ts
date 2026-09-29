@@ -598,7 +598,7 @@ export const WorkspaceUser = z.object({
   email: z.string(),
   name: z.string(),
   // 'owner' = workspaces.owner_user_id — can't be demoted or removed
-  role: z.enum(['owner', 'admin', 'member']),
+  role: z.enum(['owner', 'admin', 'member', 'viewer']),
   // 'invited' = pending membership they haven't accepted yet
   status: z.enum(['active', 'invited']).default('active'),
   notify: z

@@ -113,6 +113,9 @@ export const env = {
   workosApiKey: process.env.WORKOS_API_KEY ?? '',
   workosRedirectUri:
     process.env.WORKOS_REDIRECT_URI ?? `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/auth/sso/callback`,
+  // WorkOS Directory Sync (SCIM provisioning) — webhook signing secret for
+  // POST /workos/directory-events. Empty disables the endpoint.
+  workosDirectorySecret: process.env.WORKOS_DIRECTORY_WEBHOOK_SECRET ?? '',
   // Outlook/365 channel OAuth + Graph — separate Azure app registration.
   msClientId: process.env.MS_CLIENT_ID ?? '',
   msClientSecret: process.env.MS_CLIENT_SECRET ?? '',

@@ -1,0 +1,172 @@
+import { beforeAll, describe, expect, it } from 'vitest';
+import { PGlite } from '@electric-sql/pglite';
+import { drizzle } from 'drizzle-orm/pglite';
+import { migrate } from 'drizzle-orm/pglite/migrator';
+import { and, eq, inArray } from 'drizzle-orm';
+import type { Db } from '../db/client.js';
+import * as schema from '../db/schema.js';
+import {
+  agents,
+  campaignSends,
+  campaigns,
+  channels,
+  contactIdentities,
+  contacts,
+  conversations,
+  jobs,
+  messages,
+  workspaces,
+} from '../db/schema.js';
+import { dispatchCampaign, dispatchCampaignStep, resolveSegment } from './campaigns.js';
+
+let db: Db;
+let workspaceId: string;
+let channelId: string;
+let agentId: string;
+
+beforeAll(async () => {
+  const client = new PGlite();
+  db = drizzle(client, { schema }) as unknown as Db;
+  await migrate(db as never, { migrationsFolder: './drizzle' });
+  const [ws] = await db.insert(workspaces).values({ name: 'W' }).returning();
+  workspaceId = ws.id;
+  const [agent] = await db.insert(agents).values({ workspaceId, name: 'bot' }).returning();
+  agentId = agent.id;
+  const [ch] = await db
+    .insert(channels)
+    .values({ workspaceId, agentId, kind: 'sms', name: 'SMS', credentials: {} })
+    .returning();
+  channelId = ch.id;
+});
+
+async function mkContact(row: Partial<typeof contacts.$inferInsert> & { email?: string | null }) {
+  const [c] = await db.insert(contacts).values({ workspaceId, ...row }).returning();
+  await db.insert(contactIdentities).values({
+    contactId: c.id,
+    channelId,
+    platformUserId: row.email ?? c.id,
+  });
+  return c;
+}
+
+describe('campaign segments', () => {
+  it('filters by has_email / has_phone / active window / never_replied', async () => {
+    const reachable = await mkContact({ name: 'Reach', email: 'r@x.com', phone: '+1' });
+    const noEmail = await mkContact({ name: 'NoEmail', phone: '+2' });
+    const altOnly = await mkContact({ name: 'AltOnly', altEmails: ['alt@x.com'], phone: '+3' });
+    const quiet = await mkContact({ name: 'Quiet', email: 'q@x.com' });
+
+    // Reachable is recently active; quiet has an old conversation only.
+    const [cv] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'sms:r', contactId: reachable.id, lastMessageAt: new Date() })
+      .returning();
+    await db.insert(messages).values({ conversationId: cv.id, direction: 'in', text: 'hi' });
+    const [old] = await db
+      .insert(conversations)
+      .values({
+        agentId,
+        externalId: 'sms:q',
+        contactId: quiet.id,
+        lastMessageAt: new Date(Date.now() - 90 * 86_400_000),
+      })
+      .returning();
+    await db.insert(messages).values({ conversationId: old.id, direction: 'out', text: 'blast' });
+
+    const base = { workspaceId, channelId };
+    expect(
+      (await resolveSegment(db, { ...base, segment: { has_email: true } })).map((r) => r.contactId).sort(),
+    ).toEqual([reachable.id, altOnly.id, quiet.id].sort());
+    expect(
+      (await resolveSegment(db, { ...base, segment: { active_within_days: 30 } })).map((r) => r.contactId),
+    ).toEqual([reachable.id]);
+    expect(
+      (await resolveSegment(db, { ...base, segment: { never_replied: true } })).map((r) => r.contactId).sort(),
+    ).toEqual([noEmail.id, altOnly.id, quiet.id].sort());
+  });
+});
+
+describe('campaign dispatch', () => {
+  it('is idempotent — re-dispatch resumes instead of doubling sends', async () => {
+    const [campaign] = await db
+      .insert(campaigns)
+      .values({ workspaceId, channelId, name: 'C', text: 'hey', status: 'sending' })
+      .returning();
+    await dispatchCampaign(db, campaign.id);
+    const first = await db
+      .select()
+      .from(campaignSends)
+      .where(eq(campaignSends.campaignId, campaign.id));
+    const n1 = first.length;
+    expect(n1).toBeGreaterThan(0);
+    // Simulate the mid-dispatch crash: wipe half the sends + their jobs.
+    for (const s of first.slice(0, Math.floor(n1 / 2))) {
+      await db.delete(campaignSends).where(eq(campaignSends.id, s.id));
+    }
+    await db.delete(jobs).where(eq(jobs.type, 'outbound.send'));
+    await dispatchCampaign(db, campaign.id);
+    const second = await db
+      .select()
+      .from(campaignSends)
+      .where(eq(campaignSends.campaignId, campaign.id));
+    expect(second.length).toBe(n1); // back to full coverage, no dupes
+    const uniq = new Set(second.map((s) => s.recipient));
+    expect(uniq.size).toBe(second.length);
+  });
+
+  it('drip step reaches only prior-step sent + unreplied', async () => {
+    const [campaign] = await db
+      .insert(campaigns)
+      .values({
+        workspaceId,
+        channelId,
+        name: 'Drip',
+        text: 'first',
+        status: 'sending',
+        steps: [{ delay_minutes: 60, text: 'follow-up' }],
+      })
+      .returning();
+    await dispatchCampaign(db, campaign.id);
+    const stepJob = await db
+      .select()
+      .from(jobs)
+      .where(eq(jobs.type, 'campaign.step'));
+    expect(stepJob.length).toBe(1); // step 1 scheduled after base dispatch
+
+    const sends = await db
+      .select()
+      .from(campaignSends)
+      .where(and(eq(campaignSends.campaignId, campaign.id), eq(campaignSends.stepIndex, 0)));
+    // Mark: one replied, one failed, the rest sent.
+    await db
+      .update(campaignSends)
+      .set({ status: 'sent', repliedAt: new Date() })
+      .where(eq(campaignSends.id, sends[0].id));
+    await db
+      .update(campaignSends)
+      .set({ status: 'failed' })
+      .where(eq(campaignSends.id, sends[1].id));
+    await db
+      .update(campaignSends)
+      .set({ status: 'sent' })
+      .where(inArray(campaignSends.id, sends.slice(2).map((s) => s.id)));
+    const eligible = sends.length - 2; // minus replied + failed
+
+    await dispatchCampaignStep(db, campaign.id, 1);
+    const stepSends = await db
+      .select()
+      .from(campaignSends)
+      .where(and(eq(campaignSends.campaignId, campaign.id), eq(campaignSends.stepIndex, 1)));
+    expect(stepSends.length).toBe(eligible);
+    // Step 1 is the last defined step — nothing further queued.
+    const after = await db.select().from(jobs).where(eq(jobs.type, 'campaign.step'));
+    expect(after.filter((j) => (j.payload as { stepIndex?: number }).stepIndex === 2).length).toBe(0);
+    // Re-running the step is a no-op (unique key).
+    await dispatchCampaignStep(db, campaign.id, 1);
+    const again = await db
+      .select()
+      .from(campaignSends)
+      .where(and(eq(campaignSends.campaignId, campaign.id), eq(campaignSends.stepIndex, 1)));
+    expect(again.length).toBe(eligible);
+  });
+});

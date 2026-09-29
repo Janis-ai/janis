@@ -15,7 +15,7 @@ export default function Settings() {
   const { data: slackChannels } = useSlackChannels(!!slack?.connected);
   const { data: savedReplies } = useSavedReplies();
   const qc = useQueryClient();
-  const [form, setForm] = useState({ email: '', name: '' });
+  const [form, setForm] = useState({ email: '', name: '', role: 'member' });
   const { data: providers } = useQuery({
     queryKey: ['auth-providers'],
     queryFn: () => api<{ google: boolean; slack: boolean; password: boolean }>('/auth/providers'),
@@ -45,10 +45,10 @@ export default function Settings() {
   const [alertChannelName, setAlertChannelName] = useState('janis-alerts');
 
   const addUser = useMutation({
-    mutationFn: (body: { email: string; name?: string }) =>
+    mutationFn: (body: { email: string; name?: string; role?: string }) =>
       api('/api/users', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => {
-      setForm({ email: '', name: '' });
+      setForm({ email: '', name: '', role: 'member' });
       setError('');
       void qc.invalidateQueries({ queryKey: ['users'] });
     },
@@ -656,6 +656,7 @@ export default function Settings() {
                 >
                   <option value="member">member</option>
                   <option value="admin">admin</option>
+                  <option value="viewer">viewer (read-only)</option>
                   {me.user.id === me.workspace?.owner_id && (
                     <option value="owner">owner (transfer)</option>
                   )}
@@ -675,6 +676,7 @@ export default function Settings() {
               addUser.mutate({
                 email: form.email,
                 ...(form.name ? { name: form.name } : {}),
+                role: form.role,
               });
             }}
           >
@@ -682,6 +684,11 @@ export default function Settings() {
             <div className="row">
               <input placeholder="name (optional)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <input placeholder="email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+                <option value="member">member</option>
+                <option value="admin">admin</option>
+                <option value="viewer">viewer (read-only)</option>
+              </select>
               <button className="btn">Invite</button>
             </div>
             <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>

@@ -103,6 +103,15 @@ export function ContactDetail() {
       void qc.invalidateQueries({ queryKey: ['contacts'] });
     },
   });
+  const nav = useNavigate();
+  const del = useMutation({
+    mutationFn: (purge: boolean) =>
+      api(`/api/contacts/${id}${purge ? '?mode=purge' : ''}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['contacts'] });
+      nav('/contacts');
+    },
+  });
 
   if (!data) return <div className="muted">Loading…</div>;
   const c = data.contact;
@@ -112,6 +121,26 @@ export function ContactDetail() {
       <div className="page-head">
         <h1>{displayName(c)}</h1>
         {!edit && <button className="btn" onClick={() => setEdit({ name: c.name ?? '', email: c.email ?? '', phone: c.phone ?? '', notes: c.notes ?? '' })}>Edit</button>}
+        {isAdmin && (
+          <>
+            <a className="btn" href={`/api/contacts/${id}/export`} target="_blank" rel="noreferrer">
+              Export
+            </a>
+            <button
+              className="btn danger"
+              onClick={() => {
+                if (!confirm(`Delete ${displayName(c)}? Channel identities are removed; conversations stay but lose the contact link.`)) return;
+                if (confirm('GDPR purge? OK = also delete every conversation and transcript for this person. Cancel = keep anonymized transcripts.')) {
+                  del.mutate(true);
+                } else {
+                  del.mutate(false);
+                }
+              }}
+            >
+              Delete
+            </button>
+          </>
+        )}
       </div>
 
       {edit && (

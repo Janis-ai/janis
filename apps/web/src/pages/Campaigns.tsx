@@ -7,7 +7,7 @@ import { useChannels } from '../api/hooks';
 
 const SENDABLE = ['sms', 'whatsapp', 'email', 'gmail', 'outlook'];
 
-type Stats = { total: number; sent: number; failed: number; pending: number; skipped: number };
+type Stats = { total: number; sent: number; replied: number; failed: number; pending: number; skipped: number };
 type CampaignRow = {
   id: string;
   name: string;
@@ -17,7 +17,7 @@ type CampaignRow = {
   scheduled_at: string | null;
   stats: Stats;
 };
-type SendRow = { id: string; recipient: string; status: string; error: string | null; sent_at: string | null };
+type SendRow = { id: string; recipient: string; step?: number; status: string; error: string | null; sent_at: string | null; replied_at?: string | null };
 
 export default function Campaigns() {
   const qc = useQueryClient();
@@ -49,16 +49,31 @@ export default function Campaigns() {
 
   const [form, setForm] = useState({
     name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
+    has_email: false, has_phone: false, active_days: '', never_replied: false,
+    step_delay: '', step_text: '',
+  });
+  const segment = () => ({
+    ...(form.q ? { q: form.q } : {}),
+    ...(form.has_email ? { has_email: true } : {}),
+    ...(form.has_phone ? { has_phone: true } : {}),
+    ...(form.active_days ? { active_within_days: Number(form.active_days) } : {}),
+    ...(form.never_replied ? { never_replied: true } : {}),
   });
   const preview = useQuery({
-    queryKey: ['campaign-preview', form.channel_id, form.q],
+    queryKey: ['campaign-preview', form.channel_id, form.q, form.has_email, form.has_phone, form.active_days, form.never_replied],
     enabled: !!form.channel_id,
     queryFn: () =>
       api<{ total: number; opted_out: number }>('/api/campaigns/preview', {
         method: 'POST',
-        body: JSON.stringify({ channel_id: form.channel_id, segment: form.q ? { q: form.q } : {} }),
+        body: JSON.stringify({ channel_id: form.channel_id, segment: segment() }),
       }),
   });
+  const resetForm = () =>
+    setForm({
+      name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
+      has_email: false, has_phone: false, active_days: '', never_replied: false,
+      step_delay: '', step_text: '',
+    });
   const create = useMutation({
     mutationFn: () =>
       api(`/api/campaigns`, {
@@ -69,12 +84,16 @@ export default function Campaigns() {
           text: form.text,
           subject: form.subject || undefined,
           whatsapp_template: form.template ? { name: form.template } : undefined,
-          segment: form.q ? { q: form.q } : {},
+          segment: segment(),
+          steps:
+            form.step_text && form.step_delay
+              ? [{ delay_minutes: Math.round(Number(form.step_delay) * 60), text: form.step_text }]
+              : undefined,
           scheduled_at: form.scheduled_at ? new Date(form.scheduled_at).toISOString() : undefined,
         }),
       }),
     onSuccess: () => {
-      setForm({ name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '' });
+      resetForm();
       void qc.invalidateQueries({ queryKey: ['campaigns'] });
     },
     onError: (e) => setErr(e.message),
@@ -119,6 +138,17 @@ export default function Campaigns() {
             </span>
           )}
         </div>
+        <div className="row wrap muted" style={{ gap: 14, marginTop: 8, fontSize: 13 }}>
+          <label><input type="checkbox" checked={form.has_email}
+            onChange={(e) => setForm({ ...form, has_email: e.target.checked })} /> has email</label>
+          <label><input type="checkbox" checked={form.has_phone}
+            onChange={(e) => setForm({ ...form, has_phone: e.target.checked })} /> has phone</label>
+          <label><input type="checkbox" checked={form.never_replied}
+            onChange={(e) => setForm({ ...form, never_replied: e.target.checked })} /> never replied</label>
+          <label>active within <input className="input" type="number" min="1" max="365"
+            style={{ width: 64 }} placeholder="days" value={form.active_days}
+            onChange={(e) => setForm({ ...form, active_days: e.target.value })} /> days</label>
+        </div>
         {isEmail && (
           <input className="input" style={{ marginTop: 10, width: '100%' }} placeholder="Subject"
             value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} />
@@ -132,6 +162,15 @@ export default function Campaigns() {
             placeholder="Message" value={form.text}
             onChange={(e) => setForm({ ...form, text: e.target.value })} />
         )}
+        <div className="row" style={{ gap: 10, marginTop: 10 }}>
+          <input className="input" type="number" min="1" style={{ width: 110 }}
+            title="Hours after the first send"
+            placeholder="Follow-up hrs" value={form.step_delay}
+            onChange={(e) => setForm({ ...form, step_delay: e.target.value })} />
+          <input className="input grow"
+            placeholder="Follow-up text — goes to non-repliers (optional)"
+            value={form.step_text} onChange={(e) => setForm({ ...form, step_text: e.target.value })} />
+        </div>
         <div className="row" style={{ marginTop: 10 }}>
           <button className="btn primary"
             disabled={create.isPending || !form.name || !form.channel_id || (!form.text && !form.template)}
@@ -149,6 +188,7 @@ export default function Campaigns() {
               <span className="chip">{cp.status}</span>
               <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
                 {cp.channel_name} · {cp.stats.sent}/{cp.stats.total} sent
+                {!!cp.stats.replied && ` · ${cp.stats.replied} replied`}
                 {!!cp.stats.failed && ` · ${cp.stats.failed} failed`}
                 {!!cp.stats.skipped && ` · ${cp.stats.skipped} opted out`}
                 {!!cp.stats.pending && ` · ${cp.stats.pending} pending`}
@@ -174,7 +214,11 @@ export default function Campaigns() {
               {detail.data.sends.slice(0, 25).map((s) => (
                 <div key={s.id} className="row muted" style={{ fontSize: 13, padding: '2px 0' }}>
                   <span className="mono grow">{s.recipient}</span>
-                  <span>{s.status}{s.error ? ` — ${s.error}` : ''}</span>
+                  <span>
+                    {s.step ? `step ${s.step} · ` : ''}{s.status}
+                    {s.replied_at ? ' · replied' : ''}
+                    {s.error ? ` — ${s.error}` : ''}
+                  </span>
                 </div>
               ))}
               {detail.data.sends.length > 25 && (

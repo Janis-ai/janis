@@ -3,7 +3,22 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, campaignSends, channels, contactIdentities, contacts, conversations } from '../db/schema.js';
+import {
+  agents,
+  alerts,
+  campaignSends,
+  channelBindings,
+  channels,
+  contactIdentities,
+  contacts,
+  conversations,
+  messages,
+  slackThreads,
+  suggestions,
+  typingState,
+  usageEvents,
+  viewers,
+} from '../db/schema.js';
 import { sessionAuth, adminOnly, type SessionEnv } from '../middleware/sessionAuth.js';
 import { audit } from '../lib/audit.js';
 
@@ -312,6 +327,113 @@ export function contactRoutes(db: Db) {
       return c.json({ ok: true, contact_id: keepId });
     },
   );
+
+  // GET /api/contacts/:id/export — GDPR access: everything we hold on the
+  // data subject, one JSON bundle. Admin-only.
+  app.get('/:id/export', adminOnly, async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const [contact] = await db
+      .select()
+      .from(contacts)
+      .where(and(eq(contacts.id, c.req.param('id')), eq(contacts.workspaceId, workspaceId)))
+      .limit(1);
+    if (!contact) return c.json({ error: 'not found' }, 404);
+    const [identities, convs, sends] = await Promise.all([
+      db.select().from(contactIdentities).where(eq(contactIdentities.contactId, contact.id)),
+      db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.contactId, contact.id))
+        .limit(500),
+      db.select().from(campaignSends).where(eq(campaignSends.contactId, contact.id)),
+    ]);
+    const msgs = convs.length
+      ? await db
+          .select()
+          .from(messages)
+          .where(inArray(messages.conversationId, convs.map((v) => v.id)))
+          .orderBy(messages.createdAt)
+      : [];
+    const byConv = new Map<string, typeof msgs>();
+    for (const m of msgs) {
+      const list = byConv.get(m.conversationId) ?? [];
+      list.push(m);
+      byConv.set(m.conversationId, list);
+    }
+    await audit(db, {
+      workspaceId,
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'contact.export',
+      targetType: 'contact',
+      targetId: contact.id,
+      meta: { conversations: convs.length },
+    });
+    c.header('content-disposition', `attachment; filename="contact-${contact.id}.json"`);
+    return c.json({
+      exported_at: new Date().toISOString(),
+      contact,
+      identities,
+      campaign_sends: sends,
+      conversations: convs.map((v) => ({ ...v, messages: byConv.get(v.id) ?? [] })),
+    });
+  });
+
+  // DELETE /api/contacts/:id — GDPR erasure. Default keeps the anonymized
+  // conversation shells (agent analytics intact); ?mode=purge deletes the
+  // conversations and their transcripts too. Billing rows (usage_events)
+  // keep their record with the contact link scrubbed. Admin-only.
+  app.delete('/:id', adminOnly, async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const contactId = c.req.param('id');
+    const purge = c.req.query('mode') === 'purge';
+    const [contact] = await db
+      .select()
+      .from(contacts)
+      .where(and(eq(contacts.id, contactId), eq(contacts.workspaceId, workspaceId)))
+      .limit(1);
+    if (!contact) return c.json({ error: 'not found' }, 404);
+
+    const convRows = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.contactId, contactId));
+    const convIds = convRows.map((r) => r.id);
+
+    if (purge && convIds.length) {
+      // Financial records stay (legal retention) but lose the link.
+      await db
+        .update(usageEvents)
+        .set({ conversationId: null })
+        .where(inArray(usageEvents.conversationId, convIds));
+      for (const t of [messages, alerts, suggestions, typingState, slackThreads] as const) {
+        await db.delete(t).where(inArray(t.conversationId, convIds));
+      }
+      await db.delete(viewers).where(inArray(viewers.conversationId, convIds));
+      await db.delete(channelBindings).where(inArray(channelBindings.conversationId, convIds));
+      await db.delete(conversations).where(inArray(conversations.id, convIds));
+    } else {
+      // Unlink, don't delete — the transcript survives without a person.
+      await db
+        .update(conversations)
+        .set({ contactId: null })
+        .where(eq(conversations.contactId, contactId));
+    }
+    await db.delete(campaignSends).where(eq(campaignSends.contactId, contactId));
+    await db.delete(contactIdentities).where(eq(contactIdentities.contactId, contactId));
+    await db.delete(contacts).where(eq(contacts.id, contactId));
+
+    await audit(db, {
+      workspaceId,
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'contact.delete',
+      targetType: 'contact',
+      targetId: contactId,
+      meta: { mode: purge ? 'purge' : 'unlink', conversations: convIds.length },
+    });
+    return c.json({ ok: true, mode: purge ? 'purge' : 'unlink' });
+  });
 
   return app;
 }

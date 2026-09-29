@@ -179,11 +179,17 @@ before typecheck/tests/dev.
   quickstart now documented alongside docker; docs/console copy updated.
 
 **Product depth (features exist, competitors go deeper)**
-- Campaigns: v1 DONE — campaigns + campaign_sends tables, /api/campaigns
-  CRUD + preview + schedule + send-now, /campaigns UI, sweeper dispatch via
-  jobs, opt-out suppression recorded as skipped_opted_out. Segment = text
-  match on contact name/email/phone. Missing: multi-step drips, richer
-  segment filters, per-campaign reply attribution, suppression-list import.
+- Campaigns: v2 — campaigns + campaign_sends tables, /api/campaigns CRUD +
+  preview + schedule + send-now, /campaigns UI, sweeper dispatch via jobs,
+  opt-out suppression recorded as skipped_opted_out. Segments: q text match
+  + has_email/has_phone/active_within_days/never_replied filters. Fan-out is
+  crash-safe — unique (campaign, step, recipient) key resumes partial
+  dispatches; 'sending' campaigns re-run dispatch each tick as gap-fill.
+  Drip steps (campaigns.steps: [{delay_minutes, text, whatsapp_template?}])
+  dispatch as campaign.step jobs, reaching prior-step sent + unreplied
+  only. Reply attribution: campaign_sends.replied_at stamps on inbound in
+  the send's conversation. Missing: multi-variant A/B, suppression-list
+  import, per-recipient (vs per-campaign) drip timing.
 - Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
   13 articles on prod Demo Agent + Janis agent. Missing: full-text ranked
   search (tsvector — ILIKE only today), article view counts, helpfulness
@@ -226,10 +232,17 @@ before typecheck/tests/dev.
 **Reliability & scale (missing — honest weak spots)**
 - Observability: no tracing (OTel), no SLO dashboards, no status page, no
   5xx/latency alerting (Cloud Monitoring → Slack).
-- Job queue: PARTIAL — jobs table + enqueueJob/runJobs under sweeper leader
-  lock; broadcast and campaign sends dispatch as per-recipient jobs (HTTP
-  returns immediately, no more 30s request-held sends). Still inline in
-  sweeper: knowledge re-crawl, eval runs, gmail poll, watch renewals.
+- Job queue: jobs table + enqueueJob/runJobs under sweeper leader lock.
+  Job types: outbound.send (broadcast + campaign sends + drip steps),
+  campaign.step (drip scheduling), knowledge.refresh (URL re-crawls —
+  sweeper only enqueues + bumps next_fetch_at as a claim marker). Still
+  inline: gmail/outlook poll + watch renewals, alert/sla/snooze sweeps.
+- Migration journal gotcha: drizzle applies a migration only when its
+  journal `when` exceeds the newest __drizzle_migrations.created_at —
+  hand-set future `when` values (0063–0067 had 1790740000000+) silently
+  skipped later real-timestamped migrations. migrateDb() rewrites the
+  poisoned rows (exact-stamp list) before migrate(); keep journal `when`
+  monotonic with real time when hand-writing migrations.
 - Rate limiting: DONE core layer — in-memory per-IP ceilings on all webhook/
   read surfaces; Postgres-backed rate_limits table + dbRateLimit on money
   paths (login 10/min/IP, chat writes 600/hr/channel-token via
@@ -249,8 +262,19 @@ before typecheck/tests/dev.
   channel create+delete, outbound send + broadcast, webhook replay, contact
   merge, member invite, workspace update, billing connect/pricing/checkout/
   downgrade. Admin reads via GET /api/workspace/audit-log + Settings card.
-- Still untouched: SSO/SAML (WorkOS), SCIM, RBAC beyond admin/member, SOC 2,
-  data residency, GDPR export/delete.
+- SSO/SAML: DONE via WorkOS AuthKit (gated on WORKOS_CLIENT_ID/API_KEY).
+  SCIM: code-complete — POST /workos/directory-events verifies the WorkOS
+  HMAC signature (WORKOS_DIRECTORY_WEBHOOK_SECRET), maps directory →
+  workspace via workspaces.config.workos_directory_id, provisions/removes
+  memberships on dsync.user.* events. Untested against a real directory.
+- RBAC: viewer role — memberships.role 'viewer' is GET-only via a write
+  block in sessionAuth (allowlist: own /users/me, /push, /views). Role
+  picker + invite role select in Settings.
+- GDPR: GET /api/contacts/:id/export (full JSON bundle) + DELETE /:id
+  (?mode=purge wipes transcripts; default keeps anonymized shells).
+  Both admin-only + audited.
+- Still untouched: SOC 2 process, data residency, RBAC granularity beyond
+  admin/member/viewer.
 
 **Marketing surface (missing)**
 - GA4 is live (G-G5W5H3CVR2) but no funnel events fire — instrument signup,

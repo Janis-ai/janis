@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { sql } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
 import { env } from '../env.js';
 import * as schema from './schema.js';
@@ -32,7 +33,29 @@ export async function createDb(): Promise<Db> {
   return drizzle(new PGlite(env.pgliteDir), { schema }) as unknown as Db;
 }
 
+// __drizzle_migrations rows written by hand-crafted journal entries carried
+// future `when` values (0063–0067, ms 1790740000000–1791000000000). Drizzle
+// applies a migration only when its `when` exceeds the newest recorded
+// created_at, so those rows silently skipped every real-timestamped
+// migration after them (0067 shipped code without its column once).
+// Rewriting the applied rows' created_at below the rewritten journal
+// ordering un-poisons the check; exact-value match so real rows can never
+// be caught. Idempotent — a no-op once clean.
+const POISONED_MIGRATION_STAMPS = [
+  1790740000000, 1790790000000, 1790880000000, 1790970000000, 1791000000000,
+];
+const NORMALIZED_STAMP = 1790720000000;
+
 export async function migrateDb(db: Db) {
+  try {
+    await db.execute(sql`
+      update drizzle.__drizzle_migrations
+      set created_at = ${NORMALIZED_STAMP}
+      where created_at = any(${POISONED_MIGRATION_STAMPS})
+    `);
+  } catch {
+    // Fresh database — the table is created by migrate() below.
+  }
   if (env.databaseUrl) {
     const { migrate } = await import('drizzle-orm/postgres-js/migrator');
     // --max-instances > 1: several instances boot + migrate at once and the

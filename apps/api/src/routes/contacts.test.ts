@@ -12,6 +12,7 @@ import {
   contacts,
   conversations,
   memberships,
+  messages,
   sessions,
   users,
   workspaces,
@@ -224,5 +225,88 @@ describe('contacts', () => {
       profile: { email: 'pat@home.com' },
     });
     expect(cid).toBe(keep.id);
+  });
+
+  it('export returns the full data bundle', async () => {
+    const [c] = await db.select().from(contacts).where(eq(contacts.phone, '+1555')).limit(1);
+    const res = await api.request(`/api/contacts/${c.id}/export`, { headers: { cookie } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      contact: { id: string };
+      identities: unknown[];
+      conversations: { id: string; messages: unknown[] }[];
+    };
+    expect(body.contact.id).toBe(c.id);
+    expect(body.identities.length).toBeGreaterThan(0);
+    expect(body.conversations[0]?.id).toBe(convA);
+  });
+
+  it('viewer role is read-only — writes 403, reads pass', async () => {
+    const [v] = await db
+      .insert(users)
+      .values({ email: 'view@x.com', name: 'Vic', passwordHash: await hashPassword('password123') })
+      .returning();
+    await db
+      .insert(memberships)
+      .values({ userId: v.id, workspaceId, role: 'viewer', acceptedAt: new Date() });
+    const { token, id } = generateSessionToken();
+    await db
+      .insert(sessions)
+      .values({ id, userId: v.id, workspaceId, expiresAt: new Date(Date.now() + 86_400_000) });
+    const vcookie = `janis_session=${token}`;
+    const [c] = await db.select().from(contacts).limit(1);
+    const list = await api.request('/api/contacts', { headers: { cookie: vcookie } });
+    expect(list.status).toBe(200);
+    const write = await api.request(`/api/contacts/${c.id}`, {
+      method: 'PATCH',
+      headers: { cookie: vcookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ notes: 'nope' }),
+    });
+    expect(write.status).toBe(403);
+    const mergeTry = await api.request(`/api/contacts/${c.id}/merge`, {
+      method: 'POST',
+      headers: { cookie: vcookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ other_id: c.id }),
+    });
+    expect(mergeTry.status).toBe(403);
+  });
+
+  it('delete unlinks conversations; purge deletes them', async () => {
+    const mk = async (email: string) => {
+      const [c] = await db
+        .insert(contacts)
+        .values({ workspaceId, name: 'Tmp', email })
+        .returning();
+      const [cv] = await db
+        .insert(conversations)
+        .values({ agentId: (await db.select().from(agents))[0].id, externalId: `x:${email}`, contactId: c.id })
+        .returning();
+      await db
+        .insert(messages)
+        .values({ conversationId: cv.id, direction: 'in', text: 'hi' });
+      return { contact: c, conv: cv };
+    };
+    const a = await mk('del-unlink@x.com');
+    const res1 = await api.request(`/api/contacts/${a.contact.id}`, {
+      method: 'DELETE',
+      headers: { cookie },
+    });
+    expect(res1.status).toBe(200);
+    const [orphan] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, a.conv.id));
+    expect(orphan.contactId).toBeNull(); // transcript survives, person gone
+
+    const b = await mk('del-purge@x.com');
+    const res2 = await api.request(`/api/contacts/${b.contact.id}?mode=purge`, {
+      method: 'DELETE',
+      headers: { cookie },
+    });
+    expect(res2.status).toBe(200);
+    const gone = await db.select().from(conversations).where(eq(conversations.id, b.conv.id));
+    const goneMsgs = await db.select().from(messages).where(eq(messages.conversationId, b.conv.id));
+    expect(gone.length).toBe(0);
+    expect(goneMsgs.length).toBe(0);
   });
 });

@@ -102,7 +102,7 @@ export const memberships = pgTable(
     workspaceId: uuid('workspace_id')
       .notNull()
       .references(() => workspaces.id),
-    role: text('role', { enum: ['admin', 'member'] }).notNull().default('member'),
+    role: text('role', { enum: ['admin', 'member', 'viewer'] }).notNull().default('member'),
     invitedBy: uuid('invited_by').references(() => users.id),
     acceptedAt: timestamp('accepted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -930,7 +930,11 @@ export const campaigns = pgTable(
     text: text('text').notNull().default(''),
     subject: text('subject'),
     template: jsonb('template'), // whatsapp {name,language,body_params}
-    segment: jsonb('segment').notNull().default({}), // {q?: string}
+    segment: jsonb('segment').notNull().default({}), // CampaignSegment — see lib/campaigns
+    // Drip steps after the base send: [{delay_minutes, text, subject?,
+    // whatsapp_template?}] — each only reaches previous-step recipients who
+    // haven't replied.
+    steps: jsonb('steps').notNull().default([]),
     scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
     status: text('status', { enum: ['draft', 'scheduled', 'sending', 'done', 'failed'] })
       .notNull()
@@ -957,13 +961,23 @@ export const campaignSends = pgTable(
       .notNull()
       .references(() => channels.id),
     recipient: text('recipient').notNull(), // phone/email/platform id
+    // 0 = the base send; drip steps send as step_index 1..N.
+    stepIndex: integer('step_index').notNull().default(0),
     status: text('status', { enum: ['pending', 'sent', 'failed', 'skipped_opted_out'] })
       .notNull()
       .default('pending'),
     error: text('error'),
     conversationId: uuid('conversation_id'),
+    // Reply attribution — stamped when the recipient writes back; drip steps
+    // skip replied recipients.
+    repliedAt: timestamp('replied_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     sentAt: timestamp('sent_at', { withTimezone: true }),
   },
-  (t) => [index('campaign_sends_campaign').on(t.campaignId, t.status)],
+  (t) => [
+    index('campaign_sends_campaign').on(t.campaignId, t.status),
+    // Crash-safe fan-out: a partial dispatch resumes by re-inserting only
+    // the recipients it never reached.
+    uniqueIndex('campaign_sends_recipient').on(t.campaignId, t.stepIndex, t.recipient),
+  ],
 );

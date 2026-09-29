@@ -1,7 +1,9 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { campaignSends, channels, jobs } from '../db/schema.js';
+import { campaignSends, channels, jobs, knowledgeFiles } from '../db/schema.js';
 import { sendOutbound } from './outbound.js';
+import { refreshKnowledgeSource } from './urlSource.js';
+import { dispatchCampaignStep } from './campaigns.js';
 
 /** Job payload for 'outbound.send' — one recipient's send, replayable. */
 export interface OutboundSendJob {
@@ -72,8 +74,26 @@ async function runOutboundSend(db: Db, workspaceId: string, p: OutboundSendJob):
   if (r.error) throw new Error(r.error);
 }
 
+/** One URL-backed knowledge file re-crawl — enqueued by sweepKnowledge so
+ *  slow fetches run off the sweeper tick (and retry on failure). */
+async function runKnowledgeRefresh(db: Db, workspaceId: string, p: { fileId?: string }) {
+  const [file] = await db
+    .select()
+    .from(knowledgeFiles)
+    .where(eq(knowledgeFiles.id, p.fileId ?? ''))
+    .limit(1);
+  if (!file || file.workspaceId !== workspaceId) {
+    throw new Error('knowledge file gone or wrong workspace');
+  }
+  await refreshKnowledgeSource(db, file);
+}
+
 const HANDLERS: Record<string, (db: Db, workspaceId: string, payload: never) => Promise<void>> = {
   'outbound.send': (db, ws, p) => runOutboundSend(db, ws, p as unknown as OutboundSendJob),
+  'knowledge.refresh': (db, ws, p) => runKnowledgeRefresh(db, ws, p as { fileId?: string }),
+  'campaign.step': (db, _ws, p) =>
+    dispatchCampaignStep(db, (p as { campaignId: string }).campaignId, (p as { stepIndex: number }).stepIndex)
+      .then(() => undefined),
 };
 
 const MAX_ATTEMPTS = 5;

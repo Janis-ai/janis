@@ -10,6 +10,14 @@ type UserRow = typeof users.$inferSelect;
 
 export const SESSION_COOKIE = 'janis_session';
 
+/** Writes a viewer role can still make — own account prefs, push
+ *  subscription, personal saved views. Everything else is GET-only. */
+const VIEWER_WRITE_ALLOWLIST = [
+  /^\/api\/users\/me$/,
+  /^\/api\/push(\/|$)/,
+  /^\/api\/views(\/|$)/,
+];
+
 export interface SessionEnv {
   Variables: {
     user: UserRow;
@@ -161,6 +169,16 @@ export function sessionAuth(db: Db) {
     c.set('workspaceId', membership.workspaceId);
     c.set('role', membership.role);
     c.set('agentScope', { grants: null, hidden: hiddenRows.map((h) => h.agentId) });
+    // Viewers are read-only: any session-gated write outside the self-service
+    // allowlist 403s. Checking here (not per-route) means a missed route can
+    // never widen the role — adminOnly/agent-scoped gates stack on top.
+    if (
+      membership.role === 'viewer' &&
+      !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) &&
+      !VIEWER_WRITE_ALLOWLIST.some((r) => r.test(c.req.path))
+    ) {
+      return c.json({ error: 'viewers are read-only' }, 403);
+    }
     await next();
   });
 }

@@ -13,7 +13,7 @@ import { audit } from '../lib/audit.js';
 const createUser = z.object({
   email: z.string().trim().toLowerCase().email(),
   name: z.string().max(120).optional(),
-  role: z.enum(['admin', 'member']).default('member'),
+  role: z.enum(['admin', 'member', 'viewer']).default('member'),
 });
 
 export function userRoutes(db: Db) {
@@ -68,7 +68,7 @@ export function userRoutes(db: Db) {
     );
     const memberIds = new Set(rows.map((r) => r.user.id));
     // hidden rows were filtered above — a residual 'hidden' can't surface
-    const effRole = (userId: string, fallback: 'owner' | 'admin' | 'member') => {
+    const effRole = (userId: string, fallback: 'owner' | 'admin' | 'member' | 'viewer') => {
       if (userId === agent?.ownerId) return 'owner' as const;
       const r = scopedById.get(userId)?.role;
       return r && r !== 'hidden' ? r : fallback;
@@ -223,7 +223,7 @@ export function userRoutes(db: Db) {
   app.patch(
     '/:id',
     adminOnly,
-    zValidator('json', z.object({ role: z.enum(['admin', 'member', 'owner']) })),
+    zValidator('json', z.object({ role: z.enum(['admin', 'member', 'viewer', 'owner']) })),
     async (c) => {
       const me = c.get('user');
       const workspaceId = c.get('workspaceId');

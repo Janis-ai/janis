@@ -11,8 +11,7 @@ import { resume } from './takeover.js';
 import { renewGmailWatches, sweepGmail } from './gmailSweep.js';
 import { renewOutlookWatches, sweepOutlook } from './outlookSweep.js';
 import { sweepWebhookRetries } from '../lib/webhooks.js';
-import { refreshKnowledgeSource } from '../lib/urlSource.js';
-import { runJobs } from '../lib/jobs.js';
+import { runJobs, enqueueJob } from '../lib/jobs.js';
 import { sweepCampaigns } from '../lib/campaigns.js';
 
 /**
@@ -380,20 +379,28 @@ export async function sweepSla(db: Db): Promise<number> {
 }
 
 /**
- * Re-crawl URL knowledge sources whose refresh window elapsed. Bounded per
- * tick — a workspace importing 50 URLs shouldn't fan out 50 fetches at once;
- * stragglers simply run on the next minute tick.
+ * Re-crawl URL knowledge sources whose refresh window elapsed — the tick
+ * only ENQUEUES a knowledge.refresh job per due file and pushes next_fetch_at
+ * out a few minutes as a claim marker (the job handler's success/failure
+ * writes the real next slot). Slow crawls run on the jobs path, not inside
+ * the sweep; a crashed job re-enqueues on the next tick. Bounded per tick.
  */
 export async function sweepKnowledge(db: Db, limit = 5): Promise<number> {
   const due = await db
-    .select()
+    .select({ id: knowledgeFiles.id, workspaceId: knowledgeFiles.workspaceId })
     .from(knowledgeFiles)
     .where(and(isNotNull(knowledgeFiles.sourceUrl), lt(knowledgeFiles.nextFetchAt, new Date())))
     .limit(limit);
-  let done = 0;
   for (const file of due) {
-    await refreshKnowledgeSource(db, file);
-    done++;
+    await db
+      .update(knowledgeFiles)
+      .set({ nextFetchAt: new Date(Date.now() + 5 * 60_000) })
+      .where(eq(knowledgeFiles.id, file.id));
+    await enqueueJob(db, {
+      workspaceId: file.workspaceId,
+      type: 'knowledge.refresh',
+      payload: { fileId: file.id },
+    });
   }
-  return done;
+  return due.length;
 }
