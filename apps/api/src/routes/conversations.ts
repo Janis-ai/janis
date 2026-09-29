@@ -102,17 +102,20 @@ export function conversationRoutes(db: Db) {
   // count of conversations needing a human — powers the nav badge
   app.get('/attention-count', async (c) => {
     const workspaceId = c.get('workspaceId');
-    const [{ count }] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(conversations)
-      .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(
-        and(
-          ...agentVis(workspaceId, c.get('agentScope')),
-          inArray(conversations.state, ['needs_human', 'human']),
-        ),
-      );
-    return c.json({ count });
+    const scope = agentVis(workspaceId, c.get('agentScope'));
+    const [[{ count }], [{ count: unread }]] = await Promise.all([
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(conversations)
+        .innerJoin(agents, eq(conversations.agentId, agents.id))
+        .where(and(...scope, inArray(conversations.state, ['needs_human', 'human']))),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(conversations)
+        .innerJoin(agents, eq(conversations.agentId, agents.id))
+        .where(and(...scope, eq(conversations.isUnread, true))),
+    ]);
+    return c.json({ count, unread });
   });
 
   app.get('/:id', async (c) => {

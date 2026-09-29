@@ -861,26 +861,28 @@
           }
           // Unread watermark: non-visitor messages newer than lastSeen count
           // while the panel is closed; while open they just advance it.
-          if (m.direction !== 'in' && m.created_at && state.seenInit &&
-              (!state.lastSeen || m.created_at > state.lastSeen)) {
+          if (m.direction !== 'in' && m.created_at && state.lastSeen &&
+              m.created_at > state.lastSeen) {
             // "Unseen" = closed panel OR backgrounded tab — an open panel on
             // a hidden tab still needs the tab-strip signals (title/favicon).
+            // Gate is lastSeen (persisted), not seenInit — a refresh re-counts
+            // genuinely-unread backlog; only first-ever visits baseline it away.
             if (!state.open || document.hidden) { wantPing = true; state.unread++; }
             else { state.lastSeen = m.created_at; saveSeen(); }
           }
           if (m.direction !== 'in') gotReply = true;
           addMsg(m);
         });
-        // First poll establishes the read baseline — a fresh visitor's whole
-        // history (or none) is "seen", not a pile of unread messages.
-        if (!state.seenInit) {
+        // First poll seeds the read watermark ONLY for brand-new visitors —
+        // a stored lastSeen means messages newer than it are real backlog
+        // and were counted above (badge survives refresh; the chime doesn't
+        // re-fire for backlog on load).
+        var firstPoll = !state.seenInit;
+        if (firstPoll) {
           state.seenInit = true;
-          if (state.lastTs && (!state.lastSeen || state.lastTs > state.lastSeen)) {
-            state.lastSeen = state.lastTs;
-            saveSeen();
-          }
+          if (!state.lastSeen && state.lastTs) { state.lastSeen = state.lastTs; saveSeen(); }
         }
-        if (wantPing) ping();
+        if (wantPing && !firstPoll) ping();
         if (state.unread > 0) hideTeaser(); // the badge supersedes the teaser
         updateBadge();
         // A pending offer is moot once a human owns the conversation.

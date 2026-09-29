@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import { useMe } from '../api/hooks';
 import { useStream, type StreamAlert } from '../lib/useStream';
 import { playAlertSound } from '../lib/alertSound';
+import { setTabBadge } from '../lib/tabBadge';
 import PushBanner from './PushBanner';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
@@ -120,10 +121,14 @@ export default function Layout() {
   const hasWorkspace = Boolean(data?.workspace);
   const { data: attention } = useQuery({
     queryKey: ['attention-count'],
-    queryFn: () => api<{ count: number }>('/api/conversations/attention-count'),
+    queryFn: () => api<{ count: number; unread: number }>('/api/conversations/attention-count'),
     refetchInterval: 60_000,
     enabled: hasWorkspace,
   });
+  // Unseen-conversation count on the tab strip — the chime covers "now",
+  // this covers "came back to the tab later". SSE invalidates the query so
+  // it stays live; the 60s poll is the fallback.
+  useEffect(() => setTabBadge(attention?.unread ?? 0), [attention?.unread]);
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [toasts, setToasts] = useState<Toast[]>([]);
