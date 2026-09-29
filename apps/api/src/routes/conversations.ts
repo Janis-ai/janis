@@ -102,6 +102,18 @@ export function conversationRoutes(db: Db) {
 
     const conditions = convListConditions(q, workspaceId, c.get('user').id, c.get('agentScope'));
 
+    // Sort key: last activity, falling back to creation for threads with no
+    // messages yet. id is the tiebreaker so the order is total — the cursor
+    // comparison below relies on it.
+    const sortKey = sql`coalesce(${conversations.lastMessageAt}, ${conversations.createdAt})`;
+    if (q.cursor) {
+      const [ms, id] = q.cursor.split('_');
+      conditions.push(
+        sql`(${sortKey}, ${conversations.id}) < (${new Date(Number(ms)).toISOString()}::timestamptz, ${id}::uuid)`,
+      );
+    }
+
+    const limit = q.limit ?? 200;
     const rows = await db
       .select({
         conversation: conversations,
@@ -114,11 +126,21 @@ export function conversationRoutes(db: Db) {
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
       .where(and(...conditions))
-      .orderBy(desc(conversations.lastMessageAt))
-      .limit(200);
+      .orderBy(sql`${sortKey} desc`, desc(conversations.id))
+      .limit(limit + 1); // one extra row to tell if another page exists
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const last = page[page.length - 1]?.conversation;
+    const nextCursor =
+      hasMore && last
+        ? `${(last.lastMessageAt ?? last.createdAt).getTime()}_${last.id}`
+        : null;
 
     return c.json({
-      conversations: rows.map((r) => toConversation(r.conversation, r.openAlertCount)),
+      conversations: page.map((r) => toConversation(r.conversation, r.openAlertCount)),
+      has_more: hasMore,
+      next_cursor: nextCursor,
     });
   });
 

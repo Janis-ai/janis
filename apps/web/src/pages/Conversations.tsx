@@ -148,12 +148,13 @@ export default function Conversations() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const qc = useQueryClient();
-  const { data } = useConversations({
+  const { data, hasNextPage, fetchNextPage, isFetchingNextPage } = useConversations({
     attention: tab === 'attention' || undefined,
     state: state || undefined,
     agent_id: agentId || undefined,
     mine,
   });
+  const convList = data?.pages.flatMap((p) => p.conversations);
   const { data: agents } = useAgents();
   const { data: views } = useViews();
   const { data: hits } = useSearch(query, {
@@ -212,7 +213,7 @@ export default function Conversations() {
       return n;
     });
 
-  const list = searching ? hits?.conversations : data?.conversations;
+  const list = searching ? hits?.conversations : convList;
   const visibleIds = (list ?? []).map((c) => c.id);
   const allChecked = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
 
@@ -375,7 +376,7 @@ export default function Conversations() {
         </>
       ) : (
         <>
-          {data && data.conversations.length === 0 && (
+          {data && convList!.length === 0 && (
             <Empty>
               {tab === 'attention'
                 ? 'No conversations need attention. When an agent fails or asks for help, it lands here.'
@@ -384,7 +385,7 @@ export default function Conversations() {
                   : 'No conversations.'}
             </Empty>
           )}
-          {(data?.conversations.length ?? 0) > 0 && (
+          {(convList?.length ?? 0) > 0 && (
             <div className="conv-select-all">
               <label className="check">
                 <input
@@ -394,13 +395,24 @@ export default function Conversations() {
                     setSelected(allChecked ? new Set() : new Set(visibleIds))
                   }
                 />
-                Select all
+                Select all loaded
               </label>
             </div>
           )}
-          {data?.conversations.map((c) => (
+          {convList?.map((c) => (
             <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} />
           ))}
+          {hasNextPage && (
+            <div style={{ textAlign: 'center', marginTop: 12 }}>
+              <button
+                className="btn"
+                disabled={isFetchingNextPage}
+                onClick={() => void fetchNextPage()}
+              >
+                {isFetchingNextPage ? 'Loading…' : 'Load more'}
+              </button>
+            </div>
+          )}
         </>
       )}
     </>

@@ -13,6 +13,14 @@ export const convListQuery = z.object({
   agent_id: z.string().uuid().optional(),
   attention: z.enum(['1', 'true']).optional(), // needs_human OR has open alerts
   assignee: z.enum(['me']).optional(), // only conversations assigned to the caller
+  // Cursor pagination: `${epochMs}_${uuid}` of the last row's sort key
+  // (coalesce(last_message_at, created_at), id). Stable under new arrivals —
+  // new rows sort ahead of the cursor, never inside a fetched window.
+  cursor: z
+    .string()
+    .regex(/^\d+_[0-9a-fA-F-]{36}$/)
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 
 /** WHERE conditions for conversation listing — workspace scope + filters.

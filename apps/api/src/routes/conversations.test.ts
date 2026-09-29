@@ -420,6 +420,50 @@ describe('bulk actions', () => {
   });
 });
 
+describe('pagination', () => {
+  const getPage = (qs: string) =>
+    app
+      .request(`/api/conversations?${qs}`, { headers: { cookie: adminCookie } })
+      .then((r) => r.json());
+
+  it('pages through the list with a stable cursor, newest first', async () => {
+    // isolate: archived so the shared seeded threads don't pollute the page
+    const ids: string[] = [];
+    const t0 = Date.now() - 100_000;
+    for (let i = 0; i < 5; i++) {
+      const c = await makeConversation(`paged-${i}`);
+      await db
+        .update(conversations)
+        .set({ state: 'archived', lastMessageAt: new Date(t0 + i * 1000) })
+        .where(eq(conversations.id, c.id));
+      ids.push(c.id);
+    }
+    // newest first
+    const expected = [...ids].reverse();
+
+    const seen: string[] = [];
+    let cursor = '';
+    for (let page = 0; page < 12; page++) {
+      const d = await getPage(
+        `state=archived&limit=2${cursor ? `&cursor=${cursor}` : ''}`,
+      );
+      const pageIds = (d.conversations as { id: string }[])
+        .map((c) => c.id)
+        .filter((id) => expected.includes(id));
+      seen.push(...pageIds);
+      cursor = d.next_cursor ?? '';
+      if (seen.length >= 5 || !d.has_more) break;
+    }
+    expect(seen).toEqual(expected);
+
+    // invalid cursor shape is rejected, not silently ignored
+    const bad = await app.request('/api/conversations?cursor=garbage', {
+      headers: { cookie: adminCookie },
+    });
+    expect(bad.status).toBe(400);
+  });
+});
+
 describe('saved views', () => {
   it('creates, lists and deletes per-user views', async () => {
     const res = await app.request('/api/views', {

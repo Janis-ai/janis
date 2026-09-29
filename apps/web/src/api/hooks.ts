@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   Agent,
   Alert,
@@ -37,6 +37,12 @@ export function useMe() {
   });
 }
 
+export interface ConversationsPage {
+  conversations: Conversation[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
 export function useConversations(filter: {
   state?: string;
   agent_id?: string;
@@ -48,9 +54,15 @@ export function useConversations(filter: {
   if (filter.agent_id) params.set('agent_id', filter.agent_id);
   if (filter.attention) params.set('attention', '1');
   if (filter.mine) params.set('assignee', 'me');
-  return useQuery({
+  params.set('limit', '50');
+  return useInfiniteQuery({
     queryKey: ['conversations', filter],
-    queryFn: () => api<{ conversations: Conversation[] }>(`/api/conversations?${params}`),
+    queryFn: ({ pageParam }) =>
+      api<ConversationsPage>(
+        `/api/conversations?${params}${pageParam ? `&cursor=${pageParam}` : ''}`,
+      ),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     refetchInterval: 30_000,
   });
 }
