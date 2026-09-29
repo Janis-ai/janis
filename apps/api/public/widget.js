@@ -200,6 +200,8 @@
     '#janis-send{border:none;align-self:stretch;padding:0 16px;cursor:pointer;color:#fff;font-weight:600;background:var(--janis-accent)}' +
     '#janis-file{display:none}' +
     '#janis-power{text-align:center;font-size:11px;color:#9ca3af;padding:4px;background:#fff}' +
+    '#janis-help{display:block;text-align:center;font-size:12px;color:#2563eb;padding:4px;text-decoration:none;background:#fff;border-top:1px solid #f3f4f6}' +
+    '#janis-help:hover{text-decoration:underline}' +
     '.janis-loading{text-align:center;color:#9ca3af;font-size:12px;padding:18px 0}' +
     '#janis-form :disabled{opacity:.55;cursor:default}' +
     // iOS Safari zooms the whole page when a focused field is under 16px —
@@ -225,6 +227,7 @@
     '<textarea id="janis-input" placeholder="Type a message…" rows="1"></textarea>' +
     '<button id="janis-send" type="submit">Send</button></form>' +
     '<input id="janis-file" type="file" multiple />' +
+    '<a id="janis-help" target="_blank" rel="noopener" style="display:none">Browse help articles</a>' +
     '<div id="janis-power">Powered by Janis</div>';
   document.body.appendChild(bubble);
   document.body.appendChild(panel);
@@ -825,6 +828,11 @@
       bub.alt = '';
       bubble.textContent = '';
       bubble.appendChild(bub);
+    }
+    if (cfg.help_url) {
+      var helpLink = panel.querySelector('#janis-help');
+      helpLink.href = cfg.help_url;
+      helpLink.style.display = '';
     }
     if (cfg.position === 'left') {
       bubble.classList.add('janis-left');

@@ -4,9 +4,10 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { getCookie } from 'hono/cookie';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, asc, desc, eq, gt, gte, inArray, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, channelBindings, channels, conversations, messages, sessions, users } from '../db/schema.js';
+import { env } from '../env.js';
+import { agents, channelBindings, channels, conversations, helpArticles, messages, sessions, users } from '../db/schema.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
 import type { QuickReply } from '@janis/shared';
@@ -185,6 +186,12 @@ export function webchatRoutes(db: Db) {
     // doesn't match the transcript.
     const internal = (channel.credentials as ChannelCredentials).internal === true;
     const greeting = await resolveGreeting(channel, agent, undefined, { background: !internal }, db);
+    // Surface the public help center when the agent has published articles —
+    // the widget renders it as a "Browse help articles" link.
+    const [{ n: helpCount }] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(helpArticles)
+      .where(and(eq(helpArticles.agentId, channel.agentId), eq(helpArticles.status, 'published')));
     return c.json({
       name: channel.name,
       agent_name: agent?.name ?? 'Assistant',
@@ -196,6 +203,7 @@ export function webchatRoutes(db: Db) {
       logo_url: creds.logo_url ?? null,
       // channel-level override wins; agent config is the default
       quick_replies: creds.quick_replies?.length ? creds.quick_replies : agentReplies,
+      help_url: helpCount > 0 ? `${env.webOrigin}/help/${channel.agentId}` : null,
     });
   });
 

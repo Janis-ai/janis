@@ -571,7 +571,10 @@ export const helpArticles = pgTable(
       .notNull()
       .references(() => agents.id),
     title: text('title').notNull(),
+    slug: text('slug'), // url-safe, unique per agent — /help/:agent/:slug
     category: text('category').notNull().default('General'),
+    seoTitle: text('seo_title'),
+    seoDescription: text('seo_description'),
     body: text('body').notNull().default(''),
     status: text('status', { enum: ['draft', 'published'] }).notNull().default('draft'),
     position: integer('position').notNull().default(0),
@@ -579,7 +582,10 @@ export const helpArticles = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('help_articles_agent').on(t.agentId)],
+  (t) => [
+    index('help_articles_agent').on(t.agentId),
+    uniqueIndex('help_articles_slug').on(t.agentId, t.slug),
+  ],
 );
 
 /**

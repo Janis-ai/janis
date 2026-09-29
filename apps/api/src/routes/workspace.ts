@@ -38,6 +38,17 @@ const updateWorkspace = z.object({
   // Outbound event export — Zapier/Make catch hook that receives every
   // inbound message + handoff as a JSON POST. null clears it.
   event_webhook_url: z.string().url().max(2000).nullable().optional(),
+  // Custom help-center domain (help.acme.com) — the workspace CNAMEs it to
+  // app.janis.ai and /api/help/domain resolves the host back to this
+  // workspace's published articles. null clears it.
+  help_domain: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/, 'must be a bare domain like help.acme.com')
+    .max(200)
+    .nullable()
+    .optional(),
   llm_config: z
     .object({
       provider: z.string().optional(),
@@ -71,6 +82,8 @@ export function workspaceRoutes(db: Db) {
         llm_config: scrubLlmBlock(ws.llmConfig),
         event_webhook_url:
           (ws.config as { event_webhook_url?: string } | undefined)?.event_webhook_url ?? null,
+        help_domain:
+          (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
       },
     });
   });
@@ -96,12 +109,14 @@ export function workspaceRoutes(db: Db) {
         .where(eq(workspaces.id, workspaceId));
       ws.name = body.name;
     }
-    if (body.event_webhook_url !== undefined) {
+    if (body.event_webhook_url !== undefined || body.help_domain !== undefined) {
       const config = {
         ...(ws.config as Record<string, unknown>),
         ...(body.event_webhook_url ? { event_webhook_url: body.event_webhook_url } : {}),
+        ...(body.help_domain ? { help_domain: body.help_domain } : {}),
       };
-      if (!body.event_webhook_url) delete config.event_webhook_url;
+      if (body.event_webhook_url === null || body.event_webhook_url === '') delete config.event_webhook_url;
+      if (body.help_domain === null || body.help_domain === '') delete config.help_domain;
       await db.update(workspaces).set({ config }).where(eq(workspaces.id, workspaceId));
       ws.config = config;
     }
@@ -150,6 +165,8 @@ export function workspaceRoutes(db: Db) {
         llm_config: scrubLlmBlock(ws.llmConfig),
         event_webhook_url:
           (ws.config as { event_webhook_url?: string } | undefined)?.event_webhook_url ?? null,
+        help_domain:
+          (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
       },
     });
   });

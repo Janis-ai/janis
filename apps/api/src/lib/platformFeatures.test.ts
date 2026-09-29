@@ -168,6 +168,41 @@ describe('public help center', () => {
     const res = await app.request(`/api/help/${agentId}/${draft[0].id}`);
     expect(res.status).toBe(404);
   });
+
+  it('searches, resolves slugs, and serves domain lookups', async () => {
+    const app = new Hono().route('/api/help', helpPublicRoutes(db));
+    const [a] = await db
+      .insert(helpArticles)
+      .values({
+        workspaceId: wsId,
+        agentId,
+        title: 'Tracking a shipment',
+        slug: 'tracking-a-shipment',
+        category: 'Shipping',
+        body: 'Your tracking link is on the order confirmation email.',
+        status: 'published',
+      })
+      .returning();
+
+    // slug resolves like an id
+    const bySlug = await app.request(`/api/help/${agentId}/tracking-a-shipment`);
+    expect(bySlug.status).toBe(200);
+    expect((await bySlug.json()).article.id).toBe(a.id);
+
+    // search filters title/body
+    const hit = await (await app.request(`/api/help/${agentId}?q=tracking`)).json();
+    expect(hit.categories.flatMap((g) => g.articles).some((s) => s.id === a.id)).toBe(true);
+    const miss = await (await app.request(`/api/help/${agentId}?q=zzznotfound`)).json();
+    expect(miss.categories.flatMap((g) => g.articles)).toHaveLength(0);
+
+    // domain resolution — claim help.acme.test on this workspace
+    await db.update(workspaces).set({ config: { help_domain: 'help.acme.test' } }).where(eq(workspaces.id, wsId));
+    const dom = await (await app.request('/api/help/domain?host=help.acme.test')).json();
+    expect(dom.agents.some((x) => x.id === agentId)).toBe(true);
+    const bad = await app.request('/api/help/domain?host=unknown.example');
+    expect(bad.status).toBe(404);
+    await db.update(workspaces).set({ config: {} }).where(eq(workspaces.id, wsId));
+  });
 });
 
 describe('conversations.intent column', () => {

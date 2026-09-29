@@ -121,18 +121,31 @@ export default function Settings() {
   const [wsNameMsg, setWsNameMsg] = useState('');
   const [hookUrl, setHookUrl] = useState('');
   const [hookMsg, setHookMsg] = useState('');
+  const [helpDomain, setHelpDomain] = useState('');
+  const [domainMsg, setDomainMsg] = useState('');
   const { data: workspaceDetail } = useQuery({
     queryKey: ['workspace'],
     queryFn: () =>
-      api<{ workspace: { id: string; name: string; event_webhook_url: string | null } }>(
-        '/api/workspace',
-      ),
+      api<{
+        workspace: { id: string; name: string; event_webhook_url: string | null; help_domain: string | null };
+      }>('/api/workspace'),
   });
   useEffect(() => {
     const url = workspaceDetail?.workspace?.event_webhook_url;
     if (url !== undefined) setHookUrl(url ?? '');
+    const domain = workspaceDetail?.workspace?.help_domain;
+    if (domain !== undefined) setHelpDomain(domain ?? '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceDetail?.workspace?.id]);
+  const saveDomain = useMutation({
+    mutationFn: (domain: string | null) =>
+      api('/api/workspace', { method: 'PATCH', body: JSON.stringify({ help_domain: domain }) }),
+    onSuccess: () => {
+      setDomainMsg('Saved.');
+      void qc.invalidateQueries({ queryKey: ['workspace'] });
+    },
+    onError: (e) => setDomainMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
   const saveHook = useMutation({
     mutationFn: (url: string | null) =>
       api('/api/workspace', { method: 'PATCH', body: JSON.stringify({ event_webhook_url: url }) }),
@@ -331,6 +344,30 @@ export default function Settings() {
                 {' '}Blank disables the export. Pair with the "Webhook (Zapier / Make)" tool template for two-way automation.
               </span>
               {hookMsg && <div className="muted" style={{ marginTop: 6 }}>{hookMsg}</div>}
+            </div>
+            <div className="form-field" style={{ marginTop: 12 }}>
+              <label>Help center domain — serve your help center at help.yourdomain.com</label>
+              <div className="row">
+                <input
+                  className="grow"
+                  style={{ maxWidth: 420 }}
+                  placeholder="help.yourdomain.com"
+                  value={helpDomain}
+                  onChange={(e) => setHelpDomain(e.target.value)}
+                />
+                <button
+                  className="btn"
+                  disabled={saveDomain.isPending}
+                  onClick={() => saveDomain.mutate(helpDomain.trim().toLowerCase() || null)}
+                >
+                  {saveDomain.isPending ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {workspaceDetail?.workspace?.help_domain ? `Currently ${workspaceDetail.workspace.help_domain}.` : 'Not set.'}
+                {' '}Point the domain's CNAME at {window.location.host} first, then set it here.
+              </span>
+              {domainMsg && <div className="muted" style={{ marginTop: 6 }}>{domainMsg}</div>}
             </div>
           </>
         ) : (

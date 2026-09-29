@@ -16,7 +16,7 @@ import AgentDetail from './pages/AgentDetail';
 import Reports from './pages/Reports';
 import Billing from './pages/Billing';
 import Settings from './pages/Settings';
-import { HelpCenter, HelpArticle } from './pages/HelpCenter';
+import { HelpCenter, HelpArticle, HelpDomain } from './pages/HelpCenter';
 import { finishOpenRouterCallback } from './lib/openrouterAuth';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -108,13 +108,27 @@ function LlmCallback() {
   return <div className="login-wrap muted">Connecting to OpenRouter…</div>;
 }
 
+/** Hosts that serve the console — everything else is treated as a CNAME'd
+ * help domain (the workspace claims it via Settings → Workspace). */
+const APP_HOSTS = new Set([
+  'app.janis.ai',
+  'janis.ai',
+  'www.janis.ai',
+  'janis-api-696050206949.us-east1.run.app',
+  'localhost',
+  '127.0.0.1',
+]);
+const isAppHost = () =>
+  APP_HOSTS.has(window.location.hostname) ||
+  /\.(devin\.app|loca\.lt|ngrok[^.]*\.(io|dev|com))$/.test(window.location.hostname);
+
 export default function App() {
   return (
     <BrowserRouter>
       <PushDeepLink />
       <ErrorBoundary>
       <Routes>
-        <Route path="/" element={<Landing />} />
+        <Route path="/" element={isAppHost() ? <Landing /> : <HelpDomain />} />
         <Route path="/login" element={<Login />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/terms" element={<Terms />} />

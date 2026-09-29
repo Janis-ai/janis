@@ -173,7 +173,7 @@ export function createApp(db: Db) {
     : null;
   if (indexHtml) {
     app.use('/*', serveStatic({ root: webDist }));
-    app.get('*', (c) => {
+    app.get('*', async (c) => {
       // Unknown API-ish paths should 404, not render the SPA
       // (/channels and /billing are web pages; only /channels/meta/* and
       // /billing/stripe-webhook are API routes)
@@ -182,6 +182,54 @@ export function createApp(db: Db) {
           /^\/channels\/meta(\/|$)/.test(c.req.path) ||
           /^\/billing\/stripe-webhook(\/|$)/.test(c.req.path)) {
         return c.notFound();
+      }
+      // Public help-center pages get real <title>/meta for crawlers —
+      // the SPA can't set them until JS runs, and Google barely waits.
+      const helpMatch = c.req.path.match(/^\/help\/([0-9a-f-]{36})(?:\/([a-z0-9-]+))?$/i);
+      if (helpMatch) {
+        const [, agentId, key] = helpMatch;
+        try {
+          const { helpArticles, agents } = await import('./db/schema.js');
+          const { and, eq } = await import('drizzle-orm');
+          const [agent] = await db
+            .select({ name: agents.name })
+            .from(agents)
+            .where(eq(agents.id, agentId))
+            .limit(1);
+          if (agent) {
+            let title = `${agent.name} Help Center`;
+            let desc = `Help articles and answers from ${agent.name}.`;
+            if (key) {
+              const byId = /^[0-9a-f-]{36}$/i.test(key);
+              const [a] = await db
+                .select()
+                .from(helpArticles)
+                .where(
+                  and(
+                    byId ? eq(helpArticles.id, key) : eq(helpArticles.slug, key),
+                    eq(helpArticles.agentId, agentId),
+                    eq(helpArticles.status, 'published'),
+                  ),
+                )
+                .limit(1);
+              if (a) {
+                title = a.seoTitle ?? `${a.title} — ${agent.name}`;
+                desc = a.seoDescription ?? a.body.slice(0, 200).replace(/\s+/g, ' ').trim();
+              }
+            }
+            const esc = (s: string) =>
+              s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+            const head =
+              `<title>${esc(title)}</title>` +
+              `<meta name="description" content="${esc(desc)}">` +
+              `<meta property="og:title" content="${esc(title)}">` +
+              `<meta property="og:description" content="${esc(desc)}">` +
+              `<meta property="og:type" content="article">`;
+            return c.html(indexHtml.replace(/<title>[^<]*<\/title>/, head));
+          }
+        } catch {
+          // fall through to the plain SPA on any lookup error
+        }
       }
       return c.html(indexHtml);
     });
