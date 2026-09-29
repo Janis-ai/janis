@@ -43,11 +43,14 @@ export async function effectivePlanKey(db: Db, workspaceId: string): Promise<str
       plan: workspaces.plan,
       parentWorkspaceId: workspaces.parentWorkspaceId,
       stripeSubscriptionId: workspaces.stripeSubscriptionId,
+      connectSubscriptionId: workspaces.connectSubscriptionId,
     })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
-  if (ws?.parentWorkspaceId && !ws.stripeSubscriptionId) {
+  // A Connect subscription on the parent's account counts as the child's own
+  // plan — the agency is rebilling it, not covering it.
+  if (ws?.parentWorkspaceId && !ws.stripeSubscriptionId && !ws.connectSubscriptionId) {
     const [parent] = await db
       .select({ plan: workspaces.plan })
       .from(workspaces)
@@ -134,15 +137,17 @@ export async function messageCap(db: Db, workspaceId: string): Promise<CapStatus
       stripeCustomerId: workspaces.stripeCustomerId,
       parentWorkspaceId: workspaces.parentWorkspaceId,
       stripeSubscriptionId: workspaces.stripeSubscriptionId,
+      connectSubscriptionId: workspaces.connectSubscriptionId,
     })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
   // Agency child: caps/features ride on the parent's plan — flipping the
   // parent flips every child in the same breath. The child's own message
-  // count still drives `used`; only the rate card is inherited.
+  // count still drives `used`; only the rate card is inherited. A Connect
+  // subscription (billed on the agency's account) is the child's own plan.
   let planKey = ws?.plan;
-  if (ws?.parentWorkspaceId && !ws?.stripeSubscriptionId) {
+  if (ws?.parentWorkspaceId && !ws?.stripeSubscriptionId && !ws?.connectSubscriptionId) {
     const [parent] = await db
       .select({ plan: workspaces.plan })
       .from(workspaces)

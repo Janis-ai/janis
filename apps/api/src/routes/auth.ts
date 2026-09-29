@@ -430,13 +430,43 @@ export function authRoutes(db: Db) {
   // a memberless user starting fresh.
   app.post(
     '/workspaces',
-    zValidator('json', z.object({ name: z.string().min(1).max(120) })),
+    zValidator(
+      'json',
+      z.object({
+        name: z.string().min(1).max(120),
+        // Agency "add a client workspace" — parents the new workspace to the
+        // caller's current one so plan inheritance and Connect rebilling
+        // kick in. Clients can't nest under clients.
+        client: z.boolean().optional(),
+      }),
+    ),
     async (c) => {
       const row = await sessionUser(c);
       if (!row) return c.json({ error: 'unauthenticated' }, 401);
+      const body = c.req.valid('json');
+      let parentId: string | undefined;
+      let parentContact: string | undefined;
+      if (body.client && row.session.workspaceId) {
+        const [parent] = await db
+          .select()
+          .from(workspaces)
+          .where(eq(workspaces.id, row.session.workspaceId))
+          .limit(1);
+        if (parent?.parentWorkspaceId) {
+          return c.json({ error: 'client workspaces cannot have clients of their own' }, 400);
+        }
+        parentId = parent?.id;
+        parentContact = parent?.name;
+      }
       const [ws] = await db
         .insert(workspaces)
-        .values({ name: c.req.valid('json').name, plan: env.defaultPlan, ownerUserId: row.user.id })
+        .values({
+          name: body.name,
+          plan: env.defaultPlan,
+          ownerUserId: row.user.id,
+          parentWorkspaceId: parentId,
+          parentContact,
+        })
         .returning();
       await db.insert(memberships).values({
         userId: row.user.id,

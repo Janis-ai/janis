@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /conversations
+Disallow: /agents
+Disallow: /billing
+Disallow: /reports
+Disallow: /settings
+Disallow: /login
+
+Sitemap: https://app.janis.ai/sitemap.xml

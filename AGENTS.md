@@ -39,6 +39,24 @@ npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod)
 - apps/api/.env runs LIVE mode (sk_live + live price ids). Test-mode equivalents are kept alongside as `*_TEST` vars — swap them back for local billing work.
 - Live webhook endpoint we_1UHwWgLuGzRk7fCQQpisSIEG → https://app.janis.ai/billing/stripe-webhook (created via API 2026-09; the old janis.ai endpoint was disabled and deleted). Test mode has its own endpoint at janis.ai. Local dev uses `stripe listen --api-key $STRIPE_SECRET_KEY_TEST --forward-to localhost:8787/billing/stripe-webhook` (the whsec it prints goes in STRIPE_WEBHOOK_SECRET_TEST).
 - Customer Portal configured on both modes: card updates, invoice history, immediate cancel.
+- Agency rebilling (Stripe Connect): an agency workspace connects an Express account
+  (POST /api/billing/connect → account link; account.updated webhook flips
+  connect_charges_enabled), sets per-tier retail prices via PUT
+  /api/billing/agency-pricing (floored at wholesale — retail < wholesale baseCents
+  rejected; products/prices are created ON the connected account), and client
+  workspaces (workspaces.parent_workspace_id set — /auth/workspaces client:true)
+  check out as DIRECT CHARGES on the agency account with
+  application_fee_percent = wholesale/retail (Janis's cut of each invoice).
+  Child rows store connect_customer_id/connect_subscription_id; plan changes swap
+  the price on the existing sub in place; customer.subscription.deleted scoped to
+  a connect account frees the child (falls back to inheriting the parent's plan).
+  Effective-plan rules: a child WITH connect_subscription_id has its own
+  subscription (doesn't count toward parent agent limits); without it the child
+  inherits the parent plan. Metered usage (messages/LLM/voice) reports to the
+  AGENCY's platform customer via billingCustomerFor() — the agency pays Janis
+  wholesale usage while invoicing their client retail. /billing/downgrade on a
+  connect-billed child cancels on the agency's account. Tests:
+  routes/billing.test.ts stubs Stripe (setStripeClient) end-to-end.
 - Meters (both modes): janis.messages (1 per stored message) and janis.llm_micros (billed micro-USD incl. margin per LLM call). BYOK agents (config.llm.api_key or base_url set) record usage events at costMicros=0 — never metered. Metered prices live on dedicated products so checkout labels them separately from the plan: "Janis message usage" (prod_VKx9gGkJ… live / prod_VKxACS8m… test) — starter/pro/scale = live price_1UKHFn…uHJFhBB/…IT3YhTbM/…Sy5S2Qs, test price_1UKHFx…JcrUAy0/…LeDI4cMA/…Wibyvg6; "Janis AI usage" (prod_VKx2fsf… / prod_VKx2MIv…) — llm live price_1UKH8c…kxAw9lo, test price_1UKH8l…1V1LJs5. Existing subs keep the old-generation price ids on their items — builtinTools change_plan matches the overage item by meter id, not price id, so plan swaps stay correct across generations. Checkout adds the plan's metered price + LLM price as extra line items.
 - .env edits do NOT trigger tsx watch reloads — restart the API after changing env.
 

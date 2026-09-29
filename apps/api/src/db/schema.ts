@@ -25,6 +25,18 @@ export const workspaces = pgTable('workspaces', {
   plan: text('plan').notNull().default('free'), // key into PLANS rate map
   stripeCustomerId: text('stripe_customer_id'),
   stripeSubscriptionId: text('stripe_subscription_id'),
+  // Agency rebilling (Stripe Connect, GHL-style): the agency's Express
+  // account. Client workspaces check out on it as direct charges at
+  // agency-set retail prices; application_fee_percent keeps our wholesale.
+  stripeConnectId: text('stripe_connect_id'),
+  connectChargesEnabled: boolean('connect_charges_enabled').notNull().default(false),
+  // {[planKey]: {price_id, retail_cents}} — the agency's own price objects
+  // on their connected account; retail floor = our plan's baseCents.
+  agencyPricing: jsonb('agency_pricing').notNull().default({}),
+  // On CLIENT workspaces: the customer/subscription created on the parent's
+  // connected account by a direct-charge checkout.
+  connectCustomerId: text('connect_customer_id'),
+  connectSubscriptionId: text('connect_subscription_id'),
   // Agency sub-account: inherits plan/caps from the parent workspace and may
   // not add agents until it buys a plan of its own. parent_contact is the
   // human-facing "who to ask for more" string shown in the UI.

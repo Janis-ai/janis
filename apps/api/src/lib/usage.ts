@@ -2,7 +2,12 @@ import { and, eq, gt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { usageEvents, workspaces } from '../db/schema.js';
 import { billingConfig, currentPeriod, llmCostMicros, pricedRateFor } from './billing.js';
-import { METER_LLM_MICROS, METER_VOICE_MICROS, reportMeter } from './stripe.js';
+import {
+  METER_LLM_MICROS,
+  METER_VOICE_MICROS,
+  billingCustomerFor,
+  reportMeter,
+} from './stripe.js';
 import { env } from '../env.js';
 
 /** Meter one LLM call. Never throws — billing must not break the agent loop. */
@@ -59,12 +64,7 @@ export async function recordLlmUsage(
     // event via meter event adjustments instead of a credit note.
     const billed = Math.ceil(costMicros * (1 + billingConfig.margin));
     if (billed > 0) {
-      const [ws] = await db
-        .select({ stripeCustomerId: workspaces.stripeCustomerId })
-        .from(workspaces)
-        .where(eq(workspaces.id, args.workspaceId))
-        .limit(1);
-      reportMeter(ws?.stripeCustomerId, METER_LLM_MICROS, billed, row?.id);
+      reportMeter(await billingCustomerFor(db, args.workspaceId), METER_LLM_MICROS, billed, row?.id);
     }
   } catch {
     // metering failure is never worth breaking a conversation
@@ -136,12 +136,7 @@ export async function recordVoiceUsage(
       .returning({ id: usageEvents.id });
     const billed = Math.ceil(costMicros * (1 + billingConfig.margin));
     if (billed > 0) {
-      const [ws] = await db
-        .select({ stripeCustomerId: workspaces.stripeCustomerId })
-        .from(workspaces)
-        .where(eq(workspaces.id, args.workspaceId))
-        .limit(1);
-      reportMeter(ws?.stripeCustomerId, METER_VOICE_MICROS, billed, row?.id);
+      reportMeter(await billingCustomerFor(db, args.workspaceId), METER_VOICE_MICROS, billed, row?.id);
     }
   } catch {
     // metering failure is never worth breaking a call

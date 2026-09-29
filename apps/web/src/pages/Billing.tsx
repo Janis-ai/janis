@@ -280,8 +280,191 @@ export default function Billing() {
             run on your provider account — tokens still appear here for visibility, billed at $0.
             Janis never marks up your token spend.
           </div>
+
+          {isAdmin && !data.plan.covered_by && <AgencyBilling />}
         </>
       )}
     </>
+  );
+}
+
+interface ConnectStatus {
+  connected: boolean;
+  charges_enabled: boolean;
+  pricing: Record<string, { retail_cents: number }>;
+  wholesale_cents: Record<string, number>;
+  clients: { id: string; name: string; plan: string }[];
+}
+
+/** Agency rebilling — connect a Stripe Express account, set retail prices,
+ *  and client workspaces subscribe on the agency's account (direct charge,
+ *  agency keeps the margin above wholesale). */
+function AgencyBilling() {
+  const qc = useQueryClient();
+  const [msg, setMsg] = useState('');
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [clientName, setClientName] = useState('');
+  const { data } = useQuery({
+    queryKey: ['connect'],
+    queryFn: () => api<ConnectStatus>('/api/billing/connect'),
+    refetchInterval: (q) =>
+      // Returning from onboarding — poll until Stripe flips charges_enabled
+      new URLSearchParams(window.location.search).has('connect') &&
+      !q.state.data?.charges_enabled
+        ? 3000
+        : false,
+  });
+
+  const connect = async () => {
+    setMsg('');
+    try {
+      const r = await api<{ url: string }>('/api/billing/connect', { method: 'POST' });
+      window.location.href = r.url;
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'connect failed');
+    }
+  };
+
+  const savePricing = async () => {
+    setMsg('');
+    const retail: Record<string, number> = {};
+    for (const [k, v] of Object.entries(draft)) {
+      const cents = Math.round(parseFloat(v) * 100);
+      if (v && Number.isFinite(cents)) retail[k] = cents;
+    }
+    if (!Object.keys(retail).length) {
+      setMsg('Enter at least one retail price.');
+      return;
+    }
+    try {
+      await api('/api/billing/agency-pricing', {
+        method: 'PUT',
+        body: JSON.stringify({ retail }),
+      });
+      setDraft({});
+      setMsg('Retail prices saved.');
+      void qc.invalidateQueries({ queryKey: ['connect'] });
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'save failed');
+    }
+  };
+
+  const addClient = async () => {
+    setMsg('');
+    if (!clientName.trim()) return;
+    try {
+      await api('/auth/workspaces', {
+        method: 'POST',
+        body: JSON.stringify({ name: clientName.trim(), client: true }),
+      });
+      // The new client workspace becomes the active one — head to it so the
+      // operator can wire channels/agents for the client.
+      window.location.href = '/conversations';
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'failed');
+    }
+  };
+
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>Agency — bill your clients</h3>
+      {!data?.connected ? (
+        <>
+          <p className="muted" style={{ fontSize: 13 }}>
+            Connect a Stripe account and resell Janis under your own pricing. Client workspaces
+            subscribe on <em>your</em> Stripe account — your brand, your prices, your payout.
+            Janis keeps wholesale; you keep the margin. Usage (messages, LLM, voice) bills to
+            your Janis subscription at cost+margin for you to pass through.
+          </p>
+          <button className="btn primary" onClick={() => void connect()}>
+            Connect Stripe to start
+          </button>
+        </>
+      ) : (
+        <>
+          <div className="row" style={{ alignItems: 'baseline' }}>
+            <span className={`badge ${data.charges_enabled ? 'active' : 'warn'}`}>
+              {data.charges_enabled ? 'Stripe connected' : 'Onboarding incomplete'}
+            </span>
+            {!data.charges_enabled && (
+              <button className="btn" onClick={() => void connect()}>
+                Resume onboarding
+              </button>
+            )}
+          </div>
+
+          {data.charges_enabled && (
+            <>
+              <div style={{ marginTop: 14 }}>
+                <strong style={{ fontSize: 13 }}>Your retail prices</strong>
+                <div className="muted" style={{ fontSize: 12, margin: '4px 0 10px' }}>
+                  What clients pay you per month. Wholesale floor is what Janis keeps — set at or
+                  above it and the rest is your margin.
+                </div>
+                {Object.entries(data.wholesale_cents)
+                  .filter(([k]) => k !== 'free')
+                  .map(([key, wholesale]) => {
+                    const current = data.pricing[key]?.retail_cents;
+                    const entered = draft[key];
+                    const cents = entered ? Math.round(parseFloat(entered) * 100) : current;
+                    const margin = cents && cents > wholesale ? cents - wholesale : 0;
+                    return (
+                      <div key={key} className="row" style={{ marginBottom: 8, alignItems: 'center' }}>
+                        <span style={{ width: 70, textTransform: 'capitalize' }}>{key}</span>
+                        <input
+                          style={{ width: 90 }}
+                          type="number"
+                          min={wholesale / 100}
+                          step="1"
+                          placeholder={`${(wholesale / 100).toFixed(0)}`}
+                          value={entered ?? (current ? (current / 100).toFixed(0) : '')}
+                          onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+                        />
+                        <span className="muted" style={{ fontSize: 12 }}>
+                          /mo · wholesale {usd(wholesale)}
+                          {margin > 0 && ` · your margin ${usd(margin)}`}
+                        </span>
+                      </div>
+                    );
+                  })}
+                <button className="btn" onClick={() => void savePricing()}>
+                  Save retail prices
+                </button>
+              </div>
+
+              <div style={{ marginTop: 18 }}>
+                <strong style={{ fontSize: 13 }}>Client workspaces</strong>
+                {data.clients.length === 0 && (
+                  <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+                    None yet — a client workspace inherits your plan until it subscribes at your
+                    retail price.
+                  </div>
+                )}
+                {data.clients.map((cl) => (
+                  <div key={cl.id} className="row" style={{ marginTop: 6 }}>
+                    <span className="grow">{cl.name}</span>
+                    <span className="muted" style={{ fontSize: 12 }}>
+                      {cl.plan === 'free' ? 'on your plan' : `${cl.plan} (rebilled)`}
+                    </span>
+                  </div>
+                ))}
+                <div className="row" style={{ marginTop: 10 }}>
+                  <input
+                    className="grow"
+                    placeholder="Client workspace name"
+                    value={clientName}
+                    onChange={(e) => setClientName(e.target.value)}
+                  />
+                  <button className="btn" onClick={() => void addClient()}>
+                    Add client
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
+      {msg && <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>{msg}</div>}
+    </div>
   );
 }

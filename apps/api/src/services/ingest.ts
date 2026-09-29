@@ -20,7 +20,7 @@ import { mirrorToSlack, postSlackAlert, setSlackThreadStatus } from '../lib/slac
 import { agentEligibleMembers } from '../lib/members.js';
 import { deliverToChannel, type AttachmentRef } from '../lib/channels.js';
 import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
-import { METER_MESSAGES, reportMeter } from '../lib/stripe.js';
+import { METER_MESSAGES, billingCustomerFor, reportMeter } from '../lib/stripe.js';
 import { messageCap } from '../lib/plans.js';
 import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
 
@@ -44,13 +44,9 @@ export async function processEvents(
   const results: IngestResult[] = [];
   await db.update(agents).set({ lastSeenAt: new Date() }).where(eq(agents.id, agent.id));
 
-  // Stripe customer for metered billing — resolved once per batch
-  const [ws] = await db
-    .select({ stripeCustomerId: workspaces.stripeCustomerId })
-    .from(workspaces)
-    .where(eq(workspaces.id, agent.workspaceId))
-    .limit(1);
-  const stripeCustomerId = ws?.stripeCustomerId;
+  // Stripe customer for metered billing — agency children meter to the
+  // parent's account (wholesale); resolved once per batch
+  const stripeCustomerId = await billingCustomerFor(db, agent.workspaceId);
   // Hard-capped plan (free tier over its included volume): customer messages
   // are dropped before storage — nothing is transcribed, metered, or mirrored.
   const cap = await messageCap(db, agent.workspaceId);

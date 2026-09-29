@@ -52,6 +52,32 @@ export function planForPrice(priceId: string): string | null {
   return null;
 }
 
+/** Which platform customer a workspace's metered usage bills to. Agency
+ *  children rebill their subscriptions on the parent's Connect account, but
+ *  usage stays wholesale on Janis — the parent's customer id, never the
+ *  child's (children have no platform customer of their own). */
+export async function billingCustomerFor(
+  db: Db,
+  workspaceId: string,
+): Promise<string | null> {
+  const [ws] = await db
+    .select({
+      stripeCustomerId: workspaces.stripeCustomerId,
+      parentWorkspaceId: workspaces.parentWorkspaceId,
+    })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  if (ws?.stripeCustomerId) return ws.stripeCustomerId;
+  if (!ws?.parentWorkspaceId) return null;
+  const [parent] = await db
+    .select({ stripeCustomerId: workspaces.stripeCustomerId })
+    .from(workspaces)
+    .where(eq(workspaces.id, ws.parentWorkspaceId))
+    .limit(1);
+  return parent?.stripeCustomerId ?? null;
+}
+
 export const METER_MESSAGES = 'janis.messages';
 export const METER_LLM_MICROS = 'janis.llm_micros';
 export const METER_VOICE_MICROS = 'janis.voice_micros';

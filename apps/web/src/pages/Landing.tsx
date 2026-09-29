@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useMe } from '../api/hooks';
+import { api } from '../api/client';
 import { SiteFooter } from '../components/bits';
 
 // Inline stroke glyphs — the old PNG set only had three distinct images,
@@ -48,6 +50,10 @@ const GLYPHS = {
       <path d="M20 19a3 3 0 01-3 2h-3" />
     </>
   ),
+  phone: (
+    <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.13.96.36 1.9.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0122 16.92z" />
+  ),
+  code: <path d="M16 18l6-6-6-6M8 6l-6 6 6 6" />,
 } as const;
 
 function Icon({ name }: { name: keyof typeof GLYPHS }) {
@@ -71,7 +77,12 @@ const FEATURES = [
   {
     icon: 'inbox',
     title: 'Every channel, one inbox',
-    body: 'Messenger, Instagram, WhatsApp, email, and web chat — unified, searchable, triageable.',
+    body: 'Messenger, Instagram, WhatsApp, SMS, email, and web chat — unified, searchable, triageable.',
+  },
+  {
+    icon: 'phone',
+    title: 'Voice calls, answered',
+    body: 'A real phone number answers callers, transcribes the conversation, and speaks the agent\u2019s reply — or bridges straight to a human.',
   },
   {
     icon: 'plug',
@@ -98,6 +109,11 @@ const FEATURES = [
     title: 'A handoff that feels human',
     body: 'Typing indicators, receipts, operator personas — customers see a person, not a broken bot.',
   },
+  {
+    icon: 'code',
+    title: 'Five lines to instrument',
+    body: 'The janis npm package adds approvals, takeover, and transcripts to an agent you already built — LangGraph, custom code, anything.',
+  },
 ] as const;
 
 const DIFFERENT: [string, string, string][] = [
@@ -108,13 +124,55 @@ const DIFFERENT: [string, string, string][] = [
   ['Pricing', 'Per seat, per teammate', 'Per message + metered tokens'],
 ];
 
-// Mirrors apps/api/src/lib/plans.ts — keep in sync until plans are exposed via a public endpoint.
-const PRICING = [
-  { name: 'Free', price: '$0', msgs: '250 messages/mo', note: 'Hard cap at the limit — never a surprise bill', cta: 'Start free' },
-  { name: 'Starter', price: '$29', msgs: '2,000 messages/mo', note: 'then $8 per 1,000' },
-  { name: 'Pro', price: '$99', msgs: '20,000 messages/mo', note: 'then $5 per 1,000', featured: true },
-  { name: 'Scale', price: '$299', msgs: '100,000 messages/mo', note: 'then $3 per 1,000' },
+/** GA4 funnel events — no-op when the tag isn't injected (dev, self-host). */
+function track(event: string, params?: Record<string, string>) {
+  (window as { gtag?: (...a: unknown[]) => void }).gtag?.('event', event, params);
+}
+
+type PlanCard = {
+  key: string;
+  name: string;
+  base_cents: number;
+  included_messages: number;
+  overage_per_1k_cents: number | null;
+};
+
+// Fallback if /api/plans is unreachable — the API response is preferred.
+const FALLBACK_PLANS: PlanCard[] = [
+  { key: 'free', name: 'Free', base_cents: 0, included_messages: 250, overage_per_1k_cents: null },
+  { key: 'starter', name: 'Starter', base_cents: 2900, included_messages: 2_000, overage_per_1k_cents: 800 },
+  { key: 'pro', name: 'Pro', base_cents: 9900, included_messages: 20_000, overage_per_1k_cents: 500 },
+  { key: 'scale', name: 'Scale', base_cents: 29900, included_messages: 100_000, overage_per_1k_cents: 300 },
 ];
+
+const PLAN_NOTES: Record<string, string> = {
+  free: 'Hard cap at the limit — never a surprise bill',
+};
+
+const FAQ = [
+  [
+    'Do I need to rebuild my bot on Janis?',
+    'No. Keep the agent you already built — LangGraph, custom code, anything — and connect it with a webhook or the janis npm package. Don\u2019t have one? Janis hosts agents trained on your docs and site.',
+  ],
+  [
+    'Which channels does it cover?',
+    'Messenger, Instagram, WhatsApp, SMS, email, web chat, and voice — every conversation in one inbox, with the same takeover flow on all of them.',
+  ],
+  [
+    'How do approvals work?',
+    'Mark any agent action approval-required — refunds, plan changes, anything sensitive. The agent pauses until a human approves it in the console or straight from Slack, then picks up where it left off.',
+  ],
+  [
+    'What counts as a message?',
+    'Every message stored in a conversation, inbound or out. Free plans hard-cap at 250/month — never a surprise bill. Paid plans bill overage per 1,000 messages at the rate on the pricing card.',
+  ],
+  [
+    'Who can see our customer data?',
+    'Your workspace only. Operator replies show a real name and photo only when you enable it. Bring your own LLM key and model traffic never touches our provider account.',
+  ],
+] as const;
+
+const INTEGRATIONS = ['Shopify', 'HubSpot', 'Zendesk', 'Stripe', 'Cal.com', 'Zapier', 'Twilio', 'Google'];
 
 const STEPS = [
   ['Connect', 'Link your channels and your agent — hosted on Janis or your own webhook.'],
@@ -196,7 +254,15 @@ function DemoStrip() {
     const el = ref.current;
     if (!el || visible) return;
     const io = new IntersectionObserver(
-      ([e]) => e.isIntersecting && setVisible(true),
+      ([e]) => {
+        if (!e.isIntersecting) return;
+        setVisible(true);
+        track('demo_shown');
+        // Reduced motion: skip the timed playback, land on the decision card.
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          setStep(CARD_STEP);
+        }
+      },
       { threshold: 0.25 },
     );
     io.observe(el);
@@ -254,11 +320,20 @@ function DemoStrip() {
               <div className="demo-card-btns">
                 <button
                   className="demo-btn primary"
-                  onClick={() => setDecision({ ok: true, you: true })}
+                  onClick={() => {
+                    track('demo_decision', { decision: 'approve', actor: 'visitor' });
+                    setDecision({ ok: true, you: true });
+                  }}
                 >
                   Approve &amp; run
                 </button>
-                <button className="demo-btn" onClick={() => setDecision({ ok: false, you: true })}>
+                <button
+                  className="demo-btn"
+                  onClick={() => {
+                    track('demo_decision', { decision: 'deny', actor: 'visitor' });
+                    setDecision({ ok: false, you: true });
+                  }}
+                >
                   Deny
                 </button>
               </div>
@@ -266,7 +341,10 @@ function DemoStrip() {
                 Try it yourself — you’re the human in the loop.{' '}
                 <button
                   className="demo-note-cta"
-                  onClick={() => setDecision({ ok: true, you: false })}
+                  onClick={() => {
+                    track('demo_decision', { decision: 'approve', actor: 'auto' });
+                    setDecision({ ok: true, you: false });
+                  }}
                 >
                   or watch automatically
                 </button>
@@ -317,7 +395,15 @@ function DemoStrip() {
             <button className="btn" onClick={() => { setStep(0); setDecision(null); }}>
               ↻ Replay demo
             </button>
-            <button className="btn primary" onClick={openWidget}>Chat with our AI agent →</button>
+            <button
+              className="btn primary"
+              onClick={() => {
+                track('widget_open', { location: 'demo' });
+                openWidget();
+              }}
+            >
+              Chat with our AI agent →
+            </button>
           </div>
         </div>
       )}
@@ -328,7 +414,14 @@ function DemoStrip() {
 /** Public landing page — also satisfies the OAuth consent screen home URL. */
 export default function Landing() {
   const { data } = useMe();
+  const plansQuery = useQuery({
+    queryKey: ['public-plans'],
+    queryFn: () => api<{ plans: PlanCard[] }>('/api/plans'),
+    staleTime: 5 * 60_000,
+  });
+  const plans = plansQuery.data?.plans?.length ? plansQuery.data.plans : FALLBACK_PLANS;
   const cta = data ? { to: '/conversations', label: 'Open console' } : { to: '/login', label: 'Get started' };
+  const ctaClick = (location: string) => () => track('cta_click', { location });
   // Dogfood the web-chat widget on the marketing site. Same-origin so the
   // visitor's Janis session (when logged in) identifies them automatically;
   // on top of that we fetch a signed identity and hand it to the widget.
@@ -374,9 +467,22 @@ export default function Landing() {
           help or approval, your team steps in. Then your agent picks up right
           where it left off.
         </p>
+        <p className="landing-sub">
+          Don&rsquo;t have an agent yet? Janis hosts one — trained on your docs, live in minutes.
+        </p>
         <div className="row" style={{ justifyContent: 'center', gap: 12 }}>
-          <Link className="btn primary lg" to={cta.to}>{data ? 'Open console' : 'Get started free'}</Link>
-          <button className="btn lg" onClick={openWidget}>Chat with our AI agent</button>
+          <Link className="btn primary lg" to={cta.to} onClick={ctaClick('hero')}>
+            {data ? 'Open console' : 'Get started free'}
+          </Link>
+          <button
+            className="btn lg"
+            onClick={() => {
+              track('widget_open', { location: 'hero' });
+              openWidget();
+            }}
+          >
+            Chat with our AI agent
+          </button>
         </div>
         <p className="landing-fine">Free plan available · No credit card required</p>
       </section>
@@ -445,17 +551,26 @@ export default function Landing() {
           our platform key — or bring your own key and the LLM line drops to $0.
         </p>
         <div className="landing-grid four">
-          {PRICING.map((p) => (
-            <div key={p.name} className={`card landing-card${p.featured ? ' featured' : ''}`}>
+          {plans.map((p) => (
+            <div key={p.key} className={`card landing-card${p.key === 'pro' ? ' featured' : ''}`}>
               <strong>{p.name}</strong>
               <div className="landing-price">
-                {p.price}
+                {p.base_cents === 0 ? '$0' : `$${p.base_cents / 100}`}
                 <span className="muted">/mo</span>
               </div>
-              <p className="muted">{p.msgs}</p>
-              <p className="muted landing-price-note">{p.note}</p>
-              <Link className={`btn${p.featured ? ' primary' : ''}`} to={cta.to}>
-                {p.cta ?? cta.label}
+              <p className="muted">{p.included_messages.toLocaleString()} messages/mo</p>
+              <p className="muted landing-price-note">
+                {PLAN_NOTES[p.key] ??
+                  (p.overage_per_1k_cents !== null
+                    ? `then $${(p.overage_per_1k_cents / 100).toFixed(0)} per 1,000`
+                    : '')}
+              </p>
+              <Link
+                className={`btn${p.key === 'pro' ? ' primary' : ''}`}
+                to={cta.to}
+                onClick={ctaClick(`pricing_${p.key}`)}
+              >
+                {p.key === 'free' ? 'Start free' : cta.label}
               </Link>
             </div>
           ))}
@@ -470,10 +585,37 @@ export default function Landing() {
         </p>
       </section>
 
+      <section className="landing-steps">
+        <h2>Plays well with your stack</h2>
+        <p className="landing-sub">
+          Built-in tools for the systems your support team already runs — plus webhooks
+          for everything else.
+        </p>
+        <div className="landing-integrations">
+          {INTEGRATIONS.map((name) => (
+            <span key={name} className="landing-integration">{name}</span>
+          ))}
+        </div>
+      </section>
+
+      <section className="landing-steps">
+        <h2>Questions, answered</h2>
+        <div className="landing-faq">
+          {FAQ.map(([q, a]) => (
+            <details key={q} className="landing-faq-item">
+              <summary>{q}</summary>
+              <p className="muted">{a}</p>
+            </details>
+          ))}
+        </div>
+      </section>
+
       <section className="landing-cta">
         <h2>Give your agent a safety net.</h2>
         <p className="muted">Set up in minutes — connect a channel, and Janis starts watching.</p>
-        <Link className="btn primary lg" to={cta.to}>{cta.label}</Link>
+        <Link className="btn primary lg" to={cta.to} onClick={ctaClick('final')}>
+          {cta.label}
+        </Link>
       </section>
 
       <SiteFooter />

@@ -36,6 +36,7 @@ import { articleRoutes, helpPublicRoutes } from './routes/helpCenter.js';
 import { onboardingRoutes } from './routes/onboarding.js';
 import { toolTemplateRoutes } from './routes/toolTemplates.js';
 import { billingRoutes, stripeWebhookRoutes } from './routes/billing.js';
+import { PLANS } from './lib/plans.js';
 import { workspaceRoutes } from './routes/workspace.js';
 import { viewRoutes } from './routes/views.js';
 import { webchatRoutes } from './routes/webchat.js';
@@ -69,6 +70,22 @@ export function createApp(db: Db) {
   app.use('/chat/*', cors({ origin: '*' }));
 
   app.get('/health', (c) => c.json({ ok: true, service: 'janis-api' }));
+
+  // Public plan catalog — the landing page's pricing cards read this so the
+  // site can never drift from what billing actually charges.
+  app.get('/api/plans', (c) => {
+    return c.json({
+      plans: Object.entries(PLANS)
+        .filter(([, p]) => !p.hidden)
+        .map(([key, p]) => ({
+          key,
+          name: p.name,
+          base_cents: p.baseCents,
+          included_messages: p.includedMessages,
+          overage_per_1k_cents: p.overagePer1kCents,
+        })),
+    });
+  });
 
   // Rate limits on public/abuse-prone surfaces. Generous ceilings on signed
   // webhooks (Meta/Slack/Stripe retry in bursts; signature checks still apply);

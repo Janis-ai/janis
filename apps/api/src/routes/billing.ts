@@ -58,9 +58,11 @@ export function billingRoutes(db: Db) {
     }
 
     // Agency child: report the parent's plan and who to contact for changes.
+    // A Connect-billed child has its own subscription on the parent's Stripe
+    // account — it isn't covered, it's rebilled.
     let coveredBy: { name?: string; contact?: string } | null = null;
     let planKey = ws?.plan;
-    if (ws?.parentWorkspaceId && !ws.stripeSubscriptionId) {
+    if (ws?.parentWorkspaceId && !ws.stripeSubscriptionId && !ws.connectSubscriptionId) {
       const [parent] = await db
         .select({ name: workspaces.name, plan: workspaces.plan })
         .from(workspaces)
@@ -188,13 +190,73 @@ export function billingRoutes(db: Db) {
     const s = stripe();
     if (!s) return c.json({ error: 'billing not configured' }, 400);
     const { plan } = (await c.req.json()) as { plan?: string };
-    const priceId = plan ? env.stripePrices[plan] : '';
-    if (!plan || !PLANS[plan] || !priceId) {
+    if (!plan || !PLANS[plan]) {
       return c.json({ error: 'unknown or unavailable plan' }, 400);
     }
     const workspaceId = c.get('workspaceId');
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
 
+    // Agency rebilling: a client workspace whose parent has a live Connect
+    // account and a retail price for this tier checks out ON THE AGENCY'S
+    // Stripe account (direct charge). application_fee_percent skims our
+    // wholesale cost out of the agency's retail price — the agency keeps
+    // the margin, their brand is on the invoice.
+    if (ws?.parentWorkspaceId) {
+      const [parent] = await db
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, ws.parentWorkspaceId))
+        .limit(1);
+      const pricing = (parent?.agencyPricing ?? {}) as Record<
+        string,
+        { price_id: string; retail_cents: number }
+      >;
+      const entry = plan ? pricing[plan] : undefined;
+      if (parent?.stripeConnectId && parent.connectChargesEnabled && entry) {
+        const wholesale = PLANS[plan].baseCents;
+        const feePct = Math.min(100, Math.round((wholesale / entry.retail_cents) * 10000) / 100);
+        // Existing client subscription → swap the price in place rather than
+        // stacking a second subscription on the client's card.
+        if (ws.connectSubscriptionId) {
+          const sub = await s.subscriptions.retrieve(ws.connectSubscriptionId, undefined, {
+            stripeAccount: parent.stripeConnectId,
+          });
+          const item = sub.items.data[0];
+          await s.subscriptions.update(
+            ws.connectSubscriptionId,
+            {
+              ...(item ? { items: [{ id: item.id, price: entry.price_id }] } : {}),
+              application_fee_percent: feePct,
+              metadata: { workspace_id: workspaceId, plan },
+            },
+            { stripeAccount: parent.stripeConnectId },
+          );
+          await db.update(workspaces).set({ plan }).where(eq(workspaces.id, workspaceId));
+          invalidateCapCache(workspaceId);
+          return c.json({ plan, upgraded: true });
+        }
+        const session = await s.checkout.sessions.create(
+          {
+            mode: 'subscription',
+            line_items: [{ price: entry.price_id, quantity: 1 }],
+            subscription_data: {
+              application_fee_percent: feePct,
+              metadata: { workspace_id: workspaceId, plan },
+            },
+            metadata: { workspace_id: workspaceId, plan, via: 'connect' },
+            success_url: `${env.webOrigin}/billing?upgraded=1`,
+            cancel_url: `${env.webOrigin}/billing`,
+          },
+          { stripeAccount: parent.stripeConnectId },
+        );
+        return c.json({ url: session.url });
+      }
+    }
+
+    const priceId = env.stripePrices[plan];
+    if (!priceId) {
+      return c.json({ error: 'unknown or unavailable plan' }, 400);
+    }
     const customerId = await ensureStripeCustomer(s, db, workspaceId, ws, c.get('user').email);
 
     // metered items ride on the same subscription: graduated message overage
@@ -237,9 +299,31 @@ export function billingRoutes(db: Db) {
         }
       }
     }
+    if (ws.connectSubscriptionId && ws.parentWorkspaceId) {
+      // Agency-billed: cancel on the parent's connected account; the
+      // subscription.deleted webhook flips the plan when it lapses.
+      const s = stripe();
+      const [parent] = await db
+        .select({ stripeConnectId: workspaces.stripeConnectId })
+        .from(workspaces)
+        .where(eq(workspaces.id, ws.parentWorkspaceId))
+        .limit(1);
+      if (s && parent?.stripeConnectId) {
+        try {
+          await s.subscriptions.update(
+            ws.connectSubscriptionId,
+            { cancel_at_period_end: true },
+            { stripeAccount: parent.stripeConnectId },
+          );
+          return c.json({ plan: ws.plan, at_period_end: true });
+        } catch {
+          // already gone on Stripe's side — flip locally
+        }
+      }
+    }
     await db
       .update(workspaces)
-      .set({ plan: 'free', stripeSubscriptionId: null })
+      .set({ plan: 'free', stripeSubscriptionId: null, connectSubscriptionId: null })
       .where(eq(workspaces.id, workspaceId));
     invalidateCapCache(workspaceId);
     return c.json({ plan: 'free', at_period_end: false });
@@ -257,6 +341,147 @@ export function billingRoutes(db: Db) {
       return_url: `${env.webOrigin}/billing`,
     });
     return c.json({ url: session.url });
+  });
+
+  // ---- Agency rebilling (Stripe Connect, GHL-style direct charges) ----
+  // Client workspaces subscribe on the AGENCY's connected account at
+  // agency-set retail prices; application_fee_percent keeps our wholesale
+  // cut. Usage meters stay on the agency's Janis subscription (wholesale
+  // cost+margin) — the agency rebills the client however they like.
+
+  interface AgencyPricing {
+    [planKey: string]: { price_id: string; retail_cents: number };
+  }
+
+  // GET /api/billing/connect — agency-side status: account, charges flag,
+  // configured retail prices, and the client workspaces it parents.
+  app.get('/connect', adminOnly, async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const [ws] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    if (!ws) return c.json({ error: 'not found' }, 404);
+    const children = await db
+      .select({ id: workspaces.id, name: workspaces.name, plan: workspaces.plan })
+      .from(workspaces)
+      .where(eq(workspaces.parentWorkspaceId, workspaceId));
+    const pricing = (ws.agencyPricing ?? {}) as AgencyPricing;
+    return c.json({
+      connected: Boolean(ws.stripeConnectId),
+      charges_enabled: ws.connectChargesEnabled,
+      pricing: Object.fromEntries(
+        Object.entries(pricing).map(([k, v]) => [k, { retail_cents: v.retail_cents }]),
+      ),
+      wholesale_cents: Object.fromEntries(
+        Object.entries(PLANS)
+          .filter(([, p]) => !p.hidden)
+          .map(([k, p]) => [k, p.baseCents]),
+      ),
+      clients: children,
+    });
+  });
+
+  // POST /api/billing/connect → Stripe Express onboarding link. Idempotent:
+  // an existing account re-links into onboarding to finish/repair it.
+  app.post('/connect', adminOnly, async (c) => {
+    const s = stripe();
+    if (!s) return c.json({ error: 'billing not configured' }, 400);
+    const workspaceId = c.get('workspaceId');
+    let [ws] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    if (!ws) return c.json({ error: 'not found' }, 404);
+
+    let acctId = ws.stripeConnectId;
+    if (!acctId) {
+      const acct = await s.accounts.create({
+        type: 'express',
+        email: c.get('user').email,
+        capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
+        business_type: 'company',
+        metadata: { workspace_id: workspaceId },
+      });
+      acctId = acct.id;
+      await db
+        .update(workspaces)
+        .set({ stripeConnectId: acctId, connectChargesEnabled: acct.charges_enabled ?? false })
+        .where(eq(workspaces.id, workspaceId));
+    } else {
+      // Re-sync the flag — webhook may not have arrived yet
+      const acct = await s.accounts.retrieve(acctId).catch(() => null);
+      if (acct) {
+        await db
+          .update(workspaces)
+          .set({ connectChargesEnabled: acct.charges_enabled ?? false })
+          .where(eq(workspaces.id, workspaceId));
+      }
+    }
+    const link = await s.accountLinks.create({
+      account: acctId,
+      refresh_url: `${env.webOrigin}/billing?connect=refresh`,
+      return_url: `${env.webOrigin}/billing?connect=done`,
+      type: 'account_onboarding',
+    });
+    return c.json({ url: link.url });
+  });
+
+  // PUT /api/billing/agency-pricing {retail: {planKey: cents}} — the agency's
+  // sell price per tier. Floored at our wholesale (plan baseCents); each tier
+  // creates a Price on the CONNECTED account so checkouts are direct charges.
+  app.put('/agency-pricing', adminOnly, async (c) => {
+    const s = stripe();
+    if (!s) return c.json({ error: 'billing not configured' }, 400);
+    const workspaceId = c.get('workspaceId');
+    const [ws] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    if (!ws) return c.json({ error: 'not found' }, 404);
+    if (!ws.stripeConnectId) {
+      return c.json({ error: 'connect a Stripe account first' }, 400);
+    }
+    const { retail } = (await c.req.json()) as { retail?: Record<string, number> };
+    if (!retail || typeof retail !== 'object') {
+      return c.json({ error: 'retail: {planKey: cents} required' }, 400);
+    }
+    const pricing = { ...((ws.agencyPricing ?? {}) as AgencyPricing) };
+    const out: AgencyPricing = {};
+    for (const [key, cents] of Object.entries(retail)) {
+      const plan = PLANS[key];
+      if (!plan || plan.hidden) continue;
+      const retailCents = Math.round(Number(cents));
+      if (!Number.isFinite(retailCents) || retailCents < plan.baseCents) {
+        return c.json(
+          { error: `${key}: retail must be at least $${(plan.baseCents / 100).toFixed(0)}/mo (your wholesale cost)` },
+          400,
+        );
+      }
+      const product = await s.products.create(
+        { name: `${plan.name} plan`, metadata: { janis_plan: key, workspace_id: workspaceId } },
+        { stripeAccount: ws.stripeConnectId },
+      );
+      const price = await s.prices.create(
+        { product: product.id, currency: 'usd', unit_amount: retailCents, recurring: { interval: 'month' } },
+        { stripeAccount: ws.stripeConnectId },
+      );
+      pricing[key] = { price_id: price.id, retail_cents: retailCents };
+      out[key] = { price_id: price.id, retail_cents: retailCents };
+    }
+    if (!Object.keys(out).length) {
+      return c.json({ error: 'no valid plans in retail map' }, 400);
+    }
+    await db
+      .update(workspaces)
+      .set({ agencyPricing: pricing })
+      .where(eq(workspaces.id, workspaceId));
+    return c.json({ pricing: Object.fromEntries(
+      Object.entries(pricing).map(([k, v]) => [k, { retail_cents: v.retail_cents }]),
+    ) });
   });
 
   return app;
@@ -284,25 +509,86 @@ export function stripeWebhookRoutes(db: Db) {
       return c.json({ error: 'bad signature' }, 400);
     }
 
+    // Connected-account events arrive on the same endpoint with `account`
+    // set (the platform webhook endpoint needs Connect events enabled —
+    // a second endpoint with connect:true pointing at this URL).
+    const connectAccount = (event as { account?: string }).account;
+
+    if (event.type === 'account.updated') {
+      const acct = event.data.object as { id: string; charges_enabled?: boolean };
+      await db
+        .update(workspaces)
+        .set({ connectChargesEnabled: acct.charges_enabled ?? false })
+        .where(eq(workspaces.stripeConnectId, acct.id));
+      return c.json({ received: true });
+    }
+
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
       const wsId = session.metadata?.workspace_id;
       const plan = session.metadata?.plan;
       if (wsId && plan && PLANS[plan]) {
-        await db
-          .update(workspaces)
-          .set({
-            plan,
-            stripeCustomerId:
-              typeof session.customer === 'string' ? session.customer : session.customer?.id,
-            stripeSubscriptionId:
-              typeof session.subscription === 'string'
-                ? session.subscription
-                : session.subscription?.id,
-          })
-          .where(eq(workspaces.id, wsId));
+        if (connectAccount) {
+          // Agency direct charge — the customer/subscription live on the
+          // connected account, so they go in the connect_* columns.
+          await db
+            .update(workspaces)
+            .set({
+              plan,
+              connectCustomerId:
+                typeof session.customer === 'string' ? session.customer : session.customer?.id,
+              connectSubscriptionId:
+                typeof session.subscription === 'string'
+                  ? session.subscription
+                  : session.subscription?.id,
+            })
+            .where(eq(workspaces.id, wsId));
+        } else {
+          await db
+            .update(workspaces)
+            .set({
+              plan,
+              stripeCustomerId:
+                typeof session.customer === 'string' ? session.customer : session.customer?.id,
+              stripeSubscriptionId:
+                typeof session.subscription === 'string'
+                  ? session.subscription
+                  : session.subscription?.id,
+            })
+            .where(eq(workspaces.id, wsId));
+        }
         invalidateCapCache(wsId);
       }
+    } else if (
+      connectAccount &&
+      (event.type === 'customer.subscription.created' ||
+        event.type === 'customer.subscription.updated' ||
+        event.type === 'customer.subscription.deleted')
+    ) {
+      // Agency-billed subs: the price is agency-created so plan comes from
+      // metadata, and the lookup keys are the connect_* columns.
+      const sub = event.data.object;
+      const plan = (sub.metadata?.plan as string | undefined) ?? '';
+      const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
+      const cond = or(
+        eq(workspaces.connectSubscriptionId, sub.id),
+        customerId ? eq(workspaces.connectCustomerId, customerId) : undefined,
+      );
+      const updated =
+        event.type === 'customer.subscription.deleted'
+          ? await db
+              .update(workspaces)
+              .set({ plan: 'free', connectSubscriptionId: null })
+              .where(cond)
+              .returning({ id: workspaces.id })
+          : plan && PLANS[plan]
+            ? await db
+                .update(workspaces)
+                .set({ plan, connectSubscriptionId: sub.id })
+                .where(cond)
+                .returning({ id: workspaces.id })
+            : [];
+      for (const ws of updated) invalidateCapCache(ws.id);
     } else if (
       event.type === 'customer.subscription.created' ||
       event.type === 'customer.subscription.updated'

@@ -102,11 +102,12 @@ export function agentRoutes(db: Db) {
         parentWorkspaceId: workspaces.parentWorkspaceId,
         parentContact: workspaces.parentContact,
         stripeSubscriptionId: workspaces.stripeSubscriptionId,
+        connectSubscriptionId: workspaces.connectSubscriptionId,
       })
       .from(workspaces)
       .where(eq(workspaces.id, c.get('workspaceId')))
       .limit(1);
-    if (ws?.parentWorkspaceId && !ws.stripeSubscriptionId) {
+    if (ws?.parentWorkspaceId && !ws.stripeSubscriptionId && !ws.connectSubscriptionId) {
       const [parent] = await db
         .select({ name: workspaces.name })
         .from(workspaces)
