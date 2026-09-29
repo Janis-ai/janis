@@ -190,6 +190,13 @@ button, input, select, textarea { font: inherit; }
 .alert-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
 .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 .conv-row .who .name.unread { font-weight: 700; }
+.conv-check { flex-shrink: 0; accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+.conv-select-all { padding: 4px 16px 8px; font-size: 12px; color: var(--muted); }
+.bulk-bar {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--panel); border: 1px solid var(--accent-dim);
+  border-radius: 10px; padding: 8px 12px; margin-bottom: 10px;
+}
 
 .avatar { border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .avatar.fallback {

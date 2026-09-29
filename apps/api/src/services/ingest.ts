@@ -273,6 +273,9 @@ export async function processEvents(
         lastMessageDirection: directionFor(event),
         // new inbound traffic marks the conversation unread for operators
         isUnread: directionFor(event) === 'in' ? true : conv.isUnread,
+        // a customer reply wakes a snoozed conversation — snooze means
+        // "remind me later", not "ignore the customer"
+        snoozedUntil: directionFor(event) === 'in' ? null : conv.snoozedUntil,
         // Merge, not replace — later events only overwrite the fields they
         // actually carry, so a profile fetched earlier (or an email the
         // customer shared) survives sparse updates

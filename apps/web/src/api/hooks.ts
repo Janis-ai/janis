@@ -8,6 +8,7 @@ import type {
   Digest,
   Message,
   SavedReply,
+  SavedView,
   Suggestion,
   WebhookDelivery,
   WorkspaceUser,
@@ -51,6 +52,15 @@ export function useConversations(filter: {
     queryKey: ['conversations', filter],
     queryFn: () => api<{ conversations: Conversation[] }>(`/api/conversations?${params}`),
     refetchInterval: 30_000,
+  });
+}
+
+/** Per-operator saved filter presets for the conversations list. */
+export function useViews() {
+  return useQuery({
+    queryKey: ['views'],
+    queryFn: () => api<{ views: SavedView[] }>('/api/views'),
+    staleTime: 60_000,
   });
 }
 

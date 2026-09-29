@@ -6,6 +6,7 @@ import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
 import { Avatar, channelLabel, displayName, fmtTime, StateBadge } from '../components/bits';
 import Composer from '../components/Composer';
+import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { typingBus, presenceBus } from '../lib/typingBus';
 
 const WHO: Record<Message['direction'], string> = {
@@ -317,6 +318,7 @@ export default function ConversationPage() {
       state?: 'active' | 'needs_human' | 'archived';
       is_starred?: boolean;
       is_unread?: boolean;
+      snoozed_until?: string | null;
     }) =>
       api(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: (_d, body) => {
@@ -636,6 +638,37 @@ export default function ConversationPage() {
           >
             {c.is_unread ? 'Mark as read' : 'Mark unread'}
           </button>
+          <select
+            className="btn"
+            style={{ width: 'auto' }}
+            title={
+              c.snoozed_until && new Date(c.snoozed_until) > new Date()
+                ? `Snoozed until ${new Date(c.snoozed_until).toLocaleString()} — hidden from the queue until then`
+                : 'Snooze — hide from the queue until later; a customer reply wakes it'
+            }
+            value={c.snoozed_until && new Date(c.snoozed_until) > new Date() ? 'snoozed' : ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === 'snoozed') return;
+              patch.mutate({
+                snoozed_until:
+                  v === 'wake'
+                    ? null
+                    : new Date(Date.now() + snoozeMinutes(Number(v)) * 60_000).toISOString(),
+              });
+            }}
+          >
+            <option value="">😴 Snooze…</option>
+            {c.snoozed_until && new Date(c.snoozed_until) > new Date() && (
+              <option value="snoozed">
+                😴 until {new Date(c.snoozed_until).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+              </option>
+            )}
+            {SNOOZE_OPTIONS.map(([l, m]) => (
+              <option key={l} value={m}>{l}</option>
+            ))}
+            <option value="wake">Unsnooze</option>
+          </select>
           {agent?.hosted && (
             <button
               className="btn"

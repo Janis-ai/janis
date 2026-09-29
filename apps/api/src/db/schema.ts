@@ -183,6 +183,9 @@ export const conversations = pgTable(
     csatAskedAt: timestamp('csat_asked_at', { withTimezone: true }),
     // Set when an operator archives — feeds CSAT timing + resolution metrics
     archivedAt: timestamp('archived_at', { withTimezone: true }),
+    // Snoozed until — actively-snoozed conversations hide from every queue
+    // except the Snoozed view; expiry is passive (query-time comparison)
+    snoozedUntil: timestamp('snoozed_until', { withTimezone: true }),
     // Rolling agent memory: everything before summaryUpTo is folded into
     // agentSummary so the hosted agent remembers the whole conversation
     agentSummary: text('agent_summary'),
@@ -192,8 +195,26 @@ export const conversations = pgTable(
   (t) => [
     uniqueIndex('conversations_agent_external').on(t.agentId, t.externalId),
     index('conversations_agent_state').on(t.agentId, t.state),
+    index('conversations_snoozed').on(t.snoozedUntil),
   ],
 );
+
+// Per-operator saved filter presets for the conversations list — the
+// filters blob mirrors the query params of GET /api/conversations
+// ({state, agent_id, assignee, attention, tab, query}) so a view is just a
+// named bookmark for a filter combination.
+export const savedViews = pgTable('saved_views', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id),
+  name: text('name').notNull(),
+  filters: jsonb('filters').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const messages = pgTable(
   'messages',

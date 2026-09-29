@@ -36,6 +36,7 @@ import { onboardingRoutes } from './routes/onboarding.js';
 import { toolTemplateRoutes } from './routes/toolTemplates.js';
 import { billingRoutes, stripeWebhookRoutes } from './routes/billing.js';
 import { workspaceRoutes } from './routes/workspace.js';
+import { viewRoutes } from './routes/views.js';
 import { webchatRoutes } from './routes/webchat.js';
 import { legacyWebhookRoutes } from './routes/legacy.js';
 import { legacyApiRoutes } from './routes/legacyApi.js';
@@ -171,6 +172,7 @@ export function createApp(db: Db) {
   api.route('/onboarding', onboardingRoutes(db));
   api.route('/billing', billingRoutes(db));
   api.route('/workspace', workspaceRoutes(db));
+  api.route('/views', viewRoutes(db));
   app.route('/api', api);
 
   // Uploaded attachments are stored in Postgres (durable across deploys);

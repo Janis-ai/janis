@@ -8,7 +8,7 @@ import { agentScopeCond, type AgentScope } from './access.js';
  * signals — all ride the same param as the four real lifecycle states. */
 export const convListQuery = z.object({
   state: z
-    .enum(['active', 'needs_human', 'human', 'archived', 'unread', 'starred', 'handoff_offer', 'failure', 'overdue'])
+    .enum(['active', 'needs_human', 'human', 'archived', 'snoozed', 'unread', 'starred', 'handoff_offer', 'failure', 'overdue'])
     .optional(),
   agent_id: z.string().uuid().optional(),
   attention: z.enum(['1', 'true']).optional(), // needs_human OR has open alerts
@@ -49,8 +49,19 @@ export function convListConditions(
           and ${alerts.createdAt} < now() - interval '1 minute' * coalesce((${agents.config} ->> 'sla_minutes')::int, 15)
       )`,
     );
+  else if (q.state === 'snoozed')
+    // pseudo-state: snoozed is orthogonal to lifecycle — anything snoozed
+    // into the future, whatever its real state
+    conditions.push(sql`${conversations.snoozedUntil} > now()`);
   else if (q.state) conditions.push(eq(conversations.state, q.state));
   else conditions.push(ne(conversations.state, 'archived')); // archived hidden unless filtered
+  // actively-snoozed conversations hide from every queue except the Snoozed
+  // view itself (and archived — archive wins over snooze)
+  if (q.state !== 'snoozed' && q.state !== 'archived') {
+    conditions.push(
+      sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
+    );
+  }
   if (q.agent_id) conditions.push(eq(conversations.agentId, q.agent_id));
   if (q.assignee === 'me') conditions.push(eq(conversations.assigneeId, userId));
   if (q.attention) {

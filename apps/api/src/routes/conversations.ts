@@ -51,6 +51,29 @@ const patchBody = z.object({
   state: z.enum(['active', 'needs_human', 'archived']).optional(),
   is_starred: z.boolean().optional(),
   is_unread: z.boolean().optional(),
+  // ISO timestamp or null — snooze hides the conversation from every queue
+  // until it expires or a customer reply wakes it
+  snoozed_until: z.string().datetime({ offset: true }).nullable().optional(),
+});
+
+const bulkBody = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(200),
+  action: z.enum([
+    'archive',
+    'unarchive',
+    'assign_me',
+    'unassign',
+    'tag',
+    'untag',
+    'mark_read',
+    'mark_unread',
+    'star',
+    'unstar',
+    'snooze',
+    'unsnooze',
+  ]),
+  tag: z.string().trim().min(1).max(40).optional(),
+  minutes: z.number().int().min(1).max(43_200).optional(), // snooze duration, ≤30d
 });
 
 const attachment = z.object({
@@ -108,14 +131,105 @@ export function conversationRoutes(db: Db) {
         .select({ count: sql<number>`count(*)::int` })
         .from(conversations)
         .innerJoin(agents, eq(conversations.agentId, agents.id))
-        .where(and(...scope, inArray(conversations.state, ['needs_human', 'human']))),
+        .where(
+          and(
+            ...scope,
+            inArray(conversations.state, ['needs_human', 'human']),
+            // snoozed = out of sight until it wakes
+            sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
+          ),
+        ),
       db
         .select({ count: sql<number>`count(*)::int` })
         .from(conversations)
         .innerJoin(agents, eq(conversations.agentId, agents.id))
-        .where(and(...scope, eq(conversations.isUnread, true))),
+        .where(
+          and(
+            ...scope,
+            eq(conversations.isUnread, true),
+            sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
+          ),
+        ),
     ]);
     return c.json({ count, unread });
+  });
+
+  // Batch operations on the conversations list — same field semantics as
+  // PATCH /:id, applied to every workspace-visible id in the request.
+  app.post('/bulk', zValidator('json', bulkBody), async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const user = c.get('user');
+    const { ids, action, tag, minutes } = c.req.valid('json');
+    if ((action === 'tag' || action === 'untag') && !tag) {
+      return c.json({ error: 'tag is required' }, 400);
+    }
+
+    const rows = await db
+      .select()
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(inArray(conversations.id, ids), ...agentVis(workspaceId, c.get('agentScope'))));
+    if (!rows.length) return c.json({ updated: 0 });
+
+    const now = new Date();
+    const set: Partial<typeof conversations.$inferInsert> | null =
+      action === 'archive' ? { state: 'archived', archivedAt: now, snoozedUntil: null }
+      : action === 'unarchive' ? { state: 'active', archivedAt: null }
+      : action === 'assign_me' ? { assigneeId: user.id }
+      : action === 'unassign' ? { assigneeId: null }
+      : action === 'mark_read' ? { isUnread: false }
+      : action === 'mark_unread' ? { isUnread: true }
+      : action === 'star' ? { isStarred: true }
+      : action === 'unstar' ? { isStarred: false }
+      : action === 'snooze' ? { snoozedUntil: new Date(now.getTime() + (minutes ?? 240) * 60_000) }
+      : action === 'unsnooze' ? { snoozedUntil: null }
+      : null;
+
+    const ownedIds = rows.map((r) => r.conversations.id);
+    if (set) {
+      await db.update(conversations).set(set).where(inArray(conversations.id, ownedIds));
+    } else {
+      // tag/untag merge per row — array ops can't be expressed in one update
+      for (const r of rows) {
+        const cur = r.conversations.tags ?? [];
+        const next =
+          action === 'tag'
+            ? [...new Set([...cur, tag!])]
+            : cur.filter((t) => t !== tag);
+        if (next.length !== cur.length || action === 'untag') {
+          await db.update(conversations).set({ tags: next }).where(eq(conversations.id, r.conversations.id));
+        }
+      }
+    }
+
+    // Same side effects the single PATCH performs: Meta thread control is
+    // released when leaving 'human', and archiving fires the one-shot CSAT ask.
+    if (action === 'archive' || action === 'unarchive') {
+      for (const r of rows) {
+        const conv = r.conversations;
+        if (conv.state === 'human') {
+          void (async () => {
+            const b = await channelBindingFor(db, conv.id);
+            if (b) await releaseThreadControl(b.channel, b.platformUserId);
+          })();
+        }
+        if (action === 'archive' && conv.state !== 'archived') {
+          void sendCsatPrompt(db, { ...conv, archivedAt: now }).catch(() => {});
+        }
+      }
+    }
+
+    // one event per row so detail-page subscribers see the new state —
+    // the list invalidates on the first and ignores the rest
+    const nextState =
+      action === 'archive' ? 'archived' : action === 'unarchive' ? 'active' : null;
+    for (const r of rows) {
+      bus.publish(workspaceId, {
+        type: 'conversation',
+        data: { id: r.conversations.id, state: nextState ?? r.conversations.state },
+      });
+    }
+    return c.json({ updated: ownedIds.length });
   });
 
   app.get('/:id', async (c) => {
@@ -627,6 +741,9 @@ export function conversationRoutes(db: Db) {
         ...(body.state !== undefined && body.state !== 'archived' ? { archivedAt: null } : {}),
         ...(body.is_starred !== undefined ? { isStarred: body.is_starred } : {}),
         ...(body.is_unread !== undefined ? { isUnread: body.is_unread } : {}),
+        ...(body.snoozed_until !== undefined
+          ? { snoozedUntil: body.snoozed_until ? new Date(body.snoozed_until) : null }
+          : {}),
       })
       .where(eq(conversations.id, owned.id))
       .returning();

@@ -107,10 +107,17 @@ before typecheck/tests/dev.
 - Widget polish: unread badges, proactive messages, file uploads, sound,
   per-agent branding, chat-on-article-page.
 
-**Inbox & operator experience (missing)**
-- Snooze / follow-up reminders.
-- Internal notes (operator-only comments, distinct from outbound replies).
-- Saved views/filters ("my open", "unassigned", "waiting >4h"), bulk actions.
+**Inbox & operator experience**
+- Snooze: DONE — conversations.snoozed_until, hidden from every queue except
+  the ?state=snoozed view, passive expiry, inbound customer message wakes it,
+  excluded from attention-count. UI: detail-page 😴 select (1h/4h/tomorrow 9am/
+  next week/unsnooze) + bulk action + 😴 chip on list rows.
+- Internal notes: DONE — composer "🔒 internal note" mode → POST /:id/note,
+  payload.internal=true, never customer-delivered, Slack-mirrored.
+- Saved views: DONE — saved_views table (per-user), GET/POST/DELETE /api/views,
+  filters blob mirrors list params; Views picker + "💾 Save view" in the list.
+- Bulk actions: DONE — row checkboxes + select-all, sticky action bar →
+  POST /api/conversations/bulk (archive/unarchive/assign/tag/mark/star/snooze).
 - Conversation merge/split; unified contact profiles across channels.
 - SLA timers + breach alerts (business-hours-aware).
 - Mobile polish on conversation screen (operators live on phones).

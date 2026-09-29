@@ -85,6 +85,7 @@ export function toConversation(row: Row<typeof conversations>, openAlertCount = 
     is_starred: row.isStarred,
     is_unread: row.isUnread,
     human_since: iso(row.humanSince),
+    snoozed_until: iso(row.snoozedUntil),
     csat_score: row.csatScore,
     csat_pending: row.csatPending,
     intent: row.intent,

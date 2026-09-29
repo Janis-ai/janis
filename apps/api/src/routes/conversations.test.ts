@@ -2,13 +2,14 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, alerts, conversations, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { generateApiKey, generateSessionToken, hashPassword } from '../lib/crypto.js';
 import { conversationRoutes } from './conversations.js';
+import { viewRoutes } from './views.js';
 import { takeover } from '../services/takeover.js';
 
 let app: Hono;
@@ -30,7 +31,9 @@ beforeAll(async () => {
   const client = new PGlite();
   db = drizzle(client, { schema }) as unknown as Db;
   await migrate(db as never, { migrationsFolder: './drizzle' });
-  app = new Hono().route('/api/conversations', conversationRoutes(db));
+  app = new Hono()
+    .route('/api/conversations', conversationRoutes(db))
+    .route('/api/views', viewRoutes(db));
 
   const [ws] = await db.insert(workspaces).values({ name: 'Test' }).returning();
   wsId = ws.id;
@@ -276,5 +279,188 @@ describe('message windows', () => {
     const other = await makeConversation('around-other');
     const res = await get(`/${other.id}/messages?around=${m.id}`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe('snooze', () => {
+  const patch = (id: string, body: unknown) =>
+    app.request(`/api/conversations/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify(body),
+    });
+  const listIds = (qs = '') =>
+    app
+      .request(`/api/conversations${qs}`, { headers: { cookie: adminCookie } })
+      .then((r) => r.json())
+      .then((b: { conversations: { id: string }[] }) => b.conversations.map((c) => c.id));
+
+  it('PATCH snoozed_until hides from the default list and shows in the snoozed view', async () => {
+    const conv = await makeConversation('snooze-me');
+    const until = new Date(Date.now() + 3600_000).toISOString();
+    const res = await patch(conv.id, { snoozed_until: until });
+    expect(res.status).toBe(200);
+    const { conversation } = await res.json();
+    expect(conversation.snoozed_until).toBe(until);
+
+    expect(await listIds()).not.toContain(conv.id);
+    expect(await listIds('?state=snoozed')).toContain(conv.id);
+  });
+
+  it('an expired snooze reappears in the default list', async () => {
+    const conv = await makeConversation('snooze-expired');
+    await db
+      .update(conversations)
+      .set({ snoozedUntil: new Date(Date.now() - 60_000) })
+      .where(eq(conversations.id, conv.id));
+    expect(await listIds()).toContain(conv.id);
+    expect(await listIds('?state=snoozed')).not.toContain(conv.id);
+  });
+
+  it('snoozed conversations are excluded from unread and state views too', async () => {
+    const conv = await makeConversation('snooze-unread');
+    await db
+      .update(conversations)
+      .set({ isUnread: true, snoozedUntil: new Date(Date.now() + 3600_000) })
+      .where(eq(conversations.id, conv.id));
+    expect(await listIds('?state=unread')).not.toContain(conv.id);
+    expect(await listIds('?state=active')).not.toContain(conv.id);
+    expect(await listIds('?state=snoozed')).toContain(conv.id);
+  });
+
+  it('PATCH snoozed_until: null unsnoozes', async () => {
+    const conv = await makeConversation('snooze-clear');
+    await patch(conv.id, { snoozed_until: new Date(Date.now() + 3600_000).toISOString() });
+    expect(await listIds()).not.toContain(conv.id);
+    await patch(conv.id, { snoozed_until: null });
+    expect(await listIds()).toContain(conv.id);
+  });
+
+  it('archived stays visible in the archived view even while snoozed', async () => {
+    const conv = await makeConversation('snooze-archived');
+    await db
+      .update(conversations)
+      .set({ state: 'archived', snoozedUntil: new Date(Date.now() + 3600_000) })
+      .where(eq(conversations.id, conv.id));
+    expect(await listIds('?state=archived')).toContain(conv.id);
+    expect(await listIds()).not.toContain(conv.id);
+  });
+});
+
+describe('bulk actions', () => {
+  const bulk = (body: unknown) =>
+    post('/bulk', adminCookie, body);
+
+  it('archives, marks read, stars and tags in one call', async () => {
+    const a = await makeConversation('bulk-a');
+    const b = await makeConversation('bulk-b');
+    await db
+      .update(conversations)
+      .set({ isUnread: true })
+      .where(inArray(conversations.id, [a.id, b.id]));
+
+    const res = await bulk({ ids: [a.id, b.id], action: 'archive' });
+    expect(res.status).toBe(200);
+    expect((await res.json()).updated).toBe(2);
+    const rows = await db
+      .select()
+      .from(conversations)
+      .where(inArray(conversations.id, [a.id, b.id]));
+    expect(rows.every((r) => r.state === 'archived' && r.archivedAt)).toBe(true);
+
+    await bulk({ ids: [a.id, b.id], action: 'mark_read' });
+    await bulk({ ids: [a.id, b.id], action: 'star' });
+    await bulk({ ids: [a.id, b.id], action: 'tag', tag: 'vip' });
+    const after = await db
+      .select()
+      .from(conversations)
+      .where(inArray(conversations.id, [a.id, b.id]));
+    for (const r of after) {
+      expect(r.isUnread).toBe(false);
+      expect(r.isStarred).toBe(true);
+      expect(r.tags).toContain('vip');
+    }
+  });
+
+  it('tag adds without duplicating and untag removes', async () => {
+    const a = await makeConversation('bulk-tag');
+    await bulk({ ids: [a.id], action: 'tag', tag: 'vip' });
+    await bulk({ ids: [a.id], action: 'tag', tag: 'vip' });
+    let [r] = await db.select().from(conversations).where(eq(conversations.id, a.id));
+    expect(r.tags).toEqual(['vip']);
+    await bulk({ ids: [a.id], action: 'untag', tag: 'vip' });
+    [r] = await db.select().from(conversations).where(eq(conversations.id, a.id));
+    expect(r.tags).toEqual([]);
+  });
+
+  it('rejects other workspaces\' conversations and bad input', async () => {
+    const [otherWs] = await db.insert(workspaces).values({ name: 'Other' }).returning();
+    const [otherAgent] = await db
+      .insert(agents)
+      .values({ workspaceId: otherWs.id, name: 'OtherBot' })
+      .returning();
+    const [stranger] = await db
+      .insert(conversations)
+      .values({ agentId: otherAgent.id, externalId: 'stranger' })
+      .returning();
+
+    const res = await bulk({ ids: [stranger.id], action: 'archive' });
+    expect(res.status).toBe(200);
+    expect((await res.json()).updated).toBe(0);
+    const [still] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, stranger.id));
+    expect(still.state).toBe('active');
+
+    expect((await bulk({ ids: [], action: 'archive' })).status).toBe(400);
+    expect((await bulk({ ids: ['not-a-uuid'], action: 'archive' })).status).toBe(400);
+    const conv = await makeConversation('bulk-tagreq');
+    expect((await bulk({ ids: [conv.id], action: 'tag' })).status).toBe(400);
+  });
+});
+
+describe('saved views', () => {
+  it('creates, lists and deletes per-user views', async () => {
+    const res = await app.request('/api/views', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({
+        name: 'My overdue',
+        filters: { state: 'overdue', assignee: 'me', tab: 'attention' },
+      }),
+    });
+    expect(res.status).toBe(201);
+    const { view } = await res.json();
+    expect(view.filters.state).toBe('overdue');
+
+    const list = await app.request('/api/views', { headers: { cookie: adminCookie } });
+    const { views } = await list.json();
+    expect(views.some((v: { id: string }) => v.id === view.id)).toBe(true);
+
+    // members have their own view set — admin's view is invisible to them
+    const memberList = await app.request('/api/views', { headers: { cookie: memberCookie } });
+    const { views: memberViews } = await memberList.json();
+    expect(memberViews.some((v: { id: string }) => v.id === view.id)).toBe(false);
+    expect((await memberList.status) === 200).toBe(true);
+
+    // and can't delete it either
+    expect(
+      (
+        await app.request(`/api/views/${view.id}`, {
+          method: 'DELETE',
+          headers: { cookie: memberCookie },
+        })
+      ).status,
+    ).toBe(404);
+
+    expect(
+      (
+        await app.request(`/api/views/${view.id}`, {
+          method: 'DELETE',
+          headers: { cookie: adminCookie },
+        })
+      ).status,
+    ).toBe(200);
   });
 });

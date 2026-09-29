@@ -371,6 +371,9 @@ export const Conversation = z.object({
   is_starred: z.boolean(),
   is_unread: z.boolean(),
   human_since: z.string().nullable(),
+  /** Snoozed until (ISO) — actively-snoozed conversations hide from every
+   * queue except the Snoozed view; a new inbound message wakes them */
+  snoozed_until: z.string().nullable(),
   /** 1–5 rating captured from the post-resolution CSAT prompt, if answered */
   csat_score: z.number().nullable(),
   csat_pending: z.boolean(),
@@ -379,6 +382,23 @@ export const Conversation = z.object({
   created_at: z.string(),
 });
 export type Conversation = z.infer<typeof Conversation>;
+
+/** A named filter preset for the conversations list — per-operator.
+ * `filters` mirrors the GET /api/conversations query params. */
+export const SavedView = z.object({
+  id: z.string(),
+  name: z.string(),
+  filters: z.object({
+    state: z.string().optional(),
+    agent_id: z.string().optional(),
+    assignee: z.string().optional(),
+    attention: z.boolean().optional(),
+    tab: z.string().optional(),
+    query: z.string().optional(),
+  }),
+  created_at: z.string(),
+});
+export type SavedView = z.infer<typeof SavedView>;
 
 export const Message = z.object({
   id: z.string(),
