@@ -23,7 +23,10 @@ export async function acquireLock(
   ttlMs: number,
   holder = INSTANCE_ID,
 ): Promise<boolean> {
-  const until = new Date(Date.now() + ttlMs);
+  // ISO string, not Date — postgres-js can't serialize Date bind params on
+  // drizzle's prepared-statement execute path (ERR_INVALID_ARG_TYPE). This
+  // silently killed every sweep under DATABASE_URL; never bind Date here.
+  const until = new Date(Date.now() + ttlMs).toISOString();
   const res = (await db.execute(sql`
     insert into sweeper_locks (name, holder, expires_at)
     values (${name}, ${holder}, ${until})
@@ -51,7 +54,17 @@ export async function acquireLock(
 export function startSweeper(db: Db, intervalMs = 60_000): () => void {
   const timer = setInterval(() => {
     void (async () => {
-      if (!(await acquireLock(db, 'sweeper', intervalMs * 2))) return;
+      let won: boolean;
+      try {
+        won = await acquireLock(db, 'sweeper', intervalMs * 2);
+      } catch (err) {
+        // The tick's outer catch used to swallow this entirely — a broken
+        // acquireLock (e.g. unserializable bind) left every sweep dead for
+        // weeks. Log so it shows up in Cloud Logging.
+        console.error('sweeper lock error:', err);
+        return;
+      }
+      if (!won) return;
       void sweep(db).catch((err) => console.error('sweep error:', err));
       void sweepAutoResume(db).catch((err) => console.error('sweepAutoResume error:', err));
       void sweepSla(db).catch((err) => console.error('sweepSla error:', err));
