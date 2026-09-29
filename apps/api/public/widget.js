@@ -777,7 +777,9 @@
           // while the panel is closed; while open they just advance it.
           if (m.direction !== 'in' && m.created_at && state.seenInit &&
               (!state.lastSeen || m.created_at > state.lastSeen)) {
-            if (state.open || document.hidden) wantPing = true;
+            // Chime on any reply the visitor isn't looking at — closed panel
+            // or hidden tab — but not when the open panel is in view.
+            if (!state.open || document.hidden) wantPing = true;
             if (state.open) { state.lastSeen = m.created_at; saveSeen(); }
             else state.unread++;
           }
@@ -794,6 +796,7 @@
           }
         }
         if (wantPing) ping();
+        if (state.unread > 0) hideTeaser(); // the badge supersedes the teaser
         updateBadge();
         // A pending offer is moot once a human owns the conversation.
         if (state.convState === 'human') clearChips();
