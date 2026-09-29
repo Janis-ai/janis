@@ -456,10 +456,10 @@ export function webchatRoutes(db: Db) {
       conversation_id: conv.id,
       // an operator composing in the console — the widget/rail render dots;
       // name is null when the operator opted out of identity sharing
-      operator_typing: operatorTyping(conv.id),
+      operator_typing: await operatorTyping(db, conv.id),
       // a message.user was dispatched to the agent and no reply has landed
       // yet — real signal, unlike the post-send guess clients already make
-      agent_typing: agentWorking(conv.id),
+      agent_typing: await agentWorking(db, conv.id),
       // only meaningful on full-page loads — incremental `after` polls omit it
       ...(afterDate ? {} : { has_more: hasMore }),
     });

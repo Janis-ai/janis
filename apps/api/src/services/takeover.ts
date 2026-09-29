@@ -175,8 +175,8 @@ export async function humanReply(
 
   // A customer-visible reply ends both indicators — the agent's outstanding
   // run is moot and the operator just sent what they were typing.
-  clearAgentWorking(conversationId);
-  clearOperatorTyping(conversationId);
+  void clearAgentWorking(db, conversationId);
+  void clearOperatorTyping(db, conversationId);
   void setSlackThreadStatus(db, conversationId, null);
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
   // Per-agent override wins: the operator's identity for THIS agent's
@@ -289,8 +289,8 @@ export async function agentSend(
     .where(eq(conversations.id, conversationId));
 
   // Same as humanReply — the visitor got a message, so no more dots.
-  clearAgentWorking(conversationId);
-  clearOperatorTyping(conversationId);
+  void clearAgentWorking(db, conversationId);
+  void clearOperatorTyping(db, conversationId);
   void setSlackThreadStatus(db, conversationId, null);
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
   if (!viaSlack) {

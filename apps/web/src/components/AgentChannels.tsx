@@ -248,6 +248,34 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     onError: (e) => setError(e.message),
   });
 
+  // SMS — clone a voice channel's number/creds (from_voice_channel_id), or
+  // BYO Twilio account sid + token + SMS-capable number.
+  const [smsForm, setSmsForm] = useState({ sid: '', token: '', number: '' });
+  const createSms = useMutation({
+    mutationFn: (fromVoiceId?: string) =>
+      api('/api/channels', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'sms',
+          name: `${agent.name} SMS`,
+          agent_id: agentId,
+          ...(fromVoiceId
+            ? { from_voice_channel_id: fromVoiceId }
+            : {
+                twilio_account_sid: smsForm.sid,
+                twilio_auth_token: smsForm.token,
+                phone_number: smsForm.number,
+              }),
+        }),
+      }),
+    onSuccess: () => {
+      setSmsForm({ sid: '', token: '', number: '' });
+      setError('');
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+    },
+    onError: (e) => setError(e.message),
+  });
+
   const removeChannel = useMutation({
     mutationFn: (channelId: string) => api(`/api/channels/${channelId}`, { method: 'DELETE' }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
@@ -797,6 +825,89 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             {voiceMode === 'hosted'
               ? 'Janis provisions the number and wires it up — callers are transcribed turn-by-turn, the agent answers by voice, and a human takeover can bridge straight to the forward-to number.'
               : 'Then in the Twilio console, set the number\'s Voice → "A call comes in" webhook to the URL on the channel card. Callers are transcribed turn-by-turn; the agent\'s reply is spoken, and when a human takes over the call can bridge straight to the forward-to number.'}
+          </div>
+        </details>
+      </div>
+
+      {/* SMS — one click off an existing voice number, or BYO Twilio creds.
+          Texts land in the same inbox; replies go out via the Messages API. */}
+      <div className="card">
+        <details className="appearance-details">
+          <summary>
+            <span className="details-title">SMS — text messaging</span>
+            <span className="details-sub">
+              texts to your Twilio number become conversations here
+            </span>
+          </summary>
+          {channels.some((v) => v.kind === 'voice') ? (
+            <div style={{ marginTop: 12 }}>
+              {channels
+                .filter((v) => v.kind === 'voice')
+                .map((v) => {
+                  const sibling = channels.find(
+                    (s) => s.kind === 'sms' && s.meta.phone_number === v.meta.phone_number,
+                  );
+                  return (
+                    <div key={v.id} className="row" style={{ marginBottom: 6 }}>
+                      <span className="mono grow">{v.meta.phone_number ?? v.name}</span>
+                      {sibling ? (
+                        <span className="muted">SMS enabled</span>
+                      ) : (
+                        <button
+                          className="btn"
+                          disabled={createSms.isPending}
+                          onClick={() => createSms.mutate(v.id)}
+                        >
+                          Enable SMS
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+                One click — the same number answers texts and calls, and the webhook wires
+                itself.
+              </div>
+            </div>
+          ) : (
+            <div className="muted" style={{ marginTop: 12, fontSize: 13 }}>
+              No voice number yet — get one above, or bring your own Twilio SMS number:
+            </div>
+          )}
+          <form
+            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, maxWidth: 520 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              createSms.mutate(undefined);
+            }}
+          >
+            <input
+              placeholder="Twilio Account SID (AC…)"
+              value={smsForm.sid}
+              onChange={(e) => setSmsForm({ ...smsForm, sid: e.target.value })}
+              required
+            />
+            <input
+              placeholder="Twilio Auth Token"
+              value={smsForm.token}
+              onChange={(e) => setSmsForm({ ...smsForm, token: e.target.value })}
+              required
+            />
+            <input
+              placeholder="SMS-capable phone number — E.164, e.g. +15551234567"
+              value={smsForm.number}
+              onChange={(e) => setSmsForm({ ...smsForm, number: e.target.value })}
+              required
+            />
+            <div>
+              <button className="btn" disabled={createSms.isPending}>
+                Add SMS channel
+              </button>
+            </div>
+          </form>
+          <div className="muted" style={{ marginTop: 10 }}>
+            We wire the number's inbound-message webhook automatically — texts arrive as
+            conversations and replies send from the same number.
           </div>
         </details>
       </div>

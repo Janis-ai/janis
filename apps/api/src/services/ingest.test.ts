@@ -355,7 +355,10 @@ describe('hard cap', () => {
     const results = await processEvents(db, agent, [
       { type: 'message_in', conversation_id: 'capped', text: 'should not store' },
     ]);
-    expect(results).toHaveLength(0);
+    // results[] stays index-aligned with events[] — capped events return a
+    // marked placeholder rather than shifting every later result
+    expect(results).toHaveLength(1);
+    expect(results[0].capped).toBe(true);
     const stored = await db
       .select()
       .from(messages)

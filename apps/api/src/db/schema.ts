@@ -216,6 +216,23 @@ export const savedViews = pgTable('saved_views', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Ephemeral typing/working indicators — Postgres-backed (not in-memory) so
+// the widget's /chat poll sees operator typing + agent working no matter
+// which instance served the ping vs the poll under --max-instances N.
+// Rows self-expire via expires_at comparisons; no sweeper needed.
+export const typingState = pgTable(
+  'typing_state',
+  {
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['operator', 'agent'] }).notNull(),
+    name: text('name'), // operator display name; null for agent working
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.conversationId, t.kind] })],
+);
+
 export const messages = pgTable(
   'messages',
   {
@@ -493,7 +510,7 @@ export const channels = pgTable('channels', {
     .notNull()
     .references(() => agents.id),
   kind: text('kind', {
-    enum: ['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'voice'],
+    enum: ['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'voice', 'sms'],
   }).notNull(),
   name: text('name').notNull(),
   // {page_id, page_access_token, verify_token, phone_number_id} — secrets never leave the API
@@ -699,6 +716,9 @@ export const webhookDeliveries = pgTable('webhook_deliveries', {
     .default('pending'),
   attempts: integer('attempts').notNull().default(0),
   lastError: text('last_error'),
+  // when the next retry is due — the sweeper reclaims rows whose scheduled
+  // attempt is overdue (the in-process setTimeout chain dies on deploy)
+  nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

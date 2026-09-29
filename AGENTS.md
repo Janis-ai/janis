@@ -98,7 +98,14 @@ before typecheck/tests/dev.
 
 **Channels (missing entirely)**
 - Outlook/Office 365 mailbox channel (Graph API watch → same push plumbing as Gmail).
-- SMS channel (Twilio already integrated for voice — inbound SMS → conversation).
+- SMS channel: DONE — `kind: 'sms'`, POST /sms/:channelId Twilio-signed inbound
+  → handleChannelMessage (E.164 sender = binding key, MessageSid dedup),
+  replies via Messages API (sendSmsReply in lib/channels.ts — >1600-char
+  newline split, attachments → MMS, buttons → numbered list). MMS inbound
+  rehosts through Twilio basic-auth creds (rehostAttachments basicAuth arg).
+  Create: BYO sid/token/number or `from_voice_channel_id` (clones creds,
+  setSmsWebhook auto-wires SmsUrl by number-SID lookup — hosted + BYO).
+  Deleting a hosted voice channel cascades its SMS sibling.
 - Shared email addresses — one mailbox per channel today; multi-address fan-out
   needed for support@ + sales@ into one workspace.
 - First-class WhatsApp Business API channel (templates, business verification).

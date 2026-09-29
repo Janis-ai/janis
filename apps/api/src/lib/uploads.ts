@@ -40,11 +40,18 @@ export async function getUpload(db: Db, filename: string) {
 }
 
 /** Download a remote file (size-capped), returning null on any failure. */
-async function fetchBytes(url: string, bearer?: string): Promise<{ data: Buffer; type: string } | null> {
+async function fetchBytes(
+  url: string,
+  bearer?: string,
+  basicAuth?: { user: string; pass: string },
+): Promise<{ data: Buffer; type: string } | null> {
   try {
     const res = await fetch(url, {
       headers: {
         ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+        ...(basicAuth
+          ? { Authorization: `Basic ${Buffer.from(`${basicAuth.user}:${basicAuth.pass}`).toString('base64')}` }
+          : {}),
         'User-Agent': 'janis/1.0',
       },
       signal: AbortSignal.timeout(15_000),
@@ -73,6 +80,7 @@ export async function rehostAttachments(
   db: Db,
   refs: AttachmentRef[] | undefined,
   metaToken?: string,
+  basicAuth?: { user: string; pass: string },
 ): Promise<AttachmentRef[] | undefined> {
   if (!refs?.length) return refs;
   const out: AttachmentRef[] = [];
@@ -97,7 +105,7 @@ export async function rehostAttachments(
       }
     }
     if (!/^https?:\/\//.test(url)) { out.push(ref); continue; }
-    const got = await fetchBytes(url, bearer);
+    const got = await fetchBytes(url, bearer, basicAuth);
     if (!got) { out.push(ref); continue; }
     const stored = await storeUpload(db, {
       name: ref.name,

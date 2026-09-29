@@ -12,6 +12,7 @@ import {
   sendMessage as sendGmailMessage,
 } from './gmail.js';
 import { voiceDeliver } from './voiceBridge.js';
+import { sendSms, type TwilioError } from './twilio.js';
 
 type ChannelRow = typeof channels.$inferSelect;
 
@@ -459,6 +460,9 @@ export async function sendChannelMessage(
   if (channel.kind === 'gmail') {
     return sendGmailReply(db, channel, platformUserId, text, attachments, opts);
   }
+  if (channel.kind === 'sms') {
+    return sendSmsReply(channel, platformUserId, text, attachments, opts);
+  }
   const creds = channel.credentials as ChannelCredentials;
   if (!creds.access_token) {
     return {
@@ -687,6 +691,72 @@ export async function sendChannelMessage(
       retryable = r.retryable;
     }
   }
+  return { mid, error, retryable };
+}
+
+/** SMS/MMS replies — Twilio Messages API on the channel's number. No 24h
+ * window (unlike Meta): any prior inbound keeps the thread sendable until
+ * the customer replies STOP. Texts >1600 chars split on newlines; each
+ * attachment is its own MMS. Buttons flatten to a numbered list — SMS has
+ * no button primitive. */
+async function sendSmsReply(
+  channel: ChannelRow,
+  to: string,
+  text: string,
+  attachments: AttachmentRef[] | undefined,
+  opts?: SendOptions,
+): Promise<SendResult> {
+  const creds = channel.credentials as ChannelCredentials;
+  if (!creds.twilio_account_sid || !creds.twilio_auth_token || !creds.phone_number) {
+    return {
+      mid: null,
+      error: 'SMS channel is missing Twilio credentials — reconnect it under Integrations',
+      retryable: false,
+    };
+  }
+  const named = opts?.senderName && text.trim() ? `${opts.senderName}: ${text}` : text;
+  const strs = (opts?.quickReplies ?? []).filter((q): q is string => typeof q === 'string');
+  const body =
+    strs.length && named.trim()
+      ? `${named}\n\n${strs.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
+      : named;
+  // Twilio accepts one Body ≤1600 chars per message — split at newlines.
+  const chunks: string[] = [];
+  let rest = body;
+  while ([...rest].length > 1600) {
+    const win = [...rest].slice(0, 1600).join('');
+    const cut = win.lastIndexOf('\n');
+    const head = cut > 0 ? win.slice(0, cut) : win;
+    chunks.push(head);
+    rest = rest.slice([...head].length).replace(/^\n/, '');
+  }
+  if (rest.trim()) chunks.push(rest);
+  const sends: { body: string; mediaUrl?: string }[] = chunks.map((b) => ({ body: b }));
+  for (const a of attachments ?? []) {
+    sends.push({ body: '', mediaUrl: absoluteAttachmentUrl(a) });
+  }
+  let mid: string | null = null;
+  let error: string | null = null;
+  let retryable = true;
+  for (const s of sends) {
+    try {
+      const r = await sendSms(creds, to, s.body, s.mediaUrl);
+      mid = r.sid;
+    } catch (e) {
+      const te = e as TwilioError;
+      // Permanent when the number itself can't receive (invalid, landline,
+      // unsubscribed); provider/rate-limit failures are worth a retry.
+      const permanent =
+        te.code === 21211 || te.code === 21610 || te.code === 21611 ||
+        (te.status !== undefined && te.status >= 400 && te.status < 500 &&
+          te.code !== 20429 && te.code !== 20503);
+      if (!error) {
+        error = `Twilio rejected the send${te.code ? ` (error ${te.code})` : ''}: ${te.message}`;
+        retryable = !permanent;
+      }
+    }
+  }
+  if (!mid && !error) return { mid: null, error: 'nothing to send', retryable: false };
   return { mid, error, retryable };
 }
 

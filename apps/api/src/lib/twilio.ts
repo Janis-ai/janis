@@ -1,4 +1,68 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { env } from '../env.js';
+
+/** Twilio signs URL + alphabetically-sorted POST params with the auth token. */
+export function validTwilioSignature(
+  url: string,
+  params: Record<string, string>,
+  signature: string | undefined,
+  authToken: string,
+): boolean {
+  if (!signature || !authToken) return false;
+  const data = url + Object.keys(params).sort().map((k) => k + params[k]).join('');
+  const expected = createHmac('sha1', authToken).update(data).digest('base64');
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Send an SMS/MMS reply on the channel's own number (REST, not TwiML —
+ * replies are async: the inbound webhook already got its empty <Response>). */
+export async function sendSms(
+  creds: { twilio_account_sid?: string; twilio_auth_token?: string; phone_number?: string },
+  to: string,
+  body: string,
+  mediaUrl?: string,
+): Promise<{ sid: string }> {
+  const sid = creds.twilio_account_sid;
+  const token = creds.twilio_auth_token;
+  if (!sid || !token || !creds.phone_number) throw new Error('sms channel missing twilio creds');
+  const data = await twilioApi(sid, token, `/Accounts/${sid}/Messages.json`, {
+    method: 'POST',
+    params: {
+      From: creds.phone_number,
+      To: to,
+      ...(body.trim() ? { Body: body } : {}),
+      ...(mediaUrl ? { MediaUrl: mediaUrl } : {}),
+    },
+  });
+  return { sid: data.sid as string };
+}
+
+/** Point a number's "A message comes in" webhook at an SMS channel — the
+ * SmsUrl config every SMS channel needs. The number SID is looked up by
+ * phone number so this works for BYO channels (which never store it) as
+ * well as hosted subaccount numbers. */
+export async function setSmsWebhook(
+  creds: { twilio_account_sid?: string; twilio_auth_token?: string; phone_number?: string },
+  smsUrl: string,
+): Promise<void> {
+  const { twilio_account_sid: sid, twilio_auth_token: token, phone_number: num } = creds;
+  if (!sid || !token || !num) throw new Error('sms channel missing twilio creds');
+  const list = await twilioApi(
+    sid,
+    token,
+    `/Accounts/${sid}/IncomingPhoneNumbers.json?PhoneNumber=${encodeURIComponent(num)}`,
+  );
+  const numberSid = (list.incoming_phone_numbers as { sid?: string }[] | undefined)?.[0]?.sid;
+  if (!numberSid) throw new Error('number not found on this twilio account');
+  await twilioApi(
+    sid,
+    token,
+    `/Accounts/${sid}/IncomingPhoneNumbers/${numberSid}.json`,
+    { method: 'POST', params: { SmsUrl: smsUrl, SmsMethod: 'POST' } },
+  );
+}
 
 /**
  * Minimal Twilio REST client — Basic auth, form-encoded bodies, JSON in/out.

@@ -1,6 +1,6 @@
-import { and, desc, eq, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alertRules, alerts, busEvents, conversations, knowledgeFiles, messages, rateLimits, sweeperLocks } from '../db/schema.js';
+import { agents, alertRules, alerts, busEvents, conversations, knowledgeFiles, messages, rateLimits, sweeperLocks, typingState } from '../db/schema.js';
 import { bus, INSTANCE_ID } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
@@ -9,6 +9,7 @@ import { toAlert, toMessage } from '../lib/serializers.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
 import { renewGmailWatches, sweepGmail } from './gmailSweep.js';
+import { sweepWebhookRetries } from '../lib/webhooks.js';
 import { refreshKnowledgeSource } from '../lib/urlSource.js';
 
 /**
@@ -43,6 +44,7 @@ export async function acquireLock(
  *    (last message inbound) past the agent's inactivity threshold
  *  - auto-release 'human' takeovers past the agent's auto_resume_minutes
  *  - re-alert 'needs_human' conversations unclaimed past the agent's SLA
+ *  - wake expired snoozes (resurface as unread — the "reminder" half)
  *  - poll gmail channels, renew gmail push watches, refresh knowledge URLs
  *  - prune transient bus_events rows
  */
@@ -56,6 +58,8 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
       void sweepGmail(db).catch((err) => console.error('sweepGmail error:', err));
       void renewGmailWatches(db).catch((err) => console.error('renewGmailWatches error:', err));
       void sweepKnowledge(db).catch((err) => console.error('sweepKnowledge error:', err));
+      void sweepSnoozes(db).catch((err) => console.error('sweepSnoozes error:', err));
+      void sweepWebhookRetries(db).catch((err) => console.error('sweepWebhookRetries error:', err));
       void db
         .delete(busEvents)
         .where(lt(busEvents.createdAt, new Date(Date.now() - 10 * 60_000)))
@@ -64,10 +68,51 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
         .delete(rateLimits)
         .where(lt(rateLimits.resetAt, new Date(Date.now() - 3_600_000)))
         .catch((err) => console.error('rateLimits prune error:', err));
+      void db
+        .delete(typingState)
+        .where(lt(typingState.expiresAt, new Date(Date.now() - 60_000)))
+        .catch((err) => console.error('typingState prune error:', err));
     })().catch(() => {});
   }, intervalMs);
   timer.unref();
   return () => clearInterval(timer);
+}
+
+/** Expired snoozes resurface as unread — the "reminder" half of snooze.
+ * Clearing snoozed_until in the same update makes the pass idempotent: a row
+ * only matches while actively snoozed, so re-sweeps can't re-flag a
+ * conversation the operator already read. Archived threads are skipped —
+ * archive wins over snooze. */
+export async function sweepSnoozes(db: Db): Promise<number> {
+  const due = await db
+    .select({
+      id: conversations.id,
+      state: conversations.state,
+      workspaceId: agents.workspaceId,
+    })
+    .from(conversations)
+    .innerJoin(agents, eq(conversations.agentId, agents.id))
+    .where(
+      and(
+        lt(conversations.snoozedUntil, new Date()),
+        eq(conversations.isUnread, false),
+        ne(conversations.state, 'archived'),
+      ),
+    );
+  if (!due.length) return 0;
+
+  await db
+    .update(conversations)
+    .set({ isUnread: true, snoozedUntil: null })
+    .where(inArray(conversations.id, due.map((d) => d.id)));
+
+  for (const d of due) {
+    bus.publish(d.workspaceId, {
+      type: 'conversation',
+      data: { id: d.id, state: d.state },
+    });
+  }
+  return due.length;
 }
 
 export async function sweepAutoResume(db: Db): Promise<number> {

@@ -25,6 +25,7 @@ import { llmFor, meteredSettingsFor, OPENROUTER_BASE_URL } from './llm.js';
 import { catalogModel, vendorForBaseUrl, OR_VENDOR_SLUG, effortFor } from '@janis/shared';
 import { runLegacyReply } from './legacyAgent.js';
 import { env } from '../env.js';
+import { acquireConvLock, newestInboundIsPending } from './convLock.js';
 
 const MAX_KNOWLEDGE_CHARS = 80_000;
 
@@ -1307,20 +1308,44 @@ export async function runHostedEvent(
   }
   run.running = true;
   try {
-    do {
-      run.pending = false;
-      // Re-check ownership — a human may have taken over mid-run.
-      const [fresh] = await db
-        .select({ state: conversations.state })
-        .from(conversations)
-        .where(eq(conversations.id, convId))
-        .limit(1);
-      if (!fresh || fresh.state === 'human') break;
-      await replyAsHostedAgent(db, agent, conv);
-    } while (run.pending);
+    // Multi-instance (DATABASE_URL): the Map only serializes this process —
+    // a second instance can hold a simultaneous run for the same conv and
+    // double-reply. The advisory lock makes runs mutually exclusive across
+    // instances; a contender that waited finds its inbound already answered
+    // (newest message is 'out') and no-ops below. Null under PGlite.
+    const release = await acquireConvLock(db, convId);
+    try {
+      do {
+        // capture before clearing — the flag is the only signal that an
+        // inbound arrived while we were running
+        const wasPending = run.pending;
+        run.pending = false;
+        // Re-check ownership — a human may have taken over mid-run.
+        const [fresh] = await db
+          .select({ state: conversations.state })
+          .from(conversations)
+          .where(eq(conversations.id, convId))
+          .limit(1);
+        if (!fresh || fresh.state === 'human') break;
+        // wasPending short-circuits the DB check: the inbound it marks can
+        // postdate the reply we just stored (transcript was loaded before it
+        // arrived), so max-timestamp comparison alone would wrongly skip it.
+        // Without pending, the check closes the cross-instance gap — a
+        // contender that waited on the lock finds its inbound already
+        // answered and no-ops instead of double-replying.
+        if (!wasPending && !(await newestInboundIsPending(db, convId))) break;
+        await replyAsHostedAgent(db, agent, conv);
+      } while (run.pending);
+    } finally {
+      await release?.();
+    }
   } finally {
     run.running = false;
     convRuns.delete(convId);
+    // An inbound that slipped in between the loop's last check and teardown
+    // set pending on a run nobody will read — re-enter as a fresh run so it
+    // isn't dropped.
+    if (run.pending) void runHostedEvent(db, agent, event);
   }
 }
 

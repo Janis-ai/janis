@@ -182,7 +182,7 @@ describe('webchat widget endpoints', () => {
       .select()
       .from(conversations)
       .where(eq(conversations.externalId, `webchat:${VIS}`));
-    markOperatorTyping(conv.id, 'Bob');
+    await markOperatorTyping(db, conv.id, 'Bob');
     const body = await (
       await app.request(`/chat/${channelId}/messages?visitor_id=${VIS}`)
     ).json();
@@ -235,7 +235,7 @@ describe('webchat widget endpoints', () => {
       .insert(users)
       .values({ email: 'op@x.test', name: 'Op One' })
       .returning();
-    markOperatorTyping(conv.id, 'Op');
+    await markOperatorTyping(db, conv.id, 'Op');
     await takeover(db, ws.id, conv.id, op);
     const mid = await (
       await app.request(`/chat/${channelId}/messages?visitor_id=${VIS}`)

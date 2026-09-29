@@ -1,5 +1,5 @@
 import type { OutboundWebhook, OutboundWebhookType } from '@janis/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, lt } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alerts, webhookDeliveries } from '../db/schema.js';
 import { signWebhookPayload } from './crypto.js';
@@ -81,7 +81,7 @@ export async function deliverWebhook(
   // so even a fast hosted reply can't outrun it.
   const workingConv = (data as { janis_conversation_id?: string }).janis_conversation_id;
   if (type === 'message.user' && workingConv) {
-    markAgentWorking(workingConv);
+    void markAgentWorking(db, workingConv);
     bus.publish(agent.workspaceId, {
       type: 'typing',
       data: { conversation_id: workingConv, name: agent.name, kind: 'agent' },
@@ -165,8 +165,57 @@ async function attempt(
 
     await db
       .update(webhookDeliveries)
-      .set({ attempts: attemptIndex + 1, lastError: message })
+      .set({
+        attempts: attemptIndex + 1,
+        lastError: message,
+        // the sweeper reclaims this if the process dies before the timer —
+        // nextAttemptAt is the schedule-of-record, setTimeout just the fast path
+        nextAttemptAt: new Date(Date.now() + nextDelay),
+      })
       .where(eq(webhookDeliveries.id, deliveryId));
     setTimeout(() => void attempt(db, deliveryId, agent, body, attemptIndex + 1), nextDelay);
   }
+}
+
+/**
+ * Retry deliveries whose scheduled attempt is long overdue — the in-process
+ * setTimeout chain dies with its instance (deploy, crash, OOM). Runs under
+ * the sweeper's leader lock, so exactly one instance reclaims. The 30s grace
+ * keeps it clear of healthy timers (delays top out at 15s).
+ */
+export async function sweepWebhookRetries(db: Db): Promise<number> {
+  const stale = new Date(Date.now() - 30_000);
+  const rows = await db
+    .select({ delivery: webhookDeliveries, agent: agents })
+    .from(webhookDeliveries)
+    .innerJoin(agents, eq(webhookDeliveries.agentId, agents.id))
+    .where(
+      and(
+        eq(webhookDeliveries.status, 'pending'),
+        lt(webhookDeliveries.nextAttemptAt, stale),
+      ),
+    )
+    .limit(50);
+
+  for (const { delivery, agent } of rows) {
+    // claim first — push the schedule forward so a parallel sweep on another
+    // interval tick can't pick the same row while an attempt is in flight
+    const claimed = await db
+      .update(webhookDeliveries)
+      .set({ nextAttemptAt: new Date(Date.now() + 5 * 60_000) })
+      .where(
+        and(eq(webhookDeliveries.id, delivery.id), eq(webhookDeliveries.status, 'pending')),
+      )
+      .returning({ id: webhookDeliveries.id });
+    if (!claimed.length) continue;
+    if (!agent.webhookUrl) {
+      await db
+        .update(webhookDeliveries)
+        .set({ status: 'failed', lastError: 'no webhook_url configured' })
+        .where(eq(webhookDeliveries.id, delivery.id));
+      continue;
+    }
+    void attempt(db, delivery.id, agent, JSON.stringify(delivery.payload), delivery.attempts);
+  }
+  return rows.length;
 }

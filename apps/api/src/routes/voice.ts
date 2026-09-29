@@ -1,12 +1,12 @@
 import { Hono, type Context } from 'hono';
 import { and, eq } from 'drizzle-orm';
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { channelBindings, channels, conversations } from '../db/schema.js';
 import type { ChannelCredentials } from '../lib/channels.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 import { voiceAwaitReply, voiceEndCall } from '../lib/voiceBridge.js';
 import { recordVoiceUsage } from '../lib/usage.js';
+import { validTwilioSignature } from '../lib/twilio.js';
 import { env } from '../env.js';
 
 /**
@@ -34,21 +34,6 @@ const twiml = (c: Context, inner: string) =>
     'Content-Type': 'text/xml',
   });
 
-/** Twilio signs URL + alphabetically-sorted POST params with the auth token. */
-function validSignature(
-  url: string,
-  params: Record<string, string>,
-  signature: string | undefined,
-  authToken: string,
-): boolean {
-  if (!signature || !authToken) return false;
-  const data = url + Object.keys(params).sort().map((k) => k + params[k]).join('');
-  const expected = createHmac('sha1', authToken).update(data).digest('base64');
-  const a = Buffer.from(signature);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 export function voiceRoutes(db: Db, opts?: { replyWaitMs?: number }) {
   const replyWaitMs = opts?.replyWaitMs ?? 12_000;
   const app = new Hono();
@@ -71,7 +56,7 @@ export function voiceRoutes(db: Db, opts?: { replyWaitMs?: number }) {
     // Twilio signs the exact URL it called — env.apiOrigin + path + query.
     const req = new URL(c.req.url);
     const url = `${env.apiOrigin}${req.pathname}${req.search}`;
-    if (!validSignature(url, body, c.req.header('X-Twilio-Signature'), creds.twilio_auth_token ?? ''))
+    if (!validTwilioSignature(url, body, c.req.header('X-Twilio-Signature'), creds.twilio_auth_token ?? ''))
       return null;
     return { channel, creds, body };
   }

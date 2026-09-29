@@ -558,7 +558,7 @@ export function conversationRoutes(db: Db) {
     // Same customer-facing identity rules as a sent reply — a show_identity
     // opt-out still shows dots, just anonymously.
     const ident = await operatorIdentity(db, user, owned.agentId);
-    markOperatorTyping(owned.id, ident.name);
+    void markOperatorTyping(db, owned.id, ident.name);
     // Collision detection — teammates co-viewing the thread see "X is
     // typing" so two operators don't both compose replies.
     bus.publish(workspaceId, {

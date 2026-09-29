@@ -17,6 +17,7 @@ export const KIND_LABEL: Record<string, string> = {
   email: 'Email',
   gmail: 'Gmail',
   voice: 'Voice',
+  sms: 'SMS',
 };
 
 /** Comma- or newline-separated text → trimmed array of quick-reply labels. */
@@ -211,7 +212,23 @@ export function ChannelCard({
           </div>
         </details>
       )}
-      {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && ch.kind !== 'email' && ch.kind !== 'gmail' && ch.kind !== 'voice' && (
+      {ch.kind === 'sms' && (
+        <details className="webhook-details" open style={{ marginTop: 8 }}>
+          <summary>
+            <span className="details-title">{ch.meta.phone_number ?? 'SMS number'}</span>
+            <span className="details-sub">texts to this number land in this inbox</span>
+          </summary>
+          <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
+            {apiOrigin}/sms/{ch.id}
+          </div>
+          <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
+            Inbound webhook — Janis sets this on the number automatically when the channel is
+            created. If texts aren't arriving, paste it in the Twilio console: Phone Numbers →
+            your number → Messaging → "A message comes in": POST to the URL above.
+          </div>
+        </details>
+      )}
+      {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && ch.kind !== 'email' && ch.kind !== 'gmail' && ch.kind !== 'voice' && ch.kind !== 'sms' && (
       <details className="webhook-details">
         <summary>Webhook details</summary>
         <div className="mono" style={{ marginTop: 6 }}>

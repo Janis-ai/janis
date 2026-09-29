@@ -60,7 +60,18 @@ export async function processEvents(
   const repliedInBatch = new Set<string>();
 
   for (const event of events) {
-    if (cap.capped && event.type === 'message_in') continue;
+    if (cap.capped && event.type === 'message_in') {
+      // keep results[] index-aligned with events[] — SDK callers correlate
+      // per-event results by position; skipping shifts every later answer
+      results.push({
+        conversation_id: event.conversation_id,
+        paused: false,
+        conversation_state: 'active',
+        alert_ids: [],
+        capped: true,
+      });
+      continue;
+    }
     const conv = await findOrCreateConversation(db, agent, event);
     const alertIds: string[] = [];
     const newAlertTypes: string[] = [];
@@ -73,8 +84,8 @@ export async function processEvents(
       // no longer working on it and a delivered reply can't still be typing.
       // A second inbound mid-work keeps "is thinking" live — correct.
       if (message.direction !== 'in') {
-        clearAgentWorking(conv.id);
-        clearOperatorTyping(conv.id);
+        void clearAgentWorking(db, conv.id);
+        void clearOperatorTyping(db, conv.id);
         void setSlackThreadStatus(db, conv.id, null);
       }
       reportMeter(stripeCustomerId, METER_MESSAGES, 1);

@@ -38,7 +38,7 @@ function baseProfile(channel: ChannelRow, msg: InboundMessage): UserProfile {
     id: msg.senderId,
     channel: channel.kind,
     channel_name: channel.name,
-    ...(channel.kind === 'whatsapp' ? { phone: msg.senderId } : {}),
+    ...(channel.kind === 'whatsapp' || channel.kind === 'sms' ? { phone: msg.senderId } : {}),
     ...(msg.user?.name ?? msg.name ? { name: msg.user?.name ?? msg.name } : {}),
     // webchat host-asserted identity. external_id is the host's user id and
     // feeds account lookups — only persist it when the assertion was
@@ -423,7 +423,16 @@ export async function handleChannelMessage(
   // Rehost remote attachment URLs (expiring Meta CDN links, wa-media: refs)
   // into durable /uploads/* rows before they enter the transcript or webhook.
   if (msg.attachments?.length) {
-    msg.attachments = await rehostAttachments(db, msg.attachments, creds.access_token);
+    // Twilio media URLs sit behind basic auth (sid:token) — pass the channel
+    // creds so MMS attachments rehost instead of breaking.
+    msg.attachments = await rehostAttachments(
+      db,
+      msg.attachments,
+      creds.access_token,
+      channel.kind === 'sms' && creds.twilio_account_sid
+        ? { user: creds.twilio_account_sid, pass: creds.twilio_auth_token ?? '' }
+        : undefined,
+    );
   }
 
   // Store + evaluate rules

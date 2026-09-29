@@ -155,6 +155,9 @@ export const IngestResult = z.object({
   paused: z.boolean(),
   conversation_state: ConversationState,
   alert_ids: z.array(z.string()),
+  /** true when the workspace's hard message cap dropped this event before
+   * storage — results[] stays index-aligned with the submitted events */
+  capped: z.boolean().optional(),
 });
 export type IngestResult = z.infer<typeof IngestResult>;
 
@@ -308,7 +311,7 @@ export type Agent = z.infer<typeof Agent>;
 /** A hosted messaging channel (Meta), embeddable webchat, or inbound email. Tokens are never exposed to the console. */
 export const Channel = z.object({
   id: z.string(),
-  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'voice']),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'voice', 'sms']),
   name: z.string(),
   agent_id: z.string(),
   agent_name: z.string(),

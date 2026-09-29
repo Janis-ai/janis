@@ -34,7 +34,7 @@ import { toChannel } from '../lib/serializers.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 
 const createChannel = z.object({
-  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'voice']),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'voice', 'sms']),
   name: z.string().min(1).max(120),
   agent_id: z.string().uuid(),
   page_id: z.string().optional(), // messenger / instagram
@@ -53,6 +53,9 @@ const createChannel = z.object({
   // phone_number is one the customer picked from /channels/voice-numbers
   hosted: z.boolean().optional(),
   country: z.string().length(2).optional(),
+  // sms: clone the Twilio creds + number off an existing voice channel — the
+  // one-click "text-enable this number" path (hosted and BYO both work).
+  from_voice_channel_id: z.string().uuid().optional(),
 });
 
 const patchChannel = z.object({
@@ -175,6 +178,14 @@ export function channelApiRoutes(db: Db) {
     if (body.kind === 'voice' && body.hosted && !body.phone_number) {
       return c.json({ error: 'phone_number required — pick one from /channels/voice-numbers' }, 400);
     }
+    if (body.kind === 'sms' && !body.from_voice_channel_id) {
+      if (!body.twilio_account_sid || !body.twilio_auth_token || !body.phone_number) {
+        return c.json(
+          { error: 'twilio_account_sid, twilio_auth_token and phone_number required for sms' },
+          400,
+        );
+      }
+    }
     if (body.kind === 'messenger' || body.kind === 'instagram') {
       if (!body.page_id) {
         return c.json({ error: 'page_id required for messenger/instagram' }, 400);
@@ -201,6 +212,26 @@ export function channelApiRoutes(db: Db) {
       // routed to this channel by matching the To: header against it.
       credentials.inbound_address = `ch_${randomBytes(4).toString('hex')}@${env.emailInboundDomain}`;
       credentials.from_name = body.from_name;
+    }
+    if (body.kind === 'sms' && body.from_voice_channel_id) {
+      const [voice] = await db
+        .select({ credentials: channels.credentials })
+        .from(channels)
+        .where(
+          and(
+            eq(channels.id, body.from_voice_channel_id),
+            eq(channels.workspaceId, c.get('workspaceId')),
+            eq(channels.kind, 'voice'),
+          ),
+        )
+        .limit(1);
+      if (!voice) return c.json({ error: 'voice channel not found' }, 404);
+      const vc = voice.credentials as ChannelCredentials;
+      credentials.twilio_account_sid = vc.twilio_account_sid;
+      credentials.twilio_auth_token = vc.twilio_auth_token;
+      credentials.phone_number = vc.phone_number;
+      credentials.hosted = vc.hosted;
+      credentials.twilio_number_sid = vc.twilio_number_sid;
     }
     if (body.kind === 'voice' && body.hosted) {
       // Paid plans only — hosted numbers burn real Twilio balance, and free
@@ -281,6 +312,13 @@ export function channelApiRoutes(db: Db) {
         credentials,
       })
       .returning();
+    if (row && body.kind === 'sms') {
+      // Best-effort: point the number's SmsUrl at this channel. If Twilio
+      // rejects (bad creds, number elsewhere) the channel card still shows
+      // the webhook URL for manual setup.
+      const { setSmsWebhook } = await import('../lib/twilio.js');
+      await setSmsWebhook(credentials, `${env.apiOrigin}/sms/${row.id}`).catch(() => {});
+    }
     invalidateChannelCache();
     // Get Started button on the page profile — best-effort, never block creation
     void setGetStartedButton(body.kind, credentials).catch(() => {});
@@ -392,6 +430,25 @@ export function channelApiRoutes(db: Db) {
     if (row.kind === 'voice' && creds?.hosted && creds.twilio_account_sid) {
       const { deprovisionVoiceNumber } = await import('../lib/twilio.js');
       void deprovisionVoiceNumber(creds.twilio_account_sid, creds.twilio_number_sid);
+    }
+    // An SMS channel cloned off a hosted number dies with it — the shared
+    // subaccount creds stop working when the number releases. BYO voice
+    // creds still exist on the customer's account, so no cascade there.
+    if (row.kind === 'voice' && creds?.hosted) {
+      const smsSiblings = await db
+        .select({ id: channels.id })
+        .from(channels)
+        .where(
+          and(
+            eq(channels.workspaceId, c.get('workspaceId')),
+            eq(channels.kind, 'sms'),
+            sql`${channels.credentials}->>'phone_number' = ${creds.phone_number ?? ''}`,
+          ),
+        );
+      for (const sib of smsSiblings) {
+        await db.delete(channelBindings).where(eq(channelBindings.channelId, sib.id));
+        await db.delete(channels).where(eq(channels.id, sib.id));
+      }
     }
     // Bindings reference channels without cascade — remove them first.
     await db.delete(channelBindings).where(eq(channelBindings.channelId, row.id));

@@ -31,6 +31,7 @@ import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 import { metaApiRoutes, metaPublicRoutes } from './routes/meta.js';
 import { gmailApiRoutes, gmailPublicRoutes } from './routes/gmail.js';
 import { voiceRoutes } from './routes/voice.js';
+import { smsRoutes } from './routes/sms.js';
 import { articleRoutes, helpPublicRoutes } from './routes/helpCenter.js';
 import { onboardingRoutes } from './routes/onboarding.js';
 import { toolTemplateRoutes } from './routes/toolTemplates.js';
@@ -121,6 +122,8 @@ export function createApp(db: Db) {
   app.route('/gmail', gmailPublicRoutes(db)); // signed-token OAuth start/callback — no session
   app.use('/voice/*', rateLimit({ scope: 'voice', windowMs: 60_000, max: 120 }));
   app.route('/voice', voiceRoutes(db)); // Twilio-signed voice webhooks
+  app.use('/sms/*', rateLimit({ scope: 'sms', windowMs: 60_000, max: 120 }));
+  app.route('/sms', smsRoutes(db)); // Twilio-signed messaging webhooks
   app.route('/api/help', helpPublicRoutes(db)); // public help center — published articles only
   // Legacy npm-SDK transcript/detectIntent API (api.janis.ai) — clientkey-auth'd.
   app.use('/api/v1/*', rateLimit({ scope: 'legacy-api', windowMs: 60_000, max: 300 }));
