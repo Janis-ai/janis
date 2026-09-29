@@ -308,12 +308,48 @@
   function saveSeen() { try { if (state.lastSeen) localStorage.setItem(LS_SEEN, state.lastSeen); } catch (e) {} }
   // Tab-title flash — "(2) Site name". Strip our own prefix rather than
   // restoring a saved title so host-side title changes (SPAs) survive.
+  // Plus a red dot painted over the favicon — what actually catches the eye
+  // on a crowded tab bar (Intercom does the same).
+  var favOrig = null, favData = null, favApplied = false;
+  function faviconBadge(on) {
+    try {
+      var link = document.querySelector('link[rel~="icon"],link[rel="shortcut icon"]');
+      if (!link) return;
+      if (favOrig === null) favOrig = link.getAttribute('href') || '';
+      if (!on) {
+        if (favApplied) { link.setAttribute('href', favOrig); favApplied = false; }
+        return;
+      }
+      if (favData) { link.setAttribute('href', favData); favApplied = true; return; }
+      var img = new Image();
+      img.onload = function () {
+        var s = img.width || 32;
+        var c = document.createElement('canvas');
+        c.width = c.height = s;
+        var x = c.getContext('2d');
+        x.drawImage(img, 0, 0, s, s);
+        var r = s * 0.3;
+        x.beginPath();
+        x.arc(s - r * 0.7, r * 0.7, r, 0, Math.PI * 2);
+        x.fillStyle = '#ef4444';
+        x.fill();
+        x.lineWidth = s * 0.1;
+        x.strokeStyle = '#fff';
+        x.stroke();
+        try { favData = c.toDataURL('image/png'); } catch (e) { return; } // tainted canvas (cross-origin icon) — title prefix still carries it
+        link.setAttribute('href', favData);
+        favApplied = true;
+      };
+      img.src = favOrig;
+    } catch (e) {}
+  }
   function updateBadge() {
     var n = state.open ? 0 : state.unread;
     badgeEl.style.display = n > 0 ? 'block' : 'none';
     badgeEl.textContent = n > 9 ? '9+' : String(n);
     var bare = document.title.replace(/^\(\d+\+?\)\s+/, '');
     document.title = n > 0 ? '(' + n + ') ' + bare : bare;
+    faviconBadge(n > 0);
   }
   // Proactive teaser — a card above the launcher for brand-new visitors (no
   // thread, no unread). Session dismissal; superseded by the unread badge.

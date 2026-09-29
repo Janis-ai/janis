@@ -848,3 +848,20 @@ details summary:hover { color: var(--text); }
 .help-category a { font-weight: 600; }
 .help-category p { margin: 4px 0 0; font-size: 13px; }
 .help-body { white-space: pre-wrap; line-height: 1.65; margin-top: 16px; }
+
+/* color picker — browsers render a tiny unlabeled chip by default; make it
+   a proper bordered swatch so the chosen accent is actually visible */
+input[type=color].swatch {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 44px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  padding: 2px;
+  cursor: pointer;
+}
+input[type=color].swatch::-webkit-color-swatch-wrapper { padding: 0; }
+input[type=color].swatch::-webkit-color-swatch { border: none; border-radius: 5px; }
+input[type=color].swatch::-moz-color-swatch { border: none; border-radius: 5px; }

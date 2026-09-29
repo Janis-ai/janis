@@ -403,9 +403,11 @@ function WebchatBranding({ channel }: { channel: Channel }) {
           Accent{' '}
           <input
             type="color"
+            className="swatch"
             value={f.accent}
             onChange={(e) => setF({ ...f, accent: e.target.value })}
           />
+          <span className="mono muted">{f.accent}</span>
         </label>
         <label className="grow" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           Position
