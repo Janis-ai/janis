@@ -344,13 +344,27 @@
     } catch (e) {}
   }
   function updateBadge() {
-    var n = state.open ? 0 : state.unread;
-    badgeEl.style.display = n > 0 ? 'block' : 'none';
+    // Bubble badge only while closed (the panel covers it); title + favicon
+    // badge whenever unseen — they're what a backgrounded tab can show.
+    var n = state.unread;
+    badgeEl.style.display = n > 0 && !state.open ? 'block' : 'none';
     badgeEl.textContent = n > 9 ? '9+' : String(n);
     var bare = document.title.replace(/^\(\d+\+?\)\s+/, '');
     document.title = n > 0 ? '(' + n + ') ' + bare : bare;
     faviconBadge(n > 0);
   }
+  // Returned to a visible tab with the panel open — the transcript is in
+  // view, so the backlog is seen by definition.
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && state.open && state.unread) {
+      state.unread = 0;
+      if (state.lastTs && (!state.lastSeen || state.lastTs > state.lastSeen)) {
+        state.lastSeen = state.lastTs;
+        saveSeen();
+      }
+      updateBadge();
+    }
+  });
   // Proactive teaser — a card above the launcher for brand-new visitors (no
   // thread, no unread). Session dismissal; superseded by the unread badge.
   var teaserEl = null;
@@ -841,11 +855,10 @@
           // while the panel is closed; while open they just advance it.
           if (m.direction !== 'in' && m.created_at && state.seenInit &&
               (!state.lastSeen || m.created_at > state.lastSeen)) {
-            // Chime on any reply the visitor isn't looking at — closed panel
-            // or hidden tab — but not when the open panel is in view.
-            if (!state.open || document.hidden) wantPing = true;
-            if (state.open) { state.lastSeen = m.created_at; saveSeen(); }
-            else state.unread++;
+            // "Unseen" = closed panel OR backgrounded tab — an open panel on
+            // a hidden tab still needs the tab-strip signals (title/favicon).
+            if (!state.open || document.hidden) { wantPing = true; state.unread++; }
+            else { state.lastSeen = m.created_at; saveSeen(); }
           }
           if (m.direction !== 'in') gotReply = true;
           addMsg(m);
