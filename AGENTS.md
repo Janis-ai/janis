@@ -115,6 +115,13 @@ before typecheck/tests/dev.
 - SLA timers + breach alerts (business-hours-aware).
 - Mobile polish on conversation screen (operators live on phones).
 
+**npm**
+- `janis` (SDK): published — latest 1.0.1 (1.0.0 leaked @janis/shared type
+  imports in .d.ts; 1.0.1 owns its wire types in src/types.ts). Granular
+  token `devin-publish` bypasses 2FA for CI publishes.
+- `janis-agent` (runnable template): published 1.0.0 — `npx janis-agent`
+  quickstart now documented alongside docker; docs/console copy updated.
+
 **Product depth (features exist, competitors go deeper)**
 - Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
   13 articles on prod Demo Agent + Janis agent. Missing: full-text ranked
