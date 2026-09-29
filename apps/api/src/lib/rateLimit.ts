@@ -89,7 +89,11 @@ export function dbRateLimit(db: Db, opts: RateLimitOptions): MiddlewareHandler {
                        then ${resetAt.toISOString()} else rate_limits.reset_at end
         returning count, reset_at
       `);
-      const row = (res as { rows?: { count: number; reset_at: string | Date }[] }).rows?.[0];
+      // postgres.js returns the rows array directly; PGlite returns {rows}.
+      const resRows = (Array.isArray(res) ? res : (res as { rows?: unknown[] }).rows) as
+        | { count: number; reset_at: string | Date }[]
+        | undefined;
+      const row = resRows?.[0];
       if (row && row.count > max) {
         const retryAfter = Math.max(
           1,
