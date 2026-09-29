@@ -54,6 +54,8 @@
     seenInit: false, // first poll sets the baseline — history never counts unread
     unread: 0,
     fails: 0,        // consecutive poll failures — drives the reconnect strip
+    pinBottom: true, // visitor is scrolled to the latest — keep following new msgs
+    jumpEl: null,    // "new messages" pill shown when not pinned and replies land
     audioCtx: null,
     closedTimer: null, // closed-state poll — feeds the unread badge
   };
@@ -224,6 +226,11 @@
     '#janis-teaser .janis-x{position:absolute;top:5px;right:7px;border:none;background:none;color:#9ca3af;' +
     'font-size:15px;cursor:pointer;padding:2px 5px;line-height:1}' +
     '#janis-conn{flex-shrink:0;background:#fef3c7;color:#92400e;font-size:12px;padding:5px 14px;text-align:center}' +
+    '#janis-jump{position:absolute;bottom:66px;left:50%;transform:translateX(-50%);z-index:2;' +
+    'border:none;border-radius:14px;padding:7px 14px;background:#1f2937;color:#fff;font-size:12px;' +
+    'cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3);white-space:nowrap;animation:janis-pop .2s ease;' +
+    'font-family:inherit}' +
+    '#janis-jump:hover{background:#374151}' +
     '.janis-when{opacity:.55;font-weight:400;margin-left:4px}' +
     // iOS Safari zooms the whole page when a focused field is under 16px —
     // keep the input at 16px on touch devices so opening the widget doesn't
@@ -335,6 +342,22 @@
   }
   // Connectivity strip — consecutive poll failures mean the host is likely
   // offline or the API unreachable; show it only while the panel is open.
+  // Follow-bottom scrolling — the standard pattern (Intercom/iMessage):
+  // new messages yank the view only while the visitor is pinned near the
+  // bottom; if they've scrolled up to read, a "new messages" pill offers
+  // the jump instead of ripping them out of their place.
+  function scrollBottom() { msgs.scrollTop = msgs.scrollHeight; }
+  function nearBottom() { return msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60; }
+  function showJump() {
+    if (state.jumpEl || !state.open) return;
+    var b = el('button', {}, { id: 'janis-jump', type: 'button' });
+    b.textContent = '↓ New messages';
+    b.onclick = function () { state.pinBottom = true; scrollBottom(); hideJump(); };
+    panel.appendChild(b);
+    state.jumpEl = b;
+  }
+  function hideJump() { if (state.jumpEl) { state.jumpEl.remove(); state.jumpEl = null; } }
+
   var connEl = null;
   function setConn(lost) {
     if (lost && state.open && !connEl) {
@@ -389,7 +412,7 @@
       return;
     }
     if (state.typingEl) {
-      msgs.scrollTop = msgs.scrollHeight;
+      if (state.pinBottom) scrollBottom();
       return;
     }
     var d = el('div', {}, { class: 'janis-msg out typing' });
@@ -399,7 +422,7 @@
     dots.appendChild(el('span', {}, { class: 'janis-dot' }));
     d.appendChild(dots);
     msgs.appendChild(d);
-    msgs.scrollTop = msgs.scrollHeight;
+    if (state.pinBottom) scrollBottom(); // transient — no jump pill for dots
     state.typingEl = d;
   }
 
@@ -512,7 +535,10 @@
       clearChips();
     }
     if (state.qrsEl) msgs.appendChild(state.qrsEl); // keep chips under the newest bubble
-    msgs.scrollTop = msgs.scrollHeight;
+    // Own sends always snap to bottom (the visitor is right there typing);
+    // replies only follow when pinned — otherwise offer the jump pill.
+    if (state.pinBottom || !state.open || m.direction === 'in') scrollBottom();
+    else showJump();
     if (m.created_at && (!state.lastTs || m.created_at > state.lastTs)) state.lastTs = m.created_at;
     if (m.created_at && (!state.oldestTs || m.created_at < state.oldestTs)) state.oldestTs = m.created_at;
     return d;
@@ -565,6 +591,8 @@
   }
   msgs.addEventListener('scroll', function () {
     if (msgs.scrollTop < 40 && state.loaded) loadOlder();
+    state.pinBottom = nearBottom();
+    if (state.pinBottom) hideJump(); // scrolled to latest by hand
   });
 
   // Optimistic send: bubble renders instantly, swaps for the server echo when it arrives.
@@ -657,7 +685,7 @@
       row.appendChild(b);
     });
     msgs.appendChild(row);
-    msgs.scrollTop = msgs.scrollHeight;
+    if (state.pinBottom) scrollBottom();
     state.qrsEl = row;
   }
 
@@ -834,6 +862,12 @@
         saveSeen();
       }
       updateBadge();
+      // The transcript pre-loads while closed — but display:none has no
+      // layout, so those scroll calls were no-ops and the panel would open
+      // at the oldest message. Snap to the latest once a frame paints.
+      state.pinBottom = true;
+      hideJump();
+      requestAnimationFrame(function () { scrollBottom(); });
       poll();
       if (!state.timer) state.timer = setInterval(poll, 3000);
       // Auto-focus pops the on-screen keyboard on mobile — let them tap in.
