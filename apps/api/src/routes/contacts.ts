@@ -3,7 +3,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, channels, contactIdentities, contacts, conversations } from '../db/schema.js';
+import { agents, campaignSends, channels, contactIdentities, contacts, conversations } from '../db/schema.js';
 import { sessionAuth, adminOnly, type SessionEnv } from '../middleware/sessionAuth.js';
 import { audit } from '../lib/audit.js';
 
@@ -50,6 +50,9 @@ export function contactRoutes(db: Db) {
                 sql`${contacts.name} ilike ${'%' + q + '%'}`,
                 sql`${contacts.email} ilike ${'%' + q + '%'}`,
                 sql`${contacts.phone} ilike ${'%' + q + '%'}`,
+                // Identity ids too — a merged-away email/phone still finds
+                // the person via the channel identity that carried it.
+                sql`exists (select 1 from ${contactIdentities} ci where ci.contact_id = ${contacts.id} and ci.platform_user_id ilike ${'%' + q + '%'})`,
               )
             : undefined,
         ),
@@ -248,6 +251,10 @@ export function contactRoutes(db: Db) {
         .update(conversations)
         .set({ contactId: keepId })
         .where(eq(conversations.contactId, dropId));
+      await db
+        .update(campaignSends)
+        .set({ contactId: keepId })
+        .where(eq(campaignSends.contactId, dropId));
       const d = drop[0];
       const k = keep[0];
       await db
@@ -270,7 +277,16 @@ export function contactRoutes(db: Db) {
         action: 'contact.merge',
         targetType: 'contact',
         targetId: keepId,
-        meta: { merged_id: dropId },
+        // Record what the merge discarded — the losing email/phone/name are
+        // otherwise unrecoverable once the row is gone.
+        meta: {
+          merged_id: dropId,
+          discarded: {
+            name: k.name && d.name && k.name !== d.name ? d.name : null,
+            email: k.email && d.email && k.email !== d.email ? d.email : null,
+            phone: k.phone && d.phone && k.phone !== d.phone ? d.phone : null,
+          },
+        },
       });
       return c.json({ ok: true, contact_id: keepId });
     },
