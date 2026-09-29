@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
@@ -6,7 +6,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channelBindings, channels, usageEvents } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations, messages, usageEvents } from '../db/schema.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
@@ -16,11 +16,18 @@ import {
   invalidateChannelCache,
   parseMetaWebhook,
   resolveChatIdentity,
+  sendChannelMessage,
   setGetStartedButton,
   takeThreadControl,
   verifyMetaSignature,
   type ChannelCredentials,
 } from '../lib/channels.js';
+import { contactForBinding, linkConversationContact } from '../lib/contacts.js';
+import { audit } from '../lib/audit.js';
+import { bus } from '../lib/bus.js';
+import type { UserProfile } from '@janis/shared';
+
+type ChannelRow = typeof channels.$inferSelect;
 import {
   htmlToText,
   isAutoReply,
@@ -322,6 +329,15 @@ export function channelApiRoutes(db: Db) {
     invalidateChannelCache();
     // Get Started button on the page profile — best-effort, never block creation
     void setGetStartedButton(body.kind, credentials).catch(() => {});
+    await audit(db, {
+      workspaceId: c.get('workspaceId'),
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'channel.create',
+      targetType: 'channel',
+      targetId: row.id,
+      meta: { kind: body.kind, name: body.name, agent_id: body.agent_id },
+    });
     return c.json({ channel: toChannel(row, agent.name) }, 201);
   });
 
@@ -454,10 +470,279 @@ export function channelApiRoutes(db: Db) {
     await db.delete(channelBindings).where(eq(channelBindings.channelId, row.id));
     await db.delete(channels).where(eq(channels.id, row.id));
     invalidateChannelCache();
+    await audit(db, {
+      workspaceId: c.get('workspaceId'),
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'channel.delete',
+      targetType: 'channel',
+      targetId: row.id,
+      meta: { kind: row.kind },
+    });
     return c.json({ ok: true });
   });
 
+  // ---- Outbound / proactive messaging -----------------------------------
+
+  const waTemplate = z.object({
+    name: z.string().min(1).max(200),
+    language: z.string().max(20).optional(),
+    body_params: z.array(z.string().max(1024)).max(20).optional(),
+  });
+  const outboundBody = z.object({
+    to: z.string().min(1).max(320),
+    text: z.string().max(4000).default(''),
+    subject: z.string().max(200).optional(),
+    whatsapp_template: waTemplate.optional(),
+  });
+  const broadcastBody = outboundBody
+    .omit({ to: true })
+    .extend({ recipients: z.array(z.string().min(1).max(320)).min(1).max(200) });
+
+  /** Load the channel scoped to workspace + agent visibility; null → 404. */
+  const loadChannel = async (c: Context<SessionEnv>): Promise<ChannelRow | null> => {
+    const [row] = await db
+      .select({ channel: channels })
+      .from(channels)
+      .innerJoin(agents, eq(channels.agentId, agents.id))
+      .where(
+        and(
+          eq(channels.id, c.req.param('id') ?? ''),
+          eq(channels.workspaceId, c.get('workspaceId')),
+          ...(agentScopeCond(c.get('agentScope')) ? [agentScopeCond(c.get('agentScope'))!] : []),
+        ),
+      )
+      .limit(1);
+    return row?.channel ?? null;
+  };
+
+  // Proactive outbound — creates the conversation if the recipient hasn't
+  // messaged before. SMS/email can initiate freely; WhatsApp requires an
+  // approved template outside the 24h session window (enforced in
+  // sendOutbound). Messenger/IG/webchat can't initiate — Meta only allows
+  // replies inside the messaging window, and the widget is pull-based.
+  app.post('/:id/send', zValidator('json', outboundBody), async (c) => {
+    const channel = await loadChannel(c);
+    if (!channel) return c.json({ error: 'not found' }, 404);
+    const role = await agentRoleFor(
+      db, c.get('user').id, c.get('role'), c.get('agentScope'), channel.agentId, c.get('workspaceId'),
+    );
+    if (!role) return c.json({ error: 'forbidden' }, 403);
+    const body = c.req.valid('json');
+    const r = await sendOutbound(db, channel, c.get('user'), {
+      to: body.to,
+      text: body.text,
+      subject: body.subject,
+      template: body.whatsapp_template
+        ? {
+            name: body.whatsapp_template.name,
+            language: body.whatsapp_template.language,
+            bodyParams: body.whatsapp_template.body_params,
+          }
+        : undefined,
+    });
+    if ('error' in r && !r.conversationId) return c.json({ error: r.error }, 400);
+    const out = { conversation_id: r.conversationId, mid: r.mid, error: r.error };
+    await audit(db, {
+      workspaceId: c.get('workspaceId'),
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'channel.send',
+      targetType: 'channel',
+      targetId: channel.id,
+      meta: { to: body.to, kind: channel.kind, ok: !r.error },
+    });
+    return c.json(out, r.error ? 502 : 200);
+  });
+
+  // Broadcast — one message to a list of recipients on this channel. Admin
+  // only: bulk outbound is the spam/abuse surface. Sequential with a short
+  // spacing so a 200-recipient send doesn't trip provider rate limits;
+  // per-recipient results come back so failures are visible.
+  app.post('/:id/broadcast', zValidator('json', broadcastBody), async (c) => {
+    const channel = await loadChannel(c);
+    if (!channel) return c.json({ error: 'not found' }, 404);
+    const role = await agentRoleFor(
+      db, c.get('user').id, c.get('role'), c.get('agentScope'), channel.agentId, c.get('workspaceId'),
+    );
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
+    const body = c.req.valid('json');
+    const template = body.whatsapp_template
+      ? {
+          name: body.whatsapp_template.name,
+          language: body.whatsapp_template.language,
+          bodyParams: body.whatsapp_template.body_params,
+        }
+      : undefined;
+    const results: { to: string; ok: boolean; conversation_id?: string; error?: string }[] = [];
+    for (const to of body.recipients) {
+      const r = await sendOutbound(db, channel, c.get('user'), {
+        to, text: body.text, subject: body.subject, template,
+      });
+      results.push({
+        to,
+        ok: !r.error,
+        ...(r.conversationId ? { conversation_id: r.conversationId } : {}),
+        ...(r.error ? { error: r.error } : {}),
+      });
+      await new Promise((res) => setTimeout(res, 150));
+    }
+    await audit(db, {
+      workspaceId: c.get('workspaceId'),
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'channel.broadcast',
+      targetType: 'channel',
+      targetId: channel.id,
+      meta: { kind: channel.kind, recipients: body.recipients.length, sent: results.filter((r) => r.ok).length },
+    });
+    return c.json({ sent: results.filter((r) => r.ok).length, results });
+  });
+
   return app;
+}
+
+interface OutboundResult {
+  conversationId: string | null;
+  mid: string | null;
+  error: string | null;
+}
+
+/** Normalize a recipient for the channel kind; null when the kind can't
+ *  initiate outbound at all (Meta reply-window rules, pull-based widget). */
+function normalizeRecipient(
+  kind: string,
+  raw: string,
+): { to: string; profile: Record<string, unknown> } | null {
+  const t = raw.trim();
+  if (kind === 'sms' || kind === 'whatsapp') {
+    const to = `+${t.replace(/[^\d]/g, '')}`;
+    if (to.length < 8) return null;
+    return { to, profile: { id: to, channel: kind, phone: to } };
+  }
+  if (kind === 'email' || kind === 'gmail') {
+    const to = t.toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return null;
+    return { to, profile: { id: to, channel: kind, email: to } };
+  }
+  return null;
+}
+
+/** Find-or-create the conversation for a recipient, deliver the message,
+ *  store it, and resolve the contact. Shared by /send and /broadcast. */
+async function sendOutbound(
+  db: Db,
+  channel: ChannelRow,
+  user: { id: string; name?: string | null },
+  args: {
+    to: string;
+    text: string;
+    subject?: string;
+    template?: { name: string; language?: string; bodyParams?: string[] };
+  },
+): Promise<OutboundResult> {
+  const norm = normalizeRecipient(channel.kind, args.to);
+  if (!norm) {
+    return {
+      conversationId: null,
+      mid: null,
+      error:
+        channel.kind === 'sms' || channel.kind === 'whatsapp' || channel.kind === 'email' || channel.kind === 'gmail'
+          ? 'invalid recipient for this channel'
+          : `${channel.kind} channels can't initiate outbound — they can only reply`,
+    };
+  }
+  const { to, profile } = norm;
+
+  const [binding] = await db
+    .select({
+      conversationId: channelBindings.conversationId,
+      contactId: conversations.contactId,
+    })
+    .from(channelBindings)
+    .innerJoin(conversations, eq(channelBindings.conversationId, conversations.id))
+    .where(
+      and(
+        eq(channelBindings.channelId, channel.id),
+        eq(channelBindings.platformUserId, to),
+      ),
+    )
+    .limit(1);
+
+  // Brand-new WhatsApp thread — Meta only accepts approved templates
+  // outside the 24h customer-service window.
+  if (channel.kind === 'whatsapp' && !binding && !args.template) {
+    return {
+      conversationId: null,
+      mid: null,
+      error: 'new WhatsApp conversations require a template — pass whatsapp_template {name, language, body_params}',
+    };
+  }
+  if (!args.text.trim() && !args.template) {
+    return { conversationId: null, mid: null, error: 'text or whatsapp_template required' };
+  }
+
+  const workspaceId = channel.workspaceId;
+  let conversationId = binding?.conversationId ?? null;
+  if (!conversationId) {
+    const [conv] = await db
+      .insert(conversations)
+      .values({
+        agentId: channel.agentId,
+        externalId: `${channel.kind}:${to}`,
+        userProfile: { ...profile, channel_name: channel.name },
+      })
+      .returning({ id: conversations.id });
+    conversationId = conv.id;
+    await db
+      .insert(channelBindings)
+      .values({ channelId: channel.id, conversationId, platformUserId: to });
+  }
+
+  const sent = await sendChannelMessage(channel, to, args.text, undefined, {
+    senderName: user.name ?? undefined,
+    senderId: user.id,
+    subject: args.subject,
+    whatsappTemplate: args.template,
+  });
+  const error = sent?.error ?? 'channel does not support outbound';
+
+  // Record the attempt either way — a failed send in the inbox is better
+  // ops signal than a silent drop.
+  await db.insert(messages).values({
+    conversationId,
+    direction: 'out',
+    authorId: user.id,
+    text: args.text || `[template] ${args.template?.name}`,
+    payload: {
+      ...(sent?.mid ? { mid: sent.mid } : {}),
+      via: 'outbound',
+      ...(args.template ? { template: args.template.name } : {}),
+    },
+    flags: { failure: !!error, help_requested: false, custom_alert: false, handoff_offer: false },
+  });
+  const preview = (args.text || `[template] ${args.template?.name}`).slice(0, 200);
+  await db
+    .update(conversations)
+    .set({ lastMessageAt: new Date(), lastMessagePreview: preview, lastMessageDirection: 'out' })
+    .where(eq(conversations.id, conversationId));
+
+  // Contact resolution — same identity spine inbound uses.
+  if (!binding?.contactId) {
+    const contactId = await contactForBinding(db, {
+      workspaceId,
+      channelId: channel.id,
+      platformUserId: to,
+      profile: profile as UserProfile,
+    });
+    await linkConversationContact(db, conversationId, contactId);
+  }
+
+  bus.publish(workspaceId, {
+    type: 'conversation',
+    data: { id: conversationId, state: 'active' },
+  });
+  return { conversationId, mid: sent?.mid ?? null, error };
 }
 
 /** Public Meta webhook endpoints mounted at /channels (app-secret signed). */

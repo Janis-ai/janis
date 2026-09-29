@@ -693,6 +693,8 @@ export default function Settings() {
         {error && <div className="error">{error}</div>}
       </div>
 
+      {me?.user.role === 'admin' && <AuditLogCard />}
+
       {me?.user.role === 'admin' && (
         <div className="card" style={{ borderColor: 'var(--danger)' }}>
           <strong>Danger zone</strong>
@@ -778,6 +780,73 @@ function DefaultLlmCard() {
         )}
       </div>
       {msg && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
+    </div>
+  );
+}
+
+/** Audit trail — every security/billing-relevant mutation, newest first.
+ *  Admin-only (the endpoint 403s members anyway). */
+function AuditLogCard() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['audit-log'],
+    queryFn: () =>
+      api<{
+        entries: {
+          id: string;
+          action: string;
+          user_name: string | null;
+          target_type: string | null;
+          target_id: string | null;
+          meta: Record<string, unknown>;
+          created_at: string;
+        }[];
+      }>('/api/workspace/audit-log'),
+    refetchInterval: 30_000,
+  });
+  const entries = data?.entries ?? [];
+  return (
+    <div className="card">
+      <strong>Audit log</strong>
+      <div className="muted" style={{ margin: '4px 0 10px' }}>
+        Workspace mutations — who changed what, when.
+      </div>
+      {isLoading ? (
+        <div className="muted">Loading…</div>
+      ) : !entries.length ? (
+        <div className="muted">Nothing recorded yet.</div>
+      ) : (
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Who</th>
+              <th>Action</th>
+              <th>Target</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((e) => (
+              <tr key={e.id}>
+                <td className="muted">{new Date(e.created_at).toLocaleString()}</td>
+                <td>{e.user_name ?? '—'}</td>
+                <td>
+                  <code>{e.action}</code>
+                </td>
+                <td className="muted">
+                  {e.target_type ?? ''}
+                  {e.target_id ? ` ${String(e.target_id).slice(0, 8)}` : ''}
+                  {Object.keys(e.meta ?? {}).length
+                    ? ` — ${Object.entries(e.meta)
+                        .slice(0, 3)
+                        .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+                        .join(', ')}`
+                    : ''}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

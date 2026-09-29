@@ -8,6 +8,7 @@ import { effectivePlanKey, invalidateCapCache, messagesInPeriod, planFor, PLANS 
 import { ensureStripeCustomer, planForPrice, stripe } from '../lib/stripe.js';
 import { env } from '../env.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { audit } from '../lib/audit.js';
 
 export function billingRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
@@ -245,6 +246,11 @@ export function billingRoutes(db: Db) {
           );
           await db.update(workspaces).set({ plan }).where(eq(workspaces.id, workspaceId));
           invalidateCapCache(workspaceId);
+          await audit(db, {
+            workspaceId, userId: c.get('user').id, userName: c.get('user').name,
+            action: 'billing.checkout', targetType: 'workspace', targetId: workspaceId,
+            meta: { plan, via: 'connect', swapped: true },
+          });
           return c.json({ plan, upgraded: true });
         }
         const session = await s.checkout.sessions.create(
@@ -261,6 +267,11 @@ export function billingRoutes(db: Db) {
           },
           { stripeAccount: parent.stripeConnectId },
         );
+        await audit(db, {
+          workspaceId, userId: c.get('user').id, userName: c.get('user').name,
+          action: 'billing.checkout', targetType: 'workspace', targetId: workspaceId,
+          meta: { plan, via: 'connect' },
+        });
         return c.json({ url: session.url });
       }
     }
@@ -287,6 +298,11 @@ export function billingRoutes(db: Db) {
       subscription_data: { metadata: { workspace_id: workspaceId, plan } },
       success_url: `${env.webOrigin}/billing?upgraded=1`,
       cancel_url: `${env.webOrigin}/billing`,
+    });
+    await audit(db, {
+      workspaceId, userId: c.get('user').id, userName: c.get('user').name,
+      action: 'billing.checkout', targetType: 'workspace', targetId: workspaceId,
+      meta: { plan },
     });
     return c.json({ url: session.url });
   });
@@ -338,6 +354,11 @@ export function billingRoutes(db: Db) {
       .set({ plan: 'free', stripeSubscriptionId: null, connectSubscriptionId: null })
       .where(eq(workspaces.id, workspaceId));
     invalidateCapCache(workspaceId);
+    await audit(db, {
+      workspaceId, userId: c.get('user').id, userName: c.get('user').name,
+      action: 'billing.downgrade', targetType: 'workspace', targetId: workspaceId,
+      meta: { from_plan: ws.plan },
+    });
     return c.json({ plan: 'free', at_period_end: false });
   });
 
@@ -438,6 +459,11 @@ export function billingRoutes(db: Db) {
       return_url: `${env.webOrigin}/billing?connect=done`,
       type: 'account_onboarding',
     });
+    await audit(db, {
+      workspaceId, userId: c.get('user').id, userName: c.get('user').name,
+      action: 'billing.connect', targetType: 'workspace', targetId: workspaceId,
+      meta: { connect_account: acctId },
+    });
     return c.json({ url: link.url });
   });
 
@@ -491,6 +517,11 @@ export function billingRoutes(db: Db) {
       .update(workspaces)
       .set({ agencyPricing: pricing })
       .where(eq(workspaces.id, workspaceId));
+    await audit(db, {
+      workspaceId, userId: c.get('user').id, userName: c.get('user').name,
+      action: 'billing.agency_pricing', targetType: 'workspace', targetId: workspaceId,
+      meta: { retail: Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.retail_cents])) },
+    });
     return c.json({ pricing: Object.fromEntries(
       Object.entries(pricing).map(([k, v]) => [k, { retail_cents: v.retail_cents }]),
     ) });

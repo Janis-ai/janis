@@ -5,6 +5,7 @@ import { and, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, channels, contactIdentities, contacts, conversations } from '../db/schema.js';
 import { sessionAuth, adminOnly, type SessionEnv } from '../middleware/sessionAuth.js';
+import { audit } from '../lib/audit.js';
 
 /**
  * Unified customer records. A contact collects every channel identity
@@ -87,6 +88,7 @@ export function contactRoutes(db: Db) {
         .select({
           id: contactIdentities.id,
           platformUserId: contactIdentities.platformUserId,
+          channelId: contactIdentities.channelId,
           channelKind: channels.kind,
           channelName: channels.name,
         })
@@ -129,6 +131,7 @@ export function contactRoutes(db: Db) {
       identities: identities.map((i) => ({
         id: i.id,
         platform_user_id: i.platformUserId,
+        channel_id: i.channelId,
         channel_kind: i.channelKind,
         channel_name: i.channelName,
       })),
@@ -238,6 +241,15 @@ export function contactRoutes(db: Db) {
         .where(eq(contacts.id, keepId));
       await db.delete(contacts).where(eq(contacts.id, dropId));
 
+      await audit(db, {
+        workspaceId,
+        userId: c.get('user').id,
+        userName: c.get('user').name,
+        action: 'contact.merge',
+        targetType: 'contact',
+        targetId: keepId,
+        meta: { merged_id: dropId },
+      });
       return c.json({ ok: true, contact_id: keepId });
     },
   );

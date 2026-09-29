@@ -859,3 +859,23 @@ export const rateLimits = pgTable('rate_limits', {
   count: integer('count').notNull(),
   resetAt: timestamp('reset_at', { withTimezone: true }).notNull(),
 });
+
+/** Audit trail — every security/billing-relevant mutation writes a row so
+ *  the workspace can answer "who changed what, when" (SOC 2 prerequisite). */
+export const auditLog = pgTable(
+  'audit_log',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    userId: uuid('user_id'),
+    userName: text('user_name'),
+    action: text('action').notNull(), // 'agent.create', 'billing.connect', …
+    targetType: text('target_type'),
+    targetId: text('target_id'),
+    meta: jsonb('meta').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('audit_log_ws').on(t.workspaceId, t.createdAt)],
+);

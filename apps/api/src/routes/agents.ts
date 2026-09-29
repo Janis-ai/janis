@@ -35,6 +35,7 @@ import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { processEvents } from '../services/ingest.js';
 import { toAgent } from '../lib/serializers.js';
+import { audit } from '../lib/audit.js';
 import { invalidateChannelCache } from '../lib/channels.js';
 import { TOOL_TEMPLATES } from '../lib/toolTemplates.js';
 import { connectionToken } from '../lib/connections.js';
@@ -152,6 +153,15 @@ export function agentRoutes(db: Db) {
         void inviteWorkspaceMembers(db, inst, channel.id, row.id);
       }
     }
+    await audit(db, {
+      workspaceId: c.get('workspaceId'),
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'agent.create',
+      targetType: 'agent',
+      targetId: row.id,
+      meta: { name: row.name, hosted: row.hosted },
+    });
     return c.json({ agent: toAgent(row) }, 201);
   });
 
@@ -438,6 +448,15 @@ export function agentRoutes(db: Db) {
     if (!agent) return c.json({ error: 'not found' }, 404);
     const ok = await replayDelivery(db, c.req.param('deliveryId'), agent);
     if (!ok) return c.json({ error: 'delivery not found or not failed' }, 404);
+    await audit(db, {
+      workspaceId: c.get('workspaceId'),
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'webhook.replay',
+      targetType: 'agent',
+      targetId: agent.id,
+      meta: { delivery_id: c.req.param('deliveryId') },
+    });
     return c.json({ ok: true });
   });
 
@@ -998,6 +1017,14 @@ export function agentRoutes(db: Db) {
         .returning();
     });
     if (!row) return c.json({ error: 'not found' }, 404);
+    await audit(db, {
+      workspaceId,
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'agent.delete',
+      targetType: 'agent',
+      targetId: agentId,
+    });
     return c.json({ ok: true });
   });
 

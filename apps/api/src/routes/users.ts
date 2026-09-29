@@ -8,6 +8,7 @@ import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAu
 import { hashPassword, verifyPassword } from '../lib/crypto.js';
 import { toWorkspaceUser } from '../lib/serializers.js';
 import { removeMemberFromAlertChannels } from '../lib/slack.js';
+import { audit } from '../lib/audit.js';
 
 const createUser = z.object({
   email: z.string().trim().toLowerCase().email(),
@@ -115,6 +116,11 @@ export function userRoutes(db: Db) {
         role: body.role,
         invitedBy: me.id,
       });
+      await audit(db, {
+        workspaceId, userId: me.id, userName: me.name,
+        action: 'member.invite', targetType: 'user', targetId: existing.id,
+        meta: { email: body.email, role: body.role },
+      });
       return c.json(
         { user: { ...toWorkspaceUser(existing, body.role), status: 'invited' } },
         201,
@@ -130,6 +136,11 @@ export function userRoutes(db: Db) {
       workspaceId,
       role: body.role,
       invitedBy: me.id,
+    });
+    await audit(db, {
+      workspaceId, userId: me.id, userName: me.name,
+      action: 'member.invite', targetType: 'user', targetId: row.id,
+      meta: { email: body.email, role: body.role },
     });
     return c.json({ user: { ...toWorkspaceUser(row, body.role), status: 'invited' } }, 201);
   });

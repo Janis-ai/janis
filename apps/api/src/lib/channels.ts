@@ -399,6 +399,12 @@ export interface SendOptions {
   /** Operator avatar — Personas require a profile picture URL; without one
    * the message falls back to the inline name prefix. */
   senderAvatar?: string | null;
+  /** Email subject for a fresh outbound thread — replies still derive the
+   * subject from the customer's last inbound. */
+  subject?: string;
+  /** WhatsApp template send — required for business-initiated messages
+   * outside the 24h customer-service window. */
+  whatsappTemplate?: { name: string; language?: string; bodyParams?: string[] };
 }
 
 /** Send a message (text and/or attachments) to a platform user through the channel's credentials. */
@@ -518,6 +524,31 @@ export async function sendChannelMessage(
     let mid: string | null = null;
     let error: string | null = null;
     let retryable = true;
+    // Business-initiated outbound: outside the 24h session window Meta only
+    // accepts approved templates — send the template, not free text.
+    if (opts?.whatsappTemplate) {
+      const t = opts.whatsappTemplate;
+      const r = await send({
+        messaging_product: 'whatsapp',
+        to: platformUserId,
+        type: 'template',
+        template: {
+          name: t.name,
+          language: { code: t.language ?? 'en_US' },
+          ...(t.bodyParams?.length
+            ? {
+                components: [
+                  {
+                    type: 'body',
+                    parameters: t.bodyParams.map((p) => ({ type: 'text', text: p })),
+                  },
+                ],
+              }
+            : {}),
+        },
+      });
+      return r;
+    }
     if (named.trim()) {
       // WhatsApp has no contact-request primitive — only labelled buttons
       let buttons = qrs
@@ -775,8 +806,10 @@ async function emailThreadContext(
   db: Db | undefined,
   channel: ChannelRow,
   platformUserId: string,
+  opts?: SendOptions,
 ): Promise<{ subject: string; refs: string[]; threadId?: string }> {
-  let subject = `Re: ${channel.name}`;
+  // Fresh outbound thread — the caller's subject instead of a fake "Re:".
+  let subject = opts?.subject?.trim() || `Re: ${channel.name}`;
   const refs: string[] = [];
   let threadId: string | undefined;
   if (db) {
@@ -856,7 +889,7 @@ async function sendEmailReply(
   if (!env.resendApiKey) {
     return { mid: null, error: 'RESEND_API_KEY not configured', retryable: false };
   }
-  const { subject, refs } = await emailThreadContext(db, channel, platformUserId);
+  const { subject, refs } = await emailThreadContext(db, channel, platformUserId, opts);
   const displayName = emailDisplayName(channel, creds, opts);
   const body = emailBody(text, opts);
   try {
@@ -926,7 +959,7 @@ async function sendGmailReply(
   }
   try {
     const token = await ensureAccessToken(db, channel);
-    const { subject, refs, threadId } = await emailThreadContext(db, channel, platformUserId);
+    const { subject, refs, threadId } = await emailThreadContext(db, channel, platformUserId, opts);
     const data = await sendGmailMessage(token, {
       from: `${emailDisplayName(channel, creds, opts)} <${creds.email_address}>`,
       to: platformUserId,

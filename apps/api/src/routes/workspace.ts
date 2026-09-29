@@ -31,6 +31,7 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { stripe } from '../lib/stripe.js';
+import { audit, auditLogFor } from '../lib/audit.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
 const updateWorkspace = z.object({
@@ -101,6 +102,15 @@ export function workspaceRoutes(db: Db) {
       .where(eq(workspaces.id, workspaceId))
       .limit(1);
     if (!ws) return c.json({ error: 'not found' }, 404);
+    await audit(db, {
+      workspaceId,
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'workspace.update',
+      targetType: 'workspace',
+      targetId: workspaceId,
+      meta: { fields: Object.keys(body) },
+    });
 
     if (body.name !== undefined) {
       await db
@@ -169,6 +179,13 @@ export function workspaceRoutes(db: Db) {
           (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
       },
     });
+  });
+
+  // GET /api/workspace/audit-log — admin only. Every security/billing
+  // mutation writes a row; this is the queryable trail (SOC 2 prerequisite).
+  app.get('/audit-log', adminOnly, async (c) => {
+    const limit = Math.min(Number(c.req.query('limit')) || 100, 500);
+    return c.json({ entries: await auditLogFor(db, c.get('workspaceId'), limit) });
   });
 
   // POST /api/workspace/llm-models — same model-listing contract as the

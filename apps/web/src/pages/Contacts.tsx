@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { timeAgo } from '../components/bits';
 import { useMe } from '../api/hooks';
@@ -20,7 +20,7 @@ type ContactRow = {
 
 type ContactDetail = {
   contact: ContactRow;
-  identities: { id: string; platform_user_id: string; channel_kind: string; channel_name: string }[];
+  identities: { id: string; platform_user_id: string; channel_id: string; channel_kind: string; channel_name: string }[];
   conversations: {
     id: string;
     state: string;
@@ -154,11 +154,7 @@ export function ContactDetail() {
         <strong>Channel identities</strong>
         {data.identities.length === 0 && <div className="muted" style={{ marginTop: 8 }}>None linked.</div>}
         {data.identities.map((i) => (
-          <div key={i.id} className="row" style={{ marginTop: 6 }}>
-            <span className="badge">{i.channel_kind}</span>
-            <span className="grow">{i.channel_name}</span>
-            <span className="mono muted">{i.platform_user_id}</span>
-          </div>
+          <IdentityRow key={i.id} identity={i} contactId={id!} />
         ))}
       </div>
 
@@ -198,5 +194,89 @@ export function ContactDetail() {
         ))}
       </div>
     </>
+  );
+}
+
+/** One channel identity — shows the platform id and, for initiatable
+ *  channels (sms/email/whatsapp), an inline outbound composer. */
+function IdentityRow({
+  identity: i,
+  contactId,
+}: {
+  identity: { id: string; platform_user_id: string; channel_id: string; channel_kind: string; channel_name: string };
+  contactId: string;
+}) {
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const [template, setTemplate] = useState('');
+  const [err, setErr] = useState('');
+  const canSend = ['sms', 'whatsapp', 'email', 'gmail'].includes(i.channel_kind);
+  const send = useMutation({
+    mutationFn: () =>
+      api<{ conversation_id?: string; error?: string }>(`/api/channels/${i.channel_id}/send`, {
+        method: 'POST',
+        body: JSON.stringify({
+          to: i.platform_user_id,
+          text,
+          ...(i.channel_kind === 'whatsapp' && template.trim()
+            ? { whatsapp_template: { name: template.trim() } }
+            : {}),
+        }),
+      }),
+    onSuccess: (r) => {
+      if (r.error) { setErr(r.error); return; }
+      setOpen(false);
+      void qc.invalidateQueries({ queryKey: ['contact', contactId] });
+      if (r.conversation_id) navigate(`/conversations/${r.conversation_id}`);
+    },
+    onError: (e) => setErr(e instanceof Error ? e.message : 'send failed'),
+  });
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div className="row">
+        <span className="badge">{i.channel_kind}</span>
+        <span className="grow">{i.channel_name}</span>
+        <span className="mono muted">{i.platform_user_id}</span>
+        {canSend && (
+          <button className="btn" onClick={() => setOpen((o) => !o)}>
+            {open ? 'Close' : 'Message'}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {i.channel_kind === 'whatsapp' && (
+            <>
+              <input
+                placeholder="Approved template name (e.g. hello_world)"
+                value={template}
+                onChange={(e) => setTemplate(e.target.value)}
+              />
+              <div className="muted" style={{ fontSize: 12 }}>
+                Outside the 24-hour reply window WhatsApp requires an approved template.
+              </div>
+            </>
+          )}
+          <textarea
+            placeholder="Message text"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={2}
+          />
+          <div className="row">
+            <button
+              className="btn primary"
+              disabled={send.isPending || (!text.trim() && !(i.channel_kind === 'whatsapp' && template.trim()))}
+              onClick={() => { setErr(''); send.mutate(); }}
+            >
+              {send.isPending ? 'Sending…' : 'Send'}
+            </button>
+            {err && <span className="error" style={{ fontSize: 12 }}>{err}</span>}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

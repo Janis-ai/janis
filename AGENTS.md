@@ -126,7 +126,11 @@ before typecheck/tests/dev.
   Deleting a hosted voice channel cascades its SMS sibling.
 - Shared email addresses — one mailbox per channel today; multi-address fan-out
   needed for support@ + sales@ into one workspace.
-- First-class WhatsApp Business API channel (templates, business verification).
+- First-class WhatsApp Business API channel: DONE templates for outbound
+  (POST /api/channels/:id/send + /broadcast accept whatsapp_template
+  {name,language,body_params}; required outside the 24h window — enforced on
+  new threads). Still missing: template management/submission UI, business
+  verification flow.
 - Voice: voicemail routing, IVR ("press 1 for a human"), call-recording consent,
   call transcripts rendered in the transcript view.
 - Widget polish: unread badges, proactive messages, file uploads, sound,
@@ -183,6 +187,19 @@ before typecheck/tests/dev.
   alerting (pass-rate drop → Slack/email), no run history/diff dashboards,
   no multi-model compare, no auto-generated tests from rescued conversations.
 
+**Outbound (new — v1 shipped)**
+- POST /api/channels/:id/send {to,text,subject?,whatsapp_template?} — find-or-
+  creates the conversation + binding, records the attempt (failure flag on
+  provider rejection), resolves the contact. Members+ can send.
+- POST /api/channels/:id/broadcast {recipients≤200,...} — admin only, 150ms
+  spacing, per-recipient results.
+- Initiatable kinds: sms, email, gmail, whatsapp (template required on new
+  threads — 24h rule). Messenger/IG/webchat/voice reject outbound — Meta
+  window rules + pull-based widget.
+- Missing vs real campaign tools: no scheduling, drip sequences, opt-out
+  management (STOP handling on inbound sms is still manual), audience
+  segments, or per-campaign analytics.
+
 **Billing (missing)**
 - Trials (14-day Pro), annual billing, seat pricing, in-app usage dashboard
   (burn before the invoice), add-on SKUs (channels/seats/knowledge docs).
@@ -211,10 +228,13 @@ before typecheck/tests/dev.
   offenders, per-plan cap tiers.
 - Backup/restore runbook (Neon PITR exists — unrehearsed), load test (k6).
 
-**Enterprise checklist (untouched — gates mid-market only)**
-- SSO/SAML (WorkOS), SCIM, audit log (every mutation → queryable log; cheapest
-  item, SOC 2 prerequisite), RBAC beyond admin/member, SOC 2, data residency,
-  GDPR export/delete.
+**Enterprise checklist**
+- Audit log: DONE — audit_log table + audit() helper; instrumented on agent/
+  channel create+delete, outbound send + broadcast, webhook replay, contact
+  merge, member invite, workspace update, billing connect/pricing/checkout/
+  downgrade. Admin reads via GET /api/workspace/audit-log + Settings card.
+- Still untouched: SSO/SAML (WorkOS), SCIM, RBAC beyond admin/member, SOC 2,
+  data residency, GDPR export/delete.
 
 **Marketing surface (missing)**
 - GA4 is live (G-G5W5H3CVR2) but no funnel events fire — instrument signup,
