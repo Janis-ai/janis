@@ -6,6 +6,7 @@ import { channelBindings, channels, conversations } from '../db/schema.js';
 import type { ChannelCredentials } from '../lib/channels.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 import { voiceAwaitReply, voiceEndCall } from '../lib/voiceBridge.js';
+import { recordVoiceUsage } from '../lib/usage.js';
 import { env } from '../env.js';
 
 /**
@@ -168,6 +169,20 @@ export function voiceRoutes(db: Db, opts?: { replyWaitMs?: number }) {
     if (['completed', 'failed', 'busy', 'no-answer'].includes(r.body.CallStatus ?? '')) {
       const conv = r.body.From ? await convForCaller(r.channel.id, r.body.From) : undefined;
       if (conv) voiceEndCall(conv.id);
+      // Hosted numbers bill usage at Twilio cost + margin; BYO channels bill
+      // on the customer's own Twilio account — never metered here.
+      if (r.body.CallStatus === 'completed' && r.creds.hosted) {
+        const seconds = Number(r.body.CallDuration ?? 0);
+        if (seconds > 0 && r.body.CallSid) {
+          void recordVoiceUsage(db, {
+            workspaceId: r.channel.workspaceId,
+            agentId: r.channel.agentId,
+            conversationId: conv?.id ?? null,
+            seconds,
+            callSid: r.body.CallSid,
+          });
+        }
+      }
     }
     return c.json({ ok: true });
   });

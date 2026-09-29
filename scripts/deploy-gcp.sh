@@ -122,7 +122,7 @@ if python3 -c "import yaml; exit(0 if 'PGLITE_DIR' in yaml.safe_load(open('/tmp/
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
     --max-instances 1 --memory 1Gi --no-cpu-throttling \
-    "${SECRETS_FLAG[@]}" \
+    ${SECRETS_FLAG[@]+"${SECRETS_FLAG[@]}"} \
     --add-volume name=data,type=cloud-storage,bucket=janis-data-$PROJECT \
     --add-volume-mount volume=data,mount-path=/app/data \
     --env-vars-file /tmp/janis-env.yaml
@@ -136,8 +136,8 @@ else
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
     --memory 1Gi --no-cpu-throttling \
     --max-instances 1 \
-    "${EXTRA[@]}" \
-    "${SECRETS_FLAG[@]}" \
+    ${EXTRA[@]+"${EXTRA[@]}"} \
+    ${SECRETS_FLAG[@]+"${SECRETS_FLAG[@]}"} \
     --add-volume name=data,type=cloud-storage,bucket=janis-data-$PROJECT \
     --add-volume-mount volume=data,mount-path=/app/data \
     --env-vars-file /tmp/janis-env.yaml

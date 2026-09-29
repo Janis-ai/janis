@@ -1,8 +1,9 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { usageEvents, workspaces } from '../db/schema.js';
 import { billingConfig, currentPeriod, llmCostMicros, pricedRateFor } from './billing.js';
-import { METER_LLM_MICROS, reportMeter } from './stripe.js';
+import { METER_LLM_MICROS, METER_VOICE_MICROS, reportMeter } from './stripe.js';
+import { env } from '../env.js';
 
 /** Meter one LLM call. Never throws — billing must not break the agent loop. */
 export async function recordLlmUsage(
@@ -67,5 +68,58 @@ export async function recordLlmUsage(
     }
   } catch {
     // metering failure is never worth breaking a conversation
+  }
+}
+
+/**
+ * Meter one hosted voice call. The Twilio status webhook carries CallDuration
+ * on terminal statuses; retries are deduped on external_id so a call bills
+ * once. Hosted numbers only — BYO-Twilio channels bill on the customer's own
+ * account and never reach this (callers check creds.hosted).
+ */
+export async function recordVoiceUsage(
+  db: Db,
+  args: {
+    workspaceId: string;
+    agentId?: string | null;
+    conversationId?: string | null;
+    seconds: number;
+    callSid: string;
+  },
+): Promise<void> {
+  try {
+    if (args.seconds <= 0) return;
+    const externalId = `voice:${args.callSid}`;
+    const existing = await db
+      .select({ id: usageEvents.id })
+      .from(usageEvents)
+      .where(and(eq(usageEvents.externalId, externalId), eq(usageEvents.kind, 'voice_seconds')))
+      .limit(1);
+    if (existing.length) return;
+    const costMicros = Math.round((env.voiceCostMicrosPerMin / 60) * args.seconds);
+    const [row] = await db
+      .insert(usageEvents)
+      .values({
+        workspaceId: args.workspaceId,
+        agentId: args.agentId ?? null,
+        conversationId: args.conversationId ?? null,
+        kind: 'voice_seconds',
+        externalId,
+        quantity: args.seconds,
+        costMicros,
+        period: currentPeriod(),
+      })
+      .returning({ id: usageEvents.id });
+    const billed = Math.ceil(costMicros * (1 + billingConfig.margin));
+    if (billed > 0) {
+      const [ws] = await db
+        .select({ stripeCustomerId: workspaces.stripeCustomerId })
+        .from(workspaces)
+        .where(eq(workspaces.id, args.workspaceId))
+        .limit(1);
+      reportMeter(ws?.stripeCustomerId, METER_VOICE_MICROS, billed, row?.id);
+    }
+  } catch {
+    // metering failure is never worth breaking a call
   }
 }

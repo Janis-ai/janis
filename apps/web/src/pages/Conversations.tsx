@@ -72,6 +72,7 @@ function ConvRow({ c, agentName }: { c: Conversation; agentName?: string }) {
               {c.user_profile.channel_name && ` · ${c.user_profile.channel_name}`}
             </span>
           )}
+          {c.intent && <span className="channel-tag" title="Classified intent">{c.intent}</span>}
         </div>
         <div className="preview">{c.last_message_preview}</div>
       </div>

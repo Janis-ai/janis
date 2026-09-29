@@ -35,6 +35,9 @@ import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAu
 
 const updateWorkspace = z.object({
   name: z.string().trim().min(1).max(120).optional(),
+  // Outbound event export — Zapier/Make catch hook that receives every
+  // inbound message + handoff as a JSON POST. null clears it.
+  event_webhook_url: z.string().url().max(2000).nullable().optional(),
   llm_config: z
     .object({
       provider: z.string().optional(),
@@ -66,6 +69,8 @@ export function workspaceRoutes(db: Db) {
         id: ws.id,
         name: ws.name,
         llm_config: scrubLlmBlock(ws.llmConfig),
+        event_webhook_url:
+          (ws.config as { event_webhook_url?: string } | undefined)?.event_webhook_url ?? null,
       },
     });
   });
@@ -90,6 +95,15 @@ export function workspaceRoutes(db: Db) {
         .set({ name: body.name })
         .where(eq(workspaces.id, workspaceId));
       ws.name = body.name;
+    }
+    if (body.event_webhook_url !== undefined) {
+      const config = {
+        ...(ws.config as Record<string, unknown>),
+        ...(body.event_webhook_url ? { event_webhook_url: body.event_webhook_url } : {}),
+      };
+      if (!body.event_webhook_url) delete config.event_webhook_url;
+      await db.update(workspaces).set({ config }).where(eq(workspaces.id, workspaceId));
+      ws.config = config;
     }
     if (body.llm_config === null) {
       await db.update(workspaces).set({ llmConfig: {} }).where(eq(workspaces.id, workspaceId));
@@ -130,7 +144,13 @@ export function workspaceRoutes(db: Db) {
       });
     }
     return c.json({
-      workspace: { id: ws.id, name: ws.name, llm_config: scrubLlmBlock(ws.llmConfig) },
+      workspace: {
+        id: ws.id,
+        name: ws.name,
+        llm_config: scrubLlmBlock(ws.llmConfig),
+        event_webhook_url:
+          (ws.config as { event_webhook_url?: string } | undefined)?.event_webhook_url ?? null,
+      },
     });
   });
 

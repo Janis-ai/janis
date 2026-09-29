@@ -16,6 +16,7 @@ import AgentDetail from './pages/AgentDetail';
 import Reports from './pages/Reports';
 import Billing from './pages/Billing';
 import Settings from './pages/Settings';
+import { HelpCenter, HelpArticle } from './pages/HelpCenter';
 import { finishOpenRouterCallback } from './lib/openrouterAuth';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -119,6 +120,8 @@ export default function App() {
         <Route path="/terms" element={<Terms />} />
         <Route path="/docs" element={<Docs />} />
         <Route path="/llm/callback" element={<LlmCallback />} />
+        <Route path="/help/:agentId" element={<HelpCenter />} />
+        <Route path="/help/:agentId/:articleId" element={<HelpArticle />} />
         <Route
           element={
             <RequireAuth>

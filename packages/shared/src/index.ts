@@ -216,6 +216,9 @@ export const AgentConfig = z.object({
   sla_minutes: z.number().min(1).max(1440).optional(),
   // routing: assign handoffs to the least-loaded workspace member
   auto_assign: z.boolean().optional(),
+  // intent taxonomy — labels the classifier picks from on each conversation's
+  // first inbound. Empty/unset uses the default support taxonomy.
+  intents: z.array(z.string().min(1).max(60)).max(30).optional(),
   // suggested prompts — chips in the webchat widget; native reply buttons on
   // Messenger/IG/WhatsApp greetings (channel-level quick_replies overrides)
   quick_replies: z.array(z.string().min(1).max(120)).max(8).optional(),
@@ -367,6 +370,8 @@ export const Conversation = z.object({
   /** 1–5 rating captured from the post-resolution CSAT prompt, if answered */
   csat_score: z.number().nullable(),
   csat_pending: z.boolean(),
+  /** Semantic topic label — set by the classifier or a BYO agent's payload. */
+  intent: z.string().nullable(),
   created_at: z.string(),
 });
 export type Conversation = z.infer<typeof Conversation>;
@@ -416,6 +421,8 @@ export const AlertRule = z.object({
   kind: z.enum(['keyword', 'failure', 'handoff_request', 'inactivity', 'custom_alert', 'auto_assign']),
   config: z.object({
     keywords: z.array(z.string()).optional(),
+    // semantic topic matches — classifier labels like 'billing', 'shipping'
+    intents: z.array(z.string()).optional(),
     inactivity_minutes: z.number().optional(),
     // automation actions — keyword matches / inactivity fires / new
     // conversations can assign the thread or tag it
@@ -427,6 +434,20 @@ export const AlertRule = z.object({
   created_at: z.string(),
 });
 export type AlertRule = z.infer<typeof AlertRule>;
+
+/** Public help-center article — published rows are served unauthenticated
+ *  and injected into the agent's knowledge context. */
+export const HelpArticle = z.object({
+  id: z.string(),
+  agent_id: z.string(),
+  title: z.string(),
+  category: z.string(),
+  body: z.string(),
+  status: z.enum(['draft', 'published']),
+  published_at: z.string().nullable(),
+  updated_at: z.string(),
+});
+export type HelpArticle = z.infer<typeof HelpArticle>;
 
 export const SavedReply = z.object({
   id: z.string(),
@@ -600,17 +621,27 @@ export const StreamEvent = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('suggestion'), data: Suggestion }),
   // Ephemeral typing pings — 'visitor' for a customer composing, 'agent'
-  // for a dispatched message.user the agent hasn't answered yet. Clients
+  // for a dispatched message.user the agent hasn't answered yet, 'operator'
+  // for a teammate composing in the console (collision detection). Clients
   // show them transiently and never persist them.
   z.object({
     type: z.literal('typing'),
     data: z.object({
       conversation_id: z.string(),
       name: z.string().optional(),
-      kind: z.enum(['visitor', 'agent']).optional(),
+      kind: z.enum(['visitor', 'agent', 'operator']).optional(),
       // the typer's Janis account when session-bound — lets the console
       // suppress visitor dots for your own rail/test-chat typing
       user_id: z.string().nullable().optional(),
+    }),
+  }),
+  // Co-presence — who's viewing a conversation right now. Broadcast on
+  // change; entries expire server-side ~20s after the last heartbeat.
+  z.object({
+    type: z.literal('presence'),
+    data: z.object({
+      conversation_id: z.string(),
+      viewers: z.array(z.object({ id: z.string(), name: z.string().nullable() })),
     }),
   }),
 ]);

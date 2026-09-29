@@ -580,4 +580,35 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
     ],
   },
+  {
+    id: 'webhook',
+    name: 'Webhook (Zapier / Make)',
+    category: 'Automation',
+    blurb:
+      'Let the agent trigger anything — paste a Zapier/Make/n8n catch-hook URL and it POSTs the payload you describe. The escape hatch for every tool we don\'t ship.',
+    docs_url: 'https://zapier.com/apps/webhook/integrations',
+    fields: [
+      {
+        key: 'hook_url',
+        label: 'Webhook URL',
+        placeholder: 'https://hooks.zapier.com/hooks/catch/…',
+        help: 'Zapier → Webhooks by Zapier → Catch Hook → copy the URL. Same for Make/n8n custom webhook triggers.',
+      },
+    ],
+    secrets: (f) => ({ WEBHOOK_URL: f.hook_url.trim() }),
+    tools: [
+      {
+        name: 'webhook_send',
+        label: 'Send webhook',
+        description:
+          'POST a JSON payload to the configured automation webhook. Use it to trigger a Zap/Make/n8n workflow — log a lead, open a ticket, notify a channel — for systems with no dedicated integration.',
+        method: 'POST',
+        url: '{{secrets.WEBHOOK_URL}}',
+        params: {
+          data: 'JSON object with the fields the workflow expects, e.g. {"email":"…","summary":"…","conversation_id":"…"}',
+        },
+        approval: true,
+      },
+    ],
+  },
 ];

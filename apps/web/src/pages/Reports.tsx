@@ -107,6 +107,13 @@ export default function Reports() {
     queryKey: ['operator-metrics', agentId, channelId],
     queryFn: () => api<{ days: number; operators: OperatorStat[] }>(`/api/reports/operators?${qs}`),
   });
+  const intents = useQuery({
+    queryKey: ['intent-metrics', agentId, channelId],
+    queryFn: () =>
+      api<{ days: number; classified: number; total: number; intents: { intent: string; count: number; avg_csat: number | null }[] }>(
+        `/api/reports/intents?${qs}`,
+      ),
+  });
   const qc = useQueryClient();
 
   const generate = useMutation({
@@ -229,6 +236,45 @@ export default function Reports() {
             <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
               Customers are asked to rate 1–5 when a conversation is archived.
             </div>
+          </div>
+        );
+      })()}
+
+      {/* Topics — classified intent volume + satisfaction per topic */}
+      {(() => {
+        const t = intents.data;
+        if (!t || !t.classified) return null;
+        const top = t.intents.filter((i) => i.intent !== 'unclassified').slice(0, 12);
+        const max = Math.max(...top.map((i) => i.count), 1);
+        return (
+          <div className="card">
+            <div className="row">
+              <strong className="grow">Topics — last {t.days} days</strong>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {t.classified} of {t.total} classified
+              </span>
+            </div>
+            {top.map((i) => (
+              <div key={i.intent} className="row" style={{ marginTop: 8, gap: 10 }}>
+                <span style={{ width: 120, fontSize: 13 }}>{i.intent}</span>
+                <div style={{ flex: 1, background: 'var(--panel-2)', borderRadius: 3, height: 10 }}>
+                  <div
+                    style={{
+                      width: `${(i.count / max) * 100}%`,
+                      height: '100%',
+                      background: 'var(--accent)',
+                      borderRadius: 3,
+                    }}
+                  />
+                </div>
+                <span className="muted" style={{ width: 40, textAlign: 'right', fontSize: 12 }}>
+                  {i.count}
+                </span>
+                <span className="muted" style={{ width: 56, textAlign: 'right', fontSize: 12 }}>
+                  {i.avg_csat !== null ? `${i.avg_csat.toFixed(1)}★` : ''}
+                </span>
+              </div>
+            ))}
           </div>
         );
       })()}

@@ -158,7 +158,15 @@ export async function runAgentTest(
   db: Db,
   agent: AgentRow,
   test: AgentTestRow,
+  opts?: { systemPrompt?: string },
 ): Promise<TestRunResult> {
+  // A/B runs replay the suite against a candidate prompt without saving it.
+  if (opts?.systemPrompt !== undefined) {
+    agent = {
+      ...agent,
+      config: { ...(agent.config as Record<string, unknown>), system_prompt: opts.systemPrompt },
+    };
+  }
   const at = new Date().toISOString();
   const turns = (test.turns ?? []) as TestTurn[];
   const base: Omit<TestRunResult, 'passed' | 'reason'> & { passed: null; reason: string } = {

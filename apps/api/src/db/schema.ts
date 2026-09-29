@@ -34,6 +34,9 @@ export const workspaces = pgTable('workspaces', {
   // fields override it field-by-field (unset → inherit). api_key is
   // write-only like the agent one.
   llmConfig: jsonb('llm_config').notNull().default({}),
+  // Workspace-wide integration settings — {event_webhook_url} posts every
+  // inbound message/handoff as JSON to a Zapier/Make catch hook
+  config: jsonb('config').notNull().default({}),
   // The owning user — exactly one per workspace, kept here (not as a
   // membership role) so transfer is one atomic update. Owners hold an
   // admin membership that can't be demoted or removed; only the owner can
@@ -167,6 +170,10 @@ export const conversations = pgTable(
     pauseMinutes: integer('pause_minutes'), // per-takeover duration override (null = agent default, -1 = never)
     isStarred: boolean('is_starred').notNull().default(false),
     isUnread: boolean('is_unread').notNull().default(false),
+    // Semantic topic — classified once from the first inbound message
+    // ("billing", "shipping", …) for routing rules + reports. null while
+    // unclassified (first message pending or no LLM on the agent).
+    intent: text('intent'),
     // CSAT: prompt sent on archive; the customer's next reply carries the
     // rating and is captured in csatScore instead of reaching the agent
     csatPending: boolean('csat_pending').notNull().default(false),
@@ -500,7 +507,12 @@ export const usageEvents = pgTable(
       .references(() => workspaces.id),
     agentId: uuid('agent_id').references(() => agents.id),
     conversationId: uuid('conversation_id').references(() => conversations.id),
-    kind: text('kind', { enum: ['llm_tokens'] }).notNull(),
+    kind: text('kind', { enum: ['llm_tokens', 'voice_seconds'] }).notNull(),
+    // idempotency key for provider-sourced usage — 'voice:{callSid}' dedupes
+    // Twilio's status-webhook retries so a call can only be billed once
+    externalId: text('external_id'),
+    // provider unit for non-token kinds — call seconds for voice_seconds
+    quantity: integer('quantity'),
     model: text('model'),
     promptTokens: integer('prompt_tokens').notNull().default(0),
     completionTokens: integer('completion_tokens').notNull().default(0),
@@ -530,9 +542,42 @@ export const knowledgeFiles = pgTable(
     text: text('text').notNull().default(''),
     status: text('status', { enum: ['ready', 'failed'] }).notNull().default('ready'),
     error: text('error'),
+    // URL sources — the row's text is re-crawled from source_url on a
+    // refresh_hours cadence (null = manual only, like an uploaded file).
+    sourceUrl: text('source_url'),
+    refreshHours: integer('refresh_hours'),
+    lastFetchedAt: timestamp('last_fetched_at', { withTimezone: true }),
+    nextFetchAt: timestamp('next_fetch_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('knowledge_files_agent').on(t.agentId)],
+  (t) => [
+    index('knowledge_files_agent').on(t.agentId),
+    index('knowledge_files_due').on(t.nextFetchAt),
+  ],
+);
+
+// Public help center — operator-authored articles served unauthenticated at
+// /help/:agentId. Published articles also feed the agent's knowledge context.
+export const helpArticles = pgTable(
+  'help_articles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    title: text('title').notNull(),
+    category: text('category').notNull().default('General'),
+    body: text('body').notNull().default(''),
+    status: text('status', { enum: ['draft', 'published'] }).notNull().default('draft'),
+    position: integer('position').notNull().default(0),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('help_articles_agent').on(t.agentId)],
 );
 
 /**

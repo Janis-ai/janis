@@ -11,6 +11,8 @@ import { toAlertRule } from '../lib/serializers.js';
 
 const ruleConfig = z.object({
   keywords: z.array(z.string()).optional(),
+  /** Semantic intent labels — fires when the classifier tags the conv. */
+  intents: z.array(z.string().min(1).max(60)).max(20).optional(),
   inactivity_minutes: z.number().min(1).max(1440).optional(),
   enabled: z.boolean().default(true),
   // automation actions

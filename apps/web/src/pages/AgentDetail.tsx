@@ -12,6 +12,7 @@ import type {
 import { api } from '../api/client';
 import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
 import { AgentChannels } from '../components/AgentChannels';
+import { HelpCenter } from '../components/HelpCenter';
 import { timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
@@ -19,7 +20,7 @@ import { railBus } from '../lib/railBus';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert', 'auto_assign'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
-type Tab = 'integrations' | 'escalation' | 'tools' | 'tests' | 'connection';
+type Tab = 'integrations' | 'escalation' | 'tools' | 'tests' | 'help' | 'connection';
 
 export default function AgentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -57,7 +58,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const [params, setParams] = useSearchParams();
   const tabParam = params.get('tab') as Tab | null;
   const tab: Tab =
-    tabParam && ['integrations', 'escalation', 'tools', 'tests', 'connection'].includes(tabParam)
+    tabParam && ['integrations', 'escalation', 'tools', 'tests', 'help', 'connection'].includes(tabParam)
       ? tabParam
       : 'connection';
   const activeTab: Tab =
@@ -172,6 +173,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
       ? [
           { key: 'tools' as Tab, label: 'Tools' },
           { key: 'tests' as Tab, label: 'Tests' },
+          { key: 'help' as Tab, label: 'Help center' },
         ]
       : []),
   ];
@@ -248,6 +250,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
       {error && <div className="error">{error}</div>}
 
       {activeTab === 'integrations' && <AgentChannels agent={agent} />}
+      {activeTab === 'help' && <HelpCenter agent={agent} />}
       {activeTab === 'escalation' && (
         <EscalationTab
           agent={agent}
@@ -650,6 +653,7 @@ function EscalationTab({
 }) {
   const [kind, setKind] = useState<(typeof RULE_KINDS)[number]>('keyword');
   const [keywords, setKeywords] = useState('');
+  const [intents, setIntents] = useState('');
   const [minutes, setMinutes] = useState('15');
   const [assignTo, setAssignTo] = useState('');
   const [ruleTag, setRuleTag] = useState('');
@@ -719,6 +723,7 @@ function EscalationTab({
             <span className="grow">
               {r.kind === 'auto_assign' ? 'auto-assign new conversations' : r.kind}
               {r.config.keywords?.length ? `: ${r.config.keywords.join(', ')}` : ''}
+              {(r.config.intents?.length ?? 0) > 0 && ` · intent: ${(r.config.intents ?? []).join(', ')}`}
               {r.config.inactivity_minutes ? ` (${r.config.inactivity_minutes}m)` : ''}
               {r.config.assign_to ? ` → ${teammateName(r.config.assign_to)}` : ''}
               {r.config.assignees?.length
@@ -738,12 +743,20 @@ function EscalationTab({
             ))}
           </select>
           {kind === 'keyword' && (
-            <input
-              className="grow"
-              placeholder="keywords, comma separated"
-              value={keywords}
-              onChange={(e) => setKeywords(e.target.value)}
-            />
+            <>
+              <input
+                className="grow"
+                placeholder="keywords, comma separated"
+                value={keywords}
+                onChange={(e) => setKeywords(e.target.value)}
+              />
+              <input
+                style={{ width: 150 }}
+                placeholder="or intent: billing, …"
+                value={intents}
+                onChange={(e) => setIntents(e.target.value)}
+              />
+            </>
           )}
           {kind === 'inactivity' && (
             <input
@@ -797,7 +810,10 @@ function EscalationTab({
               onAddRule(kind, {
                 enabled: true,
                 ...(kind === 'keyword'
-                  ? { keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean) }
+                  ? {
+                      keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean),
+                      intents: intents.split(',').map((k) => k.trim()).filter(Boolean),
+                    }
                   : {}),
                 ...(kind === 'inactivity' ? { inactivity_minutes: Number(minutes) } : {}),
                 ...(assignTo ? { assign_to: assignTo } : {}),
@@ -808,6 +824,25 @@ function EscalationTab({
           >
             Add rule
           </button>
+        </div>
+        <div className="form-field" style={{ marginTop: 10 }}>
+          <label>Intent labels — topics the classifier tags each new conversation with</label>
+          <input
+            defaultValue={(cfg.intents ?? []).join(', ')}
+            placeholder="billing, shipping, technical issue, sales, other (blank = default topics)"
+            onBlur={(e) =>
+              setCfg({
+                ...cfg,
+                intents: e.target.value
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter(Boolean),
+              })
+            }
+          />
+          <span className="muted" style={{ fontSize: 12 }}>
+            Rules above can fire on these intents — classify once, route automatically.
+          </span>
         </div>
         <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
           auto-assign hands every new conversation to the next teammate in the pool; keyword and
@@ -1792,6 +1827,10 @@ interface KnowledgeFile {
   chars: number;
   status: string;
   error: string | null;
+  source_url: string | null;
+  refresh_hours: number | null;
+  last_fetched_at: string | null;
+  next_fetch_at: string | null;
   created_at: string;
 }
 
@@ -1826,6 +1865,26 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
     void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
   };
 
+  const [url, setUrl] = useState('');
+  const [urlHours, setUrlHours] = useState(24);
+  const addUrl = useMutation({
+    mutationFn: () =>
+      api(`/api/agents/${agentId}/knowledge-url`, {
+        method: 'POST',
+        body: JSON.stringify({ url: url.trim(), refresh_hours: urlHours }),
+      }),
+    onSuccess: () => {
+      setUrl('');
+      void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
+    },
+    onError: (e) => setError(e.message),
+  });
+  const refresh = useMutation({
+    mutationFn: (fileId: string) =>
+      api(`/api/agents/${agentId}/knowledge/${fileId}/refresh`, { method: 'POST' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['knowledge', agentId] }),
+  });
+
   const remove = useMutation({
     mutationFn: (fileId: string) =>
       api(`/api/agents/${agentId}/knowledge/${fileId}`, { method: 'DELETE' }),
@@ -1837,12 +1896,28 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
       {(data?.files ?? []).map((f) => (
         <div key={f.id} className="row muted" style={{ marginTop: 6 }}>
           <span className="grow">
-            📄 {f.name}
+            {f.source_url ? '🔗' : '📄'} {f.name}
             <span className="muted">
               {' '}— {Math.max(1, Math.round(f.size_bytes / 1024))}KB → {f.chars.toLocaleString()} chars
             </span>
+            {f.source_url && (
+              <span className="muted">
+                {' '}· fetched {f.last_fetched_at ? timeAgo(f.last_fetched_at) : 'never'}
+                {f.refresh_hours ? ` · re-checks every ${f.refresh_hours}h` : ''}
+              </span>
+            )}
             {f.status === 'failed' && <span className="error"> {f.error}</span>}
           </span>
+          {f.source_url && (
+            <button
+              className="btn sm"
+              title="Re-crawl now"
+              disabled={refresh.isPending}
+              onClick={() => refresh.mutate(f.id)}
+            >
+              ↻
+            </button>
+          )}
           <button className="btn danger" onClick={() => remove.mutate(f.id)}>✕</button>
         </div>
       ))}
@@ -1858,6 +1933,26 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
           }}
         />
         {uploading && <span className="muted">extracting…</span>}
+      </div>
+      <div className="row" style={{ marginTop: 8 }}>
+        <input
+          className="grow"
+          placeholder="Or add a URL — e.g. https://acme.com/faq — re-crawled on a schedule"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+        />
+        <select value={urlHours} onChange={(e) => setUrlHours(Number(e.target.value))}>
+          <option value={1}>every hour</option>
+          <option value={24}>daily</option>
+          <option value={168}>weekly</option>
+        </select>
+        <button
+          className="btn sm"
+          disabled={!url.trim() || addUrl.isPending}
+          onClick={() => addUrl.mutate()}
+        >
+          {addUrl.isPending ? 'Fetching…' : 'Add URL'}
+        </button>
       </div>
       {error && <div className="error">{error}</div>}
     </div>
@@ -2297,6 +2392,40 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
     onError: (e) => setErr(e.message),
     onSettled: () => setRunning(null),
   });
+  // Prompt A/B — replay the whole suite against a candidate system prompt.
+  // Nothing saves back to the agent; the summary is compared to the baseline
+  // pass count shown on the tests list.
+  const [abOpen, setAbOpen] = useState(false);
+  const [candidatePrompt, setCandidatePrompt] = useState('');
+  const [abResult, setAbResult] = useState<{
+    summary: { passed: number; failed: number; unrunnable: number };
+    results: { name: string; passed: boolean | null; reason: string }[];
+  } | null>(null);
+  const abRun = useMutation({
+    mutationFn: () =>
+      api(`/api/agents/${agentId}/tests-run-all`, {
+        method: 'POST',
+        body: JSON.stringify({ system_prompt: candidatePrompt }),
+      }),
+    onSuccess: (r) => setAbResult(r as typeof abResult),
+    onError: (e) => setErr(e.message),
+    onSettled: () => setRunning(null),
+  });
+  const [importOpen, setImportOpen] = useState(false);
+  const [csvText, setCsvText] = useState('');
+  const importCsv = useMutation({
+    mutationFn: () =>
+      api(`/api/agents/${agentId}/tests-import`, {
+        method: 'POST',
+        body: JSON.stringify({ csv: csvText }),
+      }),
+    onSuccess: () => {
+      setImportOpen(false);
+      setCsvText('');
+      invalidate();
+    },
+    onError: (e) => setErr(e.message),
+  });
   const del = useMutation({
     mutationFn: (testId: string) =>
       api(`/api/agents/${agentId}/tests/${testId}`, { method: 'DELETE' }),
@@ -2349,6 +2478,18 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
             {running === 'all' ? 'Running…' : 'Run all'}
           </button>
         )}
+        {tests.length > 0 && (
+          <button
+            className="btn sm"
+            disabled={running !== null}
+            onClick={() => { setAbOpen((v) => !v); }}
+          >
+            A/B prompt
+          </button>
+        )}
+        <button className="btn sm" onClick={() => setImportOpen((v) => !v)}>
+          Import CSV
+        </button>
         <button className="btn sm" onClick={() => setNewOpen((v) => !v)}>
           + New test
         </button>
@@ -2367,6 +2508,72 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
         )}
       </div>
       {err && <div className="error">{err}</div>}
+
+      {importOpen && (
+        <div className="card" style={{ background: 'var(--panel-2)' }}>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+            One test per line: <code>name, customer message, expectation</code>. Paste from a
+            spreadsheet or export. Multi-turn tests still come from "Save as test" on a conversation.
+          </div>
+          <textarea
+            rows={6}
+            placeholder={'name, prompt, expectation\nrefund request, "I want my money back", "Never promises a refund; offers human follow-up"'}
+            value={csvText}
+            onChange={(e) => setCsvText(e.target.value)}
+            style={{ width: '100%', fontFamily: 'monospace' }}
+          />
+          <div className="row" style={{ marginTop: 8 }}>
+            <button
+              className="btn primary sm"
+              disabled={!csvText.trim() || importCsv.isPending}
+              onClick={() => importCsv.mutate()}
+            >
+              {importCsv.isPending ? 'Importing…' : 'Import tests'}
+            </button>
+            <button className="btn sm" onClick={() => setImportOpen(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {abOpen && (
+        <div className="card" style={{ background: 'var(--panel-2)' }}>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+            Paste a candidate system prompt — the whole suite replays against it and
+            reports pass/fail per test. Nothing changes until you copy it into the Engine tab.
+          </div>
+          <textarea
+            rows={6}
+            placeholder="Candidate system prompt…"
+            value={candidatePrompt}
+            onChange={(e) => setCandidatePrompt(e.target.value)}
+            style={{ width: '100%', fontFamily: 'monospace' }}
+          />
+          <div className="row" style={{ marginTop: 8 }}>
+            <button
+              className="btn primary sm"
+              disabled={!candidatePrompt.trim() || running !== null}
+              onClick={() => { setRunning('all'); setAbResult(null); abRun.mutate(); }}
+            >
+              {running === 'all' ? 'Running…' : 'Run suite vs candidate'}
+            </button>
+            <button className="btn sm" onClick={() => setAbOpen(false)}>Close</button>
+          </div>
+          {abResult && (
+            <div style={{ marginTop: 8, fontSize: 13 }}>
+              <strong>
+                Candidate: {abResult.summary.passed} passed, {abResult.summary.failed} failed
+                {abResult.summary.unrunnable > 0 && `, ${abResult.summary.unrunnable} unrunnable`}
+              </strong>
+              <span className="muted"> (baseline: {passed} passing)</span>
+              {abResult.results.filter((r) => r.passed === false).map((r) => (
+                <div key={r.name} className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                  ✗ {r.name} — {r.reason}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {newOpen && (
         <div className="card" style={{ background: 'var(--panel-2)' }}>

@@ -14,6 +14,8 @@ import { openAlertOnce } from '../lib/alerts.js';
 import { enrichHandoff } from '../lib/handoff.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { evaluateActions, evaluateEvent } from '../lib/rules.js';
+import { classifyAndRoute } from '../lib/intent.js';
+import { fireEventWebhook } from '../lib/eventWebhook.js';
 import { mirrorToSlack, postSlackAlert, setSlackThreadStatus } from '../lib/slack.js';
 import { agentEligibleMembers } from '../lib/members.js';
 import { deliverToChannel, type AttachmentRef } from '../lib/channels.js';
@@ -125,6 +127,26 @@ export async function processEvents(
           });
         }
       }
+    }
+
+    // Intent classification — once per conversation, off the hot path. BYO
+    // agents can stamp payload.intent and skip the LLM entirely.
+    if (event.type === 'message_in' && conv.intent == null) {
+      const payloadIntent =
+        typeof event.payload?.intent === 'string' ? event.payload.intent : null;
+      void classifyAndRoute(db, agent, conv, event.text, payloadIntent).catch(() => {});
+    }
+
+    // Workspace event export — Zapier/Make catch hooks see inbound traffic
+    // and handoff asks, so customers can wire their own integrations.
+    if (event.type === 'message_in' || event.type === 'handoff_request') {
+      fireEventWebhook(db, agent.workspaceId, event.type, {
+        agent_id: agent.id,
+        agent_name: agent.name,
+        conversation_id: conv.id,
+        text: 'text' in event ? event.text : event.reason,
+        channel: (conv.userProfile as { channel?: string } | null)?.channel ?? null,
+      });
     }
 
     // Evaluate alert rules — one open alert per type per conversation, so a

@@ -16,6 +16,7 @@ import { generateApiKey, generateWebhookSecret } from '../lib/crypto.js';
 import { env } from '../env.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
+import { fetchUrlText, refreshKnowledgeSource } from '../lib/urlSource.js';
 import {
   detectKnowledgeGaps,
   draftKnowledgeEntry,
@@ -494,6 +495,10 @@ export function agentRoutes(db: Db) {
         chars: r.text.length,
         status: r.status,
         error: r.error,
+        source_url: r.sourceUrl,
+        refresh_hours: r.refreshHours,
+        last_fetched_at: r.lastFetchedAt?.toISOString() ?? null,
+        next_fetch_at: r.nextFetchAt?.toISOString() ?? null,
         created_at: r.createdAt.toISOString(),
       })),
     });
@@ -548,6 +553,60 @@ export function agentRoutes(db: Db) {
       },
       201,
     );
+  });
+
+  // URL knowledge sources — crawled on add and re-crawled by the sweeper on
+  // the refresh cadence, so a stale FAQ page can't silently drift.
+  const urlBody = z.object({
+    url: z.string().url().max(2000),
+    refresh_hours: z.number().int().min(1).max(24 * 30).default(24),
+  });
+  app.post('/:id/knowledge-url', agentAdmin, zValidator('json', urlBody), async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const { url, refresh_hours } = c.req.valid('json');
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.agentId, agent.id));
+    if (count >= 50) return c.json({ error: 'knowledge file limit reached (50)' }, 409);
+    let fetched: { text: string; sizeBytes: number };
+    try {
+      fetched = await fetchUrlText(url);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : 'fetch failed' }, 422);
+    }
+    const now = new Date();
+    const [row] = await db
+      .insert(knowledgeFiles)
+      .values({
+        workspaceId: c.get('workspaceId'),
+        agentId: agent.id,
+        name: url,
+        mimeType: 'text/url-source',
+        sizeBytes: fetched.sizeBytes,
+        text: fetched.text,
+        sourceUrl: url,
+        refreshHours: refresh_hours,
+        lastFetchedAt: now,
+        nextFetchAt: new Date(now.getTime() + refresh_hours * 3600_000),
+      })
+      .returning();
+    return c.json({ file: { id: row.id } }, 201);
+  });
+
+  // Manual re-crawl — also how a failed source retries without waiting.
+  app.post('/:id/knowledge/:fileId/refresh', agentAdmin, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const [file] = await db
+      .select()
+      .from(knowledgeFiles)
+      .where(and(eq(knowledgeFiles.id, c.req.param('fileId')), eq(knowledgeFiles.agentId, agent.id)))
+      .limit(1);
+    if (!file?.sourceUrl) return c.json({ error: 'not a URL source' }, 400);
+    const ok = await refreshKnowledgeSource(db, file);
+    return c.json({ ok });
   });
 
   // Knowledge-gap loop: clusters of conversations where the agent asked for a
@@ -1324,7 +1383,38 @@ export function agentRoutes(db: Db) {
     return c.json({ test: toTest(updated), run });
   });
 
+  // Bulk import — CSV of "name, customer prompt, expectation" rows. Each
+  // becomes a single-turn test. For multi-turn suites, save from a real
+  // conversation instead.
+  app.post('/:id/tests-import', agentAdmin, zValidator('json', z.object({
+    csv: z.string().min(1).max(500_000),
+  })), async (c) => {
+    const agentId = c.req.param('id')!;
+    const rows = parseCsv(c.req.valid('json').csv).filter(
+      (r) => r.length >= 2 && r[0].trim() && r[1].trim(),
+    );
+    if (!rows.length) return c.json({ error: 'no rows — expected "name, prompt, expectation"' }, 400);
+    if (rows.length > 200) return c.json({ error: 'max 200 rows per import' }, 400);
+    // Header row detection: skip it if the first cell looks like a header.
+    if (['name', 'test', 'title'].includes(rows[0][0].trim().toLowerCase())) rows.shift();
+    const inserted = await db
+      .insert(agentTests)
+      .values(
+        rows.map((r) => ({
+          workspaceId: c.get('workspaceId'),
+          agentId,
+          name: r[0].trim().slice(0, 120),
+          expectation: (r[2] ?? '').trim().slice(0, 4000),
+          turns: [{ role: 'customer', text: r[1].trim() }] as never,
+        })),
+      )
+      .returning({ id: agentTests.id });
+    return c.json({ imported: inserted.length }, 201);
+  });
+
   // Run every saved case — the "did my prompt/KB change regress anything" gate.
+  // Optional {system_prompt} replays the suite against a candidate prompt
+  // (A/B experiment) — nothing is saved back to the agent config.
   app.post('/:id/tests-run-all', agentMember, async (c) => {
     const [agent] = await db
       .select()
@@ -1332,21 +1422,76 @@ export function agentRoutes(db: Db) {
       .where(eq(agents.id, c.req.param('id')))
       .limit(1);
     if (!agent?.hosted) return c.json({ error: 'tests replay through the hosted agent' }, 400);
+    // Optional body — an empty POST is the baseline run.
+    const raw = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ system_prompt: z.string().max(20_000).optional() }).safeParse(raw);
+    const candidate = parsed.success ? parsed.data.system_prompt : undefined;
     const rows = await db
       .select()
       .from(agentTests)
       .where(eq(agentTests.agentId, agent.id))
       .orderBy(asc(agentTests.createdAt));
-    const results: { id: string; passed: boolean | null; reason: string }[] = [];
+    const results: { id: string; name: string; passed: boolean | null; reason: string }[] = [];
     for (const test of rows) {
-      const run = await runAgentTest(db, agent, test);
-      await db.update(agentTests).set({ lastRun: run as never }).where(eq(agentTests.id, test.id));
-      results.push({ id: test.id, passed: run.passed, reason: run.reason });
+      const run = await runAgentTest(db, agent, test, candidate !== undefined ? { systemPrompt: candidate } : undefined);
+      // Candidate runs are experiments — don't overwrite the baseline's verdict.
+      if (candidate === undefined) {
+        await db.update(agentTests).set({ lastRun: run as never }).where(eq(agentTests.id, test.id));
+      }
+      results.push({ id: test.id, name: test.name, passed: run.passed, reason: run.reason });
     }
-    return c.json({ results });
+    return c.json({
+      results,
+      summary: {
+        passed: results.filter((r) => r.passed === true).length,
+        failed: results.filter((r) => r.passed === false).length,
+        unrunnable: results.filter((r) => r.passed === null).length,
+      },
+    });
   });
 
   return app;
+}
+
+/** Minimal CSV reader — quoted fields, escaped quotes, CRLF. Good enough for
+ *  the "name, prompt, expectation" sheet ops teams export from anywhere. */
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let field = '';
+  let row: string[] = [];
+  let quoted = false;
+  const push = () => {
+    row.push(field);
+    field = '';
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else quoted = false;
+      } else field += ch;
+      continue;
+    }
+    if (ch === '"' && !field.trim()) {
+      field = '';
+      quoted = true;
+    } else if (ch === ',') {
+      push();
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      push();
+      rows.push(row);
+      row = [];
+    } else field += ch;
+  }
+  if (field || row.length) {
+    push();
+    rows.push(row);
+  }
+  return rows;
 }
 
 /** Insert or rotate an agent secret. Returns an error string on the cap. */

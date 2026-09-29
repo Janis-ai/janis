@@ -54,6 +54,7 @@ export function planForPrice(priceId: string): string | null {
 
 export const METER_MESSAGES = 'janis.messages';
 export const METER_LLM_MICROS = 'janis.llm_micros';
+export const METER_VOICE_MICROS = 'janis.voice_micros';
 
 /** Fire-and-forget usage report. Never throws — metering must not break
  *  flows. `identifier` dedupes retries and makes the event cancellable via

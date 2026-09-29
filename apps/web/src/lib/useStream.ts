@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { typingBus } from './typingBus';
+import { typingBus, presenceBus } from './typingBus';
 
 export interface StreamAlert {
   id: string;
@@ -39,6 +39,14 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
     source.addEventListener('typing', (e) => {
       try {
         typingBus.publish(JSON.parse((e as MessageEvent).data));
+      } catch {
+        // malformed payload — ignore
+      }
+    });
+    // Co-presence — who's viewing each conversation right now.
+    source.addEventListener('presence', (e) => {
+      try {
+        presenceBus.publish(JSON.parse((e as MessageEvent).data));
       } catch {
         // malformed payload — ignore
       }

@@ -838,3 +838,13 @@ details summary:hover { color: var(--text); }
   .landing-nav-links { display: none; }
   .demo-split { grid-template-columns: 1fr; }
 }
+
+/* Public help center */
+.help-center { max-width: 720px; margin: 0 auto; padding: 48px 20px 80px; }
+.help-inner h1 { margin: 0 0 24px; }
+.help-category h2 { font-size: 16px; margin: 28px 0 8px; color: var(--accent); }
+.help-category ul { list-style: none; margin: 0; padding: 0; }
+.help-category li { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.help-category a { font-weight: 600; }
+.help-category p { margin: 4px 0 0; font-size: 13px; }
+.help-body { white-space: pre-wrap; line-height: 1.65; margin-top: 16px; }

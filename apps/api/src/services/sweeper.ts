@@ -1,6 +1,6 @@
 import { and, desc, eq, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alertRules, alerts, conversations, messages } from '../db/schema.js';
+import { agents, alertRules, alerts, conversations, knowledgeFiles, messages } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
@@ -9,6 +9,7 @@ import { toAlert, toMessage } from '../lib/serializers.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
 import { sweepGmail } from './gmailSweep.js';
+import { refreshKnowledgeSource } from '../lib/urlSource.js';
 
 /**
  * Periodically:
@@ -23,6 +24,7 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
     void sweepAutoResume(db).catch((err) => console.error('sweepAutoResume error:', err));
     void sweepSla(db).catch((err) => console.error('sweepSla error:', err));
     void sweepGmail(db).catch((err) => console.error('sweepGmail error:', err));
+    void sweepKnowledge(db).catch((err) => console.error('sweepKnowledge error:', err));
   }, intervalMs);
   timer.unref();
   return () => clearInterval(timer);
@@ -237,4 +239,23 @@ export async function sweepSla(db: Db): Promise<number> {
     }
   }
   return fired;
+}
+
+/**
+ * Re-crawl URL knowledge sources whose refresh window elapsed. Bounded per
+ * tick — a workspace importing 50 URLs shouldn't fan out 50 fetches at once;
+ * stragglers simply run on the next minute tick.
+ */
+export async function sweepKnowledge(db: Db, limit = 5): Promise<number> {
+  const due = await db
+    .select()
+    .from(knowledgeFiles)
+    .where(and(isNotNull(knowledgeFiles.sourceUrl), lt(knowledgeFiles.nextFetchAt, new Date())))
+    .limit(limit);
+  let done = 0;
+  for (const file of due) {
+    await refreshKnowledgeSource(db, file);
+    done++;
+  }
+  return done;
 }

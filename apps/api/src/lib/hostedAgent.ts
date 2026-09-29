@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, lte } from 'drizzle-orm';
 import type { OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, alerts, conversations, knowledgeFiles, messages, workspaces } from '../db/schema.js';
+import { agents, alerts, conversations, helpArticles, knowledgeFiles, messages, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage } from './usage.js';
@@ -37,6 +37,13 @@ export async function loadKnowledgeDocs(
     .select({ name: knowledgeFiles.name, text: knowledgeFiles.text })
     .from(knowledgeFiles)
     .where(and(eq(knowledgeFiles.agentId, agentId), eq(knowledgeFiles.status, 'ready')));
+  // Published help-center articles are knowledge too — the public KB and the
+  // agent's answers can never disagree on a fact it states.
+  const articles = await db
+    .select({ name: helpArticles.title, text: helpArticles.body })
+    .from(helpArticles)
+    .where(and(eq(helpArticles.agentId, agentId), eq(helpArticles.status, 'published')));
+  for (const a of articles) rows.push({ name: `Help center: ${a.name}`, text: a.text });
   let used = 0;
   const docs: { name: string; text: string }[] = [];
   for (const row of rows) {

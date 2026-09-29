@@ -365,6 +365,41 @@
       "when": 1790635668861,
       "tag": "0051_conv_archived_at",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1790651490568,
+      "tag": "0052_help_articles",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1790651888445,
+      "tag": "0053_knowledge_url_sources",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1790652056472,
+      "tag": "0054_conv_intent",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1790652369773,
+      "tag": "0055_voice_usage",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1790652484647,
+      "tag": "0056_workspace_config",
+      "breakpoints": true
     }
   ]
 }

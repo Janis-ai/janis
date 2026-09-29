@@ -6,7 +6,7 @@ import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
 import { Avatar, channelLabel, displayName, fmtTime, StateBadge } from '../components/bits';
 import Composer from '../components/Composer';
-import { typingBus } from '../lib/typingBus';
+import { typingBus, presenceBus } from '../lib/typingBus';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -73,12 +73,24 @@ export default function ConversationPage() {
   // until a reply lands, with a long safety timer matching the server TTL.
   const [visitorTyping, setVisitorTyping] = useState(false);
   const [agentTyping, setAgentTyping] = useState(false);
+  const [operatorTyping, setOperatorTyping] = useState<string | null>(null);
+  const [viewers, setViewers] = useState<{ id: string; name: string | null }[]>([]);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const agentTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const opTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(
     () =>
       typingBus.subscribe((p) => {
         if (p.conversation_id !== id) return;
+        if (p.kind === 'operator') {
+          // Collision detection — another teammate composing here. Your own
+          // composer pings come back on the same stream; suppress them.
+          if (p.user_id && p.user_id === me?.user.id) return;
+          setOperatorTyping(p.name ?? 'A teammate');
+          clearTimeout(opTimer.current);
+          opTimer.current = setTimeout(() => setOperatorTyping(null), 5000);
+          return;
+        }
         if (p.kind === 'agent') {
           setAgentTyping(true);
           clearTimeout(agentTimer.current);
@@ -88,6 +100,25 @@ export default function ConversationPage() {
         setVisitorTyping(true);
         clearTimeout(typingTimer.current);
         typingTimer.current = setTimeout(() => setVisitorTyping(false), 4500);
+      }),
+    [id, me?.user.id],
+  );
+
+  // Presence — heartbeat while this conversation is open (server TTL ~20s)
+  // and render who's co-viewing when the stream broadcasts a change.
+  useEffect(() => {
+    const ping = () =>
+      void api(`/api/conversations/${id}/viewing`, { method: 'POST' })
+        .then((r) => setViewers((r as { viewers: { id: string; name: string | null }[] }).viewers))
+        .catch(() => {});
+    ping();
+    const t = setInterval(ping, 15_000);
+    return () => clearInterval(t);
+  }, [id]);
+  useEffect(
+    () =>
+      presenceBus.subscribe((p) => {
+        if (p.conversation_id === id) setViewers(p.viewers);
       }),
     [id],
   );
@@ -578,6 +609,19 @@ export default function ConversationPage() {
       <div className="conv-main">
         <div className="row">
           <h1 className="page-title grow">{name}</h1>
+          {viewers.filter((v) => v.id !== me?.user.id).length > 0 && (
+            <span
+              className="muted"
+              style={{ fontSize: 12, whiteSpace: 'nowrap' }}
+              title="Teammates who have this conversation open — check before replying"
+            >
+              👁 {viewers
+                .filter((v) => v.id !== me?.user.id)
+                .map((v) => v.name ?? 'Someone')
+                .join(', ')}{' '}
+              also viewing
+            </span>
+          )}
           <button
             className="btn icon"
             title={c.is_starred ? 'Unstar' : 'Star'}
@@ -911,6 +955,11 @@ export default function ConversationPage() {
           {visitorTyping && (
             <div className="msg in conv-typing">
               <span className="dot" /><span className="dot" /><span className="dot" />
+            </div>
+          )}
+          {operatorTyping && (
+            <div className="muted" style={{ fontSize: 12, padding: '2px 8px' }}>
+              ✍ {operatorTyping} is typing…
             </div>
           )}
           {agentTyping && (

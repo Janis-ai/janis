@@ -33,6 +33,7 @@ import { requestSuggestion } from '../services/suggestions.js';
 import { sendCsatPrompt } from '../lib/csat.js';
 import { fetchAvatar } from '../lib/avatar.js';
 import { markOperatorTyping, shouldRelayTyping } from '../lib/typingState.js';
+import { markViewing } from '../lib/presence.js';
 import {
   channelBindingFor,
   deliverToChannel,
@@ -419,6 +420,17 @@ export function conversationRoutes(db: Db) {
     // opt-out still shows dots, just anonymously.
     const ident = await operatorIdentity(db, user, owned.agentId);
     markOperatorTyping(owned.id, ident.name);
+    // Collision detection — teammates co-viewing the thread see "X is
+    // typing" so two operators don't both compose replies.
+    bus.publish(workspaceId, {
+      type: 'typing',
+      data: {
+        conversation_id: owned.id,
+        name: ident.name ?? undefined,
+        kind: 'operator',
+        user_id: user.id,
+      },
+    });
     // Meta channels need an actual sender_action — the webchat poll reads
     // the in-memory flag, but Messenger/IG visitors see nothing without it.
     if (shouldRelayTyping(owned.id)) {
@@ -427,6 +439,28 @@ export function conversationRoutes(db: Db) {
       );
     }
     return c.json({ ok: true });
+  });
+
+  // Viewing heartbeat — client pings while the conversation is open; the
+  // workspace stream republishes the viewer set when it changes.
+  app.post('/:id/viewing', async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const [owned] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(eq(conversations.id, c.req.param('id')), ...agentVis(workspaceId, c.get('agentScope'))))
+      .limit(1);
+    if (!owned) return c.json({ error: 'not found' }, 404);
+    const user = c.get('user');
+    const { viewers, changed } = markViewing(owned.id, user.id, user.name);
+    if (changed) {
+      bus.publish(workspaceId, {
+        type: 'presence',
+        data: { conversation_id: owned.id, viewers },
+      });
+    }
+    return c.json({ viewers });
   });
 
   // Internal note — operators only, never delivered to the end user

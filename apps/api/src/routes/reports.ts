@@ -337,6 +337,52 @@ export function reportRoutes(db: Db) {
     });
   });
 
+  // GET /intents?days=30 — conversation volume grouped by classified topic,
+  // with per-topic CSAT so "billing makes people angrier than shipping" is
+  // visible, not just counted.
+  app.get('/intents', async (c) => {
+    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+
+    const rows = await db
+      .select({
+        intent: conversations.intent,
+        csat: conversations.csatScore,
+      })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(
+        and(
+          ...agentVis(c.get('workspaceId'), c.get('agentScope')),
+          gt(conversations.createdAt, cutoff),
+          ...drillFilters(c),
+        ),
+      );
+
+    const byIntent = new Map<string, { count: number; scores: number[] }>();
+    for (const r of rows) {
+      const key = r.intent ?? 'unclassified';
+      const slot = byIntent.get(key) ?? { count: 0, scores: [] };
+      slot.count++;
+      if (r.csat !== null) slot.scores.push(r.csat);
+      byIntent.set(key, slot);
+    }
+    return c.json({
+      days,
+      total: rows.length,
+      classified: rows.length - (byIntent.get('unclassified')?.count ?? 0),
+      intents: [...byIntent.entries()]
+        .map(([intent, s]) => ({
+          intent,
+          count: s.count,
+          avg_csat: s.scores.length
+            ? Math.round((s.scores.reduce((a, b) => a + b, 0) / s.scores.length) * 100) / 100
+            : null,
+        }))
+        .sort((a, b) => b.count - a.count),
+    });
+  });
+
   // GET /operators?days=30 — per-teammate workload + responsiveness: how many
   // conversations each operator touched, replies sent, median first-response
   // and resolution times, and what's currently sitting in their name.

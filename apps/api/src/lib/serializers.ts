@@ -6,6 +6,7 @@ import type {
   Channel,
   Conversation,
   Digest,
+  HelpArticle,
   Message,
   SavedReply,
   Suggestion,
@@ -18,6 +19,7 @@ import type {
   channels,
   conversations,
   digests,
+  helpArticles,
   messages,
   savedReplies,
   suggestions,
@@ -85,6 +87,7 @@ export function toConversation(row: Row<typeof conversations>, openAlertCount = 
     human_since: iso(row.humanSince),
     csat_score: row.csatScore,
     csat_pending: row.csatPending,
+    intent: row.intent,
     created_at: iso(row.createdAt)!,
   };
 }
@@ -225,6 +228,19 @@ export function toSavedReply(row: Row<typeof savedReplies>): SavedReply {
     body: row.body,
     agent_id: row.agentId,
     created_at: iso(row.createdAt)!,
+  };
+}
+
+export function toHelpArticle(row: Row<typeof helpArticles>): HelpArticle {
+  return {
+    id: row.id,
+    agent_id: row.agentId,
+    title: row.title,
+    category: row.category,
+    body: row.body,
+    status: row.status,
+    published_at: iso(row.publishedAt),
+    updated_at: iso(row.updatedAt)!,
   };
 }
 
