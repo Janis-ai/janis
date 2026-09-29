@@ -12,6 +12,8 @@
   var LS_VISITOR = 'janis_visitor_' + TOKEN;
   var LS_OPEN = 'janis_open_' + TOKEN;
   var LS_EXPANDED = 'janis_expanded_' + TOKEN;
+  var LS_SEEN = 'janis_seen_' + TOKEN;   // read watermark for the unread badge
+  var SS_TEASER = 'janis_teaser_' + TOKEN; // teaser dismissed this session
   var visitor = localStorage.getItem(LS_VISITOR);
   if (!visitor) {
     visitor = (crypto.randomUUID ? crypto.randomUUID() :
@@ -48,6 +50,12 @@
     hasMore: false, // older transcript pages exist (scroll up to back-fill)
     oldestTs: null, // created_at of the oldest rendered message — before cursor
     loadingMore: false,
+    lastSeen: localStorage.getItem(LS_SEEN), // newest ts the visitor has seen
+    seenInit: false, // first poll sets the baseline — history never counts unread
+    unread: 0,
+    fails: 0,        // consecutive poll failures — drives the reconnect strip
+    audioCtx: null,
+    closedTimer: null, // closed-state poll — feeds the unread badge
   };
 
   // Public API — the embedding site identifies its logged-in user:
@@ -204,6 +212,19 @@
     '#janis-help:hover{text-decoration:underline}' +
     '.janis-loading{text-align:center;color:#9ca3af;font-size:12px;padding:18px 0}' +
     '#janis-form :disabled{opacity:.55;cursor:default}' +
+    '#janis-badge{position:absolute;top:-5px;left:-5px;min-width:22px;height:22px;border-radius:11px;' +
+    'background:#ef4444;color:#fff;font-size:12px;font-weight:700;line-height:22px;text-align:center;' +
+    'padding:0 6px;box-sizing:border-box;display:none;box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:none}' +
+    '@keyframes janis-pop{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}' +
+    '#janis-teaser{position:fixed;bottom:88px;right:20px;z-index:999998;max-width:250px;background:#fff;' +
+    'border-radius:14px;padding:11px 32px 11px 14px;box-shadow:0 6px 24px rgba(0,0,0,.2);font-size:13.5px;' +
+    'line-height:1.45;color:#1f2937;cursor:pointer;animation:janis-pop .25s ease;' +
+    'font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}' +
+    '#janis-teaser.janis-left{left:20px;right:auto}' +
+    '#janis-teaser .janis-x{position:absolute;top:5px;right:7px;border:none;background:none;color:#9ca3af;' +
+    'font-size:15px;cursor:pointer;padding:2px 5px;line-height:1}' +
+    '#janis-conn{flex-shrink:0;background:#fef3c7;color:#92400e;font-size:12px;padding:5px 14px;text-align:center}' +
+    '.janis-when{opacity:.55;font-weight:400;margin-left:4px}' +
     // iOS Safari zooms the whole page when a focused field is under 16px —
     // keep the input at 16px on touch devices so opening the widget doesn't
     // blow up the host site's layout.
@@ -214,6 +235,8 @@
   var bubble = el('button', { background: accent }, { id: 'janis-bubble', 'aria-label': 'Chat with us' });
   bubble.id = 'janis-bubble';
   bubble.textContent = '💬';
+  var badgeEl = el('span', {}, { id: 'janis-badge' });
+  bubble.appendChild(badgeEl);
   var panel = el('div', {}, { id: 'janis-panel' });
   panel.innerHTML =
     '<div id="janis-head"><div><span id="janis-title">Chat</span><small id="janis-sub"></small></div>' +
@@ -246,6 +269,83 @@
   // ---- transcript loading gate ----------------------------------------------
   // The composer stays disabled until the first poll resolves (or fails) —
   // sending into an unloaded transcript could race the history render.
+  // ---- presence helpers -----------------------------------------------------
+  function fmtTime(ts) {
+    if (!ts) return '';
+    var d = new Date(ts);
+    return isNaN(d) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+  // Short two-note chime on a new reply while the panel is closed or the tab
+  // is hidden — WebAudio, no asset; suspended contexts (no prior user
+  // gesture on the page) fail silently.
+  function ping() {
+    if (state.config && state.config.sound === false) return;
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!state.audioCtx) state.audioCtx = new AC();
+      var ctx = state.audioCtx;
+      if (ctx.state === 'suspended') ctx.resume();
+      var t = ctx.currentTime;
+      [880, 660].forEach(function (f, i) {
+        var o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = f;
+        o.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.0001, t + i * 0.12);
+        g.gain.exponentialRampToValueAtTime(0.07, t + i * 0.12 + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.12 + 0.2);
+        o.start(t + i * 0.12); o.stop(t + i * 0.12 + 0.22);
+      });
+    } catch (e) {}
+  }
+  function saveSeen() { try { if (state.lastSeen) localStorage.setItem(LS_SEEN, state.lastSeen); } catch (e) {} }
+  // Tab-title flash — "(2) Site name". Strip our own prefix rather than
+  // restoring a saved title so host-side title changes (SPAs) survive.
+  function updateBadge() {
+    var n = state.open ? 0 : state.unread;
+    badgeEl.style.display = n > 0 ? 'block' : 'none';
+    badgeEl.textContent = n > 9 ? '9+' : String(n);
+    var bare = document.title.replace(/^\(\d+\+?\)\s+/, '');
+    document.title = n > 0 ? '(' + n + ') ' + bare : bare;
+  }
+  // Proactive teaser — a card above the launcher for brand-new visitors (no
+  // thread, no unread). Session dismissal; superseded by the unread badge.
+  var teaserEl = null;
+  function hideTeaser() { if (teaserEl) { teaserEl.remove(); teaserEl = null; } }
+  function maybeTeaser() {
+    if (teaserEl || state.open || state.lastTs || state.unread > 0 || !state.config ||
+        state.config.proactive === false) return;
+    try { if (sessionStorage.getItem(SS_TEASER)) return; } catch (e) {}
+    var txt = state.config.teaser_text || state.config.greeting || 'Questions? Chat with us.';
+    teaserEl = el('div', {}, { id: 'janis-teaser', role: 'button' });
+    if (state.config.position === 'left') teaserEl.classList.add('janis-left');
+    var tx = el('span', {}, {});
+    tx.textContent = txt;
+    teaserEl.appendChild(tx);
+    var x = el('button', {}, { class: 'janis-x', 'aria-label': 'Dismiss' });
+    x.textContent = '×';
+    x.onclick = function (e) {
+      e.stopPropagation();
+      hideTeaser();
+      try { sessionStorage.setItem(SS_TEASER, '1'); } catch (e2) {}
+    };
+    teaserEl.appendChild(x);
+    teaserEl.onclick = function () { setOpen(true); };
+    document.body.appendChild(teaserEl);
+  }
+  // Connectivity strip — consecutive poll failures mean the host is likely
+  // offline or the API unreachable; show it only while the panel is open.
+  var connEl = null;
+  function setConn(lost) {
+    if (lost && state.open && !connEl) {
+      connEl = el('div', {}, { id: 'janis-conn' });
+      connEl.textContent = 'Connection lost — reconnecting…';
+      panel.insertBefore(connEl, msgs);
+    } else if (!lost && connEl) {
+      connEl.remove(); connEl = null;
+    }
+  }
+
   var loadingEl = el('div', {}, { class: 'janis-loading' });
   loadingEl.textContent = 'Loading conversation…';
   msgs.appendChild(loadingEl);
@@ -352,7 +452,11 @@
     var sameAuthor = state.lastAuthor === authorKey;
     state.lastAuthor = authorKey;
     d.setAttribute('data-author', authorKey);
-    if (m.created_at) d.setAttribute('data-real', '1'); // synthetic greeting stays unmarked
+    if (m.created_at) {
+      d.setAttribute('data-real', '1'); // synthetic greeting stays unmarked
+      var dt = new Date(m.created_at);
+      if (!isNaN(dt)) d.title = dt.toLocaleString(); // full stamp on hover
+    }
     // Sender label opens each run — an operator's name/avatar on human
     // replies, the agent's name/logo on its own messages. One label per
     // consecutive run, not every bubble.
@@ -375,6 +479,12 @@
         who.appendChild(av);
       }
       who.appendChild(document.createTextNode(label));
+      var when = fmtTime(m.created_at);
+      if (when) {
+        var w = el('span', {}, { class: 'janis-when' });
+        w.textContent = '· ' + when;
+        who.appendChild(w);
+      }
       d.appendChild(who);
     }
     if (m.text) {
@@ -484,11 +594,12 @@
     if (state.deliveredEl) { state.deliveredEl.remove(); state.deliveredEl = null; }
   }
 
-  function showDelivered(entry) {
+  function showDelivered(entry, ts) {
     hideDelivered();
     var st = document.createElement('div');
     st.className = 'janis-status';
-    st.textContent = 'Delivered';
+    var when = fmtTime(ts);
+    st.textContent = when ? 'Delivered · ' + when : 'Delivered';
     entry.el.after(st);
     entry.statusEl = st;
     state.deliveredEl = st;
@@ -606,7 +717,14 @@
       return new Promise(function (res) { setTimeout(res, delay); }).then(function () {
         state.pollBusy = false;
         markLoaded();
-        if (!d) return;
+        if (!d) {
+          // r.ok false (5xx, rate-limited) — soft failure, still counts
+          state.fails++;
+          if (state.fails >= 2) setConn(true);
+          return;
+        }
+        state.fails = 0;
+        setConn(false);
         if (d.participant && state.participant !== d.participant) {
           // identity switched threads — discard this response (fetched with the
           // old thread's cursor) and re-poll the new thread from scratch. The
@@ -635,6 +753,7 @@
           }
         }
         var gotReply = false;
+        var wantPing = false;
         d.messages.forEach(function (m) {
           var i = m.direction === 'in' ? state.outbox.findIndex(function (o) {
             return o.text === m.text ||
@@ -644,15 +763,38 @@
             var o = state.outbox.splice(i, 1)[0];
             o.el.classList.remove('pending'); // promoted: server echo confirms delivery
             if (o.statusEl) o.statusEl.remove();
-            showDelivered(o); // receipt moves to the newest confirmed bubble
+            showDelivered(o, m.created_at); // receipt moves to the newest confirmed bubble
             clearChips(); // the visitor's own send answers any pending offer
             if (m.id) state.seen[m.id] = 1;
             if (m.created_at && (!state.lastTs || m.created_at > state.lastTs)) state.lastTs = m.created_at;
+            if (m.created_at && state.open &&
+                (!state.lastSeen || m.created_at > state.lastSeen)) {
+              state.lastSeen = m.created_at; saveSeen();
+            }
             return;
+          }
+          // Unread watermark: non-visitor messages newer than lastSeen count
+          // while the panel is closed; while open they just advance it.
+          if (m.direction !== 'in' && m.created_at && state.seenInit &&
+              (!state.lastSeen || m.created_at > state.lastSeen)) {
+            if (state.open || document.hidden) wantPing = true;
+            if (state.open) { state.lastSeen = m.created_at; saveSeen(); }
+            else state.unread++;
           }
           if (m.direction !== 'in') gotReply = true;
           addMsg(m);
         });
+        // First poll establishes the read baseline — a fresh visitor's whole
+        // history (or none) is "seen", not a pile of unread messages.
+        if (!state.seenInit) {
+          state.seenInit = true;
+          if (state.lastTs && (!state.lastSeen || state.lastTs > state.lastSeen)) {
+            state.lastSeen = state.lastTs;
+            saveSeen();
+          }
+        }
+        if (wantPing) ping();
+        updateBadge();
         // A pending offer is moot once a human owns the conversation.
         if (state.convState === 'human') clearChips();
         // A fresh reply means whoever was typing stopped — clear both flags
@@ -668,7 +810,12 @@
         }
         renderTyping();
       });
-    }).catch(function () { state.pollBusy = false; markLoaded(); });
+    }).catch(function () {
+      state.pollBusy = false;
+      markLoaded();
+      state.fails++;
+      if (state.fails >= 2) setConn(true);
+    });
     return state.pollPromise;
   }
 
@@ -677,6 +824,13 @@
     panel.classList.toggle('open', open);
     localStorage.setItem(LS_OPEN, open ? '1' : '0');
     if (open) {
+      hideTeaser();
+      state.unread = 0;
+      if (state.lastTs && (!state.lastSeen || state.lastTs > state.lastSeen)) {
+        state.lastSeen = state.lastTs;
+        saveSeen();
+      }
+      updateBadge();
       poll();
       if (!state.timer) state.timer = setInterval(poll, 3000);
       // Auto-focus pops the on-screen keyboard on mobile — let them tap in.
@@ -828,6 +982,7 @@
       bub.alt = '';
       bubble.textContent = '';
       bubble.appendChild(bub);
+      bubble.appendChild(badgeEl); // textContent='' wiped it — re-attach
     }
     if (cfg.help_url) {
       var helpLink = panel.querySelector('#janis-help');
@@ -837,6 +992,18 @@
     if (cfg.position === 'left') {
       bubble.classList.add('janis-left');
       panel.classList.add('janis-left');
+    }
+    // Closed-state poll keeps the unread badge live and pre-warms the
+    // transcript so opening renders instantly. 20s is cheap for the host
+    // page (one GET per minute-of-three) and well under the API's read cap.
+    poll();
+    if (!state.closedTimer) {
+      state.closedTimer = setInterval(function () { if (!state.open) poll(); }, 20000);
+    }
+    // Proactive teaser — a card over the launcher nudging first-time
+    // visitors; skipped when a thread or unread already exists.
+    if (cfg.proactive !== false) {
+      setTimeout(maybeTeaser, Math.max(0, cfg.proactive_delay == null ? 20 : cfg.proactive_delay) * 1000);
     }
     if (state.open) setOpen(true);
   }).catch(function () {});

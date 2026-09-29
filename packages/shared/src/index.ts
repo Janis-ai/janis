@@ -344,6 +344,10 @@ export const Channel = z.object({
         position: z.enum(['left', 'right']).optional(),
         logo_url: z.string().optional(),
         quick_replies: z.array(z.string()).optional(),
+        teaser_text: z.string().optional(),
+        proactive: z.boolean().optional(),
+        proactive_delay: z.number().optional(),
+        sound: z.boolean().optional(),
       })
       .optional(),
   }),

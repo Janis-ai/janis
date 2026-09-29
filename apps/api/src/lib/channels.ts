@@ -38,6 +38,10 @@ export interface ChannelCredentials {
   position?: 'left' | 'right'; // webchat: which corner the launcher sits in
   logo_url?: string; // webchat: header/bubble logo image
   quick_replies?: string[]; // tappable prompts — webchat chips; reply buttons on Meta greetings
+  teaser_text?: string; // webchat: proactive teaser line by the launcher (falls back to greeting)
+  proactive?: boolean; // webchat: show the teaser at all — default on
+  proactive_delay?: number; // webchat: seconds before the teaser appears (default 20)
+  sound?: boolean; // webchat: chime on a new reply while closed/hidden — default on
   // webchat: HMAC-SHA256 key for host-signed identity assertions — when set,
   // a `sig` on the widget's user payload proves the host vouched for it
   identity_secret?: string;

@@ -204,6 +204,10 @@ export function webchatRoutes(db: Db) {
       // channel-level override wins; agent config is the default
       quick_replies: creds.quick_replies?.length ? creds.quick_replies : agentReplies,
       help_url: helpCount > 0 ? `${env.webOrigin}/help/${channel.agentId}` : null,
+      teaser_text: creds.teaser_text ?? null,
+      proactive: creds.proactive !== false,
+      proactive_delay: creds.proactive_delay ?? 20,
+      sound: creds.sound !== false,
     });
   });
 

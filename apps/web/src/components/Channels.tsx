@@ -345,6 +345,10 @@ function WebchatBranding({ channel }: { channel: Channel }) {
     position: b.position ?? 'right',
     logo_url: b.logo_url ?? '',
     quick_replies: (b.quick_replies ?? []).join(', '),
+    teaser_text: b.teaser_text ?? '',
+    proactive: b.proactive !== false,
+    proactive_delay: b.proactive_delay ?? 20,
+    sound: b.sound !== false,
   });
   const [msg, setMsg] = useState('');
   const uploadLogo = async (file: File) => {
@@ -373,6 +377,10 @@ function WebchatBranding({ channel }: { channel: Channel }) {
             position: f.position,
             logo_url: f.logo_url,
             quick_replies: parseReplies(f.quick_replies),
+            teaser_text: f.teaser_text,
+            proactive: f.proactive,
+            proactive_delay: f.proactive_delay,
+            sound: f.sound,
           },
         }),
       }),
@@ -460,6 +468,43 @@ function WebchatBranding({ channel }: { channel: Channel }) {
         value={f.quick_replies}
         onChange={(e) => setF({ ...f, quick_replies: e.target.value })}
       />
+      <div className="row">
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={f.proactive}
+            onChange={(e) => setF({ ...f, proactive: e.target.checked })}
+          />
+          Proactive teaser
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          after
+          <input
+            type="number"
+            min={0}
+            max={300}
+            style={{ width: 64 }}
+            value={f.proactive_delay}
+            onChange={(e) => setF({ ...f, proactive_delay: Math.max(0, Math.min(300, Number(e.target.value) || 0)) })}
+          />
+          s
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={f.sound}
+            onChange={(e) => setF({ ...f, sound: e.target.checked })}
+          />
+          Reply sound
+        </label>
+      </div>
+      {f.proactive && (
+        <input
+          placeholder="Teaser text (optional — defaults to the greeting)"
+          value={f.teaser_text}
+          onChange={(e) => setF({ ...f, teaser_text: e.target.value })}
+        />
+      )}
       <div className="row">
         <button className="btn" disabled={save.isPending}>Save appearance</button>
         {msg && <span className="muted">{msg}</span>}

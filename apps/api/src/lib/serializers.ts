@@ -175,6 +175,10 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     position?: 'left' | 'right';
     logo_url?: string;
     quick_replies?: string[];
+    teaser_text?: string;
+    proactive?: boolean;
+    proactive_delay?: number;
+    sound?: boolean;
     identity_secret?: string;
     show_operator?: boolean;
     inbound_address?: string;
@@ -214,6 +218,10 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
               position: creds.position,
               logo_url: creds.logo_url,
               quick_replies: creds.quick_replies,
+              teaser_text: creds.teaser_text,
+              proactive: creds.proactive,
+              proactive_delay: creds.proactive_delay,
+              sound: creds.sound,
             }
           : undefined,
     },

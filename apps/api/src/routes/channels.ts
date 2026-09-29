@@ -70,6 +70,10 @@ const patchChannel = z.object({
       logo_url: z
         .union([z.literal(''), z.string().url().max(500), z.string().regex(/^\/uploads\//).max(500)])
         .optional(),
+      teaser_text: z.string().max(200).optional(), // '' clears → greeting used
+      proactive: z.boolean().optional(),
+      proactive_delay: z.number().int().min(0).max(300).optional(),
+      sound: z.boolean().optional(),
     })
     .optional(),
   // webchat: HMAC key for signed visitor identity (Janis.identify sig); '' clears
@@ -338,6 +342,13 @@ export function channelApiRoutes(db: Db) {
         else creds[key] = v;
       }
       if (b.position !== undefined) creds.position = b.position;
+      if (b.teaser_text !== undefined) {
+        if (b.teaser_text === '') delete creds.teaser_text;
+        else creds.teaser_text = b.teaser_text;
+      }
+      if (b.proactive !== undefined) creds.proactive = b.proactive;
+      if (b.proactive_delay !== undefined) creds.proactive_delay = b.proactive_delay;
+      if (b.sound !== undefined) creds.sound = b.sound;
       if (b.quick_replies !== undefined) {
         if (b.quick_replies.length) creds.quick_replies = b.quick_replies;
         else delete creds.quick_replies;
