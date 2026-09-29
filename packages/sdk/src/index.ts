@@ -1,4 +1,6 @@
-import type { IngestEvent, IngestResponse } from '@janis/shared';
+import type { IngestEvent, IngestResponse } from './types.js';
+
+export type { IngestEvent, IngestResponse, IngestResult, EventUser } from './types.js';
 
 export interface JanisOptions {
   /** Agent API key (jk_live_...) */

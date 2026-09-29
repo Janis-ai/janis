@@ -122,7 +122,9 @@ export default function Docs() {
         answers user messages with any OpenAI-compatible LLM, and honors
         takeover. Run it as-is or fork the source as your starting point.
       </p>
-      <Code>{`docker run -e JANIS_API_KEY=jk_live_... -e LLM_API_KEY=sk-... \\
+      <Code>{`JANIS_API_KEY=jk_live_... LLM_API_KEY=sk-... npx janis-agent
+# or with Docker:
+docker run -e JANIS_API_KEY=jk_live_... -e LLM_API_KEY=sk-... \\
   -p 9798:9798 ghcr.io/janis-ai/janis-agent`}</Code>
       <p className="muted" style={{ lineHeight: 1.6 }}>
         Get the key from the agent's Engine tab → Generate API key (shown once).
@@ -136,9 +138,9 @@ export default function Docs() {
       <p className="muted" style={{ lineHeight: 1.6 }}>
         Authenticate every call with <span className="mono">Authorization: Bearer
         &lt;agent api key&gt;</span>. Plain HTTPS works everywhere; for Node agents the
-        SDK (<span className="mono">@janis/sdk</span> — coming to npm) wraps all of it:
+        SDK wraps all of it — <span className="mono">npm install janis</span>:
       </p>
-      <Code>{`import { Janis } from '@janis/sdk';
+      <Code>{`import { Janis } from 'janis';
 const janis = new Janis({ apiKey: process.env.JANIS_API_KEY });
 
 const res = await janis.userMessage('conv-42', 'where is my order?', { name: 'Jane' });
@@ -179,8 +181,8 @@ await janis.requestHuman('conv-42', 'customer asked for a refund');`}</Code>
         where <span className="mono">v1 = HMAC-SHA256(secret, "t.body")</span> over the
         exact raw request body. Verify before parsing:
       </p>
-      <Code>{`import { verifySignature } from '@janis/sdk/webhook';
-import type { OutboundWebhook } from '@janis/shared';
+      <Code>{`import { verifySignature } from 'janis/webhook';
+import type { OutboundWebhook } from 'janis/webhook';
 
 app.post('/janis/webhook', (req, res) => {
   if (!verifySignature(secret, req.headers['x-janis-signature'], req.rawBody)) {

@@ -1,4 +1,4 @@
-# @janis/agent-template
+# janis-agent
 
 A runnable, config-driven support agent for [Janis](https://app.janis.ai). Use it
 as-is for a working LLM bot, or fork it as the starting point for your own
@@ -10,6 +10,12 @@ operator suggestions, and honors the takeover contract: when a human takes
 over, it goes quiet.
 
 ## Run it
+
+```bash
+JANIS_API_KEY=jk_live_... LLM_API_KEY=sk-... npx janis-agent
+```
+
+or with Docker:
 
 ```bash
 docker run -e JANIS_API_KEY=jk_live_... -e LLM_API_KEY=sk-... \

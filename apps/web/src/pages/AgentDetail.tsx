@@ -1713,10 +1713,8 @@ function ConnectionTab({
               )}
             </div>
             <div className="muted" style={{ marginTop: 4 }}>
-              Run your agent with the template:{' '}
-              <span className="mono">
-                docker run -e JANIS_API_KEY=… -p 9798:9798 ghcr.io/janis-ai/janis-agent
-              </span>
+              Run the reference agent —{' '}
+              <span className="mono">JANIS_API_KEY=… npx janis-agent</span>
               {' '}— full contract + quickstart in the{' '}
               <a href="/docs" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>
                 BYOK docs

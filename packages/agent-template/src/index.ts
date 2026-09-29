@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @janis/agent-template — a Janis-ready support agent.
+ * janis-agent — a Janis-ready support agent.
  *
  * Boots from the agent's config in Janis (system prompt, knowledge, tone),
  * answers `message.user` webhooks from hosted channels, drafts suggestions,

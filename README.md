@@ -12,7 +12,7 @@ and the conversation can be handed back.
 apps/api        Hono + Postgres (Drizzle). Dev uses embedded PGlite — zero install.
 apps/web        Vite + React PWA console: live inbox, takeover, agent/channel/alert management.
 packages/shared zod schemas + types shared by api, web, sdk.
-packages/sdk    @janis/sdk — thin client agents use to report + receive takeover.
+packages/sdk    `janis` on npm — thin client agents use to report + receive takeover.
 ```
 
 ## Quickstart
@@ -39,7 +39,7 @@ Inbox, click **Take over**, and reply — the demo agent prints your message.
 ## Agent integration
 
 ```ts
-import { Janis } from '@janis/sdk';
+import { Janis } from 'janis';
 const janis = new Janis({ apiKey: 'jk_live_...', baseUrl: 'https://app.janis.ai' });
 
 // around your agent loop:
@@ -54,7 +54,7 @@ await janis.requestHuman(convId, 'billing dispute');
 
 Human messages arrive at your agent's `webhook_url` as signed POSTs
 (`human.takeover`, `message.human`, `human.resume`). Verify with
-`verifySignature` from `@janis/sdk/webhook`. Agents that can't receive webhooks
+`verifySignature` from `janis/webhook`. Agents that can't receive webhooks
 can poll `janis.isPaused(convId)` — every `send()` response also carries `paused`.
 
 ## API surfaces

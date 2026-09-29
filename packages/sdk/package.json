@@ -1,6 +1,6 @@
 {
   "name": "janis",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Janis client for AI agents \u2014 report conversations, request human takeover, receive human messages",
   "type": "module",
   "main": "./dist/index.js",
@@ -29,7 +29,6 @@
   },
   "dependencies": {},
   "devDependencies": {
-    "typescript": "^5.6.3",
-    "@janis/shared": "^0.1.0"
+    "typescript": "^5.6.3"
   }
 }

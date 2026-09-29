@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { OutboundWebhook } from '@janis/shared';
+import type { OutboundWebhook } from './types.js';
 
 /**
  * Verify a Janis webhook signature (Express/Hono/etc).
