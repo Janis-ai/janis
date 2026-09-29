@@ -81,12 +81,12 @@ export function dbRateLimit(db: Db, opts: RateLimitOptions): MiddlewareHandler {
     try {
       const res = await db.execute(sql`
         insert into rate_limits (key, count, reset_at)
-        values (${k}, 1, ${resetAt})
+        values (${k}, 1, ${resetAt.toISOString()})
         on conflict (key) do update set
           count = case when rate_limits.reset_at <= now()
                     then 1 else rate_limits.count + 1 end,
           reset_at = case when rate_limits.reset_at <= now()
-                       then ${resetAt} else rate_limits.reset_at end
+                       then ${resetAt.toISOString()} else rate_limits.reset_at end
         returning count, reset_at
       `);
       const row = (res as { rows?: { count: number; reset_at: string | Date }[] }).rows?.[0];
