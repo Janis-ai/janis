@@ -32,6 +32,7 @@ export const workspaces = pgTable('workspaces', {
   connectChargesEnabled: boolean('connect_charges_enabled').notNull().default(false),
   // {[planKey]: {price_id, retail_cents}} — the agency's own price objects
   // on their connected account; retail floor = our plan's baseCents.
+  trialedAt: timestamp('trialed_at', { withTimezone: true }), // one free trial per workspace, ever
   agencyPricing: jsonb('agency_pricing').notNull().default({}),
   // On CLIENT workspaces: the customer/subscription created on the parent's
   // connected account by a direct-charge checkout.
@@ -255,6 +256,9 @@ export const contactIdentities = pgTable(
       .notNull()
       .references(() => channels.id),
     platformUserId: text('platform_user_id').notNull(),
+    // STOP/unsubscribe on this (channel, identity) — set by the inbound
+    // keyword intercept; sendOutbound refuses while set.
+    optedOutAt: timestamp('opted_out_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -574,7 +578,7 @@ export const channels = pgTable('channels', {
     .notNull()
     .references(() => agents.id),
   kind: text('kind', {
-    enum: ['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'voice', 'sms'],
+    enum: ['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'outlook', 'voice', 'sms'],
   }).notNull(),
   name: text('name').notNull(),
   // {page_id, page_access_token, verify_token, phone_number_id} — secrets never leave the API
@@ -878,4 +882,83 @@ export const auditLog = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('audit_log_ws').on(t.workspaceId, t.createdAt)],
+);
+
+/** Background work units — enqueued by routes (broadcasts, campaign sends),
+ *  drained by the sweeper under the leader lock so heavy/sequential work
+ *  never runs inside an HTTP request. */
+export const jobs = pgTable(
+  'jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    type: text('type').notNull(), // 'outbound.send', …
+    payload: jsonb('payload').notNull().default({}),
+    status: text('status', { enum: ['pending', 'running', 'done', 'failed'] })
+      .notNull()
+      .default('pending'),
+    runAt: timestamp('run_at', { withTimezone: true }).notNull().defaultNow(),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [index('jobs_due').on(t.status, t.runAt)],
+);
+
+/** A scheduled/segmented outbound blast. The sweeper resolves recipients
+ *  into campaign_sends rows + jobs; status flips draft → scheduled →
+ *  sending → done. */
+export const campaigns = pgTable(
+  'campaigns',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => channels.id),
+    name: text('name').notNull(),
+    text: text('text').notNull().default(''),
+    subject: text('subject'),
+    template: jsonb('template'), // whatsapp {name,language,body_params}
+    segment: jsonb('segment').notNull().default({}), // {q?: string}
+    scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
+    status: text('status', { enum: ['draft', 'scheduled', 'sending', 'done', 'failed'] })
+      .notNull()
+      .default('draft'),
+    createdBy: uuid('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('campaigns_ws').on(t.workspaceId)],
+);
+
+/** One row per campaign recipient — the analytics + suppression record. */
+export const campaignSends = pgTable(
+  'campaign_sends',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    contactId: uuid('contact_id'),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => channels.id),
+    recipient: text('recipient').notNull(), // phone/email/platform id
+    status: text('status', { enum: ['pending', 'sent', 'failed', 'skipped_opted_out'] })
+      .notNull()
+      .default('pending'),
+    error: text('error'),
+    conversationId: uuid('conversation_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+  },
+  (t) => [index('campaign_sends_campaign').on(t.campaignId, t.status)],
 );

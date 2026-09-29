@@ -108,3 +108,40 @@ export function dbRateLimit(db: Db, opts: RateLimitOptions): MiddlewareHandler {
     await next();
   };
 }
+
+/** Spend n units from a fixed-window bucket (e.g. broadcast recipients).
+ *  Returns {ok:false, retryAfter} when the spend would exceed max. Fails
+ *  open on DB error like dbRateLimit. */
+export async function takeDbAllowance(
+  db: Db,
+  opts: { key: string; n: number; max: number; windowMs: number },
+): Promise<{ ok: boolean; retryAfter?: number }> {
+  const now = Date.now();
+  const resetAt = new Date(Math.floor(now / opts.windowMs) * opts.windowMs + opts.windowMs);
+  try {
+    const res = await db.execute(sql`
+      insert into rate_limits (key, count, reset_at)
+      values (${opts.key}, ${opts.n}, ${resetAt.toISOString()})
+      on conflict (key) do update set
+        count = case when rate_limits.reset_at <= now()
+                  then ${opts.n} else rate_limits.count + ${opts.n} end,
+        reset_at = case when rate_limits.reset_at <= now()
+                     then ${resetAt.toISOString()} else rate_limits.reset_at end
+      returning count, reset_at
+    `);
+    const resRows = (Array.isArray(res) ? res : (res as { rows?: unknown[] }).rows) as
+      | { count: number; reset_at: string | Date }[]
+      | undefined;
+    const row = resRows?.[0];
+    if (row && row.count > opts.max) {
+      return {
+        ok: false,
+        retryAfter: Math.max(1, Math.ceil((new Date(row.reset_at).getTime() - now) / 1000)),
+      };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.error('rate allowance check failed (failing open):', err);
+    return { ok: true };
+  }
+}

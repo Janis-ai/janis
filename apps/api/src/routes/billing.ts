@@ -202,7 +202,10 @@ export function billingRoutes(db: Db) {
   app.post('/checkout', adminOnly, async (c) => {
     const s = stripe();
     if (!s) return c.json({ error: 'billing not configured' }, 400);
-    const { plan } = (await c.req.json()) as { plan?: string };
+    const { plan, interval } = (await c.req.json()) as {
+      plan?: string;
+      interval?: 'month' | 'year';
+    };
     if (!plan || !PLANS[plan]) {
       return c.json({ error: 'unknown or unavailable plan' }, 400);
     }
@@ -276,11 +279,30 @@ export function billingRoutes(db: Db) {
       }
     }
 
-    const priceId = env.stripePrices[plan];
+    const yearly = interval === 'year';
+    const priceId = yearly ? env.stripeYearlyPrices[plan] : env.stripePrices[plan];
     if (!priceId) {
-      return c.json({ error: 'unknown or unavailable plan' }, 400);
+      return c.json(
+        { error: yearly ? 'annual billing is not available for this plan' : 'unknown or unavailable plan' },
+        400,
+      );
     }
     const customerId = await ensureStripeCustomer(s, db, workspaceId, ws, c.get('user').email);
+
+    // Free trial on the first paid checkout — one per workspace, ever.
+    const trialDays =
+      env.trialDays > 0 &&
+      !ws?.trialedAt &&
+      !ws?.stripeSubscriptionId &&
+      !ws?.connectSubscriptionId
+        ? env.trialDays
+        : 0;
+    if (trialDays) {
+      await db
+        .update(workspaces)
+        .set({ trialedAt: new Date() })
+        .where(eq(workspaces.id, workspaceId));
+    }
 
     // metered items ride on the same subscription: graduated message overage
     // + LLM pass-through; Stripe computes the bill from reported usage
@@ -294,8 +316,11 @@ export function billingRoutes(db: Db) {
       customer: customerId,
       mode: 'subscription',
       line_items,
-      metadata: { workspace_id: workspaceId, plan },
-      subscription_data: { metadata: { workspace_id: workspaceId, plan } },
+      metadata: { workspace_id: workspaceId, plan, ...(yearly ? { interval: 'year' } : {}) },
+      subscription_data: {
+        metadata: { workspace_id: workspaceId, plan },
+        ...(trialDays ? { trial_period_days: trialDays } : {}),
+      },
       success_url: `${env.webOrigin}/billing?upgraded=1`,
       cancel_url: `${env.webOrigin}/billing`,
     });

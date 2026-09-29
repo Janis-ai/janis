@@ -9,8 +9,11 @@ import { toAlert, toMessage } from '../lib/serializers.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
 import { renewGmailWatches, sweepGmail } from './gmailSweep.js';
+import { renewOutlookWatches, sweepOutlook } from './outlookSweep.js';
 import { sweepWebhookRetries } from '../lib/webhooks.js';
 import { refreshKnowledgeSource } from '../lib/urlSource.js';
+import { runJobs } from '../lib/jobs.js';
+import { sweepCampaigns } from '../lib/campaigns.js';
 
 /**
  * Claim or renew a named singleton lock. Only the holder (or anyone, once the
@@ -70,10 +73,18 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
       void sweepSla(db).catch((err) => console.error('sweepSla error:', err));
       void sweepGmail(db).catch((err) => console.error('sweepGmail error:', err));
       void renewGmailWatches(db).catch((err) => console.error('renewGmailWatches error:', err));
+      void sweepOutlook(db).catch((err) => console.error('sweepOutlook error:', err));
+      void renewOutlookWatches(db).catch((err) => console.error('renewOutlookWatches error:', err));
       void sweepKnowledge(db).catch((err) => console.error('sweepKnowledge error:', err));
       void sweepSnoozes(db).catch((err) => console.error('sweepSnoozes error:', err));
       void sweepWebhookRetries(db).catch((err) => console.error('sweepWebhookRetries error:', err));
       void sweepDeliveryFailures(db).catch((err) => console.error('sweepDeliveryFailures error:', err));
+      // Queued background work (broadcasts, campaign sends) — sequential,
+      // runs off the request path.
+      void runJobs(db)
+        .then((n) => { if (n) console.log(`jobs: ran ${n}`); })
+        .catch((err) => console.error('runJobs error:', err));
+      void sweepCampaigns(db).catch((err) => console.error('sweepCampaigns error:', err));
       void db
         .delete(busEvents)
         .where(lt(busEvents.createdAt, new Date(Date.now() - 10 * 60_000)))

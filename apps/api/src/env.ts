@@ -107,6 +107,19 @@ export const env = {
     process.env.GOOGLE_REDIRECT_URI ?? `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/auth/google/callback`,
   slackRedirectUri:
     process.env.SLACK_REDIRECT_URI ?? `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/auth/slack/callback`,
+  // WorkOS AuthKit enterprise SSO — /auth/sso?connection|organization|domain.
+  // Empty disables (route 404s to login with an error).
+  workosClientId: process.env.WORKOS_CLIENT_ID ?? '',
+  workosApiKey: process.env.WORKOS_API_KEY ?? '',
+  workosRedirectUri:
+    process.env.WORKOS_REDIRECT_URI ?? `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/auth/sso/callback`,
+  // Outlook/365 channel OAuth + Graph — separate Azure app registration.
+  msClientId: process.env.MS_CLIENT_ID ?? '',
+  msClientSecret: process.env.MS_CLIENT_SECRET ?? '',
+  msTenant: process.env.MS_TENANT ?? 'common',
+  msRedirectUri:
+    process.env.MS_REDIRECT_URI ?? `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/outlook/callback`,
+  msPushToken: process.env.MS_PUSH_TOKEN ?? '', // shared secret on the push URL
   metaAppId: process.env.META_APP_ID ?? '', // FB app id for OAuth connect flow
   metaAppSecret: process.env.META_APP_SECRET ?? '', // OAuth exchange + X-Hub-Signature-256
   metaVerifyToken: process.env.META_VERIFY_TOKEN ?? '',
@@ -152,6 +165,16 @@ export const env = {
     pro: process.env.STRIPE_PRICE_PRO ?? '',
     scale: process.env.STRIPE_PRICE_SCALE ?? '',
   } as Record<string, string>,
+  // Annual billing — yearly prices per tier (interval:'year' on the Stripe
+  // price). Empty disables the annual option for that plan.
+  stripeYearlyPrices: {
+    starter: process.env.STRIPE_PRICE_STARTER_YEARLY ?? '',
+    pro: process.env.STRIPE_PRICE_PRO_YEARLY ?? '',
+    scale: process.env.STRIPE_PRICE_SCALE_YEARLY ?? '',
+  } as Record<string, string>,
+  // Free trial on first paid checkout — days of paid-tier access before the
+  // card charges. 0 disables. Stripe sends trial_will_end 3 days out.
+  trialDays: Number(process.env.TRIAL_DAYS ?? 0),
   // metered overage prices (graduated: included msgs free, then per-msg) + shared LLM meter
   stripeMeterPrices: {
     starter: process.env.STRIPE_METER_PRICE_STARTER ?? '',

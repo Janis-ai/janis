@@ -70,6 +70,12 @@ export interface ChannelCredentials {
   // before expiry; absent fields mean push was never set up (poll-only).
   gmail_watch_expiry?: number;
   gmail_watch_history?: string;
+  // outlook (Microsoft Graph): same token fields as gmail + a poll cursor
+  // (ms) and subscription id/expiry for Graph change notifications.
+  outlook_cursor?: number;
+  outlook_sub_id?: string;
+  outlook_sub_expiry?: number;
+  outlook_client_state?: string; // echoes back on Graph notifications — anti-forgery
   // voice (Twilio): number config + signature token. forward_to bridges the
   // live call to a human's phone when a teammate owns the conversation.
   // Hosted (Janis-provisioned) numbers: account/token are the channel's own
@@ -465,6 +471,9 @@ export async function sendChannelMessage(
   }
   if (channel.kind === 'gmail') {
     return sendGmailReply(db, channel, platformUserId, text, attachments, opts);
+  }
+  if (channel.kind === 'outlook') {
+    return sendOutlookReply(db, channel, platformUserId, text, attachments, opts);
   }
   if (channel.kind === 'sms') {
     return sendSmsReply(channel, platformUserId, text, attachments, opts);
@@ -978,6 +987,49 @@ async function sendGmailReply(
     return {
       mid: null,
       error: `Gmail send failed: ${e instanceof Error ? e.message : e}`,
+      retryable: true,
+    };
+  }
+}
+
+/** Outlook channel (Microsoft Graph): /me/sendMail with Re: subject +
+ * In-Reply-To/References for threading — attachments as hosted links. */
+async function sendOutlookReply(
+  db: Db | undefined,
+  channel: ChannelRow,
+  platformUserId: string,
+  text: string,
+  attachments: AttachmentRef[] | undefined,
+  opts: SendOptions | undefined,
+): Promise<SendResult> {
+  const creds = channel.credentials as ChannelCredentials;
+  if (!creds.email_address || !db) {
+    return {
+      mid: null,
+      error: 'outlook channel is not connected — reconnect it under Integrations',
+      retryable: false,
+    };
+  }
+  try {
+    const { ensureMsToken, sendMail } = await import('./outlook.js');
+    const token = await ensureMsToken(db, channel);
+    const { subject, refs } = await emailThreadContext(db, channel, platformUserId, opts);
+    await sendMail(token, {
+      to: platformUserId,
+      subject,
+      text: emailBody(text, opts),
+      inReplyTo: refs[refs.length - 1],
+      references: refs,
+      attachmentLinks: attachments?.map((a) => ({
+        name: a.name,
+        url: absoluteAttachmentUrl(a),
+      })),
+    });
+    return { mid: null, error: null, retryable: true };
+  } catch (e) {
+    return {
+      mid: null,
+      error: `Outlook send failed: ${e instanceof Error ? e.message : e}`,
       retryable: true,
     };
   }

@@ -18,6 +18,7 @@ import { v1Routes } from './routes/v1.js';
 import { agentRoutes } from './routes/agents.js';
 import { conversationRoutes } from './routes/conversations.js';
 import { contactRoutes } from './routes/contacts.js';
+import { campaignRoutes } from './routes/campaigns.js';
 import { actionRoutes } from './routes/actions.js';
 import { alertRoutes } from './routes/alerts.js';
 import { ruleRoutes } from './routes/rules.js';
@@ -33,6 +34,7 @@ import { slackApiRoutes, slackPublicRoutes } from './routes/slack.js';
 import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 import { metaApiRoutes, metaPublicRoutes } from './routes/meta.js';
 import { gmailApiRoutes, gmailPublicRoutes } from './routes/gmail.js';
+import { outlookApiRoutes, outlookPublicRoutes } from './routes/outlook.js';
 import { voiceRoutes } from './routes/voice.js';
 import { smsRoutes } from './routes/sms.js';
 import { articleRoutes, helpPublicRoutes } from './routes/helpCenter.js';
@@ -111,7 +113,9 @@ export function createApp(db: Db) {
           base_cents: p.baseCents,
           included_messages: p.includedMessages,
           overage_per_1k_cents: p.overagePer1kCents,
+          yearly_available: !!env.stripeYearlyPrices[key],
         })),
+      trial_days: env.trialDays,
     });
   });
 
@@ -164,7 +168,8 @@ export function createApp(db: Db) {
   app.route('/chat', webchatRoutes(db)); // embeddable web-chat widget
   app.route('/messenger', legacyWebhookRoutes(db)); // legacy Meta app path (webhook.janis.ai)
   app.route('/meta', metaPublicRoutes(db)); // Meta-signed: data-deletion + deauthorize callbacks
-  app.route('/gmail', gmailPublicRoutes(db)); // signed-token OAuth start/callback — no session
+  app.route('/gmail', gmailPublicRoutes(db));
+  app.route('/outlook', outlookPublicRoutes(db)); // MS-signed-token OAuth + Graph push // signed-token OAuth start/callback — no session
   app.use('/voice/*', rateLimit({ scope: 'voice', windowMs: 60_000, max: 120 }));
   app.route('/voice', voiceRoutes(db)); // Twilio-signed voice webhooks
   app.use('/sms/*', rateLimit({ scope: 'sms', windowMs: 60_000, max: 120 }));
@@ -202,6 +207,7 @@ export function createApp(db: Db) {
   api.route('/tool-templates', toolTemplateRoutes(db));
   api.route('/conversations', conversationRoutes(db));
   api.route('/contacts', contactRoutes(db));
+  api.route('/campaigns', campaignRoutes(db));
   api.route('/actions', actionRoutes(db));
   api.route('/alerts', alertRoutes(db));
   api.route('/rules', ruleRoutes(db));
@@ -218,6 +224,7 @@ export function createApp(db: Db) {
   api.route('/channels', channelApiRoutes(db));
   api.route('/meta', metaApiRoutes(db));
   api.route('/gmail', gmailApiRoutes(db));
+  api.route('/outlook', outlookApiRoutes(db));
   api.route('/onboarding', onboardingRoutes(db));
   api.route('/billing', billingRoutes(db));
   api.route('/workspace', workspaceRoutes(db));

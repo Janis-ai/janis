@@ -212,7 +212,7 @@ function IdentityRow({
   const [text, setText] = useState('');
   const [template, setTemplate] = useState('');
   const [err, setErr] = useState('');
-  const canSend = ['sms', 'whatsapp', 'email', 'gmail'].includes(i.channel_kind);
+  const canSend = ['sms', 'whatsapp', 'email', 'gmail', 'outlook'].includes(i.channel_kind);
   const send = useMutation({
     mutationFn: () =>
       api<{ conversation_id?: string; error?: string }>(`/api/channels/${i.channel_id}/send`, {

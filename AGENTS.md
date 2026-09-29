@@ -172,6 +172,11 @@ before typecheck/tests/dev.
   quickstart now documented alongside docker; docs/console copy updated.
 
 **Product depth (features exist, competitors go deeper)**
+- Campaigns: v1 DONE — campaigns + campaign_sends tables, /api/campaigns
+  CRUD + preview + schedule + send-now, /campaigns UI, sweeper dispatch via
+  jobs, opt-out suppression recorded as skipped_opted_out. Segment = text
+  match on contact name/email/phone. Missing: multi-step drips, richer
+  segment filters, per-campaign reply attribution, suppression-list import.
 - Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
   13 articles on prod Demo Agent + Janis agent. Missing: full-text ranked
   search (tsvector — ILIKE only today), article view counts, helpfulness
@@ -201,8 +206,10 @@ before typecheck/tests/dev.
   segments, or per-campaign analytics.
 
 **Billing (missing)**
-- Trials (14-day Pro), annual billing, seat pricing, in-app usage dashboard
-  (burn before the invoice), add-on SKUs (channels/seats/knowledge docs).
+- Trials + annual: CODE-COMPLETE — checkout supports trial_period_days +
+  yearly price ids via STRIPE_PRICE_*_YEARLY / TRIAL_DAYS env; workspaces.trialed_at
+  guards one-trial-per-workspace; trial_will_end webhook handled. Remaining:
+  seat pricing, in-app usage dashboard, add-on SKUs.
 
 **Reporting (missing)**
 - Time-series charts (volume, FRT, resolution over time — all point-in-time
@@ -212,8 +219,10 @@ before typecheck/tests/dev.
 **Reliability & scale (missing — honest weak spots)**
 - Observability: no tracing (OTel), no SLO dashboards, no status page, no
   5xx/latency alerting (Cloud Monitoring → Slack).
-- Job queue for slow work (knowledge re-crawl, eval runs, watch renewals run
-  inline in sweeper — pg-boss on Postgres, no new infra).
+- Job queue: PARTIAL — jobs table + enqueueJob/runJobs under sweeper leader
+  lock; broadcast and campaign sends dispatch as per-recipient jobs (HTTP
+  returns immediately, no more 30s request-held sends). Still inline in
+  sweeper: knowledge re-crawl, eval runs, gmail poll, watch renewals.
 - Rate limiting: DONE core layer — in-memory per-IP ceilings on all webhook/
   read surfaces; Postgres-backed rate_limits table + dbRateLimit on money
   paths (login 10/min/IP, chat writes 600/hr/channel-token via
@@ -251,4 +260,7 @@ bulk eval CSV import + prompt A/B, URL knowledge sources with scheduled
 re-crawl, intent classification + routing + Topics report, Zapier event
 export + webhook tool template, voice usage metering, multi-instance (bus_events/viewers/voice_queue/
 sweeper_locks, --max-instances 3), Gmail Pub/Sub push, hosted-voice plan
-gate + provisioning caps, Stripe voice meter in checkout.
+gate + provisioning caps, Stripe voice meter in checkout, contacts spine +
+merge UI, webhook replay/DLQ UI, /status probe, audit log, outbound send +
+broadcast, campaigns v1, STOP opt-out, jobs queue, trials + annual billing,
+WorkOS SSO + Outlook channel (both behind env creds).

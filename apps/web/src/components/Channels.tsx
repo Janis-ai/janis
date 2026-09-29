@@ -166,7 +166,7 @@ export function ChannelCard({
           <EmailFromName channel={ch} />
         </details>
       )}
-      {ch.kind === 'gmail' && ch.meta.email_address && (
+      {['gmail','outlook'].includes(ch.kind) && ch.meta.email_address && (
         <details className="webhook-details" open style={{ marginTop: 8 }}>
           <summary>
             <span className="details-title">Connected mailbox</span>
@@ -228,7 +228,7 @@ export function ChannelCard({
           </div>
         </details>
       )}
-      {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && ch.kind !== 'email' && ch.kind !== 'gmail' && ch.kind !== 'voice' && ch.kind !== 'sms' && (
+      {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && ch.kind !== 'email' && ch.kind !== 'gmail' && ch.kind !== 'outlook' && ch.kind !== 'voice' && ch.kind !== 'sms' && (
       <details className="webhook-details">
         <summary>Webhook details</summary>
         <div className="mono" style={{ marginTop: 6 }}>

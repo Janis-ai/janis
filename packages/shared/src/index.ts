@@ -311,7 +311,7 @@ export type Agent = z.infer<typeof Agent>;
 /** A hosted messaging channel (Meta), embeddable webchat, or inbound email. Tokens are never exposed to the console. */
 export const Channel = z.object({
   id: z.string(),
-  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'voice', 'sms']),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'outlook', 'voice', 'sms']),
   name: z.string(),
   agent_id: z.string(),
   agent_name: z.string(),

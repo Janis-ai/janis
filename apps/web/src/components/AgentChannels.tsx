@@ -23,6 +23,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   const metaError = params.get('meta_error') ?? '';
   const gmailError = params.get('gmail_error') ?? '';
   const gmailConnected = params.get('gmail_connect') ?? '';
+  const outlookError = params.get('outlook_error') ?? '';
+  const outlookConnected = params.get('outlook_connect') ?? '';
   const [showManual, setShowManual] = useState(false);
   const [error, setError] = useState('');
   // Same-origin deploys serve the API on the web origin; dev splits :5173/:8787.
@@ -98,11 +100,11 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     return () => clearTimeout(t);
   }, [focusChannel, data]);
 
-  // Gmail OAuth lands back here with ?gmail_connect=<addr> — refresh the list.
+  // OAuth returns land back here with ?gmail_connect= / ?outlook_connect=.
   useEffect(() => {
-    if (!gmailConnected) return;
+    if (!gmailConnected && !outlookConnected) return;
     void qc.invalidateQueries({ queryKey: ['channels'] });
-  }, [gmailConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gmailConnected, outlookConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [form, setForm] = useState({
     kind: 'messenger' as 'messenger' | 'instagram' | 'whatsapp',
@@ -179,6 +181,19 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       api<{ url: string }>(`/api/gmail/connect-link?agent_id=${agentId}`),
     onSuccess: async (r) => {
       setGmLink(r.url);
+      try {
+        await navigator.clipboard.writeText(r.url);
+      } catch {}
+    },
+  });
+
+  // Outlook — same mailbox-owner link model as Gmail.
+  const [olLink, setOlLink] = useState('');
+  const olInvite = useMutation({
+    mutationFn: () =>
+      api<{ url: string }>(`/api/outlook/connect-link?agent_id=${agentId}`),
+    onSuccess: async (r) => {
+      setOlLink(r.url);
       try {
         await navigator.clipboard.writeText(r.url);
       } catch {}
@@ -706,6 +721,52 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             Connected <span className="mono">{gmailConnected}</span> — new mail from that inbox
             becomes conversations here; replies send from the mailbox itself.
           </div>
+        )}
+      </div>
+
+      {/* Outlook / Microsoft 365 — same OAuth mailbox pattern as Gmail */}
+      <div className="card connect-card">
+        <div className="row">
+          <div className="grow">
+            <strong>Outlook / Microsoft 365</strong>
+            <div className="muted" style={{ marginTop: 4 }}>
+              Connect an Outlook.com or Microsoft 365 mailbox — mail lands in the same
+              inbox and replies send from that address in the customer's thread.
+            </div>
+          </div>
+        </div>
+        <div className="row" style={{ marginTop: 12 }}>
+          <button
+            className="btn primary"
+            onClick={() => {
+              window.location.href = `${apiOrigin}/api/outlook/connect?agent_id=${agentId}`;
+            }}
+          >
+            Connect Outlook
+          </button>
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={olInvite.isPending}
+            title="Link for whoever controls the mailbox — works without a Janis login (expires in 7 days)"
+            onClick={() => olInvite.mutate()}
+          >
+            Copy invite link
+          </button>
+        </div>
+        {olLink && (
+          <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+            Invite link (copied — valid 7 days):{' '}
+            <span className="mono" style={{ wordBreak: 'break-all' }}>{olLink}</span>
+          </div>
+        )}
+        {outlookConnected && (
+          <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+            Connected <span className="mono">{outlookConnected}</span>.
+          </div>
+        )}
+        {outlookError && (
+          <div className="error" style={{ marginTop: 10 }}>Outlook connect failed: {outlookError}</div>
         )}
       </div>
 

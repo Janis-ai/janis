@@ -13,6 +13,7 @@ import {
   channels,
   contactIdentities,
   conversations,
+  jobs,
   memberships,
   messages,
   sessions,
@@ -20,6 +21,7 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { generateSessionToken, hashPassword, generateApiKey } from '../lib/crypto.js';
+import { applySmsOpt } from '../lib/optout.js';
 import { channelApiRoutes } from './channels.js';
 
 let db: Db;
@@ -166,9 +168,44 @@ describe('outbound send', () => {
       text: 'blast',
     });
     expect(ok.status).toBe(200);
-    const b = (await ok.json()) as { sent: number; results: { to: string; ok: boolean }[] };
-    expect(b.results.length).toBe(2);
-    expect(b.sent).toBe(0); // no Twilio creds in test env — all recorded as failures
+    const b = (await ok.json()) as { queued: number };
+    expect(b.queued).toBe(2);
+    // Sends are jobs now — two rows should be queued for the sweeper.
+    const pending = await db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.type, 'outbound.send'), eq(jobs.status, 'pending')));
+    expect(pending.length).toBe(2);
+  });
+
+  it('STOP opts the identity out; sendOutbound refuses; START re-enables', async () => {
+    // Apply the opt keyword the way the sms webhook does.
+    const [ch] = await db.select().from(channels).where(eq(channels.id, smsChId));
+    const applied = await applySmsOpt(db, ch, '+15550009999', 'STOP');
+    expect(applied).toBe(true);
+    const res = await post(`/api/channels/${smsChId}/send`, {
+      to: '+15550009999',
+      text: 'promo',
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/opted out/i);
+    // The STOP itself is still in the transcript as a flagged inbound.
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'sms:+15550009999'));
+    const msgs = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    expect((msgs[0].payload as { opt?: string }).opt).toBe('out');
+    // START clears it
+    await applySmsOpt(db, ch, '+15550009999', 'START');
+    const res2 = await post(`/api/channels/${smsChId}/send`, {
+      to: '+15550009999',
+      text: 'welcome back',
+    });
+    expect([200, 502]).toContain(res2.status);
   });
 
   it('writes audit rows for outbound sends', async () => {

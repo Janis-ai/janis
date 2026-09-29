@@ -19,6 +19,7 @@ import Settings from './pages/Settings';
 import { HelpCenter, HelpArticle, HelpDomain } from './pages/HelpCenter';
 import { Status } from './pages/Status';
 import { Contacts, ContactDetail } from './pages/Contacts';
+import Campaigns from './pages/Campaigns';
 import { finishOpenRouterCallback } from './lib/openrouterAuth';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -152,6 +153,7 @@ export default function App() {
           <Route path="/conversations/:id" element={<ConversationPage />} />
           <Route path="/contacts" element={<Contacts />} />
           <Route path="/contacts/:id" element={<ContactDetail />} />
+          <Route path="/campaigns" element={<Campaigns />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/agents/:id" element={<AgentDetail />} />
           <Route path="/reports" element={<Reports />} />

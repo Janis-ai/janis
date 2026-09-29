@@ -493,6 +493,7 @@ export function authRoutes(db: Db) {
     c.json({
       google: Boolean(env.googleClientId && env.googleClientSecret),
       slack: Boolean(env.slackClientId && env.slackClientSecret),
+      sso: Boolean(env.workosClientId && env.workosApiKey),
       password: env.passwordLogin,
     }),
   );
@@ -598,6 +599,60 @@ export function authRoutes(db: Db) {
       response_type: 'code',
       scope: 'openid profile email',
     });
+  });
+
+  // ---- Enterprise SSO (WorkOS AuthKit) --------------------------------
+  // /auth/sso?connection=<id> | organization=<id> | domain=acme.com —
+  // WorkOS brokers SAML/OIDC to the customer's IdP; we get a verified
+  // profile back on the callback. Membership still comes from an existing
+  // Janis account or invite — SSO proves identity, not authorization.
+  app.get('/sso', (c) => {
+    if (!env.workosClientId || !env.workosApiKey) {
+      return oauthError(c, 'SSO is not configured on this deployment');
+    }
+    const q = new URL(c.req.url).searchParams;
+    const params: Record<string, string> = {
+      client_id: env.workosClientId,
+      redirect_uri: env.workosRedirectUri,
+      response_type: 'code',
+    };
+    // WorkOS accepts exactly one selector — prefer the most specific.
+    for (const k of ['connection', 'organization', 'domain', 'provider', 'login_hint'] as const) {
+      const v = q.get(k);
+      if (v) params[k] = v;
+    }
+    if (!params.connection && !params.organization && !params.domain && !params.provider) {
+      return oauthError(c, 'SSO requires ?connection, ?organization, or ?domain');
+    }
+    return beginOAuth(c, 'https://api.workos.com/user_management/authorize', params);
+  });
+
+  app.get('/sso/callback', async (c) => {
+    if (!checkState(c)) return oauthError(c, 'invalid OAuth state');
+    const code = new URL(c.req.url).searchParams.get('code');
+    if (!code) return oauthError(c, 'missing authorization code');
+    const res = await fetch('https://api.workos.com/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: env.workosClientId,
+        client_secret: env.workosApiKey,
+        code,
+      }),
+    });
+    if (!res.ok) return oauthError(c, 'SSO authentication failed');
+    const data = (await res.json()) as {
+      user?: {
+        email?: string;
+        email_verified?: boolean;
+        first_name?: string;
+        last_name?: string;
+      };
+    };
+    const u = data.user;
+    const name = [u?.first_name, u?.last_name].filter(Boolean).join(' ');
+    return finishOAuth(c, { email: u?.email, email_verified: u?.email_verified, name });
   });
 
   app.get('/slack/callback', async (c) => {

@@ -242,6 +242,7 @@ export default function Layout() {
         </Link>
         <NavLink to="/conversations" end><span className="label">Conversations</span><span className="icon">▤</span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
         <NavLink to="/contacts"><span className="label">Contacts</span><span className="icon">◉</span></NavLink>
+        <NavLink to="/campaigns"><span className="label">Campaigns</span><span className="icon">📣</span></NavLink>
         <NavLink to="/agents"><span className="label">Agents</span><span className="icon">◈</span></NavLink>
         {/* Workspace-wide sections vanish for agent-scoped users — they only
             hold grants on specific agents, not the workspace itself. */}

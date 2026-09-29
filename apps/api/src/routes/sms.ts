@@ -5,6 +5,7 @@ import { channels } from '../db/schema.js';
 import type { ChannelCredentials } from '../lib/channels.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 import { validTwilioSignature } from '../lib/twilio.js';
+import { applySmsOpt, smsOptKeyword } from '../lib/optout.js';
 import { env } from '../env.js';
 
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
@@ -44,6 +45,20 @@ export function smsRoutes(db: Db) {
     const from = body.From ?? '';
     const text = body.Body ?? '';
     if (!from || (!text && !body.NumMedia)) return c.text(EMPTY_TWIML, 200, { 'Content-Type': 'text/xml' });
+
+    // CTIA opt keywords intercept before ingest — STOP marks the identity
+    // opted-out (sendOutbound refuses thereafter) and never wakes the agent.
+    if (await applySmsOpt(db, channel, from, text, body.MessageSid)) {
+      const reply =
+        smsOptKeyword(text) === 'out'
+          ? 'You have been unsubscribed and will not receive further messages. Reply START to resubscribe.'
+          : 'You have been resubscribed to messages.';
+      return c.text(
+        `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${reply}</Message></Response>`,
+        200,
+        { 'Content-Type': 'text/xml' },
+      );
+    }
 
     await handleChannelMessage(db, channel, {
       objectId: creds.phone_number ?? channel.id,
