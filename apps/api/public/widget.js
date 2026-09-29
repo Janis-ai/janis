@@ -851,6 +851,14 @@
             }
             return;
           }
+          // Dedup BEFORE the unread check — the poll boundary can re-return
+          // a rendered message; it must advance the cursor, not re-count.
+          if (m.id && state.seen[m.id]) {
+            if (m.created_at && (!state.lastTs || m.created_at > state.lastTs)) {
+              state.lastTs = m.created_at;
+            }
+            return;
+          }
           // Unread watermark: non-visitor messages newer than lastSeen count
           // while the panel is closed; while open they just advance it.
           if (m.direction !== 'in' && m.created_at && state.seenInit &&

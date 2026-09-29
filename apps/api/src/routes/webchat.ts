@@ -360,7 +360,7 @@ export function webchatRoutes(db: Db) {
     if (afterDate) {
       // incremental poll — chronological, everything since the cursor
       rows = await select()
-        .where(and(eq(messages.conversationId, conv.id), gte(messages.createdAt, afterDate)))
+        .where(and(eq(messages.conversationId, conv.id), gt(messages.createdAt, afterDate)))
         .orderBy(asc(messages.createdAt))
         .limit(500);
     } else {
