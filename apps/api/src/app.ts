@@ -168,9 +168,18 @@ export function createApp(db: Db) {
   // Single-origin deploys: serve the built web app when present
   // (src/app.ts and dist/app.js both resolve to apps/web/dist).
   const webDist = fileURLToPath(new URL('../../web/dist', import.meta.url));
-  const indexHtml = existsSync(join(webDist, 'index.html'))
+  let indexHtml = existsSync(join(webDist, 'index.html'))
     ? readFileSync(join(webDist, 'index.html'), 'utf8')
     : null;
+  if (indexHtml && env.gaMeasurementId) {
+    const id = env.gaMeasurementId.replace(/[^A-Z0-9-]/gi, '');
+    if (id) {
+      const ga =
+        `<script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>` +
+        `<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','${id}');</script>`;
+      indexHtml = indexHtml.replace('</head>', `${ga}</head>`);
+    }
+  }
   if (indexHtml) {
     app.use('/*', serveStatic({ root: webDist }));
     app.get('*', async (c) => {
