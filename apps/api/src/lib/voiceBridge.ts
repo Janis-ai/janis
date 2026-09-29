@@ -2,53 +2,64 @@
  * Voice calls are turn-based: Twilio holds the caller while our webhook
  * returns TwiML, so an agent reply can't be pushed — it has to be *pulled*
  * into the next webhook response. deliverToChannel drops outbound text into
- * the pending queue here; the /voice/turn handler drains or waits on it.
- *
- * In-memory and per-process: fine while Cloud Run stays single-instance
- * (AGENTS.md --max-instances 1). Multi-instance would need a shared queue.
+ * the voice_queue table; the /voice/turn handler drains it. The queue lives in
+ * Postgres so the turn webhook can land on any instance — a local emitter
+ * still wakes same-instance waiters immediately to keep latency low.
  */
-const queues = new Map<string, { pending: string[]; waiters: ((done: boolean) => void)[] }>();
+import { EventEmitter } from 'node:events';
+import { asc, eq, inArray } from 'drizzle-orm';
+import type { Db } from '../db/client.js';
+import { voiceQueue } from '../db/schema.js';
 
-function q(convId: string) {
-  let entry = queues.get(convId);
-  if (!entry) {
-    entry = { pending: [], waiters: [] };
-    queues.set(convId, entry);
-  }
-  return entry;
-}
+const wakeEmitter = new EventEmitter();
+wakeEmitter.setMaxListeners(0);
+const POLL_MS = 300;
 
 /** Agent/operator reply destined for a live call — spoken next turn. */
-export function voiceDeliver(convId: string, text: string): void {
-  const entry = q(convId);
-  entry.pending.push(text);
-  const waiters = entry.waiters.splice(0);
-  for (const w of waiters) w(true);
+export async function voiceDeliver(db: Db, convId: string, text: string): Promise<void> {
+  await db.insert(voiceQueue).values({ conversationId: convId, text });
+  wakeEmitter.emit(`wake:${convId}`);
 }
 
-/** Wait for outbound text: resolves with everything queued, or [] on timeout. */
-export function voiceAwaitReply(convId: string, timeoutMs: number): Promise<string[]> {
-  const entry = q(convId);
-  if (entry.pending.length) return Promise.resolve(entry.pending.splice(0));
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      const i = entry.waiters.indexOf(wake);
-      if (i >= 0) entry.waiters.splice(i, 1);
-      resolve(entry.pending.splice(0));
-    }, timeoutMs);
-    const wake = () => {
-      clearTimeout(timer);
-      resolve(entry.pending.splice(0));
-    };
-    entry.waiters.push(wake);
-  });
+async function drain(db: Db, convId: string): Promise<string[]> {
+  const rows = await db
+    .select()
+    .from(voiceQueue)
+    .where(eq(voiceQueue.conversationId, convId))
+    .orderBy(asc(voiceQueue.id));
+  if (!rows.length) return [];
+  await db.delete(voiceQueue).where(inArray(voiceQueue.id, rows.map((r) => r.id)));
+  return rows.map((r) => r.text);
 }
 
-/** Call ended — flush the queue so no waiter leaks. */
-export function voiceEndCall(convId: string): void {
-  const entry = queues.get(convId);
-  if (!entry) return;
-  const waiters = entry.waiters.splice(0);
-  for (const w of waiters) w(false);
-  queues.delete(convId);
+/** Wait for outbound text: resolves with everything queued, or [] on timeout
+ * / call end. Polls Postgres; same-instance inserts wake it instantly. */
+export async function voiceAwaitReply(db: Db, convId: string, timeoutMs: number): Promise<string[]> {
+  const deadline = Date.now() + timeoutMs;
+  const immediate = await drain(db, convId);
+  if (immediate.length) return immediate;
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return [];
+    const woke = await new Promise<'wake' | 'end' | 'poll'>((resolve) => {
+      const cleanup = () => {
+        wakeEmitter.off(`wake:${convId}`, onWake);
+        wakeEmitter.off(`end:${convId}`, onEnd);
+      };
+      const onWake = () => (cleanup(), resolve('wake'));
+      const onEnd = () => (cleanup(), resolve('end'));
+      wakeEmitter.once(`wake:${convId}`, onWake);
+      wakeEmitter.once(`end:${convId}`, onEnd);
+      setTimeout(() => (cleanup(), resolve('poll')), Math.min(POLL_MS, remaining));
+    });
+    if (woke === 'end') return [];
+    const rows = await drain(db, convId);
+    if (rows.length) return rows;
+  }
+}
+
+/** Call ended — flush the queue and wake waiters so no request leaks. */
+export async function voiceEndCall(db: Db, convId: string): Promise<void> {
+  await db.delete(voiceQueue).where(eq(voiceQueue.conversationId, convId));
+  wakeEmitter.emit(`end:${convId}`);
 }

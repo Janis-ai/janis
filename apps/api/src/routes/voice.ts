@@ -57,7 +57,9 @@ export function voiceRoutes(db: Db, opts?: { replyWaitMs?: number }) {
   // the channel's own auth token, then branches.
   async function resolve(c: Context) {
     const channelId = c.req.param('channelId');
-    if (!channelId) return null;
+    // Guard the uuid cast — Postgres throws (500) on non-uuid input, and
+    // garbage channelIds are expected from webhook scanning traffic.
+    if (!channelId || !/^[0-9a-f-]{36}$/i.test(channelId)) return null;
     const [channel] = await db
       .select()
       .from(channels)
@@ -140,7 +142,7 @@ export function voiceRoutes(db: Db, opts?: { replyWaitMs?: number }) {
 
     // Wait for the agent's reply (or queued operator replies) — Twilio holds
     // the line while we answer. ~12s keeps inside Twilio's webhook timeout.
-    const replies = await voiceAwaitReply(conv.id, replyWaitMs);
+    const replies = await voiceAwaitReply(db, conv.id, replyWaitMs);
     const text = replies.join(' ').trim();
     if (text) {
       return twiml(c, SAY(text) + gather(channel.id));
@@ -168,7 +170,7 @@ export function voiceRoutes(db: Db, opts?: { replyWaitMs?: number }) {
     if (!r) return c.text('forbidden', 403);
     if (['completed', 'failed', 'busy', 'no-answer'].includes(r.body.CallStatus ?? '')) {
       const conv = r.body.From ? await convForCaller(r.channel.id, r.body.From) : undefined;
-      if (conv) voiceEndCall(conv.id);
+      if (conv) await voiceEndCall(db, conv.id);
       // Hosted numbers bill usage at Twilio cost + margin; BYO channels bill
       // on the customer's own Twilio account — never metered here.
       if (r.body.CallStatus === 'completed' && r.creds.hosted) {

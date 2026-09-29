@@ -10,6 +10,8 @@ import {
   index,
   integer,
   customType,
+  bigserial,
+  primaryKey,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
@@ -507,7 +509,7 @@ export const usageEvents = pgTable(
       .references(() => workspaces.id),
     agentId: uuid('agent_id').references(() => agents.id),
     conversationId: uuid('conversation_id').references(() => conversations.id),
-    kind: text('kind', { enum: ['llm_tokens', 'voice_seconds'] }).notNull(),
+    kind: text('kind', { enum: ['llm_tokens', 'voice_seconds', 'voice_provision'] }).notNull(),
     // idempotency key for provider-sourced usage — 'voice:{callSid}' dedupes
     // Twilio's status-webhook retries so a call can only be billed once
     externalId: text('external_id'),
@@ -686,4 +688,54 @@ export const uploads = pgTable('uploads', {
   size: integer('size').notNull(),
   data: bytea('data').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Cross-instance SSE relay — every published bus event lands here tagged with
+ * the publishing instance; each process tails rows newer than its cursor and
+ * re-emits foreign-origin events locally. Rows are transient (sweeper prunes
+ * after a few minutes).
+ */
+export const busEvents = pgTable('bus_events', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  workspaceId: uuid('workspace_id').notNull(),
+  origin: text('origin').notNull(),
+  event: jsonb('event').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Operator presence — heartbeat rows replace the in-memory map so viewers are
+ * visible across instances. Rows expire quickly; stale ones are ignored. */
+export const viewers = pgTable(
+  'viewers',
+  {
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    userName: text('user_name').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.conversationId, t.userId] })],
+);
+
+/** Voice reply queue — outbound text waits here until the next Twilio turn
+ * webhook pulls it, whichever instance handles that request. */
+export const voiceQueue = pgTable('voice_queue', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  conversationId: uuid('conversation_id')
+    .notNull()
+    .references(() => conversations.id, { onDelete: 'cascade' }),
+  text: text('text').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Leader election for singleton background work (sweeper, Gmail poll, bus
+ * pruning) — a row per lock name, claimed by the holder while unexpired. */
+export const sweeperLocks = pgTable('sweeper_locks', {
+  name: text('name').primaryKey(),
+  holder: text('holder').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });

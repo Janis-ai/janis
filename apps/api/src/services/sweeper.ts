@@ -1,30 +1,66 @@
-import { and, desc, eq, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alertRules, alerts, conversations, knowledgeFiles, messages } from '../db/schema.js';
-import { bus } from '../lib/bus.js';
+import { agents, alertRules, alerts, busEvents, conversations, knowledgeFiles, messages, sweeperLocks } from '../db/schema.js';
+import { bus, INSTANCE_ID } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { inactivityActions, inactivityThresholds } from '../lib/rules.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
-import { sweepGmail } from './gmailSweep.js';
+import { renewGmailWatches, sweepGmail } from './gmailSweep.js';
 import { refreshKnowledgeSource } from '../lib/urlSource.js';
 
 /**
- * Periodically:
+ * Claim or renew a named singleton lock. Only the holder (or anyone, once the
+ * row expires) wins the upsert — lets every instance run its own ticker while
+ * exactly one does the work per interval.
+ */
+export async function acquireLock(
+  db: Db,
+  name: string,
+  ttlMs: number,
+  holder = INSTANCE_ID,
+): Promise<boolean> {
+  const until = new Date(Date.now() + ttlMs);
+  const res = (await db.execute(sql`
+    insert into sweeper_locks (name, holder, expires_at)
+    values (${name}, ${holder}, ${until})
+    on conflict (name) do update
+      set holder = ${holder}, expires_at = ${until}
+      where sweeper_locks.holder = ${holder}
+         or sweeper_locks.expires_at < now()
+    returning name
+  `)) as unknown as { rows?: unknown[] } | unknown[];
+  // postgres-js execute() is array-like; PGlite wraps rows in a result object.
+  const rows = Array.isArray(res) ? res : (res.rows ?? []);
+  return rows.length > 0;
+}
+
+/**
+ * Periodically (one instance at a time, via the sweeper_locks leader row):
  *  - escalate 'active' conversations where the end user is waiting
  *    (last message inbound) past the agent's inactivity threshold
  *  - auto-release 'human' takeovers past the agent's auto_resume_minutes
  *  - re-alert 'needs_human' conversations unclaimed past the agent's SLA
+ *  - poll gmail channels, renew gmail push watches, refresh knowledge URLs
+ *  - prune transient bus_events rows
  */
 export function startSweeper(db: Db, intervalMs = 60_000): () => void {
   const timer = setInterval(() => {
-    void sweep(db).catch((err) => console.error('sweep error:', err));
-    void sweepAutoResume(db).catch((err) => console.error('sweepAutoResume error:', err));
-    void sweepSla(db).catch((err) => console.error('sweepSla error:', err));
-    void sweepGmail(db).catch((err) => console.error('sweepGmail error:', err));
-    void sweepKnowledge(db).catch((err) => console.error('sweepKnowledge error:', err));
+    void (async () => {
+      if (!(await acquireLock(db, 'sweeper', intervalMs * 2))) return;
+      void sweep(db).catch((err) => console.error('sweep error:', err));
+      void sweepAutoResume(db).catch((err) => console.error('sweepAutoResume error:', err));
+      void sweepSla(db).catch((err) => console.error('sweepSla error:', err));
+      void sweepGmail(db).catch((err) => console.error('sweepGmail error:', err));
+      void renewGmailWatches(db).catch((err) => console.error('renewGmailWatches error:', err));
+      void sweepKnowledge(db).catch((err) => console.error('sweepKnowledge error:', err));
+      void db
+        .delete(busEvents)
+        .where(lt(busEvents.createdAt, new Date(Date.now() - 10 * 60_000)))
+        .catch((err) => console.error('busEvents prune error:', err));
+    })().catch(() => {});
   }, intervalMs);
   timer.unref();
   return () => clearInterval(timer);

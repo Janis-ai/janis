@@ -126,6 +126,40 @@ export function gmailApiRoutes(db: Db) {
 export function gmailPublicRoutes(db: Db) {
   const app = new Hono();
 
+  // Pub/Sub push — Gmail users.watch notifications land here. Auth is the
+  // shared token on the push subscription URL; we always 200/ack after
+  // validating it so bad payloads don't retry-storm.
+  app.post('/push', async (c) => {
+    if (!env.gmailPushToken || c.req.query('token') !== env.gmailPushToken) {
+      return c.text('forbidden', 403);
+    }
+    const body = (await c.req.json().catch(() => null)) as
+      | { message?: { data?: string } }
+      | null;
+    let emailAddress = '';
+    try {
+      const data = JSON.parse(
+        Buffer.from(body?.message?.data ?? '', 'base64').toString('utf-8'),
+      ) as { emailAddress?: string };
+      emailAddress = (data.emailAddress ?? '').toLowerCase();
+    } catch {
+      // malformed notification — ack and move on
+    }
+    if (emailAddress) {
+      const rows = await db.select().from(channels).where(eq(channels.kind, 'gmail'));
+      const channel = rows.find(
+        (r) => (r.credentials as ChannelCredentials).email_address === emailAddress,
+      );
+      if (channel) {
+        const { pollGmailChannel } = await import('../services/gmailSweep.js');
+        void pollGmailChannel(db, channel).catch((err) =>
+          console.error(`gmail push poll ${channel.id}:`, err),
+        );
+      }
+    }
+    return c.json({ ok: true });
+  });
+
   // Shareable entry: validate the long-lived link key, re-mint a short-lived
   // OAuth state, and send them into Google consent.
   app.get('/start', (c) => {
@@ -238,6 +272,12 @@ export function gmailPublicRoutes(db: Db) {
         name: intent.n || address,
         credentials: creds,
       });
+    }
+    // Register push immediately so the new mailbox is real-time from the
+    // start; the sweeper keeps renewing it before it lapses.
+    if (env.gmailPubsubTopic) {
+      const { renewGmailWatches } = await import('../services/gmailSweep.js');
+      void renewGmailWatches(db).catch(() => {});
     }
     return done(address, true);
   });

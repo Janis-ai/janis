@@ -142,7 +142,7 @@ describe('Twilio voice webhooks', () => {
 
   it('speaks a queued agent reply and re-gathers', async () => {
     const conv = (await convForCaller('+15553334444'))!;
-    voiceDeliver(conv.id, 'Your order ships Tuesday.');
+    await voiceDeliver(db, conv.id, 'Your order ships Tuesday.');
     const res = await post(`/voice/${channel.id}/turn`, {
       CallSid: 'CA4',
       From: '+15553334444',
@@ -178,6 +178,7 @@ describe('hosted voice provisioning', () => {
   let api: Hono;
   let cookie: string;
   let agentId: string;
+  let wsId: string;
   const calls: { url: string; method: string; params: Record<string, string> }[] = [];
 
   beforeAll(async () => {
@@ -189,6 +190,8 @@ describe('hosted voice provisioning', () => {
     api = new Hono().route('/api/channels', channelApiRoutes(db));
 
     const [ws] = await db.select().from(workspaces).limit(1);
+    wsId = ws.id;
+    await db.update(workspaces).set({ plan: 'pro' }).where(eq(workspaces.id, ws.id));
     const [agent] = await db.select().from(agents).limit(1);
     agentId = agent.id;
     const [u] = await db
@@ -246,5 +249,77 @@ describe('hosted voice provisioning', () => {
     expect(creds.twilio_account_sid).toBe('ACsub1');
     expect(creds.twilio_auth_token).toBe('subtoken1');
     expect(creds.twilio_number_sid).toBe('PN1');
+  });
+
+  it('rejects hosted provisioning on the free plan', async () => {
+    await db.update(workspaces).set({ plan: 'free' }).where(eq(workspaces.id, wsId));
+    const res = await api.request('/api/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        kind: 'voice',
+        name: 'Free line',
+        agent_id: agentId,
+        hosted: true,
+        phone_number: '+15550102020',
+      }),
+    });
+    expect(res.status).toBe(402);
+    await db.update(workspaces).set({ plan: 'pro' }).where(eq(workspaces.id, wsId));
+    expect(calls.filter((x) => x.url.includes('Accounts.json'))).toHaveLength(1); // no subaccount made
+  });
+
+  it('enforces the per-workspace hosted number cap', async () => {
+    const { env } = await import('../env.js');
+    for (let i = 0; i < env.voiceHostedMax; i++) {
+      await db.insert(channels).values({
+        workspaceId: wsId,
+        agentId,
+        kind: 'voice',
+        name: `cap-${i}`,
+        credentials: { hosted: true, twilio_account_sid: `ACcap${i}` },
+      });
+    }
+    const res = await api.request('/api/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        kind: 'voice',
+        name: 'Over cap',
+        agent_id: agentId,
+        hosted: true,
+        phone_number: '+15550103030',
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain('limit');
+    expect(calls.filter((x) => x.url.includes('Accounts.json'))).toHaveLength(1); // no new subaccount
+  });
+
+  it('enforces the daily provisioning-attempt cap', async () => {
+    const { env } = await import('../env.js');
+    const { usageEvents } = await import('../db/schema.js');
+    const { like } = await import('drizzle-orm');
+    await db.delete(channels).where(like(channels.name, 'cap-%')); // under the number cap
+    await db.insert(usageEvents).values(
+      Array.from({ length: env.voiceProvisionDaily }, () => ({
+        workspaceId: wsId,
+        kind: 'voice_provision' as const,
+        quantity: 1,
+        period: '2026-01',
+      })),
+    );
+    const res = await api.request('/api/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        kind: 'voice',
+        name: 'Over attempts',
+        agent_id: agentId,
+        hosted: true,
+        phone_number: '+15550104040',
+      }),
+    });
+    expect(res.status).toBe(429);
   });
 });

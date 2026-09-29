@@ -3,7 +3,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/client.js';
 import {
@@ -85,6 +85,8 @@ const stubFetch = (routes: Record<string, () => Response>) =>
 beforeAll(async () => {
   process.env.GOOGLE_CLIENT_ID = 'gid_test';
   process.env.GOOGLE_CLIENT_SECRET = 'gsecret_test';
+  process.env.GMAIL_PUBSUB_TOPIC = 'projects/p/topics/gmail-push';
+  process.env.GMAIL_PUSH_TOKEN = 'pushsecret';
   const [routesMod, sweepMod, channelsMod] = await Promise.all([
     import('./gmail.js'),
     import('../services/gmailSweep.js'),
@@ -403,6 +405,38 @@ describe('gmail oauth', () => {
     const creds = created.credentials as ChannelCredentials;
     expect(creds.email_address).toBe('owner@client.test');
     expect(created.agentId).toBe(agentId);
+  });
+
+  it('push notification triggers an ingest poll; bad tokens get 403', async () => {
+    stubFetch({
+      'messages?q=': () =>
+        Response.json({ messages: [{ id: 'gmP1', threadId: 'thP' }] }),
+      'messages/gmP1': () =>
+        new Response(
+          JSON.stringify(gmailMessage({ id: 'gmP1', threadId: 'thP', internalDate: '1700000006000' })),
+        ),
+      'users/me/watch': () => Response.json({ historyId: 'h1', expiration: '9999999999999' }),
+    });
+    const data = Buffer.from(JSON.stringify({ emailAddress: MAILBOX })).toString('base64');
+    const body = JSON.stringify({ message: { data } });
+
+    const denied = await app.request('/gmail/push?token=wrong', { method: 'POST', body });
+    expect(denied.status).toBe(403);
+
+    const res = await app.request(`/gmail/push?token=pushsecret`, { method: 'POST', body });
+    expect(res.status).toBe(200);
+    // The handler acks, then polls asynchronously — wait for the pushed
+    // message (distinct mid, in case the conv already exists from earlier tests).
+    let found;
+    for (let i = 0; i < 40; i++) {
+      [found] = await db
+        .select()
+        .from(messages)
+        .where(sql`payload->>'mid' = 'gmail:gmP1'`);
+      if (found) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(found?.direction).toBe('in');
   });
 
   it('rejects a bad invite key and bad OAuth state', async () => {

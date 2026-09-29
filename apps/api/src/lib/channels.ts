@@ -61,6 +61,10 @@ export interface ChannelCredentials {
   token_expiry?: number;
   email_address?: string;
   gmail_cursor?: number;
+  // gmail push: users.watch expiry (ms) + historyId — the sweeper re-watches
+  // before expiry; absent fields mean push was never set up (poll-only).
+  gmail_watch_expiry?: number;
+  gmail_watch_history?: string;
   // voice (Twilio): number config + signature token. forward_to bridges the
   // live call to a human's phone when a teammate owns the conversation.
   // Hosted (Janis-provisioned) numbers: account/token are the channel's own
@@ -1045,7 +1049,7 @@ export async function deliverToChannel(
   // Voice is turn-based — Twilio holds the line and the reply is spoken in
   // the next webhook response, not pushed. Queue it for the /voice/turn loop.
   if (row.channel.kind === 'voice') {
-    voiceDeliver(conversationId, text);
+    void voiceDeliver(db, conversationId, text).catch(() => {});
     if (opts?.messageId) {
       const [a] = await db
         .select({ workspaceId: agents.workspaceId })

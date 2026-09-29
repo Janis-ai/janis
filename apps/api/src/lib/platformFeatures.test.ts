@@ -14,6 +14,9 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { markViewing } from './presence.js';
+import { acquireLock } from '../services/sweeper.js';
+import { bus } from './bus.js';
+import { busEvents, sweeperLocks } from '../db/schema.js';
 import { parseCsv } from '../routes/agents.js';
 import { classifyIntent } from './intent.js';
 import { recordVoiceUsage } from './usage.js';
@@ -38,14 +41,28 @@ beforeAll(async () => {
 });
 
 describe('presence', () => {
-  it('tracks viewers per conversation and reports set changes', () => {
-    const c1 = 'conv-1';
-    expect(markViewing(c1, 'u1', 'Ann').viewers).toEqual([{ id: 'u1', name: 'Ann' }]);
-    expect(markViewing(c1, 'u1', 'Ann').changed).toBe(false); // re-heartbeat
-    const third = markViewing(c1, 'u2', 'Bob');
+  it('tracks viewers per conversation and reports set changes', async () => {
+    const { users } = schema;
+    const [u1, u2] = await db
+      .insert(users)
+      .values([
+        { email: 'ann@t.dev', name: 'Ann' },
+        { email: 'bob@t.dev', name: 'Bob' },
+      ])
+      .returning();
+    const [c1, c2] = await db
+      .insert(conversations)
+      .values([
+        { agentId, externalId: 'e1' },
+        { agentId, externalId: 'e2' },
+      ])
+      .returning();
+    expect((await markViewing(db, c1.id, u1.id, 'Ann')).viewers).toEqual([{ id: u1.id, name: 'Ann' }]);
+    expect((await markViewing(db, c1.id, u1.id, 'Ann')).changed).toBe(false); // re-heartbeat
+    const third = await markViewing(db, c1.id, u2.id, 'Bob');
     expect(third.changed).toBe(true);
-    expect(third.viewers.map((v) => v.id).sort()).toEqual(['u1', 'u2']);
-    expect(markViewing('conv-2', 'u1', 'Ann').viewers).toHaveLength(1); // per-conv isolation
+    expect(third.viewers.map((v) => v.id).sort()).toEqual([u1.id, u2.id].sort());
+    expect((await markViewing(db, c2.id, u1.id, 'Ann')).viewers).toHaveLength(1); // per-conv isolation
   });
 });
 
@@ -162,5 +179,39 @@ describe('conversations.intent column', () => {
     await db.update(conversations).set({ intent: 'billing' }).where(eq(conversations.id, conv.id));
     const [after] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
     expect(after.intent).toBe('billing');
+  });
+});
+
+describe('multi-instance', () => {
+  it('leader lock: first holder wins, expiry releases', async () => {
+    const name = `t-${Date.now()}`;
+    expect(await acquireLock(db, name, 60_000, 'inst-a')).toBe(true);
+    expect(await acquireLock(db, name, 60_000, 'inst-b')).toBe(false); // held
+    expect(await acquireLock(db, name, 60_000, 'inst-a')).toBe(true); // renew
+    await db
+      .update(sweeperLocks)
+      .set({ expiresAt: new Date(0) })
+      .where(eq(sweeperLocks.name, name));
+    expect(await acquireLock(db, name, 60_000, 'inst-b')).toBe(true); // expired → b takes it
+  });
+
+  it('bus relays foreign-origin rows and skips its own', async () => {
+    bus.attachDb(db);
+    const received: unknown[] = [];
+    const unsub = bus.subscribe(wsId, (e) => received.push(e));
+    // foreign instance's event — delivered via the tailer
+    await db.insert(busEvents).values({
+      workspaceId: wsId,
+      origin: 'other-instance',
+      event: { type: 'presence', data: { conversation_id: 'x', viewers: [] } },
+    });
+    // our own publish — lands locally, row skipped by tailer on next pass
+    bus.publish(wsId, { type: 'presence', data: { conversation_id: 'y', viewers: [] } });
+    await new Promise((r) => setTimeout(r, 800));
+    unsub();
+    const types = received.map((e) => (e as { data: { conversation_id: string } }).data.conversation_id);
+    expect(types).toContain('x'); // relayed
+    expect(types).toContain('y'); // local
+    expect(types.filter((t) => t === 'y')).toHaveLength(1); // no echo
   });
 });

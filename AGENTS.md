@@ -65,23 +65,31 @@ sweeper are still in-process.
 After editing packages/shared/src, run `npm run build -w packages/shared`
 before typecheck/tests/dev.
 
-## Open work — competitive gap tracker (updated 2026-09-29)
+## Open work — competitive gap tracker (updated 2026-10-01)
 
-**Infra / reliability (highest leverage)**
-- Multi-instance safety: voice bridge (voiceBridge.ts), presence map, Gmail
-  poller and sweeper are all in-process — Postgres alone doesn't fix this.
-  Needs a shared bus/queue (Postgres LISTEN/NOTIFY or Pub/Sub) before
-  --max-instances can rise above 1.
-- Hosted-voice compliance: regulatory address bundles / toll-free
-  verification per country, plus abuse controls on number provisioning
-  (bad actors could burn the master Twilio balance).
-- Real-time email: Gmail watch → Pub/Sub push instead of the 60s poll;
-  shared/multi-mailbox channels.
+**Infra / reliability**
+- Multi-instance: DONE — bus_events SSE relay, viewers + voice_queue tables,
+  sweeper_locks leader election (sweeps, gmail poll, digests). Deploy raises
+  --max-instances to 3 (MAX_INSTANCES env override) on DATABASE_URL mode.
+- Hosted-voice compliance (partial): paid-plan gate (402 on free),
+  VOICE_HOSTED_MAX per-workspace cap (default 3) and VOICE_PROVISION_DAILY
+  attempt cap (default 10, counted from usage_events voice_provision rows).
+  Still missing: regulatory address-bundle / toll-free verification flows
+  for countries that need them (Twilio purchase errors surface in the UI).
+- Gmail push: DONE — users.watch → Pub/Sub gmail-push → POST /gmail/push
+  ?token= runs the per-channel poll near-real-time; sweeper renews watches
+  (7-day expiry), 60s poll remains as fallback. Env: GMAIL_PUBSUB_TOPIC,
+  GMAIL_PUSH_TOKEN. Infra: topic gmail-push + push sub gmail-push-sub →
+  https://app.janis.ai/gmail/push, gmail-api-push@system.gserviceaccount.com
+  has pubsub.publisher on the topic.
 
 **Billing loose ends**
-- janis.voice_micros meter + metered price don't exist in Stripe yet —
-  usage_events rows record regardless; wire the meter into checkout when
-  voice minutes should actually invoice.
+- janis.voice_micros: DONE — live meter mtr_61VUG0yQ3HYJYG4ZJ41LuGzRk7fCQCw4,
+  product prod_VLZCJIrcFxAQCI, metered price price_1UKs3dLuGzRk7fCQ9FXCr3Jr
+  ($0.000001/unit → micro-USD passthrough), STRIPE_METER_PRICE_VOICE in .env,
+  added to checkout line items. NOTE: existing subscriptions predate the
+  price — their voice usage records in usage_events but won't invoice until
+  the item is added to the sub (Stripe API) or they re-checkout.
 - Hosted voice bills Twilio cost × (1 + BILLING_MARGIN); VOICE_COST_MICROS_PER_MIN
   env overrides the $0.014/min default if Twilio rates change.
 
@@ -104,4 +112,6 @@ auto_assign), Postgres cutover tooling (DATABASE_URL live in prod),
 collision detection (presence + operator typing), public help center,
 bulk eval CSV import + prompt A/B, URL knowledge sources with scheduled
 re-crawl, intent classification + routing + Topics report, Zapier event
-export + webhook tool template, voice usage metering.
+export + webhook tool template, voice usage metering, multi-instance (bus_events/viewers/voice_queue/
+sweeper_locks, --max-instances 3), Gmail Pub/Sub push, hosted-voice plan
+gate + provisioning caps, Stripe voice meter in checkout.

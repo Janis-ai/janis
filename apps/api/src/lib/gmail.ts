@@ -88,6 +88,27 @@ function extractText(p: GmailPayload): string {
   return '';
 }
 
+/** users.watch → Gmail publishes Pub/Sub notifications on mailbox changes.
+ * Returns null when push isn't configured or the call fails — the caller
+ * keeps relying on the periodic poll then. Watches last ≤7 days; the sweeper
+ * renews them. */
+export async function watchMailbox(
+  token: string,
+  topicName: string,
+): Promise<{ historyId: string; expirationMs: number } | null> {
+  const res = await gmailFetch(token, 'watch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topicName, labelIds: ['INBOX'], labelFilterBehavior: 'INCLUDE' }),
+  });
+  if (!res.ok) return null;
+  const data = (await res.json().catch(() => null)) as
+    | { historyId?: string; expiration?: string }
+    | null;
+  if (!data?.expiration) return null;
+  return { historyId: data.historyId ?? '', expirationMs: Number(data.expiration) };
+}
+
 /** messages.list for inbox mail newer than the cursor (ms). Returns API ids
  * oldest-first so the watermark always lands on the newest processed. */
 export async function listNewMessages(

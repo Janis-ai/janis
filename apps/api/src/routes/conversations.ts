@@ -453,7 +453,7 @@ export function conversationRoutes(db: Db) {
       .limit(1);
     if (!owned) return c.json({ error: 'not found' }, 404);
     const user = c.get('user');
-    const { viewers, changed } = markViewing(owned.id, user.id, user.name);
+    const { viewers, changed } = await markViewing(db, owned.id, user.id, user.name);
     if (changed) {
       bus.publish(workspaceId, {
         type: 'presence',

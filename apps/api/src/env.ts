@@ -24,6 +24,10 @@ export const env = {
   twilioAccountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN ?? '',
   twilioVoiceCountry: process.env.TWILIO_VOICE_COUNTRY ?? 'US',
+  // Hosted voice abuse controls — cap live numbers per workspace and daily
+  // provisioning attempts (each attempt can create a Twilio subaccount).
+  voiceHostedMax: Number(process.env.VOICE_HOSTED_MAX ?? 3),
+  voiceProvisionDaily: Number(process.env.VOICE_PROVISION_DAILY ?? 10),
   // What a hosted voice minute costs Janis (Twilio inbound ~$0.014/min) —
   // billed to the customer at cost × (1 + BILLING_MARGIN), same as LLM.
   voiceCostMicrosPerMin: Number(process.env.VOICE_COST_MICROS_PER_MIN ?? 14_000),
@@ -94,6 +98,8 @@ export const env = {
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
   // gmail channel OAuth: separate redirect from sign-in — must be registered
   // in the same Google OAuth client's authorized URIs.
+  gmailPubsubTopic: process.env.GMAIL_PUBSUB_TOPIC ?? '',
+  gmailPushToken: process.env.GMAIL_PUSH_TOKEN ?? '',
   gmailRedirectUri:
     process.env.GMAIL_REDIRECT_URI ??
     `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/gmail/callback`,
@@ -152,5 +158,6 @@ export const env = {
     pro: process.env.STRIPE_METER_PRICE_PRO ?? '',
     scale: process.env.STRIPE_METER_PRICE_SCALE ?? '',
     llm: process.env.STRIPE_METER_PRICE_LLM ?? '',
+    voice: process.env.STRIPE_METER_PRICE_VOICE ?? '',
   } as Record<string, string>,
 };

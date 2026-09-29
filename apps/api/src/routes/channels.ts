@@ -2,11 +2,12 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channelBindings, channels } from '../db/schema.js';
+import { agents, channelBindings, channels, usageEvents } from '../db/schema.js';
+import { effectivePlanKey } from '../lib/plans.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import {
@@ -111,13 +112,15 @@ export function channelApiRoutes(db: Db) {
   // register before /:id or "voice-numbers" would be read as a channel id.
   app.get('/voice-numbers', async (c) => {
     const { hostedVoiceCreds, searchVoiceNumbers } = await import('../lib/twilio.js');
-    if (!hostedVoiceCreds()) return c.json({ configured: false, numbers: [] });
+    if (!hostedVoiceCreds()) return c.json({ configured: false, paid: true, numbers: [] });
+    const planKey = await effectivePlanKey(db, c.get('workspaceId'));
+    if (planKey === 'free') return c.json({ configured: true, paid: false, numbers: [] });
     try {
       const numbers = await searchVoiceNumbers(
         (c.req.query('country') ?? env.twilioVoiceCountry).toUpperCase(),
         { areaCode: c.req.query('area_code'), contains: c.req.query('contains') },
       );
-      return c.json({ configured: true, numbers });
+      return c.json({ configured: true, paid: true, numbers });
     } catch (err) {
       const e = err as { message?: string };
       return c.json({ error: e.message ?? 'number search failed' }, 400);
@@ -196,6 +199,45 @@ export function channelApiRoutes(db: Db) {
       credentials.from_name = body.from_name;
     }
     if (body.kind === 'voice' && body.hosted) {
+      // Paid plans only — hosted numbers burn real Twilio balance, and free
+      // workspaces have no billing relationship to charge overage against.
+      const planKey = await effectivePlanKey(db, c.get('workspaceId'));
+      if (planKey === 'free') {
+        return c.json({ error: 'hosted numbers require a paid plan' }, 402);
+      }
+      // Abuse controls: cap live hosted numbers per workspace and daily
+      // provisioning attempts (each attempt creates a Twilio subaccount).
+      const existing = await db
+        .select({ credentials: channels.credentials })
+        .from(channels)
+        .where(and(eq(channels.workspaceId, c.get('workspaceId')), eq(channels.kind, 'voice')));
+      const hostedCount = existing.filter(
+        (r) => (r.credentials as ChannelCredentials).hosted,
+      ).length;
+      if (hostedCount >= env.voiceHostedMax) {
+        return c.json({ error: `hosted number limit reached (${env.voiceHostedMax} per workspace)` }, 400);
+      }
+      const [{ attempts }] = await db
+        .select({ attempts: sql<number>`count(*)::int` })
+        .from(usageEvents)
+        .where(
+          and(
+            eq(usageEvents.workspaceId, c.get('workspaceId')),
+            eq(usageEvents.kind, 'voice_provision'),
+            sql`${usageEvents.createdAt} > now() - interval '24 hours'`,
+          ),
+        );
+      if (attempts >= env.voiceProvisionDaily) {
+        return c.json({ error: 'too many provisioning attempts — try again tomorrow' }, 429);
+      }
+      // Count the attempt up front so failed provisions can't be retried
+      // into an effective quota bypass.
+      await db.insert(usageEvents).values({
+        workspaceId: c.get('workspaceId'),
+        kind: 'voice_provision',
+        quantity: 1,
+        period: new Date().toISOString().slice(0, 7),
+      });
       // Janis-hosted: provision the number under a dedicated Twilio
       // subaccount with the webhooks prewired. The subaccount's auth token is
       // what signs inbound webhooks — stored as the channel's creds.

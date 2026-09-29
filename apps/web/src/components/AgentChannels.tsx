@@ -198,7 +198,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   });
   const searchNumbers = useMutation({
     mutationFn: () =>
-      api<{ configured: boolean; numbers: typeof foundNumbers }>(
+      api<{ configured: boolean; paid: boolean; numbers: typeof foundNumbers }>(
         `/api/channels/voice-numbers?area_code=${encodeURIComponent(areaCode)}`,
       ),
     onSuccess: (r) => {
@@ -206,6 +206,11 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         setHostedConfigured(false);
         setVoiceMode('byo');
         setError('Hosted numbers are not enabled on this deployment — use your own Twilio creds.');
+        return;
+      }
+      if (r.paid === false) {
+        setFoundNumbers([]);
+        setError('Hosted numbers need a paid plan — upgrade on the Billing page, or use your own Twilio creds below.');
         return;
       }
       setFoundNumbers(r.numbers);
