@@ -28,7 +28,7 @@ type ContactDetail = {
     last_message_at: string | null;
     last_message_preview: string | null;
   }[];
-  possible_duplicates: { id: string; name: string | null; email: string | null; phone: string | null }[];
+  possible_duplicates: { id: string; name: string | null; email: string | null; phone: string | null; match?: string }[];
 };
 
 const displayName = (c: { name: string | null; email: string | null; phone: string | null }) =>
@@ -164,6 +164,7 @@ export function ContactDetail() {
           {data.possible_duplicates.map((d) => (
             <div key={d.id} className="row" style={{ marginTop: 6 }}>
               <span className="grow">{displayName(d)}</span>
+              {d.match && <span className="chip">{d.match}</span>}
               <span className="muted">{[d.email, d.phone].filter(Boolean).join(' · ')}</span>
               {isAdmin && (
                 <button

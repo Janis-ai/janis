@@ -112,21 +112,35 @@ export function contactRoutes(db: Db) {
         .limit(50),
     ]);
 
-    // Possible duplicates — same email or phone on another workspace contact.
-    const dupes = await db
-      .select({ id: contacts.id, name: contacts.name, email: contacts.email, phone: contacts.phone })
-      .from(contacts)
-      .where(
-        and(
-          eq(contacts.workspaceId, workspaceId),
-          ne(contacts.id, contact.id),
-          or(
-            contact.email ? sql`lower(${contacts.email}) = lower(${contact.email})` : undefined,
-            contact.phone ? eq(contacts.phone, contact.phone) : undefined,
-          ),
-        ),
-      )
-      .limit(10);
+    // Possible duplicates — same email, phone, or non-generic name on
+    // another workspace contact. With no signals at all (e.g. a
+    // Messenger-PSID-only contact), there are no candidates — never
+    // return the whole workspace.
+    const matchConds = [
+      contact.email ? sql`lower(${contacts.email}) = lower(${contact.email})` : undefined,
+      contact.phone ? eq(contacts.phone, contact.phone) : undefined,
+      contact.name && !['unknown', ''].includes(contact.name.trim().toLowerCase())
+        ? sql`lower(${contacts.name}) = lower(${contact.name})`
+        : undefined,
+    ];
+    const dupes = matchConds.some(Boolean)
+      ? await db
+          .select({
+            id: contacts.id,
+            name: contacts.name,
+            email: contacts.email,
+            phone: contacts.phone,
+          })
+          .from(contacts)
+          .where(
+            and(
+              eq(contacts.workspaceId, workspaceId),
+              ne(contacts.id, contact.id),
+              or(...matchConds.filter((x) => x !== undefined)),
+            ),
+          )
+          .limit(10)
+      : [];
 
     return c.json({
       contact: toContact(contact),
@@ -149,6 +163,12 @@ export function contactRoutes(db: Db) {
         name: d.name,
         email: d.email,
         phone: d.phone,
+        match:
+          contact.email && d.email?.toLowerCase() === contact.email.toLowerCase()
+            ? 'same email'
+            : contact.phone && d.phone === contact.phone
+              ? 'same phone'
+              : 'same name',
       })),
     });
   });

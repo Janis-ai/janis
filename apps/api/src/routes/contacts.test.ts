@@ -164,4 +164,34 @@ describe('contacts', () => {
     const gone = await db.select().from(contacts).where(eq(contacts.id, dupe.id));
     expect(gone.length).toBe(0);
   });
+
+  it('possible_duplicates is empty for contacts with no match signals', async () => {
+    // A Messenger-PSID-only contact has no email/phone/name to match on —
+    // the dup query must return nobody, not the whole workspace.
+    const [bare] = await db
+      .insert(contacts)
+      .values({ workspaceId, name: null })
+      .returning();
+    const res = await api.request(`/api/contacts/${bare.id}`, { headers: { cookie } });
+    const body = (await res.json()) as { possible_duplicates: unknown[] };
+    expect(body.possible_duplicates).toEqual([]);
+  });
+
+  it('possible_duplicates surfaces same-name contacts', async () => {
+    // Backfill-era contacts often share a name but no identifiers — name
+    // match is the suggestion channel that lets operators merge them.
+    const [twin] = await db
+      .insert(contacts)
+      .values({ workspaceId, name: 'sam' }) // case-insensitive match on 'Sam'
+      .returning();
+    const res = await api.request(`/api/contacts?q=Sam`, { headers: { cookie } });
+    const { contacts: list } = (await res.json()) as { contacts: { id: string; name: string }[] };
+    const sam = list.find((c) => c.name === 'Sam');
+    const d = await api.request(`/api/contacts/${sam!.id}`, { headers: { cookie } });
+    const body = (await d.json()) as {
+      possible_duplicates: { id: string; match: string }[];
+    };
+    const hit = body.possible_duplicates.find((p) => p.id === twin.id);
+    expect(hit?.match).toBe('same name');
+  });
 });
