@@ -90,11 +90,17 @@ before typecheck/tests/dev.
   added to checkout line items. NOTE: existing subscriptions predate the
   price — their voice usage records in usage_events but won't invoice until
   the item is added to the sub (Stripe API) or they re-checkout.
+  UPDATE 2026-09-29: scanned all live subs — zero carry Janis prices or
+  workspace_id metadata; no Janis subscriptions exist yet. Backfill is
+  moot until the first real customer checks out.
 - Hosted voice bills Twilio cost × (1 + BILLING_MARGIN); VOICE_COST_MICROS_PER_MIN
   env overrides the $0.014/min default if Twilio rates change.
 
 **Product depth (features exist, competitors go deeper)**
-- Help center: no search, SEO metadata, custom domain, or widget link.
+- Help center: search, slug URLs, SEO meta (SSR-injected), custom domain
+  (workspaces.help_domain → /api/help/domain/:host), and widget help link are done.
+  Prod Demo Agent seeded with 13 articles. Remaining depth: no full-text search
+  (ILIKE only), no per-article analytics, no version history.
 - Marketplace: webhook template + event export cover Zapier manually; no
   one-click OAuth app directory or published Zapier app.
 - Intent classification: classifies first message only — no drift
