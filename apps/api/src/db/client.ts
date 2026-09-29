@@ -51,10 +51,18 @@ export async function migrateDb(db: Db) {
     await db.execute(sql`
       update drizzle.__drizzle_migrations
       set created_at = ${NORMALIZED_STAMP}
-      where created_at = any(${POISONED_MIGRATION_STAMPS})
+      where created_at in (${sql.join(
+        POISONED_MIGRATION_STAMPS.map((s) => sql`${s}`),
+        sql`, `,
+      )})
     `);
-  } catch {
-    // Fresh database — the table is created by migrate() below.
+  } catch (err) {
+    // 42P01 = fresh database — the table is created by migrate() below.
+    // Anything else (bad bind, perms) must surface: a silent failure here is
+    // exactly how the poisoned ordering went unnoticed once already.
+    if ((err as { code?: string }).code !== '42P01') {
+      console.error('migration-stamp normalization failed:', err);
+    }
   }
   if (env.databaseUrl) {
     const { migrate } = await import('drizzle-orm/postgres-js/migrator');
