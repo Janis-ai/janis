@@ -186,6 +186,15 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     inbound_address?: string;
     email_address?: string;
     from_name?: string;
+    from_address?: string;
+    gmail_query?: string;
+    email_filters?: {
+      answer_addresses?: string[];
+      list_mail?: boolean;
+      sender_allow?: string[];
+      sender_block?: string[];
+      subject_exclude?: string[];
+    };
     hosted?: boolean;
   };
   return {
@@ -213,6 +222,11 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
       email_address: (row.kind === 'gmail' || row.kind === 'outlook') ? creds.email_address : undefined,
       from_name:
         ['email', 'gmail', 'outlook'].includes(row.kind) ? creds.from_name : undefined,
+      from_address:
+        ['email', 'gmail', 'outlook'].includes(row.kind) ? creds.from_address : undefined,
+      email_filters:
+        ['email', 'gmail', 'outlook'].includes(row.kind) ? creds.email_filters : undefined,
+      gmail_query: row.kind === 'gmail' ? creds.gmail_query : undefined,
       branding:
         row.kind === 'webchat'
           ? {

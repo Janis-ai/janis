@@ -180,6 +180,18 @@ export function ChannelCard({
             the customer's thread. To stop syncing, disconnect the channel — or revoke access
             at myaccount.google.com/permissions.
           </div>
+          <EmailFromName channel={ch} />
+        </details>
+      )}
+      {['email', 'gmail', 'outlook'].includes(ch.kind) && (
+        <details className="webhook-details" style={{ marginTop: 8 }}>
+          <summary>
+            <span className="details-title">Answer rules</span>
+            <span className="details-sub">
+              which mail the agent replies to — groups, senders, subjects
+            </span>
+          </summary>
+          <EmailAnswerRules channel={ch} />
         </details>
       )}
       {ch.kind === 'voice' && ch.meta.hosted && (
@@ -271,6 +283,149 @@ function EmailFromName({ channel }: { channel: Channel }) {
         Save
       </button>
       {msg && <span className="muted">{msg}</span>}
+    </div>
+  );
+}
+
+/** Email answer rules — which inbound mail reaches the agent. The headline
+ *  feature is `answer_addresses`: mail To/Cc/Delivered-To'd to a listed
+ *  address is ingested even when it's list-fanned — that's what makes a
+ *  Google Group / alias / shared mailbox work. */
+function EmailAnswerRules({ channel }: { channel: Channel }) {
+  const qc = useQueryClient();
+  const f = channel.meta.email_filters ?? {};
+  const [form, setForm] = useState({
+    answer_addresses: (f.answer_addresses ?? []).join('\n'),
+    sender_block: (f.sender_block ?? []).join('\n'),
+    sender_allow: (f.sender_allow ?? []).join('\n'),
+    subject_exclude: (f.subject_exclude ?? []).join('\n'),
+    from_address: channel.meta.from_address ?? '',
+    gmail_query: channel.meta.gmail_query ?? '',
+    list_mail: f.list_mail ?? false,
+  });
+  const [msg, setMsg] = useState('');
+  const lines = (s: string) => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/channels/${channel.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          from_address: form.from_address.trim(),
+          email_filters: {
+            answer_addresses: lines(form.answer_addresses),
+            sender_block: lines(form.sender_block),
+            sender_allow: lines(form.sender_allow),
+            subject_exclude: lines(form.subject_exclude),
+            list_mail: form.list_mail,
+          },
+          ...(channel.kind === 'gmail' ? { gmail_query: form.gmail_query.trim() } : {}),
+        }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+      setMsg('Saved.');
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),
+  });
+  const field = (key: keyof typeof form, label: string, hint: string, placeholder: string) => (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
+      <textarea
+        className="input"
+        rows={2}
+        style={{ width: '100%', marginTop: 4, fontFamily: 'inherit', fontSize: 13 }}
+        placeholder={placeholder}
+        value={form[key] as string}
+        onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+      />
+      <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{hint}</div>
+    </div>
+  );
+  return (
+    <div style={{ marginTop: 8, fontSize: 13 }}>
+      {field(
+        'answer_addresses',
+        'Only answer mail addressed to',
+        'One address per line — e.g. support@you.com or the Google Group address. ' +
+          'Mail delivered to a listed address is answered even when it arrives via a ' +
+          'mailing list — this is what makes group/alias/shared-mailbox setups work. ' +
+          'Blank = answer everything that lands here.',
+        'support@you.com',
+      )}
+      {field(
+        'sender_block',
+        'Never answer senders',
+        'Addresses or @domains, one per line — e.g. @yourcompany.com to skip coworkers.',
+        '@yourcompany.com',
+      )}
+      {field(
+        'sender_allow',
+        'Only answer senders (optional)',
+        'When set, only these addresses/@domains reach the agent. Blank = everyone.',
+        '@bigcustomer.com',
+      )}
+      {field(
+        'subject_exclude',
+        'Skip subjects containing',
+        'Case-insensitive substrings, one per line — e.g. "out of office", "[newsletter]".',
+        'out of office',
+      )}
+      <label className="muted" style={{ display: 'block', marginTop: 10, fontSize: 13 }}>
+        <input
+          type="checkbox"
+          checked={form.list_mail}
+          onChange={(e) => setForm({ ...form, list_mail: e.target.checked })}
+        />{' '}
+        Answer mailing-list and bulk mail
+        <div style={{ fontSize: 12, marginTop: 2 }}>
+          Off by default — newsletters and list blasts stay out. Auto-replies and bounces
+          are always skipped.
+        </div>
+      </label>
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>Send replies as</div>
+        <input
+          className="input"
+          style={{ width: '100%', marginTop: 4 }}
+          placeholder={
+            channel.kind === 'email'
+              ? channel.meta.inbound_address
+              : channel.meta.email_address
+          }
+          value={form.from_address}
+          onChange={(e) => setForm({ ...form, from_address: e.target.value })}
+        />
+        <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+          {channel.kind === 'gmail'
+            ? 'A send-as alias verified in Gmail settings (Settings → Accounts → Send mail as) — e.g. the group address.'
+            : channel.kind === 'outlook'
+              ? 'A shared mailbox or alias the account can Send As in Microsoft 365.'
+              : 'An address on a domain verified in Resend.'}
+        </div>
+      </div>
+      {channel.kind === 'gmail' && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Gmail scope</div>
+          <input
+            className="input"
+            style={{ width: '100%', marginTop: 4 }}
+            placeholder='e.g. label:support -in:spam'
+            value={form.gmail_query}
+            onChange={(e) => setForm({ ...form, gmail_query: e.target.value })}
+          />
+          <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+            Extra Gmail search operators on top of "in:inbox" — scopes which mail the
+            poller considers at all.
+          </div>
+        </div>
+      )}
+      <div className="row" style={{ marginTop: 12 }}>
+        <button className="btn" disabled={save.isPending} onClick={() => save.mutate()}>
+          Save rules
+        </button>
+        {msg && <span className="muted">{msg}</span>}
+      </div>
     </div>
   );
 }

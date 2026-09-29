@@ -19,6 +19,7 @@ import { generateApiKey } from '../lib/crypto.js';
 import {
   htmlToText,
   isAutoReply,
+  mailSkipReason,
   parseAddressList,
   parseFrom,
   verifySvixSignature,
@@ -97,7 +98,79 @@ describe('parsing helpers', () => {
     expect(isAutoReply({ 'Auto-Submitted': 'no' })).toBe(false);
     expect(isAutoReply({ precedence: 'bulk' })).toBe(true);
     expect(isAutoReply({ 'list-id': '<list.x.com>' })).toBe(true);
+    expect(isAutoReply({ 'list-id': '<list.x.com>' }, { allowList: true })).toBe(false);
+    expect(isAutoReply({ 'Auto-Submitted': 'auto-replied' }, { allowList: true })).toBe(true);
     expect(isAutoReply(undefined)).toBe(false);
+  });
+
+  it('mailSkipReason applies per-channel answer rules', () => {
+    const groupMail = {
+      headers: { 'list-id': '<support.you.com>' },
+      from: 'Customer <customer@x.com>',
+      to: 'support@you.com',
+      subject: 'help!',
+    };
+    // The group bug: no filters → list-fanned mail dies as before.
+    expect(mailSkipReason(groupMail, { selfAddress: 'me@you.com' })).toBe('list');
+    // Configured answer address exempts it — the group/alias case.
+    expect(
+      mailSkipReason(groupMail, {
+        selfAddress: 'me@you.com',
+        filters: { answer_addresses: ['support@you.com'] },
+      }),
+    ).toBeNull();
+    // list_mail opt-in works without an address list.
+    expect(
+      mailSkipReason(groupMail, { selfAddress: 'me@you.com', filters: { list_mail: true } }),
+    ).toBeNull();
+    // ...but true machine mail still skips even on a list-enabled channel.
+    expect(
+      mailSkipReason(
+        { ...groupMail, headers: { 'auto-submitted': 'auto-replied' } },
+        { selfAddress: 'me@you.com', filters: { list_mail: true } },
+      ),
+    ).toBe('machine');
+    // Address allowlist rejects mail to other addresses (shared-mailbox noise).
+    expect(
+      mailSkipReason(
+        { ...groupMail, headers: {}, to: 'alice@you.com' },
+        { selfAddress: 'me@you.com', filters: { answer_addresses: ['support@you.com'] } },
+      ),
+    ).toBe('not-addressed');
+    // Sender rules: block wins over allow.
+    expect(
+      mailSkipReason(
+        { headers: {}, from: 'coworker@you.com', to: 'me@you.com' },
+        { filters: { sender_block: ['@you.com'] } },
+      ),
+    ).toBe('sender-blocked');
+    expect(
+      mailSkipReason(
+        { headers: {}, from: 'random@x.com', to: 'me@you.com' },
+        { filters: { sender_allow: ['@you.com'] } },
+      ),
+    ).toBe('not-allowed');
+    expect(
+      mailSkipReason(
+        { headers: {}, from: 'vip@you.com', to: 'me@you.com' },
+        { filters: { sender_allow: ['@you.com'], sender_block: ['vip@you.com'] } },
+      ),
+    ).toBe('sender-blocked');
+    // Subject excludes + self/daemon guards.
+    expect(
+      mailSkipReason(
+        { headers: {}, from: 'a@x.com', to: 'me@you.com', subject: 'RE: Out of office' },
+        { filters: { subject_exclude: ['out of office'] } },
+      ),
+    ).toBe('subject-excluded');
+    expect(
+      mailSkipReason(
+        { headers: {}, from: 'me@you.com', to: 'me@you.com' },
+        { selfAddress: 'me@you.com' },
+      ),
+    ).toBe('self');
+    expect(mailSkipReason({ from: 'mailer-daemon@x.com' }, {})).toBe('daemon');
+    expect(mailSkipReason({ headers: {}, from: 'a@x.com' }, {})).toBeNull();
   });
 
   it('strips html to text for html-only mail', () => {

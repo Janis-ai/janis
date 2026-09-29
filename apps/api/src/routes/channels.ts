@@ -29,8 +29,7 @@ import { audit } from '../lib/audit.js';
 type ChannelRow = typeof channels.$inferSelect;
 import {
   htmlToText,
-  isAutoReply,
-  isDaemonAddress,
+  mailSkipReason,
   parseAddressList,
   parseFrom,
   verifySvixSignature,
@@ -91,6 +90,22 @@ const patchChannel = z.object({
   show_operator: z.boolean().optional(),
   // email: From display name on outbound replies; '' clears to channel name
   from_name: z.string().max(120).optional(),
+  // email/gmail/outlook: send-as address (verified alias / shared mailbox);
+  // '' clears to the mailbox/inbound address
+  from_address: z.string().email().max(200).or(z.literal('')).optional(),
+  // email/gmail/outlook: inbound answer rules — group/alias addressing,
+  // list-mail opt-in, sender allow/block, subject excludes
+  email_filters: z
+    .object({
+      answer_addresses: z.array(z.string().email().max(200)).max(20).optional(),
+      list_mail: z.boolean().optional(),
+      sender_allow: z.array(z.string().max(200)).max(50).optional(),
+      sender_block: z.array(z.string().max(200)).max(50).optional(),
+      subject_exclude: z.array(z.string().max(200)).max(50).optional(),
+    })
+    .optional(),
+  // gmail only: extra poll query terms ("label:support -in:spam"); '' clears
+  gmail_query: z.string().max(300).optional(),
   // reassign which agent answers this channel
   agent_id: z.string().uuid().optional(),
 });
@@ -364,8 +379,18 @@ export function channelApiRoutes(db: Db) {
     if (body.show_operator !== undefined && row.kind !== 'webchat') {
       return c.json({ error: 'show_operator applies to webchat channels' }, 400);
     }
-    if (body.from_name !== undefined && row.kind !== 'email' && row.kind !== 'gmail') {
+    const emailKinds = ['email', 'gmail', 'outlook'];
+    if (body.from_name !== undefined && !emailKinds.includes(row.kind)) {
       return c.json({ error: 'from_name applies to email channels' }, 400);
+    }
+    if (body.from_address !== undefined && !emailKinds.includes(row.kind)) {
+      return c.json({ error: 'from_address applies to email channels' }, 400);
+    }
+    if (body.email_filters !== undefined && !emailKinds.includes(row.kind)) {
+      return c.json({ error: 'email_filters applies to email channels' }, 400);
+    }
+    if (body.gmail_query !== undefined && row.kind !== 'gmail') {
+      return c.json({ error: 'gmail_query applies to gmail channels' }, 400);
     }
     if (body.agent_id) {
       const [target] = await db
@@ -385,6 +410,36 @@ export function channelApiRoutes(db: Db) {
     if (body.from_name !== undefined) {
       if (body.from_name === '') delete creds.from_name;
       else creds.from_name = body.from_name;
+    }
+    if (body.from_address !== undefined) {
+      if (body.from_address === '') delete creds.from_address;
+      else creds.from_address = body.from_address.toLowerCase();
+    }
+    if (body.gmail_query !== undefined) {
+      if (body.gmail_query === '') delete creds.gmail_query;
+      else creds.gmail_query = body.gmail_query;
+    }
+    if (body.email_filters !== undefined) {
+      const f = body.email_filters;
+      const next = { ...(creds.email_filters ?? {}) };
+      for (const key of [
+        'answer_addresses',
+        'sender_allow',
+        'sender_block',
+        'subject_exclude',
+      ] as const) {
+        const v = f[key];
+        if (v === undefined) continue;
+        const clean = v.map((s) => s.trim().toLowerCase()).filter(Boolean);
+        if (clean.length) next[key] = clean;
+        else delete next[key];
+      }
+      if (f.list_mail !== undefined) {
+        if (f.list_mail) next.list_mail = true;
+        else delete next.list_mail;
+      }
+      if (Object.keys(next).length) creds.email_filters = next;
+      else delete creds.email_filters;
     }
     if (body.branding) {
       const b = body.branding;
@@ -800,16 +855,7 @@ export function channelWebhookRoutes(db: Db) {
 
     const headers = mail.headers;
     const { name: fromName, address: fromAddr } = parseFrom(mail.from);
-    // Loop guards — auto-replies, bulk mail, bounces, and our own outbound
-    // domain must never ingest, or we'd email ourselves into a loop.
-    if (
-      !fromAddr ||
-      isAutoReply(headers) ||
-      isDaemonAddress(fromAddr) ||
-      fromAddr.endsWith(`@${env.emailInboundDomain}`)
-    ) {
-      return c.json({ ok: true });
-    }
+    if (!fromAddr) return c.json({ ok: true });
     const recipients = parseAddressList(mail.to);
     let channel;
     for (const r of recipients) {
@@ -817,6 +863,23 @@ export function channelWebhookRoutes(db: Db) {
       if (channel) break;
     }
     if (!channel) return c.json({ ok: true });
+
+    // Loop guards + per-channel answer rules — auto-replies, bulk mail,
+    // bounces, our own outbound domain, and anything the channel's filters
+    // exclude must never ingest, or we'd email ourselves into a loop.
+    const creds = channel.credentials as ChannelCredentials;
+    if (
+      mailSkipReason(
+        { headers, from: mail.from, to: mail.to, subject: mail.subject },
+        {
+          selfAddress: creds.inbound_address,
+          selfDomain: env.emailInboundDomain,
+          filters: creds.email_filters,
+        },
+      )
+    ) {
+      return c.json({ ok: true });
+    }
 
     let text = (mail.text ?? '').trim();
     if (!text && mail.html) text = htmlToText(mail.html);

@@ -124,8 +124,15 @@ before typecheck/tests/dev.
   Create: BYO sid/token/number or `from_voice_channel_id` (clones creds,
   setSmsWebhook auto-wires SmsUrl by number-SID lookup — hosted + BYO).
   Deleting a hosted voice channel cascades its SMS sibling.
-- Shared email addresses — one mailbox per channel today; multi-address fan-out
-  needed for support@ + sales@ into one workspace.
+- Shared email addresses: PARTIAL — answer_rules on every email channel
+  (PATCH /api/channels/:id {email_filters, from_address, gmail_query}):
+  answer_addresses allowlist (mail To/Cc/Delivered-To a listed address
+  ingests even when list-fanned — fixes the Google-Group member case),
+  list_mail opt-in, sender allow/block (@domain or address),
+  subject_exclude substrings, send-as From override, gmail poll query
+  scope. mailSkipReason() in lib/email.ts is the single decision point —
+  gmail/outlook sweeps + Resend inbound all run it. Still missing: true
+  multi-address fan-out (one channel per address today).
 - First-class WhatsApp Business API channel: DONE templates for outbound
   (POST /api/channels/:id/send + /broadcast accept whatsapp_template
   {name,language,body_params}; required outside the 24h window — enforced on
@@ -260,7 +267,9 @@ bulk eval CSV import + prompt A/B, URL knowledge sources with scheduled
 re-crawl, intent classification + routing + Topics report, Zapier event
 export + webhook tool template, voice usage metering, multi-instance (bus_events/viewers/voice_queue/
 sweeper_locks, --max-instances 3), Gmail Pub/Sub push, hosted-voice plan
-gate + provisioning caps, Stripe voice meter in checkout, contacts spine +
+gate + provisioning caps, Stripe voice meter in checkout, email answer rules + send-as
+(from_address, answer_addresses, list_mail, sender rules, gmail_query;
+ List-Id group-mail fix), contacts spine +
 merge UI, webhook replay/DLQ UI, /status probe, audit log, outbound send +
 broadcast, campaigns v1, STOP opt-out, jobs queue, trials + annual billing,
 WorkOS SSO + Outlook channel (both behind env creds).

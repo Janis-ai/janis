@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { channels } from '../db/schema.js';
 import type { ChannelCredentials } from '../lib/channels.js';
-import { isDaemonAddress, parseFrom } from '../lib/email.js';
+import { mailSkipReason, parseFrom } from '../lib/email.js';
 import {
   ensureMsToken,
   getMessage,
@@ -42,12 +42,11 @@ export async function pollOutlookChannel(
     if (mail.internalMs > cursor) cursor = mail.internalMs;
 
     const { name: fromName, address: fromAddr } = parseFrom(mail.from);
-    if (
-      !fromAddr ||
-      mail.autoSubmitted ||
-      isDaemonAddress(fromAddr) ||
-      fromAddr === creds.email_address.toLowerCase()
-    ) {
+    if (!fromAddr) continue;
+    if (mailSkipReason(
+      { headers: mail.headers, from: mail.from, to: mail.to, subject: mail.subject },
+      { selfAddress: creds.email_address, filters: creds.email_filters },
+    )) {
       continue;
     }
     await handleChannelMessage(db, channel, {

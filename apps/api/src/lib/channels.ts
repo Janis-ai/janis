@@ -59,6 +59,21 @@ export interface ChannelCredentials {
   // + the display name outbound replies are From:'d as
   inbound_address?: string;
   from_name?: string;
+  // email channels (resend/gmail/outlook): send-as From override — gmail
+  // needs the alias verified in Gmail settings, resend needs the domain
+  // verified, outlook needs SendAs permission on the mailbox.
+  from_address?: string;
+  // inbound mail rules — see EmailFilterConfig in lib/email.ts
+  email_filters?: {
+    answer_addresses?: string[];
+    list_mail?: boolean;
+    sender_allow?: string[];
+    sender_block?: string[];
+    subject_exclude?: string[];
+  };
+  // gmail poll: extra query terms appended to `in:inbox after:X`
+  // (e.g. "label:support" or "-in:spam") — scopes what mail is eligible
+  gmail_query?: string;
   // gmail (oauth): tokens + connected mailbox + poll cursor. access_token is
   // refreshed in place when token_expiry is near; gmail_cursor is the ms
   // internalDate watermark of the newest message ingested.
@@ -909,7 +924,7 @@ async function sendEmailReply(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: `${displayName} <${fromAddr}>`,
+        from: `${displayName} <${creds.from_address ?? fromAddr}>`,
         to: [platformUserId],
         subject,
         text: body,
@@ -970,7 +985,7 @@ async function sendGmailReply(
     const token = await ensureAccessToken(db, channel);
     const { subject, refs, threadId } = await emailThreadContext(db, channel, platformUserId, opts);
     const data = await sendGmailMessage(token, {
-      from: `${emailDisplayName(channel, creds, opts)} <${creds.email_address}>`,
+      from: `${emailDisplayName(channel, creds, opts)} <${creds.from_address ?? creds.email_address}>`,
       to: platformUserId,
       subject,
       text: emailBody(text, opts),
@@ -1015,6 +1030,7 @@ async function sendOutlookReply(
     const token = await ensureMsToken(db, channel);
     const { subject, refs } = await emailThreadContext(db, channel, platformUserId, opts);
     await sendMail(token, {
+      from: creds.from_address,
       to: platformUserId,
       subject,
       text: emailBody(text, opts),

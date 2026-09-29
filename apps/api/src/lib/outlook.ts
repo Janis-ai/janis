@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { channels } from '../db/schema.js';
 import { env } from '../env.js';
-import { htmlToText, isAutoReply } from './email.js';
+import { htmlToText } from './email.js';
 import type { ChannelCredentials } from './channels.js';
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
@@ -20,7 +20,7 @@ export interface OutlookMessage {
   subject: string;
   rfcMessageId?: string; // internetMessageId — In-Reply-To target
   text: string;
-  autoSubmitted: boolean;
+  headers: Record<string, string>;
 }
 
 function msFetch(token: string, path: string, init?: RequestInit) {
@@ -138,7 +138,7 @@ export async function getMessage(token: string, id: string): Promise<OutlookMess
     subject: m.subject ?? '',
     rfcMessageId: m.internetMessageId,
     text: bodyText.trim(),
-    autoSubmitted: isAutoReply(headers),
+    headers,
   };
 }
 
@@ -147,6 +147,8 @@ export async function getMessage(token: string, id: string): Promise<OutlookMess
 export async function sendMail(
   token: string,
   opts: {
+    /** Shared-mailbox/alias send-as — requires SendAs permission in M365. */
+    from?: string;
     to: string;
     subject: string;
     text: string;
@@ -169,6 +171,7 @@ export async function sendMail(
         subject: opts.subject,
         body: { contentType: 'Text', content: body },
         toRecipients: [{ emailAddress: { address: opts.to } }],
+        ...(opts.from ? { from: { emailAddress: { address: opts.from } } } : {}),
         ...(headers.length ? { internetMessageHeaders: headers } : {}),
       },
       saveToSentItems: true,

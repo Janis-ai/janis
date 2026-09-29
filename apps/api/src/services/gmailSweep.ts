@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { channels } from '../db/schema.js';
 import type { ChannelCredentials } from '../lib/channels.js';
-import { isDaemonAddress, parseFrom } from '../lib/email.js';
+import { mailSkipReason, parseFrom } from '../lib/email.js';
 import { ensureAccessToken, getMessage, listNewMessages, watchMailbox } from '../lib/gmail.js';
 import { env } from '../env.js';
 import { handleChannelMessage } from './channelIngress.js';
@@ -31,19 +31,18 @@ export async function pollGmailChannel(db: Db, channel: typeof channels.$inferSe
   // No cursor yet (channels predating the field) → start at channel creation,
   // never the whole mailbox backlog.
   let cursor = creds.gmail_cursor ?? channel.createdAt.getTime();
-  const listing = await listNewMessages(token, cursor);
+  const listing = await listNewMessages(token, cursor, creds.gmail_query);
   for (const stub of listing) {
     const mail = await getMessage(token, stub.id);
     if (!mail) continue;
     if (mail.internalMs > cursor) cursor = mail.internalMs;
 
     const { name: fromName, address: fromAddr } = parseFrom(mail.from);
-    if (
-      !fromAddr ||
-      mail.autoSubmitted ||
-      isDaemonAddress(fromAddr) ||
-      fromAddr === creds.email_address.toLowerCase()
-    ) {
+    if (!fromAddr) continue;
+    if (mailSkipReason(
+      { headers: mail.headers, from: mail.from, to: mail.to, subject: mail.subject },
+      { selfAddress: creds.email_address, filters: creds.email_filters },
+    )) {
       continue;
     }
     await handleChannelMessage(db, channel, {

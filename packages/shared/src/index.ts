@@ -337,6 +337,18 @@ export const Channel = z.object({
     // gmail: the connected mailbox address (oauth identity)
     email_address: z.string().optional(),
     from_name: z.string().optional(),
+    // email channels: send-as From override + inbound answer rules
+    from_address: z.string().optional(),
+    gmail_query: z.string().optional(),
+    email_filters: z
+      .object({
+        answer_addresses: z.array(z.string()).optional(),
+        list_mail: z.boolean().optional(),
+        sender_allow: z.array(z.string()).optional(),
+        sender_block: z.array(z.string()).optional(),
+        subject_exclude: z.array(z.string()).optional(),
+      })
+      .optional(),
     // webchat widget appearance — display config only, never secrets
     branding: z
       .object({

@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { channels } from '../db/schema.js';
 import { env } from '../env.js';
-import { htmlToText, isAutoReply } from './email.js';
+import { htmlToText } from './email.js';
 import type { ChannelCredentials } from './channels.js';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -20,7 +20,7 @@ export interface GmailMessage {
   rfcMessageId?: string; // Message-ID header — In-Reply-To target
   references: string[];
   text: string;
-  autoSubmitted: boolean; // machine mail — poller skips it
+  headers: Record<string, string>; // lowercase keys — filter + threading input
 }
 
 function gmailFetch(token: string, path: string, init?: RequestInit) {
@@ -110,18 +110,39 @@ export async function watchMailbox(
 }
 
 /** messages.list for inbox mail newer than the cursor (ms). Returns API ids
- * oldest-first so the watermark always lands on the newest processed. */
+ * oldest-first so the watermark always lands on the newest processed.
+ * `extraQuery` scopes the poll (channel's gmail_query filter). Paginates —
+ * a busy inbox can exceed one page between ticks and the cursor must not
+ * jump past unread mail. */
 export async function listNewMessages(
   token: string,
   cursorMs: number,
+  extraQuery?: string,
 ): Promise<{ id: string; threadId: string }[]> {
-  const q = encodeURIComponent(`in:inbox after:${Math.floor(cursorMs / 1000)}`);
-  const res = await gmailFetch(token, `messages?q=${q}&maxResults=50`);
-  const data = (await res.json().catch(() => null)) as
-    | { messages?: { id: string; threadId: string }[]; error?: { message?: string } }
-    | null;
-  if (!res.ok) throw new Error(`gmail list failed: ${data?.error?.message ?? `HTTP ${res.status}`}`);
-  return (data?.messages ?? []).reverse();
+  const q = encodeURIComponent(
+    `in:inbox after:${Math.floor(cursorMs / 1000)}${extraQuery ? ` ${extraQuery}` : ''}`,
+  );
+  const out: { id: string; threadId: string }[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await gmailFetch(
+      token,
+      `messages?q=${q}&maxResults=100${pageToken ? `&pageToken=${pageToken}` : ''}`,
+    );
+    const data = (await res.json().catch(() => null)) as
+      | {
+          messages?: { id: string; threadId: string }[];
+          nextPageToken?: string;
+          error?: { message?: string };
+        }
+      | null;
+    if (!res.ok) {
+      throw new Error(`gmail list failed: ${data?.error?.message ?? `HTTP ${res.status}`}`);
+    }
+    out.push(...(data?.messages ?? []));
+    pageToken = data?.nextPageToken;
+  } while (pageToken && out.length < 300); // cap: don't drain a whole mailbox in one tick
+  return out.reverse();
 }
 
 /** messages.get flattened into GmailMessage. */
@@ -151,7 +172,7 @@ export async function getMessage(token: string, id: string): Promise<GmailMessag
     rfcMessageId: headers['message-id'],
     references: refs,
     text: extractText(data.payload ?? {}).trim(),
-    autoSubmitted: isAutoReply(headers),
+    headers,
   };
 }
 
