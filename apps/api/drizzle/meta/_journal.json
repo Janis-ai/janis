@@ -470,6 +470,13 @@
       "when": 1790970000000,
       "tag": "0066_outbound_ops",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1791000000000,
+      "tag": "0067_contact_alt_ids",
+      "breakpoints": true
     }
   ]
 }

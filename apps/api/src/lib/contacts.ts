@@ -52,7 +52,8 @@ export async function contactForBinding(
         .where(
           and(
             eq(contacts.workspaceId, workspaceId),
-            sql`lower(${contacts.email}) = ${email}`,
+            // primary or any merged-away secondary address
+            sql`(lower(${contacts.email}) = ${email} or ${email} = any(${contacts.altEmails}))`,
           ),
         )
         .limit(1);
@@ -62,7 +63,12 @@ export async function contactForBinding(
       const [row] = await db
         .select({ id: contacts.id })
         .from(contacts)
-        .where(and(eq(contacts.workspaceId, workspaceId), eq(contacts.phone, phone)))
+        .where(
+          and(
+            eq(contacts.workspaceId, workspaceId),
+            sql`(${contacts.phone} = ${phone} or ${phone} = any(${contacts.altPhones}))`,
+          ),
+        )
         .limit(1);
       contactId = row?.id;
     }
@@ -95,7 +101,9 @@ export async function contactForBinding(
 }
 
 /** Fill contact fields the identity didn't previously know — never overwrites
- *  a value a human or an earlier channel set (coalesce(existing, new)). */
+ *  a value a human or an earlier channel set (coalesce(existing, new)).
+ *  A differing email/phone isn't lost either — it lands in the alt arrays
+ *  so a person can carry several addresses. */
 async function enrichContact(db: Db, contactId: string, profile: Profile): Promise<void> {
   const email = profile.email?.trim().toLowerCase();
   const phone = profile.phone?.trim();
@@ -104,6 +112,16 @@ async function enrichContact(db: Db, contactId: string, profile: Profile): Promi
     .set({
       ...(email ? { email: sql`coalesce(${contacts.email}, ${email})` } : {}),
       ...(phone ? { phone: sql`coalesce(${contacts.phone}, ${phone})` } : {}),
+      ...(email
+        ? {
+            altEmails: sql`case when ${contacts.email} is not null and ${contacts.email} <> ${email} and not (${email} = any(${contacts.altEmails})) then array_append(${contacts.altEmails}, ${email}) else ${contacts.altEmails} end`,
+          }
+        : {}),
+      ...(phone
+        ? {
+            altPhones: sql`case when ${contacts.phone} is not null and ${contacts.phone} <> ${phone} and not (${phone} = any(${contacts.altPhones})) then array_append(${contacts.altPhones}, ${phone}) else ${contacts.altPhones} end`,
+          }
+        : {}),
       ...(profile.name ? { name: sql`coalesce(${contacts.name}, ${profile.name})` } : {}),
       ...(profile.picture_url
         ? { avatarUrl: sql`coalesce(${contacts.avatarUrl}, ${profile.picture_url})` }

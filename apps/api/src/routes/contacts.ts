@@ -22,6 +22,8 @@ export function contactRoutes(db: Db) {
     name: r.name,
     email: r.email,
     phone: r.phone,
+    alt_emails: r.altEmails,
+    alt_phones: r.altPhones,
     avatar_url: null as string | null, // raw CDN urls stay server-side
     has_avatar: Boolean(r.avatarUrl),
     notes: r.notes,
@@ -50,6 +52,8 @@ export function contactRoutes(db: Db) {
                 sql`${contacts.name} ilike ${'%' + q + '%'}`,
                 sql`${contacts.email} ilike ${'%' + q + '%'}`,
                 sql`${contacts.phone} ilike ${'%' + q + '%'}`,
+                sql`exists (select 1 from unnest(${contacts.altEmails}) e where e ilike ${'%' + q + '%'})`,
+                sql`exists (select 1 from unnest(${contacts.altPhones}) p where p ilike ${'%' + q + '%'})`,
                 // Identity ids too — a merged-away email/phone still finds
                 // the person via the channel identity that carried it.
                 sql`exists (select 1 from ${contactIdentities} ci where ci.contact_id = ${contacts.id} and ci.platform_user_id ilike ${'%' + q + '%'})`,
@@ -186,6 +190,9 @@ export function contactRoutes(db: Db) {
         email: z.string().email().max(320).nullable().optional(),
         phone: z.string().max(40).nullable().optional(),
         notes: z.string().max(10_000).nullable().optional(),
+        // Secondary addresses — replace whole arrays (UI edits the list).
+        alt_emails: z.array(z.string().email().max(320)).max(20).optional(),
+        alt_phones: z.array(z.string().max(40)).max(20).optional(),
       }),
     ),
     async (c) => {
@@ -195,6 +202,10 @@ export function contactRoutes(db: Db) {
       if (body.email !== undefined) patch.email = body.email?.toLowerCase() ?? null;
       if (body.phone !== undefined) patch.phone = body.phone;
       if (body.notes !== undefined) patch.notes = body.notes;
+      if (body.alt_emails !== undefined) {
+        patch.altEmails = body.alt_emails.map((e) => e.toLowerCase());
+      }
+      if (body.alt_phones !== undefined) patch.altPhones = body.alt_phones;
       const [row] = await db
         .update(contacts)
         .set(patch)
@@ -257,12 +268,22 @@ export function contactRoutes(db: Db) {
         .where(eq(campaignSends.contactId, dropId));
       const d = drop[0];
       const k = keep[0];
+      // Differing email/phone fold into the alt arrays — a person keeps
+      // every address they've written from, not just the primary.
+      const altEmails = new Set([...k.altEmails, ...d.altEmails]);
+      const altPhones = new Set([...k.altPhones, ...d.altPhones]);
+      const email = k.email ?? d.email;
+      const phone = k.phone ?? d.phone;
+      if (d.email && d.email !== email) altEmails.add(d.email);
+      if (d.phone && d.phone !== phone) altPhones.add(d.phone);
       await db
         .update(contacts)
         .set({
           name: k.name ?? d.name,
-          email: k.email ?? d.email,
-          phone: k.phone ?? d.phone,
+          email,
+          phone,
+          altEmails: [...altEmails],
+          altPhones: [...altPhones],
           avatarUrl: k.avatarUrl ?? d.avatarUrl,
           notes: [k.notes, d.notes].filter(Boolean).join('\n') || null,
           updatedAt: new Date(),
@@ -282,9 +303,9 @@ export function contactRoutes(db: Db) {
         meta: {
           merged_id: dropId,
           discarded: {
+            // name has no alt list — a differing dropped name is only
+            // preserved here and in the merged notes trail.
             name: k.name && d.name && k.name !== d.name ? d.name : null,
-            email: k.email && d.email && k.email !== d.email ? d.email : null,
-            phone: k.phone && d.phone && k.phone !== d.phone ? d.phone : null,
           },
         },
       });

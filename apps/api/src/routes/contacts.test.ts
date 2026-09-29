@@ -194,4 +194,35 @@ describe('contacts', () => {
     const hit = body.possible_duplicates.find((p) => p.id === twin.id);
     expect(hit?.match).toBe('same name');
   });
+
+  it('merge folds differing email into alt_emails and stays resolvable', async () => {
+    // Two contacts for the same person with different emails — merging
+    // keeps both addresses on the survivor.
+    const [keep] = await db
+      .insert(contacts)
+      .values({ workspaceId, name: 'Pat', email: 'pat@work.com' })
+      .returning();
+    const [drop] = await db
+      .insert(contacts)
+      .values({ workspaceId, name: 'Pat', email: 'pat@home.com' })
+      .returning();
+    const res = await api.request(`/api/contacts/${keep.id}/merge`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ other_id: drop.id }),
+    });
+    expect(res.status).toBe(200);
+    const [merged] = await db.select().from(contacts).where(eq(contacts.id, keep.id));
+    expect(merged.email).toBe('pat@work.com');
+    expect(merged.altEmails).toEqual(['pat@home.com']);
+    // A new identity arriving from the merged-away address resolves to the
+    // survivor — not a fresh duplicate contact.
+    const cid = await contactForBinding(db, {
+      workspaceId,
+      channelId: emailChId,
+      platformUserId: 'pat@home.com',
+      profile: { email: 'pat@home.com' },
+    });
+    expect(cid).toBe(keep.id);
+  });
 });

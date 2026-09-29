@@ -231,6 +231,11 @@ export const contacts = pgTable(
     name: text('name'),
     email: text('email'),
     phone: text('phone'),
+    // Secondary identifiers — merges fold the losing contact's differing
+    // email/phone here instead of discarding them; searchable like the
+    // primary fields.
+    altEmails: text('alt_emails').array().notNull().default([]),
+    altPhones: text('alt_phones').array().notNull().default([]),
     avatarUrl: text('avatar_url'),
     notes: text('notes'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

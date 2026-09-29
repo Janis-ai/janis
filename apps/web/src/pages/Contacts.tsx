@@ -10,6 +10,8 @@ type ContactRow = {
   name: string | null;
   email: string | null;
   phone: string | null;
+  alt_emails?: string[];
+  alt_phones?: string[];
   has_avatar: boolean;
   notes: string | null;
   identities?: number;
@@ -145,7 +147,9 @@ export function ContactDetail() {
         <strong>Details</strong>
         <div className="muted" style={{ marginTop: 8 }}>
           <div>Email: {c.email ?? '—'}</div>
+          {!!c.alt_emails?.length && <div>Also emails: {c.alt_emails.join(', ')}</div>}
           <div>Phone: {c.phone ?? '—'}</div>
+          {!!c.alt_phones?.length && <div>Also phones: {c.alt_phones.join(', ')}</div>}
           {c.notes && <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>{c.notes}</div>}
         </div>
       </div>
@@ -171,7 +175,7 @@ export function ContactDetail() {
                   className="btn"
                   disabled={merge.isPending}
                   onClick={() => {
-                    if (confirm(`Merge ${displayName(d)} into ${displayName(c)}? Their conversations and identities move over.`))
+                    if (confirm(`Merge ${displayName(d)} (${[d.email, d.phone].filter(Boolean).join(', ') || 'no contact info'}) into ${displayName(c)} (${[c.email, c.phone].filter(Boolean).join(', ') || 'no contact info'})? Their conversations, identities, and any differing email/phone move over.`))
                       merge.mutate(d.id);
                   }}
                 >
