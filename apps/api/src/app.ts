@@ -225,7 +225,10 @@ export function createApp(db: Db) {
               `<meta property="og:title" content="${esc(title)}">` +
               `<meta property="og:description" content="${esc(desc)}">` +
               `<meta property="og:type" content="article">`;
-            return c.html(indexHtml.replace(/<title>[^<]*<\/title>/, head));
+            const html = indexHtml
+              .replace(/<meta name="description"[^>]*>/, '')
+              .replace(/<title>[^<]*<\/title>/, head);
+            return c.html(html);
           }
         } catch {
           // fall through to the plain SPA on any lookup error
