@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import Stripe from 'stripe';
 import { and, eq, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, channels, usageEvents, workspaces } from '../db/schema.js';
@@ -10,6 +11,17 @@ import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAu
 
 export function billingRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
+  // Hono compose() routes handler throws to the app's onError (middleware
+  // try/catch can't intercept), and route() honors a sub-app's onError — so
+  // this does fire for Stripe failures. Their messages are user-actionable
+  // (e.g. Connect platform-profile prompts); surface them as 502s.
+  app.onError((err, c) => {
+    console.error('billing route error:', err);
+    if (err instanceof Stripe.errors.StripeError) {
+      return c.json({ error: err.message }, 502);
+    }
+    return c.json({ error: 'Internal server error' }, 500);
+  });
   app.use('/*', sessionAuth(db));
 
   // GET /api/billing/llm-rate?model=x — the cost basis + margin a metered

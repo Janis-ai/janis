@@ -4,7 +4,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
-import type Stripe from 'stripe';
+import Stripe from 'stripe';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, memberships, sessions, users, workspaces } from '../db/schema.js';
@@ -145,6 +145,22 @@ beforeAll(async () => {
 });
 
 describe('agency connect', () => {
+  it('surfaces Stripe errors instead of an opaque 500', async () => {
+    const orig = fake.accounts.create;
+    fake.accounts.create = async () => {
+      throw new Stripe.errors.StripeInvalidRequestError({
+        message: 'Stripe says: platform profile incomplete',
+      });
+    };
+    try {
+      const res = await api.request('/api/billing/connect', { method: 'POST', headers: { cookie } });
+      expect(res.status).toBe(502);
+      expect((await res.json()).error).toContain('platform profile');
+    } finally {
+      fake.accounts.create = orig;
+    }
+  });
+
   it('creates an Express account and returns an onboarding link', async () => {
     const res = await api.request('/api/billing/connect', { method: 'POST', headers: { cookie } });
     expect(res.status).toBe(200);
