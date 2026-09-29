@@ -23,8 +23,8 @@
  *   GET  /health
  */
 import { createServer } from 'node:http';
-import { Janis } from '@janis/sdk';
-import { verifySignature } from '@janis/sdk/webhook';
+import { Janis } from 'janis';
+import { verifySignature } from 'janis/webhook';
 import type { AgentConfig, OutboundWebhook } from '@janis/shared';
 
 const JANIS_API_KEY = process.env.JANIS_API_KEY ?? '';

@@ -1,17 +1,17 @@
-# @janis/sdk
+# janis
 
 Client for the [Janis](https://app.janis.ai) agent-oversight platform. Report
 conversation traffic, flag failures, request human takeover — and receive
 signed webhooks when operators step in.
 
 ```bash
-npm install @janis/sdk
+npm install janis
 ```
 
 ## Usage
 
 ```ts
-import { Janis } from '@janis/sdk';
+import { Janis } from 'janis';
 
 const janis = new Janis({
   apiKey: process.env.JANIS_API_KEY!,        // jk_live_… from the agent's page
@@ -43,7 +43,7 @@ Janis POSTs signed events to your agent's `webhook_url`. Verify with the
 agent's webhook secret:
 
 ```ts
-import { verifySignature } from '@janis/sdk/webhook';
+import { verifySignature } from 'janis/webhook';
 import type { OutboundWebhook } from '@janis/shared';
 
 app.post('/janis/webhook', (req, res) => {

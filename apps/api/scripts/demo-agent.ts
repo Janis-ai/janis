@@ -7,7 +7,7 @@
  * and listens on :9797 for Janis takeover webhooks.
  */
 import { createServer } from 'node:http';
-import { Janis } from '@janis/sdk';
+import { Janis } from 'janis';
 
 const API_KEY = process.env.JANIS_API_KEY ?? '';
 const BASE_URL = process.env.JANIS_BASE_URL ?? 'http://localhost:8787';
