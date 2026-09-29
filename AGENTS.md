@@ -96,20 +96,69 @@ before typecheck/tests/dev.
 - Hosted voice bills Twilio cost × (1 + BILLING_MARGIN); VOICE_COST_MICROS_PER_MIN
   env overrides the $0.014/min default if Twilio rates change.
 
+**Channels (missing entirely)**
+- Outlook/Office 365 mailbox channel (Graph API watch → same push plumbing as Gmail).
+- SMS channel (Twilio already integrated for voice — inbound SMS → conversation).
+- Shared email addresses — one mailbox per channel today; multi-address fan-out
+  needed for support@ + sales@ into one workspace.
+- First-class WhatsApp Business API channel (templates, business verification).
+- Voice: voicemail routing, IVR ("press 1 for a human"), call-recording consent,
+  call transcripts rendered in the transcript view.
+- Widget polish: unread badges, proactive messages, file uploads, sound,
+  per-agent branding, chat-on-article-page.
+
+**Inbox & operator experience (missing)**
+- Snooze / follow-up reminders.
+- Internal notes (operator-only comments, distinct from outbound replies).
+- Saved views/filters ("my open", "unassigned", "waiting >4h"), bulk actions.
+- Conversation merge/split; unified contact profiles across channels.
+- SLA timers + breach alerts (business-hours-aware).
+- Mobile polish on conversation screen (operators live on phones).
+
 **Product depth (features exist, competitors go deeper)**
-- Help center: search, slug URLs, SEO meta (SSR-injected), custom domain
-  (workspaces.help_domain → /api/help/domain/:host), and widget help link are done.
-  Prod Demo Agent seeded with 13 articles. Remaining depth: no full-text search
-  (ILIKE only), no per-article analytics, no version history.
+- Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
+  13 articles on prod Demo Agent + Janis agent. Missing: full-text ranked
+  search (tsvector — ILIKE only today), article view counts, helpfulness
+  votes, zero-results search log (feeds content roadmap), version history,
+  widget article embeds.
 - Marketplace: webhook template + event export cover Zapier manually; no
-  one-click OAuth app directory or published Zapier app.
-- Intent classification: classifies first message only — no drift
-  reclassification; no nightly eval scheduling or regression alerting.
-- Eval suite: CSV import + A/B runs exist; no scheduled runs, history, or
-  diff dashboards.
+  published Zapier app (listing/submission = highest-leverage non-code task),
+  no one-click OAuth installs, no public /integrations directory, outbound
+  webhooks are fire-and-forget (no retries/dead-letter/management UI).
+- Intent classification: first-message only — no drift reclassification,
+  confidence + manual override, sentiment, auto-topic clustering.
+- Eval suite: CSV import + A/B runs exist; no scheduled runs, no regression
+  alerting (pass-rate drop → Slack/email), no run history/diff dashboards,
+  no multi-model compare, no auto-generated tests from rescued conversations.
+
+**Billing (missing)**
+- Trials (14-day Pro), annual billing, seat pricing, in-app usage dashboard
+  (burn before the invoice), add-on SKUs (channels/seats/knowledge docs).
+
+**Reporting (missing)**
+- Time-series charts (volume, FRT, resolution over time — all point-in-time
+  today), AI-vs-human resolution split / deflection rate (core ROI metric),
+  CSV export.
+
+**Reliability & scale (missing — honest weak spots)**
+- Observability: no tracing (OTel), no SLO dashboards, no status page, no
+  5xx/latency alerting (Cloud Monitoring → Slack).
+- Job queue for slow work (knowledge re-crawl, eval runs, watch renewals run
+  inline in sweeper — pg-boss on Postgres, no new infra).
+- Rate limiting on public endpoints (widget/chat/help center) — a spammer can
+  burn LLM tokens through a public widget today. Real abuse hole.
+- Backup/restore runbook (Neon PITR exists — unrehearsed), load test (k6).
 
 **Enterprise checklist (untouched — gates mid-market only)**
-- SSO/SAML, SCIM, audit log, SOC 2, data residency.
+- SSO/SAML (WorkOS), SCIM, audit log (every mutation → queryable log; cheapest
+  item, SOC 2 prerequisite), RBAC beyond admin/member, SOC 2, data residency,
+  GDPR export/delete.
+
+**Marketing surface (missing)**
+- GA4 is live (G-G5W5H3CVR2) but no funnel events fire — instrument signup,
+  first_agent, first_conversation, channel_connected.
+- Public API/SDK docs, onboarding checklist (connect channel → test → invite),
+  security/trust page, pricing/comparison pages.
 
 **Done so far** (don't rebuild): voice (BYO + hosted via Twilio subaccounts),
 CSAT on archive, Shopify/HubSpot/Zendesk/Stripe/Cal.com/iTunes/webhook tool
