@@ -1,9 +1,13 @@
 import type { Context, MiddlewareHandler } from 'hono';
+import { sql } from 'drizzle-orm';
+import type { Db } from '../db/client.js';
 
 /**
- * Fixed-window in-memory rate limiter. Cloud Run is single-instance for now,
- * so per-process state is accurate; if that changes this still acts as a
- * per-instance ceiling rather than a correctness guarantee.
+ * Fixed-window in-memory rate limiter — a per-instance ceiling. With
+ * --max-instances > 1 the effective limit is max × instance count, which is
+ * fine for the generous webhook/read ceilings. For strict or per-resource
+ * limits where correctness matters (login, chat writes, uploads), use
+ * dbRateLimit — it counts in Postgres so the cap holds across instances.
  */
 
 interface Bucket {
@@ -54,6 +58,48 @@ export function rateLimit(opts: RateLimitOptions): MiddlewareHandler {
       return c.json({ error: 'Too many requests — slow down and retry.' }, 429);
     } else {
       b.count += 1;
+    }
+    await next();
+  };
+}
+
+/**
+ * Postgres-backed fixed-window limiter — correct across Cloud Run instances
+ * and IP rotation when keyed on a resource (e.g. the channel token) rather
+ * than the client IP. The single upsert serializes concurrent increments on
+ * the bucket row, so counts are exact. Fails OPEN on a DB error: a limiter
+ * hiccup shouldn't take down public endpoints (and those requests will fail
+ * on the same DB error downstream anyway).
+ */
+export function dbRateLimit(db: Db, opts: RateLimitOptions): MiddlewareHandler {
+  const { windowMs, max, scope = '', methods, key = clientIp } = opts;
+  return async (c, next) => {
+    if (methods && !methods.includes(c.req.method)) return next();
+    const now = Date.now();
+    const resetAt = new Date(Math.floor(now / windowMs) * windowMs + windowMs);
+    const k = `${scope}:${key(c)}`;
+    try {
+      const res = await db.execute(sql`
+        insert into rate_limits (key, count, reset_at)
+        values (${k}, 1, ${resetAt})
+        on conflict (key) do update set
+          count = case when rate_limits.reset_at <= now()
+                    then 1 else rate_limits.count + 1 end,
+          reset_at = case when rate_limits.reset_at <= now()
+                       then ${resetAt} else rate_limits.reset_at end
+        returning count, reset_at
+      `);
+      const row = (res as { rows?: { count: number; reset_at: string | Date }[] }).rows?.[0];
+      if (row && row.count > max) {
+        const retryAfter = Math.max(
+          1,
+          Math.ceil((new Date(row.reset_at).getTime() - now) / 1000),
+        );
+        c.header('Retry-After', String(retryAfter));
+        return c.json({ error: 'Too many requests — slow down and retry.' }, 429);
+      }
+    } catch (err) {
+      console.error('rate limit check failed (failing open):', err);
     }
     await next();
   };

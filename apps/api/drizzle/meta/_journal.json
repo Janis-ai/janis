@@ -414,6 +414,13 @@
       "when": 1790655600000,
       "tag": "0058_help_seo",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790686200000,
+      "tag": "0059_rate_limits",
+      "breakpoints": true
     }
   ]
 }

@@ -745,3 +745,12 @@ export const sweeperLocks = pgTable('sweeper_locks', {
   holder: text('holder').notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });
+
+/** Cross-instance fixed-window rate-limit counters. One row per bucket key
+ * (scope:identifier); the upsert in dbRateLimit is the atomic check. Rows are
+ * pruned by the sweeper once reset_at has passed. */
+export const rateLimits = pgTable('rate_limits', {
+  key: text('key').primaryKey(),
+  count: integer('count').notNull(),
+  resetAt: timestamp('reset_at', { withTimezone: true }).notNull(),
+});

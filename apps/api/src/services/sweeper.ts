@@ -1,6 +1,6 @@
 import { and, desc, eq, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alertRules, alerts, busEvents, conversations, knowledgeFiles, messages, sweeperLocks } from '../db/schema.js';
+import { agents, alertRules, alerts, busEvents, conversations, knowledgeFiles, messages, rateLimits, sweeperLocks } from '../db/schema.js';
 import { bus, INSTANCE_ID } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
@@ -60,6 +60,10 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
         .delete(busEvents)
         .where(lt(busEvents.createdAt, new Date(Date.now() - 10 * 60_000)))
         .catch((err) => console.error('busEvents prune error:', err));
+      void db
+        .delete(rateLimits)
+        .where(lt(rateLimits.resetAt, new Date(Date.now() - 3_600_000)))
+        .catch((err) => console.error('rateLimits prune error:', err));
     })().catch(() => {});
   }, intervalMs);
   timer.unref();

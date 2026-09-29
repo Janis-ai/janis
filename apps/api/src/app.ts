@@ -9,7 +9,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { Db } from './db/client.js';
 import { env } from './env.js';
 import { reportError } from './lib/errorReporting.js';
-import { rateLimit } from './lib/rateLimit.js';
+import { rateLimit, dbRateLimit } from './lib/rateLimit.js';
 import { getUpload } from './lib/uploads.js';
 import { authRoutes } from './routes/auth.js';
 import { v1Routes } from './routes/v1.js';
@@ -70,9 +70,12 @@ export function createApp(db: Db) {
 
   // Rate limits on public/abuse-prone surfaces. Generous ceilings on signed
   // webhooks (Meta/Slack/Stripe retry in bursts; signature checks still apply);
-  // strict on credential endpoints.
+  // strict on credential endpoints. In-memory limits are per-instance ceilings
+  // (Cloud Run runs up to MAX_INSTANCES); the money paths — login, chat writes,
+  // chat uploads — use the Postgres limiter so caps hold across instances and,
+  // for chat, across IPs rotated against a single channel token.
   app.use('/v1/*', rateLimit({ scope: 'v1', windowMs: 60_000, max: 300 }));
-  app.use('/auth/login', rateLimit({ scope: 'login', windowMs: 60_000, max: 10 }));
+  app.use('/auth/login', dbRateLimit(db, { scope: 'login', windowMs: 60_000, max: 10 }));
   app.use('/slack/events', rateLimit({ scope: 'slack', windowMs: 60_000, max: 120 }));
   app.use('/slack/interactions', rateLimit({ scope: 'slack', windowMs: 60_000, max: 120 }));
   app.use('/channels/meta/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));
@@ -81,9 +84,30 @@ export function createApp(db: Db) {
   app.use('/messenger/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));
   app.use('/meta/*', rateLimit({ scope: 'meta-cb', windowMs: 60_000, max: 60 }));
   app.use('/billing/stripe-webhook', rateLimit({ scope: 'stripe', windowMs: 60_000, max: 60 }));
-  // Web-chat: visitors poll while the widget is open (~20/min); posts are stricter.
+  // Web-chat: visitors poll while the widget is open (~20/min); posts are
+  // stricter. The per-IP write cap stops a single source; the DB-backed
+  // per-token caps stop a distributed flood against one channel — that's the
+  // path that burns JANIS_LLM_API_KEY on every inbound message.
   app.use('/chat/*', rateLimit({ scope: 'chat-read', windowMs: 60_000, max: 120, methods: ['GET'] }));
   app.use('/chat/*', rateLimit({ scope: 'chat-write', windowMs: 60_000, max: 30, methods: ['POST'] }));
+  app.use('/chat/:token/messages', dbRateLimit(db, {
+    scope: 'chat-token-write',
+    windowMs: 3_600_000,
+    max: env.chatTokenHourlyMax,
+    methods: ['POST'],
+    key: (c) => c.req.param('token') ?? 'unknown',
+  }));
+  app.use('/chat/:token/uploads', dbRateLimit(db, {
+    scope: 'chat-token-upload',
+    windowMs: 3_600_000,
+    max: env.chatTokenUploadHourlyMax,
+    methods: ['POST'],
+    key: (c) => c.req.param('token') ?? 'unknown',
+  }));
+  // Public read surfaces — in-memory ceilings are enough here (scrape
+  // deterrence, not spend protection).
+  app.use('/api/help/*', rateLimit({ scope: 'help', windowMs: 60_000, max: 120 }));
+  app.use('/uploads/*', rateLimit({ scope: 'uploads', windowMs: 60_000, max: 120 }));
 
   app.route('/v1', v1Routes(db)); // agent-facing (server-to-server, no CORS)
   app.route('/auth', authRoutes(db));

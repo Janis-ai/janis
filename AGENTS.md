@@ -145,8 +145,13 @@ before typecheck/tests/dev.
   5xx/latency alerting (Cloud Monitoring → Slack).
 - Job queue for slow work (knowledge re-crawl, eval runs, watch renewals run
   inline in sweeper — pg-boss on Postgres, no new infra).
-- Rate limiting on public endpoints (widget/chat/help center) — a spammer can
-  burn LLM tokens through a public widget today. Real abuse hole.
+- Rate limiting: DONE core layer — in-memory per-IP ceilings on all webhook/
+  read surfaces; Postgres-backed rate_limits table + dbRateLimit on money
+  paths (login 10/min/IP, chat writes 600/hr/channel-token via
+  CHAT_TOKEN_HOURLY_MAX, chat uploads 60/hr via CHAT_TOKEN_UPLOAD_HOURLY_MAX)
+  — caps hold across instances and rotated IPs. Fails open on DB error.
+  Remaining: per-workspace spend ceilings/circuit breakers, CAPTCHA on
+  widget after N messages, blocklisting repeat offenders.
 - Backup/restore runbook (Neon PITR exists — unrehearsed), load test (k6).
 
 **Enterprise checklist (untouched — gates mid-market only)**

@@ -163,4 +163,9 @@ export const env = {
   // GA4 measurement id (G-…) — when set, the served SPA gets the gtag snippet
   // injected into <head>. Empty disables (dev/tests embed nothing).
   gaMeasurementId: process.env.GA_MEASUREMENT_ID ?? '',
+  // DB-backed hourly caps per webchat channel token — bound worst-case spend
+  // when a widget endpoint is flooded from many IPs. Generous defaults; lower
+  // them if a specific channel is abused.
+  chatTokenHourlyMax: Number(process.env.CHAT_TOKEN_HOURLY_MAX ?? 600),
+  chatTokenUploadHourlyMax: Number(process.env.CHAT_TOKEN_UPLOAD_HOURLY_MAX ?? 60),
 };
