@@ -64,3 +64,44 @@ sweeper are still in-process.
 @janis/shared resolves to dist/ in all consumers (prod Node can't load .ts).
 After editing packages/shared/src, run `npm run build -w packages/shared`
 before typecheck/tests/dev.
+
+## Open work — competitive gap tracker (updated 2026-09-29)
+
+**Infra / reliability (highest leverage)**
+- Multi-instance safety: voice bridge (voiceBridge.ts), presence map, Gmail
+  poller and sweeper are all in-process — Postgres alone doesn't fix this.
+  Needs a shared bus/queue (Postgres LISTEN/NOTIFY or Pub/Sub) before
+  --max-instances can rise above 1.
+- Hosted-voice compliance: regulatory address bundles / toll-free
+  verification per country, plus abuse controls on number provisioning
+  (bad actors could burn the master Twilio balance).
+- Real-time email: Gmail watch → Pub/Sub push instead of the 60s poll;
+  shared/multi-mailbox channels.
+
+**Billing loose ends**
+- janis.voice_micros meter + metered price don't exist in Stripe yet —
+  usage_events rows record regardless; wire the meter into checkout when
+  voice minutes should actually invoice.
+- Hosted voice bills Twilio cost × (1 + BILLING_MARGIN); VOICE_COST_MICROS_PER_MIN
+  env overrides the $0.014/min default if Twilio rates change.
+
+**Product depth (features exist, competitors go deeper)**
+- Help center: no search, SEO metadata, custom domain, or widget link.
+- Marketplace: webhook template + event export cover Zapier manually; no
+  one-click OAuth app directory or published Zapier app.
+- Intent classification: classifies first message only — no drift
+  reclassification; no nightly eval scheduling or regression alerting.
+- Eval suite: CSV import + A/B runs exist; no scheduled runs, history, or
+  diff dashboards.
+
+**Enterprise checklist (untouched — gates mid-market only)**
+- SSO/SAML, SCIM, audit log, SOC 2, data residency.
+
+**Done so far** (don't rebuild): voice (BYO + hosted via Twilio subaccounts),
+CSAT on archive, Shopify/HubSpot/Zendesk/Stripe/Cal.com/iTunes/webhook tool
+templates, operator metrics report, routing automations (keyword/inactivity/
+auto_assign), Postgres cutover tooling (DATABASE_URL live in prod),
+collision detection (presence + operator typing), public help center,
+bulk eval CSV import + prompt A/B, URL knowledge sources with scheduled
+re-crawl, intent classification + routing + Topics report, Zapier event
+export + webhook tool template, voice usage metering.
