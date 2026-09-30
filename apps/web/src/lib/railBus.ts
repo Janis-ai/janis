@@ -2,6 +2,9 @@ export interface RailRequest {
   channelId: string;
   label: string;
   agentId?: string; // for ?rail=test&agent=… deeplinks
+  // Seed the Ask Janis rail with a question — sent automatically on open.
+  // Discovery cards and ?rail=ask&q= deeplinks use this.
+  seed?: string;
 }
 
 /**

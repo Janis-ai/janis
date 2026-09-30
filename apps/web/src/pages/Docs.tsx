@@ -202,6 +202,46 @@ curl -X DELETE https://app.janis.ai/v1/hooks/<id> \\
         escalated, and resolved conversations; actions reply, escalate, resume,
         resolve, and send outbound. Connect with the agent API key above.
       </p>
+
+      <h2>Recipes — ManyChat &amp; GoHighLevel</h2>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        Any tool that can fire an HTTP request can hand a conversation to Janis.
+        POST one batch to <span className="mono">/v1/events</span>: a{' '}
+        <span className="mono">message_in</span> records what the customer said
+        (creating the conversation on first use), and a{' '}
+        <span className="mono">handoff_request</span> pages your operators.
+        Prefix <span className="mono">conversation_id</span> with the source so
+        ids never collide — <span className="mono">manychat:{'{'}user_id{'}'}</span>.
+      </p>
+      <Code>{`# ManyChat: External Request action (or a GHL workflow webhook)
+POST https://app.janis.ai/v1/events
+Authorization: Bearer jk_live_...
+Content-Type: application/json
+
+{
+  "events": [
+    {
+      "type": "message_in",
+      "conversation_id": "manychat:{{user_id}}",
+      "text": "{{last_text_input}}",
+      "user": { "name": "{{first_name}} {{last_name}}" }
+    },
+    {
+      "type": "handoff_request",
+      "conversation_id": "manychat:{{user_id}}",
+      "reason": "customer asked for a human in ManyChat"
+    }
+  ]
+}`}</Code>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        In ManyChat: add an <strong>External Request</strong> action to the flow,
+        method POST, the URL above, and map the user's id/name/last input into
+        the body. In GoHighLevel: use a workflow <strong>Webhook</strong> action
+        (or a custom webhook step) with the same payload — GHL merge fields
+        stand in for the {'{{…}}'} placeholders. Omit the{' '}
+        <span className="mono">handoff_request</span> event to route the message
+        to the agent instead of straight to a human.
+      </p>
         </>
       ) : (
         <>

@@ -194,7 +194,12 @@ export default function Settings() {
   const [pwMsg, setPwMsg] = useState('');
 
   const setNotify = useMutation({
-    mutationFn: (notify: { push?: boolean; email?: boolean; sound?: boolean }) =>
+    mutationFn: (notify: {
+      push?: boolean;
+      email?: boolean;
+      sound?: boolean;
+      events?: Record<string, boolean>;
+    }) =>
       api<{ user: WorkspaceUser }>('/api/users/me', {
         method: 'PATCH',
         body: JSON.stringify({ notify }),
@@ -495,6 +500,36 @@ export default function Settings() {
               />{' '}
               Alert sounds
             </label>
+          </div>
+        )}
+        {me && (
+          <div style={{ marginTop: 14 }}>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+              Notify me about
+            </div>
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 13 }}>
+              {(
+                [
+                  ['handoff', 'Handoffs'],
+                  ['assigned', 'Assigned to me'],
+                  ['keyword', 'Keyword matches'],
+                  ['approval', 'Approvals'],
+                  ['digest', 'Digests'],
+                  ['eval', 'Eval regressions'],
+                  ['mention', 'Mentions'],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key}>
+                  <input
+                    type="checkbox"
+                    checked={(me.user.notify as { events?: Record<string, boolean> } | undefined)?.events?.[key] !== false}
+                    disabled={setNotify.isPending}
+                    onChange={(e) => setNotify.mutate({ events: { [key]: e.target.checked } })}
+                  />{' '}
+                  {label}
+                </label>
+              ))}
+            </div>
           </div>
         )}
       </div>

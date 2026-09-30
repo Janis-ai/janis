@@ -212,7 +212,7 @@ export async function runScheduledEval(
         body: regression.detail,
         url: `/agents/${agent.id}?tab=tests`,
       },
-      { agentId: agent.id },
+      { agentId: agent.id, event: 'eval' },
     );
   }
   bus.publish(agent.workspaceId, {

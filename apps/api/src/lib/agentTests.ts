@@ -158,13 +158,22 @@ export async function runAgentTest(
   db: Db,
   agent: AgentRow,
   test: AgentTestRow,
-  opts?: { systemPrompt?: string },
+  opts?: { systemPrompt?: string; model?: string },
 ): Promise<TestRunResult> {
-  // A/B runs replay the suite against a candidate prompt without saving it.
-  if (opts?.systemPrompt !== undefined) {
+  // A/B runs replay the suite against a candidate prompt and/or model without
+  // saving either — config.llm.model merges over the workspace default the
+  // same way the agent's own override does.
+  if (opts?.systemPrompt !== undefined || opts?.model !== undefined) {
+    const cfg = agent.config as Record<string, unknown>;
+    const llm = { ...((cfg.llm as Record<string, unknown>) ?? {}) };
+    if (opts.model !== undefined) llm.model = opts.model;
     agent = {
       ...agent,
-      config: { ...(agent.config as Record<string, unknown>), system_prompt: opts.systemPrompt },
+      config: {
+        ...cfg,
+        ...(opts.systemPrompt !== undefined ? { system_prompt: opts.systemPrompt } : {}),
+        llm,
+      },
     };
   }
   const at = new Date().toISOString();

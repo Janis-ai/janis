@@ -20,7 +20,7 @@ import { railBus } from '../lib/railBus';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert', 'auto_assign'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
-type Tab = 'integrations' | 'escalation' | 'tools' | 'tests' | 'help' | 'connection';
+type Tab = 'integrations' | 'escalation' | 'tools' | 'tests' | 'help' | 'connection' | 'llm';
 
 export default function AgentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -58,11 +58,13 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const [params, setParams] = useSearchParams();
   const tabParam = params.get('tab') as Tab | null;
   const tab: Tab =
-    tabParam && ['integrations', 'escalation', 'tools', 'tests', 'help', 'connection'].includes(tabParam)
+    tabParam && ['integrations', 'escalation', 'tools', 'tests', 'help', 'connection', 'llm'].includes(tabParam)
       ? tabParam
       : 'connection';
   const activeTab: Tab =
-    (tab === 'tools' || tab === 'tests') && !agent.hosted ? 'connection' : tab;
+    (tab === 'tools' || tab === 'tests' || tab === 'llm' || tab === 'help') && !agent.hosted
+      ? 'connection'
+      : tab;
   // merge — the URL may carry breadcrumb state (?from/&scroll=) or the rail's
   // ?rail= that a wholesale replace would wipe on every tab click
   const setTab = (t: Tab) =>
@@ -172,6 +174,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
     ...(agent.hosted
       ? [
           { key: 'tools' as Tab, label: 'Tools' },
+          { key: 'llm' as Tab, label: 'Language Model' },
           { key: 'tests' as Tab, label: 'Tests' },
           { key: 'help' as Tab, label: 'Help center' },
         ]
@@ -265,6 +268,9 @@ function AgentEditor({ agent }: { agent: Agent }) {
         />
       )}
       {activeTab === 'tools' && agent.hosted && <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />}
+      {activeTab === 'llm' && agent.hosted && (
+        <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+      )}
       {activeTab === 'tests' && agent.hosted && <TestsTab agentId={agent.id} agent={agent} isAdmin={isAdmin} />}
       {activeTab === 'connection' && (
         <ConnectionTab
@@ -1743,8 +1749,6 @@ function ConnectionTab({
 
       <BehaviorSection agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} hosted={agent.hosted} />
 
-      {agent.hosted && <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />}
-
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Credentials{agent.hosted ? '' : ' &amp; deliveries'}</strong>
         {agent.api_key_preview && (
@@ -2463,6 +2467,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   // pass count shown on the tests list.
   const [abOpen, setAbOpen] = useState(false);
   const [candidatePrompt, setCandidatePrompt] = useState('');
+  const [candidateModel, setCandidateModel] = useState('');
   const [abResult, setAbResult] = useState<{
     summary: { passed: number; failed: number; unrunnable: number };
     results: { name: string; passed: boolean | null; reason: string }[];
@@ -2471,7 +2476,10 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     mutationFn: () =>
       api(`/api/agents/${agentId}/tests-run-all`, {
         method: 'POST',
-        body: JSON.stringify({ system_prompt: candidatePrompt }),
+        body: JSON.stringify({
+          ...(candidatePrompt.trim() ? { system_prompt: candidatePrompt } : {}),
+          ...(candidateModel.trim() ? { model: candidateModel.trim() } : {}),
+        }),
       }),
     onSuccess: (r) => setAbResult(r as typeof abResult),
     onError: (e) => setErr(e.message),
@@ -2750,20 +2758,27 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       {abOpen && (
         <div className="card" style={{ background: 'var(--panel-2)' }}>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-            Paste a candidate system prompt — the whole suite replays against it and
-            reports pass/fail per test. Nothing changes until you copy it into the Engine tab.
+            Paste a candidate system prompt and/or model id — the whole suite replays
+            against it and reports pass/fail per test. Nothing changes until you copy
+            the winner into the Engine / Language Model tab.
           </div>
           <textarea
             rows={6}
-            placeholder="Candidate system prompt…"
+            placeholder="Candidate system prompt… (optional)"
             value={candidatePrompt}
             onChange={(e) => setCandidatePrompt(e.target.value)}
             style={{ width: '100%', fontFamily: 'monospace' }}
           />
+          <input
+            placeholder="Candidate model id — e.g. gpt-4o-mini (optional)"
+            value={candidateModel}
+            onChange={(e) => setCandidateModel(e.target.value)}
+            style={{ marginTop: 8 }}
+          />
           <div className="row" style={{ marginTop: 8 }}>
             <button
               className="btn primary sm"
-              disabled={!candidatePrompt.trim() || running !== null}
+              disabled={(!candidatePrompt.trim() && !candidateModel.trim()) || running !== null}
               onClick={() => { setRunning('all'); setAbResult(null); abRun.mutate(); }}
             >
               {running === 'all' ? 'Running…' : 'Run suite vs candidate'}

@@ -101,6 +101,24 @@ export default function Agents() {
               <span className={`badge ${agent.hosted ? 'active' : agent.webhook_url ? '' : 'warn'}`}>
                 {agent.hosted ? 'hosted' : agent.webhook_url ? 'external' : 'unreachable'}
               </span>
+              <button
+                className="btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/conversations?agent=${agent.id}`);
+                }}
+              >
+                View
+              </button>
+              <button
+                className="btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/agents/${agent.id}`);
+                }}
+              >
+                Manage
+              </button>
               {isAdmin && (
                 <button
                   className="btn danger"

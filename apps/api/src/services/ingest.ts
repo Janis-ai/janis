@@ -12,7 +12,7 @@ import {
 import { bus } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { enrichHandoff } from '../lib/handoff.js';
-import { alertNotification, notifyWorkspace } from '../lib/notify.js';
+import { alertNotification, eventForAlertType, notifyWorkspace, type NotifyEvent } from '../lib/notify.js';
 import { evaluateActions, evaluateEvent } from '../lib/rules.js';
 import { classifyAndRoute, recheckIntent } from '../lib/intent.js';
 import { fireEventWebhook } from '../lib/eventWebhook.js';
@@ -165,7 +165,7 @@ export async function processEvents(
     // struggling agent doesn't spam push/email on every message
     let handoffAlertId: string | undefined;
     let handoffAlertNew = false;
-    const pendingNotifies: { title: string; body: string; url: string }[] = [];
+    const pendingNotifies: { title: string; body: string; url: string; event: NotifyEvent }[] = [];
     for (const triggered of evaluateEvent(event, rules)) {
       const [open] = await db
         .select()
@@ -200,6 +200,7 @@ export async function processEvents(
             // Re-page whoever owns it — an ignored handoff is an escalation
             void notifyWorkspace(db, agent.workspaceId, n, { agentId: agent.id,
               userIds: conv.assigneeId ? [conv.assigneeId] : undefined,
+              event: eventForAlertType(reAlert.type),
             });
           } else {
             // Recent open alert — postSlackAlert replies in the existing
@@ -243,7 +244,10 @@ export async function processEvents(
       }
       void postSlackAlert(db, agent.workspaceId, conv, agent, alert);
       // queued — fired after auto-assign so the page goes to the owner
-      pendingNotifies.push(await alertNotification(db, alert, conv, agent));
+      pendingNotifies.push({
+        ...(await alertNotification(db, alert, conv, agent)),
+        event: eventForAlertType(alert.type),
+      });
     }
 
     // State transitions: alerts escalate to needs_human unless a human owns
@@ -335,6 +339,7 @@ export async function processEvents(
     for (const n of pendingNotifies) {
       void notifyWorkspace(db, agent.workspaceId, n, { agentId: agent.id,
         userIds: assigneeId ? [assigneeId] : undefined,
+        event: n.event,
       });
     }
 

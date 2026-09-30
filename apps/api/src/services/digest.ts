@@ -83,7 +83,7 @@ export async function emitDueDigests(db: Db): Promise<void> {
     if (latest && Date.now() - latest.createdAt.getTime() < DIGEST_PERIOD_MS) continue;
     const d = await generateDigest(db, w.id);
     const text = digestText(d);
-    await notifyWorkspace(db, w.id, { title: 'Janis digest', body: text, url: '/reports' });
+    await notifyWorkspace(db, w.id, { title: 'Janis digest', body: text, url: '/reports' }, { event: 'digest' });
     await postSlackMessage(db, w.id, text);
   }
 }

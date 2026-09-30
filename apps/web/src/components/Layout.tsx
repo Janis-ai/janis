@@ -32,6 +32,51 @@ const ALERT_LABELS: Record<string, string> = {
   approval_request: 'Approval requested',
 };
 
+interface BillingStatus {
+  plan_key: string;
+  plan_name: string;
+  used: number;
+  included: number;
+  pct: number;
+  capped: boolean;
+}
+
+/** Slim plan + usage meter pinned above the workspace switcher. Free shows
+ *  the cap; internal (included = MAX_SAFE_INTEGER) shows used only. */
+function PlanMeter() {
+  const { data } = useQuery({
+    queryKey: ['billing-status'],
+    queryFn: () => api<BillingStatus>('/api/billing/status'),
+    refetchInterval: 60_000,
+  });
+  if (!data) return null;
+  const internal = data.plan_key === 'internal' || data.included >= Number.MAX_SAFE_INTEGER;
+  return (
+    <Link to="/billing" className="plan-meter" title="Billing">
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <span style={{ fontWeight: 600 }}>{data.plan_name}</span>
+        {data.capped && <span style={{ color: 'var(--warn)' }}>cap</span>}
+      </div>
+      <div className="muted" style={{ fontSize: 11 }}>
+        {internal
+          ? `${data.used.toLocaleString()} messages this month`
+          : `${data.used.toLocaleString()} of ${data.included.toLocaleString()} messages`}
+      </div>
+      {!internal && (
+        <div className="plan-meter-bar">
+          <div
+            className="plan-meter-fill"
+            style={{
+              width: `${data.pct}%`,
+              background: data.pct >= 100 ? 'var(--danger)' : 'var(--accent)',
+            }}
+          />
+        </div>
+      )}
+    </Link>
+  );
+}
+
 export default function Layout() {
   const { data } = useMe();
   // GA4 sign_up — fires once per account, only for users created in the last
@@ -51,11 +96,17 @@ export default function Layout() {
   const [railOpen, setRailOpen] = useState(false);
   const [railTab, setRailTab] = useState<'ask' | 'test'>('ask');
   const [testRail, setTestRail] = useState<RailRequest | null>(null);
+  const [askSeed, setAskSeed] = useState<string | null>(null);
   useEffect(
     () =>
       railBus.subscribe((r) => {
-        setTestRail(r);
-        setRailTab('test');
+        if (r.seed) {
+          setAskSeed(r.seed);
+          setRailTab('ask');
+        } else {
+          setTestRail(r);
+          setRailTab('test');
+        }
         setRailOpen(true);
       }),
     [],
@@ -91,6 +142,10 @@ export default function Layout() {
     if (key === consumedRail.current) return;
     consumedRail.current = key;
     if (railParam === 'ask') {
+      // ?q= seeds the concierge with a question — discovery cards and emails
+      // can deep-link a conversation, not just a panel.
+      const q = searchParams.get('q');
+      if (q) setAskSeed(q);
       setRailTab('ask');
       setRailOpen(true);
     } else if (railParam === 'test' && railAgentParam) {
@@ -289,6 +344,9 @@ export default function Layout() {
           </button>
         )}
         <div className="spacer" />
+        {/* Plan meter — cheap /billing/status poll; hidden for agent-scoped
+            members and workspaces on the uncapped internal plan. */}
+        {!data?.agent_scope && <PlanMeter />}
         <Link to="/docs?guide=operator" className="docs-link" style={{ fontSize: 12, opacity: 0.75 }}>
           <span className="label">Operator guide</span><span className="icon"><BookOpen size={16} /></span>
         </Link>
@@ -380,6 +438,7 @@ export default function Layout() {
             <div style={{ display: railTab === 'ask' ? 'contents' : 'none' }}>
               <AskJanis
                 channelId={data!.support_channel_id!}
+                seedMessage={askSeed ?? undefined}
                 onClose={hasBoth ? undefined : () => setRailOpen(false)}
               />
             </div>

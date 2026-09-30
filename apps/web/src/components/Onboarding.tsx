@@ -41,9 +41,6 @@ export default function Onboarding() {
       if (s.done && event) trackOnce(`step:${s.key}`, event);
     }
     if (data.complete) trackOnce('onboarding_complete', 'onboarding_complete');
-    // Zero done steps on first load ≈ a fresh signup — the only client-side
-    // signal we have, since account creation happens inside OAuth callbacks.
-    if (data.steps.every((s) => !s.done)) trackOnce('sign_up', 'sign_up');
   }, [data]);
 
   // Channel steps land on the first agent's Channels tab (management is per-agent now).

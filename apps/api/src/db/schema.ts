@@ -1249,3 +1249,23 @@ export const hookSubscriptions = pgTable(
   },
   (t) => [index('hook_subscriptions_agent_event').on(t.agentId, t.event)],
 );
+
+/**
+ * In-product activation events (discovery-card clicks, tab views) — the
+ * server-side funnel complement to GA4's marketing funnel. Fire-and-forget
+ * writes from POST /api/track; queried by hand for activation metrics.
+ */
+export const analyticsEvents = pgTable(
+  'analytics_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    event: text('event').notNull(),
+    meta: jsonb('meta'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('analytics_events_ws_time').on(t.workspaceId, t.createdAt)],
+);

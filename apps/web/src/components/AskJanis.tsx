@@ -142,10 +142,13 @@ export function AskJanis({
   channelId,
   badge,
   onClose,
+  seedMessage,
 }: {
   channelId: string;
   badge?: string;
   onClose?: () => void; // omitted when the rail's own tab strip handles close
+  // Auto-sent once on load — discovery cards / ?rail=ask&q= deeplinks.
+  seedMessage?: string;
 }) {
   const navigate = useNavigate();
   const visitor = useRef(visitorId()).current;
@@ -439,6 +442,16 @@ export function AskJanis({
       setSending(false);
     }
   };
+
+  // Seeded questions fire once each — tracked by value so a second card click
+  // (or a fresh ?q= link) sends its own question.
+  const seededFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!seedMessage || !loaded || seedMessage === seededFor.current) return;
+    seededFor.current = seedMessage;
+    void send(seedMessage, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedMessage, loaded]);
 
   const submit = () => {
     const ready = pending.filter((p) => !p.uploading);

@@ -17,10 +17,29 @@ function ensureVapid(): boolean {
   return true;
 }
 
+/** Per-event notification prefs — a member can mute a whole alert class
+ *  (e.g. keyword pings) without turning off handoffs. Missing key = on. */
+export type NotifyEvent =
+  | 'handoff'
+  | 'assigned'
+  | 'keyword'
+  | 'mention'
+  | 'digest'
+  | 'approval'
+  | 'eval';
+
 interface NotifyPrefs {
   push?: boolean;
   email?: boolean;
   sound?: boolean;
+  events?: Partial<Record<NotifyEvent, boolean>>;
+}
+
+/** Alert type → the pref bucket that can mute it. */
+export function eventForAlertType(type: string): NotifyEvent {
+  if (type === 'keyword') return 'keyword';
+  if (type === 'approval_request') return 'approval';
+  return 'handoff';
 }
 
 /** Titles shared by in-app toasts, push, and email — one alert, one message. */
@@ -128,7 +147,7 @@ export async function notifyWorkspace(
   db: Db,
   workspaceId: string,
   notification: { title: string; body: string; url?: string },
-  opts: { userIds?: string[]; agentId?: string } = {},
+  opts: { userIds?: string[]; agentId?: string; event?: NotifyEvent } = {},
 ): Promise<void> {
   let members = (await workspaceMembers(db, workspaceId)).map((m) => m.user);
   // Agent-scoped users hold no membership — pull them in when the alert is
@@ -148,9 +167,6 @@ export async function notifyWorkspace(
     }
     members = members.filter((m) => !hidden.has(m.id));
   }
-  const recipients = members.filter((m) => !opts.userIds || opts.userIds.includes(m.id));
-  if (recipients.length === 0) return;
-
   // Per-agent notify overrides (agent_members.notify_prefs) win field-wise
   // over the user's workspace prefs for this agent's alerts.
   const overrideByUser = new Map<string, NotifyPrefs>();
@@ -161,10 +177,30 @@ export async function notifyWorkspace(
       .where(eq(agentMembers.agentId, opts.agentId));
     for (const r of rows) if (r.prefs) overrideByUser.set(r.userId, r.prefs as NotifyPrefs);
   }
-  const prefs = (u: (typeof recipients)[number]): NotifyPrefs => ({
-    ...(u.notifyPrefs as NotifyPrefs),
-    ...(overrideByUser.get(u.id) ?? {}),
-  });
+  const prefs = (u: (typeof members)[number]): NotifyPrefs => {
+    const base = u.notifyPrefs as NotifyPrefs;
+    const over = overrideByUser.get(u.id);
+    // events merge per-key — an agent override muting 'keyword' keeps the
+    // member's workspace-level 'digest: false' instead of wiping the map
+    return {
+      ...base,
+      ...over,
+      ...(base?.events || over?.events
+        ? { events: { ...base?.events, ...over?.events } }
+        : {}),
+    };
+  };
+
+  // Targeted pages to an owner count as 'assigned' events; broadcasts use the
+  // caller's event kind. A muted event drops the member entirely — push and
+  // email alike.
+  const event = opts.event ?? (opts.userIds?.length ? 'assigned' : 'handoff');
+  const recipients = members.filter(
+    (m) =>
+      (!opts.userIds || opts.userIds.includes(m.id)) &&
+      prefs(m).events?.[event] !== false,
+  );
+  if (recipients.length === 0) return;
 
   const pushUserIds = recipients.filter((m) => prefs(m).push !== false).map((m) => m.id);
   const emailAddrs = recipients.filter((m) => prefs(m).email !== false).map((m) => m.email);

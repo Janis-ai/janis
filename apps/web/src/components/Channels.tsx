@@ -585,6 +585,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
   });
   return (
     <form
+      className="branding-form"
       style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, maxWidth: 460 }}
       onSubmit={(e) => {
         e.preventDefault();
@@ -704,7 +705,73 @@ function WebchatBranding({ channel }: { channel: Channel }) {
         <button className="btn" disabled={save.isPending}>Save appearance</button>
         {msg && <span className="muted">{msg}</span>}
       </div>
+      <WidgetPreview
+        accent={f.accent}
+        title={f.title || channel.name}
+        subtitle={f.subtitle || 'Powered by Janis'}
+        greeting={f.greeting}
+        logo_url={f.logo_url}
+        quick_replies={parseReplies(f.quick_replies)}
+      />
     </form>
+  );
+}
+
+/** Static mock of the embedded widget — reflects the draft branding so the
+ *  operator sees accent/logo/greeting changes before saving. */
+function WidgetPreview({
+  accent,
+  title,
+  subtitle,
+  greeting,
+  logo_url,
+  quick_replies,
+}: {
+  accent: string;
+  title: string;
+  subtitle: string;
+  greeting: string;
+  logo_url: string;
+  quick_replies: string[];
+}) {
+  return (
+    <div className="widget-preview">
+      <div className="wp-head" style={{ background: accent }}>
+        {logo_url ? (
+          <img src={logo_url} alt="" className="wp-logo" />
+        ) : (
+          <span className="wp-logo wp-logo-dot" />
+        )}
+        <div>
+          <div className="wp-title">{title}</div>
+          <div className="wp-sub">{subtitle}</div>
+        </div>
+      </div>
+      <div className="wp-body">
+        {greeting && <div className="wp-msg wp-msg-out">{greeting}</div>}
+        <div className="wp-msg wp-msg-in" style={{ background: accent }}>
+          Hi — how much is the pro plan?
+        </div>
+        {quick_replies.length > 0 && (
+          <div className="wp-qr">
+            {quick_replies.map((q) => (
+              <span key={q} className="wp-qr-btn" style={{ borderColor: accent, color: accent }}>
+                {q}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="wp-foot">
+        <span className="wp-input muted">Type a message…</span>
+        <span className="wp-send" style={{ background: accent }}>
+          ↑
+        </span>
+      </div>
+      <div className="wp-bubble" style={{ background: accent }}>
+        {logo_url ? <img src={logo_url} alt="" /> : '💬'}
+      </div>
+    </div>
   );
 }
 

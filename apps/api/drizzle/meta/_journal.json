@@ -575,6 +575,13 @@
       "when": 1790832000004,
       "tag": "0081_hook_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1790832000005,
+      "tag": "0082_analytics_events",
+      "breakpoints": true
     }
   ]
 }

@@ -1505,23 +1505,47 @@ export function agentRoutes(db: Db) {
       .where(eq(agents.id, c.req.param('id')))
       .limit(1);
     if (!agent?.hosted) return c.json({ error: 'tests replay through the hosted agent' }, 400);
-    // Optional body — an empty POST is the baseline run.
+    // Optional body — an empty POST is the baseline run. {system_prompt} and/or
+    // {model} replay the suite against a candidate config (A/B experiment,
+    // model comparison) — nothing is saved back to the agent config.
     const raw = await c.req.json().catch(() => ({}));
-    const parsed = z.object({ system_prompt: z.string().max(20_000).optional() }).safeParse(raw);
+    const parsed = z
+      .object({
+        system_prompt: z.string().max(20_000).optional(),
+        model: z.string().min(1).max(200).optional(),
+      })
+      .safeParse(raw);
     const candidate = parsed.success ? parsed.data.system_prompt : undefined;
+    const candidateModel = parsed.success ? parsed.data.model : undefined;
     const rows = await db
       .select()
       .from(agentTests)
       .where(eq(agentTests.agentId, agent.id))
       .orderBy(asc(agentTests.createdAt));
     const batchId = randomUUID();
-    const kind = candidate !== undefined ? 'ab' : 'manual';
+    const isExperiment = candidate !== undefined || candidateModel !== undefined;
+    const kind = isExperiment ? 'ab' : 'manual';
     const results: { id: string; name: string; passed: boolean | null; reason: string }[] = [];
     for (const test of rows) {
-      const run = await runAgentTest(db, agent, test, candidate !== undefined ? { systemPrompt: candidate } : undefined);
+      // An unrunnable candidate (bad model id, unpriced metered model, key
+      // failure) shouldn't kill the whole batch — mark the test unrunnable.
+      const run = await runAgentTest(db, agent, test, isExperiment
+        ? {
+            ...(candidate !== undefined ? { systemPrompt: candidate } : {}),
+            ...(candidateModel !== undefined ? { model: candidateModel } : {}),
+          }
+        : undefined
+      ).catch((e) => ({
+        at: new Date().toISOString(),
+        passed: null,
+        reply: null,
+        tools: [],
+        model: candidateModel,
+        reason: e instanceof Error ? e.message : 'run failed',
+      }));
       await recordRun(db, { agent, test, result: run, batchId, kind });
       // Candidate runs are experiments — don't overwrite the baseline's verdict.
-      if (candidate === undefined) {
+      if (!isExperiment) {
         await db.update(agentTests).set({ lastRun: run as never }).where(eq(agentTests.id, test.id));
       }
       results.push({ id: test.id, name: test.name, passed: run.passed, reason: run.reason });

@@ -151,7 +151,7 @@ export async function enrichHandoff(
         db,
         agent.workspaceId,
         await alertNotification(db, alert, conv, agent, summary ?? reason),
-        { agentId: agent.id, userIds: assigneeId ? [assigneeId] : undefined },
+        { agentId: agent.id, userIds: assigneeId ? [assigneeId] : undefined, event: 'handoff' },
       );
     }
   } catch {

@@ -96,6 +96,10 @@ before typecheck/tests/dev.
 - Multi-instance: DONE — bus_events SSE relay, viewers + voice_queue tables,
   sweeper_locks leader election (sweeps, gmail poll, digests). Deploy raises
   --max-instances to 3 (MAX_INSTANCES env override) on DATABASE_URL mode.
+  In-process-state audit (2026-10): convRuns guarded by a Postgres advisory
+  lock (convLock.ts), voice replies pull from voice_queue, Slack dedup is
+  DB-backed (payload->>slack_ts) with an in-memory fast path only; remaining
+  module Maps are caches or cosmetic (typing bubble, thread status).
 - Scale tail (2026-10): DB pool explicit — DB_POOL_MAX (default 8) sizes the
   postgres-js pool per instance (≤24 conns at 3 instances vs Neon pooler
   budget); job runner claims all due rows then runs handlers JOB_CONCURRENCY
@@ -427,9 +431,12 @@ before typecheck/tests/dev.
   console → Branches → new branch "from a point in time" → psql into the
   branch endpoint, verify a known row (e.g. newest campaign_send) → delete
   branch. For real restores prefer branching + cutover over overwriting the
-  primary branch. Still missing: Cloud Monitoring 5xx/latency alert policy
-  → Slack webhook (log-based metric on status>=500 in the run.googleapis
-  log; janis.alert ERROR markers already exist as an anchor).
+  primary branch.
+- Cloud Monitoring alerts: scripts/setup-alerts.sh (CLI-able, needs
+  ALERT_SLACK_WEBHOOK) — Slack webhook channel + log-based janis_api_5xx
+  metric (>5/min for 60s) + run.googleapis p95>3s/5m policy. Run once with
+  gcloud auth'd to janis-prod-mn; janis.alert ERROR markers remain as an
+  extra anchor for log-based alerts.
 
 **Enterprise checklist**
 - Audit log: DONE — audit_log table + audit() helper; instrumented on agent/

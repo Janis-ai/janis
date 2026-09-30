@@ -158,6 +158,9 @@ export function userRoutes(db: Db) {
             push: z.boolean().optional(),
             email: z.boolean().optional(),
             sound: z.boolean().optional(),
+            // per-alert-class mutes — { handoff: false } silences handoff
+            // pages without touching push/email switches
+            events: z.record(z.string(), z.boolean()).optional(),
           })
           .optional(),
         password: z
@@ -186,11 +189,16 @@ export function userRoutes(db: Db) {
           push?: boolean;
           email?: boolean;
           sound?: boolean;
+          events?: Record<string, boolean>;
         };
         updates.notifyPrefs = {
           push: body.notify.push ?? current.push ?? true,
           email: body.notify.email ?? current.email ?? true,
           sound: body.notify.sound ?? current.sound ?? true,
+          // events merge — a toggle updates one key without wiping the rest
+          ...(body.notify.events || current.events
+            ? { events: { ...current.events, ...body.notify.events } }
+            : {}),
         };
       }
       if (body.password) {

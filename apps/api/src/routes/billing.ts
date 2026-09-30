@@ -39,6 +39,25 @@ export function billingRoutes(db: Db) {
     c.json({ ...allRates(), plan: await effectivePlanKey(db, c.get('workspaceId')) }),
   );
 
+  // GET /api/billing/status — cheap sidebar meter: plan + messages used vs
+  // included. No Stripe sync (unlike /summary) so it's safe to poll.
+  app.get('/status', async (c) => {
+    const ws = c.get('workspaceId');
+    const [planKey, used] = await Promise.all([
+      effectivePlanKey(db, ws),
+      messagesInPeriod(db, ws),
+    ]);
+    const plan = planFor(planKey);
+    return c.json({
+      plan_key: planKey,
+      plan_name: plan.name,
+      used,
+      included: plan.includedMessages,
+      pct: plan.includedMessages ? Math.min(100, Math.round((used / plan.includedMessages) * 100)) : 0,
+      capped: plan.overagePer1kCents === null,
+    });
+  });
+
   // GET /api/billing/summary?period=YYYY-MM — usage + estimated invoice
   app.get('/summary', async (c) => {
     const workspaceId = c.get('workspaceId');

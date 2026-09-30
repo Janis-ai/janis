@@ -6,6 +6,7 @@ import { useConversations, useAgents, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
 import { Avatar, channelLabel, displayName, Empty, StateBadge, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
+import DiscoveryCards from '../components/DiscoveryCards';
 import { Moon, Save, Star } from 'lucide-react';
 import { usePrompt } from '../components/Prompt';
 import { isEditableTarget } from '../lib/keys';
@@ -153,6 +154,16 @@ export default function Conversations() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [agentId, setAgentId] = useSticky('conv.agent', '');
+  // Deep link: /conversations?agent=<id> seeds the sticky agent filter once,
+  // then strips itself so the URL doesn't fight later filter changes.
+  useEffect(() => {
+    const a = params.get('agent');
+    if (!a) return;
+    setAgentId(a);
+    params.delete('agent');
+    setParams(params, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [mine, setMine] = useSticky('conv.mine', false);
   const [query, setQuery] = useSticky('conv.query', '');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -289,6 +300,7 @@ export default function Conversations() {
     <>
       {promptEl}
       <h1 className="page-title">Conversations</h1>
+      <DiscoveryCards />
       <Onboarding />
       <div className="filters">
         <button

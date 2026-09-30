@@ -160,11 +160,11 @@ export default function Billing() {
                       {usd(p.base_cents)}<span className="muted" style={{ fontSize: 12 }}>/mo</span>
                     </div>
                     <div className="muted" style={{ fontSize: 13 }}>
-                      {p.included_messages.toLocaleString()} messages/mo
+                      {p.included_messages.toLocaleString()} messages included / month
                       <br />
                       {p.overage_per_1k_cents === null
                         ? 'hard cap beyond limit'
-                        : `${usd(p.overage_per_1k_cents)}/1k over`}
+                        : `then ${usd(p.overage_per_1k_cents)} per additional 1,000 messages`}
                     </div>
                     {current ? (
                       <div className="muted" style={{ marginTop: 10 }}>Current plan</div>

@@ -51,6 +51,7 @@ import { eventRoutes } from './routes/events.js';
 import { opsRoutes } from './routes/ops.js';
 import { crmRoutes } from './routes/crm.js';
 import { viewRoutes } from './routes/views.js';
+import { trackRoutes } from './routes/track.js';
 import { webchatRoutes } from './routes/webchat.js';
 import { legacyWebhookRoutes } from './routes/legacy.js';
 import { legacyApiRoutes } from './routes/legacyApi.js';
@@ -256,6 +257,7 @@ export function createApp(db: Db) {
   api.route('/billing', billingRoutes(db));
   api.route('/workspace', workspaceRoutes(db));
   api.route('/views', viewRoutes(db));
+  api.route('/track', trackRoutes(db));
   app.route('/api', api);
 
   // Uploaded attachments are stored in Postgres (durable across deploys);
