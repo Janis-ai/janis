@@ -265,7 +265,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
         />
       )}
       {activeTab === 'tools' && agent.hosted && <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />}
-      {activeTab === 'tests' && agent.hosted && <TestsTab agentId={agent.id} isAdmin={isAdmin} />}
+      {activeTab === 'tests' && agent.hosted && <TestsTab agentId={agent.id} agent={agent} isAdmin={isAdmin} />}
       {activeTab === 'connection' && (
         <ConnectionTab
           agent={agent}
@@ -2383,11 +2383,25 @@ interface AgentTest {
   created_at: string;
 }
 
-function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
+interface EvalBatch {
+  batch_id: string;
+  kind: 'manual' | 'ab' | 'scheduled';
+  at: string;
+  passed: number;
+  failed: number;
+  unrunnable: number;
+  results: { test_id: string; name: string; passed: boolean | null; reason: string; model: string | null }[];
+}
+
+function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; isAdmin: boolean }) {
   const qc = useQueryClient();
   const { data } = useQuery({
     queryKey: ['agent-tests', agentId],
     queryFn: () => api<{ tests: AgentTest[] }>(`/api/agents/${agentId}/tests`),
+  });
+  const { data: runsData } = useQuery({
+    queryKey: ['agent-test-runs', agentId],
+    queryFn: () => api<{ batches: EvalBatch[] }>(`/api/agents/${agentId}/test-runs`),
   });
   const [running, setRunning] = useState<string | 'all' | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -2478,9 +2492,26 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
     onError: (e) => setErr(e.message),
   });
 
+  // Scheduled suite runs — eval_interval_hours in the agent config; the
+  // sweeper enqueues eval.run jobs and alerts the workspace on regressions.
+  const setSchedule = useMutation({
+    mutationFn: (hours: number) => {
+      const config = { ...(agent.config ?? {}) } as AgentConfig;
+      if (hours) config.eval_interval_hours = hours;
+      else delete config.eval_interval_hours;
+      return api(`/api/agents/${agentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ config }),
+      });
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['agents'] }),
+    onError: (e) => setErr(e.message),
+  });
+
   const tests = data?.tests ?? [];
   const passed = tests.filter((t) => t.last_run?.passed === true).length;
   const failed = tests.filter((t) => t.last_run?.passed === false).length;
+  const batches = runsData?.batches ?? [];
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
@@ -2513,6 +2544,25 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
         <button className="btn sm" onClick={() => setNewOpen((v) => !v)}>
           + New test
         </button>
+        {tests.length > 0 && (
+          <label
+            className="row"
+            style={{ gap: 6, marginLeft: 'auto', fontSize: 12, whiteSpace: 'nowrap' }}
+            title="Replay the suite on a schedule — the workspace is alerted when a run regresses"
+          >
+            <span className="muted">Auto-run</span>
+            <select
+              value={agent.config?.eval_interval_hours ?? 0}
+              disabled={setSchedule.isPending}
+              onChange={(e) => setSchedule.mutate(Number(e.target.value))}
+            >
+              <option value={0}>off</option>
+              <option value={6}>every 6h</option>
+              <option value={24}>daily</option>
+              <option value={168}>weekly</option>
+            </select>
+          </label>
+        )}
       </div>
       <div className="muted" style={{ fontSize: 12 }}>
         Save a transcript from any conversation ("Save as test") — each point where a
@@ -2870,6 +2920,50 @@ function TestsTab({ agentId, isAdmin }: { agentId: string; isAdmin: boolean }) {
           </>
         );
       })()}
+
+      {batches.length > 0 && (
+        <div>
+          <div className="muted" style={{ fontSize: 12, fontWeight: 600, margin: '4px 0 6px' }}>
+            Run history
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {batches.map((b) => (
+              <details key={b.batch_id} style={{ fontSize: 12 }}>
+                <summary style={{ cursor: 'pointer' }}>
+                  <span className="muted">{timeAgo(b.at)} ago</span>
+                  {' '}
+                  <span
+                    className={`badge ${b.failed ? 'warn' : 'active'}`}
+                    style={{ marginLeft: 4 }}
+                  >
+                    {b.failed
+                      ? `${b.passed}/${b.passed + b.failed} passing`
+                      : `${b.passed} passing`}
+                  </span>
+                  <span className="muted" style={{ marginLeft: 6 }}>
+                    {b.kind === 'scheduled' ? 'scheduled' : b.kind === 'ab' ? 'A/B' : 'manual'}
+                    {b.unrunnable > 0 && ` · ${b.unrunnable} unrunnable`}
+                  </span>
+                </summary>
+                <div style={{ margin: '6px 0 6px 16px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {b.results.map((r) => (
+                    <div key={r.test_id}>
+                      <span
+                        className={`badge ${r.passed === true ? 'active' : r.passed === false ? 'warn' : ''}`}
+                      >
+                        {r.passed === true ? '✓' : r.passed === false ? '✗' : '—'}
+                      </span>
+                      {' '}
+                      {r.name}
+                      {r.reason && <span className="muted"> — {r.reason}</span>}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            ))}
+          </div>
+        </div>
+      )}
       </ReadOnly>
     </div>
   );

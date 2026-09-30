@@ -31,7 +31,7 @@ npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod)
 - Repo lives at ~/repos/janis (moved out of iCloud Drive — sync was corrupting
   files mid-edit). Do NOT run the API with .pglite inside a synced dir;
   apps/api/.env sets PGLITE_DIR=~/.janis/pglite.
-- Only ONE tsx watch may run against a PGlite dir at a time; kill extras (pkill -f "tsx watch src/index.ts") before restarting.
+- Only ONE tsx watch may run against a PGlite dir at a time; kill extras (pkill -f "tsx watch src/index.ts") before restarting. A wedged watch killed mid-write has now corrupted the dev dir twice (RuntimeError Aborted() at boot) — prefer SIGTERM + wait over -9, and keep ~/.janis/pglite.broken-* copies before recreating.
 
 ## Billing / Stripe
 
@@ -319,9 +319,17 @@ before typecheck/tests/dev.
   webhooks have retries + deliveries/replay UI (DONE — see Webhook ops).
 - Intent classification: first-message only — no drift reclassification,
   confidence + manual override, sentiment, auto-topic clustering.
-- Eval suite: CSV import + A/B runs exist; no scheduled runs, no regression
-  alerting (pass-rate drop → Slack/email), no run history/diff dashboards,
-  no multi-model compare, no auto-generated tests from rescued conversations.
+- Eval suite: CSV import + A/B runs + scheduled runs + regression alerting +
+  run history DONE — agent_test_runs batches every execution (manual/ab/
+  scheduled); config.eval_interval_hours + sweepEvals enqueue eval.run jobs
+  (leader-locked, per-agent dedup, run_at heartbeat vs the 5min reclaim);
+  detectRegression alerts on pass→fail flips, ≥20pp pass-rate drops, or an
+  unrunnable suite via notifyWorkspace + janis.alert log (adjacent-batch
+  compare — steady-state red doesn't re-alert). GET /agents/:id/test-runs +
+  history/Auto-run UI on the tests tab, 'eval' SSE event refreshes it.
+  Missing: diff dashboards beyond batch views, multi-model compare,
+  auto-generated tests from rescued conversations (checkpointIndices
+  exists — the Save-as-test flow doesn't auto-suggest yet).
 
 **Outbound (new — v1 shipped)**
 - POST /api/channels/:id/send {to,text,subject?,whatsapp_template?} — find-or-

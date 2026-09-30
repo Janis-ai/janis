@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { AgentConfig } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentConnections, agentMembers, agentSecrets, agentTests, alertRules, alerts, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, alertRules, alerts, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import {
   adminOnly,
   agentAdminOnly,
@@ -29,6 +29,8 @@ import {
 import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
 import { checkpointIndices, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
+import { recordRun } from '../lib/evalRuns.js';
+import { randomUUID } from 'node:crypto';
 import { effectiveMeteredModel } from '../lib/llm.js';
 import { llmModelsResult } from '../lib/llmModels.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
@@ -1418,6 +1420,13 @@ export function agentRoutes(db: Db) {
       .limit(1);
     if (!test) return c.json({ error: 'not found' }, 404);
     const run = await runAgentTest(db, agent, test);
+    await recordRun(db, {
+      agent,
+      test,
+      result: run,
+      batchId: randomUUID(),
+      kind: 'manual',
+    });
     const [updated] = await db
       .update(agentTests)
       .set({ lastRun: run as never })
@@ -1474,9 +1483,12 @@ export function agentRoutes(db: Db) {
       .from(agentTests)
       .where(eq(agentTests.agentId, agent.id))
       .orderBy(asc(agentTests.createdAt));
+    const batchId = randomUUID();
+    const kind = candidate !== undefined ? 'ab' : 'manual';
     const results: { id: string; name: string; passed: boolean | null; reason: string }[] = [];
     for (const test of rows) {
       const run = await runAgentTest(db, agent, test, candidate !== undefined ? { systemPrompt: candidate } : undefined);
+      await recordRun(db, { agent, test, result: run, batchId, kind });
       // Candidate runs are experiments — don't overwrite the baseline's verdict.
       if (candidate === undefined) {
         await db.update(agentTests).set({ lastRun: run as never }).where(eq(agentTests.id, test.id));
@@ -1491,6 +1503,55 @@ export function agentRoutes(db: Db) {
         unrunnable: results.filter((r) => r.passed === null).length,
       },
     });
+  });
+
+  // Run history — recent batches newest-first, each with its per-test
+  // verdicts. Powers the tests tab's history view and regression diffs.
+  app.get('/:id/test-runs', agentMember, async (c) => {
+    const rows = await db
+      .select()
+      .from(agentTestRuns)
+      .where(eq(agentTestRuns.agentId, c.req.param('id')))
+      .orderBy(desc(agentTestRuns.createdAt))
+      .limit(600);
+    const batches = new Map<
+      string,
+      {
+        batch_id: string;
+        kind: string;
+        at: string;
+        passed: number;
+        failed: number;
+        unrunnable: number;
+        results: { test_id: string; name: string; passed: boolean | null; reason: string; model: string | null }[];
+      }
+    >();
+    for (const r of rows) {
+      let b = batches.get(r.batchId);
+      if (!b) {
+        b = {
+          batch_id: r.batchId,
+          kind: r.kind,
+          at: r.createdAt.toISOString(),
+          passed: 0,
+          failed: 0,
+          unrunnable: 0,
+          results: [],
+        };
+        batches.set(r.batchId, b);
+      }
+      if (r.passed === true) b.passed++;
+      else if (r.passed === false) b.failed++;
+      else b.unrunnable++;
+      b.results.push({
+        test_id: r.testId,
+        name: r.testName,
+        passed: r.passed,
+        reason: r.reason,
+        model: r.model,
+      });
+    }
+    return c.json({ batches: [...batches.values()].slice(0, 30) });
   });
 
   return app;

@@ -13,6 +13,7 @@ import { refreshKnowledgeSource } from './urlSource.js';
 import { dispatchCampaignStep, stepStragglersExist } from './campaigns.js';
 import { checkSendPolicy, policyFor } from './sendPolicy.js';
 import { queueCrmActivity, runCrmSyncJob, runCrmWritebackJob } from './crm.js';
+import { runScheduledEval } from './evalRuns.js';
 
 /** Job payload for 'outbound.send' — one recipient's send, replayable. */
 export interface OutboundSendJob {
@@ -176,7 +177,11 @@ async function runKnowledgeRefresh(db: Db, workspaceId: string, p: { fileId?: st
   await refreshKnowledgeSource(db, file);
 }
 
-const HANDLERS: Record<string, (db: Db, workspaceId: string, payload: never) => Promise<void>> = {
+type JobRow = typeof jobs.$inferSelect;
+const HANDLERS: Record<
+  string,
+  (db: Db, workspaceId: string, payload: never, job: JobRow) => Promise<void>
+> = {
   'outbound.send': (db, ws, p) => runOutboundSend(db, ws, p as unknown as OutboundSendJob),
   'knowledge.refresh': (db, ws, p) => runKnowledgeRefresh(db, ws, p as { fileId?: string }),
   'campaign.step': async (db, ws, p) => {
@@ -220,6 +225,15 @@ const HANDLERS: Record<string, (db: Db, workspaceId: string, payload: never) => 
     const { connection_id } = p as { connection_id?: string };
     if (!connection_id) throw new Error('crm.writeback job missing connection_id');
     await runCrmWritebackJob(db, connection_id);
+  },
+  'eval.run': async (db, ws, p, job) => {
+    const { agentId } = p as { agentId?: string };
+    if (!agentId) throw new Error('eval.run job missing agentId');
+    // Suites can outrun the 5-minute stale reclaim — bump run_at between
+    // tests so a healthy long run isn't re-claimed mid-flight.
+    await runScheduledEval(db, ws, agentId, () =>
+      db.update(jobs).set({ runAt: new Date() }).where(eq(jobs.id, job.id)),
+    );
   },
 };
 
@@ -269,7 +283,7 @@ export async function runJobs(db: Db): Promise<number> {
     const handler = HANDLERS[job.type];
     try {
       if (!handler) throw new Error(`unknown job type ${job.type}`);
-      await handler(db, job.workspaceId, job.payload as never);
+      await handler(db, job.workspaceId, job.payload as never, job);
       await db
         .update(jobs)
         .set({ status: 'done', finishedAt: new Date(), lastError: null })

@@ -35,6 +35,11 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
     source.addEventListener('message', refresh);
     source.addEventListener('conversation', refresh);
     source.addEventListener('suggestion', refresh);
+    // Eval suite runs (scheduled/manual) — refresh the tests tab's data.
+    source.addEventListener('eval', () => {
+      void qc.invalidateQueries({ queryKey: ['agent-tests'] });
+      void qc.invalidateQueries({ queryKey: ['agent-test-runs'] });
+    });
     // Visitor typing — ephemeral; routed to the open chat, never a refetch.
     source.addEventListener('typing', (e) => {
       try {

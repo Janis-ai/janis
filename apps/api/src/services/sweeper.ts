@@ -13,6 +13,7 @@ import { renewOutlookWatches, sweepOutlook } from './outlookSweep.js';
 import { sweepWebhookRetries } from '../lib/webhooks.js';
 import { runJobs, enqueueJob } from '../lib/jobs.js';
 import { sweepCampaigns } from '../lib/campaigns.js';
+import { sweepEvals } from '../lib/evalRuns.js';
 
 /**
  * Claim or renew a named singleton lock. Only the holder (or anyone, once the
@@ -84,6 +85,7 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
         .then((n) => { if (n) console.log(`jobs: ran ${n}`); })
         .catch((err) => console.error('runJobs error:', err));
       void sweepCampaigns(db).catch((err) => console.error('sweepCampaigns error:', err));
+      void sweepEvals(db).catch((err) => console.error('sweepEvals error:', err));
       void db
         .delete(busEvents)
         .where(lt(busEvents.createdAt, new Date(Date.now() - 10 * 60_000)))

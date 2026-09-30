@@ -791,6 +791,37 @@ export const agentTests = pgTable(
   (t) => [index('agent_tests_agent').on(t.agentId)],
 );
 
+// Every regression-suite execution — manual, A/B candidate, or scheduled —
+// lands here grouped by batch_id. test_id is NOT a FK: a deleted test's
+// history stays readable (test_name snapshots the label).
+export const agentTestRuns = pgTable(
+  'agent_test_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    testId: uuid('test_id').notNull(),
+    testName: text('test_name').notNull().default(''),
+    /** All rows from one suite run share this id — batch = the diffable unit. */
+    batchId: uuid('batch_id').notNull(),
+    kind: text('kind', { enum: ['manual', 'ab', 'scheduled'] }).notNull(),
+    /** null = unrunnable (no LLM, empty reply, judge unreadable). */
+    passed: boolean('passed'),
+    reason: text('reason').notNull().default(''),
+    reply: text('reply'),
+    model: text('model'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('agent_test_runs_agent_batch').on(t.agentId, t.batchId),
+    index('agent_test_runs_test').on(t.testId, t.createdAt),
+  ],
+);
+
 // Per-agent secrets (API keys for tool calls) — AES-256-GCM encrypted at rest.
 // Write-only via the API: values are never returned after creation.
 export const agentSecrets = pgTable(

@@ -217,6 +217,9 @@ export const AgentConfig = z.object({
   builtin_tools: z.array(z.string()).optional(),
   // escalation: re-alert when a handoff stays unclaimed past N minutes
   sla_minutes: z.number().min(1).max(1440).optional(),
+  // eval suite: replay saved regression tests every N hours (unset = off).
+  // Scheduled runs record to agent_test_runs and alert on pass-rate drops.
+  eval_interval_hours: z.number().min(1).max(720).optional(),
   // routing: assign handoffs to the least-loaded workspace member
   auto_assign: z.boolean().optional(),
   // intent taxonomy — labels the classifier picks from on each conversation's
@@ -690,6 +693,12 @@ export const StreamEvent = z.discriminatedUnion('type', [
       conversation_id: z.string(),
       viewers: z.array(z.object({ id: z.string(), name: z.string().nullable() })),
     }),
+  }),
+  // An eval-suite batch completed — the tests tab refreshes its run history.
+  // regressed means the workspace was also alerted (push/email + janis.alert log).
+  z.object({
+    type: z.literal('eval'),
+    data: z.object({ agent_id: z.string(), batch_id: z.string(), regressed: z.boolean() }),
   }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEvent>;
