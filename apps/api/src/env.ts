@@ -2,6 +2,14 @@ export const env = {
   port: Number(process.env.PORT ?? 8787),
   databaseUrl: process.env.DATABASE_URL ?? '',
   pgliteDir: process.env.PGLITE_DIR ?? '.pglite',
+  // Explicit pool ceiling — postgres-js defaults to 10/instance, which is
+  // fine at 3 Cloud Run instances but an accident at 10. Sized against the
+  // Neon pooler, not the per-instance default.
+  dbPoolMax: Number(process.env.DB_POOL_MAX) || 8,
+  // Deploys run migrations as a pre-deploy step (deploy-gcp.sh); instances
+  // boot against an already-current schema instead of racing the migrator.
+  // Local/PGlite mode still migrates at boot.
+  skipDbMigrate: process.env.SKIP_DB_MIGRATE === '1',
   sessionSecret: process.env.SESSION_SECRET ?? 'dev-insecure-secret',
   webOrigin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
   apiOrigin: process.env.API_ORIGIN ?? 'http://localhost:8787',

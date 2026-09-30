@@ -71,6 +71,14 @@ if db_url:
                     '--role', 'roles/secretmanager.secretAccessor'],
                    capture_output=True)
     SECRET_BINDINGS.append('DATABASE_URL=janis-database-url:latest')
+    # Pre-deploy migration: schema is current before new instances boot, so
+    # they run with SKIP_DB_MIGRATE and never race the migrator behind the
+    # startup probe (the 00418/00424 deploy flakes). Failing here aborts the
+    # deploy before traffic shifts — the URL stays in-process, never on disk.
+    subprocess.run(['npm', 'run', 'db:migrate', '-w', 'apps/api'],
+                   env={**os.environ, 'DATABASE_URL': db_url, 'PGLITE_DIR': ''},
+                   check=True)
+    envs['SKIP_DB_MIGRATE'] = '1'
 else:
     envs['PGLITE_DIR'] = '/app/data/pglite'
 

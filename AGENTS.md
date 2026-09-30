@@ -74,8 +74,15 @@ pglite dir, then `DATABASE_URL=… PGLITE_DIR=… npm run migrate-to-pg -w apps/
 --apply` (idempotent — re-run to catch stragglers). Set DATABASE_URL in
 apps/api/.env.production and redeploy — deploy-gcp.sh stores it in Secret
 Manager and attaches the Cloud SQL connector when the URL uses a
-/cloudsql/… host. --max-instances stays 1: voice bridge, Gmail poller and
-sweeper are still in-process.
+/cloudsql/… host.
+
+Prod migrations run PRE-DEPLOY, not at boot: deploy-gcp.sh executes
+`npm run db:migrate -w apps/api` (scripts/migrate.ts — raw DATABASE_URL, same
+journal-poison fix as migrateDb) inside the build env before updating the
+service, then ships SKIP_DB_MIGRATE=1 so instances boot instantly without
+racing the migrator behind the startup probe. A failed migrate aborts the
+deploy. Dev (no SKIP_DB_MIGRATE) still migrates at boot; tests call
+migrateDb directly.
 
 ## Shared package
 
@@ -89,6 +96,20 @@ before typecheck/tests/dev.
 - Multi-instance: DONE — bus_events SSE relay, viewers + voice_queue tables,
   sweeper_locks leader election (sweeps, gmail poll, digests). Deploy raises
   --max-instances to 3 (MAX_INSTANCES env override) on DATABASE_URL mode.
+- Scale tail (2026-10): DB pool explicit — DB_POOL_MAX (default 8) sizes the
+  postgres-js pool per instance (≤24 conns at 3 instances vs Neon pooler
+  budget); job runner claims all due rows then runs handlers JOB_CONCURRENCY
+  (8)-wide under the sweeper leader lock (claim-first unchanged — crash
+  leaves 'running', reclaimed at attempts<5/5min stale); migrations moved to
+  a pre-deploy step (see Deploy). In-process state audit: safe — TTL caches
+  (cap/token/avatar/greeting/sub), slack channel+thread-status caches
+  (lazy-refill), typing-relay dedup; KNOWN GAPS — convRuns per-conversation
+  agent run-guard is per-instance (two instances could both start a hosted
+  reply for the same conversation on racing inbound; fix = DB-claim row or
+  agent.run job dedup) and meta OAuth `pending` map is same-instance-only
+  (connect flow can die if the callback routes to another instance; fix =
+  DB-backed state or self-contained signed state). Voice bridge has no
+  module state — queue lives in voice_queue.
 - Hosted-voice compliance (partial): paid-plan gate (402 on free),
   VOICE_HOSTED_MAX per-workspace cap (default 3) and VOICE_PROVISION_DAILY
   attempt cap (default 10, counted from usage_events voice_provision rows).
@@ -352,7 +373,17 @@ before typecheck/tests/dev.
   notice). BYOK rows cost 0 — never trip.
   Remaining: CAPTCHA on widget after N messages, blocklisting repeat
   offenders, per-plan cap tiers.
-- Backup/restore runbook (Neon PITR exists — unrehearsed), load test (k6).
+- Load test: scripts/load-test.js (k6) — staged 10→150 RPS on health +
+  session-auth'd reads, p95<800ms / <1% errors thresholds; run against a
+  preview revision, never prod at 150rps without warning. Read-only by
+  design (writes pollute CRM write-back + billing meters).
+- Backup/restore runbook (Neon PITR exists — unrehearsed): rehearsal = Neon
+  console → Branches → new branch "from a point in time" → psql into the
+  branch endpoint, verify a known row (e.g. newest campaign_send) → delete
+  branch. For real restores prefer branching + cutover over overwriting the
+  primary branch. Still missing: Cloud Monitoring 5xx/latency alert policy
+  → Slack webhook (log-based metric on status>=500 in the run.googleapis
+  log; janis.alert ERROR markers already exist as an anchor).
 
 **Enterprise checklist**
 - Audit log: DONE — audit_log table + audit() helper; instrumented on agent/

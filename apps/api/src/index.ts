@@ -9,7 +9,10 @@ import { emitDueDigests } from './services/digest.js';
 import { bus } from './lib/bus.js';
 
 const db = await createDb();
-await migrateDb(db);
+// Prod deploys migrate pre-deploy (deploy-gcp.sh) and set SKIP_DB_MIGRATE —
+// instances then boot fast on an already-current schema instead of racing
+// the advisory lock behind the startup probe.
+if (!env.skipDbMigrate) await migrateDb(db);
 bus.attachDb(db);
 await ensureSeed(db);
 startSweeper(db);

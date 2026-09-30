@@ -24,7 +24,11 @@ export async function createDb(): Promise<Db> {
   if (env.databaseUrl) {
     const { drizzle } = await import('drizzle-orm/postgres-js');
     const { default: postgres } = await import('postgres');
-    const sql = postgres(env.databaseUrl);
+    const sql = postgres(env.databaseUrl, {
+      max: env.dbPoolMax,
+      idle_timeout: 20,
+      connect_timeout: 10,
+    });
     sqlClient = sql as never;
     return drizzle(sql, { schema }) as unknown as Db;
   }

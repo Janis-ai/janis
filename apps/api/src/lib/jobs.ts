@@ -225,17 +225,21 @@ const HANDLERS: Record<string, (db: Db, workspaceId: string, payload: never) => 
 
 const MAX_ATTEMPTS = 5;
 const BATCH = 50;
+// Handlers run in a bounded pool — campaign fan-outs of thousands would
+// otherwise serialize one send per loop iteration per sweep tick.
+const JOB_CONCURRENCY = 8;
 
 /** Drain due jobs — called under the sweeper leader lock each tick. Claim-
  *  first semantics: status flips running before the handler runs, so a crash
  *  leaves the row 'running' (reclaimed on the next pass when attempts <
- *  MAX, else surfaced as failed). */
+ *  MAX, else surfaced as failed). Claims all due rows first, then runs
+ *  handlers JOB_CONCURRENCY-wide. */
 export async function runJobs(db: Db): Promise<number> {
-  let ran = 0;
+  const claimed: (typeof jobs.$inferSelect)[] = [];
   for (let i = 0; i < BATCH; i++) {
     // Claim one due job atomically; leader lock means no cross-instance race,
     // but SKIP LOCKED keeps intra-instance overlap safe too.
-    const claimed = (await db.execute(sql`
+    const raw = (await db.execute(sql`
       update jobs set status = 'running', attempts = attempts + 1
       where id = (
         select id from jobs
@@ -245,18 +249,23 @@ export async function runJobs(db: Db): Promise<number> {
         order by run_at limit 1
         for update skip locked
       )
-      returning *
+      returning id
     `)) as unknown;
-    const rows = (Array.isArray(claimed) ? claimed : (claimed as { rows?: unknown[] }).rows) as
-      | (typeof jobs.$inferSelect)[]
+    const rows = (Array.isArray(raw) ? raw : (raw as { rows?: unknown[] }).rows) as
+      | { id: string }[]
       | undefined;
-    const claimedRow = rows?.[0] as Record<string, unknown> | undefined;
+    const claimedRow = rows?.[0];
     if (!claimedRow) break;
     // db.execute returns raw snake_case keys — re-select through drizzle for
     // the mapped row (workspace_id → workspaceId). Skipping this once made
     // every outbound.send job die with 'channel gone or wrong workspace'.
-    const [job] = await db.select().from(jobs).where(eq(jobs.id, claimedRow.id as string));
-    if (!job) continue;
+    const [job] = await db.select().from(jobs).where(eq(jobs.id, claimedRow.id));
+    if (job) claimed.push(job);
+  }
+  if (!claimed.length) return 0;
+
+  let next = 0;
+  const runOne = async (job: (typeof claimed)[number]) => {
     const handler = HANDLERS[job.type];
     try {
       if (!handler) throw new Error(`unknown job type ${job.type}`);
@@ -267,7 +276,9 @@ export async function runJobs(db: Db): Promise<number> {
         .where(eq(jobs.id, job.id));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const attempts = job.attempts + 1;
+      // The claim's UPDATE already counted this run — job.attempts IS this
+      // attempt's number; adding one would dead-letter a retry early.
+      const attempts = job.attempts;
       await db
         .update(jobs)
         .set(
@@ -281,7 +292,11 @@ export async function runJobs(db: Db): Promise<number> {
         )
         .where(eq(jobs.id, job.id));
     }
-    ran++;
-  }
-  return ran;
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(JOB_CONCURRENCY, claimed.length) }, async () => {
+      while (next < claimed.length) await runOne(claimed[next++]);
+    }),
+  );
+  return claimed.length;
 }
