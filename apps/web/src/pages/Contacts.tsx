@@ -39,7 +39,9 @@ const displayName = (c: { name: string | null; email: string | null; phone: stri
 
 export function Contacts() {
   const [q, setQ] = useState('');
+  const [tab, setTab] = useState<'contacts' | 'lists'>('contacts');
   const { data: me } = useMe();
+  const isAdmin = me?.user.role === 'admin';
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [importMsg, setImportMsg] = useState('');
@@ -68,14 +70,30 @@ export function Contacts() {
     <>
       <div className="page-head">
         <h1>Contacts</h1>
-        <input
-          className="grow"
-          style={{ maxWidth: 320 }}
-          placeholder="Search name, email, phone…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        {me?.user.role === 'admin' && (
+        <div className="row" style={{ gap: 0 }}>
+          <button
+            className={`btn ${tab === 'contacts' ? 'primary' : 'ghost'}`}
+            onClick={() => setTab('contacts')}
+          >
+            People
+          </button>
+          <button
+            className={`btn ${tab === 'lists' ? 'primary' : 'ghost'}`}
+            onClick={() => setTab('lists')}
+          >
+            Lists
+          </button>
+        </div>
+        {tab === 'contacts' && (
+          <input
+            className="grow"
+            style={{ maxWidth: 320 }}
+            placeholder="Search name, email, phone…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        )}
+        {isAdmin && tab === 'contacts' && (
           <>
             <input
               ref={fileRef}
@@ -95,6 +113,8 @@ export function Contacts() {
         )}
       </div>
       {importMsg && <div className="muted" style={{ marginBottom: 8 }}>{importMsg}</div>}
+      {tab === 'lists' && <ListsPanel isAdmin={isAdmin} />}
+      {tab === 'contacts' && (
       <div className="card">
         {data?.contacts.length === 0 && (
           <div className="muted">No contacts yet — they appear as conversations arrive.</div>
@@ -114,7 +134,142 @@ export function Contacts() {
           </Link>
         ))}
       </div>
+      )}
     </>
+  );
+}
+
+type ListRow = { id: string; name: string; members: number; created_at: string };
+type MemberRow = { id: string; name: string | null; email: string | null; phone: string | null; tags?: string[] };
+
+/** Static audiences — create/rename/delete lists, view + edit membership.
+ *  Membership feeds campaign segments (list_id) and CSV imports. */
+function ListsPanel({ isAdmin }: { isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const [newName, setNewName] = useState('');
+  const [openId, setOpenId] = useState('');
+  const { data } = useQuery({
+    queryKey: ['lists'],
+    queryFn: () => api<{ lists: ListRow[] }>('/api/lists'),
+  });
+  const create = useMutation({
+    mutationFn: () => api('/api/lists', { method: 'POST', body: JSON.stringify({ name: newName }) }),
+    onSuccess: () => {
+      setNewName('');
+      void qc.invalidateQueries({ queryKey: ['lists'] });
+    },
+  });
+  const del = useMutation({
+    mutationFn: (id: string) => api(`/api/lists/${id}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['lists'] }),
+  });
+  return (
+    <div className="card">
+      {isAdmin && (
+        <div className="row" style={{ marginBottom: 10 }}>
+          <input
+            className="grow"
+            style={{ maxWidth: 240 }}
+            placeholder="New list name…"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && newName.trim() && create.mutate()}
+          />
+          <button className="btn" disabled={create.isPending || !newName.trim()} onClick={() => create.mutate()}>
+            Create list
+          </button>
+          <span className="muted" style={{ fontSize: 13 }}>or use Import CSV above — each file becomes a list.</span>
+        </div>
+      )}
+      {data?.lists.length === 0 && (
+        <div className="muted">No lists yet — import a CSV or create one.</div>
+      )}
+      {data?.lists.map((l) => (
+        <div key={l.id} style={{ borderBottom: '1px solid var(--border)', padding: '8px 0' }}>
+          <div className="row">
+            <button className="btn ghost grow" style={{ textAlign: 'left' }} onClick={() => setOpenId(openId === l.id ? '' : l.id)}>
+              <strong>{l.name}</strong>
+            </button>
+            <span className="muted">{l.members} member{l.members === 1 ? '' : 's'}</span>
+            {isAdmin && (
+              <button
+                className="btn danger"
+                onClick={() => {
+                  if (confirm(`Delete list "${l.name}"? Contacts stay — only the grouping is removed.`)) del.mutate(l.id);
+                }}
+              >
+                Delete
+              </button>
+            )}
+          </div>
+          {openId === l.id && <ListMembers listId={l.id} isAdmin={isAdmin} />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ListMembers({ listId, isAdmin }: { listId: string; isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const [addQ, setAddQ] = useState('');
+  const { data } = useQuery({
+    queryKey: ['list-members', listId],
+    queryFn: () => api<{ members: MemberRow[] }>(`/api/lists/${listId}/members`),
+  });
+  const search = useQuery({
+    queryKey: ['contacts', `list-add:${listId}:${addQ}`],
+    enabled: addQ.trim().length > 1,
+    queryFn: () => api<{ contacts: ContactRow[] }>(`/api/contacts?q=${encodeURIComponent(addQ)}`),
+  });
+  const memberIds = new Set((data?.members ?? []).map((m) => m.id));
+  const candidates = (search.data?.contacts ?? []).filter((c) => !memberIds.has(c.id)).slice(0, 8);
+  const add = useMutation({
+    mutationFn: (contactId: string) =>
+      api(`/api/lists/${listId}/members`, { method: 'POST', body: JSON.stringify({ contact_id: contactId }) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['list-members', listId] }),
+  });
+  const remove = useMutation({
+    mutationFn: (contactId: string) =>
+      api(`/api/lists/${listId}/members/${contactId}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['list-members', listId] }),
+  });
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['list-members', listId] });
+    void qc.invalidateQueries({ queryKey: ['lists'] });
+  };
+  return (
+    <div style={{ marginTop: 8 }}>
+      {isAdmin && (
+        <div style={{ marginBottom: 8 }}>
+          <input
+            className="grow"
+            style={{ maxWidth: 280 }}
+            placeholder="Add a contact — search name, email, phone…"
+            value={addQ}
+            onChange={(e) => setAddQ(e.target.value)}
+          />
+          {candidates.map((c) => (
+            <div key={c.id} className="row" style={{ padding: '4px 0' }}>
+              <span className="grow">{displayName(c)} <span className="muted">{[c.email, c.phone].filter(Boolean).join(' · ')}</span></span>
+              <button className="btn" onClick={() => add.mutate(c.id)}>Add</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {(data?.members ?? []).map((m) => (
+        <div key={m.id} className="row" style={{ padding: '4px 0' }}>
+          <Link to={`/contacts/${m.id}`} className="grow" style={{ color: 'inherit', textDecoration: 'none' }}>
+            {displayName(m)} <span className="muted">{[m.email, m.phone].filter(Boolean).join(' · ')}</span>
+          </Link>
+          {isAdmin && (
+            <button className="btn ghost" onClick={() => { remove.mutate(m.id); invalidate(); }}>
+              Remove
+            </button>
+          )}
+        </div>
+      ))}
+      {!!data && !data.members.length && <div className="muted">Empty — search above to add contacts.</div>}
+    </div>
   );
 }
 
