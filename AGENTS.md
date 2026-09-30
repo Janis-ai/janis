@@ -185,9 +185,12 @@ before typecheck/tests/dev.
   + has_email/has_phone/active_within_days/never_replied filters. Fan-out is
   crash-safe — unique (campaign, step, recipient) key resumes partial
   dispatches; 'sending' campaigns re-run dispatch each tick as gap-fill.
-  Drip steps (campaigns.steps: [{delay_minutes, text, whatsapp_template?}])
-  dispatch as campaign.step jobs, reaching prior-step sent + unreplied
-  only. Reply attribution: campaign_sends.replied_at stamps on inbound in
+  Drip steps (campaigns.steps: [{delay_minutes, text, condition?,
+  whatsapp_template?}]) dispatch as campaign.step jobs; step.condition
+  branches on the prior step's outcome — if_not_replied (default),
+  if_replied, if_converted, if_not_converted, always; the straggler
+  re-check mirrors the condition so late qualifiers are never dropped.
+  Reply attribution: campaign_sends.replied_at stamps on inbound in
   the send's conversation. Agent binding: campaign → channel → channel.agent_id;
   campaigns.agent_instructions is injected into the reply prompt (and
   suggestion prompt) for campaign-originated conversations via

@@ -63,7 +63,8 @@ export default function Campaigns() {
   const [form, setForm] = useState({
     name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
     has_email: false, has_phone: false, active_days: '', never_replied: false,
-    step_delay: '', step_text: '', agent_instructions: '', list_id: '', tags: '',
+    step_delay: '', step_text: '', step_cond: 'if_not_replied',
+    agent_instructions: '', list_id: '', tags: '',
     enrollment: 'once', send_cap: '', goal: '',
   });
   const segment = () => ({
@@ -88,7 +89,8 @@ export default function Campaigns() {
     setForm({
       name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
       has_email: false, has_phone: false, active_days: '', never_replied: false,
-      step_delay: '', step_text: '', agent_instructions: '', list_id: '', tags: '',
+      step_delay: '', step_text: '', step_cond: 'if_not_replied',
+      agent_instructions: '', list_id: '', tags: '',
       enrollment: 'once', send_cap: '', goal: '',
     });
   const create = useMutation({
@@ -104,7 +106,11 @@ export default function Campaigns() {
           segment: segment(),
           steps:
             form.step_text && form.step_delay
-              ? [{ delay_minutes: Math.round(Number(form.step_delay) * 60), text: form.step_text }]
+              ? [{
+                  delay_minutes: Math.round(Number(form.step_delay) * 60),
+                  text: form.step_text,
+                  condition: form.step_cond,
+                }]
               : undefined,
           agent_instructions: form.agent_instructions.trim() || undefined,
           enrollment: form.enrollment,
@@ -220,13 +226,23 @@ export default function Campaigns() {
             value={form.agent_instructions}
             onChange={(e) => setForm({ ...form, agent_instructions: e.target.value })} />
         )}
-        <div className="row" style={{ gap: 10, marginTop: 10 }}>
+        <div className="row wrap" style={{ gap: 10, marginTop: 10 }}>
           <input className="input" type="number" min="1" style={{ width: 110 }}
             title="Hours after the first send"
             placeholder="Follow-up hrs" value={form.step_delay}
             onChange={(e) => setForm({ ...form, step_delay: e.target.value })} />
+          <select className="input" style={{ width: 220 }}
+            title="Who gets the follow-up — branches on the first send's outcome"
+            value={form.step_cond}
+            onChange={(e) => setForm({ ...form, step_cond: e.target.value })}>
+            <option value="if_not_replied">if no reply (classic drip)</option>
+            <option value="if_replied">if they replied</option>
+            <option value="if_converted">if converted (goal event)</option>
+            <option value="if_not_converted">if not converted</option>
+            <option value="always">everyone who got the first send</option>
+          </select>
           <input className="input grow"
-            placeholder="Follow-up text — goes to non-repliers (optional)"
+            placeholder="Follow-up text — branches on prior outcome (optional)"
             value={form.step_text} onChange={(e) => setForm({ ...form, step_text: e.target.value })} />
         </div>
         <div className="row" style={{ marginTop: 10 }}>

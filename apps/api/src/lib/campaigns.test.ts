@@ -227,6 +227,56 @@ describe('campaign dispatch', () => {
       .where(and(eq(campaignSends.campaignId, campaign.id), eq(campaignSends.stepIndex, 1)));
     expect(again.length).toBe(eligible);
   });
+
+  it('branch conditions select prior-step recipients by outcome', async () => {
+    const past = new Date(Date.now() - 2 * 3_600_000);
+    const mk = async (condition: string) => {
+      const [campaign] = await db
+        .insert(campaigns)
+        .values({
+          workspaceId,
+          channelId,
+          name: `B-${condition}`,
+          text: 'first',
+          status: 'sending',
+          steps: [{ delay_minutes: 60, text: 'follow', condition }],
+        })
+        .returning();
+      await dispatchCampaign(db, campaign.id);
+      const sends = await db
+        .select()
+        .from(campaignSends)
+        .where(and(eq(campaignSends.campaignId, campaign.id), eq(campaignSends.stepIndex, 0)));
+      // Outcomes: [replied], [converted], [plain sent]
+      await db
+        .update(campaignSends)
+        .set({ status: 'sent', sentAt: past, repliedAt: new Date() })
+        .where(eq(campaignSends.id, sends[0].id));
+      await db
+        .update(campaignSends)
+        .set({ status: 'sent', sentAt: past, convertedAt: new Date() })
+        .where(eq(campaignSends.id, sends[1].id));
+      await db
+        .update(campaignSends)
+        .set({ status: 'sent', sentAt: past })
+        .where(eq(campaignSends.id, sends[2].id));
+      return campaign.id;
+    };
+    const stepCount = async (campaignId: string) => {
+      await dispatchCampaignStep(db, campaignId, 1);
+      return (
+        await db
+          .select()
+          .from(campaignSends)
+          .where(and(eq(campaignSends.campaignId, campaignId), eq(campaignSends.stepIndex, 1)))
+      ).length;
+    };
+    expect(await stepCount(await mk('if_replied'))).toBe(1); // only the replayer
+    expect(await stepCount(await mk('if_converted'))).toBe(1); // only the converter
+    expect(await stepCount(await mk('if_not_converted'))).toBe(2); // replied + plain
+    expect(await stepCount(await mk('if_not_replied'))).toBe(2); // converted + plain
+    expect(await stepCount(await mk('always'))).toBe(3); // all sent rows
+  });
 });
 
 describe('campaign agent context', () => {

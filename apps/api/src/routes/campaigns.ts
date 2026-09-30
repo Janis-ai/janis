@@ -33,14 +33,18 @@ const createCampaign = z.object({
       never_replied: z.boolean().optional(),
     })
     .optional(),
-  /** Drip follow-ups — each step reaches prior-step recipients who haven't
-   *  replied, delay_minutes after the previous step. */
+  /** Drip follow-ups — each step reaches prior-step recipients matching
+   *  its branch condition (default: haven't replied), delay_minutes after
+   *  the previous step. */
   steps: z
     .array(
       z.object({
         delay_minutes: z.number().int().min(1).max(60 * 24 * 30),
         text: z.string().max(4000).optional(),
         subject: z.string().max(200).optional(),
+        condition: z
+          .enum(['if_not_replied', 'if_replied', 'if_converted', 'if_not_converted', 'always'])
+          .optional(),
         whatsapp_template: z
           .object({
             name: z.string().min(1),

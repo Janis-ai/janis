@@ -30,12 +30,40 @@ export interface CampaignSegment {
 }
 
 /** One drip step — sent delay_minutes after the previous step to recipients
- *  who haven't replied. Replies stop the sequence per-contact. */
+ *  who haven't replied. Replies stop the sequence per-contact.
+ *  `condition` turns a step into a branch: it evaluates the PRIOR step's
+ *  send row (replied/converted) instead of the default stop-on-reply. */
 export interface CampaignStep {
   delay_minutes: number;
   text?: string;
   subject?: string;
   whatsapp_template?: { name: string; language?: string; body_params?: string[] };
+  /** Branch predicate on the prior step's outcome. Default
+   *  'if_not_replied' preserves classic drip semantics. */
+  condition?:
+    | 'if_not_replied'
+    | 'if_replied'
+    | 'if_converted'
+    | 'if_not_converted'
+    | 'always';
+}
+
+/** The prior-step-send predicate a branch condition implies. */
+function stepConditionFilter(step: CampaignStep) {
+  switch (step.condition ?? 'if_not_replied') {
+    case 'always':
+      return undefined;
+    case 'if_replied':
+      return sql`${campaignSends.repliedAt} is not null`;
+    case 'if_converted':
+      return sql`${campaignSends.convertedAt} is not null`;
+    case 'if_not_converted':
+      // Literal semantics — replied-but-not-converted still qualifies
+      // ("asked a question but didn't buy" is exactly the nudge audience).
+      return isNull(campaignSends.convertedAt);
+    default:
+      return isNull(campaignSends.repliedAt);
+  }
 }
 
 /** Email-kinded channels reach contact.email/alt_emails; phone-kinded reach
@@ -352,10 +380,10 @@ export async function enrollContactInCampaign(
 }
 
 /** A drip step — sends to prior-step recipients who got the message at
- *  least step.delay_minutes ago and haven't replied since. delay is
- *  per-recipient (their prior send time), not wall-clock from dispatch —
- *  that's what makes continuous enrollment drip correctly. Job handler
- *  for 'campaign.step'. */
+ *  least step.delay_minutes ago and meet the step's branch condition
+ *  (default: haven't replied). delay is per-recipient (their prior send
+ *  time), not wall-clock from dispatch — that's what makes continuous
+ *  enrollment drip correctly. Job handler for 'campaign.step'. */
 export async function dispatchCampaignStep(
   db: Db,
   campaignId: string,
@@ -388,9 +416,9 @@ export async function dispatchCampaignStep(
         eq(campaignSends.stepIndex, stepIndex - 1),
         eq(campaignSends.status, 'sent'),
         lte(campaignSends.sentAt, cutoff),
-        // Drip semantics: a reply anywhere in the sequence stops future
-        // steps for that contact.
-        isNull(campaignSends.repliedAt),
+        // Branch semantics: the step's condition decides which prior-step
+        // recipients advance. Default is drip — a reply stops the sequence.
+        stepConditionFilter(step),
       ),
     );
 
@@ -428,15 +456,23 @@ export async function dispatchCampaignStep(
   return queued;
 }
 
-/** True when a prior-step send is sent + unreplied but has no step row —
- *  recipients enrolled after the step job ran (continuous campaigns) or
- *  sends that landed after the delay check. The job handler re-enqueues
- *  the step while stragglers exist, so late qualifiers are never dropped. */
+/** True when a prior-step send qualifies for the step's branch condition
+ *  but has no step row — recipients enrolled after the step job ran
+ *  (continuous campaigns) or sends that landed after the delay check.
+ *  The job handler re-enqueues the step while stragglers exist, so late
+ *  qualifiers are never dropped. */
 export async function stepStragglersExist(
   db: Db,
   campaignId: string,
   stepIndex: number,
 ): Promise<boolean> {
+  const [campaign] = await db
+    .select({ steps: campaigns.steps })
+    .from(campaigns)
+    .where(eq(campaigns.id, campaignId))
+    .limit(1);
+  const step = ((campaign?.steps ?? []) as CampaignStep[])[stepIndex - 1];
+  if (!step) return false;
   const [row] = await db
     .select({ id: campaignSends.id })
     .from(campaignSends)
@@ -445,7 +481,7 @@ export async function stepStragglersExist(
         eq(campaignSends.campaignId, campaignId),
         eq(campaignSends.stepIndex, stepIndex - 1),
         eq(campaignSends.status, 'sent'),
-        isNull(campaignSends.repliedAt),
+        stepConditionFilter(step),
         sql`not exists (
           select 1 from campaign_sends nx
           where nx.campaign_id = ${campaignSends.campaignId}
