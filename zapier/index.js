@@ -13,7 +13,7 @@ const authentication = {
       type: 'password',
       required: true,
       helpText:
-        "Copy from your agent's API key card in the Janis console (starts with jk_live_).",
+        "In the Janis console: open your agent → Connection tab → Credentials → Generate API key. Keys start with jk_live_.",
     },
   ],
 };

@@ -1745,22 +1745,38 @@ function ConnectionTab({
 
       {agent.hosted && <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />}
 
-      {!agent.hosted && (
       <div className="card" style={{ marginTop: 12 }}>
-        <strong>Credentials &amp; deliveries</strong>
+        <strong>Credentials{agent.hosted ? '' : ' &amp; deliveries'}</strong>
+        {agent.api_key_preview && (
+          <div className="muted mono" style={{ marginTop: 6 }}>
+            Active key: {agent.api_key_preview}
+          </div>
+        )}
         <div className="row" style={{ marginTop: 8 }}>
           {isAdmin && (
             <>
               <button className="btn" onClick={onRotateKey}>
                 {agent.api_key_preview ? 'Rotate API key' : 'Generate API key'}
               </button>
-              <button className="btn" onClick={onRotateSecret}>Rotate webhook secret</button>
-              <button className="btn" onClick={onRevealSecret}>Show webhook secret</button>
+              {!agent.hosted && (
+                <>
+                  <button className="btn" onClick={onRotateSecret}>Rotate webhook secret</button>
+                  <button className="btn" onClick={onRevealSecret}>Show webhook secret</button>
+                </>
+              )}
             </>
           )}
-          <button className="btn" onClick={() => setShowDeliveries((s) => !s)}>
-            {showDeliveries ? 'Hide deliveries' : 'Deliveries'}
-          </button>
+          {!agent.hosted && (
+            <button className="btn" onClick={() => setShowDeliveries((s) => !s)}>
+              {showDeliveries ? 'Hide deliveries' : 'Deliveries'}
+            </button>
+          )}
+        </div>
+        <div className="muted" style={{ marginTop: 8 }}>
+          API keys authenticate the /v1 API — send replies, escalate, resolve,
+          poll conversations — and the Janis app in Zapier. Send it as
+          {' '}<span className="mono">X-API-KEY</span> or{' '}
+          <span className="mono">Authorization: Bearer</span>.
         </div>
         {showDeliveries && (
           <div className="muted" style={{ marginTop: 10 }}>
@@ -1794,7 +1810,6 @@ function ConnectionTab({
           </div>
         )}
       </div>
-      )}
     </>
   );
 }
