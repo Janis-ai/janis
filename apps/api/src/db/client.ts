@@ -110,6 +110,19 @@ export async function migrateDb(db: Db) {
     }
     const conn = await sqlClient.reserve();
     try {
+      // Self-heal: a killed migrator (watchdog timeout, pod kill) leaves its
+      // backend session holding the lock — Neon's pooler keeps orphaned
+      // sessions alive and reissues them to app traffic, so the lock would
+      // block every future migrate forever. A real migrate finishes in
+      // seconds; an idle session granted >5min ago is an orphan.
+      await conn`
+        select pg_terminate_backend(l.pid) from pg_locks l
+        left join pg_stat_activity a on a.pid = l.pid
+        where l.locktype = 'advisory' and l.objid = 730062 and l.granted
+          and l.pid <> pg_backend_pid()
+          and a.state = 'idle'
+          and a.query_start < now() - interval '5 minutes'
+      `;
       await conn`SELECT pg_advisory_lock(730062)`;
       await migrate(db as never, { migrationsFolder: MIGRATIONS });
     } finally {
