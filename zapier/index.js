@@ -13,7 +13,7 @@ const authentication = {
       type: 'password',
       required: true,
       helpText:
-        "In the Janis console: open your agent → Connection tab → Credentials → Generate API key. Keys start with jk_live_.",
+        'In the Janis console: open your agent → Connection tab → Credentials → Generate API key. Keys start with jk_live_. Docs: https://app.janis.ai/docs?guide=automation',
     },
   ],
 };
@@ -105,12 +105,36 @@ const ListChannels = {
   },
 };
 
+// Hidden trigger powering the External Conversation ID dropdowns on the
+// actions. Dropdown value is external_id (what the action URLs take), label
+// shows the preview so users recognize the thread.
+const ListConversations = {
+  key: 'list_conversations',
+  noun: 'Conversation',
+  display: {
+    label: 'List Conversations',
+    description: 'Lists recent conversations for the dropdown.',
+    hidden: true,
+  },
+  operation: {
+    perform: async (z, bundle) => {
+      const res = await z.request({ url: `${BASE}/v1/conversations` });
+      return res.data.map((c) => ({
+        id: c.external_id,
+        name: `${c.external_id} — ${c.state}${c.last_message_preview ? ` · ${c.last_message_preview}` : ''}`,
+      }));
+    },
+    sample: { id: 'email:customer@example.com', name: 'email:customer@example.com — active' },
+  },
+};
+
 const EXTERNAL_ID_FIELD = {
   key: 'external_id',
   label: 'External Conversation ID',
-  type: 'string',
+  dynamic: 'list_conversations.id.name',
   required: true,
-  helpText: 'Map the external_id field from a Janis trigger or Send Outbound output.',
+  helpText:
+    'Map the external_id field from a Janis trigger or Send Outbound output — or pick a conversation.',
 };
 
 const conversationAction = (key, label, description, suffix, extraFields, bodyFor) => ({
@@ -198,6 +222,7 @@ module.exports = {
   beforeRequest: [addApiKey],
   triggers: {
     list_channels: ListChannels,
+    list_conversations: ListConversations,
     new_conversation: conversationTrigger(
       'new_conversation',
       'New Conversation',

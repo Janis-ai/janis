@@ -5,6 +5,6 @@
   "main": "index.js",
   "private": true,
   "dependencies": {
-    "zapier-platform-core": "17.9.1"
+    "zapier-platform-core": "19.1.0"
   }
 }
