@@ -792,9 +792,15 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
             <button className="btn sm" onClick={() => act('/email-domain/verify', {}, 'Verification requested.')}>
               Verify DNS
             </button>
-            <button className="btn sm" onClick={() => setCfOpen((o) => !o)}>
-              Auto-add to Cloudflare
-            </button>
+            {channel.meta.cf_connected ? (
+              <button className="btn sm" onClick={() => act('/email-domain/cf-setup', {})}>
+                Push records via Cloudflare
+              </button>
+            ) : (
+              <button className="btn sm" onClick={() => setCfOpen((o) => !o)}>
+                Auto-add to Cloudflare
+              </button>
+            )}
             <button
               className="btn sm"
               onClick={() =>
@@ -811,31 +817,47 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
           {cfOpen && (
             <div style={{ marginTop: 8, border: '1px solid var(--border, #333)', borderRadius: 6, padding: 8 }}>
               <div className="muted" style={{ fontSize: 12 }}>
-                Paste a Cloudflare API token (My Profile → API Tokens → Edit zone DNS for the zone).
-                Used once to create the records — never stored.
+                If the domain's DNS is on Cloudflare, connect once — we'll create every record
+                for you (asks for zone read + DNS write only).
               </div>
-              <input
-                className="input"
-                style={{ width: '100%', marginTop: 4 }}
-                placeholder="Cloudflare API token"
-                type="password"
-                value={cfToken}
-                onChange={(e) => setCfToken(e.target.value)}
-              />
               <button
                 className="btn sm"
                 style={{ marginTop: 6 }}
-                disabled={!cfToken.trim()}
                 onClick={() =>
-                  act('/email-domain/cf-setup', { api_token: cfToken.trim() }).then(() => {
-                    setCfToken('');
-                    setCfOpen(false);
-                    setMsg('Records created on Cloudflare — verification may take a minute.');
-                  })
+                  api(`/api/channels/${channel.id}/email-domain/cf-connect`, { method: 'POST' })
+                    .then((d) => { window.location.href = (d as { url: string }).url; })
+                    .catch((e) => setMsg(e instanceof Error ? e.message : 'failed'))
                 }
               >
-                Add records
+                Connect Cloudflare →
               </button>
+              <details style={{ marginTop: 8 }}>
+                <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
+                  or paste an API token instead
+                </summary>
+                <input
+                  className="input"
+                  style={{ width: '100%', marginTop: 4 }}
+                  placeholder="Cloudflare API token — used once, never stored"
+                  type="password"
+                  value={cfToken}
+                  onChange={(e) => setCfToken(e.target.value)}
+                />
+                <button
+                  className="btn sm"
+                  style={{ marginTop: 6 }}
+                  disabled={!cfToken.trim()}
+                  onClick={() =>
+                    act('/email-domain/cf-setup', { api_token: cfToken.trim() }).then(() => {
+                      setCfToken('');
+                      setCfOpen(false);
+                      setMsg('Records created on Cloudflare — verification may take a minute.');
+                    })
+                  }
+                >
+                  Add records
+                </button>
+              </details>
             </div>
           )}
         </>

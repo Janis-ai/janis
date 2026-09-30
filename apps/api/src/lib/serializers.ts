@@ -208,6 +208,8 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
       priority?: number;
       status?: string;
     }[];
+    cf_connected?: boolean;
+    cf_refresh_token?: string;
   };
   return {
     id: row.id,
@@ -244,6 +246,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
         row.kind === 'email' && creds.email_domain_status !== 'verified'
           ? creds.email_domain_records
           : undefined,
+      cf_connected: row.kind === 'email' && creds.cf_refresh_token ? true : undefined,
       gmail_query: row.kind === 'gmail' ? creds.gmail_query : undefined,
       branding:
         row.kind === 'webchat'

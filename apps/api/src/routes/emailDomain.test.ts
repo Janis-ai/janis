@@ -13,8 +13,10 @@ import { eq } from 'drizzle-orm';
 // the route module loads so resendDomains can call the API.
 process.env.RESEND_API_KEY = 're_test_key';
 process.env.EMAIL_INBOUND_DOMAIN = 'inbound.janis.ai';
+process.env.CLOUDFLARE_OAUTH_CLIENT_ID = 'cf_client';
+process.env.CLOUDFLARE_OAUTH_CLIENT_SECRET = 'cf_secret';
 
-const { channelApiRoutes } = await import('./channels.js');
+const { channelApiRoutes, channelWebhookRoutes } = await import('./channels.js');
 
 let db: Db;
 let app: Hono;
@@ -177,6 +179,50 @@ describe('custom email domain', () => {
     });
     const res2 = await post(`/${channelId}/email-domain/cf-setup`, { api_token: 'x'.repeat(40) });
     expect((await j(res2)).skipped).toBe(1);
+  });
+
+  it('oauth callback exchanges the code, stores the refresh token, pushes records', async () => {
+    // consent URL carries a signed state binding the flow to the channel
+    const conn = await post(`/${channelId}/email-domain/cf-connect`);
+    const { url } = (await j(conn)) as { url: string };
+    expect(url).toContain('dash.cloudflare.com/oauth2/authorize');
+    expect(url).toContain('client_id=cf_client');
+    const state = new URL(url).searchParams.get('state')!;
+
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(input);
+      if (u.includes('oauth2/token'))
+        return new Response('{"access_token":"cf_at","refresh_token":"cf_rt"}', { status: 200 });
+      if (/\/zones\?name=mail\.acme\.com/.test(u)) return new Response('{"result":[]}', { status: 200 });
+      if (/\/zones\?name=acme\.com/.test(u))
+        return new Response('{"result":[{"id":"z1","name":"acme.com"}]}', { status: 200 });
+      if (u.includes('/dns_records') && init?.method === 'POST')
+        return new Response('{"result":{}}', { status: 200 });
+      if (u.includes('/dns_records')) return new Response('{"result":[]}', { status: 200 });
+      if (u.endsWith('/verify')) return new Response('{}', { status: 200 });
+      if (/\/domains\/dom_9$/.test(u))
+        return new Response(JSON.stringify({ ...resendDomain, id: 'dom_9', status: 'verified' }), { status: 200 });
+      return new Response('{}', { status: 404 });
+    });
+    const hooks = new Hono().route('/channels', channelWebhookRoutes(db));
+    const cb = await hooks.fetch(
+      new Request(`http://t/channels/email-domain/cf-callback?code=CODE&state=${encodeURIComponent(state)}`),
+    );
+    expect(cb.status).toBe(302);
+    expect(cb.headers.get('location')).toContain('cf=connected');
+    expect(cb.headers.get('location')).toContain('cf_records=1');
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    expect((ch.credentials as { cf_refresh_token?: string }).cf_refresh_token).toBe('cf_rt');
+
+    // forged or expired state is rejected
+    const bad = await hooks.fetch(
+      new Request(`http://t/channels/email-domain/cf-callback?code=CODE&state=cf.bogus.sig`),
+    );
+    expect(bad.headers.get('location')).toContain('cf_error');
+
+    // cf-setup without a token uses the stored refresh token
+    const res = await post(`/${channelId}/email-domain/cf-setup`, {});
+    expect(res.status).toBe(200);
   });
 
   it('delete clears domain creds and a dependent from_address', async () => {

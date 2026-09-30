@@ -141,6 +141,10 @@ export const env = {
   msPushToken: process.env.MS_PUSH_TOKEN ?? '', // shared secret on the push URL
   metaAppId: process.env.META_APP_ID ?? '', // FB app id for OAuth connect flow
   metaAppSecret: process.env.META_APP_SECRET ?? '', // OAuth exchange + X-Hub-Signature-256
+  // Cloudflare OAuth client — auto-configures sending-domain DNS records on
+  // the client's zone (zone.read + dns.write scopes).
+  cfOauthClientId: process.env.CLOUDFLARE_OAUTH_CLIENT_ID ?? '',
+  cfOauthClientSecret: process.env.CLOUDFLARE_OAUTH_CLIENT_SECRET ?? '',
   metaVerifyToken: process.env.META_VERIFY_TOKEN ?? '',
   // Shared secret for the legacy broadcast-api relay — it forwards Facebook
   // page events for which no legacy client exists. Verified via

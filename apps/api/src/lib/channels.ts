@@ -77,6 +77,9 @@ export interface ChannelCredentials {
     priority?: number;
     status?: string;
   }[];
+  // Cloudflare OAuth for one-click DNS setup — refresh token grants
+  // zone.read + dns.write on the client's zones; used to push records.
+  cf_refresh_token?: string;
   // inbound mail rules — see EmailFilterConfig in lib/email.ts
   email_filters?: {
     answer_addresses?: string[];

@@ -3,6 +3,9 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import {
+  cfAuthorizeUrl,
+  cfExchangeCode,
+  cfRefresh,
   cloudflareSetupRecords,
   createOrAdoptResendDomain,
   deleteResendDomain,
@@ -10,7 +13,7 @@ import {
   verifyResendDomain,
 } from '../lib/resendDomains.js';
 import { and, eq, sql } from 'drizzle-orm';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import { agents, channelBindings, channels, contacts, usageEvents } from '../db/schema.js';
@@ -583,11 +586,30 @@ export function channelApiRoutes(db: Db) {
     }
   });
 
-  // Push the DNS records into Cloudflare on the client's behalf — one-shot
-  // API token, never stored. Skips records that already exist.
+  // Cloudflare OAuth — one-click DNS setup. State is HMAC-signed and binds
+  // the consent redirect back to this channel (same scheme as Slack).
+  const cfRedirectUri = `${env.apiOrigin}/channels/email-domain/cf-callback`;
+  app.post('/:id/email-domain/cf-connect', async (c) => {
+    if (!env.cfOauthClientId) return c.json({ error: 'cloudflare oauth not configured' }, 503);
+    const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
+    if (!row) return c.json({ error: 'not found' }, 404);
+    const role = await agentRoleFor(
+      db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
+    );
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
+    const b64 = Buffer.from(
+      JSON.stringify({ ch: row.id, w: c.get('workspaceId'), x: Date.now() + 600_000 }),
+    ).toString('base64url');
+    const sig = createHmac('sha256', env.sessionSecret).update(b64).digest('base64url');
+    return c.json({ url: cfAuthorizeUrl(cfRedirectUri, `cf.${b64}.${sig}`) });
+  });
+
+  // Push the DNS records into Cloudflare on the client's behalf — an OAuth
+  // connection if one exists, else a one-shot API token (never stored).
+  // Skips records that already exist.
   app.post(
     '/:id/email-domain/cf-setup',
-    zValidator('json', z.object({ api_token: z.string().min(20).max(200) })),
+    zValidator('json', z.object({ api_token: z.string().min(20).max(200).optional() })),
     async (c) => {
       const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
       if (!row) return c.json({ error: 'not found' }, 404);
@@ -600,10 +622,16 @@ export function channelApiRoutes(db: Db) {
       );
       if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
       try {
+        let token = c.req.valid('json').api_token;
+        if (!token) {
+          if (!creds.cf_refresh_token)
+            return c.json({ error: 'connect Cloudflare or paste an API token' }, 400);
+          token = (await cfRefresh(creds.cf_refresh_token)).access_token;
+        }
         const out = await cloudflareSetupRecords(
           creds.email_domain,
           creds.email_domain_records,
-          c.req.valid('json').api_token,
+          token,
         );
         await verifyResendDomain(creds.email_domain_id!).catch(() => {});
         const d = await getResendDomain(creds.email_domain_id!);
@@ -861,6 +889,69 @@ export function channelApiRoutes(db: Db) {
 /** Public Meta webhook endpoints mounted at /channels (app-secret signed). */
 export function channelWebhookRoutes(db: Db) {
   const app = new Hono();
+
+  // Cloudflare OAuth redirect — 'cf.<b64>.<hmac>' state binds consent back to
+  // the channel; on success we keep the refresh token and immediately push
+  // the pending DNS records + trigger Resend verification.
+  app.get('/email-domain/cf-callback', async (c) => {
+    const fail = (msg: string) =>
+      c.redirect(`${env.webOrigin}/agents?cf_error=${encodeURIComponent(msg)}`);
+    const code = c.req.query('code');
+    const state = c.req.query('state') ?? '';
+    if (!code || !state.startsWith('cf.')) return fail('missing code or state');
+    const [b64, sig] = state.slice(3).split('.');
+    const expected = createHmac('sha256', env.sessionSecret).update(b64 ?? '').digest('base64url');
+    if (
+      !b64 ||
+      !sig ||
+      sig.length !== expected.length ||
+      !timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
+    )
+      return fail('invalid state');
+    let st: { ch?: string; w?: string; x?: number };
+    try {
+      st = JSON.parse(Buffer.from(b64, 'base64url').toString());
+    } catch {
+      return fail('invalid state');
+    }
+    if (!st.ch || !st.w || !st.x || st.x < Date.now()) return fail('expired state');
+    const [row] = await db
+      .select()
+      .from(channels)
+      .where(and(eq(channels.id, st.ch), eq(channels.workspaceId, st.w)))
+      .limit(1);
+    if (!row) return fail('channel not found');
+    const creds = row.credentials as ChannelCredentials;
+    try {
+      const tokens = await cfExchangeCode(
+        code,
+        `${env.apiOrigin}/channels/email-domain/cf-callback`,
+      );
+      const next = { ...creds, cf_refresh_token: tokens.refresh_token ?? creds.cf_refresh_token };
+      let pushed = '';
+      if (creds.email_domain && creds.email_domain_records?.length) {
+        const out = await cloudflareSetupRecords(
+          creds.email_domain,
+          creds.email_domain_records,
+          tokens.access_token,
+        );
+        if (creds.email_domain_id) {
+          await verifyResendDomain(creds.email_domain_id).catch(() => {});
+          const d = await getResendDomain(creds.email_domain_id);
+          next.email_domain_status = d.status ?? creds.email_domain_status;
+          if (d.records?.length) next.email_domain_records = d.records;
+        }
+        pushed = `&cf_records=${out.created}`;
+      }
+      await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
+      invalidateChannelCache();
+      return c.redirect(
+        `${env.webOrigin}/agents/${row.agentId}?tab=channels&cf=connected${pushed}`,
+      );
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : 'cloudflare setup failed');
+    }
+  });
 
   // Webhook verification — Meta sends this when you register the callback URL
   app.get('/meta/webhook', async (c) => {

@@ -128,3 +128,48 @@ export async function cloudflareSetupRecords(
   }
   return { created, skipped, zone: zoneName };
 }
+
+/** Cloudflare OAuth — one-click DNS setup. The client consents on CF's
+ *  screen; we exchange the code and keep the refresh token so later record
+ *  changes need no re-consent. */
+export const CF_AUTHORIZE_URL = 'https://dash.cloudflare.com/oauth2/authorize';
+const CF_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';
+export const CF_SCOPES = 'zone.read dns.write';
+
+export function cfAuthorizeUrl(redirectUri: string, state: string): string {
+  const p = new URLSearchParams({
+    response_type: 'code',
+    client_id: env.cfOauthClientId,
+    redirect_uri: redirectUri,
+    scope: CF_SCOPES,
+    state,
+  });
+  return `${CF_AUTHORIZE_URL}?${p}`;
+}
+
+interface CfTokens {
+  access_token: string;
+  refresh_token?: string;
+}
+
+async function cfToken(body: Record<string, string>): Promise<CfTokens> {
+  const res = await fetch(CF_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: env.cfOauthClientId,
+      client_secret: env.cfOauthClientSecret,
+      ...body,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const out = (await res.json().catch(() => ({}))) as CfTokens & { error?: string; error_description?: string };
+  if (!res.ok || !out.access_token)
+    throw new Error(out.error_description ?? out.error ?? `token exchange ${res.status}`);
+  return out;
+}
+
+export const cfExchangeCode = (code: string, redirectUri: string) =>
+  cfToken({ grant_type: 'authorization_code', code, redirect_uri: redirectUri });
+export const cfRefresh = (refreshToken: string) =>
+  cfToken({ grant_type: 'refresh_token', refresh_token: refreshToken });
