@@ -11,6 +11,7 @@ import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
 import { BarChart3, Bot, CreditCard, Inbox, Megaphone, Settings, Sparkles, Users } from 'lucide-react';
 import { usePrompt } from './Prompt';
+import { CommandPalette } from './CommandPalette';
 
 interface Toast {
   id: string;
@@ -240,6 +241,7 @@ export default function Layout() {
   return (
     <div className={`layout${railVisible ? ' ask-open' : ''}`}>
       {promptEl}
+      <CommandPalette />
       <nav className="sidebar">
         <Link className="brand" to="/" title="Janis home">
           <img className="brand-wide" src="/img/janis-top.png" alt="Janis" />

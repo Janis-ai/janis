@@ -897,3 +897,18 @@ input[type=color].swatch::-moz-color-swatch { border: none; border-radius: 5px; 
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
 }
 .modal-msg { font-size: 14px; }
+
+.palette { padding: 12px; width: 520px; }
+.palette-input { width: 100%; font-size: 15px; }
+.palette-list { margin-top: 8px; max-height: 320px; overflow-y: auto; }
+.palette-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 10px; border: 0; background: none; color: var(--text);
+  font-size: 14px; border-radius: 7px; cursor: pointer;
+}
+.palette-item.active { background: var(--panel-2); }
+.palette-icon { display: inline-flex; color: var(--muted); }
+.palette-hint { font-size: 12px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-foot { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; }
+
+.conv-row.kbd-focus { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }

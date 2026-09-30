@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
 import { useConversations, useAgents, useSearch, useViews } from '../api/hooks';
@@ -8,6 +8,7 @@ import { Avatar, channelLabel, displayName, Empty, StateBadge, timeAgo } from '.
 import Onboarding from '../components/Onboarding';
 import { Moon, Save, Star } from 'lucide-react';
 import { usePrompt } from '../components/Prompt';
+import { isEditableTarget } from '../lib/keys';
 
 /** Filter options grouped by kind — values map to the `state` list param.
  * Labels match the conversation detail Status dropdown (Agent = agent-driven). */
@@ -80,15 +81,21 @@ function ConvRow({
   agentName,
   selected,
   onToggle,
+  focused,
 }: {
   c: Conversation;
   agentName?: string;
   selected?: boolean;
   onToggle?: (id: string) => void;
+  focused?: boolean;
 }) {
   const snoozed = c.snoozed_until && new Date(c.snoozed_until) > new Date();
+  const rowRef = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    if (focused) rowRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [focused]);
   return (
-    <Link to={`/conversations/${c.id}`} className="conv-row">
+    <Link to={`/conversations/${c.id}`} className={`conv-row${focused ? ' kbd-focus' : ''}`} ref={rowRef}>
       {onToggle && (
         <input
           type="checkbox"
@@ -221,6 +228,46 @@ export default function Conversations() {
   const list = searching ? hits?.conversations : convList;
   const visibleIds = (list ?? []).map((c) => c.id);
   const allChecked = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+
+  // Keyboard triage — j/k move, Enter opens, e archives, s stars, x selects.
+  const navigate = useNavigate();
+  const [focusIdx, setFocusIdx] = useState(-1);
+  useEffect(() => setFocusIdx(-1), [tab, state, agentId, mine, query]);
+  const focused = focusIdx >= 0 ? list?.[focusIdx] : undefined;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      const cur = focusIdx >= 0 ? list?.[focusIdx] : undefined;
+      const one = async (action: string, extra: Record<string, unknown> = {}) => {
+        if (!cur) return;
+        await api('/api/conversations/bulk', {
+          method: 'POST',
+          body: JSON.stringify({ ids: [cur.id], action, ...extra }),
+        });
+        void qc.invalidateQueries({ queryKey: ['conversations'] });
+        void qc.invalidateQueries({ queryKey: ['attention-count'] });
+      };
+      const patch = async (fields: Record<string, unknown>) => {
+        if (!cur) return;
+        await api(`/api/conversations/${cur.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(fields),
+        });
+        void qc.invalidateQueries({ queryKey: ['conversations'] });
+      };
+      if (e.key === 'j') setFocusIdx((i) => Math.min(i + 1, (list?.length ?? 1) - 1));
+      else if (e.key === 'k') setFocusIdx((i) => Math.max(i - 1, 0));
+      else if (e.key === 'Enter' && cur) navigate(`/conversations/${cur.id}`);
+      else if (e.key === 'e' && cur) void one(cur.state === 'archived' ? 'unarchive' : 'archive');
+      else if (e.key === 's' && cur) void patch({ is_starred: !cur.is_starred });
+      else if (e.key === 'u' && cur) void patch({ is_unread: !cur.is_unread });
+      else if (e.key === 'x' && cur) toggle(cur.id);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   const bulk = async (action: string, extra: Record<string, unknown> = {}) => {
     if (!selected.size) return;
@@ -362,8 +409,8 @@ export default function Conversations() {
       {searching ? (
         <>
           {hits && hits.conversations.length === 0 && <Empty>No matches.</Empty>}
-          {hits?.conversations.map((c) => (
-            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} />
+          {hits?.conversations.map((c, i) => (
+            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} />
           ))}
           {hits && hits.messages.length > 0 && (
             <div className="card" style={{ marginTop: 16 }}>
@@ -405,8 +452,8 @@ export default function Conversations() {
               </label>
             </div>
           )}
-          {convList?.map((c) => (
-            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} />
+          {convList?.map((c, i) => (
+            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} />
           ))}
           {hasNextPage && (
             <div style={{ textAlign: 'center', marginTop: 12 }}>
@@ -419,6 +466,9 @@ export default function Conversations() {
               </button>
             </div>
           )}
+          <div className="muted" style={{ fontSize: 11, marginTop: 14, textAlign: 'center' }}>
+            j/k move · Enter open · e archive · s star · u read/unread · x select · ⌘K palette
+          </div>
         </>
       )}
     </>
