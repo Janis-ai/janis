@@ -14,7 +14,12 @@ import { setGetStartedButton, type ChannelCredentials } from '../lib/channels.js
 const GRAPH = 'https://graph.facebook.com/v21.0';
 const STATE_COOKIE = 'janis_meta_state';
 const AGENT_COOKIE = 'janis_meta_agent';
-const PENDING_TTL_MS = 15 * 60 * 1000;
+// No in-memory connect store — the OAuth round-trip writes the user token
+// into meta_connections before the picker opens, so /pending and /link
+// re-discover assets from the stored connection. connect_id stays in the
+// wire contract for the frontend but is just a flow marker, not a lookup
+// key: scoping comes from the session's workspace. That's what makes the
+// flow survive the callback landing on a different Cloud Run instance.
 
 // What the OAuth flow discovers about the user's Meta assets.
 interface MetaPage {
@@ -28,21 +33,6 @@ interface MetaWaba {
   name?: string;
   phone_numbers: { id: string; display_phone_number?: string }[];
 }
-interface PendingConnect {
-  workspaceId: string;
-  userToken: string;
-  pages: MetaPage[];
-  wabas: MetaWaba[];
-  expiresAt: number;
-}
-
-// Short-lived in-memory store for OAuth results awaiting user selection.
-// On restart the connect is simply retried.
-const pending = new Map<string, PendingConnect>();
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of pending) if (v.expiresAt < now) pending.delete(k);
-}, 60_000).unref();
 
 const SCOPES = [
   'pages_show_list',
@@ -186,15 +176,21 @@ export function metaApiRoutes(db: Db) {
     const assets = await discoverAssets(userToken);
     if (!assets) return back('Meta token rejected — try connecting again');
 
-    const id = randomBytes(12).toString('hex');
-    pending.set(id, {
-      workspaceId,
-      userToken,
-      ...assets,
-      expiresAt: Date.now() + PENDING_TTL_MS,
-    });
-    return dest(`meta_connect=${id}`);
+    return dest(`meta_connect=${randomBytes(12).toString('hex')}`);
   });
+
+  /** Stored Meta connection + freshly discovered assets for the session
+   *  workspace — replaces the old per-instance `pending` map lookup. */
+  const loadAssets = async (c: Context) => {
+    const [conn] = await db
+      .select()
+      .from(metaConnections)
+      .where(eq(metaConnections.workspaceId, c.get('workspaceId')))
+      .limit(1);
+    if (!conn) return null;
+    const assets = await discoverAssets(conn.userToken);
+    return assets ? { conn, assets } : { conn, assets: null };
+  };
 
   // Persistent session: if this workspace has a stored Meta token, re-discover
   // assets with it and mint a fresh pending id — no re-OAuth needed on reload.
@@ -207,14 +203,7 @@ export function metaApiRoutes(db: Db) {
     if (!conn) return c.json({ connected: false });
     const assets = await discoverAssets(conn.userToken);
     if (!assets) return c.json({ connected: false, expired: true });
-    const id = randomBytes(12).toString('hex');
-    pending.set(id, {
-      workspaceId: c.get('workspaceId'),
-      userToken: conn.userToken,
-      ...assets,
-      expiresAt: Date.now() + PENDING_TTL_MS,
-    });
-    return c.json({ connected: true, connect_id: id });
+    return c.json({ connected: true, connect_id: randomBytes(12).toString('hex') });
   });
 
   // Forget the stored Meta connection (e.g. to switch accounts).
@@ -225,31 +214,37 @@ export function metaApiRoutes(db: Db) {
     return c.json({ ok: true });
   });
 
-  // Step 3: UI fetches discovered assets for the picker.
-  app.get('/pending', (c) => {
-    const p = pending.get(c.req.query('id') ?? '');
-    if (!p || p.expiresAt < Date.now() || p.workspaceId !== c.get('workspaceId')) {
+  // Step 3: UI fetches discovered assets for the picker. `id` is accepted
+  // for the old wire contract but assets always come from the workspace's
+  // stored Meta connection — works no matter which instance the OAuth
+  // callback ran on.
+  app.get('/pending', async (c) => {
+    const found = await loadAssets(c);
+    if (!found || !found.assets) {
       return c.json({ error: 'connect session expired — start again' }, 404);
     }
+    const { pages, wabas } = found.assets;
     return c.json({
-      pages: p.pages.map((pg) => ({
+      pages: pages.map((pg) => ({
         id: pg.id,
         name: pg.name,
         instagram: pg.instagram_business_account
           ? { id: pg.instagram_business_account.id, username: pg.instagram_business_account.username }
           : null,
       })),
-      whatsapp: p.wabas,
+      whatsapp: wabas,
     });
   });
 
   // Step 4: link a discovered asset to an agent → channel + webhook subscribe.
   app.post('/link', adminOnly, zValidator('json', linkBody), async (c) => {
     const body = c.req.valid('json');
-    const p = pending.get(body.connect_id);
-    if (!p || p.expiresAt < Date.now() || p.workspaceId !== c.get('workspaceId')) {
+    const found = await loadAssets(c);
+    if (!found || !found.assets) {
       return c.json({ error: 'connect session expired — start again' }, 404);
     }
+    const { conn, assets: p } = found;
+    const userToken = conn.userToken;
     // OAuth linking stays workspace-admin — it touches the shared Meta
     // connection; an agent-admin who isn't a workspace admin can't pull in
     // pages they shouldn't see.
@@ -278,7 +273,7 @@ export function metaApiRoutes(db: Db) {
       }
       // A user token scoped whatsapp_business_messaging can send; a system-user
       // token is more durable for production — can be swapped later.
-      credentials.access_token = p.userToken;
+      credentials.access_token = userToken;
 
       const [row] = await db
         .insert(channels)
@@ -389,13 +384,25 @@ async function deleteMetaUserData(db: Db, metaUserId: string) {
   await db.delete(metaConnections).where(eq(metaConnections.workspaceId, conn.workspaceId));
 }
 
-// Issued confirmation codes — deletions run synchronously, so every issued
-// code is already 'completed' by the time the status page is fetched.
-const deletionCodes = new Map<string, number>();
-setInterval(() => {
-  const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
-  for (const [k, t] of deletionCodes) if (t < cutoff) deletionCodes.delete(k);
-}, 3600_000).unref();
+// Deletion-confirmation codes are SIGNED, not stored — deletions run
+// synchronously so a verifiably-issued code is already 'completed', and a
+// signed code works whichever instance the status check lands on.
+// Format: jd_<issuedMs>_<rand>.<hmac(issuedMs:rand)>
+const DELETION_CODE_TTL_MS = 7 * 24 * 3600 * 1000;
+const signDeletionCode = (ts: number, rand: string) =>
+  createHmac('sha256', env.metaAppSecret ?? '')
+    .update(`deletion:${ts}:${rand}`)
+    .digest('hex')
+    .slice(0, 24);
+const validDeletionCode = (code: string | undefined): boolean => {
+  const m = code?.match(/^jd_(\d+)_([0-9a-f]+)\.([0-9a-f]{24})$/);
+  if (!m) return false;
+  const ts = Number(m[1]);
+  if (!ts || Date.now() - ts > DELETION_CODE_TTL_MS || ts > Date.now()) return false;
+  const expected = Buffer.from(signDeletionCode(ts, m[2]));
+  const actual = Buffer.from(m[3]);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+};
 
 /** Public Meta callbacks mounted at /meta (no session — signed_request authed). */
 export function metaPublicRoutes(db: Db) {
@@ -417,8 +424,9 @@ export function metaPublicRoutes(db: Db) {
     const userId = await handleSignedRequest(c);
     if (typeof userId !== 'string') return userId; // error response
     await deleteMetaUserData(db, userId);
-    const code = `jd_${randomBytes(8).toString('hex')}`;
-    deletionCodes.set(code, Date.now());
+    const issued = Date.now();
+    const rand = randomBytes(8).toString('hex');
+    const code = `jd_${issued}_${rand}.${signDeletionCode(issued, rand)}`;
     return c.json({
       url: `${env.apiOrigin}/meta/data-deletion/status?code=${code}`,
       confirmation_code: code,
@@ -427,7 +435,7 @@ export function metaPublicRoutes(db: Db) {
 
   app.get('/data-deletion/status', (c) => {
     const code = c.req.query('code');
-    return c.json({ status: code && deletionCodes.has(code) ? 'completed' : 'not_found' });
+    return c.json({ status: validDeletionCode(code) ? 'completed' : 'not_found' });
   });
 
   // Deauthorize Callback — Meta POSTs when a user removes the app.

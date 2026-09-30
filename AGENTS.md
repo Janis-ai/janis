@@ -103,13 +103,15 @@ before typecheck/tests/dev.
   leaves 'running', reclaimed at attempts<5/5min stale); migrations moved to
   a pre-deploy step (see Deploy). In-process state audit: safe — TTL caches
   (cap/token/avatar/greeting/sub), slack channel+thread-status caches
-  (lazy-refill), typing-relay dedup; KNOWN GAPS — convRuns per-conversation
-  agent run-guard is per-instance (two instances could both start a hosted
-  reply for the same conversation on racing inbound; fix = DB-claim row or
-  agent.run job dedup) and meta OAuth `pending` map is same-instance-only
-  (connect flow can die if the callback routes to another instance; fix =
-  DB-backed state or self-contained signed state). Voice bridge has no
-  module state — queue lives in voice_queue.
+  (lazy-refill), typing-relay dedup. convRuns run-guard CLOSED via
+  lib/convLock.ts — pg session advisory lock per conv on a reserved
+  connection + newestInboundIsPending makes lock-waiters no-op instead of
+  double-replying (PGlite skips; single instance). Meta OAuth state CLOSED —
+  no `pending` map: meta_connections stores the token before the picker
+  opens, /pending + /link re-discover assets per request (connect_id is now
+  a wire-contract marker, not a lookup key); data-deletion codes are
+  HMAC-signed stateless instead of a Map. Voice bridge has no module
+  state — queue lives in voice_queue.
 - Hosted-voice compliance (partial): paid-plan gate (402 on free),
   VOICE_HOSTED_MAX per-workspace cap (default 3) and VOICE_PROVISION_DAILY
   attempt cap (default 10, counted from usage_events voice_provision rows).
