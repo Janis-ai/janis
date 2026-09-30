@@ -28,7 +28,7 @@ import {
 } from '../services/knowledgeGaps.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
-import { checkpointIndices, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
+import { checkpointIndices, draftExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { randomUUID } from 'node:crypto';
 import { effectiveMeteredModel } from '../lib/llm.js';
@@ -1270,6 +1270,7 @@ export function agentRoutes(db: Db) {
     name: t.name,
     turns: t.turns,
     expectation: t.expectation,
+    expectation_draft: t.expectationDraft,
     source_conversation_id: t.sourceConversationId,
     source_message_id: t.sourceMessageId,
     original_reply: t.originalReply,
@@ -1328,6 +1329,32 @@ export function agentRoutes(db: Db) {
           ? [...seen.values()].sort((a, b) => a - b).slice(-10)
           : lastCustomer >= 0 ? [lastCustomer] : [];
         if (!ends.length) return c.json({ error: 'no turns — supply turns or a conversation_id' }, 400);
+
+        // Auto-draft expectations — a rescued conv creates judgeable tests
+        // out of the box instead of rows waiting on a human write-up. Runs
+        // in parallel (≤10 checkpoints), soft-fails to no expectation; the
+        // expectation_draft flag marks them for review in the UI.
+        let drafts: (string | null)[] = ends.map(() => null);
+        if (!b.expectation) {
+          const [agent] = await db
+            .select()
+            .from(agents)
+            .where(eq(agents.id, agentId))
+            .limit(1);
+          if (agent) {
+            drafts = await Promise.all(
+              ends.map((end) =>
+                draftExpectation(
+                  db,
+                  agent,
+                  full.slice(Math.max(0, end + 1 - 16), end + 1),
+                  full[end + 1]?.text ?? null,
+                ).catch(() => null),
+              ),
+            );
+          }
+        }
+
         const rows = await db
           .insert(agentTests)
           .values(
@@ -1335,7 +1362,8 @@ export function agentRoutes(db: Db) {
               workspaceId: c.get('workspaceId'),
               agentId,
               name: ends.length > 1 ? `${b.name} #${i + 1}` : b.name,
-              expectation: b.expectation,
+              expectation: b.expectation || drafts[i] || '',
+              expectationDraft: !b.expectation && !!drafts[i],
               turns: full.slice(Math.max(0, end + 1 - 16), end + 1) as never,
               sourceConversationId,
               sourceMessageId: full[end].mid ?? null,
@@ -1369,7 +1397,10 @@ export function agentRoutes(db: Db) {
       .update(agentTests)
       .set({
         ...(b.name !== undefined ? { name: b.name } : {}),
-        ...(b.expectation !== undefined ? { expectation: b.expectation } : {}),
+        // editing the draft is the review — clears the AI-draft marker
+        ...(b.expectation !== undefined
+          ? { expectation: b.expectation, expectationDraft: false }
+          : {}),
         ...(b.turns !== undefined ? { turns: b.turns as never } : {}),
       })
       .where(and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, c.req.param('id'))))

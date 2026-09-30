@@ -2376,6 +2376,8 @@ interface AgentTest {
   name: string;
   turns: { role: 'customer' | 'agent'; text: string; mid?: string }[];
   expectation: string;
+  /** Expectation was AI-drafted at save time and not yet reviewed. */
+  expectation_draft?: boolean;
   source_conversation_id?: string | null;
   source_message_id?: string | null;
   original_reply?: string | null;
@@ -2485,6 +2487,20 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     mutationFn: (sourceConvId: string) =>
       api(`/api/agents/${agentId}/tests?source=${sourceConvId}`, { method: 'DELETE' }),
     onSuccess: invalidate,
+    onError: (e) => setErr(e.message),
+  });
+  // Edit state for the inline expectation textarea on each test card.
+  const [editExp, setEditExp] = useState<{ id: string; text: string } | null>(null);
+  const saveExp = useMutation({
+    mutationFn: (b: { id: string; text: string }) =>
+      api(`/api/agents/${agentId}/tests/${b.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ expectation: b.text }),
+      }),
+    onSuccess: () => {
+      setEditExp(null);
+      invalidate();
+    },
     onError: (e) => setErr(e.message),
   });
   const create = useMutation({
@@ -2839,9 +2855,49 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                 </div>
               ) : null;
             })()}
-            {t.expectation && (
+            {editExp?.id === t.id ? (
+              <div style={{ marginTop: 6 }}>
+                <textarea
+                  rows={2}
+                  autoFocus
+                  style={{ width: '100%', fontSize: 12 }}
+                  value={editExp.text}
+                  onChange={(e) => setEditExp({ id: t.id, text: e.target.value })}
+                />
+                <div className="row" style={{ marginTop: 4 }}>
+                  <button
+                    className="btn primary sm"
+                    disabled={saveExp.isPending}
+                    onClick={() => saveExp.mutate({ id: t.id, text: editExp.text.trim() })}
+                  >
+                    {saveExp.isPending ? 'Saving…' : 'Save expectation'}
+                  </button>
+                  <button className="btn sm" onClick={() => setEditExp(null)}>Cancel</button>
+                </div>
+              </div>
+            ) : (
               <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                expects: {t.expectation}
+                {t.expectation ? (
+                  <>
+                    expects: {t.expectation}
+                    {t.expectation_draft && (
+                      <span className="badge warn" style={{ marginLeft: 6 }} title="Written by AI at save time — review it">
+                        AI draft
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  "no expectation — runs aren't judged"
+                )}
+                {isAdmin && (
+                  <button
+                    className="btn ghost sm"
+                    style={{ marginLeft: 8 }}
+                    onClick={() => setEditExp({ id: t.id, text: t.expectation })}
+                  >
+                    {t.expectation ? 'edit' : 'add one'}
+                  </button>
+                )}
               </div>
             )}
             {run && (

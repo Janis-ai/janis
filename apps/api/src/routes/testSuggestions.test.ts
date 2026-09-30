@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
@@ -141,5 +141,58 @@ describe('GET /:id/test-suggestions', () => {
       (s: { conversation_id: string }) => s.conversation_id,
     );
     expect(ids3).not.toContain(convHuman);
+  });
+});
+
+describe('POST /:id/tests from a rescued conversation', () => {
+  it('auto-drafts an expectation and clears the flag on edit', async () => {
+    // BYOK config so llmFor resolves; the completion itself is stubbed.
+    await db
+      .update(agents)
+      .set({ config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } } as never })
+      .where(eq(agents.id, agentId));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Offers the returns portal link; never promises a refund.' } }],
+        }),
+      })),
+    );
+
+    const convId = await mkConv('draft-1', 'Draft Cust');
+    await db.insert(messages).values([
+      { conversationId: convId, direction: 'in', text: 'I want a refund' },
+      {
+        conversationId: convId,
+        direction: 'out',
+        text: 'sure, refunding now',
+        flags: { failure: true, help_requested: false, custom_alert: false, handoff_offer: false },
+      },
+      { conversationId: convId, direction: 'human', text: 'I will handle this' },
+    ]);
+
+    const res = await app.request(`/api/agents/${agentId}/tests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ name: 'draft test', conversation_id: convId }),
+    });
+    expect(res.status).toBe(201);
+    const { tests } = await res.json();
+    expect(tests.length).toBeGreaterThan(0);
+    expect(tests[0].expectation).toContain('returns portal');
+    expect(tests[0].expectation_draft).toBe(true);
+
+    // Operator edit → draft flag clears.
+    const patch = await app.request(`/api/agents/${agentId}/tests/${tests[0].id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ expectation: 'Reviewed expectation' }),
+    });
+    expect(patch.status).toBe(200);
+    const { test } = await patch.json();
+    expect(test.expectation).toBe('Reviewed expectation');
+    expect(test.expectation_draft).toBe(false);
   });
 });

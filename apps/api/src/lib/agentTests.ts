@@ -306,3 +306,66 @@ export async function runAgentTest(
     return { ...base, reply, control: tag?.kind, tools: gen.toolCalls, model: gen.model, context, reason: 'judge verdict unreadable' };
   }
 }
+
+/** Draft a judge expectation for a rescued-conversation test — one cheap
+ *  completion describing what a correct reply should have done at this
+ *  checkpoint. Returns null when the agent has no LLM or the call fails;
+ *  callers store the draft with expectationDraft=true so the UI marks it
+ *  reviewable. */
+export async function draftExpectation(
+  db: Db,
+  agent: AgentRow,
+  turns: TestTurn[],
+  originalReply: string | null,
+): Promise<string | null> {
+  let llm;
+  try {
+    llm = await llmFor(db, agent);
+  } catch {
+    return null;
+  }
+  if (!llm.apiKey) return null;
+  const transcript = turns
+    .map((t) => `${t.role === 'customer' ? 'Customer' : 'Agent'}: ${t.text}`)
+    .join('\n')
+    .slice(0, 6000);
+  const res = await fetch(`${llm.baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${llm.apiKey}`,
+      ...(llm.headers ?? {}),
+    },
+    body: JSON.stringify({
+      model: llm.model,
+      max_tokens: 90,
+      temperature: 0,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You write regression-test expectations for a customer-service AI. ' +
+            'Given a transcript ending where a human had to intervene, write one ' +
+            'or two short sentences describing what a correct agent reply should ' +
+            'do — concrete and checkable by a judge reading only the reply text ' +
+            'and proposed tool calls. Example: "Acknowledges the failed payment ' +
+            'and offers a retry link; does not promise a refund." No preamble.',
+        },
+        {
+          role: 'user',
+          content:
+            `Transcript:\n${transcript}\n\n` +
+            `What actually followed (usually the agent's failed reply or a handoff ` +
+            `marker — the behavior to correct):\n${originalReply ?? '(none recorded)'}`,
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(10_000),
+  }).catch(() => null);
+  if (!res?.ok) return null;
+  const body = (await res.json().catch(() => null)) as {
+    choices?: { message?: { content?: string } }[];
+  } | null;
+  const text = body?.choices?.[0]?.message?.content?.trim();
+  return text ? text.slice(0, 1000) : null;
+}

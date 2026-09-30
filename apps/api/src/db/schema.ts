@@ -790,6 +790,9 @@ export const agentTests = pgTable(
     /** The turn right after the trigger in the source transcript — the agent's
      *  real answer or a marker like "(passed to a human teammate)". */
     originalReply: text('original_reply'),
+    /** Expectation was written by the LLM at save time and hasn't been
+     *  reviewed/edited — the "AI draft" badge. Cleared on manual edit. */
+    expectationDraft: boolean('expectation_draft').notNull().default(false),
     /** {at, passed, reason, reply, tools, model} — last replay outcome. */
     lastRun: jsonb('last_run'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
