@@ -12,7 +12,7 @@ import { sendOutbound } from './outbound.js';
 import { refreshKnowledgeSource } from './urlSource.js';
 import { dispatchCampaignStep, stepStragglersExist } from './campaigns.js';
 import { checkSendPolicy, policyFor } from './sendPolicy.js';
-import { runCrmSyncJob } from '../routes/crm.js';
+import { queueCrmActivity, runCrmSyncJob, runCrmWritebackJob } from './crm.js';
 
 /** Job payload for 'outbound.send' — one recipient's send, replayable. */
 export interface OutboundSendJob {
@@ -124,7 +124,7 @@ async function runOutboundSend(db: Db, workspaceId: string, p: OutboundSendJob):
     { to: p.to, text: p.text, subject: p.subject, template: p.template },
   );
   if (p.campaignSendId) {
-    await db
+    const [stamped] = await db
       .update(campaignSends)
       .set({
         status: r.error
@@ -136,7 +136,19 @@ async function runOutboundSend(db: Db, workspaceId: string, p: OutboundSendJob):
         conversationId: r.conversationId,
         sentAt: r.error ? null : new Date(),
       })
-      .where(eq(campaignSends.id, p.campaignSendId));
+      .where(eq(campaignSends.id, p.campaignSendId))
+      .returning({ contactId: campaignSends.contactId });
+    if (stamped?.contactId) {
+      await queueCrmActivity(db, {
+        workspaceId,
+        contactId: stamped.contactId,
+        kind: r.error ? 'campaign_failed' : 'campaign_sent',
+        refId: p.campaignSendId,
+        summary: r.error
+          ? `Campaign message failed to ${p.to}: ${r.error}`
+          : `Campaign message sent to ${p.to}`,
+      }).catch(() => {}); // write-back must never kill a send
+    }
   }
   if (r.error) throw new Error(r.error);
 }
@@ -194,6 +206,11 @@ const HANDLERS: Record<string, (db: Db, workspaceId: string, payload: never) => 
     const { connection_id } = p as { connection_id?: string };
     if (!connection_id) throw new Error('crm.sync job missing connection_id');
     await runCrmSyncJob(db, connection_id);
+  },
+  'crm.writeback': async (db, _ws, p) => {
+    const { connection_id } = p as { connection_id?: string };
+    if (!connection_id) throw new Error('crm.writeback job missing connection_id');
+    await runCrmWritebackJob(db, connection_id);
   },
 };
 

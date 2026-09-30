@@ -971,6 +971,7 @@ type CrmConn = {
   id: string;
   provider: string;
   enabled: boolean;
+  activity_writeback: boolean;
   list_id: string | null;
   last_synced_at: string | null;
   last_error: string | null;
@@ -1003,6 +1004,11 @@ function CrmCard() {
     mutationFn: (id: string) => api(`/api/crm/${id}/sync-now`, { method: 'POST' }),
     onSuccess: invalidate,
   });
+  const writeback = useMutation({
+    mutationFn: ({ id, on }: { id: string; on: boolean }) =>
+      api(`/api/crm/${id}`, { method: 'PATCH', body: JSON.stringify({ activity_writeback: on }) }),
+    onSuccess: invalidate,
+  });
   const drop = useMutation({
     mutationFn: (id: string) => api(`/api/crm/${id}`, { method: 'DELETE' }),
     onSuccess: invalidate,
@@ -1024,6 +1030,12 @@ function CrmCard() {
           </span>
           {cn.last_error && <span className="error" style={{ fontSize: 12 }}>{cn.last_error}</span>}
           <span className="grow" />
+          <label className="row" style={{ gap: 5, fontSize: 12 }}
+            title="Log campaign sends, replies, conversions and human replies as notes on the CRM contact">
+            <input type="checkbox" checked={cn.activity_writeback}
+              onChange={(e) => writeback.mutate({ id: cn.id, on: e.target.checked })} />
+            write activity back
+          </label>
           <button className="btn ghost" onClick={() => syncNow.mutate(cn.id)}>Sync now</button>
           <button className="btn ghost" onClick={() => drop.mutate(cn.id)}>Disconnect</button>
         </div>

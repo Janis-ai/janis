@@ -7,6 +7,7 @@ import { handleChannelMessage } from '../services/channelIngress.js';
 import { validTwilioSignature } from '../lib/twilio.js';
 import { applySmsOpt, smsOptKeyword } from '../lib/optout.js';
 import { recordSuppression } from '../lib/deliverability.js';
+import { queueCrmActivity } from '../lib/crm.js';
 import { campaignSends } from '../db/schema.js';
 import { env } from '../env.js';
 
@@ -117,7 +118,7 @@ export function smsRoutes(db: Db) {
       source: `twilio:${code}`,
     });
     // Flip the freshest 'sent' send for this recipient — acceptance ≠ delivery.
-    await db
+    const failedSends = await db
       .update(campaignSends)
       .set({ status: 'failed', error: `twilio ${code}` })
       .where(
@@ -127,7 +128,19 @@ export function smsRoutes(db: Db) {
           eq(campaignSends.status, 'sent'),
           sql`${campaignSends.sentAt} > now() - interval '24 hours'`,
         ),
-      );
+      )
+      .returning({ id: campaignSends.id, contactId: campaignSends.contactId });
+    for (const s of failedSends) {
+      if (s.contactId) {
+        void queueCrmActivity(db, {
+          workspaceId: channel.workspaceId,
+          contactId: s.contactId,
+          kind: 'campaign_failed',
+          refId: s.id,
+          summary: `Campaign SMS to ${to} failed delivery (twilio ${code})`,
+        }).catch(() => {});
+      }
+    }
     return c.json({ ok: true });
   });
 

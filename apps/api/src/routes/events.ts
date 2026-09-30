@@ -5,6 +5,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { campaignSends, conversionEvents } from '../db/schema.js';
 import { upsertContactByAddress } from '../lib/contacts.js';
+import { queueCrmActivity } from '../lib/crm.js';
 import { dbRateLimit } from '../lib/rateLimit.js';
 
 /** Public conversion-event webhook — POST /events/:token. One token per
@@ -76,21 +77,31 @@ export function eventRoutes(db: Db) {
         .orderBy(desc(campaignSends.sentAt))
         .limit(1);
 
-      await db.insert(conversionEvents).values({
-        workspaceId,
-        contactId,
-        campaignSendId: send?.id ?? null,
-        campaignId: send?.campaignId ?? null,
-        event: body.event,
-        valueCents: body.value_cents ?? null,
-        source: body.source ?? 'api',
-      });
+      const [evt] = await db
+        .insert(conversionEvents)
+        .values({
+          workspaceId,
+          contactId,
+          campaignSendId: send?.id ?? null,
+          campaignId: send?.campaignId ?? null,
+          event: body.event,
+          valueCents: body.value_cents ?? null,
+          source: body.source ?? 'api',
+        })
+        .returning();
       if (send && !send.convertedAt) {
         await db
           .update(campaignSends)
           .set({ convertedAt: new Date() })
           .where(eq(campaignSends.id, send.id));
       }
+      await queueCrmActivity(db, {
+        workspaceId,
+        contactId,
+        kind: 'conversion',
+        refId: evt.id,
+        summary: `Conversion: ${body.event}${body.value_cents != null ? ` ($${(body.value_cents / 100).toFixed(2)})` : ''}${body.source ? ` via ${body.source}` : ''}`,
+      }).catch(() => {});
       return c.json({ ok: true });
     },
   );

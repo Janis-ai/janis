@@ -7,7 +7,6 @@ import { crmConnections } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { enqueueJob } from '../lib/jobs.js';
-import { syncHubSpotConnection } from '../lib/crm.js';
 import { audit } from '../lib/audit.js';
 
 /** CRM read connectors — admin-managed workspace settings. v1 supports
@@ -27,6 +26,7 @@ export function crmRoutes(db: Db) {
         id: r.id,
         provider: r.provider,
         enabled: r.enabled,
+        activity_writeback: r.activityWriteback,
         list_id: r.listId,
         watermark: r.watermark?.toISOString() ?? null,
         last_synced_at: r.lastSyncedAt?.toISOString() ?? null,
@@ -121,34 +121,31 @@ export function crmRoutes(db: Db) {
     return c.json({ ok: true });
   });
 
-  return app;
-}
+  // Toggle append-only activity write-back — campaign sends/replies,
+  // conversions, human replies and opt-outs become HubSpot notes.
+  app.patch(
+    '/:id',
+    zValidator('json', z.object({ activity_writeback: z.boolean() })),
+    async (c) => {
+      const { activity_writeback } = c.req.valid('json');
+      const [conn] = await db
+        .update(crmConnections)
+        .set({ activityWriteback: activity_writeback })
+        .where(
+          and(eq(crmConnections.id, c.req.param('id')), eq(crmConnections.workspaceId, c.get('workspaceId'))),
+        )
+        .returning();
+      if (!conn) return c.json({ error: 'not found' }, 404);
+      if (activity_writeback) {
+        await enqueueJob(db, {
+          workspaceId: conn.workspaceId,
+          type: 'crm.writeback',
+          payload: { connection_id: conn.id },
+        });
+      }
+      return c.json({ ok: true });
+    },
+  );
 
-/** Job handler — loads the connection, runs its provider's sync, reschedules.
- *  Every periodic CRM sync is a self-rescheduling job rather than sweeper
- *  inline work: per-connection failure isolation + backoff for free. */
-export async function runCrmSyncJob(db: Db, connectionId: string): Promise<void> {
-  const [conn] = await db
-    .select()
-    .from(crmConnections)
-    .where(eq(crmConnections.id, connectionId))
-    .limit(1);
-  if (!conn || !conn.enabled) return;
-  try {
-    if (conn.provider !== 'hubspot') throw new Error(`unsupported provider ${conn.provider}`);
-    await syncHubSpotConnection(db, conn);
-  } catch (e) {
-    await db
-      .update(crmConnections)
-      .set({ lastError: (e as Error).message.slice(0, 500), lastSyncedAt: new Date() })
-      .where(eq(crmConnections.id, conn.id));
-    throw e;
-  }
-  // Self-reschedule — 15 min cadence, idempotent by watermark.
-  await enqueueJob(db, {
-    workspaceId: conn.workspaceId,
-    type: 'crm.sync',
-    payload: { connection_id: conn.id },
-    runAt: new Date(Date.now() + 15 * 60_000),
-  });
+  return app;
 }

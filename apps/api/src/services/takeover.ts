@@ -9,6 +9,7 @@ import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
 import { agentVis, operatorIdentity, type AgentScope } from '../lib/access.js';
+import { queueCrmActivity } from '../lib/crm.js';
 
 type UserRow = typeof users.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -236,6 +237,15 @@ export async function humanReply(
     operator: await customerOperator(db, user, agent.id),
     payload: attachments?.length ? { attachments } : undefined,
   });
+  if (conversation.contactId) {
+    void queueCrmActivity(db, {
+      workspaceId,
+      contactId: conversation.contactId,
+      kind: 'human_reply',
+      refId: message.id,
+      summary: `Human agent replied via ${agent.name}${ident.name ? ` (operator ${ident.name})` : ''}: “${text.slice(0, 140)}”`,
+    }).catch(() => {});
+  }
   return { message, delivery };
 }
 

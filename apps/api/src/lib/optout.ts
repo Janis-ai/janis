@@ -8,6 +8,7 @@ import {
   type channels,
 } from '../db/schema.js';
 import { contactForBinding, linkConversationContact } from './contacts.js';
+import { queueCrmActivity } from './crm.js';
 import { audit } from './audit.js';
 import { bus } from './bus.js';
 import type { UserProfile } from '@janis/shared';
@@ -113,6 +114,15 @@ export async function applySmsOpt(
         eq(contactIdentities.platformUserId, from),
       ),
     );
+  if (contactId && kw === 'out') {
+    void queueCrmActivity(db, {
+      workspaceId,
+      contactId,
+      kind: 'opt_out',
+      refId: `${channel.id}:${from}`,
+      summary: `Recipient opted out via SMS STOP (${from})`,
+    }).catch(() => {});
+  }
 
   await audit(db, {
     workspaceId,

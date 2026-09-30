@@ -24,6 +24,7 @@ import { toMessage } from '../lib/serializers.js';
 import { bus } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { captureCsat } from '../lib/csat.js';
+import { queueCrmActivity } from '../lib/crm.js';
 import { pickAutoAssignee } from '../lib/rules.js';
 import { env } from '../env.js';
 import { deliverWebhook } from '../lib/webhooks.js';
@@ -487,10 +488,22 @@ export async function handleChannelMessage(
 
   // Campaign reply attribution — an inbound on a conversation a campaign
   // sent to marks those sends replied (also what stops a drip sequence).
-  await db
+  const repliedSends = await db
     .update(campaignSends)
     .set({ repliedAt: new Date() })
-    .where(and(eq(campaignSends.conversationId, conv.id), isNull(campaignSends.repliedAt)));
+    .where(and(eq(campaignSends.conversationId, conv.id), isNull(campaignSends.repliedAt)))
+    .returning({ id: campaignSends.id, contactId: campaignSends.contactId });
+  for (const s of repliedSends) {
+    if (s.contactId) {
+      void queueCrmActivity(db, {
+        workspaceId: channel.workspaceId,
+        contactId: s.contactId,
+        kind: 'campaign_reply',
+        refId: s.id,
+        summary: `Recipient replied${conv.contactId ? ` — conversation ${conv.id}` : ''}`,
+      }).catch(() => {});
+    }
+  }
 
   // A pending CSAT prompt turns this reply into a rating — it's already in
   // the transcript; record the score and thank them without waking the agent.

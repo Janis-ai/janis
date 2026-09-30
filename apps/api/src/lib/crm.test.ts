@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import {
@@ -13,8 +13,8 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { encryptSecret } from '../lib/secrets.js';
-import { syncHubSpotConnection } from './crm.js';
-import { runCrmSyncJob } from '../routes/crm.js';
+import { queueCrmActivity, runCrmSyncJob, runCrmWriteback, syncHubSpotConnection } from './crm.js';
+import { crmActivityQueue } from '../db/schema.js';
 
 let db: Db;
 let wsId: string;
@@ -135,5 +135,84 @@ describe('hubspot crm sync', () => {
       .where(eq(crmConnections.id, conn.id));
     expect(failed.lastError).toContain('429');
     vi.unstubAllGlobals();
+  });
+});
+
+describe('crm activity write-back', () => {
+  it('queue is gated on an enabled write-back connection', async () => {
+    const [c] = await db.select().from(contacts).where(eq(contacts.email, 'ada@corp.test')).limit(1);
+    // writeback off → nothing queues
+    await queueCrmActivity(db, {
+      workspaceId: wsId,
+      contactId: c.id,
+      kind: 'campaign_sent',
+      refId: 'gated-1',
+      summary: 'should not queue',
+    });
+    expect(await db.select().from(crmActivityQueue)).toHaveLength(0);
+    // enable → queues
+    await db.update(crmConnections).set({ activityWriteback: true }).where(eq(crmConnections.id, conn.id));
+    await queueCrmActivity(db, {
+      workspaceId: wsId,
+      contactId: c.id,
+      kind: 'campaign_sent',
+      refId: 'send-1',
+      summary: 'Campaign message sent',
+    });
+    // dedup on (contact,kind,ref)
+    await queueCrmActivity(db, {
+      workspaceId: wsId,
+      contactId: c.id,
+      kind: 'campaign_sent',
+      refId: 'send-1',
+      summary: 'dup',
+    });
+    expect(await db.select().from(crmActivityQueue)).toHaveLength(1);
+  });
+
+  it('posts a HubSpot note per queued activity and stamps synced_at', async () => {
+    const posted: { body: Record<string, unknown> }[] = [];
+    vi.stubGlobal('fetch', async (_i: RequestInfo | URL, init?: RequestInit) => {
+      posted.push({ body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      return Response.json({ id: 'note-1' }, { status: 201 });
+    });
+    const [fresh] = await db.select().from(crmConnections).where(eq(crmConnections.id, conn.id));
+    await runCrmWriteback(db, fresh);
+    vi.unstubAllGlobals();
+    expect(posted).toHaveLength(1);
+    const props = (posted[0].body as { properties?: Record<string, unknown> }).properties!;
+    expect(String(props.hs_note_body)).toContain('Campaign send');
+    const assoc = (posted[0].body as { associations?: { to: { id: string } }[] }).associations!;
+    expect(assoc[0].to.id).toBe('hs-1');
+    const rows = await db.select().from(crmActivityQueue);
+    expect(rows[0].syncedAt).toBeTruthy();
+  });
+
+  it('drops events for contacts the CRM does not know', async () => {
+    const [janisOnly] = await db
+      .insert(contacts)
+      .values({ workspaceId: wsId, email: 'local@only.test' })
+      .returning();
+    await queueCrmActivity(db, {
+      workspaceId: wsId,
+      contactId: janisOnly.id,
+      kind: 'opt_out',
+      refId: 'opt-1',
+      summary: 'opted out',
+    });
+    const calls: unknown[] = [];
+    vi.stubGlobal('fetch', async () => {
+      calls.push(1);
+      return Response.json({ id: 'n' }, { status: 201 });
+    });
+    const [fresh] = await db.select().from(crmConnections).where(eq(crmConnections.id, conn.id));
+    await runCrmWriteback(db, fresh);
+    vi.unstubAllGlobals();
+    expect(calls).toHaveLength(0); // no note — no upstream anchor
+    const pending = await db
+      .select()
+      .from(crmActivityQueue)
+      .where(sql`${crmActivityQueue.syncedAt} is null`);
+    expect(pending).toHaveLength(0);
   });
 });

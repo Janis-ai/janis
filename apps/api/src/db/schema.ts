@@ -1091,6 +1091,9 @@ export const crmConnections = pgTable(
     // Synced contacts land in this list — the campaign audience picker
     // consumes it like any other list.
     listId: uuid('list_id').references(() => contactLists.id, { onDelete: 'set null' }),
+    // Append-only activity write-back (HubSpot notes / SF Tasks). Opt-in per
+    // connection — the queue fills only while this is on.
+    activityWriteback: boolean('activity_writeback').notNull().default(false),
     watermark: timestamp('watermark', { withTimezone: true }),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
     lastError: text('last_error'),
@@ -1098,6 +1101,34 @@ export const crmConnections = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('crm_connections_ws').on(t.workspaceId)],
+);
+
+/** Activity destined for CRM timelines — written at the moment Janis
+ *  observes the event (campaign send/reply/fail, conversion, human reply,
+ *  opt-out), drained by the crm.writeback job onto the CRM contact record.
+ *  (contact_id, kind, ref_id) unique → retries never double-post. */
+export const crmActivityQueue = pgTable(
+  'crm_activity_queue',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => contacts.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(), // campaign_sent|campaign_failed|campaign_reply|conversion|human_reply|opt_out
+    refId: text('ref_id').notNull(), // campaign_send id, conversion_event id, message id…
+    summary: text('summary').notNull(), // human-readable note body
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+    syncedAt: timestamp('synced_at', { withTimezone: true }),
+    attempts: integer('attempts').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('crm_activity_queue_ref').on(t.contactId, t.kind, t.refId),
+    index('crm_activity_queue_pending').on(t.workspaceId, t.syncedAt),
+  ],
 );
 
 /** Workspace suppression list — never-send addresses regardless of per-channel

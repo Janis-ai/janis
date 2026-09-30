@@ -241,11 +241,16 @@ before typecheck/tests/dev.
   (15min) → HubSpot contacts.search filtered lastmodifieddate>watermark,
   20-page cap/run → upsertContactByAddress anchored on external_ids.hubspot
   → stable 'hubspot sync' list; hs_email_optout → one-way suppression
-  (never clears Janis opt-outs). Second provider: SF client_credentials via
-  connections.ts PROVIDERS. Still pending: activity write-back (append-only
-  — campaign send/reply logged via HubSpot timeline/custom events or SF
-  Tasks; Intercom logs convs as SF tasks, this is the competitive bar).
-  Full bidirectional field sync = later, separate product.
+  (never clears Janis opt-outs). Activity write-back: DONE (HubSpot notes) —
+  connections gain activity_writeback flag (PATCH /api/crm/:id, Settings
+  checkbox); every campaign send/fail/reply, conversion, human reply and
+  SMS opt-out calls queueCrmActivity → crm_activity_queue (unique
+  contact+kind+ref → dedup-safe) → 'crm.writeback' self-rescheduling job
+  posts HubSpot notes (associationTypeId 202) onto the external_ids-anchored
+  contact. Never creates CRM contacts; Janis-only contacts' rows drop on
+  drain. Dead-letters after 5 attempts. Second provider: SF client_credentials
+  via connections.ts PROVIDERS + Task write-back. Still pending: Salesforce
+  connector, full bidirectional field sync (later, separate product).
 - Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
   13 articles on prod Demo Agent + Janis agent. Missing: full-text ranked
   search (tsvector — ILIKE only today), article view counts, helpfulness
