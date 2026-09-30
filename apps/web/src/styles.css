@@ -248,7 +248,7 @@ button, input, select, textarea { font: inherit; }
 }
 .msg {
   max-width: 75%; padding: 10px 14px; border-radius: 14px; font-size: 14px;
-  line-height: 1.45; overflow-wrap: anywhere;
+  line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .msg.in { align-self: flex-start; background: var(--panel-2); }
 .msg.out { align-self: flex-end; background: #1d3a5f; }

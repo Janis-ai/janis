@@ -3019,6 +3019,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                                           textDecoration: 'underline',
                                           textDecorationStyle: 'dotted',
                                           textUnderlineOffset: 3,
+                                          whiteSpace: 'pre-wrap',
                                         }}
                                         title="Open this message in the conversation"
                                       >
@@ -3027,7 +3028,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                                     ) : (
                                       <span
                                         className={trigger ? '' : 'muted'}
-                                        style={trigger ? { fontWeight: 600 } : undefined}
+                                        style={{ whiteSpace: 'pre-wrap', ...(trigger ? { fontWeight: 600 } : {}) }}
                                       >
                                         {turn.text}
                                       </span>
