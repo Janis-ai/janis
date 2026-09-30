@@ -34,4 +34,18 @@ describe('POST /ops/alert', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
   });
+
+  it('also accepts the token via Authorization: Bearer (GCP webhook_tokenauth)', async () => {
+    const res = await app.fetch(
+      new Request('http://t/ops/alert', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer test-ops-token',
+        },
+        body: JSON.stringify({ incident: { summary: 'x', state: 'open' } }),
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
 });

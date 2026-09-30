@@ -12,7 +12,11 @@ export function opsRoutes() {
   const app = new Hono();
 
   app.post('/alert', async (c) => {
-    if (!env.opsAlertToken || c.req.query('token') !== env.opsAlertToken)
+    // GCP webhook_tokenauth puts the secret on the Authorization header
+    // ("Bearer <token>"); a bare ?token= query also works for manual pings.
+    const auth = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '');
+    const tok = c.req.query('token') ?? auth;
+    if (!env.opsAlertToken || tok !== env.opsAlertToken)
       return c.text('invalid token', 401);
     const body = (await c.req.json().catch(() => ({}))) as {
       incident?: {

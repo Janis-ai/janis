@@ -186,11 +186,17 @@ before typecheck/tests/dev.
 - Webhook ops: DONE — deliveries list on the agent page (payload, attempts,
   next_attempt_at), POST /api/agents/:id/deliveries/:did/replay re-sends a
   failed delivery with a fresh signature + full retry budget.
-- Status/monitoring: DONE (basic) — GET /status probes db + sweeper-leader
-  liveness (503 when degraded), /status web page, sweepDeliveryFailures logs
-  a `janis.alert` ERROR marker on webhook-failure spikes (attach a Cloud
-  Logging log-based alert to it). Still missing: real SLO dashboards, uptime
-  history, third-party status page.
+- Status/monitoring: DONE — GET /status probes db + sweeper-leader liveness
+  (503 when degraded), /status web page, `janis.alert` ERROR markers
+  (webhook_delivery_spike sweep, eval_regression), and alerting is LIVE:
+  opsAlert() posts to ALERT_SLACK_WEBHOOK at each marker, and Cloud
+  Monitoring policy "janis-api errors to Slack" (severity>=ERROR on the
+  cloud_run_revision, 5-min notify rate limit) pushes incidents through a
+  webhook_tokenauth channel to POST /ops/alert → reposted to Slack. Note:
+  Cloud Run strips the Authorization header at the IAM layer, so the
+  channel URL carries ?token= instead of header auth (OPS_ALERT_TOKEN).
+  Still missing: real SLO dashboards, uptime history, third-party status
+  page.
 - SLA timers + breach alerts (business-hours-aware).
 - Mobile polish on conversation screen (operators live on phones).
 
