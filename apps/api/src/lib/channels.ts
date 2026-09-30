@@ -931,6 +931,9 @@ async function sendEmailReply(
       },
       body: JSON.stringify({
         from: `${displayName} <${creds.from_address ?? fromAddr}>`,
+        // A branded From still routes replies to the channel's inbound
+        // address — otherwise the customer's reply never reaches us.
+        ...(creds.from_address ? { reply_to: [fromAddr] } : {}),
         to: [platformUserId],
         subject,
         text: body,
