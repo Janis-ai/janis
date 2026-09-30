@@ -294,3 +294,28 @@ export async function sweepCampaigns(db: Db): Promise<void> {
     }
   }
 }
+
+/** Prompt fragment for the reply path: if this conversation originated from
+ *  a campaign send, surface the campaign name + the workspace-authored
+ *  instructions for how the agent should handle replies. Data-only context
+ *  comes from the workspace admin, so it can be phrased as instructions —
+ *  but the customer never sees it. */
+export async function campaignContextFor(
+  db: Db,
+  conversationId: string,
+): Promise<string | null> {
+  const rows = await db
+    .select({ name: campaigns.name, agentInstructions: campaigns.agentInstructions })
+    .from(campaignSends)
+    .innerJoin(campaigns, eq(campaignSends.campaignId, campaigns.id))
+    .where(eq(campaignSends.conversationId, conversationId))
+    .limit(1);
+  const c = rows[0];
+  if (!c) return null;
+  const instr = c.agentInstructions?.trim();
+  return (
+    `\nThis conversation started as an outbound campaign "${c.name}" — ` +
+    `the customer is replying to a message you sent them.` +
+    (instr ? `\nCampaign instructions for handling replies:\n${instr}` : '')
+  );
+}

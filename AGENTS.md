@@ -188,8 +188,15 @@ before typecheck/tests/dev.
   Drip steps (campaigns.steps: [{delay_minutes, text, whatsapp_template?}])
   dispatch as campaign.step jobs, reaching prior-step sent + unreplied
   only. Reply attribution: campaign_sends.replied_at stamps on inbound in
-  the send's conversation. Missing: multi-variant A/B, suppression-list
-  import, per-recipient (vs per-campaign) drip timing.
+  the send's conversation. Agent binding: campaign → channel → channel.agent_id;
+  campaigns.agent_instructions is injected into the reply prompt (and
+  suggestion prompt) for campaign-originated conversations via
+  campaignContextFor — the agent knows it's answering a campaign reply and
+  gets workspace-authored handling guidance. UI shows the reply agent in
+  the channel picker + list rows. Missing: lists/tags/CSV-import audiences
+  (segment is filter-only), branching steps, conversion attribution,
+  frequency caps/quiet hours, bounce→suppression loop, channel-readiness
+  gating.
 - Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
   13 articles on prod Demo Agent + Janis agent. Missing: full-text ranked
   search (tsvector — ILIKE only today), article view counts, helpfulness

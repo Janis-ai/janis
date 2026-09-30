@@ -935,6 +935,10 @@ export const campaigns = pgTable(
     // whatsapp_template?}] — each only reaches previous-step recipients who
     // haven't replied.
     steps: jsonb('steps').notNull().default([]),
+    // Workspace-authored guidance for the channel's agent when it handles
+    // replies to this campaign — injected into the reply prompt for
+    // campaign-originated conversations.
+    agentInstructions: text('agent_instructions'),
     scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
     status: text('status', { enum: ['draft', 'scheduled', 'sending', 'done', 'failed'] })
       .notNull()

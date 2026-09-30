@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { and, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { campaignSends, campaigns, channels } from '../db/schema.js';
+import { agents, campaignSends, campaigns, channels } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { dispatchCampaign, resolveSegment } from '../lib/campaigns.js';
 import { audit } from '../lib/audit.js';
@@ -48,6 +48,10 @@ const createCampaign = z.object({
     )
     .max(10)
     .optional(),
+  /** Workspace-authored guidance for the channel's agent when it answers
+   *  replies to this campaign — injected into the reply prompt for
+   *  campaign-originated conversations. */
+  agent_instructions: z.string().max(4000).optional(),
   /** ISO timestamp — presence schedules; absence leaves a draft. */
   scheduled_at: z.string().datetime().optional(),
 });
@@ -74,14 +78,20 @@ export function campaignRoutes(db: Db) {
 
   app.get('/', async (c) => {
     const rows = await db
-      .select({ campaign: campaigns, channelName: channels.name, channelKind: channels.kind })
+      .select({
+        campaign: campaigns,
+        channelName: channels.name,
+        channelKind: channels.kind,
+        agentName: agents.name,
+      })
       .from(campaigns)
       .innerJoin(channels, eq(campaigns.channelId, channels.id))
+      .innerJoin(agents, eq(channels.agentId, agents.id))
       .where(eq(campaigns.workspaceId, c.get('workspaceId')))
       .orderBy(desc(campaigns.createdAt))
       .limit(100);
     const withStats = await Promise.all(
-      rows.map(async ({ campaign, channelName, channelKind }) => {
+      rows.map(async ({ campaign, channelName, channelKind, agentName }) => {
         const sends = await db
           .select({ status: campaignSends.status, repliedAt: campaignSends.repliedAt })
           .from(campaignSends)
@@ -92,6 +102,8 @@ export function campaignRoutes(db: Db) {
           channel_id: campaign.channelId,
           channel_name: channelName,
           channel_kind: channelKind,
+          agent_name: agentName,
+          agent_instructions: campaign.agentInstructions,
           status: campaign.status,
           scheduled_at: campaign.scheduledAt?.toISOString() ?? null,
           created_at: campaign.createdAt.toISOString(),
@@ -164,6 +176,7 @@ export function campaignRoutes(db: Db) {
           : null,
         segment: body.segment ?? {},
         steps: body.steps ?? [],
+        agentInstructions: body.agent_instructions?.trim() || null,
         scheduledAt: scheduled,
         status: scheduled ? 'scheduled' : 'draft',
         createdBy: c.get('user').id,
@@ -206,6 +219,7 @@ export function campaignRoutes(db: Db) {
         scheduled_at: campaign.scheduledAt?.toISOString() ?? null,
         segment: campaign.segment,
         steps: campaign.steps,
+        agent_instructions: campaign.agentInstructions,
       },
       stats: stats(sends),
       sends: sends.map((s) => ({

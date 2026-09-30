@@ -484,6 +484,13 @@
       "when": 1790730000000,
       "tag": "0068_campaign_depth",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1790731000000,
+      "tag": "0069_campaign_agent_instructions",
+      "breakpoints": true
     }
   ]
 }

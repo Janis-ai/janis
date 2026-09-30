@@ -14,6 +14,7 @@ type CampaignRow = {
   status: string;
   channel_name: string;
   channel_kind: string;
+  agent_name: string;
   scheduled_at: string | null;
   stats: Stats;
 };
@@ -50,7 +51,7 @@ export default function Campaigns() {
   const [form, setForm] = useState({
     name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
     has_email: false, has_phone: false, active_days: '', never_replied: false,
-    step_delay: '', step_text: '',
+    step_delay: '', step_text: '', agent_instructions: '',
   });
   const segment = () => ({
     ...(form.q ? { q: form.q } : {}),
@@ -72,7 +73,7 @@ export default function Campaigns() {
     setForm({
       name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
       has_email: false, has_phone: false, active_days: '', never_replied: false,
-      step_delay: '', step_text: '',
+      step_delay: '', step_text: '', agent_instructions: '',
     });
   const create = useMutation({
     mutationFn: () =>
@@ -89,6 +90,7 @@ export default function Campaigns() {
             form.step_text && form.step_delay
               ? [{ delay_minutes: Math.round(Number(form.step_delay) * 60), text: form.step_text }]
               : undefined,
+          agent_instructions: form.agent_instructions.trim() || undefined,
           scheduled_at: form.scheduled_at ? new Date(form.scheduled_at).toISOString() : undefined,
         }),
       }),
@@ -121,7 +123,9 @@ export default function Campaigns() {
             onChange={(e) => setForm({ ...form, channel_id: e.target.value })}>
             <option value="">Channel…</option>
             {channels.map((c) => (
-              <option key={c.id} value={c.id}>{c.name} ({c.kind})</option>
+              <option key={c.id} value={c.id}>
+                {c.name} ({c.kind}) — agent: {c.agent_name}
+              </option>
             ))}
           </select>
           <input className="input" type="datetime-local" title="Schedule (blank = draft)"
@@ -162,6 +166,12 @@ export default function Campaigns() {
             placeholder="Message" value={form.text}
             onChange={(e) => setForm({ ...form, text: e.target.value })} />
         )}
+        {!!form.channel_id && (
+          <textarea className="input" style={{ marginTop: 10, width: '100%' }} rows={2}
+            placeholder={`Reply handling for ${channels.find((c) => c.id === form.channel_id)?.agent_name ?? 'the agent'} — optional. e.g. "This is a win-back offer; answer questions and help them reactivate. Offer 20% off if asked."`}
+            value={form.agent_instructions}
+            onChange={(e) => setForm({ ...form, agent_instructions: e.target.value })} />
+        )}
         <div className="row" style={{ gap: 10, marginTop: 10 }}>
           <input className="input" type="number" min="1" style={{ width: 110 }}
             title="Hours after the first send"
@@ -187,7 +197,7 @@ export default function Campaigns() {
               <strong>{cp.name}</strong>{' '}
               <span className="chip">{cp.status}</span>
               <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-                {cp.channel_name} · {cp.stats.sent}/{cp.stats.total} sent
+                {cp.channel_name} · replies → {cp.agent_name} · {cp.stats.sent}/{cp.stats.total} sent
                 {!!cp.stats.replied && ` · ${cp.stats.replied} replied`}
                 {!!cp.stats.failed && ` · ${cp.stats.failed} failed`}
                 {!!cp.stats.skipped && ` · ${cp.stats.skipped} opted out`}

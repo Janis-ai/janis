@@ -170,3 +170,60 @@ describe('campaign dispatch', () => {
     expect(again.length).toBe(eligible);
   });
 });
+
+describe('campaign agent context', () => {
+  it('returns campaign name + instructions for a campaign-originated conversation', async () => {
+    const { campaignContextFor } = await import('./campaigns.js');
+    const [campaign] = await db
+      .insert(campaigns)
+      .values({
+        workspaceId,
+        channelId,
+        name: 'Win-back',
+        text: 'hey',
+        status: 'sending',
+        agentInstructions: 'Offer 20% off if asked.',
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'sms:ctx' })
+      .returning();
+    await db.insert(campaignSends).values({
+      campaignId: campaign.id,
+      workspaceId,
+      channelId,
+      recipient: '+1555',
+      conversationId: conv.id,
+    });
+
+    const ctx = await campaignContextFor(db, conv.id);
+    expect(ctx).toContain('Win-back');
+    expect(ctx).toContain('Offer 20% off if asked.');
+    // An unlinked conversation gets nothing.
+    const [plain] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'sms:plain' })
+      .returning();
+    expect(await campaignContextFor(db, plain.id)).toBeNull();
+    // A linked campaign with no instructions still names the campaign.
+    const [noInstr] = await db
+      .insert(campaigns)
+      .values({ workspaceId, channelId, name: 'Plain', text: 'x', status: 'sending' })
+      .returning();
+    const [conv2] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'sms:ctx2' })
+      .returning();
+    await db.insert(campaignSends).values({
+      campaignId: noInstr.id,
+      workspaceId,
+      channelId,
+      recipient: '+1556',
+      conversationId: conv2.id,
+    });
+    const ctx2 = await campaignContextFor(db, conv2.id);
+    expect(ctx2).toContain('Plain');
+    expect(ctx2).not.toContain('Campaign instructions');
+  });
+});

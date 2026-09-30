@@ -14,6 +14,7 @@ import type { AttachmentRef } from './channels.js';
 import { getUpload } from './uploads.js';
 import { callTool, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
+import { campaignContextFor } from './campaigns.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -1184,7 +1185,9 @@ export async function runHostedEvent(
       ...(await connectionSecrets(db, agent.id)),
     };
     const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId, agent, suggesting: true };
-    const prompt = systemPrompt(agent, docs, conv, { forSuggestion: true });
+    const prompt =
+      systemPrompt(agent, docs, conv, { forSuggestion: true }) +
+      ((await campaignContextFor(db, convId)) ?? '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     const result = await generateReply(
       llm,
@@ -1429,7 +1432,8 @@ async function replyAsHostedAgent(
       ...(await connectionSecrets(db, agent.id)),
     };
     const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId, agent };
-    const prompt = systemPrompt(agent, docs, conv);
+    const prompt =
+      systemPrompt(agent, docs, conv) + ((await campaignContextFor(db, convId)) ?? '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;
     const onStall = () => {
