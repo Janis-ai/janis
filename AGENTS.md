@@ -171,6 +171,25 @@ before typecheck/tests/dev.
 - SLA timers + breach alerts (business-hours-aware).
 - Mobile polish on conversation screen (operators live on phones).
 
+**UX polish (2026-09 review — interaction layer good; reads engineer-polished)**
+- A. Iconography: unicode glyph nav (▤ ◉ 📣 ◫ $) + emoji chrome (💾 😴 ⭐)
+  → lucide-react. Biggest single visual lift; mobile icon-only nav is
+  illegible today.
+- B. Shared Modal component — retire window.prompt (workspace create, tag
+  entry, view naming); unblocks input validation.
+- C. Keyboard layer: j/k rows, e archive, c compose, ⌘K command palette.
+  The Intercom/Front retention gap for operators.
+- D. "Why" affordances: surface skip/defer reasons on campaign_send rows
+  (quiet hours, suppression+bounce date, send cap), policy tooltips at the
+  point of decision.
+- E. Operator docs — /docs covers only the agent API; nothing for
+  campaigns, send policy, suppressions, CRM sync, approvals, Slack
+  takeover, saved views. Reuse help-center renderer.
+- F. Accessibility sweep: ~27 aria attrs total; icon-only buttons on
+  title= only; focus rings + landmarks for procurement questionnaires.
+- Deferred: light mode; extended onboarding (checklist ends at first
+  takeover — docs cover discovery more durably).
+
 **npm**
 - `janis` (SDK): published — latest 1.0.1 (1.0.0 leaked @janis/shared type
   imports in .d.ts; 1.0.1 owns its wire types in src/types.ts). Granular
