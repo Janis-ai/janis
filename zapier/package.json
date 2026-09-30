@@ -1,0 +1,10 @@
+{
+  "name": "janis",
+  "version": "1.0.1",
+  "description": "Janis — human-assisted AI customer conversations. AI when AI is best, humans when needed.",
+  "main": "index.js",
+  "private": true,
+  "dependencies": {
+    "zapier-platform-core": "17.9.1"
+  }
+}
