@@ -309,10 +309,10 @@ before typecheck/tests/dev.
   Subject/Description) — SF auth minted once per batch, not per row.
   Still pending: full bidirectional field sync (later, separate product).
 - Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
-  13 articles on prod Demo Agent + Janis agent. Missing: full-text ranked
-  search (tsvector — ILIKE only today), article view counts, helpfulness
-  votes, zero-results search log (feeds content roadmap), version history,
-  widget article embeds.
+  13 articles on prod Demo Agent + Janis agent. Ranked tsvector search
+  (websearch_to_tsquery + ILIKE fallback), view counts, and zero-result
+  search log → GET /api/articles/insights all DONE (mig 0076).
+  Missing: helpfulness votes, version history, widget article embeds.
 - Marketplace: webhook template + event export cover Zapier manually; no
   published Zapier app (listing/submission = highest-leverage non-code task),
   no one-click OAuth installs, no public /integrations directory. Outbound
@@ -362,7 +362,8 @@ before typecheck/tests/dev.
   split — "deflection" card on Reports), /usage (messages vs plan
   included + LLM cost/tokens + voice seconds, current vs previous period — card on Reports), /export?kind=
   conversations|campaign_sends (CSV, scope-filtered, 5k-row cap).
-- Still missing: FRT/resolution-over-time charts (point-in-time today).
+- /timeline DONE — daily opened/FRT/resolution + ai-vs-human resolved
+  split (deflection card). Reporting tail closed.
 
 **Reliability & scale (missing — honest weak spots)**
 - Observability: no tracing (OTel), no SLO dashboards, no
