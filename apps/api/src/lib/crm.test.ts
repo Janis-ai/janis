@@ -13,7 +13,13 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { encryptSecret } from '../lib/secrets.js';
-import { queueCrmActivity, runCrmSyncJob, runCrmWriteback, syncHubSpotConnection } from './crm.js';
+import {
+  queueCrmActivity,
+  runCrmSyncJob,
+  runCrmWriteback,
+  syncHubSpotConnection,
+  syncSalesforceConnection,
+} from './crm.js';
 import { crmActivityQueue } from '../db/schema.js';
 
 let db: Db;
@@ -214,5 +220,102 @@ describe('crm activity write-back', () => {
       .from(crmActivityQueue)
       .where(sql`${crmActivityQueue.syncedAt} is null`);
     expect(pending).toHaveLength(0);
+  });
+});
+
+describe('salesforce crm connector', () => {
+  let sfConn: typeof crmConnections.$inferSelect;
+
+  it('logs in, polls SOQL on LastModifiedDate, syncs identity + opt-out', async () => {
+    [sfConn] = await db
+      .insert(crmConnections)
+      .values({
+        workspaceId: wsId,
+        provider: 'salesforce',
+        credentialsEnc: encryptSecret(
+          JSON.stringify({ host: 'acme.my.salesforce.com', client_id: 'cid', client_secret: 'sec' }),
+        ),
+      })
+      .returning();
+
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes('/services/oauth2/token')) {
+        return Response.json({ access_token: 'sf-tok', instance_url: 'https://acme.my.salesforce.com' });
+      }
+      expect(init?.headers && (init.headers as Record<string, string>).Authorization).toBe('Bearer sf-tok');
+      return Response.json({
+        records: [
+          {
+            Id: '003AAA',
+            Email: 'grace@navy.test',
+            Phone: '+15557770000',
+            FirstName: 'Grace',
+            LastName: 'Hopper',
+            LastModifiedDate: '2026-02-01T00:00:00.000Z',
+            HasOptedOutOfEmail: false,
+          },
+          {
+            Id: '003BBB',
+            Email: 'silent@sales.test',
+            LastModifiedDate: '2026-02-02T00:00:00.000Z',
+            HasOptedOutOfEmail: true,
+          },
+        ],
+      });
+    });
+    const { synced } = await syncSalesforceConnection(db, sfConn);
+    expect(synced).toBe(2);
+    expect(urls[0]).toContain('/services/oauth2/token');
+    expect(decodeURIComponent(urls[1])).toContain('FROM Contact');
+
+    const [grace] = await db.select().from(contacts).where(eq(contacts.email, 'grace@navy.test'));
+    expect((grace.externalIds as Record<string, string>).salesforce).toBe('003AAA');
+    expect(grace.name).toBe('Grace Hopper');
+    expect(grace.tags).toContain('crm:salesforce');
+
+    // HasOptedOutOfEmail → one-way suppression.
+    const sups = await db.select().from(suppressions).where(eq(suppressions.address, 'silent@sales.test'));
+    expect(sups[0]?.reason).toBe('manual');
+
+    // Sync list named after the provider.
+    const [after] = await db.select().from(crmConnections).where(eq(crmConnections.id, sfConn.id));
+    expect(after.listId).toBeTruthy();
+    expect(after.watermark?.toISOString()).toBe('2026-02-02T00:00:00.000Z');
+    vi.unstubAllGlobals();
+  });
+
+  it('writes activity back as a completed Task on the contact', async () => {
+    const [grace] = await db.select().from(contacts).where(eq(contacts.email, 'grace@navy.test'));
+    await db.update(crmConnections).set({ activityWriteback: true }).where(eq(crmConnections.id, sfConn.id));
+    await queueCrmActivity(db, {
+      workspaceId: wsId,
+      contactId: grace.id,
+      kind: 'conversion',
+      refId: 'conv-1',
+      summary: 'Conversion: purchase ($99.00) via shopify',
+    });
+
+    const tasks: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/services/oauth2/token')) {
+        return Response.json({ access_token: 'sf-tok', instance_url: 'https://acme.my.salesforce.com' });
+      }
+      expect(url).toContain('/sobjects/Task');
+      tasks.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return Response.json({ id: '00T1' }, { status: 201 });
+    });
+    const [fresh] = await db.select().from(crmConnections).where(eq(crmConnections.id, sfConn.id));
+    await runCrmWriteback(db, fresh);
+    vi.unstubAllGlobals();
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].WhoId).toBe('003AAA');
+    expect(tasks[0].Status).toBe('Completed');
+    expect(String(tasks[0].Subject)).toContain('Conversion');
+    expect(String(tasks[0].Description)).toContain('$99.00');
   });
 });

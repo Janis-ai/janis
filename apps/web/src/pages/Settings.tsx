@@ -988,16 +988,27 @@ function CrmCard() {
     queryFn: () => api<{ connections: CrmConn[] }>('/api/crm'),
     refetchInterval: 15_000,
   });
+  const [provider, setProvider] = useState<'hubspot' | 'salesforce'>('hubspot');
   const [token, setToken] = useState('');
+  const [sf, setSf] = useState({ host: '', client_id: '', client_secret: '' });
   const [msg, setMsg] = useState('');
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['crm'] });
   const connect = useMutation({
     mutationFn: () =>
       api('/api/crm', {
         method: 'POST',
-        body: JSON.stringify({ provider: 'hubspot', token: token.trim() }),
+        body: JSON.stringify(
+          provider === 'hubspot'
+            ? { provider, token: token.trim() }
+            : { provider, ...sf },
+        ),
       }),
-    onSuccess: () => { setToken(''); setMsg('Connected — first sync is queued.'); invalidate(); },
+    onSuccess: () => {
+      setToken('');
+      setSf({ host: '', client_id: '', client_secret: '' });
+      setMsg('Connected — first sync is queued.');
+      invalidate();
+    },
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'failed'),
   });
   const syncNow = useMutation({
@@ -1041,14 +1052,44 @@ function CrmCard() {
         </div>
       ))}
       <div className="row" style={{ gap: 8 }}>
-        <input className="input grow" style={{ maxWidth: 320 }} type="password"
-          placeholder="HubSpot private-app token (pat-…)"
-          value={token} onChange={(e) => setToken(e.target.value)} />
-        <button className="btn" disabled={!token.trim() || connect.isPending}
-          onClick={() => connect.mutate()}>
-          {connect.isPending ? 'Checking…' : 'Connect HubSpot'}
-        </button>
+        <select className="input" value={provider}
+          onChange={(e) => setProvider(e.target.value as 'hubspot' | 'salesforce')}>
+          <option value="hubspot">HubSpot</option>
+          <option value="salesforce">Salesforce</option>
+        </select>
       </div>
+      {provider === 'hubspot' ? (
+        <div className="row" style={{ gap: 8 }}>
+          <input className="input grow" style={{ maxWidth: 320 }} type="password"
+            placeholder="HubSpot private-app token (pat-…)"
+            value={token} onChange={(e) => setToken(e.target.value)} />
+          <button className="btn" disabled={!token.trim() || connect.isPending}
+            onClick={() => connect.mutate()}>
+            {connect.isPending ? 'Checking…' : 'Connect HubSpot'}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="row" style={{ gap: 8 }}>
+            <input className="input grow" style={{ maxWidth: 320 }}
+              placeholder="acme.my.salesforce.com"
+              value={sf.host} onChange={(e) => setSf({ ...sf, host: e.target.value.trim() })} />
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <input className="input grow" style={{ maxWidth: 320 }}
+              placeholder="Connected app client id"
+              value={sf.client_id} onChange={(e) => setSf({ ...sf, client_id: e.target.value.trim() })} />
+            <input className="input grow" style={{ maxWidth: 320 }} type="password"
+              placeholder="Client secret"
+              value={sf.client_secret} onChange={(e) => setSf({ ...sf, client_secret: e.target.value })} />
+            <button className="btn"
+              disabled={!sf.host || !sf.client_id || !sf.client_secret || connect.isPending}
+              onClick={() => connect.mutate()}>
+              {connect.isPending ? 'Checking…' : 'Connect Salesforce'}
+            </button>
+          </div>
+        </>
+      )}
       {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
     </div>
   );

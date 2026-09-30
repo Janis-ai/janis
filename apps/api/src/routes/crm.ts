@@ -41,29 +41,61 @@ export function crmRoutes(db: Db) {
     '/',
     zValidator(
       'json',
-      z.object({
-        provider: z.literal('hubspot'),
-        // HubSpot private-app token (pat-na1-…) — static bearer, never leaves
-        // the API encrypted.
-        token: z.string().min(10).max(500),
-      }),
+      z.discriminatedUnion('provider', [
+        z.object({
+          provider: z.literal('hubspot'),
+          // HubSpot private-app token (pat-na1-…) — static bearer, never
+          // leaves the API encrypted.
+          token: z.string().min(10).max(500),
+        }),
+        z.object({
+          provider: z.literal('salesforce'),
+          // Connected-app client_credentials — the API user needs Contact
+          // read + Task create scopes on the SF side.
+          host: z.string().regex(/^[a-z0-9][a-z0-9.-]+\.(my\.salesforce|lightning\.force|cloudforce)\.com$/, 'must be your my.salesforce.com host').max(200),
+          client_id: z.string().min(10).max(200),
+          client_secret: z.string().min(10).max(200),
+        }),
+      ]),
     ),
     async (c) => {
-      const { provider, token } = c.req.valid('json');
-      // Fail fast on a bad token — verify it can read before storing.
-      const probe = await fetch('https://api.hubapi.com/crm/v3/objects/contacts?limit=1', {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(10_000),
-      }).catch(() => null);
-      if (!probe?.ok) {
-        return c.json({ error: `HubSpot rejected the token (${probe?.status ?? 'unreachable'})` }, 400);
+      const body = c.req.valid('json');
+      const provider = body.provider;
+      // Fail fast on bad creds — verify before storing anything.
+      if (provider === 'hubspot') {
+        const probe = await fetch('https://api.hubapi.com/crm/v3/objects/contacts?limit=1', {
+          headers: { Authorization: `Bearer ${body.token}` },
+          signal: AbortSignal.timeout(10_000),
+        }).catch(() => null);
+        if (!probe?.ok) {
+          return c.json({ error: `HubSpot rejected the token (${probe?.status ?? 'unreachable'})` }, 400);
+        }
+      } else {
+        const login = await fetch(`https://${body.host}/services/oauth2/token`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'client_credentials',
+            client_id: body.client_id,
+            client_secret: body.client_secret,
+          }),
+          signal: AbortSignal.timeout(10_000),
+        }).catch(() => null);
+        const data = (await login?.json().catch(() => ({}))) as { access_token?: string };
+        if (!login?.ok || !data.access_token) {
+          return c.json({ error: `Salesforce rejected the credentials (${login?.status ?? 'unreachable'})` }, 400);
+        }
       }
+      const credentials =
+        provider === 'hubspot'
+          ? { token: body.token }
+          : { host: body.host, client_id: body.client_id, client_secret: body.client_secret };
       const [conn] = await db
         .insert(crmConnections)
         .values({
           workspaceId: c.get('workspaceId'),
           provider,
-          credentialsEnc: encryptSecret(JSON.stringify({ token })),
+          credentialsEnc: encryptSecret(JSON.stringify(credentials)),
         })
         .returning();
       // First sync kicks off immediately; the job reschedules itself +15min.

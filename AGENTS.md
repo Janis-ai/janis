@@ -248,9 +248,16 @@ before typecheck/tests/dev.
   contact+kind+ref → dedup-safe) → 'crm.writeback' self-rescheduling job
   posts HubSpot notes (associationTypeId 202) onto the external_ids-anchored
   contact. Never creates CRM contacts; Janis-only contacts' rows drop on
-  drain. Dead-letters after 5 attempts. Second provider: SF client_credentials
-  via connections.ts PROVIDERS + Task write-back. Still pending: Salesforce
-  connector, full bidirectional field sync (later, separate product).
+  drain. Dead-letters after 5 attempts.
+  Salesforce: DONE — provider dispatch in lib/crm.ts (applyChanged shared
+  tail: upsert on external_ids anchor → provider-named sync list → one-way
+  opt-out suppression). Connect via POST /api/crm {provider:'salesforce',
+  host(*.my.salesforce.com), client_id, client_secret} — connected-app
+  client_credentials, login probed before storing. Sync = SOQL Contact
+  WHERE LastModifiedDate > wm ORDER BY ASC (nextRecordsUrl pages);
+  HasOptedOutOfEmail → suppression. Write-back = completed Task (WhoId,
+  Subject/Description) — SF auth minted once per batch, not per row.
+  Still pending: full bidirectional field sync (later, separate product).
 - Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
   13 articles on prod Demo Agent + Janis agent. Missing: full-text ranked
   search (tsvector — ILIKE only today), article view counts, helpfulness
