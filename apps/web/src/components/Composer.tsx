@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Attachment } from '@janis/shared';
 import { useSavedReplies } from '../api/hooks';
+import { FileText, Image, Paperclip, Smile } from 'lucide-react';
 
 const EMOJIS = [
   '😀','😄','😊','🙂','😉','😍','🤔','😅','😂','🥲','😢','😮','😴','🤗','🤝','👍',
@@ -115,7 +116,10 @@ export default function Composer({
         <div className="attach-list">
           {attachments.map((a, i) => (
             <span key={i} className="attach-chip">
-              {a.type.startsWith('image/') ? '🖼' : '📎'} {a.name}
+              {a.type.startsWith('image/')
+                ? <Image size={12} style={{ verticalAlign: '-1px', marginRight: 3 }} />
+                : <Paperclip size={12} style={{ verticalAlign: '-1px', marginRight: 3 }} />}
+              {a.name}
               <a
                 href="#"
                 onClick={(e) => {
@@ -153,10 +157,10 @@ export default function Composer({
         />
 
         <div className="composer-bar">
-          <button type="button" className="btn icon" title="Emoji" onClick={() => setEmojiOpen((o) => !o)}>😊</button>
-          <button type="button" className="btn icon" title="Attach file" onClick={() => fileRef.current?.click()}>📎</button>
+          <button type="button" className="btn icon" title="Emoji" onClick={() => setEmojiOpen((o) => !o)}><Smile size={16} /></button>
+          <button type="button" className="btn icon" title="Attach file" onClick={() => fileRef.current?.click()}><Paperclip size={16} /></button>
           {(savedReplies?.saved_replies.length ?? 0) > 0 && (
-            <button type="button" className="btn icon" title="Saved replies" onClick={() => setRepliesOpen((o) => !o)}>📑</button>
+            <button type="button" className="btn icon" title="Saved replies" onClick={() => setRepliesOpen((o) => !o)}><FileText size={16} /></button>
           )}
           <input
             ref={fileRef}

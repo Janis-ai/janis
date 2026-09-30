@@ -922,10 +922,8 @@ export function channelWebhookRoutes(db: Db) {
   // contact — provider-side attribution beats guessing a send's workspace.
   app.post('/email/events', async (c) => {
     const raw = await c.req.text();
-    if (
-      !env.resendInboundSecret ||
-      !verifySvixSignature(env.resendInboundSecret, raw, c.req.raw.headers)
-    ) {
+    const secret = env.resendEventsSecret || env.resendInboundSecret;
+    if (!secret || !verifySvixSignature(secret, raw, c.req.raw.headers)) {
       return c.text('invalid signature', 401);
     }
     let event: { type?: string; data?: { to?: string[] | string; bounce_type?: string } };

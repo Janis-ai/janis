@@ -6,6 +6,8 @@ import { useConversations, useAgents, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
 import { Avatar, channelLabel, displayName, Empty, StateBadge, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
+import { Moon, Save, Star } from 'lucide-react';
+import { usePrompt } from '../components/Prompt';
 
 /** Filter options grouped by kind — values map to the `state` list param.
  * Labels match the conversation detail Status dropdown (Agent = agent-driven). */
@@ -101,7 +103,7 @@ function ConvRow({
       <Avatar c={c} size={34} />
       <div className="who">
         <div className={`name ${c.is_unread ? 'unread' : ''}`}>
-          {c.is_starred && '⭐ '}
+          {c.is_starred && <Star size={13} fill="currentColor" style={{ verticalAlign: '-1px', marginRight: 3, color: 'var(--accent)' }} />}
           {displayName(c)}
           {agentName && <span className="agent-tag">{agentName}</span>}
           {c.user_profile?.channel && (
@@ -115,7 +117,8 @@ function ConvRow({
           {c.intent && <span className="channel-tag" title="Classified intent">{c.intent}</span>}
           {snoozed && (
             <span className="channel-tag" title={`Snoozed until ${new Date(c.snoozed_until!).toLocaleString()}`}>
-              😴 {new Date(c.snoozed_until!).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+              <Moon size={11} style={{ verticalAlign: '-1px', marginRight: 3 }} />
+              {new Date(c.snoozed_until!).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
             </span>
           )}
         </div>
@@ -179,8 +182,10 @@ export default function Conversations() {
     setSelected(new Set());
   };
 
+  const [promptEl, ask] = usePrompt();
+
   const saveView = async () => {
-    const name = window.prompt('Save current filters as a view:', 'My view');
+    const name = await ask('Save current filters as a view:', 'My view');
     if (!name?.trim()) return;
     await api('/api/views', {
       method: 'POST',
@@ -235,6 +240,7 @@ export default function Conversations() {
 
   return (
     <>
+      {promptEl}
       <h1 className="page-title">Conversations</h1>
       <Onboarding />
       <div className="filters">
@@ -272,7 +278,7 @@ export default function Conversations() {
           </>
         )}
         <button className="btn" title="Save current filters as a view" onClick={saveView}>
-          💾 Save view
+          <Save size={14} style={{ verticalAlign: '-2px', marginRight: 4 }} />Save view
         </button>
         <input
           className="search-box"
@@ -324,8 +330,8 @@ export default function Conversations() {
           <button
             className="btn"
             disabled={busy}
-            onClick={() => {
-              const t = window.prompt('Tag to add/remove (prefix with - to remove):');
+            onClick={async () => {
+              const t = await ask('Tag to add/remove (prefix with - to remove):');
               if (!t?.trim()) return;
               const remove = t.trim().startsWith('-');
               const tag = remove ? t.trim().slice(1) : t.trim();

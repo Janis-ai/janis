@@ -92,6 +92,9 @@ async function runOutboundSend(db: Db, workspaceId: string, p: OutboundSendJob):
       return;
     }
     if (send.status === 'paused') {
+      // The row stays 'pending' — stamp the reason so an operator looking at
+      // the campaign sees *why* it hasn't gone out, not a mystery hold.
+      await stamp('pending', 'held — campaign is paused');
       await defer(new Date(Date.now() + DEFER_RETRY_MS));
       return;
     }
@@ -110,6 +113,12 @@ async function runOutboundSend(db: Db, workspaceId: string, p: OutboundSendJob):
   });
   if (!decision.ok) {
     if ('deferUntil' in decision) {
+      // Quiet-hours defer — the send stays pending but explains itself.
+      // A later attempt overwrites this note on the real outcome.
+      await stamp(
+        'pending',
+        `held for quiet hours — retrying ${decision.deferUntil.toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+      );
       await defer(decision.deferUntil);
       return;
     }

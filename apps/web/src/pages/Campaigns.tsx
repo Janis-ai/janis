@@ -22,6 +22,17 @@ type CampaignRow = {
 };
 type SendRow = { id: string; recipient: string; step?: number; status: string; error: string | null; sent_at: string | null; replied_at?: string | null };
 
+/** Human-readable send outcomes — the "why" behind each status code. */
+const SEND_STATUS: Record<string, string> = {
+  pending: 'queued',
+  sent: 'sent',
+  failed: 'failed',
+  skipped_opted_out: 'skipped — opted out',
+  skipped_suppressed: 'skipped — suppressed (bounce/complaint)',
+  skipped_frequency_cap: 'skipped — 24h frequency cap',
+  skipped_cancelled: 'skipped — campaign stopped',
+};
+
 export default function Campaigns() {
   const qc = useQueryClient();
   const { data: chans } = useChannels();
@@ -318,7 +329,7 @@ export default function Campaigns() {
                 <div key={s.id} className="row muted" style={{ fontSize: 13, padding: '2px 0' }}>
                   <span className="mono grow">{s.recipient}</span>
                   <span>
-                    {s.step ? `step ${s.step} · ` : ''}{s.status}
+                    {s.step ? `step ${s.step} · ` : ''}{SEND_STATUS[s.status] ?? s.status}
                     {s.replied_at ? ' · replied' : ''}
                     {s.error ? ` — ${s.error}` : ''}
                   </span>

@@ -9,6 +9,7 @@ import {
   type ChatMsg,
   type OutEntry,
 } from '../lib/chatTimeline';
+import { Loader2, Paperclip, Smile } from 'lucide-react';
 
 interface ChatConfig {
   agent_name: string;
@@ -126,7 +127,7 @@ function AttachmentNodes({ atts }: { atts: Attachment[] }) {
           </a>
         ) : (
           <a key={i} className="ask-att" href={a.url} target="_blank" rel="noreferrer">
-            📎 {a.name}
+            <Paperclip size={12} style={{ verticalAlign: '-1px', marginRight: 3 }} />{a.name}
           </a>
         ),
       )}
@@ -642,7 +643,10 @@ export function AskJanis({
         <div className="ask-attach">
           {pending.map((p, i) => (
             <span key={i} className="ask-chip">
-              {p.uploading ? '⏳ ' : '📎 '}{p.name}
+              {p.uploading
+                ? <Loader2 size={12} className="spin" style={{ verticalAlign: '-1px', marginRight: 3 }} />
+                : <Paperclip size={12} style={{ verticalAlign: '-1px', marginRight: 3 }} />}
+              {p.name}
               <button aria-label="Remove" onClick={() => setPending((cur) => cur.filter((_, j) => j !== i))}>×</button>
             </span>
           ))}
@@ -682,8 +686,8 @@ export function AskJanis({
           }}
         />
         <div className="ask-input-row">
-          <button className="btn" title="Emoji" disabled={!loaded} onClick={() => setEmojiOpen((o) => !o)}>☺</button>
-          <button className="btn" title="Attach" disabled={!loaded} onClick={() => fileRef.current?.click()}>📎</button>
+          <button className="btn" title="Emoji" disabled={!loaded} onClick={() => setEmojiOpen((o) => !o)}><Smile size={15} /></button>
+          <button className="btn" title="Attach" disabled={!loaded} onClick={() => fileRef.current?.click()}><Paperclip size={15} /></button>
           <input
             ref={fileRef}
             type="file"

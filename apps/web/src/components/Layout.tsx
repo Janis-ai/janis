@@ -9,6 +9,8 @@ import { setTabBadge } from '../lib/tabBadge';
 import PushBanner from './PushBanner';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
+import { BarChart3, Bot, CreditCard, Inbox, Megaphone, Settings, Sparkles, Users } from 'lucide-react';
+import { usePrompt } from './Prompt';
 
 interface Toast {
   id: string;
@@ -208,9 +210,11 @@ export default function Layout() {
     window.location.href = '/';
   };
 
+  const [promptEl, ask] = usePrompt();
+
   const switchWorkspace = async (workspaceId: string) => {
     if (workspaceId === '__new') {
-      const name = window.prompt('Name the new workspace (e.g. a client or team):');
+      const name = await ask('Name the new workspace (e.g. a client or team):');
       if (!name?.trim()) return;
       await api('/auth/workspaces', {
         method: 'POST',
@@ -235,22 +239,23 @@ export default function Layout() {
 
   return (
     <div className={`layout${railVisible ? ' ask-open' : ''}`}>
+      {promptEl}
       <nav className="sidebar">
         <Link className="brand" to="/" title="Janis home">
           <img className="brand-wide" src="/img/janis-top.png" alt="Janis" />
           <img className="brand-mark" src="/img/janis-mark.png" alt="" />
         </Link>
-        <NavLink to="/conversations" end><span className="label">Conversations</span><span className="icon">▤</span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
-        <NavLink to="/contacts"><span className="label">Contacts</span><span className="icon">◉</span></NavLink>
-        <NavLink to="/campaigns"><span className="label">Campaigns</span><span className="icon">📣</span></NavLink>
-        <NavLink to="/agents"><span className="label">Agents</span><span className="icon">◈</span></NavLink>
+        <NavLink to="/conversations" end><span className="label">Conversations</span><span className="icon"><Inbox size={18} /></span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
+        <NavLink to="/contacts"><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
+        <NavLink to="/campaigns"><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
+        <NavLink to="/agents"><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>
         {/* Workspace-wide sections vanish for agent-scoped users — they only
             hold grants on specific agents, not the workspace itself. */}
         {!data?.agent_scope && (
           <>
-            <NavLink to="/reports"><span className="label">Reports</span><span className="icon">◫</span></NavLink>
-            <NavLink to="/billing"><span className="label">Billing</span><span className="icon">$</span></NavLink>
-            <NavLink to="/settings"><span className="label">Settings</span><span className="icon">⚙</span></NavLink>
+            <NavLink to="/reports"><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
+            <NavLink to="/billing"><span className="label">Billing</span><span className="icon"><CreditCard size={18} /></span></NavLink>
+            <NavLink to="/settings"><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </>
         )}
         {data?.support_channel_id && (
@@ -265,7 +270,7 @@ export default function Layout() {
               }
             }}
           >
-            <span className="label">Ask Janis</span><span className="icon">✦</span>
+            <span className="label">Ask Janis</span><span className="icon"><Sparkles size={18} /></span>
           </button>
         )}
         <div className="spacer" />

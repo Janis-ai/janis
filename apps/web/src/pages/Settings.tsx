@@ -7,6 +7,7 @@ import { getPushSubscription, subscribeToPush, unsubscribeFromPush, markPushDisa
 import { installAvailable, isIOS, isStandalone, onInstallStateChange, promptInstall } from '../lib/install';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
+import { usePrompt } from '../components/Prompt';
 
 export default function Settings() {
   const { data: me } = useMe();
@@ -23,6 +24,7 @@ export default function Settings() {
   });
   const [reply, setReply] = useState({ title: '', body: '' });
   const [error, setError] = useState('');
+  const [promptEl, ask] = usePrompt();
   const [pushMsg, setPushMsg] = useState('');
   const [pushEnabled, setPushEnabled] = useState<boolean | null>(null);
 
@@ -286,6 +288,7 @@ export default function Settings() {
 
   return (
     <>
+      {promptEl}
       <h1 className="page-title">Settings</h1>
 
       <div className="card">
@@ -716,8 +719,8 @@ export default function Settings() {
           <button
             className="btn danger"
             disabled={deleteWorkspace.isPending}
-            onClick={() => {
-              const name = window.prompt(
+            onClick={async () => {
+              const name = await ask(
                 `Type the workspace name (${me.workspace?.name}) to confirm deletion:`,
               );
               if (name === me.workspace?.name) deleteWorkspace.mutate();
@@ -865,6 +868,12 @@ function SendPolicyCard() {
         Quiet hours — hold sends between
       </label>
       {p.quiet_enabled && (
+        <div className="muted" style={{ fontSize: 12, marginLeft: 24, marginTop: -4 }}>
+          Sends due inside the window wait and go out when it ends — they show as
+          "held for quiet hours" on the campaign, never dropped.
+        </div>
+      )}
+      {p.quiet_enabled && (
         <div className="row wrap" style={{ gap: 8, marginLeft: 24 }}>
           <input type="time" className="input" value={p.quiet_from ?? '21:00'}
             onChange={(e) => upd({ quiet_from: e.target.value })} />
@@ -896,8 +905,9 @@ function SendPolicyCard() {
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 4 }}>
         <strong style={{ fontSize: 13 }}>Suppression list</strong>
         <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
-          Never-send addresses — bounces and complaints land here automatically; add
-          manual entries below.
+          Never-send addresses — bounces, complaints and dead numbers land here
+          automatically. Sends to these show as "skipped — suppressed" on the
+          campaign; removing an entry re-enables them.
         </div>
         <div className="row" style={{ gap: 8 }}>
           <input className="input grow" style={{ maxWidth: 300 }}

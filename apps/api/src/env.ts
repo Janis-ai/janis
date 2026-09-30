@@ -19,6 +19,9 @@ export const env = {
   // svix webhook secret verifying Resend's email.received posts
   emailInboundDomain: process.env.EMAIL_INBOUND_DOMAIN ?? 'inbound.janis.ai',
   resendInboundSecret: process.env.RESEND_INBOUND_SECRET ?? '',
+  // outbound event webhook (bounces/complaints) — separate Resend webhook
+  // registration, so a distinct secret; falls back to the inbound secret.
+  resendEventsSecret: process.env.RESEND_EVENTS_SECRET ?? '',
   // Hosted voice — master Twilio account that provisions per-channel
   // subaccounts + numbers. Empty = BYO-creds voice only.
   twilioAccountSid: process.env.TWILIO_ACCOUNT_SID ?? '',

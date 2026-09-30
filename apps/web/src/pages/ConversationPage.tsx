@@ -8,6 +8,7 @@ import { Avatar, channelLabel, displayName, fmtTime, StateBadge } from '../compo
 import Composer from '../components/Composer';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { typingBus, presenceBus } from '../lib/typingBus';
+import { Paperclip, Star } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -629,7 +630,7 @@ export default function ConversationPage() {
             title={c.is_starred ? 'Unstar' : 'Star'}
             onClick={() => patch.mutate({ is_starred: !c.is_starred })}
           >
-            {c.is_starred ? '⭐' : '☆'}
+            <Star size={16} fill={c.is_starred ? 'currentColor' : 'none'} color={c.is_starred ? 'var(--accent)' : 'currentColor'} />
           </button>
           <button
             className="btn"
@@ -805,7 +806,7 @@ export default function ConversationPage() {
                           </a>
                         ) : (
                           <a href={a.url} target="_blank" rel="noreferrer" className="attach-chip">
-                            📎 {a.name}
+                            <Paperclip size={12} style={{ verticalAlign: '-1px', marginRight: 3 }} />{a.name}
                           </a>
                         )}
                       </div>
@@ -930,7 +931,7 @@ export default function ConversationPage() {
                     </a>
                   ) : (
                     <a href={a.url} target="_blank" rel="noreferrer" className="attach-chip">
-                      📎 {a.name}
+                      <Paperclip size={12} style={{ verticalAlign: '-1px', marginRight: 3 }} />{a.name}
                     </a>
                   )}
                 </div>
