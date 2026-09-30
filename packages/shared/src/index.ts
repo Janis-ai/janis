@@ -356,6 +356,22 @@ export const Channel = z.object({
         subject_exclude: z.array(z.string()).optional(),
       })
       .optional(),
+    // email (resend): client-branded sending domain + verification state
+    email_domain: z.string().optional(),
+    email_domain_status: z.string().optional(),
+    email_domain_records: z
+      .array(
+        z.object({
+          record: z.string().optional(),
+          name: z.string(),
+          type: z.string(),
+          value: z.string(),
+          ttl: z.string().optional(),
+          priority: z.number().optional(),
+          status: z.string().optional(),
+        }),
+      )
+      .optional(),
     // webchat widget appearance — display config only, never secrets
     branding: z
       .object({

@@ -197,6 +197,17 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
       subject_exclude?: string[];
     };
     hosted?: boolean;
+    email_domain?: string;
+    email_domain_status?: string;
+    email_domain_records?: {
+      record?: string;
+      name: string;
+      type: string;
+      value: string;
+      ttl?: string;
+      priority?: number;
+      status?: string;
+    }[];
   };
   return {
     id: row.id,
@@ -227,6 +238,12 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
         ['email', 'gmail', 'outlook'].includes(row.kind) ? creds.from_address : undefined,
       email_filters:
         ['email', 'gmail', 'outlook'].includes(row.kind) ? creds.email_filters : undefined,
+      email_domain: row.kind === 'email' ? creds.email_domain : undefined,
+      email_domain_status: row.kind === 'email' ? creds.email_domain_status : undefined,
+      email_domain_records:
+        row.kind === 'email' && creds.email_domain_status !== 'verified'
+          ? creds.email_domain_records
+          : undefined,
       gmail_query: row.kind === 'gmail' ? creds.gmail_query : undefined,
       branding:
         row.kind === 'webchat'

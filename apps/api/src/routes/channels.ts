@@ -2,6 +2,12 @@ import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
+import {
+  createResendDomain,
+  deleteResendDomain,
+  getResendDomain,
+  verifyResendDomain,
+} from '../lib/resendDomains.js';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
@@ -414,6 +420,21 @@ export function channelApiRoutes(db: Db) {
     }
     if (body.from_address !== undefined) {
       if (body.from_address === '') delete creds.from_address;
+      else if (
+        row.kind === 'email' &&
+        body.from_address.split('@')[1]?.toLowerCase() !== env.emailInboundDomain &&
+        !(
+          creds.email_domain &&
+          creds.email_domain_status === 'verified' &&
+          body.from_address.toLowerCase().endsWith(`@${creds.email_domain}`)
+        )
+      )
+        return c.json(
+          {
+            error: `from_address must be on ${env.emailInboundDomain} or a domain verified under Custom sending domain`,
+          },
+          400,
+        );
       else creds.from_address = body.from_address.toLowerCase();
     }
     if (body.gmail_query !== undefined) {
@@ -477,6 +498,110 @@ export function channelApiRoutes(db: Db) {
     void setGetStartedButton(row.kind, creds).catch(() => {});
     const [agent] = await db.select({ name: agents.name }).from(agents).where(eq(agents.id, row.agentId)).limit(1);
     return c.json({ channel: toChannel(updated, agent?.name ?? '') });
+  });
+
+  // ── Custom sending domain (email channels, Resend-verified) ─────────
+  // Client registers e.g. mail.acme.com on our Resend account; we return
+  // the DNS records, they configure them, verify flips status. Replies
+  // still route to the channel's inbound_address via Reply-To — sending-
+  // side records only.
+  const loadEmailChannel = async (workspaceId: string, channelId: string) => {
+    const [row] = await db
+      .select()
+      .from(channels)
+      .where(and(eq(channels.id, channelId), eq(channels.workspaceId, workspaceId)))
+      .limit(1);
+    return row;
+  };
+
+  app.post(
+    '/:id/email-domain',
+    zValidator('json', z.object({ domain: z.string().min(4).max(200) })),
+    async (c) => {
+      const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
+      if (!row) return c.json({ error: 'not found' }, 404);
+      if (row.kind !== 'email') return c.json({ error: 'email channel required' }, 400);
+      const role = await agentRoleFor(
+        db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
+      );
+      if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
+      const domain = c.req
+        .valid('json')
+        .domain.trim()
+        .toLowerCase()
+        .replace(/^https?:\/\//, '')
+        .replace(/[/?#].*$/, '');
+      if (!/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(domain) || domain.endsWith(env.emailInboundDomain))
+        return c.json({ error: 'enter a domain you own — e.g. mail.acme.com' }, 400);
+      const creds = row.credentials as ChannelCredentials;
+      let d;
+      try {
+        d = await createResendDomain(domain);
+      } catch (e) {
+        return c.json({ error: `resend: ${e instanceof Error ? e.message : e}` }, 502);
+      }
+      const next = {
+        ...creds,
+        email_domain: domain,
+        email_domain_id: d.id,
+        email_domain_status: d.status ?? 'pending',
+        email_domain_records: d.records ?? [],
+      };
+      await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
+      invalidateChannelCache();
+      return c.json({ email_domain: domain, status: next.email_domain_status, records: next.email_domain_records });
+    },
+  );
+
+  app.post('/:id/email-domain/verify', async (c) => {
+    const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
+    if (!row) return c.json({ error: 'not found' }, 404);
+    if (row.kind !== 'email') return c.json({ error: 'email channel required' }, 400);
+    const creds = row.credentials as ChannelCredentials;
+    if (!creds.email_domain_id) return c.json({ error: 'no domain registered' }, 400);
+    const role = await agentRoleFor(
+      db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
+    );
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
+    try {
+      // ask Resend to re-check; a not-yet-propagated domain can error — the
+      // fresh GET below is the source of truth either way
+      await verifyResendDomain(creds.email_domain_id).catch(() => {});
+      const d = await getResendDomain(creds.email_domain_id);
+      const next = {
+        ...creds,
+        email_domain_status: d.status ?? creds.email_domain_status,
+        ...(d.records?.length ? { email_domain_records: d.records } : {}),
+      };
+      await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
+      invalidateChannelCache();
+      return c.json({ status: next.email_domain_status, records: next.email_domain_records ?? creds.email_domain_records ?? [] });
+    } catch (e) {
+      return c.json({ error: `resend: ${e instanceof Error ? e.message : e}` }, 502);
+    }
+  });
+
+  app.delete('/:id/email-domain', async (c) => {
+    const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
+    if (!row) return c.json({ error: 'not found' }, 404);
+    if (row.kind !== 'email') return c.json({ error: 'email channel required' }, 400);
+    const creds = row.credentials as ChannelCredentials;
+    const role = await agentRoleFor(
+      db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
+    );
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
+    if (creds.email_domain_id) void deleteResendDomain(creds.email_domain_id).catch(() => {});
+    const next = { ...creds };
+    delete next.email_domain;
+    delete next.email_domain_id;
+    delete next.email_domain_status;
+    delete next.email_domain_records;
+    // a branded From on the removed domain can no longer send
+    if (next.from_address && creds.email_domain && next.from_address.endsWith(`@${creds.email_domain}`))
+      delete next.from_address;
+    await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
+    invalidateChannelCache();
+    return c.json({ ok: true });
   });
 
   app.delete('/:id', async (c) => {

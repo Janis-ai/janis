@@ -156,6 +156,13 @@ before typecheck/tests/dev.
   scope. mailSkipReason() in lib/email.ts is the single decision point —
   gmail/outlook sweeps + Resend inbound all run it. Still missing: true
   multi-address fan-out (one channel per address today).
+- Custom sending domains: DONE — client registers their domain on the
+  channel's Custom sending domain card (POST /api/channels/:id/email-domain
+  → Resend domains.create → records shown; /verify polls; DELETE cleans
+  up). Verified domains unlock from_address on them; sends always set
+  Reply-To to the channel's inbound_address so branded From never breaks
+  routing. mailSkipReason also skips mail FROM emailInboundDomain — don't
+  send test mail From @inbound.janis.ai, it self-skips by design.
 - First-class WhatsApp Business API channel: DONE templates for outbound
   (POST /api/channels/:id/send + /broadcast accept whatsapp_template
   {name,language,body_params}; required outside the 24h window — enforced on

@@ -1,0 +1,140 @@
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { PGlite } from '@electric-sql/pglite';
+import { drizzle } from 'drizzle-orm/pglite';
+import { migrate } from 'drizzle-orm/pglite/migrator';
+import { Hono } from 'hono';
+import type { Db } from '../db/client.js';
+import * as schema from '../db/schema.js';
+import { agents, channels, memberships, sessions, users, workspaces } from '../db/schema.js';
+import { generateSessionToken, hashPassword } from '../lib/crypto.js';
+import { eq } from 'drizzle-orm';
+
+// env.ts reads process.env at import time — resend key must exist before
+// the route module loads so resendDomains can call the API.
+process.env.RESEND_API_KEY = 're_test_key';
+process.env.EMAIL_INBOUND_DOMAIN = 'inbound.janis.ai';
+
+const { channelApiRoutes } = await import('./channels.js');
+
+let db: Db;
+let app: Hono;
+let cookie: string;
+let channelId: string;
+
+const j = (res: Response) => res.json() as Promise<Record<string, unknown>>;
+
+const resendDomain = {
+  id: 'dom_1',
+  name: 'mail.acme.com',
+  status: 'pending',
+  records: [{ type: 'TXT', name: 'resend._domainkey.mail', value: 'p=abc' }],
+};
+
+function stubResend(verifyStatus = 'verified') {
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/domains') && init?.method === 'POST')
+      return new Response(JSON.stringify(resendDomain), { status: 200 });
+    if (url.endsWith('/verify'))
+      return new Response('{}', { status: 200 });
+    if (/\/domains\/dom_1$/.test(url) && init?.method === 'DELETE')
+      return new Response('{}', { status: 200 });
+    if (/\/domains\/dom_1$/.test(url))
+      return new Response(JSON.stringify({ ...resendDomain, status: verifyStatus }), { status: 200 });
+    return new Response('{}', { status: 404 });
+  });
+}
+
+beforeAll(async () => {
+  const client = new PGlite();
+  db = drizzle(client, { schema }) as unknown as Db;
+  await migrate(db as never, { migrationsFolder: './drizzle' });
+  app = new Hono().route('/api/channels', channelApiRoutes(db));
+
+  const [ws] = await db.insert(workspaces).values({ name: 'W', plan: 'pro' }).returning();
+  const [agent] = await db
+    .insert(agents)
+    .values({ workspaceId: ws.id, name: 'bot', apiKeyHash: 'h', apiKeyPreview: 'p' })
+    .returning();
+  const [ch] = await db
+    .insert(channels)
+    .values({ workspaceId: ws.id, agentId: agent.id, kind: 'email', name: 'Mail', credentials: {} })
+    .returning();
+  channelId = ch.id;
+  const [u] = await db
+    .insert(users)
+    .values({ email: 'a@a.a', name: 'Admin', passwordHash: await hashPassword('password123') })
+    .returning();
+  await db
+    .insert(memberships)
+    .values({ userId: u.id, workspaceId: ws.id, role: 'admin', acceptedAt: new Date() });
+  const { token, id } = generateSessionToken();
+  await db
+    .insert(sessions)
+    .values({ id, userId: u.id, expiresAt: new Date(Date.now() + 86_400_000) });
+  cookie = `janis_session=${token}`;
+});
+
+afterEach(() => vi.unstubAllGlobals());
+
+const post = (path: string, body?: unknown) =>
+  app.fetch(
+    new Request(`http://t/api/channels${path}`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
+
+const patch = (body: unknown) =>
+  app.fetch(
+    new Request(`http://t/api/channels/${channelId}`, {
+      method: 'PATCH',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+
+describe('custom email domain', () => {
+  it('registers a domain and returns DNS records', async () => {
+    stubResend();
+    const res = await post(`/${channelId}/email-domain`, { domain: 'https://Mail.Acme.com/x' });
+    const body = await j(res);
+    expect(res.status).toBe(200);
+    expect(body.email_domain).toBe('mail.acme.com');
+    expect(body.status).toBe('pending');
+    expect((body.records as unknown[]).length).toBe(1);
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    expect((ch.credentials as { email_domain_id?: string }).email_domain_id).toBe('dom_1');
+  });
+
+  it('rejects from_address on an unverified domain, allows after verify', async () => {
+    stubResend();
+    expect(
+      (await patch({ from_address: 'support@mail.acme.com' })).status,
+    ).toBe(400);
+    const v = await post(`/${channelId}/email-domain/verify`);
+    expect((await j(v)).status).toBe('verified');
+    expect((await patch({ from_address: 'support@mail.acme.com' })).status).toBe(200);
+  });
+
+  it('allows addresses on the shared inbound domain, rejects strangers', async () => {
+    expect((await patch({ from_address: 'support@inbound.janis.ai' })).status).toBe(200);
+    expect((await patch({ from_address: 'support@other.com' })).status).toBe(400);
+  });
+
+  it('delete clears domain creds and a dependent from_address', async () => {
+    await patch({ from_address: 'support@mail.acme.com' });
+    const res = await app.fetch(
+      new Request(`http://t/api/channels/${channelId}/email-domain`, {
+        method: 'DELETE',
+        headers: { cookie },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    const creds = ch.credentials as Record<string, unknown>;
+    expect(creds.email_domain).toBeUndefined();
+    expect(creds.from_address).toBeUndefined();
+  });
+});

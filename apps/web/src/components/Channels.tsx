@@ -401,9 +401,10 @@ function EmailAnswerRules({ channel }: { channel: Channel }) {
             ? 'A send-as alias verified in Gmail settings (Settings → Accounts → Send mail as) — e.g. the group address.'
             : channel.kind === 'outlook'
               ? 'A shared mailbox or alias the account can Send As in Microsoft 365.'
-              : 'An address on a domain verified in Resend.'}
+              : `Any address on ${channel.meta.inbound_address?.split('@')[1] ?? 'the inbound domain'} — or on a verified custom domain below.`}
         </div>
       </div>
+      {channel.kind === 'email' && <EmailDomainCard channel={channel} />}
       {channel.kind === 'gmail' && (
         <div style={{ marginTop: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>Gmail scope</div>
@@ -684,5 +685,104 @@ function WebchatBranding({ channel }: { channel: Channel }) {
         {msg && <span className="muted">{msg}</span>}
       </div>
     </form>
+  );
+}
+
+/** Custom sending domain for email channels — register a client domain on
+ *  the platform Resend account, show the DNS records to add, verify.
+ *  Replies still route through the channel's inbound address (Reply-To),
+ *  so only sending-side records are needed. */
+function EmailDomainCard({ channel }: { channel: Channel }) {
+  const qc = useQueryClient();
+  const [domain, setDomain] = useState(channel.meta.email_domain ?? '');
+  const [msg, setMsg] = useState('');
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+  const act = (path: string, body?: unknown, okMsg = 'Done.') =>
+    api(`/api/channels/${channel.id}${path}`, {
+      method: body === undefined ? 'DELETE' : 'POST',
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+      .then(() => {
+        setMsg(okMsg);
+        refresh();
+      })
+      .catch((e) => setMsg(e instanceof Error ? e.message : 'failed'));
+  const status = channel.meta.email_domain_status;
+  const records = channel.meta.email_domain_records ?? [];
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontSize: 13, fontWeight: 600 }}>
+        Custom sending domain
+        {status && (
+          <span
+            className="muted"
+            style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}
+          >
+            {channel.meta.email_domain} ·{' '}
+            {status === 'verified' ? '✓ verified' : status ?? 'pending'}
+          </span>
+        )}
+      </div>
+      {!channel.meta.email_domain ? (
+        <>
+          <input
+            className="input"
+            style={{ width: '100%', marginTop: 4 }}
+            placeholder="mail.acme.com — a domain you own"
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+          />
+          <div className="row" style={{ marginTop: 6 }}>
+            <button
+              className="btn sm"
+              disabled={!domain.trim()}
+              onClick={() => act('/email-domain', { domain: domain.trim() }, 'Registered — add the DNS records below.')}
+            >
+              Register domain
+            </button>
+          </div>
+        </>
+      ) : status !== 'verified' && records.length > 0 ? (
+        <>
+          <table style={{ width: '100%', fontSize: 12, marginTop: 6 }}>
+            <thead>
+              <tr className="muted" style={{ textAlign: 'left' }}>
+                <th>Type</th>
+                <th>Name</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((r, i) => (
+                <tr key={i}>
+                  <td style={{ padding: '2px 6px 2px 0' }}>{r.type}</td>
+                  <td style={{ padding: '2px 6px 2px 0', wordBreak: 'break-all' }}>{r.name}</td>
+                  <td style={{ padding: '2px 6px 2px 0', wordBreak: 'break-all' }}>{r.value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="row" style={{ marginTop: 6 }}>
+            <button className="btn sm" onClick={() => act('/email-domain/verify', {}, 'Verification requested.')}>
+              Verify DNS
+            </button>
+            <button className="btn sm" onClick={() => act('/email-domain', undefined, 'Domain removed.')}>
+              Remove
+            </button>
+          </div>
+        </>
+      ) : status === 'verified' ? (
+        <div className="row" style={{ marginTop: 6 }}>
+          <span className="muted" style={{ fontSize: 12 }}>
+            Set "Send replies as" to any @{channel.meta.email_domain} address — replies still
+            route to this channel.
+          </span>
+          <button className="btn sm" onClick={() => act('/email-domain', undefined, 'Domain removed.')}>
+            Remove
+          </button>
+        </div>
+      ) : null}
+      {msg && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{msg}</div>}
+    </div>
   );
 }

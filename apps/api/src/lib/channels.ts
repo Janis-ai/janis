@@ -63,6 +63,20 @@ export interface ChannelCredentials {
   // needs the alias verified in Gmail settings, resend needs the domain
   // verified, outlook needs SendAs permission on the mailbox.
   from_address?: string;
+  // email (resend): client-branded sending domain registered on our Resend
+  // account — DNS records surfaced in channel settings until verified.
+  email_domain?: string;
+  email_domain_id?: string;
+  email_domain_status?: string;
+  email_domain_records?: {
+    record?: string;
+    name: string;
+    type: string;
+    value: string;
+    ttl?: string;
+    priority?: number;
+    status?: string;
+  }[];
   // inbound mail rules — see EmailFilterConfig in lib/email.ts
   email_filters?: {
     answer_addresses?: string[];
