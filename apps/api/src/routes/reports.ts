@@ -575,6 +575,158 @@ export function reportRoutes(db: Db) {
     });
   });
 
+  // GET /timeline?days=30 — response/resolution speed over time + the
+  // AI-vs-human split on resolved conversations. "Deflection" = share of
+  // resolved convs closed with zero human-authored customer-facing message —
+  // the ROI number: how much queue the agent absorbed alone.
+  app.get('/timeline', async (c) => {
+    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const scope = agentVis(c.get('workspaceId'), c.get('agentScope'));
+
+    // Opened-in-window feeds the FRT/opened series; archived-in-window feeds
+    // resolution/deflection — a conv created before the window but closed in
+    // it still counts toward the day it closed.
+    const convs = await db
+      .select({
+        id: conversations.id,
+        createdAt: conversations.createdAt,
+        archivedAt: conversations.archivedAt,
+      })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(
+        and(
+          ...scope,
+          sql`(${conversations.createdAt} > ${cutoff} or ${conversations.archivedAt} > ${cutoff})`,
+          ...drillFilters(c),
+        ),
+      );
+    if (!convs.length) {
+      return c.json({
+        days,
+        opened: 0,
+        resolved: 0,
+        resolution_rate: null,
+        ai_resolved: 0,
+        human_resolved: 0,
+        deflection_rate: null,
+        median_frt_min: null,
+        median_resolution_min: null,
+        series: [],
+      });
+    }
+    const convById = new Map(convs.map((v) => [v.id, v]));
+
+    const msgs = await db
+      .select({
+        convId: messages.conversationId,
+        direction: messages.direction,
+        createdAt: messages.createdAt,
+        payload: messages.payload,
+      })
+      .from(messages)
+      .where(inArray(messages.conversationId, [...convById.keys()]))
+      .orderBy(asc(messages.createdAt));
+
+    const firstIn = new Map<string, Date>();
+    const firstReply = new Map<string, Date>();
+    const humanTouched = new Set<string>();
+    for (const m of msgs) {
+      const p = m.payload as { internal?: boolean; via?: string } | undefined;
+      if (m.direction === 'in' && !firstIn.has(m.convId)) firstIn.set(m.convId, m.createdAt);
+      if (p?.internal) continue;
+      if (m.direction === 'human' || p?.via === 'operator') {
+        humanTouched.add(m.convId);
+        if (!firstReply.has(m.convId)) firstReply.set(m.convId, m.createdAt);
+      } else if (m.direction === 'out' && !firstReply.has(m.convId)) {
+        firstReply.set(m.convId, m.createdAt);
+      }
+    }
+
+    interface Slot {
+      date: string;
+      opened: number;
+      frt: number[]; // minutes, first inbound → first reply
+      resolutions: number;
+      resolutionMin: number[]; // minutes, opened → archived
+      ai: number;
+      human: number;
+    }
+    const byDay = new Map<string, Slot>();
+    const slot = (d: string) => {
+      let s = byDay.get(d);
+      if (!s) {
+        s = { date: d, opened: 0, frt: [], resolutions: 0, resolutionMin: [], ai: 0, human: 0 };
+        byDay.set(d, s);
+      }
+      return s;
+    };
+    const day = (d: Date) => d.toISOString().slice(0, 10);
+
+    let opened = 0;
+    const frtAll: number[] = [];
+    const resAll: number[] = [];
+    let aiResolved = 0;
+    let humanResolved = 0;
+    for (const conv of convs) {
+      if (conv.createdAt > cutoff) {
+        opened++;
+        const s = slot(day(conv.createdAt));
+        s.opened++;
+        const inbound = firstIn.get(conv.id) ?? conv.createdAt;
+        const reply = firstReply.get(conv.id);
+        if (reply && reply >= inbound) {
+          const m = (reply.getTime() - inbound.getTime()) / 60_000;
+          s.frt.push(m);
+          frtAll.push(m);
+        }
+      }
+      if (conv.archivedAt && conv.archivedAt > cutoff) {
+        const s = slot(day(conv.archivedAt));
+        s.resolutions++;
+        const m = (conv.archivedAt.getTime() - conv.createdAt.getTime()) / 60_000;
+        s.resolutionMin.push(m);
+        resAll.push(m);
+        if (humanTouched.has(conv.id)) {
+          s.human++;
+          humanResolved++;
+        } else {
+          s.ai++;
+          aiResolved++;
+        }
+      }
+    }
+
+    const med = (ms: number[]) =>
+      ms.length
+        ? Math.round(ms.sort((a, b) => a - b)[Math.floor(ms.length / 2)] * 10) / 10
+        : null;
+    const resolved = aiResolved + humanResolved;
+    return c.json({
+      days,
+      opened,
+      resolved,
+      resolution_rate: opened ? Math.round((resolved / opened) * 100) : null,
+      ai_resolved: aiResolved,
+      human_resolved: humanResolved,
+      deflection_rate: resolved ? Math.round((aiResolved / resolved) * 100) : null,
+      median_frt_min: med(frtAll),
+      median_resolution_min: med(resAll),
+      series: [...byDay.values()]
+        .map((s) => ({
+          date: s.date,
+          opened: s.opened,
+          frt_min: med(s.frt),
+          resolutions: s.resolutions,
+          resolution_min: med(s.resolutionMin),
+          ai_resolved: s.ai,
+          human_resolved: s.human,
+        }))
+        .sort((a, b) => (a.date < b.date ? -1 : 1)),
+    });
+  });
+
   // GET /usage — current + previous billing period against the plan:
   // stored messages vs includedMessages, LLM token/cost burn, voice seconds.
   app.get('/usage', async (c) => {

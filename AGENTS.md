@@ -358,8 +358,9 @@ before typecheck/tests/dev.
   escalated vs no-reply + daily series + approval/handoff timings) is the
   AI-vs-human split. Also live: /handoffs, /csat, /intents, /operators,
   /volume (daily convs + messages by direction — bar chart on Reports),
-  /usage (messages vs plan included + LLM cost/tokens + voice seconds,
-  current vs previous period — card on Reports), /export?kind=
+  /timeline (opened/FRT/resolution daily series + ai-vs-human resolved
+  split — "deflection" card on Reports), /usage (messages vs plan
+  included + LLM cost/tokens + voice seconds, current vs previous period — card on Reports), /export?kind=
   conversations|campaign_sends (CSV, scope-filtered, 5k-row cap).
 - Still missing: FRT/resolution-over-time charts (point-in-time today).
 

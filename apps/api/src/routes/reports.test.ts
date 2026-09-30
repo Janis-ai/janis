@@ -142,3 +142,56 @@ describe('GET /api/reports/export', () => {
     expect(text).toContain('+1555');
   });
 });
+
+describe('GET /api/reports/timeline', () => {
+  it('splits resolved convs ai-vs-human and reports speed', async () => {
+    const now = Date.now();
+    // A: answered by the agent, archived → ai_resolved + FRT sample
+    const [a] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'tl:a', createdAt: new Date(now - 3600_000), archivedAt: new Date(now - 600_000), state: 'archived' })
+      .returning();
+    await db.insert(messages).values([
+      { conversationId: a.id, direction: 'in', text: 'q', createdAt: new Date(now - 3600_000) },
+      { conversationId: a.id, direction: 'out', text: 'a', createdAt: new Date(now - 3540_000) },
+    ]);
+    // B: answered by a human, archived → human_resolved
+    const [b] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'tl:b', createdAt: new Date(now - 1800_000), archivedAt: new Date(now - 60_000), state: 'archived' })
+      .returning();
+    await db.insert(messages).values([
+      { conversationId: b.id, direction: 'in', text: 'q', createdAt: new Date(now - 1800_000) },
+      { conversationId: b.id, direction: 'human', text: 'on it', createdAt: new Date(now - 1740_000) },
+    ]);
+    // C: open → counts in opened only
+    await db.insert(conversations).values({ agentId, externalId: 'tl:c' });
+
+    const res = await app.request('/api/reports/timeline?days=30', { headers: { Cookie: cookie } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      opened: number;
+      resolved: number;
+      ai_resolved: number;
+      human_resolved: number;
+      deflection_rate: number | null;
+      median_frt_min: number | null;
+      median_resolution_min: number | null;
+      series: { date: string; opened: number; resolutions: number; ai_resolved: number; human_resolved: number }[];
+    };
+    // fixture conv (shipping, unarchived) + B + C opened today; A opened an
+    // hour ago — could roll to yesterday's bucket, so only assert resolved.
+    expect(body.opened).toBe(4);
+    expect(body.resolved).toBe(2);
+    expect(body.ai_resolved).toBe(1);
+    expect(body.human_resolved).toBe(1);
+    expect(body.deflection_rate).toBe(50);
+    expect(body.median_frt_min).not.toBeNull();
+    expect(body.median_resolution_min).not.toBeNull();
+    const today = new Date().toISOString().slice(0, 10);
+    const bucket = body.series.find((d) => d.date === today);
+    expect(bucket?.resolutions).toBe(2);
+    expect(bucket?.ai_resolved).toBe(1);
+    expect(bucket?.human_resolved).toBe(1);
+  });
+});

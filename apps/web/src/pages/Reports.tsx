@@ -121,6 +121,30 @@ export default function Reports() {
         `/api/reports/volume?${qs}`,
       ),
   });
+  const timeline = useQuery({
+    queryKey: ['timeline-metrics', agentId, channelId],
+    queryFn: () =>
+      api<{
+        days: number;
+        opened: number;
+        resolved: number;
+        resolution_rate: number | null;
+        ai_resolved: number;
+        human_resolved: number;
+        deflection_rate: number | null;
+        median_frt_min: number | null;
+        median_resolution_min: number | null;
+        series: {
+          date: string;
+          opened: number;
+          frt_min: number | null;
+          resolutions: number;
+          resolution_min: number | null;
+          ai_resolved: number;
+          human_resolved: number;
+        }[];
+      }>(`/api/reports/timeline?${qs}`),
+  });
   const usage = useQuery({
     queryKey: ['usage-metrics'],
     queryFn: () =>
@@ -210,6 +234,57 @@ export default function Reports() {
               <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
                 {k.no_reply} conversation{k.no_reply === 1 ? '' : 's'} got no agent reply at all —
                 counted in the total, in neither column.
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Resolution & speed — how fast things close, and who closes them */}
+      {(() => {
+        const t = timeline.data;
+        if (!t || !t.opened) return null;
+        const resDays = t.series.filter((d) => d.resolutions > 0);
+        const maxRes = Math.max(...resDays.map((d) => d.resolutions), 1);
+        return (
+          <div className="card">
+            <div className="row">
+              <strong className="grow">Resolution &amp; speed — last {t.days} days</strong>
+            </div>
+            <div className="metric-grid" style={{ marginTop: 10 }}>
+              <div className="metric">
+                <div className="metric-num">
+                  {t.deflection_rate === null ? '—' : `${t.deflection_rate}%`}
+                </div>
+                <div className="muted">deflection — resolved with no human touch</div>
+              </div>
+              <div className="metric"><div className="metric-num">{fmtMin(t.median_frt_min)}</div><div className="muted">median first response</div></div>
+              <div className="metric"><div className="metric-num">{fmtMin(t.median_resolution_min)}</div><div className="muted">median time to resolve</div></div>
+              <div className="metric"><div className="metric-num">{t.resolved}</div><div className="muted">resolved ({t.resolution_rate ?? '—'}% of opened)</div></div>
+              <div className="metric"><div className="metric-num">{t.ai_resolved}</div><div className="muted">closed by agent alone</div></div>
+              <div className="metric"><div className="metric-num">{t.human_resolved}</div><div className="muted">closed after human touch</div></div>
+            </div>
+            {resDays.length >= 2 && (
+              <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 56, marginTop: 12 }}>
+                {resDays.map((d) => (
+                  <div key={d.date} style={{ flex: 1, minWidth: 2, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 1 }}
+                    title={`${d.date}: ${d.resolutions} resolved — ${d.ai_resolved} agent-only, ${d.human_resolved} human-assisted${d.frt_min !== null ? ` · FRT ${fmtMin(d.frt_min)}` : ''}`}>
+                    <div style={{
+                      height: Math.max((d.ai_resolved / maxRes) * 52, d.ai_resolved ? 2 : 0),
+                      background: 'var(--accent)', borderRadius: '2px 2px 0 0',
+                    }} />
+                    <div style={{
+                      height: Math.max((d.human_resolved / maxRes) * 52, d.human_resolved ? 2 : 0),
+                      background: 'var(--warn, #d97706)', borderRadius: '2px 2px 0 0',
+                    }} />
+                  </div>
+                ))}
+              </div>
+            )}
+            {resDays.length >= 2 && (
+              <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                daily resolutions — <span style={{ color: 'var(--accent)' }}>agent alone</span> /{' '}
+                <span style={{ color: 'var(--warn, #d97706)' }}>human-assisted</span>
               </div>
             )}
           </div>
