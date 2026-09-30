@@ -90,6 +90,11 @@ const patchChannel = z.object({
       logo_url: z
         .union([z.literal(''), z.string().url().max(500), z.string().regex(/^\/uploads\//).max(500)])
         .optional(),
+      // logo tile: inset padding, corner radius, outline — px ints
+      logo_padding: z.number().int().min(0).max(16).optional(),
+      logo_radius: z.number().int().min(0).max(16).optional(),
+      logo_border_width: z.number().int().min(0).max(4).optional(),
+      logo_border_color: z.string().regex(/^#[0-9a-fA-F]{6}$/).or(z.literal('')).optional(),
       teaser_text: z.string().max(200).optional(), // '' clears → greeting used
       proactive: z.boolean().optional(),
       proactive_delay: z.number().int().min(0).max(300).optional(),
@@ -487,6 +492,13 @@ export function channelApiRoutes(db: Db) {
         else creds[key] = v;
       }
       if (b.position !== undefined) creds.position = b.position;
+      if (b.logo_padding !== undefined) creds.logo_padding = b.logo_padding;
+      if (b.logo_radius !== undefined) creds.logo_radius = b.logo_radius;
+      if (b.logo_border_width !== undefined) creds.logo_border_width = b.logo_border_width;
+      if (b.logo_border_color !== undefined) {
+        if (b.logo_border_color === '') delete creds.logo_border_color;
+        else creds.logo_border_color = b.logo_border_color;
+      }
       if (b.teaser_text !== undefined) {
         if (b.teaser_text === '') delete creds.teaser_text;
         else creds.teaser_text = b.teaser_text;

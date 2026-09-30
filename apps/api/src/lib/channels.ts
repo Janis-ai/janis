@@ -38,6 +38,10 @@ export interface ChannelCredentials {
   subtitle?: string; // webchat: header subtext (falls back to agent name)
   position?: 'left' | 'right'; // webchat: which corner the launcher sits in
   logo_url?: string; // webchat: header/bubble logo image
+  logo_padding?: number; // webchat: px inset inside the header tile + launcher ring
+  logo_radius?: number; // webchat: px corner radius of the header logo tile
+  logo_border_width?: number; // webchat: px outline on the header logo tile
+  logo_border_color?: string; // webchat: outline color (falls back to soft dark)
   quick_replies?: string[]; // tappable prompts — webchat chips; reply buttons on Meta greetings
   teaser_text?: string; // webchat: proactive teaser line by the launcher (falls back to greeting)
   proactive?: boolean; // webchat: show the teaser at all — default on

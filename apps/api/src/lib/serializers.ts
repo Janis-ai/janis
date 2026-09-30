@@ -177,6 +177,10 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     accent?: string;
     position?: 'left' | 'right';
     logo_url?: string;
+    logo_padding?: number;
+    logo_radius?: number;
+    logo_border_width?: number;
+    logo_border_color?: string;
     quick_replies?: string[];
     teaser_text?: string;
     proactive?: boolean;
@@ -259,6 +263,10 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
               accent: creds.accent,
               position: creds.position,
               logo_url: creds.logo_url,
+              logo_padding: creds.logo_padding,
+              logo_radius: creds.logo_radius,
+              logo_border_width: creds.logo_border_width,
+              logo_border_color: creds.logo_border_color,
               quick_replies: creds.quick_replies,
               teaser_text: creds.teaser_text,
               proactive: creds.proactive,

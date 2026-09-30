@@ -1068,14 +1068,25 @@
     if (cfg.logo_url) {
       // Uploaded logos are /uploads/… paths on the API origin, not the host page's.
       var logoSrc = /^https?:\/\//.test(cfg.logo_url) ? cfg.logo_url : API + cfg.logo_url;
+      // Logo tile: padding/corner-radius/outline are branding-configurable.
+      var logoPad = cfg.logo_padding != null ? cfg.logo_padding : 2;
       var logo = document.createElement('img');
       logo.className = 'janis-logo';
       logo.src = logoSrc;
       logo.alt = '';
+      if (cfg.logo_radius != null) logo.style.borderRadius = cfg.logo_radius + 'px';
+      logo.style.padding = logoPad + 'px';
+      if (cfg.logo_border_width) {
+        logo.style.border = cfg.logo_border_width + 'px solid ' + (cfg.logo_border_color || 'rgba(0,0,0,.2)');
+      }
       panel.querySelector('#janis-head').insertBefore(logo, panel.querySelector('#janis-head').firstChild);
       var bub = document.createElement('img');
       bub.src = logoSrc;
       bub.alt = '';
+      if (logoPad > 0) {
+        // inset the logo inside the accent circle — the accent ring is the pad
+        bub.style.width = bub.style.height = 'calc(100% - ' + logoPad * 2 + 'px)';
+      }
       bubble.textContent = '';
       bubble.appendChild(bub);
       bubble.appendChild(badgeEl); // textContent='' wiped it — re-attach

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
@@ -537,6 +537,10 @@ function WebchatBranding({ channel }: { channel: Channel }) {
     accent: normHex(b.accent),
     position: b.position ?? 'right',
     logo_url: b.logo_url ?? '',
+    logo_padding: b.logo_padding ?? 2,
+    logo_radius: b.logo_radius ?? 8,
+    logo_border_width: b.logo_border_width ?? 0,
+    logo_border_color: b.logo_border_color ?? '#d1d5db',
     quick_replies: (b.quick_replies ?? []).join(', '),
     teaser_text: b.teaser_text ?? '',
     proactive: b.proactive !== false,
@@ -569,6 +573,10 @@ function WebchatBranding({ channel }: { channel: Channel }) {
             accent: f.accent,
             position: f.position,
             logo_url: f.logo_url,
+            logo_padding: f.logo_padding,
+            logo_radius: f.logo_radius,
+            logo_border_width: f.logo_border_width,
+            logo_border_color: f.logo_border_color,
             quick_replies: parseReplies(f.quick_replies),
             teaser_text: f.teaser_text,
             proactive: f.proactive,
@@ -648,16 +656,61 @@ function WebchatBranding({ channel }: { channel: Channel }) {
         </label>
       </div>
       {f.logo_url && (
-        <div className="row">
-          <img
-            src={f.logo_url}
-            alt="logo preview"
-            style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', border: '1px solid var(--border, #ddd)' }}
-          />
-          <button type="button" className="btn" onClick={() => setF({ ...f, logo_url: '' })}>
-            Remove logo
-          </button>
-        </div>
+        <>
+          <div className="row">
+            <img
+              src={f.logo_url}
+              alt="logo preview"
+              style={{
+                width: 32, height: 32, objectFit: 'contain',
+                background: '#fff',
+                padding: f.logo_padding,
+                borderRadius: f.logo_radius,
+                border: f.logo_border_width ? `${f.logo_border_width}px solid ${f.logo_border_color}` : '1px solid var(--border, #ddd)',
+              }}
+            />
+            <button type="button" className="btn" onClick={() => setF({ ...f, logo_url: '' })}>
+              Remove logo
+            </button>
+          </div>
+          <div className="row wrap" style={{ gap: 12 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              Inset
+              <input
+                type="number" min={0} max={16} style={{ width: 56 }}
+                value={f.logo_padding}
+                onChange={(e) => setF({ ...f, logo_padding: Math.max(0, Math.min(16, Number(e.target.value) || 0)) })}
+              />
+              px
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              Corners
+              <input
+                type="number" min={0} max={16} style={{ width: 56 }}
+                value={f.logo_radius}
+                onChange={(e) => setF({ ...f, logo_radius: Math.max(0, Math.min(16, Number(e.target.value) || 0)) })}
+              />
+              px
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              Outline
+              <input
+                type="number" min={0} max={4} style={{ width: 56 }}
+                value={f.logo_border_width}
+                onChange={(e) => setF({ ...f, logo_border_width: Math.max(0, Math.min(4, Number(e.target.value) || 0)) })}
+              />
+              px
+              <input
+                type="color" className="swatch" value={f.logo_border_color}
+                onChange={(e) => setF({ ...f, logo_border_color: e.target.value })}
+              />
+            </label>
+          </div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            Inset also sets the breathing room around the logo inside the
+            circular launcher button — the accent ring.
+          </div>
+        </>
       )}
       <input
         placeholder="Quick replies — comma-separated (optional, e.g. Pricing, Support, Book demo)"
@@ -711,6 +764,10 @@ function WebchatBranding({ channel }: { channel: Channel }) {
         subtitle={f.subtitle || 'Powered by Janis'}
         greeting={f.greeting}
         logo_url={f.logo_url}
+        logo_padding={f.logo_padding}
+        logo_radius={f.logo_radius}
+        logo_border_width={f.logo_border_width}
+        logo_border_color={f.logo_border_color}
         quick_replies={parseReplies(f.quick_replies)}
       />
     </form>
@@ -725,6 +782,10 @@ function WidgetPreview({
   subtitle,
   greeting,
   logo_url,
+  logo_padding,
+  logo_radius,
+  logo_border_width,
+  logo_border_color,
   quick_replies,
 }: {
   accent: string;
@@ -732,13 +793,24 @@ function WidgetPreview({
   subtitle: string;
   greeting: string;
   logo_url: string;
+  logo_padding: number;
+  logo_radius: number;
+  logo_border_width: number;
+  logo_border_color: string;
   quick_replies: string[];
 }) {
+  const tileStyle: CSSProperties = {
+    borderRadius: logo_radius,
+    padding: logo_padding,
+    background: '#fff',
+    objectFit: 'contain',
+    border: logo_border_width ? `${logo_border_width}px solid ${logo_border_color}` : undefined,
+  };
   return (
     <div className="widget-preview">
       <div className="wp-head" style={{ background: accent }}>
         {logo_url ? (
-          <img src={logo_url} alt="" className="wp-logo" />
+          <img src={logo_url} alt="" className="wp-logo" style={tileStyle} />
         ) : (
           <span className="wp-logo wp-logo-dot" />
         )}
@@ -769,7 +841,13 @@ function WidgetPreview({
         </span>
       </div>
       <div className="wp-bubble" style={{ background: accent }}>
-        {logo_url ? <img src={logo_url} alt="" /> : '💬'}
+        {logo_url ? (
+          <img
+            src={logo_url}
+            alt=""
+            style={logo_padding > 0 ? { width: `calc(100% - ${logo_padding * 2}px)`, height: `calc(100% - ${logo_padding * 2}px)` } : undefined}
+          />
+        ) : '💬'}
       </div>
     </div>
   );

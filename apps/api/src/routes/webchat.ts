@@ -201,6 +201,10 @@ export function webchatRoutes(db: Db) {
       accent: creds.accent ?? null,
       position: creds.position === 'left' ? 'left' : 'right',
       logo_url: creds.logo_url ?? null,
+      logo_padding: creds.logo_padding ?? null,
+      logo_radius: creds.logo_radius ?? null,
+      logo_border_width: creds.logo_border_width ?? null,
+      logo_border_color: creds.logo_border_color ?? null,
       // channel-level override wins; agent config is the default
       quick_replies: creds.quick_replies?.length ? creds.quick_replies : agentReplies,
       help_url: helpCount > 0 ? `${env.webOrigin}/help/${channel.agentId}` : null,

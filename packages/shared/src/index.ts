@@ -385,6 +385,11 @@ export const Channel = z.object({
         accent: z.string().optional(),
         position: z.enum(['left', 'right']).optional(),
         logo_url: z.string().optional(),
+        // logo tile (header) + launcher inset
+        logo_padding: z.number().optional(),
+        logo_radius: z.number().optional(),
+        logo_border_width: z.number().optional(),
+        logo_border_color: z.string().optional(),
         quick_replies: z.array(z.string()).optional(),
         teaser_text: z.string().optional(),
         proactive: z.boolean().optional(),
