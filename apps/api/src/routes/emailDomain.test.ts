@@ -225,6 +225,13 @@ describe('custom email domain', () => {
     expect(res.status).toBe(200);
   });
 
+  it('dns-setup picks the best path for the domain', async () => {
+    // no DC key configured + acme.com isn't Cloudflare-hosted → manual
+    const res = await post(`/${channelId}/email-domain/dns-setup`);
+    expect(res.status).toBe(200);
+    expect((await j(res)).mode).toBe('manual');
+  });
+
   it('delete clears domain creds and a dependent from_address', async () => {
     await patch({ from_address: 'support@mail.acme.com' });
     const res = await app.fetch(

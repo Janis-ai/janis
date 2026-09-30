@@ -817,8 +817,20 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
                 Push records via Cloudflare
               </button>
             ) : (
-              <button className="btn sm" onClick={() => setCfOpen((o) => !o)}>
-                Auto-add to Cloudflare
+              <button
+                className="btn sm"
+                onClick={() =>
+                  api(`/api/channels/${channel.id}/email-domain/dns-setup`, { method: 'POST' })
+                    .then((d) => {
+                      const r = d as { mode: string; url?: string };
+                      if (r.url) window.location.href = r.url;
+                      else if (r.mode === 'manual')
+                        setMsg('DNS is not on Cloudflare — add the records above at your provider.');
+                    })
+                    .catch((e) => setMsg(e instanceof Error ? e.message : 'failed'))
+                }
+              >
+                Set up DNS automatically
               </button>
             )}
             <button
@@ -834,6 +846,15 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
               Remove
             </button>
           </div>
+          {!cfOpen && !channel.meta.cf_connected && (
+            <button
+              className="muted"
+              style={{ fontSize: 12, marginTop: 6, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+              onClick={() => setCfOpen(true)}
+            >
+              On Cloudflare? Connect or paste a token →
+            </button>
+          )}
           {cfOpen && (
             <div style={{ marginTop: 8, border: '1px solid var(--border, #333)', borderRadius: 6, padding: 8 }}>
               <div className="muted" style={{ fontSize: 12 }}>

@@ -12,6 +12,7 @@ import {
   getResendDomain,
   verifyResendDomain,
 } from '../lib/resendDomains.js';
+import { detectDnsSetup } from '../lib/dnsSetup.js';
 import { and, eq, sql } from 'drizzle-orm';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
@@ -612,6 +613,31 @@ export function channelApiRoutes(db: Db) {
     ).toString('base64url');
     const sig = createHmac('sha256', env.sessionSecret).update(b64).digest('base64url');
     return c.json({ url: cfAuthorizeUrl(cfRedirectUri, `cf.${b64}.${sig}`) });
+  });
+
+  // Best-path DNS setup: Domain Connect → Cloudflare OAuth → manual. The UI
+  // calls this and navigates to whatever URL comes back (or shows records).
+  app.post('/:id/email-domain/dns-setup', async (c) => {
+    const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
+    if (!row) return c.json({ error: 'not found' }, 404);
+    if (row.kind !== 'email') return c.json({ error: 'email channel required' }, 400);
+    const creds = row.credentials as ChannelCredentials;
+    if (!creds.email_domain || !creds.email_domain_records?.length)
+      return c.json({ error: 'register a domain first' }, 400);
+    const role = await agentRoleFor(
+      db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
+    );
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
+    const mode = await detectDnsSetup(creds.email_domain, creds.email_domain_records);
+    if (mode.mode === 'cloudflare') {
+      if (!env.cfOauthClientId) return c.json({ mode: 'manual' });
+      const b64 = Buffer.from(
+        JSON.stringify({ ch: row.id, w: c.get('workspaceId'), x: Date.now() + 600_000 }),
+      ).toString('base64url');
+      const sig = createHmac('sha256', env.sessionSecret).update(b64).digest('base64url');
+      return c.json({ mode: 'cloudflare', url: cfAuthorizeUrl(cfRedirectUri, `cf.${b64}.${sig}`) });
+    }
+    return c.json(mode);
   });
 
   // Push the DNS records into Cloudflare on the client's behalf — an OAuth
