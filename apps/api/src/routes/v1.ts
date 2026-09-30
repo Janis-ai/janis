@@ -192,7 +192,11 @@ export function v1Routes(db: Db) {
     zValidator(
       'json',
       z.object({
-        channel_id: z.string().uuid().optional(),
+        // Zapier sends "" for blank optional fields — normalize to undefined
+        channel_id: z.preprocess(
+          (v) => (v === '' ? undefined : v),
+          z.string().uuid().optional(),
+        ),
         to: z.string().min(1),
         text: z.string().default(''),
         subject: z.string().optional(),
@@ -220,7 +224,7 @@ export function v1Routes(db: Db) {
       const r = await sendOutbound(db, channel, undefined, {
         to: body.to,
         text: body.text,
-        subject: body.subject,
+        subject: body.subject || undefined,
         template: body.whatsapp_template
           ? {
               name: body.whatsapp_template.name,
