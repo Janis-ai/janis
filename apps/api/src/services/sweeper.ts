@@ -4,6 +4,7 @@ import { agents, alertRules, alerts, busEvents, conversations, knowledgeFiles, m
 import { bus, INSTANCE_ID } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
+import { opsAlert } from '../lib/opsAlert.js';
 import { inactivityActions, inactivityThresholds } from '../lib/rules.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
@@ -129,6 +130,7 @@ export async function sweepDeliveryFailures(db: Db): Promise<void> {
         total,
       }),
     );
+    opsAlert(`🚨 janis: webhook delivery spike — ${failed}/${total} deliveries failed in the last hour`);
   }
 }
 

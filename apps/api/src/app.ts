@@ -48,6 +48,7 @@ import { workspaceRoutes } from './routes/workspace.js';
 import { workosRoutes } from './routes/workos.js';
 import { enrollRoutes } from './routes/enroll.js';
 import { eventRoutes } from './routes/events.js';
+import { opsRoutes } from './routes/ops.js';
 import { crmRoutes } from './routes/crm.js';
 import { viewRoutes } from './routes/views.js';
 import { webchatRoutes } from './routes/webchat.js';
@@ -196,6 +197,11 @@ export function createApp(db: Db) {
   // Conversion-event webhooks — same secret-URL pattern, workspace-scoped.
   app.use('/events/*', rateLimit({ scope: 'events', windowMs: 60_000, max: 120 }));
   app.route('/events', eventRoutes(db));
+
+  // Ops alerting — Cloud Monitoring webhook channel posts incidents here;
+  // shared-token auth, forwarded to the ops Slack webhook.
+  app.use('/ops/*', rateLimit({ scope: 'ops', windowMs: 60_000, max: 60 }));
+  app.route('/ops', opsRoutes());
 
   // Embed script for the web-chat widget — plain JS, cacheable.
   const widgetJs = readFileSync(

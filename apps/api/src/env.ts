@@ -30,6 +30,11 @@ export const env = {
   // outbound event webhook (bounces/complaints) — separate Resend webhook
   // registration, so a distinct secret; falls back to the inbound secret.
   resendEventsSecret: process.env.RESEND_EVENTS_SECRET ?? '',
+  // ops alerting — Slack incoming webhook for janis.alert incidents, plus
+  // the token that authenticates Cloud Monitoring's webhook posts to
+  // /ops/alert. Empty webhook = Slack posts skipped.
+  alertSlackWebhook: process.env.ALERT_SLACK_WEBHOOK ?? '',
+  opsAlertToken: process.env.OPS_ALERT_TOKEN ?? '',
   // Hosted voice — master Twilio account that provisions per-channel
   // subaccounts + numbers. Empty = BYO-creds voice only.
   twilioAccountSid: process.env.TWILIO_ACCOUNT_SID ?? '',

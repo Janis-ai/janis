@@ -4,6 +4,7 @@ import type { Db } from '../db/client.js';
 import { agents, agentTestRuns, agentTests } from '../db/schema.js';
 import { runAgentTest, type TestRunResult } from './agentTests.js';
 import { notifyWorkspace } from './notify.js';
+import { opsAlert } from './opsAlert.js';
 import { enqueueJob } from './jobs.js';
 import { bus } from './bus.js';
 
@@ -202,6 +203,7 @@ export async function runScheduledEval(
         batchId,
       }),
     );
+    opsAlert(`🚨 janis: eval regression — ${agent.name}: ${regression.detail}`);
     await notifyWorkspace(
       db,
       agent.workspaceId,
