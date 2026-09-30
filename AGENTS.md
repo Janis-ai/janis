@@ -427,12 +427,14 @@ before typecheck/tests/dev.
   address bundles for non-US voice.
 - LLM config OK locally (JANIS_LLM_* on gemini, OPENAI+ANTHROPIC keys set);
   JANIS_LLM_PROVIDERS multi-provider map + LLM_PRICES unset (optional).
-- Stack upgrades: Node 20 → 22/24 LTS (engines + Dockerfile node:20-alpine
-  + @types/node — Node 20 EOL 2026-04). drizzle-orm 0.38→0.45 has a HIGH
-  SQL-injection advisory fix (breaking upgrade — smoke-test migrations).
-  react-router 6→7 (moderate advisories, breaking), React 18→19,
-  @hono/node-server 1→2, pglite 0.2→0.5, pdf-parse 1→2, vite/plugin-react
-  majors. Deprecated warns: @esbuild-kit (merged into tsx), glob 11.
+- Stack upgrades: DONE 2026-09-30 — Node 22 (Dockerfile + engines + @types),
+  React 19, react-router 7, vite 8 + plugin-react 6 + vite-plugin-pwa 1.3,
+  @hono/node-server 2, pglite 0.5 (dev dirs from 0.2 don't open — move aside),
+  pdf-parse 2 (PDFParse class, d.ts shim deleted), vitest 5, lucide 1.49.
+  drizzle-orm 0.45 already shipped. Still pending: drizzle-orm →1.0 when
+  stable, zod 3→4 (big migration — record/error APIs), npm local: vitest@5
+  peer tree crashes npm 10's arborist — install with npm >=10.9/12.
+  @esbuild-kit + glob 11 warns are transitive (drizzle-kit/workbox-build).
 - .env.example documents ~30 of ~80 vars — needs a full pass w/ comments
   on which are dev-defaulted vs required.
 - Legacy to retire eventually: WORDHOP_API_URL, JANIS_SOCKET_SERVER_URL
