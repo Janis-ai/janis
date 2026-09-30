@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { and, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, campaignSends, campaigns, channels } from '../db/schema.js';
+import { agents, campaignSends, campaigns, channels, contactLists } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { dispatchCampaign, resolveSegment } from '../lib/campaigns.js';
 import { audit } from '../lib/audit.js';
@@ -23,6 +23,8 @@ const createCampaign = z.object({
   segment: z
     .object({
       q: z.string().max(200).optional(),
+      list_id: z.string().uuid().optional(),
+      tags: z.array(z.string().max(80)).max(20).optional(),
       has_email: z.boolean().optional(),
       has_phone: z.boolean().optional(),
       active_within_days: z.number().int().min(1).max(365).optional(),
@@ -123,7 +125,15 @@ export function campaignRoutes(db: Db) {
       .where(and(eq(channels.id, channel_id), eq(channels.workspaceId, c.get('workspaceId'))))
       .limit(1);
     if (!ch) return c.json({ error: 'channel not found' }, 404);
-    const recipients = await resolveSegment(db, {
+    if (segment?.list_id) {
+      const [list] = await db
+        .select({ id: contactLists.id })
+        .from(contactLists)
+        .where(and(eq(contactLists.id, segment.list_id), eq(contactLists.workspaceId, c.get('workspaceId'))))
+        .limit(1);
+      if (!list) return c.json({ error: 'list not found' }, 404);
+    }
+    const { recipients, unreachable } = await resolveSegment(db, {
       workspaceId: c.get('workspaceId'),
       channelId: channel_id,
       segment: segment ?? {},
@@ -131,6 +141,7 @@ export function campaignRoutes(db: Db) {
     return c.json({
       total: recipients.length,
       opted_out: recipients.filter((r) => r.opted).length,
+      unreachable,
       sample: recipients.slice(0, 10).map((r) => r.platformUserId),
     });
   });
@@ -144,6 +155,16 @@ export function campaignRoutes(db: Db) {
       .where(and(eq(channels.id, body.channel_id), eq(channels.workspaceId, workspaceId)))
       .limit(1);
     if (!ch) return c.json({ error: 'channel not found' }, 404);
+    if (body.segment?.list_id) {
+      const [list] = await db
+        .select({ id: contactLists.id })
+        .from(contactLists)
+        .where(
+          and(eq(contactLists.id, body.segment.list_id), eq(contactLists.workspaceId, workspaceId)),
+        )
+        .limit(1);
+      if (!list) return c.json({ error: 'list not found' }, 404);
+    }
     if (!['sms', 'whatsapp', 'email', 'gmail', 'outlook'].includes(ch.kind)) {
       return c.json({ error: `${ch.kind} channels can't initiate outbound` }, 400);
     }

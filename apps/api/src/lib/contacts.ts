@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { contactIdentities, contacts, conversations } from '../db/schema.js';
 import type { UserProfile } from '@janis/shared';
@@ -129,6 +129,74 @@ async function enrichContact(db: Db, contactId: string, profile: Profile): Promi
       updatedAt: new Date(),
     })
     .where(eq(contacts.id, contactId));
+}
+
+/** Find-or-create a contact by email/phone — the import path. Matches on
+ *  primary OR alt addresses; on a hit the row's fields enrich (fill + alt
+ *  fold) and tags union in. Returns the contact id and whether it was new. */
+export async function upsertContactByAddress(
+  db: Db,
+  input: {
+    workspaceId: string;
+    name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    tags?: string[];
+  },
+): Promise<{ contactId: string; created: boolean }> {
+  const email = input.email?.trim().toLowerCase() || null;
+  const phone = input.phone?.trim() || null;
+  const matchConds = [
+    email
+      ? sql`(lower(${contacts.email}) = ${email} or ${email} = any(${contacts.altEmails}))`
+      : undefined,
+    phone
+      ? sql`(${contacts.phone} = ${phone} or ${phone} = any(${contacts.altPhones}))`
+      : undefined,
+  ].filter((x): x is NonNullable<typeof x> => !!x);
+  const [match] = matchConds.length
+    ? await db
+        .select({ id: contacts.id })
+        .from(contacts)
+        .where(and(eq(contacts.workspaceId, input.workspaceId), or(...matchConds)))
+        .limit(1)
+    : [undefined];
+
+  let contactId: string;
+  if (match) {
+    contactId = match.id;
+    await enrichContact(db, contactId, {
+      email: email ?? undefined,
+      phone: phone ?? undefined,
+      name: input.name ?? undefined,
+    });
+  } else {
+    const [created] = await db
+      .insert(contacts)
+      .values({
+        workspaceId: input.workspaceId,
+        name: input.name ?? null,
+        email,
+        phone,
+        tags: input.tags ?? [],
+      })
+      .returning({ id: contacts.id });
+    contactId = created.id;
+  }
+  if (match && input.tags?.length) {
+    // array[...] literal + sql.join — the plain array bind doesn't reach PG
+    // as an array through the sql template.
+    await db
+      .update(contacts)
+      .set({
+        tags: sql`array(select distinct unnest(${contacts.tags} || array[${sql.join(
+          input.tags.map((t) => sql`${t}`),
+          sql`, `,
+        )}]))`,
+      })
+      .where(eq(contacts.id, contactId));
+  }
+  return { contactId, created: !match };
 }
 
 /** Link (or re-link) a conversation to its resolved contact. */

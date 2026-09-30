@@ -18,6 +18,7 @@ import { v1Routes } from './routes/v1.js';
 import { agentRoutes } from './routes/agents.js';
 import { conversationRoutes } from './routes/conversations.js';
 import { contactRoutes } from './routes/contacts.js';
+import { listRoutes } from './routes/lists.js';
 import { campaignRoutes } from './routes/campaigns.js';
 import { actionRoutes } from './routes/actions.js';
 import { alertRoutes } from './routes/alerts.js';
@@ -212,6 +213,7 @@ export function createApp(db: Db) {
   api.route('/tool-templates', toolTemplateRoutes(db));
   api.route('/conversations', conversationRoutes(db));
   api.route('/contacts', contactRoutes(db));
+  api.route('/lists', listRoutes(db));
   api.route('/campaigns', campaignRoutes(db));
   api.route('/actions', actionRoutes(db));
   api.route('/alerts', alertRoutes(db));

@@ -74,15 +74,71 @@ describe('campaign segments', () => {
     await db.insert(messages).values({ conversationId: old.id, direction: 'out', text: 'blast' });
 
     const base = { workspaceId, channelId };
+    // SMS channel → recipients need a phone. quiet has email only → unreachable.
     expect(
-      (await resolveSegment(db, { ...base, segment: { has_email: true } })).map((r) => r.contactId).sort(),
-    ).toEqual([reachable.id, altOnly.id, quiet.id].sort());
+      (await resolveSegment(db, { ...base, segment: { has_email: true } })).recipients
+        .map((r) => r.contactId).sort(),
+    ).toEqual([reachable.id, altOnly.id].sort());
     expect(
-      (await resolveSegment(db, { ...base, segment: { active_within_days: 30 } })).map((r) => r.contactId),
+      (await resolveSegment(db, { ...base, segment: { active_within_days: 30 } })).recipients
+        .map((r) => r.contactId),
     ).toEqual([reachable.id]);
-    expect(
-      (await resolveSegment(db, { ...base, segment: { never_replied: true } })).map((r) => r.contactId).sort(),
-    ).toEqual([noEmail.id, altOnly.id, quiet.id].sort());
+    const nr = await resolveSegment(db, { ...base, segment: { never_replied: true } });
+    expect(nr.recipients.map((r) => r.contactId).sort()).toEqual([noEmail.id, altOnly.id].sort());
+    // quiet matches the filter but has no phone → counted unreachable.
+    expect(nr.unreachable).toBe(1);
+  });
+
+  it('targets the contact\'s email on email channels and honors list_id/tags', async () => {
+    const [emailCh] = await db
+      .insert(channels)
+      .values({ workspaceId, agentId, kind: 'email', name: 'E', credentials: {} })
+      .returning();
+    const tagged = await mkContact({ name: 'Vip', email: 'vip@x.com', tags: ['vip'] });
+    const listed = await mkContact({ name: 'Listy', email: 'listy@x.com' });
+    const { contactLists, contactListMembers } = await import('../db/schema.js');
+    const [list] = await db
+      .insert(contactLists)
+      .values({ workspaceId, name: 'import-1' })
+      .returning();
+    await db.insert(contactListMembers).values({ listId: list.id, contactId: listed.id });
+
+    const byTag = await resolveSegment(db, {
+      workspaceId, channelId: emailCh.id, segment: { tags: ['vip'] },
+    });
+    expect(byTag.recipients.map((r) => r.contactId)).toEqual([tagged.id]);
+    expect(byTag.recipients[0].platformUserId).toBe('vip@x.com');
+
+    const byList = await resolveSegment(db, {
+      workspaceId, channelId: emailCh.id, segment: { list_id: list.id },
+    });
+    expect(byList.recipients.map((r) => r.contactId)).toEqual([listed.id]);
+    expect(byList.recipients[0].platformUserId).toBe('listy@x.com');
+  });
+
+  it('flags opted-out identities on the target channel', async () => {
+    const c = await mkContact({ name: 'Stopper', phone: '+1999' });
+    // Rebind the helper's identity to the phone — that address is what
+    // resolveSegment will try to send to.
+    await db.delete(contactIdentities).where(eq(contactIdentities.contactId, c.id));
+    await db.insert(contactIdentities).values({
+      contactId: c.id,
+      channelId,
+      platformUserId: '+1999',
+    });
+    await db
+      .update(contactIdentities)
+      .set({ optedOutAt: new Date() })
+      .where(
+        and(
+          eq(contactIdentities.channelId, channelId),
+          eq(contactIdentities.platformUserId, '+1999'),
+        ),
+      );
+    const r = await resolveSegment(db, { workspaceId, channelId, segment: { q: 'stopper' } });
+    expect(r.recipients).toEqual([
+      { contactId: c.id, platformUserId: '+1999', opted: true },
+    ]);
   });
 });
 

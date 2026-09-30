@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
@@ -12,6 +12,7 @@ type ContactRow = {
   phone: string | null;
   alt_emails?: string[];
   alt_phones?: string[];
+  tags?: string[];
   has_avatar: boolean;
   notes: string | null;
   identities?: number;
@@ -38,9 +39,29 @@ const displayName = (c: { name: string | null; email: string | null; phone: stri
 
 export function Contacts() {
   const [q, setQ] = useState('');
+  const { data: me } = useMe();
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [importMsg, setImportMsg] = useState('');
   const { data } = useQuery({
     queryKey: ['contacts', q],
     queryFn: () => api<{ contacts: ContactRow[] }>(`/api/contacts${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  });
+  const importCsv = useMutation({
+    mutationFn: async (file: File) => {
+      const csv = await file.text();
+      const name = file.name.replace(/\.csv$/i, '');
+      return api<{ list_id: string; created: number; matched: number; skipped: number }>(
+        '/api/lists/import',
+        { method: 'POST', body: JSON.stringify({ name, csv }) },
+      );
+    },
+    onSuccess: (r) => {
+      setImportMsg(`Imported → list: ${r.created} new, ${r.matched} matched existing${r.skipped ? `, ${r.skipped} skipped (bad rows)` : ''}`);
+      void qc.invalidateQueries({ queryKey: ['contacts'] });
+      void qc.invalidateQueries({ queryKey: ['lists'] });
+    },
+    onError: (e) => setImportMsg(e.message),
   });
 
   return (
@@ -54,7 +75,26 @@ export function Contacts() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
+        {me?.user.role === 'admin' && (
+          <>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,text/csv"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) importCsv.mutate(f);
+                e.target.value = '';
+              }}
+            />
+            <button className="btn" disabled={importCsv.isPending} onClick={() => fileRef.current?.click()}>
+              {importCsv.isPending ? 'Importing…' : 'Import CSV'}
+            </button>
+          </>
+        )}
       </div>
+      {importMsg && <div className="muted" style={{ marginBottom: 8 }}>{importMsg}</div>}
       <div className="card">
         {data?.contacts.length === 0 && (
           <div className="muted">No contacts yet — they appear as conversations arrive.</div>
@@ -62,6 +102,9 @@ export function Contacts() {
         {data?.contacts.map((c) => (
           <Link key={c.id} to={`/contacts/${c.id}`} className="row" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)', color: 'inherit', textDecoration: 'none' }}>
             <strong className="grow">{displayName(c)}</strong>
+            {!!c.tags?.length && (
+              <span>{c.tags.slice(0, 4).map((t) => <span key={t} className="chip" style={{ marginRight: 4 }}>{t}</span>)}</span>
+            )}
             <span className="muted">{[c.email, c.phone].filter(Boolean).join(' · ')}</span>
             <span className="muted">
               {(c.identities ?? 0) > 1 ? `${c.identities} channels` : ''}
@@ -85,9 +128,9 @@ export function ContactDetail() {
     queryFn: () => api<ContactDetail>(`/api/contacts/${id}`),
     enabled: !!id,
   });
-  const [edit, setEdit] = useState<{ name: string; email: string; phone: string; notes: string } | null>(null);
+  const [edit, setEdit] = useState<{ name: string; email: string; phone: string; notes: string; tags: string } | null>(null);
   const save = useMutation({
-    mutationFn: (body: Record<string, string | null>) =>
+    mutationFn: (body: Record<string, string | string[] | null>) =>
       api(`/api/contacts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: () => {
       setEdit(null);
@@ -120,7 +163,7 @@ export function ContactDetail() {
     <>
       <div className="page-head">
         <h1>{displayName(c)}</h1>
-        {!edit && <button className="btn" onClick={() => setEdit({ name: c.name ?? '', email: c.email ?? '', phone: c.phone ?? '', notes: c.notes ?? '' })}>Edit</button>}
+        {!edit && <button className="btn" onClick={() => setEdit({ name: c.name ?? '', email: c.email ?? '', phone: c.phone ?? '', notes: c.notes ?? '', tags: (c.tags ?? []).join(', ') })}>Edit</button>}
         {isAdmin && (
           <>
             <a className="btn" href={`/api/contacts/${id}/export`} target="_blank" rel="noreferrer">
@@ -150,6 +193,7 @@ export function ContactDetail() {
             <input placeholder="Name" value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} />
             <input placeholder="Email" value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} />
             <input placeholder="Phone" value={edit.phone} onChange={(e) => setEdit({ ...edit, phone: e.target.value })} />
+            <input placeholder="Tags (comma-separated — used for campaign audiences)" value={edit.tags} onChange={(e) => setEdit({ ...edit, tags: e.target.value })} />
             <textarea placeholder="Notes" value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} />
             <div className="row">
               <button
@@ -161,6 +205,7 @@ export function ContactDetail() {
                     email: edit.email || null,
                     phone: edit.phone || null,
                     notes: edit.notes || null,
+                    tags: edit.tags.split(',').map((t) => t.trim()).filter(Boolean),
                   })
                 }
               >
@@ -179,6 +224,11 @@ export function ContactDetail() {
           {!!c.alt_emails?.length && <div>Also emails: {c.alt_emails.join(', ')}</div>}
           <div>Phone: {c.phone ?? '—'}</div>
           {!!c.alt_phones?.length && <div>Also phones: {c.alt_phones.join(', ')}</div>}
+          {!!c.tags?.length && (
+            <div style={{ marginTop: 6 }}>
+              Tags: {c.tags.map((t) => <span key={t} className="chip" style={{ marginRight: 4 }}>{t}</span>)}
+            </div>
+          )}
           {c.notes && <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>{c.notes}</div>}
         </div>
       </div>

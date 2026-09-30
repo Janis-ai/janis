@@ -24,6 +24,11 @@ export default function Campaigns() {
   const qc = useQueryClient();
   const { data: chans } = useChannels();
   const channels = (chans?.channels ?? []).filter((c) => SENDABLE.includes(c.kind));
+  const { data: listsData } = useQuery({
+    queryKey: ['lists'],
+    queryFn: () => api<{ lists: { id: string; name: string; members: number }[] }>('/api/lists'),
+  });
+  const lists = listsData?.lists ?? [];
   const { data } = useQuery({
     queryKey: ['campaigns'],
     queryFn: () => api<{ campaigns: CampaignRow[] }>('/api/campaigns'),
@@ -51,20 +56,22 @@ export default function Campaigns() {
   const [form, setForm] = useState({
     name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
     has_email: false, has_phone: false, active_days: '', never_replied: false,
-    step_delay: '', step_text: '', agent_instructions: '',
+    step_delay: '', step_text: '', agent_instructions: '', list_id: '', tags: '',
   });
   const segment = () => ({
     ...(form.q ? { q: form.q } : {}),
+    ...(form.list_id ? { list_id: form.list_id } : {}),
+    ...(form.tags.trim() ? { tags: form.tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean) } : {}),
     ...(form.has_email ? { has_email: true } : {}),
     ...(form.has_phone ? { has_phone: true } : {}),
     ...(form.active_days ? { active_within_days: Number(form.active_days) } : {}),
     ...(form.never_replied ? { never_replied: true } : {}),
   });
   const preview = useQuery({
-    queryKey: ['campaign-preview', form.channel_id, form.q, form.has_email, form.has_phone, form.active_days, form.never_replied],
+    queryKey: ['campaign-preview', form.channel_id, form.q, form.list_id, form.tags, form.has_email, form.has_phone, form.active_days, form.never_replied],
     enabled: !!form.channel_id,
     queryFn: () =>
-      api<{ total: number; opted_out: number }>('/api/campaigns/preview', {
+      api<{ total: number; opted_out: number; unreachable: number }>('/api/campaigns/preview', {
         method: 'POST',
         body: JSON.stringify({ channel_id: form.channel_id, segment: segment() }),
       }),
@@ -73,7 +80,7 @@ export default function Campaigns() {
     setForm({
       name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
       has_email: false, has_phone: false, active_days: '', never_replied: false,
-      step_delay: '', step_text: '', agent_instructions: '',
+      step_delay: '', step_text: '', agent_instructions: '', list_id: '', tags: '',
     });
   const create = useMutation({
     mutationFn: () =>
@@ -132,13 +139,25 @@ export default function Campaigns() {
             value={form.scheduled_at}
             onChange={(e) => setForm({ ...form, scheduled_at: e.target.value })} />
         </div>
-        <div className="row" style={{ gap: 10, marginTop: 10 }}>
-          <input className="input grow" placeholder="Audience: name/email/phone contains… (blank = all)"
+        <div className="row wrap" style={{ gap: 10, marginTop: 10 }}>
+          <select className="input" value={form.list_id}
+            title="Static audience — contacts imported or added to a list"
+            onChange={(e) => setForm({ ...form, list_id: e.target.value })}>
+            <option value="">Audience: all contacts…</option>
+            {lists.map((l) => (
+              <option key={l.id} value={l.id}>List: {l.name} ({l.members})</option>
+            ))}
+          </select>
+          <input className="input grow" placeholder="Refine: name/email/phone contains…"
             value={form.q} onChange={(e) => setForm({ ...form, q: e.target.value })} />
+          <input className="input" style={{ width: 170 }} placeholder="tag, tag…"
+            title="Contacts matching any of these tags"
+            value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} />
           {preview.data && (
             <span className="muted" style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
               {preview.data.total} recipients
               {!!preview.data.opted_out && ` (${preview.data.opted_out} opted out)`}
+              {!!preview.data.unreachable && ` (${preview.data.unreachable} unreachable on this channel)`}
             </span>
           )}
         </div>

@@ -236,6 +236,8 @@ export const contacts = pgTable(
     // primary fields.
     altEmails: text('alt_emails').array().notNull().default([]),
     altPhones: text('alt_phones').array().notNull().default([]),
+    // Lightweight labels — audiences, campaigns and filters group on these.
+    tags: text('tags').array().notNull().default([]),
     avatarUrl: text('avatar_url'),
     notes: text('notes'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -270,6 +272,35 @@ export const contactIdentities = pgTable(
     uniqueIndex('contact_identities_channel_user').on(t.channelId, t.platformUserId),
     index('contact_identities_contact').on(t.contactId),
   ],
+);
+
+/** Named static audiences — CSV imports and manual picks. Campaigns target
+ *  a list via segment.list_id; dynamic filters stay in segment. */
+export const contactLists = pgTable(
+  'contact_lists',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    name: text('name').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('contact_lists_ws').on(t.workspaceId)],
+);
+
+export const contactListMembers = pgTable(
+  'contact_list_members',
+  {
+    listId: uuid('list_id')
+      .notNull()
+      .references(() => contactLists.id, { onDelete: 'cascade' }),
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => contacts.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('contact_list_members_pair').on(t.listId, t.contactId)],
 );
 
 // Per-operator saved filter presets for the conversations list — the

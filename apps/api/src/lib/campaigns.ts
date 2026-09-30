@@ -1,9 +1,11 @@
-import { and, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   campaignSends,
   campaigns,
+  channels,
   contactIdentities,
+  contactListMembers,
   contacts,
   conversations,
   jobs,
@@ -14,6 +16,10 @@ import { enqueueJob } from './jobs.js';
 export interface CampaignSegment {
   /** Free-text match over contact name/email/phone (alts included). */
   q?: string;
+  /** Static audience — members of this contact_list. */
+  list_id?: string;
+  /** Any-of tag match on the contact. */
+  tags?: string[];
   /** Require a reachable email/phone on the contact record. */
   has_email?: boolean;
   has_phone?: boolean;
@@ -32,19 +38,45 @@ export interface CampaignStep {
   whatsapp_template?: { name: string; language?: string; body_params?: string[] };
 }
 
-/** Resolve a campaign's segment to recipient identities on its channel.
+/** Email-kinded channels reach contact.email/alt_emails; phone-kinded reach
+ *  contact.phone/alt_phones. A contact's addresses ARE its reachable
+ *  identities — the channel only decides which one is used, so imported
+ *  contacts with no channel history are targetable. */
+const EMAIL_KINDS = new Set(['email', 'gmail', 'outlook']);
+const PHONE_KINDS = new Set(['sms', 'whatsapp']);
+
+function addressFor(
+  kind: string,
+  c: { email: string | null; altEmails: string[]; phone: string | null; altPhones: string[] },
+): string | null {
+  if (EMAIL_KINDS.has(kind)) return c.email ?? c.altEmails[0] ?? null;
+  if (PHONE_KINDS.has(kind)) return c.phone ?? c.altPhones[0] ?? null;
+  return null;
+}
+
+/** Resolve a campaign's segment to recipients reachable on its channel.
  *  Opted-out identities are returned with opted=true so the caller records
- *  a skipped send (suppression is data, not silence). */
+ *  a skipped send (suppression is data, not silence); contacts with no
+ *  usable address for the channel kind count toward `unreachable`. */
 export async function resolveSegment(
   db: Db,
   campaign: { workspaceId: string; channelId: string; segment: unknown },
-): Promise<{ contactId: string; platformUserId: string; opted: boolean }[]> {
+): Promise<{
+  recipients: { contactId: string; platformUserId: string; opted: boolean }[];
+  unreachable: number;
+}> {
   const seg = (campaign.segment ?? {}) as CampaignSegment;
+  const [channel] = await db
+    .select({ kind: channels.kind })
+    .from(channels)
+    .where(eq(channels.id, campaign.channelId))
+    .limit(1);
+  if (!channel) return { recipients: [], unreachable: 0 };
+  const needEmail = EMAIL_KINDS.has(channel.kind);
+  const needPhone = PHONE_KINDS.has(channel.kind);
+
   const q = seg.q?.trim().toLowerCase();
-  const conds = [
-    eq(contacts.workspaceId, campaign.workspaceId),
-    eq(contactIdentities.channelId, campaign.channelId),
-  ];
+  const conds = [eq(contacts.workspaceId, campaign.workspaceId)];
   if (q) {
     conds.push(
       or(
@@ -54,6 +86,21 @@ export async function resolveSegment(
         sql`exists (select 1 from unnest(${contacts.altEmails}) e where e ilike ${`%${q}%`})`,
         sql`exists (select 1 from unnest(${contacts.altPhones}) p where p ilike ${`%${q}%`})`,
       )!,
+    );
+  }
+  if (seg.list_id) {
+    conds.push(
+      sql`exists (select 1 from ${contactListMembers} lm where lm.list_id = ${seg.list_id} and lm.contact_id = ${contacts.id})`,
+    );
+  }
+  if (seg.tags?.length) {
+    // sql.join — a raw array bind through the template doesn't serialize
+    // to a PG array on this driver.
+    conds.push(
+      sql`exists (select 1 from unnest(${contacts.tags}) t where t in (${sql.join(
+        seg.tags.map((t) => sql`${t}`),
+        sql`, `,
+      )}))`,
     );
   }
   if (seg.has_email) {
@@ -83,18 +130,43 @@ export async function resolveSegment(
   }
   const rows = await db
     .select({
-      contactId: contactIdentities.contactId,
-      platformUserId: contactIdentities.platformUserId,
-      opted: contactIdentities.optedOutAt,
+      id: contacts.id,
+      email: contacts.email,
+      altEmails: contacts.altEmails,
+      phone: contacts.phone,
+      altPhones: contacts.altPhones,
     })
-    .from(contactIdentities)
-    .innerJoin(contacts, eq(contactIdentities.contactId, contacts.id))
-    .where(and(...conds));
-  return rows.map((r) => ({
-    contactId: r.contactId,
-    platformUserId: r.platformUserId,
-    opted: !!r.opted,
-  }));
+    .from(contacts)
+    .where(and(...conds))
+    .limit(20_000);
+
+  // Map each contact to the address this channel can reach, then look up
+  // opt-outs on the (channel, address) pair — suppression still applies to
+  // imported contacts who previously STOPped on this channel.
+  const addressed = rows
+    .map((c) => ({ contactId: c.id, platformUserId: addressFor(channel.kind, c) }))
+    .filter((r): r is { contactId: string; platformUserId: string } => !!r.platformUserId);
+  const optedSet = new Set<string>();
+  if (addressed.length) {
+    const optRows = await db
+      .select({ platformUserId: contactIdentities.platformUserId })
+      .from(contactIdentities)
+      .where(
+        and(
+          eq(contactIdentities.channelId, campaign.channelId),
+          inArray(
+            contactIdentities.platformUserId,
+            addressed.map((r) => r.platformUserId),
+          ),
+          sql`${contactIdentities.optedOutAt} is not null`,
+        ),
+      );
+    for (const r of optRows) optedSet.add(r.platformUserId);
+  }
+  return {
+    recipients: addressed.map((r) => ({ ...r, opted: optedSet.has(r.platformUserId) })),
+    unreachable: rows.length - addressed.length,
+  };
 }
 
 /** One send row per (campaign, step, recipient) — onConflictDoNothing makes
@@ -163,7 +235,7 @@ export async function dispatchCampaign(db: Db, campaignId: string): Promise<numb
     .where(eq(campaigns.id, campaignId))
     .limit(1);
   if (!campaign || campaign.status === 'done' || campaign.status === 'failed') return 0;
-  const recipients = await resolveSegment(db, campaign);
+  const { recipients } = await resolveSegment(db, campaign);
   const template = (campaign.template ?? undefined) as
     | { name: string; language?: string; bodyParams?: string[] }
     | undefined;

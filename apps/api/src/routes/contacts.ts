@@ -10,6 +10,8 @@ import {
   channelBindings,
   channels,
   contactIdentities,
+  contactListMembers,
+  contactLists,
   contacts,
   conversations,
   messages,
@@ -39,6 +41,7 @@ export function contactRoutes(db: Db) {
     phone: r.phone,
     alt_emails: r.altEmails,
     alt_phones: r.altPhones,
+    tags: r.tags,
     avatar_url: null as string | null, // raw CDN urls stay server-side
     has_avatar: Boolean(r.avatarUrl),
     notes: r.notes,
@@ -208,6 +211,7 @@ export function contactRoutes(db: Db) {
         // Secondary addresses — replace whole arrays (UI edits the list).
         alt_emails: z.array(z.string().email().max(320)).max(20).optional(),
         alt_phones: z.array(z.string().max(40)).max(20).optional(),
+        tags: z.array(z.string().min(1).max(80)).max(50).optional(),
       }),
     ),
     async (c) => {
@@ -221,6 +225,9 @@ export function contactRoutes(db: Db) {
         patch.altEmails = body.alt_emails.map((e) => e.toLowerCase());
       }
       if (body.alt_phones !== undefined) patch.altPhones = body.alt_phones;
+      if (body.tags !== undefined) {
+        patch.tags = [...new Set(body.tags.map((t) => t.trim().toLowerCase()).filter(Boolean))];
+      }
       const [row] = await db
         .update(contacts)
         .set(patch)
@@ -338,7 +345,7 @@ export function contactRoutes(db: Db) {
       .where(and(eq(contacts.id, c.req.param('id')), eq(contacts.workspaceId, workspaceId)))
       .limit(1);
     if (!contact) return c.json({ error: 'not found' }, 404);
-    const [identities, convs, sends] = await Promise.all([
+    const [identities, convs, sends, memberships] = await Promise.all([
       db.select().from(contactIdentities).where(eq(contactIdentities.contactId, contact.id)),
       db
         .select()
@@ -346,6 +353,11 @@ export function contactRoutes(db: Db) {
         .where(eq(conversations.contactId, contact.id))
         .limit(500),
       db.select().from(campaignSends).where(eq(campaignSends.contactId, contact.id)),
+      db
+        .select({ listId: contactListMembers.listId, name: contactLists.name })
+        .from(contactListMembers)
+        .innerJoin(contactLists, eq(contactListMembers.listId, contactLists.id))
+        .where(eq(contactListMembers.contactId, contact.id)),
     ]);
     const msgs = convs.length
       ? await db
@@ -374,6 +386,7 @@ export function contactRoutes(db: Db) {
       exported_at: new Date().toISOString(),
       contact,
       identities,
+      lists: memberships,
       campaign_sends: sends,
       conversations: convs.map((v) => ({ ...v, messages: byConv.get(v.id) ?? [] })),
     });
