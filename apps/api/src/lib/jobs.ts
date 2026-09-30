@@ -1,9 +1,17 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { campaignSends, channels, jobs, knowledgeFiles } from '../db/schema.js';
+import {
+  campaigns,
+  campaignSends,
+  channels,
+  jobs,
+  knowledgeFiles,
+  workspaces,
+} from '../db/schema.js';
 import { sendOutbound } from './outbound.js';
 import { refreshKnowledgeSource } from './urlSource.js';
 import { dispatchCampaignStep, stepStragglersExist } from './campaigns.js';
+import { checkSendPolicy, policyFor } from './sendPolicy.js';
 
 /** Job payload for 'outbound.send' — one recipient's send, replayable. */
 export interface OutboundSendJob {
@@ -41,6 +49,8 @@ export async function enqueueJob(
 
 /** One queued outbound send — a broadcast/campaign recipient. The channel
  *  may have been deleted since enqueue; that job fails permanently. */
+const DEFER_RETRY_MS = 15 * 60_000;
+
 async function runOutboundSend(db: Db, workspaceId: string, p: OutboundSendJob): Promise<void> {
   const [channel] = await db
     .select()
@@ -50,6 +60,62 @@ async function runOutboundSend(db: Db, workspaceId: string, p: OutboundSendJob):
   if (!channel || channel.workspaceId !== workspaceId) {
     throw new Error('channel gone or wrong workspace');
   }
+
+  // Lazy cancel/pause + suppression re-check at send time — a job enqueued
+  // hours ago still honors a pause/resume/cancel or a bounce-suppression
+  // written since it queued. Campaign sends stamp the outcome on their row.
+  const stamp = async (
+    status: typeof campaignSends.$inferSelect.status,
+    error?: string,
+  ) => {
+    if (p.campaignSendId) {
+      await db
+        .update(campaignSends)
+        .set({ status, ...(error ? { error } : {}) })
+        .where(eq(campaignSends.id, p.campaignSendId));
+    }
+  };
+  const defer = async (runAt: Date) => {
+    await enqueueJob(db, { workspaceId, type: 'outbound.send', payload: { ...p }, runAt });
+  };
+
+  if (p.campaignSendId) {
+    const [send] = await db
+      .select({ status: campaigns.status })
+      .from(campaignSends)
+      .innerJoin(campaigns, eq(campaignSends.campaignId, campaigns.id))
+      .where(eq(campaignSends.id, p.campaignSendId))
+      .limit(1);
+    if (!send || send.status === 'cancelled' || send.status === 'done' || send.status === 'failed') {
+      await stamp('skipped_cancelled');
+      return;
+    }
+    if (send.status === 'paused') {
+      await defer(new Date(Date.now() + DEFER_RETRY_MS));
+      return;
+    }
+  }
+
+  const [ws] = await db
+    .select({ config: workspaces.config })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  const decision = await checkSendPolicy(db, {
+    workspaceId,
+    channelKind: channel.kind,
+    recipient: p.to,
+    policy: policyFor(ws?.config),
+  });
+  if (!decision.ok) {
+    if ('deferUntil' in decision) {
+      await defer(decision.deferUntil);
+      return;
+    }
+    await stamp(`skipped_${decision.skip}`, `send policy: ${decision.skip}`);
+    return;
+  }
+
   const r = await sendOutbound(
     db,
     channel,
@@ -93,6 +159,23 @@ const HANDLERS: Record<string, (db: Db, workspaceId: string, payload: never) => 
   'knowledge.refresh': (db, ws, p) => runKnowledgeRefresh(db, ws, p as { fileId?: string }),
   'campaign.step': async (db, ws, p) => {
     const { campaignId, stepIndex } = p as { campaignId: string; stepIndex: number };
+    // Paused campaigns hold their step chain — re-check rather than
+    // dispatch or drop; resume re-arms it. Cancelled/finished ends it.
+    const [camp] = await db
+      .select({ status: campaigns.status })
+      .from(campaigns)
+      .where(eq(campaigns.id, campaignId))
+      .limit(1);
+    if (camp?.status === 'paused') {
+      await enqueueJob(db, {
+        workspaceId: ws,
+        type: 'campaign.step',
+        payload: { campaignId, stepIndex },
+        runAt: new Date(Date.now() + DEFER_RETRY_MS),
+      });
+      return;
+    }
+    if (!camp || camp.status !== 'sending') return;
     await dispatchCampaignStep(db, campaignId, stepIndex);
     // Rolling re-check: late-landing sends (retry delays) and contacts
     // enrolled into a continuous campaign after this step ran must still
@@ -135,8 +218,13 @@ export async function runJobs(db: Db): Promise<number> {
     const rows = (Array.isArray(claimed) ? claimed : (claimed as { rows?: unknown[] }).rows) as
       | (typeof jobs.$inferSelect)[]
       | undefined;
-    const job = rows?.[0];
-    if (!job) break;
+    const claimedRow = rows?.[0] as Record<string, unknown> | undefined;
+    if (!claimedRow) break;
+    // db.execute returns raw snake_case keys — re-select through drizzle for
+    // the mapped row (workspace_id → workspaceId). Skipping this once made
+    // every outbound.send job die with 'channel gone or wrong workspace'.
+    const [job] = await db.select().from(jobs).where(eq(jobs.id, claimedRow.id as string));
+    if (!job) continue;
     const handler = HANDLERS[job.type];
     try {
       if (!handler) throw new Error(`unknown job type ${job.type}`);

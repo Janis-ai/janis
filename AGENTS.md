@@ -207,9 +207,20 @@ before typecheck/tests/dev.
   re-resolves each tick (unique send key dedupes). Drip delay is
   per-recipient (prior sentAt+delay); step jobs roll while stragglers
   exist. POST /enroll/:token = public event-enroll webhook (per-IP +
-  per-token caps). Missing: branching steps, conversion attribution,
-  frequency caps/quiet hours, bounce→suppression loop, channel-readiness
-  gating.
+  per-token caps, only 'sending' campaigns accept enrolls). Send policy:
+  lib/sendPolicy.ts checked inside outbound.send jobs — suppressions table
+  (workspace,address,kind; bounce/complaint/dead_number/manual reasons),
+  workspaces.config.send_policy {quiet_enabled,quiet_from,quiet_to,quiet_tz,
+  max_per_recipient_per_day} via PATCH /api/workspace + Settings card,
+  campaigns.send_cap total-send ceiling, pause/resume/cancel are lazy —
+  queued jobs re-check campaign status + policy at send time (paused
+  defers 15m, cancelled stamps skipped_cancelled, quiet hours defer to
+  window end). /api/suppressions CRUD (admin). Missing: branching steps,
+  conversion attribution, bounce→suppression webhook ingest (table ready),
+  channel-readiness gating, per-recipient timezone.
+  GOTCHA: db.execute(sql`... returning *`) yields snake_case keys —
+  workspaceId etc. are undefined; re-select through drizzle (jobs.ts does).
+  That latent bug dead-queued every outbound.send until 0072.
 - CRM sync: external_ids {system:id} + /enroll webhook are the anchors.
   Planned: workspace-scoped crm_connections (HubSpot private-app token first,
   SF client_credentials via connections.ts PROVIDERS second), crm.sync job

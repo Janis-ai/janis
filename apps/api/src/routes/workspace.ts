@@ -50,6 +50,19 @@ const updateWorkspace = z.object({
     .max(200)
     .nullable()
     .optional(),
+  // Bulk-send guardrails — quiet hours in an IANA zone + a rolling-24h
+  // per-recipient cap. Applies to marketing-class sends only (campaigns,
+  // broadcasts); conversational replies are never throttled.
+  send_policy: z
+    .object({
+      quiet_enabled: z.boolean().optional(),
+      quiet_from: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+      quiet_to: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+      quiet_tz: z.string().max(60).optional(),
+      max_per_recipient_per_day: z.number().int().min(1).max(1000).nullable().optional(),
+    })
+    .nullable()
+    .optional(),
   llm_config: z
     .object({
       provider: z.string().optional(),
@@ -85,6 +98,7 @@ export function workspaceRoutes(db: Db) {
           (ws.config as { event_webhook_url?: string } | undefined)?.event_webhook_url ?? null,
         help_domain:
           (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
+        send_policy: (ws.config as { send_policy?: unknown } | undefined)?.send_policy ?? null,
       },
     });
   });
@@ -119,14 +133,23 @@ export function workspaceRoutes(db: Db) {
         .where(eq(workspaces.id, workspaceId));
       ws.name = body.name;
     }
-    if (body.event_webhook_url !== undefined || body.help_domain !== undefined) {
+    if (
+      body.event_webhook_url !== undefined ||
+      body.help_domain !== undefined ||
+      body.send_policy !== undefined
+    ) {
       const config = {
         ...(ws.config as Record<string, unknown>),
         ...(body.event_webhook_url ? { event_webhook_url: body.event_webhook_url } : {}),
         ...(body.help_domain ? { help_domain: body.help_domain } : {}),
       };
-      if (body.event_webhook_url === null || body.event_webhook_url === '') delete config.event_webhook_url;
-      if (body.help_domain === null || body.help_domain === '') delete config.help_domain;
+      if (body.event_webhook_url === null || body.event_webhook_url === '')
+        delete (config as Record<string, unknown>).event_webhook_url;
+      if (body.help_domain === null || body.help_domain === '')
+        delete (config as Record<string, unknown>).help_domain;
+      if (body.send_policy === null) delete (config as Record<string, unknown>).send_policy;
+      else if (body.send_policy !== undefined)
+        (config as Record<string, unknown>).send_policy = body.send_policy;
       await db.update(workspaces).set({ config }).where(eq(workspaces.id, workspaceId));
       ws.config = config;
     }
@@ -177,6 +200,7 @@ export function workspaceRoutes(db: Db) {
           (ws.config as { event_webhook_url?: string } | undefined)?.event_webhook_url ?? null,
         help_domain:
           (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
+        send_policy: (ws.config as { send_policy?: unknown } | undefined)?.send_policy ?? null,
       },
     });
   });

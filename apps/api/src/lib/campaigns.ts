@@ -272,13 +272,24 @@ export async function dispatchCampaign(db: Db, campaignId: string): Promise<numb
     .from(campaigns)
     .where(eq(campaigns.id, campaignId))
     .limit(1);
-  if (!campaign || campaign.status === 'done' || campaign.status === 'failed') return 0;
+  if (!campaign || campaign.status !== 'sending' && campaign.status !== 'scheduled' && campaign.status !== 'draft') return 0;
+  // send_cap = hard ceiling on total send rows (all steps) for the campaign.
+  let remaining = Infinity;
+  if (campaign.sendCap != null) {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(campaignSends)
+      .where(eq(campaignSends.campaignId, campaign.id));
+    remaining = campaign.sendCap - (row?.n ?? 0);
+    if (remaining <= 0) return 0;
+  }
   const { recipients } = await resolveSegment(db, campaign);
   const template = (campaign.template ?? undefined) as
     | { name: string; language?: string; bodyParams?: string[] }
     | undefined;
   let queued = 0;
   for (const r of recipients) {
+    if (remaining-- <= 0) break;
     if (
       (await queueRecipient(db, campaign, r, 0, {
         text: campaign.text,
@@ -358,7 +369,14 @@ export async function dispatchCampaignStep(
   const steps = (campaign?.steps ?? []) as CampaignStep[];
   const step = steps[stepIndex - 1];
   if (!campaign || !step) return 0;
-  if (campaign.status === 'failed') return 0;
+  if (campaign.status !== 'sending') return 0;
+  if (campaign.sendCap != null) {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(campaignSends)
+      .where(eq(campaignSends.campaignId, campaign.id));
+    if ((row?.n ?? 0) >= campaign.sendCap) return 0;
+  }
   const cutoff = new Date(Date.now() - Math.max(1, step.delay_minutes) * 60_000);
 
   const prior = await db

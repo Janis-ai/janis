@@ -44,7 +44,7 @@ export function enrollRoutes(db: Db) {
         .from(campaigns)
         .where(eq(campaigns.enrollToken, c.req.param('token')))
         .limit(1);
-      if (!campaign || campaign.status === 'done' || campaign.status === 'failed') {
+      if (!campaign || campaign.status !== 'sending') {
         return c.json({ error: 'not found' }, 404);
       }
       if (!body.email && !body.phone && !body.external_id) {

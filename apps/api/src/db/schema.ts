@@ -982,8 +982,12 @@ export const campaigns = pgTable(
     // Public webhook path token — POST /enroll/:token drops a contact into
     // this campaign (event-driven enrollment: abandoned checkout, Zapier).
     enrollToken: text('enroll_token'),
+    // Hard cap on total sends (all steps) — spend/volume ceiling per campaign.
+    sendCap: integer('send_cap'),
     scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
-    status: text('status', { enum: ['draft', 'scheduled', 'sending', 'done', 'failed'] })
+    status: text('status', {
+      enum: ['draft', 'scheduled', 'sending', 'paused', 'cancelled', 'done', 'failed'],
+    })
       .notNull()
       .default('draft'),
     createdBy: uuid('created_by'),
@@ -1010,7 +1014,17 @@ export const campaignSends = pgTable(
     recipient: text('recipient').notNull(), // phone/email/platform id
     // 0 = the base send; drip steps send as step_index 1..N.
     stepIndex: integer('step_index').notNull().default(0),
-    status: text('status', { enum: ['pending', 'sent', 'failed', 'skipped_opted_out'] })
+    status: text('status', {
+      enum: [
+        'pending',
+        'sent',
+        'failed',
+        'skipped_opted_out',
+        'skipped_suppressed',
+        'skipped_frequency_cap',
+        'skipped_cancelled',
+      ],
+    })
       .notNull()
       .default('pending'),
     error: text('error'),
@@ -1026,5 +1040,26 @@ export const campaignSends = pgTable(
     // Crash-safe fan-out: a partial dispatch resumes by re-inserting only
     // the recipients it never reached.
     uniqueIndex('campaign_sends_recipient').on(t.campaignId, t.stepIndex, t.recipient),
+    // Frequency-cap counting: sends to this address in the trailing window.
+    index('campaign_sends_ws_recipient').on(t.workspaceId, t.recipient, t.status, t.sentAt),
   ],
+);
+
+/** Workspace suppression list — never-send addresses regardless of per-channel
+ *  opt-out rows. Written by bounce/complaint webhooks, dead-number callbacks,
+ *  or manually; checked by the send policy immediately before dispatch. */
+export const suppressions = pgTable(
+  'suppressions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    address: text('address').notNull(), // normalized: lowercased email / digits+ phone
+    kind: text('kind').notNull().default('all'), // 'all' | 'email' | 'phone'
+    reason: text('reason').notNull().default('manual'), // bounce|complaint|dead_number|manual
+    source: text('source'), // which webhook/import wrote it
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('suppressions_ws_addr').on(t.workspaceId, t.address, t.kind)],
 );

@@ -45,12 +45,13 @@ export default function Campaigns() {
   });
 
   const [err, setErr] = useState('');
-  const act = (id: string, action: 'send' | 'delete') =>
-    action === 'send'
-      ? api(`/api/campaigns/${id}/send`, { method: 'POST' })
-      : api(`/api/campaigns/${id}`, { method: 'DELETE' });
+  type Action = 'send' | 'delete' | 'pause' | 'resume' | 'cancel';
+  const act = (id: string, action: Action) =>
+    action === 'delete'
+      ? api(`/api/campaigns/${id}`, { method: 'DELETE' })
+      : api(`/api/campaigns/${id}/${action}`, { method: 'POST' });
   const mutate = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: 'send' | 'delete' }) => act(id, action),
+    mutationFn: ({ id, action }: { id: string; action: Action }) => act(id, action),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['campaigns'] }),
     onError: (e) => setErr(e.message),
   });
@@ -59,7 +60,7 @@ export default function Campaigns() {
     name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
     has_email: false, has_phone: false, active_days: '', never_replied: false,
     step_delay: '', step_text: '', agent_instructions: '', list_id: '', tags: '',
-    enrollment: 'once',
+    enrollment: 'once', send_cap: '',
   });
   const segment = () => ({
     ...(form.q ? { q: form.q } : {}),
@@ -84,7 +85,7 @@ export default function Campaigns() {
       name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
       has_email: false, has_phone: false, active_days: '', never_replied: false,
       step_delay: '', step_text: '', agent_instructions: '', list_id: '', tags: '',
-      enrollment: 'once',
+      enrollment: 'once', send_cap: '',
     });
   const create = useMutation({
     mutationFn: () =>
@@ -103,6 +104,7 @@ export default function Campaigns() {
               : undefined,
           agent_instructions: form.agent_instructions.trim() || undefined,
           enrollment: form.enrollment,
+          send_cap: form.send_cap ? Number(form.send_cap) : undefined,
           scheduled_at: form.scheduled_at ? new Date(form.scheduled_at).toISOString() : undefined,
         }),
       }),
@@ -151,6 +153,10 @@ export default function Campaigns() {
             <option value="once">One-time blast</option>
             <option value="continuous">Ongoing — auto-enroll new matches + webhook</option>
           </select>
+          <input className="input" type="number" min="1" style={{ width: 150 }}
+            title="Hard cap on total sends — leave blank for unlimited"
+            placeholder="Max sends (cap)" value={form.send_cap}
+            onChange={(e) => setForm({ ...form, send_cap: e.target.value })} />
         </div>
         <div className="row wrap" style={{ gap: 10, marginTop: 10 }}>
           <select className="input" value={form.list_id}
@@ -246,6 +252,27 @@ export default function Campaigns() {
                   Delete
                 </button>
               </>
+            )}
+            {['sending', 'scheduled'].includes(cp.status) && (
+              <button className="btn ghost" onClick={() => mutate.mutate({ id: cp.id, action: 'pause' })}>
+                Pause
+              </button>
+            )}
+            {cp.status === 'paused' && (
+              <button className="btn primary" onClick={() => mutate.mutate({ id: cp.id, action: 'resume' })}>
+                Resume
+              </button>
+            )}
+            {['sending', 'paused', 'scheduled'].includes(cp.status) && (
+              <button
+                className="btn ghost"
+                onClick={() => {
+                  if (confirm('Cancel this campaign? Pending sends will be skipped.'))
+                    mutate.mutate({ id: cp.id, action: 'cancel' });
+                }}
+              >
+                Cancel
+              </button>
             )}
             <button className="btn ghost" onClick={() => setOpenId(openId === cp.id ? '' : cp.id)}>
               Details

@@ -60,6 +60,8 @@ const createCampaign = z.object({
   enrollment: z.enum(['once', 'continuous']).optional(),
   /** ISO timestamp — presence schedules; absence leaves a draft. */
   scheduled_at: z.string().datetime().optional(),
+  /** Hard ceiling on total sends across all steps — the volume/spend cap. */
+  send_cap: z.number().int().min(1).max(1_000_000).optional(),
 });
 
 type SendStatus = { status: string; repliedAt?: Date | null };
@@ -71,7 +73,10 @@ function stats(rows: SendStatus[]) {
     replied: rows.filter((r) => r.repliedAt).length,
     failed: rows.filter((r) => r.status === 'failed').length,
     pending: rows.filter((r) => r.status === 'pending').length,
-    skipped: rows.filter((r) => r.status === 'skipped_opted_out').length,
+    skipped: rows.filter((r) => r.status.startsWith('skipped_')).length,
+    skipped_opted_out: rows.filter((r) => r.status === 'skipped_opted_out').length,
+    skipped_suppressed: rows.filter((r) => r.status === 'skipped_suppressed').length,
+    skipped_frequency_cap: rows.filter((r) => r.status === 'skipped_frequency_cap').length,
   };
 }
 
@@ -111,6 +116,7 @@ export function campaignRoutes(db: Db) {
           agent_name: agentName,
           agent_instructions: campaign.agentInstructions,
           enrollment: campaign.enrollment,
+          send_cap: campaign.sendCap,
           enroll_token: campaign.enrollToken,
           status: campaign.status,
           scheduled_at: campaign.scheduledAt?.toISOString() ?? null,
@@ -205,6 +211,7 @@ export function campaignRoutes(db: Db) {
         steps: body.steps ?? [],
         agentInstructions: body.agent_instructions?.trim() || null,
         enrollment: body.enrollment ?? 'once',
+        sendCap: body.send_cap ?? null,
         enrollToken: randomBytes(24).toString('base64url'),
         scheduledAt: scheduled,
         status: scheduled ? 'scheduled' : 'draft',
@@ -250,6 +257,7 @@ export function campaignRoutes(db: Db) {
         steps: campaign.steps,
         agent_instructions: campaign.agentInstructions,
         enrollment: campaign.enrollment,
+        send_cap: campaign.sendCap,
         enroll_token: campaign.enrollToken,
       },
       stats: stats(sends),
@@ -295,6 +303,42 @@ export function campaignRoutes(db: Db) {
     });
     return c.json({ queued });
   });
+
+  /** Shared status-transition helper — pause/resume/cancel are all
+   *  lazy at send time: queued jobs re-check campaign status before
+   *  dispatching, so no pending-job sweep is needed. */
+  const transition = (to: string, from: string[], action: string) =>
+    app.post(`/:id/${to}`, async (c) => {
+      const workspaceId = c.get('workspaceId');
+      const [campaign] = await db
+        .select()
+        .from(campaigns)
+        .where(and(eq(campaigns.id, c.req.param('id')), eq(campaigns.workspaceId, workspaceId)))
+        .limit(1);
+      if (!campaign) return c.json({ error: 'not found' }, 404);
+      if (!from.includes(campaign.status)) {
+        return c.json({ error: `can't ${to} a ${campaign.status} campaign` }, 409);
+      }
+      // Resume a paused-scheduled campaign whose time already passed →
+      // straight to 'sending' rather than stuck 'scheduled' in the past.
+      const next =
+        to === 'sending' || (to === 'scheduled' && campaign.scheduledAt && campaign.scheduledAt > new Date())
+          ? to
+          : 'sending';
+      await db.update(campaigns).set({ status: next }).where(eq(campaigns.id, campaign.id));
+      await audit(db, {
+        workspaceId,
+        userId: c.get('user').id,
+        userName: c.get('user').name,
+        action,
+        targetType: 'campaign',
+        targetId: campaign.id,
+      });
+      return c.json({ ok: true, status: next });
+    });
+  transition('pause', ['sending', 'scheduled'], 'campaign.pause');
+  transition('resume', ['paused'], 'campaign.resume');
+  transition('cancel', ['draft', 'scheduled', 'sending', 'paused'], 'campaign.cancel');
 
   // Cancel a draft/scheduled campaign before it dispatches.
   app.delete('/:id', async (c) => {

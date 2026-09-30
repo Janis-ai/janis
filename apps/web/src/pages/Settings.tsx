@@ -377,6 +377,8 @@ export default function Settings() {
 
       {me?.user.role === 'admin' && <DefaultLlmCard />}
 
+      {me?.user.role === 'admin' && <SendPolicyCard />}
+
       <div className="card">
         <strong>Profile</strong>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
@@ -787,6 +789,134 @@ function DefaultLlmCard() {
         )}
       </div>
       {msg && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
+    </div>
+  );
+}
+
+type SendPolicy = {
+  quiet_enabled?: boolean;
+  quiet_from?: string;
+  quiet_to?: string;
+  quiet_tz?: string;
+  max_per_recipient_per_day?: number | null;
+};
+type SuppressionRow = { id: string; address: string; kind: string; reason: string; source: string | null };
+
+/** Bulk-send guardrails — quiet hours + per-recipient cap + the workspace
+ *  suppression list. Applies to campaigns/broadcasts only; replies aren't
+ *  throttled. Admin-only. */
+function SendPolicyCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () =>
+      api<{ workspace: { send_policy?: SendPolicy | null } }>('/api/workspace'),
+  });
+  const { data: sup } = useQuery({
+    queryKey: ['suppressions'],
+    queryFn: () => api<{ suppressions: SuppressionRow[] }>('/api/suppressions'),
+  });
+  const saved = data?.workspace.send_policy ?? {};
+  const [draft, setDraft] = useState<SendPolicy | null>(null);
+  const [msg, setMsg] = useState('');
+  const [newAddr, setNewAddr] = useState('');
+  const p = draft ?? saved;
+  const dirty = draft !== null;
+  const upd = (patch: Partial<SendPolicy>) => setDraft({ ...(draft ?? saved), ...patch });
+
+  const save = useMutation({
+    mutationFn: () =>
+      api('/api/workspace', { method: 'PATCH', body: JSON.stringify({ send_policy: p }) }),
+    onSuccess: () => {
+      setDraft(null);
+      setMsg('Saved — applies to the next queued send.');
+      void qc.invalidateQueries({ queryKey: ['workspace'] });
+    },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+  const addSup = useMutation({
+    mutationFn: () =>
+      api('/api/suppressions', { method: 'POST', body: JSON.stringify({ address: newAddr }) }),
+    onSuccess: () => {
+      setNewAddr('');
+      void qc.invalidateQueries({ queryKey: ['suppressions'] });
+    },
+  });
+  const delSup = useMutation({
+    mutationFn: (id: string) => api(`/api/suppressions/${id}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['suppressions'] }),
+  });
+
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <strong>Send policy</strong>
+      <div className="muted" style={{ fontSize: 13 }}>
+        Guardrails for campaign + broadcast sends. Checked again at send time —
+        queued sends honor changes.
+      </div>
+      <label className="row" style={{ gap: 8, fontSize: 13 }}>
+        <input
+          type="checkbox"
+          checked={!!p.quiet_enabled}
+          onChange={(e) => upd({ quiet_enabled: e.target.checked })}
+        />
+        Quiet hours — hold sends between
+      </label>
+      {p.quiet_enabled && (
+        <div className="row wrap" style={{ gap: 8, marginLeft: 24 }}>
+          <input type="time" className="input" value={p.quiet_from ?? '21:00'}
+            onChange={(e) => upd({ quiet_from: e.target.value })} />
+          <span className="muted">to</span>
+          <input type="time" className="input" value={p.quiet_to ?? '08:00'}
+            onChange={(e) => upd({ quiet_to: e.target.value })} />
+          <input className="input grow" style={{ maxWidth: 220 }}
+            placeholder="Timezone (IANA), e.g. America/New_York"
+            value={p.quiet_tz ?? ''} onChange={(e) => upd({ quiet_tz: e.target.value })} />
+        </div>
+      )}
+      <label className="row" style={{ gap: 8, fontSize: 13 }}>
+        Max sends per recipient / 24h:
+        <input className="input" type="number" min="1" style={{ width: 80 }}
+          placeholder="∞"
+          value={p.max_per_recipient_per_day ?? ''}
+          onChange={(e) =>
+            upd({ max_per_recipient_per_day: e.target.value ? Number(e.target.value) : null })
+          } />
+      </label>
+      <div className="row">
+        <button className="btn primary" disabled={!dirty || save.isPending}
+          onClick={() => save.mutate()}>
+          {save.isPending ? 'Saving…' : 'Save policy'}
+        </button>
+        {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
+
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 4 }}>
+        <strong style={{ fontSize: 13 }}>Suppression list</strong>
+        <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+          Never-send addresses — bounces and complaints land here automatically; add
+          manual entries below.
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <input className="input grow" style={{ maxWidth: 300 }}
+            placeholder="email or phone to suppress…"
+            value={newAddr} onChange={(e) => setNewAddr(e.target.value)} />
+          <button className="btn" disabled={!newAddr.trim() || addSup.isPending}
+            onClick={() => addSup.mutate()}>
+            Suppress
+          </button>
+        </div>
+        {(sup?.suppressions ?? []).slice(0, 20).map((s) => (
+          <div key={s.id} className="row" style={{ fontSize: 13, padding: '3px 0' }}>
+            <span className="mono grow">{s.address}</span>
+            <span className="muted">{s.kind} · {s.reason}</span>
+            <button className="btn ghost" onClick={() => delSup.mutate(s.id)}>Remove</button>
+          </div>
+        ))}
+        {!!sup && !sup.suppressions.length && (
+          <div className="muted" style={{ fontSize: 12 }}>Empty — nothing suppressed.</div>
+        )}
+      </div>
     </div>
   );
 }
