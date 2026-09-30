@@ -15,6 +15,8 @@ type CampaignRow = {
   channel_name: string;
   channel_kind: string;
   agent_name: string;
+  enrollment?: string;
+  enroll_token?: string | null;
   scheduled_at: string | null;
   stats: Stats;
 };
@@ -57,6 +59,7 @@ export default function Campaigns() {
     name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
     has_email: false, has_phone: false, active_days: '', never_replied: false,
     step_delay: '', step_text: '', agent_instructions: '', list_id: '', tags: '',
+    enrollment: 'once',
   });
   const segment = () => ({
     ...(form.q ? { q: form.q } : {}),
@@ -81,6 +84,7 @@ export default function Campaigns() {
       name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
       has_email: false, has_phone: false, active_days: '', never_replied: false,
       step_delay: '', step_text: '', agent_instructions: '', list_id: '', tags: '',
+      enrollment: 'once',
     });
   const create = useMutation({
     mutationFn: () =>
@@ -98,6 +102,7 @@ export default function Campaigns() {
               ? [{ delay_minutes: Math.round(Number(form.step_delay) * 60), text: form.step_text }]
               : undefined,
           agent_instructions: form.agent_instructions.trim() || undefined,
+          enrollment: form.enrollment,
           scheduled_at: form.scheduled_at ? new Date(form.scheduled_at).toISOString() : undefined,
         }),
       }),
@@ -138,6 +143,14 @@ export default function Campaigns() {
           <input className="input" type="datetime-local" title="Schedule (blank = draft)"
             value={form.scheduled_at}
             onChange={(e) => setForm({ ...form, scheduled_at: e.target.value })} />
+        </div>
+        <div className="row" style={{ gap: 10, marginTop: 10 }}>
+          <select className="input" value={form.enrollment}
+            title="one-time resolves the audience at send; ongoing keeps enrolling new matching contacts and accepts webhook enrollments"
+            onChange={(e) => setForm({ ...form, enrollment: e.target.value })}>
+            <option value="once">One-time blast</option>
+            <option value="continuous">Ongoing — auto-enroll new matches + webhook</option>
+          </select>
         </div>
         <div className="row wrap" style={{ gap: 10, marginTop: 10 }}>
           <select className="input" value={form.list_id}
@@ -214,7 +227,7 @@ export default function Campaigns() {
           <div className="row">
             <div className="grow">
               <strong>{cp.name}</strong>{' '}
-              <span className="chip">{cp.status}</span>
+              <span className="chip">{cp.enrollment === 'continuous' ? 'ongoing' : cp.status}</span>
               <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
                 {cp.channel_name} · replies → {cp.agent_name} · {cp.stats.sent}/{cp.stats.total} sent
                 {!!cp.stats.replied && ` · ${cp.stats.replied} replied`}
@@ -240,6 +253,13 @@ export default function Campaigns() {
           </div>
           {openId === cp.id && detail.data && (
             <div style={{ marginTop: 10 }}>
+              {cp.enrollment === 'continuous' && cp.enroll_token && (
+                <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                  Webhook enroll:{' '}
+                  <code>POST {location.origin}/enroll/{cp.enroll_token}</code>{' '}
+                  — body: {'{email?|phone?|external_id?, name?, tags?}'}
+                </div>
+              )}
               {detail.data.sends.slice(0, 25).map((s) => (
                 <div key={s.id} className="row muted" style={{ fontSize: 13, padding: '2px 0' }}>
                   <span className="mono grow">{s.recipient}</span>

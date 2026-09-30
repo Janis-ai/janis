@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { and, desc, eq } from 'drizzle-orm';
@@ -54,6 +55,9 @@ const createCampaign = z.object({
    *  replies to this campaign — injected into the reply prompt for
    *  campaign-originated conversations. */
   agent_instructions: z.string().max(4000).optional(),
+  /** 'once' = resolve + finish; 'continuous' = stay active, sweep enrolls
+   *  new qualifying contacts each tick + /enroll/:token accepts events. */
+  enrollment: z.enum(['once', 'continuous']).optional(),
   /** ISO timestamp — presence schedules; absence leaves a draft. */
   scheduled_at: z.string().datetime().optional(),
 });
@@ -106,6 +110,8 @@ export function campaignRoutes(db: Db) {
           channel_kind: channelKind,
           agent_name: agentName,
           agent_instructions: campaign.agentInstructions,
+          enrollment: campaign.enrollment,
+          enroll_token: campaign.enrollToken,
           status: campaign.status,
           scheduled_at: campaign.scheduledAt?.toISOString() ?? null,
           created_at: campaign.createdAt.toISOString(),
@@ -198,6 +204,8 @@ export function campaignRoutes(db: Db) {
         segment: body.segment ?? {},
         steps: body.steps ?? [],
         agentInstructions: body.agent_instructions?.trim() || null,
+        enrollment: body.enrollment ?? 'once',
+        enrollToken: randomBytes(24).toString('base64url'),
         scheduledAt: scheduled,
         status: scheduled ? 'scheduled' : 'draft',
         createdBy: c.get('user').id,
@@ -241,6 +249,8 @@ export function campaignRoutes(db: Db) {
         segment: campaign.segment,
         steps: campaign.steps,
         agent_instructions: campaign.agentInstructions,
+        enrollment: campaign.enrollment,
+        enroll_token: campaign.enrollToken,
       },
       stats: stats(sends),
       sends: sends.map((s) => ({

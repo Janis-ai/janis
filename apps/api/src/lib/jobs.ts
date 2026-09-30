@@ -3,7 +3,7 @@ import type { Db } from '../db/client.js';
 import { campaignSends, channels, jobs, knowledgeFiles } from '../db/schema.js';
 import { sendOutbound } from './outbound.js';
 import { refreshKnowledgeSource } from './urlSource.js';
-import { dispatchCampaignStep } from './campaigns.js';
+import { dispatchCampaignStep, stepStragglersExist } from './campaigns.js';
 
 /** Job payload for 'outbound.send' — one recipient's send, replayable. */
 export interface OutboundSendJob {
@@ -91,9 +91,21 @@ async function runKnowledgeRefresh(db: Db, workspaceId: string, p: { fileId?: st
 const HANDLERS: Record<string, (db: Db, workspaceId: string, payload: never) => Promise<void>> = {
   'outbound.send': (db, ws, p) => runOutboundSend(db, ws, p as unknown as OutboundSendJob),
   'knowledge.refresh': (db, ws, p) => runKnowledgeRefresh(db, ws, p as { fileId?: string }),
-  'campaign.step': (db, _ws, p) =>
-    dispatchCampaignStep(db, (p as { campaignId: string }).campaignId, (p as { stepIndex: number }).stepIndex)
-      .then(() => undefined),
+  'campaign.step': async (db, ws, p) => {
+    const { campaignId, stepIndex } = p as { campaignId: string; stepIndex: number };
+    await dispatchCampaignStep(db, campaignId, stepIndex);
+    // Rolling re-check: late-landing sends (retry delays) and contacts
+    // enrolled into a continuous campaign after this step ran must still
+    // get stepped. Recheck in 5 min until no stragglers remain.
+    if (await stepStragglersExist(db, campaignId, stepIndex)) {
+      await enqueueJob(db, {
+        workspaceId: ws,
+        type: 'campaign.step',
+        payload: { campaignId, stepIndex },
+        runAt: new Date(Date.now() + 5 * 60_000),
+      });
+    }
+  },
 };
 
 const MAX_ATTEMPTS = 5;

@@ -193,10 +193,12 @@ describe('campaign dispatch', () => {
       .select()
       .from(campaignSends)
       .where(and(eq(campaignSends.campaignId, campaign.id), eq(campaignSends.stepIndex, 0)));
-    // Mark: one replied, one failed, the rest sent.
+    // Mark: one replied, one failed, the rest sent 2h ago (past the 60m
+    // step delay — eligibility is per-recipient sentAt, not dispatch time).
+    const past = new Date(Date.now() - 2 * 3_600_000);
     await db
       .update(campaignSends)
-      .set({ status: 'sent', repliedAt: new Date() })
+      .set({ status: 'sent', sentAt: past, repliedAt: new Date() })
       .where(eq(campaignSends.id, sends[0].id));
     await db
       .update(campaignSends)
@@ -204,7 +206,7 @@ describe('campaign dispatch', () => {
       .where(eq(campaignSends.id, sends[1].id));
     await db
       .update(campaignSends)
-      .set({ status: 'sent' })
+      .set({ status: 'sent', sentAt: past })
       .where(inArray(campaignSends.id, sends.slice(2).map((s) => s.id)));
     const eligible = sends.length - 2; // minus replied + failed
 
@@ -281,5 +283,58 @@ describe('campaign agent context', () => {
     const ctx2 = await campaignContextFor(db, conv2.id);
     expect(ctx2).toContain('Plain');
     expect(ctx2).not.toContain('Campaign instructions');
+  });
+});
+
+describe('enrollment', () => {
+  it('enrolls a contact event-driven and honors opt-out', async () => {
+    const { enrollContactInCampaign } = await import('./campaigns.js');
+    const [campaign] = await db
+      .insert(campaigns)
+      .values({ workspaceId, channelId, name: 'Abandon', text: 'finish?', status: 'sending' })
+      .returning();
+    const contact = await mkContact({ name: 'Enrollee', phone: '+1777' });
+    const r = await enrollContactInCampaign(db, campaign, contact);
+    expect(r).toBe('queued');
+    // Duplicate enrollment is a no-op.
+    expect(await enrollContactInCampaign(db, campaign, contact)).toBe('duplicate');
+    // Opted-out → recorded as skipped, not sent.
+    const opted = await mkContact({ name: 'Opted', phone: '+1888' });
+    await db.delete(contactIdentities).where(eq(contactIdentities.contactId, opted.id));
+    await db.insert(contactIdentities).values({
+      contactId: opted.id, channelId, platformUserId: '+1888', optedOutAt: new Date(),
+    });
+    expect(await enrollContactInCampaign(db, campaign, opted)).toBe('skipped_opted_out');
+    // No usable address for this channel.
+    const noAddr = await mkContact({ name: 'EmailOnly', email: 'only@x.com' });
+    expect(await enrollContactInCampaign(db, campaign, noAddr)).toBe('unreachable');
+  });
+
+  it('continuous campaigns keep enrolling new matches and stay sending', async () => {
+    const { sweepCampaigns } = await import('./campaigns.js');
+    const [campaign] = await db
+      .insert(campaigns)
+      .values({
+        workspaceId, channelId, name: 'Cont', text: 'hi', status: 'sending',
+        enrollment: 'continuous', segment: { tags: ['winback'] },
+      })
+      .returning();
+    await db.update(campaignSends).set({ status: 'sent' }).where(
+      eq(campaignSends.campaignId, campaign.id),
+    );
+    await sweepCampaigns(db);
+    let [c] = await db.select().from(campaigns).where(eq(campaigns.id, campaign.id));
+    expect(c.status).toBe('sending'); // continuous never done
+    // New qualifying contact enrolled on the next sweep.
+    const [con] = await db
+      .insert(contacts)
+      .values({ workspaceId, name: 'Late', phone: '+1444', tags: ['winback'] })
+      .returning();
+    await sweepCampaigns(db);
+    const sends = await db
+      .select()
+      .from(campaignSends)
+      .where(eq(campaignSends.campaignId, campaign.id));
+    expect(sends.map((s) => s.contactId)).toContain(con.id);
   });
 });

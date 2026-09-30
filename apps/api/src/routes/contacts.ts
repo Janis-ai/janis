@@ -42,6 +42,7 @@ export function contactRoutes(db: Db) {
     alt_emails: r.altEmails,
     alt_phones: r.altPhones,
     tags: r.tags,
+    external_ids: r.externalIds,
     avatar_url: null as string | null, // raw CDN urls stay server-side
     has_avatar: Boolean(r.avatarUrl),
     notes: r.notes,

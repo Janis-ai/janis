@@ -238,6 +238,9 @@ export const contacts = pgTable(
     altPhones: text('alt_phones').array().notNull().default([]),
     // Lightweight labels — audiences, campaigns and filters group on these.
     tags: text('tags').array().notNull().default([]),
+    // External-system ids — {system: id} e.g. {"salesforce": "003abc",
+    // "shopify": "123"} — so CRM-synced people stay one Janis contact.
+    externalIds: jsonb('external_ids').notNull().default({}),
     avatarUrl: text('avatar_url'),
     notes: text('notes'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -970,6 +973,15 @@ export const campaigns = pgTable(
     // replies to this campaign — injected into the reply prompt for
     // campaign-originated conversations.
     agentInstructions: text('agent_instructions'),
+    // 'once' = resolve the segment at dispatch and finish; 'continuous' =
+    // the campaign stays active and the sweeper enrolls new matching
+    // contacts each tick (the unique send key dedupes).
+    enrollment: text('enrollment', { enum: ['once', 'continuous'] })
+      .notNull()
+      .default('once'),
+    // Public webhook path token — POST /enroll/:token drops a contact into
+    // this campaign (event-driven enrollment: abandoned checkout, Zapier).
+    enrollToken: text('enroll_token'),
     scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
     status: text('status', { enum: ['draft', 'scheduled', 'sending', 'done', 'failed'] })
       .notNull()

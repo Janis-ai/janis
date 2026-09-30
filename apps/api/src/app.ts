@@ -45,6 +45,7 @@ import { billingRoutes, stripeWebhookRoutes } from './routes/billing.js';
 import { PLANS } from './lib/plans.js';
 import { workspaceRoutes } from './routes/workspace.js';
 import { workosRoutes } from './routes/workos.js';
+import { enrollRoutes } from './routes/enroll.js';
 import { viewRoutes } from './routes/views.js';
 import { webchatRoutes } from './routes/webchat.js';
 import { legacyWebhookRoutes } from './routes/legacy.js';
@@ -184,6 +185,10 @@ export function createApp(db: Db) {
   // WorkOS Directory Sync webhooks (SCIM provisioning) — HMAC-signed.
   app.use('/workos/*', rateLimit({ scope: 'workos', windowMs: 60_000, max: 120 }));
   app.route('/workos', workosRoutes(db));
+
+  // Campaign enrollment webhooks — secret-URL tokens, per-token DB cap inside.
+  app.use('/enroll/*', rateLimit({ scope: 'enroll', windowMs: 60_000, max: 120 }));
+  app.route('/enroll', enrollRoutes(db));
 
   // Embed script for the web-chat widget — plain JS, cacheable.
   const widgetJs = readFileSync(

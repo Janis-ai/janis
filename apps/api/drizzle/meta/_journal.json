@@ -498,6 +498,13 @@
       "when": 1790732000000,
       "tag": "0070_contact_lists",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1790733000000,
+      "tag": "0071_continuous_enrollment",
+      "breakpoints": true
     }
   ]
 }

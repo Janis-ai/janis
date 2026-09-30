@@ -141,12 +141,21 @@ export async function upsertContactByAddress(
     name?: string | null;
     email?: string | null;
     phone?: string | null;
+    /** External-system identity — {"system":"salesforce","id":"003abc"}.
+     *  Matched first when present: CRM re-syncs stay idempotent even when
+     *  the person's email/phone changes upstream. */
+    external?: { system: string; id: string } | null;
     tags?: string[];
   },
 ): Promise<{ contactId: string; created: boolean }> {
   const email = input.email?.trim().toLowerCase() || null;
   const phone = input.phone?.trim() || null;
+  const extSys = input.external?.system;
+  const extId = input.external?.id;
   const matchConds = [
+    extSys && extId
+      ? sql`${contacts.externalIds}->>${extSys} = ${extId}`
+      : undefined,
     email
       ? sql`(lower(${contacts.email}) = ${email} or ${email} = any(${contacts.altEmails}))`
       : undefined,
@@ -170,6 +179,15 @@ export async function upsertContactByAddress(
       phone: phone ?? undefined,
       name: input.name ?? undefined,
     });
+    if (extSys && extId) {
+      // || merges {sys:id} into the map — same-key overwrite is idempotent.
+      await db
+        .update(contacts)
+        .set({
+          externalIds: sql`${contacts.externalIds} || jsonb_build_object(${extSys}::text, ${extId}::text)`,
+        })
+        .where(eq(contacts.id, contactId));
+    }
   } else {
     const [created] = await db
       .insert(contacts)
@@ -179,6 +197,7 @@ export async function upsertContactByAddress(
         email,
         phone,
         tags: input.tags ?? [],
+        externalIds: extSys && extId ? { [extSys]: extId } : {},
       })
       .returning({ id: contacts.id });
     contactId = created.id;

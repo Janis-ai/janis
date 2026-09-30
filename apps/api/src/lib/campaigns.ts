@@ -223,11 +223,49 @@ async function scheduleStep(db: Db, campaign: typeof campaigns.$inferSelect, ste
   });
 }
 
+/** Insert the send row + queue its outbound job for one recipient.
+ *  Returns 'queued' | 'skipped_opted_out' | 'duplicate' (row already
+ *  existed — resume/event-enroll re-entry is a no-op). */
+async function queueRecipient(
+  db: Db,
+  campaign: typeof campaigns.$inferSelect,
+  r: { contactId: string; platformUserId: string; opted: boolean },
+  stepIndex: number,
+  content: { text: string; subject?: string | null; template?: { name: string; language?: string; bodyParams?: string[] } },
+): Promise<'queued' | 'skipped_opted_out' | 'duplicate'> {
+  const sendId = await insertSend(db, {
+    campaignId: campaign.id,
+    workspaceId: campaign.workspaceId,
+    contactId: r.contactId,
+    channelId: campaign.channelId,
+    recipient: r.platformUserId,
+    stepIndex,
+    status: r.opted ? 'skipped_opted_out' : 'pending',
+  });
+  if (!sendId) return 'duplicate';
+  if (r.opted) return 'skipped_opted_out';
+  await enqueueJob(db, {
+    workspaceId: campaign.workspaceId,
+    type: 'outbound.send',
+    payload: {
+      channelId: campaign.channelId,
+      to: r.platformUserId,
+      text: content.text,
+      subject: content.subject ?? undefined,
+      template: content.template,
+      senderId: campaign.createdBy ?? undefined,
+      campaignSendId: sendId,
+    },
+  });
+  return 'queued';
+}
+
 /** Fan a due campaign out into campaign_sends + outbound.send jobs.
  *  Called under the sweeper leader lock. Idempotent — the unique
  *  (campaign, step, recipient) key means a crash mid-dispatch resumes by
  *  inserting only the recipients it never reached; re-running is safe and
- *  the 'sending' sweep calls it every tick to gap-fill. */
+ *  the 'sending' sweep calls it every tick to gap-fill — which is also how
+ *  'continuous' campaigns pick up newly-qualifying contacts. */
 export async function dispatchCampaign(db: Db, campaignId: string): Promise<number> {
   const [campaign] = await db
     .select()
@@ -241,37 +279,72 @@ export async function dispatchCampaign(db: Db, campaignId: string): Promise<numb
     | undefined;
   let queued = 0;
   for (const r of recipients) {
-    const sendId = await insertSend(db, {
-      campaignId: campaign.id,
-      workspaceId: campaign.workspaceId,
-      contactId: r.contactId,
-      channelId: campaign.channelId,
-      recipient: r.platformUserId,
-      stepIndex: 0,
-      status: r.opted ? 'skipped_opted_out' : 'pending',
-    });
-    if (!sendId || r.opted) continue;
-    await enqueueJob(db, {
-      workspaceId: campaign.workspaceId,
-      type: 'outbound.send',
-      payload: {
-        channelId: campaign.channelId,
-        to: r.platformUserId,
+    if (
+      (await queueRecipient(db, campaign, r, 0, {
         text: campaign.text,
-        subject: campaign.subject ?? undefined,
+        subject: campaign.subject,
         template,
-        senderId: campaign.createdBy ?? undefined,
-        campaignSendId: sendId,
-      },
-    });
-    queued++;
+      })) === 'queued'
+    ) {
+      queued++;
+    }
   }
   await scheduleStep(db, campaign, 1);
   return queued;
 }
 
-/** A drip step — sends to prior-step recipients who got the message and
- *  haven't replied since. Job handler for 'campaign.step'. */
+/** Enroll one contact into a campaign — event-driven path (POST /enroll/:token).
+ *  The contact must have an address the channel can reach; opted-out
+ *  addresses record a skipped send rather than mailing anyway. */
+export async function enrollContactInCampaign(
+  db: Db,
+  campaign: typeof campaigns.$inferSelect,
+  contact: {
+    id: string;
+    email: string | null;
+    altEmails: string[];
+    phone: string | null;
+    altPhones: string[];
+  },
+): Promise<'queued' | 'skipped_opted_out' | 'duplicate' | 'unreachable'> {
+  const [channel] = await db
+    .select({ kind: channels.kind })
+    .from(channels)
+    .where(eq(channels.id, campaign.channelId))
+    .limit(1);
+  if (!channel) return 'unreachable';
+  const platformUserId = addressFor(channel.kind, contact);
+  if (!platformUserId) return 'unreachable';
+  const [optRow] = await db
+    .select({ opted: contactIdentities.optedOutAt })
+    .from(contactIdentities)
+    .where(
+      and(
+        eq(contactIdentities.channelId, campaign.channelId),
+        eq(contactIdentities.platformUserId, platformUserId),
+      ),
+    )
+    .limit(1);
+  return queueRecipient(
+    db,
+    campaign,
+    { contactId: contact.id, platformUserId, opted: !!optRow?.opted },
+    0,
+    {
+      text: campaign.text,
+      subject: campaign.subject,
+      template: (campaign.template ?? undefined) as
+        | { name: string; language?: string; bodyParams?: string[] }
+        | undefined,
+    },
+  );
+}
+
+/** A drip step — sends to prior-step recipients who got the message at
+ *  least step.delay_minutes ago and haven't replied since. delay is
+ *  per-recipient (their prior send time), not wall-clock from dispatch —
+ *  that's what makes continuous enrollment drip correctly. Job handler
+ *  for 'campaign.step'. */
 export async function dispatchCampaignStep(
   db: Db,
   campaignId: string,
@@ -286,6 +359,7 @@ export async function dispatchCampaignStep(
   const step = steps[stepIndex - 1];
   if (!campaign || !step) return 0;
   if (campaign.status === 'failed') return 0;
+  const cutoff = new Date(Date.now() - Math.max(1, step.delay_minutes) * 60_000);
 
   const prior = await db
     .select({ contactId: campaignSends.contactId, recipient: campaignSends.recipient })
@@ -295,6 +369,7 @@ export async function dispatchCampaignStep(
         eq(campaignSends.campaignId, campaign.id),
         eq(campaignSends.stepIndex, stepIndex - 1),
         eq(campaignSends.status, 'sent'),
+        lte(campaignSends.sentAt, cutoff),
         // Drip semantics: a reply anywhere in the sequence stops future
         // steps for that contact.
         isNull(campaignSends.repliedAt),
@@ -335,6 +410,36 @@ export async function dispatchCampaignStep(
   return queued;
 }
 
+/** True when a prior-step send is sent + unreplied but has no step row —
+ *  recipients enrolled after the step job ran (continuous campaigns) or
+ *  sends that landed after the delay check. The job handler re-enqueues
+ *  the step while stragglers exist, so late qualifiers are never dropped. */
+export async function stepStragglersExist(
+  db: Db,
+  campaignId: string,
+  stepIndex: number,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: campaignSends.id })
+    .from(campaignSends)
+    .where(
+      and(
+        eq(campaignSends.campaignId, campaignId),
+        eq(campaignSends.stepIndex, stepIndex - 1),
+        eq(campaignSends.status, 'sent'),
+        isNull(campaignSends.repliedAt),
+        sql`not exists (
+          select 1 from campaign_sends nx
+          where nx.campaign_id = ${campaignSends.campaignId}
+            and nx.step_index = ${stepIndex}
+            and nx.recipient = ${campaignSends.recipient}
+        )`,
+      ),
+    )
+    .limit(1);
+  return !!row;
+}
+
 /** Sweeper hook: dispatch scheduled campaigns whose time has come, gap-fill
  *  'sending' campaigns (idempotent — crash-mid-dispatch resumes), and mark
  *  campaigns done once no pending sends remain. */
@@ -351,12 +456,16 @@ export async function sweepCampaigns(db: Db): Promise<void> {
     await dispatchCampaign(db, c.id);
   }
   const sending = await db
-    .select({ id: campaigns.id })
+    .select({ id: campaigns.id, enrollment: campaigns.enrollment })
     .from(campaigns)
     .where(eq(campaigns.status, 'sending'))
     .limit(20);
   for (const c of sending) {
     await dispatchCampaign(db, c.id);
+    // 'continuous' campaigns stay in 'sending' — the tick re-resolves the
+    // segment and the unique send key makes re-enrollment a no-op, so new
+    // qualifying contacts trickle in and old ones never double-send.
+    if (c.enrollment === 'continuous') continue;
     const [pending] = await db
       .select({ n: sql<number>`count(*)::int` })
       .from(campaignSends)
