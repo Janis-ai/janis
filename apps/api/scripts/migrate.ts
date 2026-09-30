@@ -20,7 +20,17 @@ if (!env.databaseUrl) {
   process.exit(1);
 }
 
+// Hard watchdog: postgres.js's connect_timeout covers the handshake only —
+// a query on a half-dead socket (Neon suspended the TCP mid-migration once,
+// deploy sat 20+ min waiting on an event loop with no sockets) hangs forever.
+// deploy-gcp.sh must fail loud, not stall the pipeline.
+const watchdog = setTimeout(() => {
+  console.error('db:migrate timed out after 120s — aborting deploy');
+  process.exit(2);
+}, 120_000);
+
 const db = await createDb();
 await migrateDb(db);
+clearTimeout(watchdog);
 console.log('migrations applied');
 process.exit(0);
