@@ -210,6 +210,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     }[];
     cf_connected?: boolean;
     cf_refresh_token?: string;
+    mirror_address?: string;
   };
   return {
     id: row.id,
@@ -247,6 +248,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
           ? creds.email_domain_records
           : undefined,
       cf_connected: row.kind === 'email' && creds.cf_refresh_token ? true : undefined,
+      mirror_address: row.kind === 'email' ? creds.mirror_address : undefined,
       gmail_query: row.kind === 'gmail' ? creds.gmail_query : undefined,
       branding:
         row.kind === 'webchat'

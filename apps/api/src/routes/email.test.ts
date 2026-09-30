@@ -273,6 +273,41 @@ describe('inbound email webhook', () => {
     expect(convs.every((c) => c.externalId !== 'email:jane@x.com:nobody')).toBe(true);
   });
 
+  it('remembers the forwarding mailbox for reply mirroring', async () => {
+    const res = await inboundEvent({
+      from: 'fwd@x.com',
+      to: [INBOUND],
+      subject: 'Forwarded customer mail',
+      text: 'hello',
+      headers: {
+        To: 'janis@janis.ai',
+        'X-Forwarded-For': `janis@janis.ai ${INBOUND}`,
+        'Delivered-To': INBOUND,
+      },
+    });
+    expect(res.status).toBe(200);
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channel.id));
+    expect((ch.credentials as { mirror_address?: string }).mirror_address).toBe('janis@janis.ai');
+  });
+
+  it('skips our own outbound mail boomeranging through the mirror', async () => {
+    // From is NOT on our inbound domain — only the X-Janis-Outbound marker
+    // stops a mirror copy from ingesting as fresh customer mail.
+    const res = await inboundEvent({
+      from: 'bounceback@x.com',
+      to: [INBOUND],
+      subject: 'Re: hi',
+      text: 'reply copy',
+      headers: { 'X-Janis-Outbound': channel.id },
+    });
+    expect(res.status).toBe(200);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'email:bounceback@x.com'));
+    expect(conv).toBeUndefined();
+  });
+
   it('extracts text from html-only mail', async () => {
     vi.stubGlobal(
       'fetch',
@@ -333,8 +368,10 @@ describe('email reply send', () => {
     // Imported after beforeAll so env.ts sees the RESEND_API_KEY set there —
     // env is evaluated at module load.
     const { sendChannelMessage } = await import('../lib/channels.js');
+    // re-fetch — the inbound tests above may have persisted mirror_address
+    const [fresh] = await db.select().from(channels).where(eq(channels.id, channel.id));
     const result = await sendChannelMessage(
-      channel,
+      fresh,
       'sender@x.com',
       'Your order shipped today.',
       undefined,
@@ -350,6 +387,10 @@ describe('email reply send', () => {
     const headers = sent?.body.headers as Record<string, string>;
     expect(headers['In-Reply-To']).toBe('<orig@mail.x.com>');
     expect(headers.References).toContain('<orig@mail.x.com>');
+    // outbound marker — a forwarded mirror copy of this send gets skipped
+    expect(headers['X-Janis-Outbound']).toBe(channel.id);
+    // mirror was detected in the inbound tests above → replies BCC it
+    expect(sent?.body.bcc).toEqual(['janis@janis.ai']);
     // Suggested replies flatten to a numbered list — email's button equivalent
     expect(sent?.body.text).toBe('Your order shipped today.\n\n1. Track it\n2. Talk to a human');
   });

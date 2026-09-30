@@ -169,6 +169,8 @@ export function mailSkipReason(
 
   // Addressed-to check: To + Cc + Delivered-To headers, or the `to` field.
   const h = lowerHeaders(msg.headers);
+  // Our own outbound mail boomeranging back via a mirror/forward is a loop.
+  if (h['x-janis-outbound']) return 'self';
   const want = (filters.answer_addresses ?? []).map((a) => a.trim().toLowerCase()).filter(Boolean);
   let addressed = true;
   if (want.length) {

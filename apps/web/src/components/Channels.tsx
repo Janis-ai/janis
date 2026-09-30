@@ -404,6 +404,26 @@ function EmailAnswerRules({ channel }: { channel: Channel }) {
               : `Any address on ${channel.meta.inbound_address?.split('@')[1] ?? 'the inbound domain'} — or on a verified custom domain below.`}
         </div>
       </div>
+      {channel.kind === 'email' && channel.meta.mirror_address && (
+        <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+          Mail looks forwarded from <strong>{channel.meta.mirror_address}</strong> — replies are
+          BCC'd there so its copy of the thread stays complete.{' '}
+          <button
+            className="btn sm"
+            onClick={() =>
+              api(`/api/channels/${channel.id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ mirror_address: '' }),
+              }).then(() => {
+                void qc.invalidateQueries({ queryKey: ['channels'] });
+                void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+              })
+            }
+          >
+            Stop mirroring
+          </button>
+        </div>
+      )}
       {channel.kind === 'email' && <EmailDomainCard channel={channel} />}
       {channel.kind === 'gmail' && (
         <div style={{ marginTop: 10 }}>

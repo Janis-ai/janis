@@ -104,6 +104,9 @@ const patchChannel = z.object({
   // email/gmail/outlook: send-as address (verified alias / shared mailbox);
   // '' clears to the mailbox/inbound address
   from_address: z.string().email().max(200).or(z.literal('')).optional(),
+  // email: upstream mailbox replies get BCC'd to (auto-detected from
+  // forwarded mail; '' clears)
+  mirror_address: z.string().email().max(200).or(z.literal('')).optional(),
   // email/gmail/outlook: inbound answer rules — group/alias addressing,
   // list-mail opt-in, sender allow/block, subject excludes
   email_filters: z
@@ -400,6 +403,9 @@ export function channelApiRoutes(db: Db) {
     if (body.email_filters !== undefined && !emailKinds.includes(row.kind)) {
       return c.json({ error: 'email_filters applies to email channels' }, 400);
     }
+    if (body.mirror_address !== undefined && row.kind !== 'email') {
+      return c.json({ error: 'mirror_address applies to resend email channels' }, 400);
+    }
     if (body.gmail_query !== undefined && row.kind !== 'gmail') {
       return c.json({ error: 'gmail_query applies to gmail channels' }, 400);
     }
@@ -440,6 +446,10 @@ export function channelApiRoutes(db: Db) {
           400,
         );
       else creds.from_address = body.from_address.toLowerCase();
+    }
+    if (body.mirror_address !== undefined) {
+      if (body.mirror_address === '') delete creds.mirror_address;
+      else creds.mirror_address = body.mirror_address.toLowerCase();
     }
     if (body.gmail_query !== undefined) {
       if (body.gmail_query === '') delete creds.gmail_query;
@@ -1146,6 +1156,25 @@ export function channelWebhookRoutes(db: Db) {
     if (atts.length) {
       text = `${text}${text ? '\n\n' : ''}${atts.map((f) => `📎 ${f}`).join('\n')}`;
     }
+    // Forwarded-mail detection: when a real mailbox (janis@janis.ai) auto-
+    // forwards here, its address shows up in x-forwarded-* / delivered-to /
+    // To — remember it so outbound replies can BCC the origin inbox and
+    // keep its copy of the thread complete.
+    if (!creds.mirror_address && headers) {
+      const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+      const ours = `@${env.emailInboundDomain}`;
+      const mirror = ['x-forwarded-for', 'x-forwarded-to', 'delivered-to', 'to', 'cc']
+        .flatMap((k) => parseAddressList(lower[k]))
+        .find((a) => !a.endsWith(ours));
+      if (mirror) {
+        creds.mirror_address = mirror;
+        await db
+          .update(channels)
+          .set({ credentials: creds })
+          .where(eq(channels.id, channel.id));
+      }
+    }
+
     // RFC threading fields get stored on the message so replies can
     // reconstruct In-Reply-To/References.
     const refsHeader = headers?.['References'] ?? headers?.['references'];

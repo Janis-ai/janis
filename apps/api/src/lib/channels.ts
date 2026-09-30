@@ -80,6 +80,10 @@ export interface ChannelCredentials {
   // Cloudflare OAuth for one-click DNS setup — refresh token grants
   // zone.read + dns.write on the client's zones; used to push records.
   cf_refresh_token?: string;
+  // detected upstream mailbox (e.g. janis@janis.ai auto-forwarding to the
+  // channel address) — replies are BCC'd there so the thread stays complete
+  // in the origin inbox.
+  mirror_address?: string;
   // inbound mail rules — see EmailFilterConfig in lib/email.ts
   email_filters?: {
     answer_addresses?: string[];
@@ -954,9 +958,17 @@ async function sendEmailReply(
         to: [platformUserId],
         subject,
         text: body,
-        ...(refs.length
-          ? { headers: { 'In-Reply-To': refs[refs.length - 1], References: refs.join(' ') } }
-          : {}),
+        headers: {
+          // marks our own sends — inbound skips them if a forward/mirror
+          // ever loops one back to the channel address
+          'X-Janis-Outbound': channel.id,
+          ...(refs.length
+            ? { 'In-Reply-To': refs[refs.length - 1], References: refs.join(' ') }
+            : {}),
+        },
+        // keep the origin inbox's copy of the thread complete when the
+        // channel is fed by forwarding (janis@… → ch_…@inbound.janis.ai)
+        ...(creds.mirror_address ? { bcc: [creds.mirror_address] } : {}),
         ...(attachments?.length
           ? {
               attachments: attachments.map((a) => ({
