@@ -123,7 +123,8 @@ export async function sendOutbound(
     subject: args.subject,
     whatsappTemplate: args.template,
   });
-  const error = sent?.error ?? 'channel does not support outbound';
+  const error =
+    sent === null ? 'channel does not support outbound' : sent.error;
 
   // Record the attempt either way — a failed send in the inbox is better
   // ops signal than a silent drop.
