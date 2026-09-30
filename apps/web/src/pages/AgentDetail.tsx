@@ -245,12 +245,6 @@ function AgentEditor({ agent }: { agent: Agent }) {
         </div>
       </div>
 
-      {freshSecret && (
-        <div className="card" style={{ borderColor: 'var(--accent)', marginTop: 12 }}>
-          <div className="muted">{freshSecret.label} — copy it now, it won't be shown again:</div>
-          <div className="mono" style={{ marginTop: 8, overflowWrap: 'anywhere' }}>{freshSecret.value}</div>
-        </div>
-      )}
       {error && <div className="error">{error}</div>}
 
       {activeTab === 'integrations' && <AgentChannels agent={agent} />}
@@ -298,6 +292,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
             const r = await api<{ webhook_secret: string }>(`/api/agents/${agent.id}/webhook-secret`);
             setFreshSecret({ label: 'Webhook secret', value: r.webhook_secret });
           }}
+          freshSecret={freshSecret}
         />
       )}
 
@@ -1632,6 +1627,37 @@ function IntegrationCards({
   );
 }
 
+/** Freshly minted secret shown inline where the button was clicked — copy
+ *  now or lose it; only a prefix/suffix preview survives the save. */
+function FreshSecretCard({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div
+      className="card"
+      style={{ borderColor: 'var(--accent)', marginTop: 8, marginBottom: 4 }}
+    >
+      <div className="muted" style={{ fontSize: 12 }}>
+        {label} — copy it now, it won't be shown again:
+      </div>
+      <div className="row" style={{ marginTop: 6 }}>
+        <div className="mono grow" style={{ overflowWrap: 'anywhere' }}>{value}</div>
+        <button
+          type="button"
+          className="btn sm"
+          onClick={() => {
+            void navigator.clipboard.writeText(value).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            });
+          }}
+        >
+          {copied ? 'Copied ✓' : 'Copy'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ConnectionTab({
   agent,
   cfg,
@@ -1644,6 +1670,7 @@ function ConnectionTab({
   onRotateKey,
   onRotateSecret,
   onRevealSecret,
+  freshSecret,
 }: {
   agent: Agent;
   cfg: AgentConfig;
@@ -1656,6 +1683,7 @@ function ConnectionTab({
   onRotateKey: () => void;
   onRotateSecret: () => void;
   onRevealSecret: () => void;
+  freshSecret: { label: string; value: string } | null;
 }) {
   const navigate = useNavigate();
   const [testMsg, setTestMsg] = useState('');
@@ -1759,9 +1787,13 @@ function ConnectionTab({
 
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Credentials{agent.hosted ? '' : ' &amp; deliveries'}</strong>
+        {freshSecret && (
+          <FreshSecretCard label={freshSecret.label} value={freshSecret.value} />
+        )}
         {agent.api_key_preview && (
-          <div className="muted mono" style={{ marginTop: 6 }}>
-            Active key: {agent.api_key_preview}
+          <div className="muted" style={{ marginTop: 6 }}>
+            Active key: <span className="mono">{agent.api_key_preview}</span>
+            {' '}— full key is shown once at creation and can't be recovered.
           </div>
         )}
         <div className="row" style={{ marginTop: 8 }}>
