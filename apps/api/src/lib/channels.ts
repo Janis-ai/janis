@@ -795,7 +795,13 @@ async function sendSmsReply(
   let retryable = true;
   for (const s of sends) {
     try {
-      const r = await sendSms(creds, to, s.body, s.mediaUrl);
+      const r = await sendSms(
+        creds,
+        to,
+        s.body,
+        s.mediaUrl,
+        `${env.apiOrigin}/sms/${channel.id}/status`,
+      );
       mid = r.sid;
     } catch (e) {
       const te = e as TwilioError;

@@ -7,7 +7,7 @@ import { useChannels } from '../api/hooks';
 
 const SENDABLE = ['sms', 'whatsapp', 'email', 'gmail', 'outlook'];
 
-type Stats = { total: number; sent: number; replied: number; failed: number; pending: number; skipped: number };
+type Stats = { total: number; sent: number; replied: number; converted?: number; failed: number; pending: number; skipped: number };
 type CampaignRow = {
   id: string;
   name: string;
@@ -45,14 +45,18 @@ export default function Campaigns() {
   });
 
   const [err, setErr] = useState('');
+  const [warn, setWarn] = useState('');
   type Action = 'send' | 'delete' | 'pause' | 'resume' | 'cancel';
   const act = (id: string, action: Action) =>
     action === 'delete'
-      ? api(`/api/campaigns/${id}`, { method: 'DELETE' })
-      : api(`/api/campaigns/${id}/${action}`, { method: 'POST' });
+      ? api<{ warnings?: string[] }>(`/api/campaigns/${id}`, { method: 'DELETE' })
+      : api<{ warnings?: string[] }>(`/api/campaigns/${id}/${action}`, { method: 'POST' });
   const mutate = useMutation({
     mutationFn: ({ id, action }: { id: string; action: Action }) => act(id, action),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['campaigns'] }),
+    onSuccess: (r) => {
+      setWarn(r?.warnings?.length ? `Send queued — but check: ${r.warnings.join(' ')}` : '');
+      void qc.invalidateQueries({ queryKey: ['campaigns'] });
+    },
     onError: (e) => setErr(e.message),
   });
 
@@ -60,7 +64,7 @@ export default function Campaigns() {
     name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
     has_email: false, has_phone: false, active_days: '', never_replied: false,
     step_delay: '', step_text: '', agent_instructions: '', list_id: '', tags: '',
-    enrollment: 'once', send_cap: '',
+    enrollment: 'once', send_cap: '', goal: '',
   });
   const segment = () => ({
     ...(form.q ? { q: form.q } : {}),
@@ -85,7 +89,7 @@ export default function Campaigns() {
       name: '', channel_id: '', subject: '', text: '', template: '', q: '', scheduled_at: '',
       has_email: false, has_phone: false, active_days: '', never_replied: false,
       step_delay: '', step_text: '', agent_instructions: '', list_id: '', tags: '',
-      enrollment: 'once', send_cap: '',
+      enrollment: 'once', send_cap: '', goal: '',
     });
   const create = useMutation({
     mutationFn: () =>
@@ -105,6 +109,7 @@ export default function Campaigns() {
           agent_instructions: form.agent_instructions.trim() || undefined,
           enrollment: form.enrollment,
           send_cap: form.send_cap ? Number(form.send_cap) : undefined,
+          goal: form.goal.trim() || undefined,
           scheduled_at: form.scheduled_at ? new Date(form.scheduled_at).toISOString() : undefined,
         }),
       }),
@@ -127,6 +132,7 @@ export default function Campaigns() {
         and recorded.
       </p>
       {err && <div className="error" style={{ marginBottom: 12 }}>{err}</div>}
+      {warn && <div className="error" style={{ marginBottom: 12, background: '#3a2d00', borderColor: '#8a6d00' }}>{warn}</div>}
 
       <div className="card">
         <h3>New campaign</h3>
@@ -157,6 +163,10 @@ export default function Campaigns() {
             title="Hard cap on total sends — leave blank for unlimited"
             placeholder="Max sends (cap)" value={form.send_cap}
             onChange={(e) => setForm({ ...form, send_cap: e.target.value })} />
+          <input className="input" style={{ width: 180 }}
+            title="Conversion event name that counts as this campaign's goal (from POST /events/:token)"
+            placeholder="Goal event (e.g. purchase)" value={form.goal}
+            onChange={(e) => setForm({ ...form, goal: e.target.value })} />
         </div>
         <div className="row wrap" style={{ gap: 10, marginTop: 10 }}>
           <select className="input" value={form.list_id}
@@ -237,6 +247,7 @@ export default function Campaigns() {
               <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
                 {cp.channel_name} · replies → {cp.agent_name} · {cp.stats.sent}/{cp.stats.total} sent
                 {!!cp.stats.replied && ` · ${cp.stats.replied} replied`}
+                {!!cp.stats.converted && ` · ${cp.stats.converted} converted`}
                 {!!cp.stats.failed && ` · ${cp.stats.failed} failed`}
                 {!!cp.stats.skipped && ` · ${cp.stats.skipped} opted out`}
                 {!!cp.stats.pending && ` · ${cp.stats.pending} pending`}

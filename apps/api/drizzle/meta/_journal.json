@@ -512,6 +512,20 @@
       "when": 1790734453948,
       "tag": "0072_send_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1790735628870,
+      "tag": "0073_conversions",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1790735629000,
+      "tag": "0074_crm_connections",
+      "breakpoints": true
     }
   ]
 }

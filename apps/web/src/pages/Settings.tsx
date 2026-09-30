@@ -378,6 +378,8 @@ export default function Settings() {
       {me?.user.role === 'admin' && <DefaultLlmCard />}
 
       {me?.user.role === 'admin' && <SendPolicyCard />}
+      {me?.user.role === 'admin' && <EventTokenCard />}
+      {me?.user.role === 'admin' && <CrmCard />}
 
       <div className="card">
         <strong>Profile</strong>
@@ -917,6 +919,125 @@ function SendPolicyCard() {
           <div className="muted" style={{ fontSize: 12 }}>Empty — nothing suppressed.</div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Conversion-event ingestion — the token + endpoint CRM/marketing systems
+ *  POST to when a contact converts. Attributes to the last campaign send. */
+function EventTokenCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () => api<{ workspace: { event_token?: string | null } }>('/api/workspace'),
+  });
+  const [msg, setMsg] = useState('');
+  const token = data?.workspace.event_token ?? null;
+  const rotate = useMutation({
+    mutationFn: () =>
+      api<{ event_token: string }>('/api/workspace/event-token', { method: 'POST' }),
+    onSuccess: () => {
+      setMsg(token ? 'Rotated — update every integration using the old URL.' : 'Token minted.');
+      void qc.invalidateQueries({ queryKey: ['workspace'] });
+    },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+  const url = token ? `${window.location.origin}/events/${token}` : '';
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <strong>Conversion events</strong>
+      <div className="muted" style={{ fontSize: 13 }}>
+        Report business outcomes (purchase, signup, booked) — attributed to the
+        contact's most recent campaign send so campaigns show real ROI.
+      </div>
+      {token ? (
+        <pre className="muted" style={{ fontSize: 11, overflowX: 'auto', margin: 0 }}>
+          {`curl -XPOST ${url} -H 'content-type: application/json' -d '{"event":"purchase","email":"who@co.com"}'`}
+        </pre>
+      ) : (
+        <div className="muted" style={{ fontSize: 13 }}>No token yet — mint one to get the URL.</div>
+      )}
+      <div className="row">
+        <button className="btn" disabled={rotate.isPending} onClick={() => rotate.mutate()}>
+          {token ? 'Rotate token' : 'Mint token'}
+        </button>
+        {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+type CrmConn = {
+  id: string;
+  provider: string;
+  enabled: boolean;
+  list_id: string | null;
+  last_synced_at: string | null;
+  last_error: string | null;
+  synced_count: number;
+};
+
+/** CRM sync — read-only pull from HubSpot into a synced contact list that
+ *  campaigns can target. Consent flows one way (CRM → Janis), never clears
+ *  a Janis opt-out. */
+function CrmCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['crm'],
+    queryFn: () => api<{ connections: CrmConn[] }>('/api/crm'),
+    refetchInterval: 15_000,
+  });
+  const [token, setToken] = useState('');
+  const [msg, setMsg] = useState('');
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ['crm'] });
+  const connect = useMutation({
+    mutationFn: () =>
+      api('/api/crm', {
+        method: 'POST',
+        body: JSON.stringify({ provider: 'hubspot', token: token.trim() }),
+      }),
+    onSuccess: () => { setToken(''); setMsg('Connected — first sync is queued.'); invalidate(); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+  const syncNow = useMutation({
+    mutationFn: (id: string) => api(`/api/crm/${id}/sync-now`, { method: 'POST' }),
+    onSuccess: invalidate,
+  });
+  const drop = useMutation({
+    mutationFn: (id: string) => api(`/api/crm/${id}`, { method: 'DELETE' }),
+    onSuccess: invalidate,
+  });
+  const conns = data?.connections ?? [];
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <strong>CRM sync</strong>
+      <div className="muted" style={{ fontSize: 13 }}>
+        Read-only pull — contacts sync into a "{`hubspot`} sync" list campaigns
+        can target. Opt-outs import; Janis opt-outs are never cleared upstream.
+      </div>
+      {conns.map((cn) => (
+        <div key={cn.id} className="row wrap" style={{ gap: 8, fontSize: 13 }}>
+          <strong>{cn.provider}</strong>
+          <span className="muted">
+            {cn.synced_count} synced
+            {cn.last_synced_at && ` · last ${new Date(cn.last_synced_at).toLocaleString()}`}
+          </span>
+          {cn.last_error && <span className="error" style={{ fontSize: 12 }}>{cn.last_error}</span>}
+          <span className="grow" />
+          <button className="btn ghost" onClick={() => syncNow.mutate(cn.id)}>Sync now</button>
+          <button className="btn ghost" onClick={() => drop.mutate(cn.id)}>Disconnect</button>
+        </div>
+      ))}
+      <div className="row" style={{ gap: 8 }}>
+        <input className="input grow" style={{ maxWidth: 320 }} type="password"
+          placeholder="HubSpot private-app token (pat-…)"
+          value={token} onChange={(e) => setToken(e.target.value)} />
+        <button className="btn" disabled={!token.trim() || connect.isPending}
+          onClick={() => connect.mutate()}>
+          {connect.isPending ? 'Checking…' : 'Connect HubSpot'}
+        </button>
+      </div>
+      {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
     </div>
   );
 }

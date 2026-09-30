@@ -47,6 +47,8 @@ import { PLANS } from './lib/plans.js';
 import { workspaceRoutes } from './routes/workspace.js';
 import { workosRoutes } from './routes/workos.js';
 import { enrollRoutes } from './routes/enroll.js';
+import { eventRoutes } from './routes/events.js';
+import { crmRoutes } from './routes/crm.js';
 import { viewRoutes } from './routes/views.js';
 import { webchatRoutes } from './routes/webchat.js';
 import { legacyWebhookRoutes } from './routes/legacy.js';
@@ -191,6 +193,10 @@ export function createApp(db: Db) {
   app.use('/enroll/*', rateLimit({ scope: 'enroll', windowMs: 60_000, max: 120 }));
   app.route('/enroll', enrollRoutes(db));
 
+  // Conversion-event webhooks — same secret-URL pattern, workspace-scoped.
+  app.use('/events/*', rateLimit({ scope: 'events', windowMs: 60_000, max: 120 }));
+  app.route('/events', eventRoutes(db));
+
   // Embed script for the web-chat widget — plain JS, cacheable.
   const widgetJs = readFileSync(
     fileURLToPath(new URL('../public/widget.js', import.meta.url)),
@@ -221,6 +227,7 @@ export function createApp(db: Db) {
   api.route('/contacts', contactRoutes(db));
   api.route('/lists', listRoutes(db));
   api.route('/suppressions', suppressionRoutes(db));
+  api.route('/crm', crmRoutes(db));
   api.route('/campaigns', campaignRoutes(db));
   api.route('/actions', actionRoutes(db));
   api.route('/alerts', alertRoutes(db));

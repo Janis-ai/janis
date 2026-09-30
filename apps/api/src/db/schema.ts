@@ -984,6 +984,8 @@ export const campaigns = pgTable(
     enrollToken: text('enroll_token'),
     // Hard cap on total sends (all steps) — spend/volume ceiling per campaign.
     sendCap: integer('send_cap'),
+    // The business outcome this campaign aims at — matches conversion_events.event.
+    goal: text('goal'),
     scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
     status: text('status', {
       enum: ['draft', 'scheduled', 'sending', 'paused', 'cancelled', 'done', 'failed'],
@@ -1032,6 +1034,9 @@ export const campaignSends = pgTable(
     // Reply attribution — stamped when the recipient writes back; drip steps
     // skip replied recipients.
     repliedAt: timestamp('replied_at', { withTimezone: true }),
+    // Conversion attribution — stamped when a conversion event lands for
+    // this contact; the event row holds the detail.
+    convertedAt: timestamp('converted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     sentAt: timestamp('sent_at', { withTimezone: true }),
   },
@@ -1042,7 +1047,57 @@ export const campaignSends = pgTable(
     uniqueIndex('campaign_sends_recipient').on(t.campaignId, t.stepIndex, t.recipient),
     // Frequency-cap counting: sends to this address in the trailing window.
     index('campaign_sends_ws_recipient').on(t.workspaceId, t.recipient, t.status, t.sentAt),
+    // Conversion attribution: latest send for a contact.
+    index('campaign_sends_contact').on(t.contactId, t.createdAt),
   ],
+);
+
+/** Business outcomes reported via POST /events/:token — purchases, signups,
+ *  bookings. Linked to a campaign_send when the contact has one, so campaign
+ *  stats distinguish delivery/engagement from conversion. */
+export const conversionEvents = pgTable(
+  'conversion_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
+    campaignSendId: uuid('campaign_send_id').references(() => campaignSends.id, {
+      onDelete: 'set null',
+    }),
+    campaignId: uuid('campaign_id'),
+    event: text('event').notNull(), // 'purchase', 'signup', 'booked', …
+    valueCents: integer('value_cents'),
+    source: text('source'), // 'api', 'zapier', 'shopify', …
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('conversion_events_ws').on(t.workspaceId, t.createdAt)],
+);
+
+/** Workspace → CRM sync connection (v1: HubSpot private-app token, poll on a
+ *  lastmodified watermark). Contact identity anchors on
+ *  contacts.external_ids so the same person stays one Janis contact. */
+export const crmConnections = pgTable(
+  'crm_connections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull().default('hubspot'),
+    credentialsEnc: text('credentials_enc').notNull(), // encryptSecret({token})
+    enabled: boolean('enabled').notNull().default(true),
+    // Synced contacts land in this list — the campaign audience picker
+    // consumes it like any other list.
+    listId: uuid('list_id').references(() => contactLists.id, { onDelete: 'set null' }),
+    watermark: timestamp('watermark', { withTimezone: true }),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    syncedCount: integer('synced_count').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('crm_connections_ws').on(t.workspaceId)],
 );
 
 /** Workspace suppression list — never-send addresses regardless of per-channel

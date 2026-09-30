@@ -9,10 +9,14 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import {
   agents,
+  campaignSends,
+  campaigns,
   channelBindings,
   channels,
+  contacts,
   conversations,
   messages,
+  suppressions,
   workspaces,
 } from '../db/schema.js';
 import { generateApiKey } from '../lib/crypto.js';
@@ -197,5 +201,82 @@ describe('outbound SMS', () => {
     expect(r?.error).toContain('Twilio');
     expect(r?.retryable).toBe(false); // bad number — permanent
     vi.unstubAllGlobals();
+  });
+
+  it('requests a StatusCallback so undelivered finals reach the loop', async () => {
+    let seen: Record<string, string> = {};
+    vi.stubGlobal('fetch', async (_i: RequestInfo | URL, init?: RequestInit) => {
+      seen = Object.fromEntries(new URLSearchParams(String(init?.body ?? '')).entries());
+      return Response.json({ sid: 'SM-cb' });
+    });
+    await sendChannelMessage(channel, '+15553334444', 'hi');
+    expect(seen.StatusCallback).toBe(`${ORIGIN}/sms/${channel.id}/status`);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('delivery status callback', () => {
+  it('suppresses a dead number and flips the recent send to failed', async () => {
+    const [camp] = await db
+      .insert(campaigns)
+      .values({ workspaceId: wsId, channelId: channel.id, name: 'Blast', text: 'x', status: 'sending' })
+      .returning();
+    const [contact] = await db
+      .insert(contacts)
+      .values({ workspaceId: wsId, phone: '+15559998888' })
+      .returning();
+    const [send] = await db
+      .insert(campaignSends)
+      .values({
+        workspaceId: wsId,
+        campaignId: camp.id,
+        contactId: contact.id,
+        channelId: channel.id,
+        recipient: '+15559998888',
+        status: 'sent',
+        sentAt: new Date(),
+      })
+      .returning();
+
+    const res = await post(`/sms/${channel.id}/status`, {
+      MessageSid: 'SM-dead',
+      MessageStatus: 'undelivered',
+      ErrorCode: '30034',
+      To: '+15559998888',
+      From: '+15550001111',
+    });
+    expect(res.status).toBe(200);
+
+    const sups = await db
+      .select()
+      .from(suppressions)
+      .where(eq(suppressions.workspaceId, wsId));
+    expect(
+      sups.some((s) => s.address === '+15559998888' && s.reason === 'dead_number'),
+    ).toBe(true);
+    const [after] = await db
+      .select()
+      .from(campaignSends)
+      .where(eq(campaignSends.id, send.id));
+    expect(after.status).toBe('failed');
+    expect(after.error).toContain('30034');
+  });
+
+  it('ignores non-final statuses and bad signatures', async () => {
+    const params = {
+      MessageSid: 'SM-pending',
+      MessageStatus: 'delivered',
+      To: '+15551119999',
+      From: '+15550001111',
+    };
+    const ok = await post(`/sms/${channel.id}/status`, params);
+    expect(ok.status).toBe(200);
+    const bad = await post(`/sms/${channel.id}/status`, params, true);
+    expect(bad.status).toBe(401);
+    const sups = await db
+      .select()
+      .from(suppressions)
+      .where(eq(suppressions.address, '+15551119999'));
+    expect(sups).toHaveLength(0); // delivered → no suppression
   });
 });

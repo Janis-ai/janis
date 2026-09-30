@@ -7,6 +7,7 @@ import type { Db } from '../db/client.js';
 import { agents, campaignSends, campaigns, channels, contactLists } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { dispatchCampaign, resolveSegment } from '../lib/campaigns.js';
+import { channelReadiness } from '../lib/deliverability.js';
 import { audit } from '../lib/audit.js';
 
 const createCampaign = z.object({
@@ -62,9 +63,11 @@ const createCampaign = z.object({
   scheduled_at: z.string().datetime().optional(),
   /** Hard ceiling on total sends across all steps — the volume/spend cap. */
   send_cap: z.number().int().min(1).max(1_000_000).optional(),
+  /** Business outcome this campaign aims at — matches conversion_events.event. */
+  goal: z.string().max(80).optional(),
 });
 
-type SendStatus = { status: string; repliedAt?: Date | null };
+type SendStatus = { status: string; repliedAt?: Date | null; convertedAt?: Date | null };
 
 function stats(rows: SendStatus[]) {
   return {
@@ -77,6 +80,7 @@ function stats(rows: SendStatus[]) {
     skipped_opted_out: rows.filter((r) => r.status === 'skipped_opted_out').length,
     skipped_suppressed: rows.filter((r) => r.status === 'skipped_suppressed').length,
     skipped_frequency_cap: rows.filter((r) => r.status === 'skipped_frequency_cap').length,
+    converted: rows.filter((r) => r.convertedAt).length,
   };
 }
 
@@ -104,7 +108,11 @@ export function campaignRoutes(db: Db) {
     const withStats = await Promise.all(
       rows.map(async ({ campaign, channelName, channelKind, agentName }) => {
         const sends = await db
-          .select({ status: campaignSends.status, repliedAt: campaignSends.repliedAt })
+          .select({
+            status: campaignSends.status,
+            repliedAt: campaignSends.repliedAt,
+            convertedAt: campaignSends.convertedAt,
+          })
           .from(campaignSends)
           .where(eq(campaignSends.campaignId, campaign.id));
         return {
@@ -117,6 +125,7 @@ export function campaignRoutes(db: Db) {
           agent_instructions: campaign.agentInstructions,
           enrollment: campaign.enrollment,
           send_cap: campaign.sendCap,
+          goal: campaign.goal,
           enroll_token: campaign.enrollToken,
           status: campaign.status,
           scheduled_at: campaign.scheduledAt?.toISOString() ?? null,
@@ -212,6 +221,7 @@ export function campaignRoutes(db: Db) {
         agentInstructions: body.agent_instructions?.trim() || null,
         enrollment: body.enrollment ?? 'once',
         sendCap: body.send_cap ?? null,
+        goal: body.goal?.trim() || null,
         enrollToken: randomBytes(24).toString('base64url'),
         scheduledAt: scheduled,
         status: scheduled ? 'scheduled' : 'draft',
@@ -258,6 +268,7 @@ export function campaignRoutes(db: Db) {
         agent_instructions: campaign.agentInstructions,
         enrollment: campaign.enrollment,
         send_cap: campaign.sendCap,
+        goal: campaign.goal,
         enroll_token: campaign.enrollToken,
       },
       stats: stats(sends),
@@ -270,6 +281,7 @@ export function campaignRoutes(db: Db) {
         conversation_id: s.conversationId,
         sent_at: s.sentAt?.toISOString() ?? null,
         replied_at: s.repliedAt ? new Date(s.repliedAt).toISOString() : null,
+        converted_at: s.convertedAt ? new Date(s.convertedAt).toISOString() : null,
       })),
     });
   });
@@ -292,6 +304,17 @@ export function campaignRoutes(db: Db) {
       .update(campaigns)
       .set({ status: 'sending' })
       .where(eq(campaigns.id, campaign.id));
+    // Channel-readiness warnings surface AT dispatch — the operator finds out
+    // about missing A2P registration or Gmail caps before the blast, not after.
+    let warnings: string[] = [];
+    const [channel] = await db
+      .select()
+      .from(channels)
+      .where(eq(channels.id, campaign.channelId))
+      .limit(1);
+    if (channel) {
+      warnings = (await channelReadiness(channel, queued)).warnings;
+    }
     await audit(db, {
       workspaceId: c.get('workspaceId'),
       userId: c.get('user').id,
@@ -299,9 +322,9 @@ export function campaignRoutes(db: Db) {
       action: 'campaign.send',
       targetType: 'campaign',
       targetId: campaign.id,
-      meta: { queued },
+      meta: { queued, warnings },
     });
-    return c.json({ queued });
+    return c.json({ queued, warnings });
   });
 
   /** Shared status-transition helper — pause/resume/cancel are all

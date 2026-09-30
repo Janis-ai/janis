@@ -11,8 +11,10 @@ import {
   agents,
   channelBindings,
   channels,
+  contacts,
   conversations,
   messages,
+  suppressions,
   workspaces,
 } from '../db/schema.js';
 import { generateApiKey } from '../lib/crypto.js';
@@ -31,6 +33,7 @@ let db: Db;
 let app: Hono;
 let agentId: string;
 let channel: typeof channels.$inferSelect;
+let wsId: string;
 
 const WHSEC_KEY = Buffer.from('test-key-32-bytes-test-key-32-bytes!').toString('base64');
 const svixSign = (raw: string) => {
@@ -60,6 +63,7 @@ beforeAll(async () => {
   app = new Hono().route('/channels', channelWebhookRoutes(db));
 
   const [ws] = await db.insert(workspaces).values({ name: 'Test' }).returning();
+  wsId = ws.id;
   const { hash, preview } = generateApiKey();
   const [agent] = await db
     .insert(agents)
@@ -348,5 +352,60 @@ describe('email reply send', () => {
     expect(headers.References).toContain('<orig@mail.x.com>');
     // Suggested replies flatten to a numbered list — email's button equivalent
     expect(sent?.body.text).toBe('Your order shipped today.\n\n1. Track it\n2. Talk to a human');
+  });
+});
+
+describe('outbound event webhooks (/channels/email/events)', () => {
+  const eventsReq = (data: Record<string, unknown>, type = 'email.bounced', badSig = false) => {
+    const body = JSON.stringify({ type, data });
+    const headers = badSig
+      ? { 'svix-id': 'x', 'svix-timestamp': '0', 'svix-signature': 'v1,bogus' }
+      : svixSign(body);
+    return app.request('/channels/email/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body,
+    });
+  };
+
+  it('suppresses a bounced recipient in every workspace that owns the contact', async () => {
+    await db
+      .insert(contacts)
+      .values({ workspaceId: wsId, email: 'dead@mailbox.test', name: 'Dead' });
+    const res = await eventsReq({ to: ['dead@mailbox.test'], email_id: 'em_1' });
+    expect(res.status).toBe(200);
+    const sups = await db
+      .select()
+      .from(suppressions)
+      .where(eq(suppressions.workspaceId, wsId));
+    expect(
+      sups.some(
+        (s) => s.address === 'dead@mailbox.test' && s.kind === 'email' && s.reason === 'bounce',
+      ),
+    ).toBe(true);
+    // Idempotent — a retried webhook doesn't duplicate.
+    await eventsReq({ to: ['dead@mailbox.test'], email_id: 'em_1' });
+    const again = await db
+      .select()
+      .from(suppressions)
+      .where(eq(suppressions.address, 'dead@mailbox.test'));
+    expect(again).toHaveLength(1);
+  });
+
+  it('records complaints with complaint reason, ignores other events + bad sigs', async () => {
+    await db.insert(contacts).values({ workspaceId: wsId, email: 'mad@customer.test' });
+    const res = await eventsReq({ to: 'mad@customer.test' }, 'email.complained');
+    expect(res.status).toBe(200);
+    const sups = await db
+      .select()
+      .from(suppressions)
+      .where(eq(suppressions.address, 'mad@customer.test'));
+    expect(sups[0]?.reason).toBe('complaint');
+
+    expect((await eventsReq({ to: 'x@y.test' }, 'email.delivered')).status).toBe(200);
+    expect(
+      (await db.select().from(suppressions).where(eq(suppressions.address, 'x@y.test'))).length,
+    ).toBe(0);
+    expect((await eventsReq({ to: 'dead@mailbox.test' }, 'email.bounced', true)).status).toBe(401);
   });
 });

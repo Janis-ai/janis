@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { randomBytes } from 'node:crypto';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { eq, inArray } from 'drizzle-orm';
@@ -99,8 +100,36 @@ export function workspaceRoutes(db: Db) {
         help_domain:
           (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
         send_policy: (ws.config as { send_policy?: unknown } | undefined)?.send_policy ?? null,
+        event_token:
+          (ws.config as { event_token?: string } | undefined)?.event_token ?? null,
       },
     });
+  });
+
+  // POST /api/workspace/event-token — mint/rotate the credential authorizing
+  // POST /events/:token conversions. Rotating invalidates the old URL.
+  app.post('/event-token', adminOnly, async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const token = randomBytes(24).toString('base64url');
+    const [ws] = await db
+      .select({ config: workspaces.config })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    const config = {
+      ...((ws?.config ?? {}) as Record<string, unknown>),
+      event_token: token,
+    };
+    await db.update(workspaces).set({ config }).where(eq(workspaces.id, workspaceId));
+    await audit(db, {
+      workspaceId,
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'workspace.event_token.rotate',
+      targetType: 'workspace',
+      targetId: workspaceId,
+    });
+    return c.json({ event_token: token });
   });
 
   // PATCH /api/workspace — admin only. llm_config is the default every agent
@@ -201,6 +230,8 @@ export function workspaceRoutes(db: Db) {
         help_domain:
           (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
         send_policy: (ws.config as { send_policy?: unknown } | undefined)?.send_policy ?? null,
+        event_token:
+          (ws.config as { event_token?: string } | undefined)?.event_token ?? null,
       },
     });
   });

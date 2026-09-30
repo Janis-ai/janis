@@ -1,11 +1,13 @@
 import { Hono } from 'hono';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { channels } from '../db/schema.js';
 import type { ChannelCredentials } from '../lib/channels.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 import { validTwilioSignature } from '../lib/twilio.js';
 import { applySmsOpt, smsOptKeyword } from '../lib/optout.js';
+import { recordSuppression } from '../lib/deliverability.js';
+import { campaignSends } from '../db/schema.js';
 import { env } from '../env.js';
 
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
@@ -80,6 +82,53 @@ export function smsRoutes(db: Db) {
       },
     });
     return c.text(EMPTY_TWIML, 200, { 'Content-Type': 'text/xml' });
+  });
+
+  // Delivery status callback — sendSms passes StatusCallback=/sms/:id/status.
+  // failed/undelivered finals suppress the number (dead lines poison
+  // deliverability) and flip recent 'sent' campaign rows to failed.
+  app.post('/:channelId/status', async (c) => {
+    const [channel] = await db
+      .select()
+      .from(channels)
+      .where(and(eq(channels.id, c.req.param('channelId')), eq(channels.kind, 'sms')))
+      .limit(1);
+    if (!channel) return c.text('not found', 404);
+    const creds = channel.credentials as ChannelCredentials;
+    const req = new URL(c.req.url);
+    const url = `${env.apiOrigin}${req.pathname}${req.search}`;
+    const raw = await c.req.parseBody() as Record<string, unknown>;
+    const body = Object.fromEntries(
+      Object.entries(raw).filter(([, v]) => typeof v === 'string'),
+    ) as Record<string, string>;
+    if (!validTwilioSignature(url, body, c.req.header('X-Twilio-Signature'), creds.twilio_auth_token ?? '')) {
+      return c.text('bad signature', 401);
+    }
+    const status = body.MessageStatus;
+    if (status !== 'failed' && status !== 'undelivered') return c.json({ ok: true });
+    const to = body.To;
+    if (!to) return c.json({ ok: true });
+    const code = body.ErrorCode ?? 'unknown';
+    await recordSuppression(db, {
+      workspaceId: channel.workspaceId,
+      address: to,
+      kind: 'phone',
+      reason: 'dead_number',
+      source: `twilio:${code}`,
+    });
+    // Flip the freshest 'sent' send for this recipient — acceptance ≠ delivery.
+    await db
+      .update(campaignSends)
+      .set({ status: 'failed', error: `twilio ${code}` })
+      .where(
+        and(
+          eq(campaignSends.channelId, channel.id),
+          eq(campaignSends.recipient, to),
+          eq(campaignSends.status, 'sent'),
+          sql`${campaignSends.sentAt} > now() - interval '24 hours'`,
+        ),
+      );
+    return c.json({ ok: true });
   });
 
   return app;

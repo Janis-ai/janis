@@ -23,6 +23,7 @@ export async function sendSms(
   to: string,
   body: string,
   mediaUrl?: string,
+  statusCallbackUrl?: string,
 ): Promise<{ sid: string }> {
   const sid = creds.twilio_account_sid;
   const token = creds.twilio_auth_token;
@@ -34,6 +35,9 @@ export async function sendSms(
       To: to,
       ...(body.trim() ? { Body: body } : {}),
       ...(mediaUrl ? { MediaUrl: mediaUrl } : {}),
+      ...(statusCallbackUrl
+        ? { StatusCallback: statusCallbackUrl, StatusCallbackMethod: 'POST' }
+        : {}),
     },
   });
   return { sid: data.sid as string };

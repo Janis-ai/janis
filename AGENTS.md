@@ -215,21 +215,37 @@ before typecheck/tests/dev.
   campaigns.send_cap total-send ceiling, pause/resume/cancel are lazy —
   queued jobs re-check campaign status + policy at send time (paused
   defers 15m, cancelled stamps skipped_cancelled, quiet hours defer to
-  window end). /api/suppressions CRUD (admin). Missing: branching steps,
-  conversion attribution, bounce→suppression webhook ingest (table ready),
-  channel-readiness gating, per-recipient timezone.
+  window end). /api/suppressions CRUD (admin).
+  Deliverability loop: POST /channels/email/events handles Resend
+  email.bounced/complained/failed (same Svix secret as inbound) → suppresses
+  in every workspace owning that contact; sendSms sends StatusCallback →
+  POST /sms/:id/status (Twilio-signed) → failed/undelivered writes
+  dead_number suppression + flips the recent 'sent' campaign_send. Channel
+  readiness: POST /api/campaigns/:id/send returns {queued, warnings} via
+  lib/deliverability.channelReadiness — A2P brand check (messaging.twilio.com
+  /v1/BrandRegistrations), Resend domain verify, Gmail/Outlook bulk caps,
+  shared-domain volume warning. UI shows warnings on dispatch.
+  Conversion API: POST /events/:token (workspaces.config.event_token,
+  mint/rotate at POST /api/workspace/event-token, Settings card) →
+  upsertContactByAddress → conversion_events row + last-touch attribution
+  to the contact's freshest 'sent' campaign_send (stamps converted_at);
+  campaigns.goal field, stats gain converted, form takes goal event name.
+  Missing: branching steps, per-recipient timezone.
   GOTCHA: db.execute(sql`... returning *`) yields snake_case keys —
   workspaceId etc. are undefined; re-select through drizzle (jobs.ts does).
   That latent bug dead-queued every outbound.send until 0072.
-- CRM sync: external_ids {system:id} + /enroll webhook are the anchors.
-  Planned: workspace-scoped crm_connections (HubSpot private-app token first,
-  SF client_credentials via connections.ts PROVIDERS second), crm.sync job
-  polling changed contacts on a lastmodified watermark → upsertContactByAddress
-  → stable per-connection list; one-way consent INTO opted_out_at only (never
-  clears). Then activity write-back (append-only — campaign send/reply logged
-  via HubSpot timeline/custom events or SF Tasks; Intercom logs convs as SF
-  tasks, this is the competitive bar). Full bidirectional field sync = later,
-  separate product.
+- CRM sync: DONE (HubSpot v1) — crm_connections (workspace-scoped,
+  encryptSecret'd token, list_id, lastmodified watermark, synced_count,
+  last_error); /api/crm GET/POST/DELETE + /:id/sync-now (admin, Settings
+  card probes the token before storing); 'crm.sync' self-rescheduling job
+  (15min) → HubSpot contacts.search filtered lastmodifieddate>watermark,
+  20-page cap/run → upsertContactByAddress anchored on external_ids.hubspot
+  → stable 'hubspot sync' list; hs_email_optout → one-way suppression
+  (never clears Janis opt-outs). Second provider: SF client_credentials via
+  connections.ts PROVIDERS. Still pending: activity write-back (append-only
+  — campaign send/reply logged via HubSpot timeline/custom events or SF
+  Tasks; Intercom logs convs as SF tasks, this is the competitive bar).
+  Full bidirectional field sync = later, separate product.
 - Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
   13 articles on prod Demo Agent + Janis agent. Missing: full-text ranked
   search (tsvector — ILIKE only today), article view counts, helpfulness

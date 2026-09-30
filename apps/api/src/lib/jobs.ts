@@ -12,6 +12,7 @@ import { sendOutbound } from './outbound.js';
 import { refreshKnowledgeSource } from './urlSource.js';
 import { dispatchCampaignStep, stepStragglersExist } from './campaigns.js';
 import { checkSendPolicy, policyFor } from './sendPolicy.js';
+import { runCrmSyncJob } from '../routes/crm.js';
 
 /** Job payload for 'outbound.send' — one recipient's send, replayable. */
 export interface OutboundSendJob {
@@ -188,6 +189,11 @@ const HANDLERS: Record<string, (db: Db, workspaceId: string, payload: never) => 
         runAt: new Date(Date.now() + 5 * 60_000),
       });
     }
+  },
+  'crm.sync': async (db, _ws, p) => {
+    const { connection_id } = p as { connection_id?: string };
+    if (!connection_id) throw new Error('crm.sync job missing connection_id');
+    await runCrmSyncJob(db, connection_id);
   },
 };
 

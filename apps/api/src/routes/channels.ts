@@ -6,7 +6,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channelBindings, channels, usageEvents } from '../db/schema.js';
+import { agents, channelBindings, channels, contacts, usageEvents } from '../db/schema.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
@@ -25,6 +25,7 @@ import { sendOutbound } from '../lib/outbound.js';
 import { enqueueJob } from '../lib/jobs.js';
 import { dbRateLimit, takeDbAllowance } from '../lib/rateLimit.js';
 import { audit } from '../lib/audit.js';
+import { recordSuppression } from '../lib/deliverability.js';
 
 type ChannelRow = typeof channels.$inferSelect;
 import {
@@ -911,6 +912,56 @@ export function channelWebhookRoutes(db: Db) {
         },
       },
     });
+    return c.json({ ok: true });
+  });
+
+  // Resend OUTBOUND events — email.bounced / .complained / .failed land here
+  // (ops point a second Resend webhook subscription at this path; same Svix
+  // signing secret as inbound). A hard bounce or complaint = the mailbox is
+  // dead or hostile, so we suppress it in every workspace that holds that
+  // contact — provider-side attribution beats guessing a send's workspace.
+  app.post('/email/events', async (c) => {
+    const raw = await c.req.text();
+    if (
+      !env.resendInboundSecret ||
+      !verifySvixSignature(env.resendInboundSecret, raw, c.req.raw.headers)
+    ) {
+      return c.text('invalid signature', 401);
+    }
+    let event: { type?: string; data?: { to?: string[] | string; bounce_type?: string } };
+    try {
+      event = JSON.parse(raw) as typeof event;
+    } catch {
+      return c.text('bad json', 400);
+    }
+    const type = event.type ?? '';
+    if (!['email.bounced', 'email.complained', 'email.failed'].includes(type)) {
+      return c.json({ ok: true });
+    }
+    const recipients = event.data?.to;
+    const tos = Array.isArray(recipients) ? recipients : recipients ? [recipients] : [];
+    const reason = type === 'email.complained' ? 'complaint' : 'bounce';
+    for (const to of tos) {
+      const normalized = to.trim().toLowerCase();
+      if (!normalized.includes('@')) continue;
+      const owners = await db
+        .select({ workspaceId: contacts.workspaceId })
+        .from(contacts)
+        .where(
+          sql`lower(${contacts.email}) = ${normalized}
+              or ${normalized} = any(${contacts.altEmails})`,
+        )
+        .limit(50);
+      for (const { workspaceId } of owners) {
+        await recordSuppression(db, {
+          workspaceId,
+          address: normalized,
+          kind: 'email',
+          reason,
+          source: `resend:${type}`,
+        });
+      }
+    }
     return c.json({ ok: true });
   });
 
