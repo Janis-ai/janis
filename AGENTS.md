@@ -177,8 +177,9 @@ before typecheck/tests/dev.
   emoji pickers (native elements can't render SVG).
 - B. Shared usePrompt modal: DONE — workspace create, view naming, bulk
   tag, workspace-delete confirm all off window.prompt.
-- C. Keyboard layer: j/k rows, e archive, c compose, ⌘K command palette.
-  The Intercom/Front retention gap for operators.
+- C. Keyboard layer: DONE — ⌘K palette (nav + agents + conversation
+  search, arrow-nav) app-wide; inbox triage keys j/k/Enter/e/s/u/x with
+  focus ring + scrollIntoView.
 - D. "Why" affordances: DONE — deferred sends stamp 'held — paused/quiet
   hours' on the send row (self-clears on real outcome); human status labels
   in the campaign detail; policy card explains defer-vs-drop.
