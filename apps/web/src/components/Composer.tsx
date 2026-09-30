@@ -2,13 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Attachment } from '@janis/shared';
 import { useSavedReplies } from '../api/hooks';
 import { FileText, Image, Paperclip, Smile } from 'lucide-react';
-
-const EMOJIS = [
-  '😀','😄','😊','🙂','😉','😍','🤔','😅','😂','🥲','😢','😮','😴','🤗','🤝','👍',
-  '👎','🙏','👏','💪','🫶','✌️','🤞','👋','❤️','🧡','💛','💚','💙','💜','🖤','🤍',
-  '💯','✨','🔥','🎉','🎊','🎁','⭐','⚡','💡','🔔','📌','📎','📄','🖼️','📊','💳',
-  '📦','🚀','✅','❌','⚠️','❓','❗','🕐','📅','🔒','🔑','🛠️','🐛','💬','📞','📧',
-];
+import { EmojiPicker } from './EmojiPicker';
 
 export default function Composer({
   agentId,
@@ -191,13 +185,7 @@ export default function Composer({
         </div>
       </div>
 
-      {emojiOpen && (
-        <div className="emoji-pop">
-          {EMOJIS.map((e) => (
-            <button key={e} type="button" onClick={() => insertEmoji(e)}>{e}</button>
-          ))}
-        </div>
-      )}
+      {emojiOpen && <EmojiPicker onPick={insertEmoji} />}
       {repliesOpen && (
         <div className="emoji-pop reply-pop">
           {savedReplies?.saved_replies.map((r) => (

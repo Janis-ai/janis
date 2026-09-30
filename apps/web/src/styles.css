@@ -18,6 +18,30 @@
 /* Dark, thin scrollbars — the default OS chrome is jarring against the theme.
    scrollbar-* covers Firefox/modern Chrome; ::-webkit-* covers Safari. */
 :root { color-scheme: dark; }
+
+/* Light theme — opt-in from Settings → Me; mainly for demos/screenshots.
+   Only the palette overrides; every component already consumes the vars. */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --panel-2: #eef0f4;
+  --panel-alt: #e8eaf0;
+  --border: #d6dae3;
+  --text: #1c2430;
+  --muted: #5d6678;
+  --accent: #0d9488;
+  --accent-dim: #ccfbf1;
+  --danger: #dc2626;
+  --warn: #b45309;
+  --ok: #059669;
+}
+:root[data-theme='light'] .card,
+:root[data-theme='light'] input,
+:root[data-theme='light'] select,
+:root[data-theme='light'] textarea {
+  box-shadow: none;
+}
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }
@@ -293,6 +317,18 @@ button, input, select, textarea { font: inherit; }
   padding: 4px; border-radius: 6px;
 }
 .emoji-pop button:hover { background: var(--panel-2); }
+.emoji-pop .emoji-search {
+  grid-column: 1 / -1; width: 100%; margin-bottom: 6px; font-size: 13px;
+  padding: 6px 8px;
+}
+.emoji-pop .emoji-grid {
+  display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px;
+  max-height: 220px; overflow-y: auto; grid-column: 1 / -1;
+}
+.emoji-pop.emoji-inline {
+  position: static; width: auto; border: none; border-top: 1px solid var(--border);
+  border-radius: 0; box-shadow: none;
+}
 .reply-pop { display: flex; flex-direction: column; width: 340px; max-height: 300px; overflow-y: auto; }
 .reply-pop .reply-item {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
@@ -666,6 +702,11 @@ details summary:hover { color: var(--text); }
      wrap beneath it instead of piling onto the name */
   .conv-row .who { flex: 1 1 140px; }
   .conv-row .who .name { overflow-wrap: anywhere; }
+  /* triage-on-a-phone: drop secondary chips (agent, page disambiguator,
+     intent) so a row reads name + channel + preview at a glance, and
+     card-ify the row so the tap target is obvious */
+  .conv-row { border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+  .conv-row .agent-tag, .conv-row .intent-tag, .conv-row .channel-name { display: none; }
   .msg { max-width: 85%; }
   .login-wrap { padding: 16px; }
   .login-card { width: 100%; }

@@ -20,7 +20,7 @@ import { railBus } from '../lib/railBus';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert', 'auto_assign'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
-type Tab = 'integrations' | 'escalation' | 'tools' | 'tests' | 'help' | 'connection' | 'llm';
+type Tab = 'integrations' | 'escalation' | 'tools' | 'tests' | 'help' | 'connection' | 'llm' | 'behavior';
 
 export default function AgentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -58,7 +58,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const [params, setParams] = useSearchParams();
   const tabParam = params.get('tab') as Tab | null;
   const tab: Tab =
-    tabParam && ['integrations', 'escalation', 'tools', 'tests', 'help', 'connection', 'llm'].includes(tabParam)
+    tabParam && ['integrations', 'escalation', 'tools', 'tests', 'help', 'connection', 'llm', 'behavior'].includes(tabParam)
       ? tabParam
       : 'connection';
   const activeTab: Tab =
@@ -169,6 +169,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const channels = channelsData?.channels.filter((c) => c.agent_id === agent.id) ?? [];
   const tabs: { key: Tab; label: string }[] = [
     { key: 'connection', label: 'Engine' },
+    { key: 'behavior', label: 'Behavior' },
     { key: 'integrations', label: 'Channels' },
     { key: 'escalation', label: 'Escalation' },
     ...(agent.hosted
@@ -270,6 +271,15 @@ function AgentEditor({ agent }: { agent: Agent }) {
       {activeTab === 'tools' && agent.hosted && <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />}
       {activeTab === 'llm' && agent.hosted && (
         <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+      )}
+      {activeTab === 'behavior' && (
+        <BehaviorSection
+          agent={agent}
+          cfg={cfg}
+          setCfg={setCfg}
+          isAdmin={isAdmin}
+          hosted={agent.hosted}
+        />
       )}
       {activeTab === 'tests' && agent.hosted && <TestsTab agentId={agent.id} agent={agent} isAdmin={isAdmin} />}
       {activeTab === 'connection' && (
@@ -1746,8 +1756,6 @@ function ConnectionTab({
           </>
         )}
       </div>
-
-      <BehaviorSection agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} hosted={agent.hosted} />
 
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Credentials{agent.hosted ? '' : ' &amp; deliveries'}</strong>

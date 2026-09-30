@@ -1107,7 +1107,13 @@ export default function ConversationPage() {
             {c.state !== 'archived' && (
               <>
                 <button className="btn primary" onClick={() => act.mutate('takeover')}>Take over</button>
-                <button className="btn" onClick={() => { setSendAs('agent'); }}>Send via agent</button>
+                <button
+                  className="btn"
+                  title="Your text goes out as if the AI agent wrote it — the customer sees no human takeover"
+                  onClick={() => { setSendAs('agent'); }}
+                >
+                  Send via agent
+                </button>
                 <button className="btn" onClick={() => { setSendAs('note'); }}>🔒 Internal note</button>
                 {canTeach && (
                   <button className="btn" onClick={() => { setSendAs('teach'); }}>🧠 Teach agent</button>

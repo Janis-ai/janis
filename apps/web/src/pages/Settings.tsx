@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceUser } from '@janis/shared';
 import { api, ApiError } from '../api/client';
@@ -8,9 +9,23 @@ import { installAvailable, isIOS, isStandalone, onInstallStateChange, promptInst
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { usePrompt } from '../components/Prompt';
+import { currentTheme, setTheme } from '../lib/theme';
+
+type Section = 'workspace' | 'me' | 'integrations' | 'deliverability' | 'team';
+const SECTIONS: { key: Section; label: string }[] = [
+  { key: 'workspace', label: 'Workspace' },
+  { key: 'me', label: 'Me' },
+  { key: 'integrations', label: 'Integrations' },
+  { key: 'deliverability', label: 'Deliverability' },
+  { key: 'team', label: 'Team' },
+];
 
 export default function Settings() {
   const { data: me } = useMe();
+  const [params, setParams] = useSearchParams();
+  const section = (SECTIONS.some((s) => s.key === params.get('section'))
+    ? params.get('section')
+    : 'workspace') as Section;
   const { data: users } = useUsers();
   const { data: slack } = useSlackStatus();
   const { data: slackChannels } = useSlackChannels(!!slack?.connected);
@@ -27,6 +42,7 @@ export default function Settings() {
   const [promptEl, ask] = usePrompt();
   const [pushMsg, setPushMsg] = useState('');
   const [pushEnabled, setPushEnabled] = useState<boolean | null>(null);
+  const [theme, setThemeState] = useState<'dark' | 'light'>(currentTheme());
 
   useEffect(() => {
     const refresh = () =>
@@ -295,7 +311,20 @@ export default function Settings() {
     <>
       {promptEl}
       <h1 className="page-title">Settings</h1>
+      <div className="tabs" style={{ marginBottom: 12 }}>
+        {SECTIONS.map((s) => (
+          <button
+            key={s.key}
+            className={`tab${section === s.key ? ' active' : ''}`}
+            onClick={() => setParams({ section: s.key })}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
 
+      {section === 'workspace' && (
+        <>
       <div className="card">
         <strong>Workspace</strong>
         {me?.user.role === 'admin' && me.workspace ? (
@@ -384,11 +413,20 @@ export default function Settings() {
       </div>
 
       {me?.user.role === 'admin' && <DefaultLlmCard />}
+        </>
+      )}
 
+      {section === 'deliverability' && (
+        <>
       {me?.user.role === 'admin' && <SendPolicyCard />}
       {me?.user.role === 'admin' && <EventTokenCard />}
-      {me?.user.role === 'admin' && <CrmCard />}
+        </>
+      )}
 
+      {section === 'integrations' && me?.user.role === 'admin' && <CrmCard />}
+
+      {section === 'me' && (
+        <>
       <div className="card">
         <strong>Profile</strong>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
@@ -452,6 +490,19 @@ export default function Settings() {
           <span className="muted" style={{ fontSize: 12 }}>
             — unchecked, your replies stay anonymous even on enabled channels
           </span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 14 }}>
+          <input
+            type="checkbox"
+            checked={theme === 'light'}
+            onChange={(e) => {
+              const t = e.target.checked ? 'light' : 'dark';
+              setTheme(t);
+              setThemeState(t);
+            }}
+          />
+          Light theme
+          <span className="muted" style={{ fontSize: 12 }}>— for demos and daylight; dark stays default</span>
         </label>
       </div>
 
@@ -575,7 +626,11 @@ export default function Settings() {
       )}
 
       <InstallCard />
+        </>
+      )}
 
+      {section === 'integrations' && (
+        <>
       <div className="card">
         <strong>Slack</strong>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
@@ -624,7 +679,10 @@ export default function Settings() {
           </div>
         )}
       </div>
+        </>
+      )}
 
+      {section === 'me' && (
       <div className="card">
         <strong>Saved replies</strong>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
@@ -662,7 +720,10 @@ export default function Settings() {
           </div>
         </form>
       </div>
+      )}
 
+      {section === 'team' && (
+        <>
       <div className="card">
         <strong>Team</strong>
         <div className="muted" style={{ margin: '6px 0 4px', fontSize: 13 }}>
@@ -765,6 +826,8 @@ export default function Settings() {
             {deleteWorkspace.isPending ? 'Deleting…' : 'Delete workspace'}
           </button>
         </div>
+      )}
+        </>
       )}
     </>
   );
@@ -889,7 +952,7 @@ function SendPolicyCard() {
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <strong>Send policy</strong>
+      <strong title="Rules that gate every campaign and broadcast send — quiet hours, per-recipient caps, and the never-send list">Send policy</strong>
       <div className="muted" style={{ fontSize: 13 }}>
         Guardrails for campaign + broadcast sends. Checked again at send time —
         queued sends honor changes.
@@ -938,7 +1001,7 @@ function SendPolicyCard() {
       </div>
 
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 4 }}>
-        <strong style={{ fontSize: 13 }}>Suppression list</strong>
+        <strong style={{ fontSize: 13 }} title="Addresses Janis will never campaign to — added automatically on bounces and complaints">Suppression list</strong>
         <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
           Never-send addresses — bounces, complaints and dead numbers land here
           automatically. Sends to these show as "skipped — suppressed" on the
@@ -990,7 +1053,7 @@ function EventTokenCard() {
   const url = token ? `${window.location.origin}/events/${token}` : '';
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <strong>Conversion events</strong>
+      <strong title="Business outcomes (purchase, signup) reported by your systems — Janis attributes them to the campaign send that caused them">Conversion events</strong>
       <div className="muted" style={{ fontSize: 13 }}>
         Report business outcomes (purchase, signup, booked) — attributed to the
         contact's most recent campaign send so campaigns show real ROI.

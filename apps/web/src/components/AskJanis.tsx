@@ -10,6 +10,7 @@ import {
   type OutEntry,
 } from '../lib/chatTimeline';
 import { Loader2, Paperclip, Smile } from 'lucide-react';
+import { EmojiPicker } from './EmojiPicker';
 
 interface ChatConfig {
   agent_name: string;
@@ -27,10 +28,7 @@ interface PendingFile {
   size?: number;
 }
 
-const EMOJIS = (
-  '😀 😄 😁 🙂 😉 😊 😍 🤩 😘 😜 🤪 😎 🤔 😅 😂 🤣 😢 😭 😮 😴' +
-  ' 👍 👎 🙏 👏 🙌 🤝 💪 ✌️ 🤞 👋 👀 💬 ❤️ 💚 💙 💜 🖤 🤍 💯 ✅ 🎉 🔥 ⭐ 💡 📎 ❓'
-).split(' ');
+
 
 function visitorId(): string {
   const k = 'janis_console_visitor';
@@ -665,13 +663,7 @@ export function AskJanis({
           ))}
         </div>
       )}
-      {emojiOpen && (
-        <div className="ask-emoji">
-          {EMOJIS.map((em) => (
-            <button key={em} type="button" onClick={() => insertEmoji(em)}>{em}</button>
-          ))}
-        </div>
-      )}
+      {emojiOpen && <EmojiPicker variant="inline" onPick={insertEmoji} />}
       <div className="ask-input">
         <textarea
           ref={inputRef}

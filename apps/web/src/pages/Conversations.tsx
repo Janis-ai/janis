@@ -119,10 +119,12 @@ function ConvRow({
               {channelLabel(c.user_profile.channel)}
               {/* the page/account — disambiguates same-person-different-page
                   PSID conversations that otherwise render identically */}
-              {c.user_profile.channel_name && ` · ${c.user_profile.channel_name}`}
+              {c.user_profile.channel_name && (
+                <span className="channel-name"> · {c.user_profile.channel_name}</span>
+              )}
             </span>
           )}
-          {c.intent && <span className="channel-tag" title="Classified intent">{c.intent}</span>}
+          {c.intent && <span className="channel-tag intent-tag" title="Classified intent">{c.intent}</span>}
           {snoozed && (
             <span className="channel-tag" title={`Snoozed until ${new Date(c.snoozed_until!).toLocaleString()}`}>
               <Moon size={11} style={{ verticalAlign: '-1px', marginRight: 3 }} />
