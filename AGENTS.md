@@ -209,7 +209,16 @@ before typecheck/tests/dev.
   exist. POST /enroll/:token = public event-enroll webhook (per-IP +
   per-token caps). Missing: branching steps, conversion attribution,
   frequency caps/quiet hours, bounce→suppression loop, channel-readiness
-  gating, HubSpot/Salesforce sync.
+  gating.
+- CRM sync: external_ids {system:id} + /enroll webhook are the anchors.
+  Planned: workspace-scoped crm_connections (HubSpot private-app token first,
+  SF client_credentials via connections.ts PROVIDERS second), crm.sync job
+  polling changed contacts on a lastmodified watermark → upsertContactByAddress
+  → stable per-connection list; one-way consent INTO opted_out_at only (never
+  clears). Then activity write-back (append-only — campaign send/reply logged
+  via HubSpot timeline/custom events or SF Tasks; Intercom logs convs as SF
+  tasks, this is the competitive bar). Full bidirectional field sync = later,
+  separate product.
 - Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
   13 articles on prod Demo Agent + Janis agent. Missing: full-text ranked
   search (tsvector — ILIKE only today), article view counts, helpfulness
