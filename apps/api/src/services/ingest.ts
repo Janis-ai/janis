@@ -14,7 +14,7 @@ import { openAlertOnce } from '../lib/alerts.js';
 import { enrichHandoff } from '../lib/handoff.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { evaluateActions, evaluateEvent } from '../lib/rules.js';
-import { classifyAndRoute } from '../lib/intent.js';
+import { classifyAndRoute, recheckIntent } from '../lib/intent.js';
 import { fireEventWebhook } from '../lib/eventWebhook.js';
 import { mirrorToSlack, postSlackAlert, setSlackThreadStatus } from '../lib/slack.js';
 import { agentEligibleMembers } from '../lib/members.js';
@@ -137,11 +137,14 @@ export async function processEvents(
     }
 
     // Intent classification — once per conversation, off the hot path. BYO
-    // agents can stamp payload.intent and skip the LLM entirely.
+    // agents can stamp payload.intent and skip the LLM entirely. Later
+    // inbounds feed the drift re-check (throttled in recheckIntent).
     if (event.type === 'message_in' && conv.intent == null) {
       const payloadIntent =
         typeof event.payload?.intent === 'string' ? event.payload.intent : null;
       void classifyAndRoute(db, agent, conv, event.text, payloadIntent).catch(() => {});
+    } else if (event.type === 'message_in') {
+      void recheckIntent(db, agent, conv).catch(() => {});
     }
 
     // Workspace event export — Zapier/Make catch hooks see inbound traffic

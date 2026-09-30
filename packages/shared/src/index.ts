@@ -401,6 +401,8 @@ export const Conversation = z.object({
   csat_pending: z.boolean(),
   /** Semantic topic label — set by the classifier or a BYO agent's payload. */
   intent: z.string().nullable(),
+  /** Who set intent: 'ai' (drift re-checks may update), 'byo', or 'manual'. */
+  intent_source: z.string().optional(),
   /** Unified customer record this conversation's identity resolved to. */
   contact_id: z.string().nullable().optional(),
   created_at: z.string(),
@@ -709,5 +711,20 @@ export const StreamEvent = z.discriminatedUnion('type', [
   }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEvent>;
+
+/** Fallback intent taxonomy when an agent doesn't configure config.intents —
+ * the API classifier and the console's override dropdown share this list. */
+export const DEFAULT_INTENTS = [
+  'billing',
+  'shipping',
+  'order status',
+  'returns',
+  'technical issue',
+  'account',
+  'cancellation',
+  'sales',
+  'feedback',
+  'other',
+];
 
 export * from './models.js';

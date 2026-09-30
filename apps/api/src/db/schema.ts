@@ -189,6 +189,12 @@ export const conversations = pgTable(
     // ("billing", "shipping", …) for routing rules + reports. null while
     // unclassified (first message pending or no LLM on the agent).
     intent: text('intent'),
+    // 'ai' (classified — drift re-checks may update it), 'byo' (trusted from
+    // the BYO agent's payload), 'manual' (operator override — never overwritten)
+    intentSource: text('intent_source').notNull().default('ai'),
+    // Throttle marker for drift re-classification — one window check per
+    // conversation per 15 minutes.
+    intentCheckedAt: timestamp('intent_checked_at', { withTimezone: true }),
     // CSAT: prompt sent on archive; the customer's next reply carries the
     // rating and is captured in csatScore instead of reaching the agent
     csatPending: boolean('csat_pending').notNull().default(false),

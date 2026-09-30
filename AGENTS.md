@@ -317,8 +317,13 @@ before typecheck/tests/dev.
   published Zapier app (listing/submission = highest-leverage non-code task),
   no one-click OAuth installs, no public /integrations directory. Outbound
   webhooks have retries + deliveries/replay UI (DONE — see Webhook ops).
-- Intent classification: first-message only — no drift reclassification,
-  confidence + manual override, sentiment, auto-topic clustering.
+- Intent classification: drift DONE — classifyAndRoute stamps
+  intent_source ('ai'/'byo'); recheckIntent re-classifies the last 4
+  inbounds on later inbounds (≤1/15min per conv), a differing non-'other'
+  label updates intent + re-fires that intent's rule tags (assign never
+  steals). PATCH /conversations/:id {intent} = manual override, locks
+  against drift; sidebar Intent card edits it ('· manual' marker).
+  Still missing: sentiment, auto-topic clustering, confidence scores.
 - Eval suite: CSV import + A/B runs + scheduled runs + regression alerting +
   run history DONE — agent_test_runs batches every execution (manual/ab/
   scheduled); config.eval_interval_hours + sweepEvals enqueue eval.run jobs

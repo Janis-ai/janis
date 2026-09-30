@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
@@ -320,6 +321,7 @@ export default function ConversationPage() {
       is_starred?: boolean;
       is_unread?: boolean;
       snoozed_until?: string | null;
+      intent?: string | null;
     }) =>
       api(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: (_d, body) => {
@@ -1210,6 +1212,36 @@ export default function ConversationPage() {
               </option>
             ))}
           </select>
+        </div>
+
+        <div className="card">
+          <strong>
+            Intent
+            {(c.intent_source ?? 'ai') === 'manual' && (
+              <span className="muted" style={{ fontWeight: 400 }}> · manual</span>
+            )}
+          </strong>
+          <select
+            style={{ width: '100%', marginTop: 8 }}
+            value={c.intent ?? ''}
+            disabled={patch.isPending}
+            onChange={(e) => patch.mutate({ intent: e.target.value || null })}
+          >
+            <option value="">Unclassified</option>
+            {[...new Set([...(agent?.config?.intents ?? []), ...DEFAULT_INTENTS])].map((i) => (
+              <option key={i} value={i}>
+                {i}
+              </option>
+            ))}
+            {c.intent &&
+              ![...(agent?.config?.intents ?? []), ...DEFAULT_INTENTS].includes(c.intent) && (
+                <option value={c.intent}>{c.intent}</option>
+              )}
+          </select>
+          <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+            Auto-classified from the conversation and re-checked as topics drift — a
+            manual choice is never overwritten.
+          </div>
         </div>
 
         <TagEditor conversation={c} onSave={(tags) => patch.mutate({ tags })} />

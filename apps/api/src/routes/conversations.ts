@@ -54,6 +54,9 @@ const patchBody = z.object({
   // ISO timestamp or null — snooze hides the conversation from every queue
   // until it expires or a customer reply wakes it
   snoozed_until: z.string().datetime({ offset: true }).nullable().optional(),
+  // Operator intent override — stamps intent_source='manual' so the drift
+  // re-check never overwrites it. null clears back to unclassified.
+  intent: z.string().max(60).nullable().optional(),
 });
 
 const bulkBody = z.object({
@@ -765,6 +768,13 @@ export function conversationRoutes(db: Db) {
         ...(body.is_unread !== undefined ? { isUnread: body.is_unread } : {}),
         ...(body.snoozed_until !== undefined
           ? { snoozedUntil: body.snoozed_until ? new Date(body.snoozed_until) : null }
+          : {}),
+        ...(body.intent !== undefined
+          ? {
+              intent: body.intent,
+              intentSource: body.intent ? 'manual' : 'ai',
+              intentCheckedAt: body.intent ? new Date() : null,
+            }
           : {}),
       })
       .where(eq(conversations.id, owned.id))
