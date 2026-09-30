@@ -1,0 +1,10 @@
+import postgres from 'postgres';
+import { readFileSync } from 'node:fs';
+const sql = postgres(readFileSync('/tmp/dburl.txt','utf8').trim(), { ssl: 'require' });
+const users = await sql`select id, email, name from users order by created_at`;
+for (const u of users) console.log('user:', u.email, '|', u.name);
+const ws = await sql`select w.id, w.name, w.plan, (select string_agg(u.email,',' ) from memberships m join users u on u.id=m.user_id where m.workspace_id=w.id and m.accepted_at is not null) as members from workspaces w`;
+for (const w of ws) console.log('ws:', w.name, '|', w.id, '|', w.plan, '|', w.members);
+const ag = await sql`select a.id, a.name, a.workspace_id from agents a`;
+for (const a of ag) console.log('agent:', a.name, '|', a.id, '| ws', a.workspace_id);
+await sql.end();

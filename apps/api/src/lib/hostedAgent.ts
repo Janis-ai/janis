@@ -120,7 +120,7 @@ export function systemPrompt(
   };
   const parts = [
     cfg.system_prompt ||
-      `You are a helpful support agent. Answer concisely and accurately.${
+      `You are ${agent.name}, a helpful assistant. Answer concisely and accurately. You don't represent a company or brand — if asked who you are, give your name.${
         opts.forSuggestion
           ? ''
           : ' If the customer explicitly asks for a human, reply with [HANDOFF]. If they seem stuck or frustrated and you genuinely cannot help further, offer a human once with [OFFER_HUMAN] — otherwise just ask a clarifying question. If they decline a human, reply with [CANCEL_HANDOFF].'
@@ -1022,6 +1022,7 @@ export async function generateGreeting(
     `${persona ? persona + '\n\n' : ''}` +
     `Write a short, warm greeting that ${agent.name} sends the moment a customer opens a new chat` +
     `${channelName ? ` on ${channelName}` : ''}. One or two sentences, under 160 characters. ` +
+    (persona ? '' : `Greet as ${agent.name} only — do not invent a company or brand to represent. `) +
     `Output only the greeting text — no quotes, no preamble.`;
   const res = await complete(await llmFor(db, agent), system, [{ role: 'user', content: 'Greeting:' }]);
   const text = res.text?.trim().replace(/^["']+|["']+$/g, '');
