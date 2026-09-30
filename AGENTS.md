@@ -306,6 +306,34 @@ before typecheck/tests/dev.
 - Still untouched: SOC 2 process, data residency, RBAC granularity beyond
   admin/member/viewer.
 
+**Env / provider / stack gaps (audited 2026-09-30)**
+- Prod env = .env overlaid by .env.production (deploy-gcp.sh merges →
+  /tmp/janis-env.yaml; DATABASE_URL/TWILIO_AUTH_TOKEN also via Secret Manager).
+- Dead everywhere (missing from BOTH envs): MS_CLIENT_ID/SECRET/TENANT/
+  PUSH_TOKEN (Outlook channel code-complete, needs Azure app reg),
+  WORKOS_* ×4 (SSO/SCIM need a WorkOS account), STRIPE_PRICE_*_YEARLY +
+  TRIAL_DAYS (yearly Prices don't exist in Stripe yet — create live+test),
+  RESEND_INBOUND_SECRET (inbound-mail auth unset on the shared domain),
+  JANIS_SEARCH_API_KEY (agent web-search tool dead).
+- Missing locally only (set in .env.production): SLACK_SIGNING_SECRET(+ALT),
+  JANIS_SECRETS_KEY (falls back to sha256(SESSION_SECRET) — fine, but
+  prod-encrypted secrets can't decrypt locally regardless).
+- Twilio provider-side (can't fix in code): paid-account status, A2P 10DLC
+  brand+campaign registration — hard blocker for bulk US SMS, regulatory
+  address bundles for non-US voice.
+- LLM config OK locally (JANIS_LLM_* on gemini, OPENAI+ANTHROPIC keys set);
+  JANIS_LLM_PROVIDERS multi-provider map + LLM_PRICES unset (optional).
+- Stack upgrades: Node 20 → 22/24 LTS (engines + Dockerfile node:20-alpine
+  + @types/node — Node 20 EOL 2026-04). drizzle-orm 0.38→0.45 has a HIGH
+  SQL-injection advisory fix (breaking upgrade — smoke-test migrations).
+  react-router 6→7 (moderate advisories, breaking), React 18→19,
+  @hono/node-server 1→2, pglite 0.2→0.5, pdf-parse 1→2, vite/plugin-react
+  majors. Deprecated warns: @esbuild-kit (merged into tsx), glob 11.
+- .env.example documents ~30 of ~80 vars — needs a full pass w/ comments
+  on which are dev-defaulted vs required.
+- Legacy to retire eventually: WORDHOP_API_URL, JANIS_SOCKET_SERVER_URL
+  (Heroku relay), LEGACY_SLACK_INTERACTIONS_URL, META_LEGACY_WEBHOOK_URL.
+
 **Marketing surface (missing)**
 - GA4 (G-G5W5H3CVR2) fires landing-page demo/CTA events only — funnel events
   still missing: signup, first_agent, first_conversation, channel_connected.
