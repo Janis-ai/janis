@@ -695,35 +695,47 @@ function WebchatBranding({ channel }: { channel: Channel }) {
 function EmailDomainCard({ channel }: { channel: Channel }) {
   const qc = useQueryClient();
   const [domain, setDomain] = useState(channel.meta.email_domain ?? '');
+  const [registered, setRegistered] = useState(channel.meta.email_domain ?? '');
+  const [status, setStatus] = useState(channel.meta.email_domain_status ?? '');
+  const [records, setRecords] = useState(channel.meta.email_domain_records ?? []);
+  const [cfToken, setCfToken] = useState('');
+  const [cfOpen, setCfOpen] = useState(false);
   const [msg, setMsg] = useState('');
-  const refresh = () => void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+    void qc.invalidateQueries({ queryKey: ['channels'] });
+  };
+  type DomainState = { email_domain?: string; status?: string; records?: typeof records };
+  const apply = (d: DomainState) => {
+    if (d.email_domain !== undefined) setRegistered(d.email_domain);
+    if (d.status !== undefined) setStatus(d.status);
+    if (d.records) setRecords(d.records);
+  };
   const act = (path: string, body?: unknown, okMsg = 'Done.') =>
     api(`/api/channels/${channel.id}${path}`, {
       method: body === undefined ? 'DELETE' : 'POST',
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
-      .then(() => {
+      .then((d) => {
         setMsg(okMsg);
+        apply(d as DomainState);
         refresh();
       })
       .catch((e) => setMsg(e instanceof Error ? e.message : 'failed'));
-  const status = channel.meta.email_domain_status;
-  const records = channel.meta.email_domain_records ?? [];
   return (
     <div style={{ marginTop: 14 }}>
       <div style={{ fontSize: 13, fontWeight: 600 }}>
         Custom sending domain
-        {status && (
+        {registered && (
           <span
             className="muted"
             style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}
           >
-            {channel.meta.email_domain} ·{' '}
-            {status === 'verified' ? '✓ verified' : status ?? 'pending'}
+            {registered} · {status === 'verified' ? '✓ verified' : status || 'pending'}
           </span>
         )}
       </div>
-      {!channel.meta.email_domain ? (
+      {!registered ? (
         <>
           <input
             className="input"
@@ -747,17 +759,31 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
           <table style={{ width: '100%', fontSize: 12, marginTop: 6 }}>
             <thead>
               <tr className="muted" style={{ textAlign: 'left' }}>
+                <th />
                 <th>Type</th>
                 <th>Name</th>
                 <th>Value</th>
+                <th />
               </tr>
             </thead>
             <tbody>
               {records.map((r, i) => (
                 <tr key={i}>
+                  <td style={{ padding: '2px 6px 2px 0', width: 16 }}>
+                    {r.status === 'verified' ? '✓' : '·'}
+                  </td>
                   <td style={{ padding: '2px 6px 2px 0' }}>{r.type}</td>
                   <td style={{ padding: '2px 6px 2px 0', wordBreak: 'break-all' }}>{r.name}</td>
                   <td style={{ padding: '2px 6px 2px 0', wordBreak: 'break-all' }}>{r.value}</td>
+                  <td style={{ padding: '2px 0', width: 22 }}>
+                    <button
+                      className="btn sm"
+                      title="Copy"
+                      onClick={() => void navigator.clipboard.writeText(r.value)}
+                    >
+                      ⧉
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -766,18 +792,69 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
             <button className="btn sm" onClick={() => act('/email-domain/verify', {}, 'Verification requested.')}>
               Verify DNS
             </button>
-            <button className="btn sm" onClick={() => act('/email-domain', undefined, 'Domain removed.')}>
+            <button className="btn sm" onClick={() => setCfOpen((o) => !o)}>
+              Auto-add to Cloudflare
+            </button>
+            <button
+              className="btn sm"
+              onClick={() =>
+                act('/email-domain', undefined, 'Domain removed.').then(() => {
+                  setRegistered('');
+                  setStatus('');
+                  setRecords([]);
+                })
+              }
+            >
               Remove
             </button>
           </div>
+          {cfOpen && (
+            <div style={{ marginTop: 8, border: '1px solid var(--border, #333)', borderRadius: 6, padding: 8 }}>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Paste a Cloudflare API token (My Profile → API Tokens → Edit zone DNS for the zone).
+                Used once to create the records — never stored.
+              </div>
+              <input
+                className="input"
+                style={{ width: '100%', marginTop: 4 }}
+                placeholder="Cloudflare API token"
+                type="password"
+                value={cfToken}
+                onChange={(e) => setCfToken(e.target.value)}
+              />
+              <button
+                className="btn sm"
+                style={{ marginTop: 6 }}
+                disabled={!cfToken.trim()}
+                onClick={() =>
+                  act('/email-domain/cf-setup', { api_token: cfToken.trim() }).then(() => {
+                    setCfToken('');
+                    setCfOpen(false);
+                    setMsg('Records created on Cloudflare — verification may take a minute.');
+                  })
+                }
+              >
+                Add records
+              </button>
+            </div>
+          )}
         </>
       ) : status === 'verified' ? (
         <div className="row" style={{ marginTop: 6 }}>
           <span className="muted" style={{ fontSize: 12 }}>
-            Set "Send replies as" to any @{channel.meta.email_domain} address — replies still
+            Set "Send replies as" to any @{registered} address — replies still
             route to this channel.
           </span>
-          <button className="btn sm" onClick={() => act('/email-domain', undefined, 'Domain removed.')}>
+          <button
+            className="btn sm"
+            onClick={() =>
+              act('/email-domain', undefined, 'Domain removed.').then(() => {
+                setRegistered('');
+                setStatus('');
+                setRecords([]);
+              })
+            }
+          >
             Remove
           </button>
         </div>

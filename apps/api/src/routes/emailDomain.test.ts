@@ -123,6 +123,62 @@ describe('custom email domain', () => {
     expect((await patch({ from_address: 'support@other.com' })).status).toBe(400);
   });
 
+  it('adopts an already-registered domain instead of erroring', async () => {
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/domains') && init?.method === 'POST')
+        return new Response(JSON.stringify({ message: 'domain already exists' }), { status: 409 });
+      if (url.endsWith('/domains'))
+        return new Response(JSON.stringify({ data: [{ id: 'dom_9', name: 'mail.acme.com' }] }), { status: 200 });
+      if (/\/domains\/dom_9$/.test(url))
+        return new Response(JSON.stringify({ ...resendDomain, id: 'dom_9' }), { status: 200 });
+      return new Response('{}', { status: 404 });
+    });
+    const res = await post(`/${channelId}/email-domain`, { domain: 'mail.acme.com' });
+    expect(res.status).toBe(200);
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    expect((ch.credentials as { email_domain_id?: string }).email_domain_id).toBe('dom_9');
+  });
+
+  it('cf-setup creates missing Cloudflare records then verifies', async () => {
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('api.cloudflare.com')) {
+        if (/\/zones\?name=mail\.acme\.com/.test(url)) return new Response('{"result":[]}', { status: 200 });
+        if (/\/zones\?name=acme\.com/.test(url))
+          return new Response('{"result":[{"id":"z1","name":"acme.com"}]}', { status: 200 });
+        if (url.includes('/dns_records') && init?.method === 'POST')
+          return new Response('{"result":{}}', { status: 200 });
+        if (url.includes('/dns_records')) return new Response('{"result":[]}', { status: 200 });
+      }
+      if (url.endsWith('/verify')) return new Response('{}', { status: 200 });
+      if (/\/domains\/dom_9$/.test(url))
+        return new Response(JSON.stringify({ ...resendDomain, id: 'dom_9', status: 'verified' }), { status: 200 });
+      return new Response('{}', { status: 404 });
+    });
+    const res = await post(`/${channelId}/email-domain/cf-setup`, { api_token: 'x'.repeat(40) });
+    const body = await j(res);
+    expect(res.status).toBe(200);
+    expect(body.created).toBe(1);
+    expect(body.zone).toBe('acme.com');
+    expect(body.status).toBe('verified');
+    // second run skips existing records
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (/\/zones\?name=mail\.acme\.com/.test(url)) return new Response('{"result":[]}', { status: 200 });
+      if (/\/zones\?name=acme\.com/.test(url))
+        return new Response('{"result":[{"id":"z1","name":"acme.com"}]}', { status: 200 });
+      if (url.includes('/dns_records'))
+        return new Response('{"result":[{"id":"r1"}]}', { status: 200 });
+      if (url.endsWith('/verify')) return new Response('{}', { status: 200 });
+      if (/\/domains\/dom_9$/.test(url))
+        return new Response(JSON.stringify({ ...resendDomain, id: 'dom_9', status: 'verified' }), { status: 200 });
+      return new Response('{}', { status: 404 });
+    });
+    const res2 = await post(`/${channelId}/email-domain/cf-setup`, { api_token: 'x'.repeat(40) });
+    expect((await j(res2)).skipped).toBe(1);
+  });
+
   it('delete clears domain creds and a dependent from_address', async () => {
     await patch({ from_address: 'support@mail.acme.com' });
     const res = await app.fetch(

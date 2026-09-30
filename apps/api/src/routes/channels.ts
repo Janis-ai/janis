@@ -3,7 +3,8 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import {
-  createResendDomain,
+  cloudflareSetupRecords,
+  createOrAdoptResendDomain,
   deleteResendDomain,
   getResendDomain,
   verifyResendDomain,
@@ -536,7 +537,8 @@ export function channelApiRoutes(db: Db) {
       const creds = row.credentials as ChannelCredentials;
       let d;
       try {
-        d = await createResendDomain(domain);
+        // idempotent — re-registering an existing domain adopts it
+        d = await createOrAdoptResendDomain(domain);
       } catch (e) {
         return c.json({ error: `resend: ${e instanceof Error ? e.message : e}` }, 502);
       }
@@ -580,6 +582,44 @@ export function channelApiRoutes(db: Db) {
       return c.json({ error: `resend: ${e instanceof Error ? e.message : e}` }, 502);
     }
   });
+
+  // Push the DNS records into Cloudflare on the client's behalf — one-shot
+  // API token, never stored. Skips records that already exist.
+  app.post(
+    '/:id/email-domain/cf-setup',
+    zValidator('json', z.object({ api_token: z.string().min(20).max(200) })),
+    async (c) => {
+      const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
+      if (!row) return c.json({ error: 'not found' }, 404);
+      if (row.kind !== 'email') return c.json({ error: 'email channel required' }, 400);
+      const creds = row.credentials as ChannelCredentials;
+      if (!creds.email_domain || !creds.email_domain_records?.length)
+        return c.json({ error: 'register a domain first' }, 400);
+      const role = await agentRoleFor(
+        db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
+      );
+      if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
+      try {
+        const out = await cloudflareSetupRecords(
+          creds.email_domain,
+          creds.email_domain_records,
+          c.req.valid('json').api_token,
+        );
+        await verifyResendDomain(creds.email_domain_id!).catch(() => {});
+        const d = await getResendDomain(creds.email_domain_id!);
+        const next = {
+          ...creds,
+          email_domain_status: d.status ?? creds.email_domain_status,
+          ...(d.records?.length ? { email_domain_records: d.records } : {}),
+        };
+        await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
+        invalidateChannelCache();
+        return c.json({ ...out, status: next.email_domain_status, records: next.email_domain_records });
+      } catch (e) {
+        return c.json({ error: `cloudflare: ${e instanceof Error ? e.message : e}` }, 502);
+      }
+    },
+  );
 
   app.delete('/:id/email-domain', async (c) => {
     const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
