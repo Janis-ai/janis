@@ -723,6 +723,11 @@ export const helpArticles = pgTable(
     body: text('body').notNull().default(''),
     status: text('status', { enum: ['draft', 'published'] }).notNull().default('draft'),
     position: integer('position').notNull().default(0),
+    // Public-page reads bump this — the insights endpoint ranks by it.
+    viewCount: integer('view_count').notNull().default(0),
+    // search_vector is a GENERATED tsvector column (migration 0076) — not
+    // declared here since drizzle can't express generated columns; queries
+    // reference it via sql`search_vector`.
     publishedAt: timestamp('published_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -731,6 +736,25 @@ export const helpArticles = pgTable(
     index('help_articles_agent').on(t.agentId),
     uniqueIndex('help_articles_slug').on(t.agentId, t.slug),
   ],
+);
+
+/** Every customer-facing help-center search — results=0 rows are the content
+ *  roadmap: what customers asked for and couldn't find. */
+export const helpSearchLog = pgTable(
+  'help_search_log',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    query: text('query').notNull(),
+    results: integer('results').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('help_search_log_agent').on(t.agentId, t.createdAt)],
 );
 
 /**

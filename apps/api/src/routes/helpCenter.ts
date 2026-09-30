@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, helpArticles, workspaces } from '../db/schema.js';
+import { agents, helpArticles, helpSearchLog, workspaces } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toHelpArticle } from '../lib/serializers.js';
 
@@ -89,6 +89,35 @@ export function articleRoutes(db: Db) {
       .where(eq(helpArticles.agentId, agent_id))
       .orderBy(asc(helpArticles.category), asc(helpArticles.position), asc(helpArticles.createdAt));
     return c.json({ articles: rows.map(toHelpArticle) });
+  });
+
+  // Content roadmap: most-viewed articles + the searches that found nothing.
+  app.get('/insights', zValidator('query', z.object({ agent_id: z.string().uuid() })), async (c) => {
+    const { agent_id } = c.req.valid('query');
+    if (!(await ownsAgent(db, c.get('workspaceId'), agent_id)))
+      return c.json({ error: 'not found' }, 404);
+    const topViewed = await db
+      .select({
+        id: helpArticles.id,
+        title: helpArticles.title,
+        slug: helpArticles.slug,
+        category: helpArticles.category,
+        viewCount: helpArticles.viewCount,
+      })
+      .from(helpArticles)
+      .where(eq(helpArticles.agentId, agent_id))
+      .orderBy(desc(helpArticles.viewCount))
+      .limit(10);
+    const missed = (await db.execute(sql`
+      select lower(query) as query, count(*)::int as n, max(created_at) as last_seen
+      from help_search_log
+      where agent_id = ${agent_id} and results = 0
+      group by lower(query)
+      order by n desc, last_seen desc
+      limit 20
+    `)) as unknown;
+    const missedRows = (Array.isArray(missed) ? missed : (missed as { rows?: unknown[] }).rows) ?? [];
+    return c.json({ top_viewed: topViewed, zero_result_searches: missedRows });
   });
 
   app.post('/', zValidator('json', articleBody), async (c) => {
@@ -190,16 +219,23 @@ export function helpPublicRoutes(db: Db) {
   app.get('/:agentId', async (c) => {
     const agentId = c.req.param('agentId');
     const [agent] = await db
-      .select({ id: agents.id, name: agents.name })
+      .select({ id: agents.id, name: agents.name, workspaceId: agents.workspaceId })
       .from(agents)
       .where(eq(agents.id, agentId))
       .limit(1);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const q = (c.req.query('q') ?? '').trim();
     const conds = [eq(helpArticles.agentId, agentId), eq(helpArticles.status, 'published')];
+    // Ranked lexical search: tsvector over title+body (generated column,
+    // GIN index) OR'd with ILIKE so queries with no English lexemes
+    // ("09xx" phone prefixes, codes) still match verbatim.
     if (q) {
       const like = `%${q}%`;
-      conds.push(or(ilike(helpArticles.title, like), ilike(helpArticles.body, like))!);
+      conds.push(
+        sql`(search_vector @@ websearch_to_tsquery('english', ${q})
+             or ${helpArticles.title} ilike ${like}
+             or ${helpArticles.body} ilike ${like})`,
+      );
     }
     const rows = await db
       .select({
@@ -212,7 +248,23 @@ export function helpPublicRoutes(db: Db) {
       })
       .from(helpArticles)
       .where(and(...conds))
-      .orderBy(asc(helpArticles.category), asc(helpArticles.position), asc(helpArticles.createdAt));
+      .orderBy(
+        // Rank only applies when searching — 0 for the ILIKE-only matches,
+        // which then fall through to the catalog order.
+        ...(q ? [sql`ts_rank(search_vector, websearch_to_tsquery('english', ${q})) desc` as never] : []),
+        asc(helpArticles.category),
+        asc(helpArticles.position),
+        asc(helpArticles.createdAt),
+      );
+    // Every search is logged — results=0 rows are the content roadmap.
+    if (q) {
+      await db.insert(helpSearchLog).values({
+        workspaceId: agent.workspaceId,
+        agentId,
+        query: q.slice(0, 300),
+        results: rows.length,
+      });
+    }
     // Group into categories, preserving sort order.
     const categories: {
       name: string;
@@ -247,6 +299,13 @@ export function helpPublicRoutes(db: Db) {
       )
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
+    // Fire-and-forget read counter — the insights endpoint ranks on it.
+    // (drizzle builders only execute on .then — a bare `void` would never run.)
+    void db
+      .update(helpArticles)
+      .set({ viewCount: sql`${helpArticles.viewCount} + 1` })
+      .where(eq(helpArticles.id, row.help_articles.id))
+      .catch(() => {});
     return c.json({ agent_name: row.agents.name, article: toHelpArticle(row.help_articles) });
   });
 

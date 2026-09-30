@@ -269,6 +269,7 @@ export function toHelpArticle(row: Row<typeof helpArticles>): HelpArticle {
     seo_description: row.seoDescription,
     body: row.body,
     status: row.status,
+    view_count: row.viewCount,
     published_at: iso(row.publishedAt),
     updated_at: iso(row.updatedAt)!,
   };

@@ -488,6 +488,7 @@ export const HelpArticle = z.object({
   seo_description: z.string().nullable(),
   body: z.string(),
   status: z.enum(['draft', 'published']),
+  view_count: z.number().default(0),
   published_at: z.string().nullable(),
   updated_at: z.string(),
 });
