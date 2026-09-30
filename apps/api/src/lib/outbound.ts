@@ -45,7 +45,7 @@ export function normalizeRecipient(
 export async function sendOutbound(
   db: Db,
   channel: ChannelRow,
-  user: { id: string; name?: string | null },
+  user: { id?: string; name?: string | null } | undefined,
   args: {
     to: string;
     text: string;
@@ -118,8 +118,8 @@ export async function sendOutbound(
   }
 
   const sent = await sendChannelMessage(channel, to, args.text, undefined, {
-    senderName: user.name ?? undefined,
-    senderId: user.id,
+    senderName: user?.name ?? undefined,
+    senderId: user?.id,
     subject: args.subject,
     whatsappTemplate: args.template,
   });
@@ -130,7 +130,7 @@ export async function sendOutbound(
   await db.insert(messages).values({
     conversationId,
     direction: 'out',
-    authorId: user.id,
+    authorId: user?.id ?? null,
     text: args.text || `[template] ${args.template?.name}`,
     payload: {
       ...(sent?.mid ? { mid: sent.mid } : {}),

@@ -14,8 +14,9 @@ export interface AgentAuthEnv {
 export function agentAuth(db: Db) {
   return createMiddleware<AgentAuthEnv>(async (c, next) => {
     const header = c.req.header('authorization') ?? '';
-    const token = header.replace(/^bearer\s+/i, '').trim();
-    if (!token) return c.json({ error: 'missing bearer token' }, 401);
+    const token =
+      header.replace(/^bearer\s+/i, '').trim() || (c.req.header('x-api-key') ?? '').trim();
+    if (!token) return c.json({ error: 'missing api key' }, 401);
 
     const [agent] = await db
       .select()
