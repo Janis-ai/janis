@@ -1,7 +1,7 @@
 {
   "name": "janis-agent",
   "version": "1.0.0",
-  "description": "Janis-ready LLM agent \u2014 boots from Janis config, honors takeover, serves hosted channels",
+  "description": "Janis-ready LLM agent — boots from Janis config, honors takeover, serves hosted channels",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -23,10 +23,10 @@
     "janis": "^1.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@janis/shared": "^0.1.0",
+    "@types/node": "^22.20.4",
     "esbuild": "^0.28.2",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3",
-    "@janis/shared": "^0.1.0"
+    "typescript": "^5.6.3"
   }
 }

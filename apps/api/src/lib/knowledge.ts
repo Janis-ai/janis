@@ -1,7 +1,5 @@
 import mammoth from 'mammoth';
-// Import the lib entry directly — pdf-parse's index.js detects a missing
-// module.parent under ESM and returns test data instead of the parser.
-import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+import { PDFParse } from 'pdf-parse';
 
 export interface KnowledgeLlm {
   apiKey: string;
@@ -85,7 +83,7 @@ export async function extractKnowledgeText(
   const e = ext(name);
 
   if (mime === 'application/pdf' || e === 'pdf') {
-    const data = await pdfParse(buf);
+    const data = await new PDFParse({ data: new Uint8Array(buf) }).getText();
     const text = clean(data.text ?? '');
     if (!text) {
       throw new Error('no readable text in PDF (may be a scan — convert or upload as images)');

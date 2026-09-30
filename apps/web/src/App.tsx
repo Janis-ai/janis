@@ -1,4 +1,4 @@
-import { Component, type ReactNode, useEffect } from 'react';
+import { Component, type ReactElement, type ReactNode, useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api, ApiError } from './api/client';
@@ -50,7 +50,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
-function RequireAuth({ children }: { children: JSX.Element }) {
+function RequireAuth({ children }: { children: ReactElement }) {
   const { isLoading, error } = useMe();
   const location = useLocation();
   if (isLoading) return <div className="login-wrap muted">Loading…</div>;
