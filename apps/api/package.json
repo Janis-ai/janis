@@ -18,7 +18,8 @@
     "set-plan": "tsx scripts/set-plan.ts",
     "slack-manifest-sync": "tsx scripts/slack-manifest-sync.ts",
     "migrate-slack-teams": "tsx scripts/migrate-slack-teams.ts",
-    "migrate-to-pg": "tsx scripts/migrate-to-pg.ts"
+    "migrate-to-pg": "tsx scripts/migrate-to-pg.ts",
+    "sync-from-prod": "tsx scripts/sync-from-prod.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",
