@@ -1231,3 +1231,21 @@ export const suppressions = pgTable(
   },
   (t) => [uniqueIndex('suppressions_ws_addr').on(t.workspaceId, t.address, t.kind)],
 );
+
+/**
+ * Outbound webhook subscriptions registered via POST /v1/hooks (Zapier REST
+ * hooks, Make, n8n). Each row is one (agent, event) → target_url fan-out.
+ */
+export const hookSubscriptions = pgTable(
+  'hook_subscriptions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    event: text('event').notNull(),
+    targetUrl: text('target_url').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('hook_subscriptions_agent_event').on(t.agentId, t.event)],
+);

@@ -31,6 +31,7 @@ import {
 } from '../services/takeover.js';
 import { requestSuggestion } from '../services/suggestions.js';
 import { sendCsatPrompt } from '../lib/csat.js';
+import { emitHookEvent } from '../lib/hooks.js';
 import { fetchAvatar } from '../lib/avatar.js';
 import { markOperatorTyping, shouldRelayTyping } from '../lib/typingState.js';
 import { markViewing } from '../lib/presence.js';
@@ -239,7 +240,9 @@ export function conversationRoutes(db: Db) {
           })();
         }
         if (action === 'archive' && conv.state !== 'archived') {
-          void sendCsatPrompt(db, { ...conv, archivedAt: now }).catch(() => {});
+          const archivedConv = { ...conv, archivedAt: now };
+          void sendCsatPrompt(db, archivedConv).catch(() => {});
+          emitHookEvent(db, conv.agentId, 'conversation_resolved', archivedConv);
         }
       }
     }
@@ -794,6 +797,10 @@ export function conversationRoutes(db: Db) {
     // the customer's next reply lands as a rating, not another turn.
     if (body.state === 'archived' && owned.state !== 'archived') {
       void sendCsatPrompt(db, row).catch(() => {});
+      emitHookEvent(db, row.agentId, 'conversation_resolved', row);
+    }
+    if (body.state === 'needs_human' && owned.state !== 'needs_human') {
+      emitHookEvent(db, row.agentId, 'conversation_escalated', row);
     }
 
     // Manually un-flagging back to the agent resolves open alerts — same

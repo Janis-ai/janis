@@ -4,12 +4,13 @@ import { z } from 'zod';
 import { and, desc, eq } from 'drizzle-orm';
 import { IngestRequest } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { channels, conversations } from '../db/schema.js';
+import { channels, conversations, hookSubscriptions } from '../db/schema.js';
 import { agentAuth, type AgentAuthEnv } from '../middleware/agentAuth.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { bus } from '../lib/bus.js';
 import { sendCsatPrompt } from '../lib/csat.js';
 import { sendOutbound } from '../lib/outbound.js';
+import { emitHookEvent, HOOK_EVENTS } from '../lib/hooks.js';
 import { toConversation } from '../lib/serializers.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
@@ -17,6 +18,8 @@ import { storeSuggestion } from '../services/suggestions.js';
 /**
  * Agent-facing API. Auth: `Authorization: Bearer <agent api key>`.
  */
+const OUTBOUND_KINDS = ['sms', 'email', 'gmail', 'outlook', 'whatsapp'];
+
 export function v1Routes(db: Db) {
   const app = new Hono<AgentAuthEnv>();
   app.use('/*', agentAuth(db));
@@ -183,6 +186,7 @@ export function v1Routes(db: Db) {
       type: 'conversation',
       data: { id: row.id, state: row.state },
     });
+    emitHookEvent(db, agent.id, 'conversation_resolved', row);
     return c.json({ conversation_id: externalId, state: row.state });
   });
 
@@ -215,7 +219,7 @@ export function v1Routes(db: Db) {
       const own = await db.select().from(channels).where(eq(channels.agentId, agent.id));
       const channel = body.channel_id
         ? own.find((ch) => ch.id === body.channel_id)
-        : own.find((ch) => ['sms', 'email', 'gmail', 'outlook', 'whatsapp'].includes(ch.kind));
+        : own.find((ch) => OUTBOUND_KINDS.includes(ch.kind));
       if (!channel)
         return c.json(
           { error: body.channel_id ? 'channel not found' : 'no outbound-capable channel' },
@@ -264,6 +268,63 @@ export function v1Routes(db: Db) {
       janis_conversation_id: 'webhook-test',
       text: 'Janis webhook test — if you received this, your endpoint works.',
     });
+    return c.json({ ok: true });
+  });
+
+  // The agent's channels — powers the channel_id dropdown in Zapier and lets
+  // /send callers pick a specific channel instead of relying on auto-pick.
+  app.get('/channels', async (c) => {
+    const agent = c.get('agent');
+    const rows = await db
+      .select({ id: channels.id, kind: channels.kind, name: channels.name })
+      .from(channels)
+      .where(eq(channels.agentId, agent.id));
+    return c.json(rows.map((r) => ({ ...r, outbound: OUTBOUND_KINDS.includes(r.kind) })));
+  });
+
+  // REST-hook subscriptions — Zapier/Make/n8n-style instant delivery. The
+  // payload is the serialized conversation, identical to the polling
+  // trigger's output shape.
+  app.get('/hooks', async (c) => {
+    const agent = c.get('agent');
+    const rows = await db
+      .select({ id: hookSubscriptions.id, event: hookSubscriptions.event, target_url: hookSubscriptions.targetUrl })
+      .from(hookSubscriptions)
+      .where(eq(hookSubscriptions.agentId, agent.id));
+    return c.json(rows);
+  });
+
+  app.post(
+    '/hooks',
+    zValidator(
+      'json',
+      z.object({
+        target_url: z.string().url().max(2048),
+        event: z.enum(HOOK_EVENTS),
+      }),
+    ),
+    async (c) => {
+      const agent = c.get('agent');
+      const { target_url, event } = c.req.valid('json');
+      const [row] = await db
+        .insert(hookSubscriptions)
+        .values({ agentId: agent.id, event, targetUrl: target_url })
+        .returning({
+          id: hookSubscriptions.id,
+          event: hookSubscriptions.event,
+          target_url: hookSubscriptions.targetUrl,
+        });
+      return c.json(row, 201);
+    },
+  );
+
+  app.delete('/hooks/:id', async (c) => {
+    const agent = c.get('agent');
+    const [row] = await db
+      .delete(hookSubscriptions)
+      .where(and(eq(hookSubscriptions.id, c.req.param('id')), eq(hookSubscriptions.agentId, agent.id)))
+      .returning({ id: hookSubscriptions.id });
+    if (!row) return c.json({ error: 'hook not found' }, 404);
     return c.json({ ok: true });
   });
 

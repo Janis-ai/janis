@@ -156,4 +156,49 @@ describe('v1 integration surface', () => {
     // webchat isn't outbound-capable and is the only channel → normalized-reject
     expect([400, 502]).toContain(res2.status);
   });
+
+  it('/channels lists the agent channels with an outbound flag', async () => {
+    const res = await app.request('/v1/channels', { headers: authed() });
+    expect(res.status).toBe(200);
+    const list = await res.json();
+    expect(list).toHaveLength(1);
+    expect(list[0].kind).toBe('webchat');
+    expect(list[0].outbound).toBe(false);
+  });
+
+  it('/hooks registers, lists, and deletes a subscription', async () => {
+    const created = await app.request('/v1/hooks', {
+      method: 'POST',
+      headers: { ...authed(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target_url: 'https://hooks.example.test/catch/abc',
+        event: 'conversation_resolved',
+      }),
+    });
+    expect(created.status).toBe(201);
+    const hook = await created.json();
+    expect(hook.event).toBe('conversation_resolved');
+
+    const list = await app.request('/v1/hooks', { headers: authed() });
+    expect((await list.json()).some((h: { id: string }) => h.id === hook.id)).toBe(true);
+
+    const del = await app.request(`/v1/hooks/${hook.id}`, { method: 'DELETE', headers: authed() });
+    expect(del.status).toBe(200);
+    const again = await app.request(`/v1/hooks/${hook.id}`, { method: 'DELETE', headers: authed() });
+    expect(again.status).toBe(404);
+  });
+
+  it('/hooks rejects a bad event and a non-URL target', async () => {
+    for (const body of [
+      { target_url: 'not-a-url', event: 'new_conversation' },
+      { target_url: 'https://x.test', event: 'bogus' },
+    ]) {
+      const res = await app.request('/v1/hooks', {
+        method: 'POST',
+        headers: { ...authed(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(400);
+    }
+  });
 });

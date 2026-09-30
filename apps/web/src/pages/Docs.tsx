@@ -32,6 +32,20 @@ const WEBHOOKS = [
   ['suggestion.request', 'Operator asked for a suggested reply — POST it to /v1/suggestions'],
 ];
 
+const AUTOMATION = [
+  ['GET /v1/me', 'Agent identity — { id, name }. Zapier uses this to label the connection.'],
+  ['GET /v1/conversations', 'Newest-first list. ?state=needs_human|archived|active|human|snoozed filters.'],
+  ['POST /v1/conversations/:external_id/reply', '{ text } — send a reply as the agent.'],
+  ['POST /v1/conversations/:external_id/escalate', '{ reason? } — flag needs_human, alerts operators.'],
+  ['POST /v1/conversations/:external_id/resume', 'Hand a needs_human conversation back to the AI.'],
+  ['POST /v1/conversations/:external_id/resolve', 'Archive + send the CSAT survey. Idempotent.'],
+  ['POST /v1/send', '{ to, text, subject?, channel_id?, whatsapp_template? } — open or continue an outbound thread. Returns conversation_id and external_id.'],
+  ['GET /v1/channels', 'The agent\'s channels — { id, kind, name, outbound }. Feed channel_id into /v1/send.'],
+  ['GET /v1/hooks', 'List REST-hook subscriptions.'],
+  ['POST /v1/hooks', '{ target_url, event } — subscribe to instant pushes. Events: new_conversation, conversation_escalated, conversation_resolved.'],
+  ['DELETE /v1/hooks/:id', 'Unsubscribe. Zapier calls this when a Zap turns off.'],
+];
+
 function Table({ head, rows }: { head: string[]; rows: string[][] }) {
   return (
     <table className="docs-table">
@@ -81,7 +95,8 @@ function Code({ children }: { children: string }) {
 export default function Docs() {
   const { data } = useMe();
   const [params, setParams] = useSearchParams();
-  const tab = params.get('guide') === 'operator' ? 'operator' : 'api';
+  const guide = params.get('guide');
+  const tab = guide === 'operator' ? 'operator' : guide === 'automation' ? 'automation' : 'api';
   const signOut = async () => {
     await api('/auth/logout', { method: 'POST' });
     window.location.href = '/';
@@ -117,6 +132,12 @@ export default function Docs() {
           Agent API &amp; BYOK
         </button>
         <button
+          className={`btn ${tab === 'automation' ? 'primary' : ''}`}
+          onClick={() => setParams({ guide: 'automation' })}
+        >
+          Automation API
+        </button>
+        <button
           className={`btn ${tab === 'operator' ? 'primary' : ''}`}
           onClick={() => setParams({ guide: 'operator' })}
         >
@@ -126,6 +147,62 @@ export default function Docs() {
 
       {tab === 'operator' ? (
         <OperatorDocs />
+      ) : tab === 'automation' ? (
+        <>
+      <h1>Automation API</h1>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        Drive Janis from Zapier, Make, n8n, or plain HTTP — read conversations,
+        reply, escalate, resolve, and subscribe to instant pushes. Works for
+        hosted and BYOK agents alike.
+      </p>
+
+      <h2>Authentication</h2>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        Every request carries the agent's API key — generate one in the console:
+        agent → <strong>Connection</strong> tab → Credentials → Generate API key.
+        Send it as <span className="mono">X-API-KEY: &lt;key&gt;</span> (what
+        Zapier's API-key auth sends natively) or{' '}
+        <span className="mono">Authorization: Bearer &lt;key&gt;</span>. Keys start
+        with <span className="mono">jk_live_</span>.
+      </p>
+      <Code>{`curl https://app.janis.ai/v1/me \\
+  -H "X-API-KEY: jk_live_..."`}</Code>
+
+      <h2>Endpoints</h2>
+      <Table head={['Endpoint', 'Purpose']} rows={AUTOMATION} />
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        Two IDs exist per conversation: <span className="mono">id</span> is the
+        internal UUID; <span className="mono">external_id</span> is the stable key
+        every action route takes (<span className="mono">email:jane@…</span>,
+        <span className="mono">webchat:test:…</span>). Trigger payloads return
+        both — always map <span className="mono">external_id</span> into action
+        URLs.
+      </p>
+
+      <h2>Instant triggers — REST hooks</h2>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        <span className="mono">POST /v1/hooks</span> registers a target URL for an
+        event; Janis POSTs the serialized conversation (the same shape{' '}
+        <span className="mono">GET /v1/conversations</span> returns) the moment
+        the event happens — no polling. This is exactly what Zapier REST-hook
+        triggers subscribe to; Make and n8n webhook nodes work the same way.
+      </p>
+      <Code>{`curl -X POST https://app.janis.ai/v1/hooks \\
+  -H "X-API-KEY: jk_live_..." -H "content-type: application/json" \\
+  -d '{"target_url":"https://hooks.example.com/catch/abc",
+       "event":"conversation_escalated"}'
+# → {"id":"…","event":"conversation_escalated","target_url":"…"}
+
+curl -X DELETE https://app.janis.ai/v1/hooks/<id> \\
+  -H "X-API-KEY: jk_live_..."`}</Code>
+
+      <h2>Zapier</h2>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        Search <strong>Janis</strong> in the Zapier editor — triggers fire on new,
+        escalated, and resolved conversations; actions reply, escalate, resume,
+        resolve, and send outbound. Connect with the agent API key above.
+      </p>
+        </>
       ) : (
         <>
       <h1>Agent API &amp; BYOK</h1>

@@ -16,6 +16,7 @@ import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { evaluateActions, evaluateEvent } from '../lib/rules.js';
 import { classifyAndRoute, recheckIntent } from '../lib/intent.js';
 import { fireEventWebhook } from '../lib/eventWebhook.js';
+import { emitHookEvent } from '../lib/hooks.js';
 import { mirrorToSlack, postSlackAlert, setSlackThreadStatus } from '../lib/slack.js';
 import { agentEligibleMembers } from '../lib/members.js';
 import { deliverToChannel, type AttachmentRef } from '../lib/channels.js';
@@ -68,7 +69,8 @@ export async function processEvents(
       });
       continue;
     }
-    const conv = await findOrCreateConversation(db, agent, event);
+    const { conv, isNew } = await findOrCreateConversation(db, agent, event);
+    if (isNew) emitHookEvent(db, agent.id, 'new_conversation', conv);
     const alertIds: string[] = [];
     const newAlertTypes: string[] = [];
 
@@ -299,6 +301,8 @@ export async function processEvents(
         type: 'conversation',
         data: { id: updated.id, state: updated.state },
       });
+      if (updated.state === 'needs_human')
+        emitHookEvent(db, agent.id, 'conversation_escalated', updated);
     }
 
     // A declined handoff also closes whatever was paging for it — same
@@ -390,7 +394,7 @@ async function findOrCreateConversation(
   db: Db,
   agent: AgentRow,
   event: IngestEvent,
-): Promise<ConversationRow> {
+): Promise<{ conv: ConversationRow; isNew: boolean }> {
   const [existing] = await db
     .select()
     .from(conversations)
@@ -401,7 +405,7 @@ async function findOrCreateConversation(
       ),
     )
     .limit(1);
-  if (existing) return existing;
+  if (existing) return { conv: existing, isNew: false };
 
   const [created] = await db
     .insert(conversations)
@@ -415,7 +419,7 @@ async function findOrCreateConversation(
     type: 'conversation',
     data: { id: created.id, state: created.state },
   });
-  return created;
+  return { conv: created, isNew: true };
 }
 
 async function insertEventMessage(db: Db, conversationId: string, event: IngestEvent) {

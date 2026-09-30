@@ -53,16 +53,57 @@ const pollConversations = (state) => async (z, bundle) => {
   return res.data;
 };
 
+// REST-hook triggers: Zapier POSTs the subscribe/unsubscribe lifecycle to
+// /v1/hooks; Janis pushes the serialized conversation to the target URL the
+// moment the event happens — no polling delay.
+const subscribeHook = (event) => async (z, bundle) => {
+  const res = await z.request({
+    url: `${BASE}/v1/hooks`,
+    method: 'POST',
+    body: { target_url: bundle.targetUrl, event },
+  });
+  return res.data;
+};
+
+const unsubscribeHook = async (z, bundle) => {
+  await z.request({
+    url: `${BASE}/v1/hooks/${bundle.subscribeData.id}`,
+    method: 'DELETE',
+  });
+  return {};
+};
+
+// A pushed hook body is already a serialized conversation.
+const parseHook = (z, bundle) => [bundle.cleanedRequest];
+
 const conversationTrigger = (key, label, description, state) => ({
   key,
   noun: 'Conversation',
   display: { label, description },
   operation: {
-    perform: pollConversations(state),
+    type: 'hook',
+    performSubscribe: subscribeHook(key),
+    performUnsubscribe: unsubscribeHook,
+    perform: parseHook,
+    performList: pollConversations(state),
     sample: { ...CONVERSATION_SAMPLE, ...(state ? { state } : {}) },
     outputFields: CONVERSATION_FIELDS,
   },
 });
+
+// Hidden trigger powering the Channel dropdown on Send Outbound.
+const ListChannels = {
+  key: 'list_channels',
+  noun: 'Channel',
+  display: { label: 'List Channels', description: 'Lists the agent channels.', hidden: true },
+  operation: {
+    perform: async (z, bundle) => {
+      const res = await z.request({ url: `${BASE}/v1/channels` });
+      return res.data;
+    },
+    sample: { id: 'cc7073c9-05a1-4fc4-be2a-caff51ffbb91', kind: 'email', name: 'Support Inbox' },
+  },
+};
 
 const EXTERNAL_ID_FIELD = {
   key: 'external_id',
@@ -119,9 +160,9 @@ const SendOutbound = {
       },
       {
         key: 'channel_id',
-        label: 'Channel ID',
-        type: 'string',
-        helpText: "Leave blank to use the agent's first outbound-capable channel.",
+        label: 'Channel',
+        dynamic: 'list_channels.id.name',
+        helpText: "Pick a channel, or leave blank to use the agent's first outbound-capable one.",
       },
     ],
     perform: async (z, bundle) => {
@@ -156,6 +197,7 @@ module.exports = {
   authentication,
   beforeRequest: [addApiKey],
   triggers: {
+    list_channels: ListChannels,
     new_conversation: conversationTrigger(
       'new_conversation',
       'New Conversation',
