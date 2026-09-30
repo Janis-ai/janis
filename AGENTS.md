@@ -197,9 +197,11 @@ before typecheck/tests/dev.
   Audiences v2: contact-based targeting — email-kind channels reach
   email/alt_emails, phone-kinds reach phone/alt_phones (channel identities
   only gate opt-out, so imported contacts are targetable). contact_lists +
-  contact_list_members + contacts.tags; /api/lists CRUD + POST
-  /lists/import (CSV → upsertContactByAddress: match primary/alt
-  email/phone, enrich don't duplicate). contacts.external_ids {system:id}
+  contact_list_members + contacts.tags; /api/lists CRUD + member add/remove
+  + POST /lists/import (CSV → upsertContactByAddress: match primary/alt
+  email/phone, enrich don't duplicate). /contacts has People|Lists tabs —
+  list index w/ counts, create/delete (contacts survive), member view w/
+  search-to-add + remove. contacts.external_ids {system:id}
   keeps CRM/event identities on one Janis contact. campaigns.enrollment:
   'once' resolves+finishes; 'continuous' stays 'sending' — sweeper
   re-resolves each tick (unique send key dedupes). Drip delay is
@@ -215,8 +217,8 @@ before typecheck/tests/dev.
   widget article embeds.
 - Marketplace: webhook template + event export cover Zapier manually; no
   published Zapier app (listing/submission = highest-leverage non-code task),
-  no one-click OAuth installs, no public /integrations directory, outbound
-  webhooks are fire-and-forget (no retries/dead-letter/management UI).
+  no one-click OAuth installs, no public /integrations directory. Outbound
+  webhooks have retries + deliveries/replay UI (DONE — see Webhook ops).
 - Intent classification: first-message only — no drift reclassification,
   confidence + manual override, sentiment, auto-topic clustering.
 - Eval suite: CSV import + A/B runs exist; no scheduled runs, no regression
@@ -232,9 +234,10 @@ before typecheck/tests/dev.
 - Initiatable kinds: sms, email, gmail, whatsapp (template required on new
   threads — 24h rule). Messenger/IG/webchat/voice reject outbound — Meta
   window rules + pull-based widget.
-- Missing vs real campaign tools: no scheduling, drip sequences, opt-out
-  management (STOP handling on inbound sms is still manual), audience
-  segments, or per-campaign analytics.
+- Ad-hoc send/broadcast only — scheduling, drips, opt-out suppression, and
+  audience segments all live in campaigns (above). Inbound SMS STOP/START is
+  automatic (lib/optout.ts: CTIA keywords set identity.opted_out_at, audited,
+  no agent dispatch).
 
 **Billing (missing)**
 - Trials + annual: CODE-COMPLETE — checkout supports trial_period_days +
@@ -248,8 +251,8 @@ before typecheck/tests/dev.
   CSV export.
 
 **Reliability & scale (missing — honest weak spots)**
-- Observability: no tracing (OTel), no SLO dashboards, no status page, no
-  5xx/latency alerting (Cloud Monitoring → Slack).
+- Observability: no tracing (OTel), no SLO dashboards, no
+  5xx/latency alerting (Cloud Monitoring → Slack). /status probe + page done.
 - Job queue: jobs table + enqueueJob/runJobs under sweeper leader lock.
   Job types: outbound.send (broadcast + campaign sends + drip steps),
   campaign.step (drip scheduling), knowledge.refresh (URL re-crawls —
@@ -295,10 +298,10 @@ before typecheck/tests/dev.
   admin/member/viewer.
 
 **Marketing surface (missing)**
-- GA4 is live (G-G5W5H3CVR2) but no funnel events fire — instrument signup,
-  first_agent, first_conversation, channel_connected.
-- Public API/SDK docs, onboarding checklist (connect channel → test → invite),
-  security/trust page, pricing/comparison pages.
+- GA4 (G-G5W5H3CVR2) fires landing-page demo/CTA events only — funnel events
+  still missing: signup, first_agent, first_conversation, channel_connected.
+- Onboarding checklist: DONE (Onboarding.tsx + /api/onboarding). Still missing:
+  public API/SDK docs, security/trust page, pricing/comparison pages.
 
 **Done so far** (don't rebuild): voice (BYO + hosted via Twilio subaccounts),
 CSAT on archive, Shopify/HubSpot/Zendesk/Stripe/Cal.com/iTunes/webhook tool
