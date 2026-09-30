@@ -5,8 +5,12 @@ import type { Agent } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgents, useChannels, useMe } from '../api/hooks';
 import { timeAgo } from '../components/bits';
+import { useConfirm } from '../components/Prompt';
+import { friendlyError } from '../lib/friendlyError';
+import { usePageTitle } from '../lib/title';
 
 export default function Agents() {
+  usePageTitle('Agents');
   const { data } = useAgents();
   const { data: me } = useMe();
   const isAdmin = me?.user.role === 'admin';
@@ -14,6 +18,7 @@ export default function Agents() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [newName, setNewName] = useState('');
+  const [confirmEl, confirm] = useConfirm();
   const [newHosted, setNewHosted] = useState(true);
   const [error, setError] = useState('');
   // OAuth callbacks that fail before resolving the channel land here.
@@ -45,8 +50,12 @@ export default function Agents() {
 
   return (
     <>
+      {confirmEl}
       <h1 className="page-title">Agents</h1>
-      {oauthError && <div className="error">Connect failed: {oauthError}</div>}
+      {oauthError && (() => {
+        const f = friendlyError(oauthError);
+        return <div className="error" title={f.detail}>Connect failed: {f.text}</div>;
+      })()}
 
       {isAdmin && (
       <form
@@ -122,9 +131,9 @@ export default function Agents() {
               {isAdmin && (
                 <button
                   className="btn danger"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.stopPropagation();
-                    if (confirm(`Delete agent "${agent.name}"?`)) removeAgent.mutate(agent.id);
+                    if (await confirm(`Delete agent "${agent.name}"? Its channels, conversations, and settings are removed.`, [{ key: 'ok', label: 'Delete', danger: true }])) removeAgent.mutate(agent.id);
                   }}
                 >
                   Delete

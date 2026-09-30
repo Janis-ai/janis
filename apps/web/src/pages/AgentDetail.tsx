@@ -17,6 +17,8 @@ import { timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { railBus } from '../lib/railBus';
+import { usePageTitle } from '../lib/title';
+import { useConfirm } from '../components/Prompt';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert', 'auto_assign'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
@@ -26,6 +28,7 @@ export default function AgentDetail() {
   const { id } = useParams<{ id: string }>();
   const { data } = useAgents();
   const agent = data?.agents.find((a) => a.id === id);
+  usePageTitle(agent?.name ?? 'Agent');
 
   if (data && !agent) {
     return (
@@ -89,6 +92,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
   );
   const [error, setError] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
+  const [confirmEl, confirm] = useConfirm();
 
   // draft state — one shared cfg, saved wholesale by the header Save button
   const [name, setName] = useState(agent.name);
@@ -248,6 +252,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
         </div>
       </div>
 
+      {confirmEl}
       {error && <div className="error">{error}</div>}
 
       {activeTab === 'channels' && <AgentChannels agent={agent} />}
@@ -303,8 +308,8 @@ function AgentEditor({ agent }: { agent: Agent }) {
         <div className="row" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
           <button
             className="btn danger"
-            onClick={() => {
-              if (confirm(`Delete agent "${agent.name}"?`)) removeAgent.mutate();
+            onClick={async () => {
+              if (await confirm(`Delete agent "${agent.name}"? Its channels, conversations, and settings are removed.`, [{ key: 'ok', label: 'Delete', danger: true }])) removeAgent.mutate();
             }}
           >
             Delete agent
@@ -1156,6 +1161,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
   const { data: members } = useAgentMembers(agent.id);
   const { data: wsUsers } = useUsers();
   const qc = useQueryClient();
+  const [confirmEl, confirm] = useConfirm();
   const [form, setForm] = useState({ email: '', role: 'member' });
   const [err, setErr] = useState('');
 
@@ -1217,13 +1223,14 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         value={value}
         onChange={(e) => {
           const role = e.target.value;
-          if (
-            role === 'owner' &&
-            !window.confirm('Transfer ownership of this agent? They become owner — you stay an admin but lose ownership.')
-          ) {
+          if (role !== 'owner') {
+            setRole.mutate({ userId, role: role === 'inherit' ? null : role });
             return;
           }
-          setRole.mutate({ userId, role: role === 'inherit' ? null : role });
+          void (async () => {
+            if (await confirm('Transfer ownership of this agent? They become owner — you stay an admin but lose ownership.', undefined, true))
+              setRole.mutate({ userId, role });
+          })();
         }}
       >
         {inherited !== null && <option value="inherit">inherit ({inherited})</option>}
@@ -1237,6 +1244,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
 
   return (
     <div className="card" style={{ marginTop: 12 }}>
+      {confirmEl}
       <strong>Team</strong>
       <div className="muted" style={{ margin: '4px 0 8px' }}>
         Workspace members can see every agent — a role set here overrides
@@ -1770,7 +1778,7 @@ function ConnectionTab({
               <span className="mono">JANIS_API_KEY=… npx janis-agent</span>
               {' '}— full contract + quickstart in the{' '}
               <a href="/docs" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>
-                BYOK docs
+                self-hosting docs
               </a>
               . Working locally?{' '}
               <a

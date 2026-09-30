@@ -5,11 +5,12 @@ import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
-import { Avatar, channelLabel, displayName, fmtTime, StateBadge } from '../components/bits';
+import { ArgsRows, Avatar, channelLabel, displayName, fmtTime, StateBadge } from '../components/bits';
 import Composer from '../components/Composer';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { typingBus, presenceBus } from '../lib/typingBus';
-import { Paperclip, Star } from 'lucide-react';
+import { usePageTitle } from '../lib/title';
+import { Paperclip, Star, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -41,6 +42,7 @@ export default function ConversationPage() {
   const jumpMsg = searchParams.get('msg'); // search-result deep link
   const returnScroll = searchParams.get('scroll'); // agent-page breadcrumb round-trip
   const { data, error: loadError } = useConversation(id);
+  usePageTitle(data ? displayName(data.conversation) : 'Conversation');
   const { data: agents } = useAgents();
   const { data: users } = useUsers();
   const { data: me } = useMe();
@@ -893,7 +895,7 @@ export default function ConversationPage() {
                     <div className="mono" style={{ fontSize: 12 }}>
                       {act.tool}
                     </div>
-                    <pre className="action-args">{JSON.stringify(act.args, null, 2)}</pre>
+                    <ArgsRows args={act.args} />
                     {act.status === 'pending' ? (
                       <div className="row" style={{ marginTop: 6 }}>
                         <button
@@ -1112,7 +1114,7 @@ export default function ConversationPage() {
                   title="Your text goes out as if the AI agent wrote it — the customer sees no human takeover"
                   onClick={() => { setSendAs('agent'); }}
                 >
-                  Send via agent
+                  Reply as the agent
                 </button>
                 <button className="btn" onClick={() => { setSendAs('note'); }}>🔒 Internal note</button>
                 {canTeach && (
@@ -1288,12 +1290,13 @@ function TagEditor({
             {t}{' '}
             <a
               href="#"
+              aria-label={`Remove tag ${t}`}
               onClick={(e) => {
                 e.preventDefault();
                 onSave(conversation.tags.filter((x) => x !== t));
               }}
             >
-              ✕
+              <X size={11} style={{ verticalAlign: -1 }} />
             </a>
           </span>
         ))}

@@ -8,8 +8,10 @@ import { getPushSubscription, subscribeToPush, unsubscribeFromPush, markPushDisa
 import { installAvailable, isIOS, isStandalone, onInstallStateChange, promptInstall } from '../lib/install';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
-import { usePrompt } from '../components/Prompt';
+import { usePrompt, useConfirm } from '../components/Prompt';
+import { CodeBlock } from '../components/bits';
 import { currentTheme, setTheme } from '../lib/theme';
+import { usePageTitle } from '../lib/title';
 
 type Section = 'workspace' | 'me' | 'integrations' | 'deliverability' | 'team';
 const SECTIONS: { key: Section; label: string }[] = [
@@ -21,6 +23,7 @@ const SECTIONS: { key: Section; label: string }[] = [
 ];
 
 export default function Settings() {
+  usePageTitle('Settings');
   const { data: me } = useMe();
   const [params, setParams] = useSearchParams();
   const section = (SECTIONS.some((s) => s.key === params.get('section'))
@@ -40,6 +43,7 @@ export default function Settings() {
   const [reply, setReply] = useState({ title: '', body: '' });
   const [error, setError] = useState('');
   const [promptEl, ask] = usePrompt();
+  const [confirmEl, confirm] = useConfirm();
   const [pushMsg, setPushMsg] = useState('');
   const [pushEnabled, setPushEnabled] = useState<boolean | null>(null);
   const [theme, setThemeState] = useState<'dark' | 'light'>(currentTheme());
@@ -310,6 +314,7 @@ export default function Settings() {
   return (
     <>
       {promptEl}
+      {confirmEl}
       <h1 className="page-title">Settings</h1>
       <div className="tabs" style={{ marginBottom: 12 }}>
         {SECTIONS.map((s) => (
@@ -748,13 +753,14 @@ export default function Settings() {
                   value={u.role}
                   onChange={(e) => {
                     const role = e.target.value;
-                    if (
-                      role === 'owner' &&
-                      !window.confirm(`Transfer ownership of this workspace to ${u.name}? You stay an admin but lose ownership.`)
-                    ) {
+                    if (role !== 'owner') {
+                      setRole.mutate({ id: u.id, role });
                       return;
                     }
-                    setRole.mutate({ id: u.id, role });
+                    void (async () => {
+                      if (await confirm(`Transfer ownership of this workspace to ${u.name}? You stay an admin but lose ownership.`, undefined, true))
+                        setRole.mutate({ id: u.id, role });
+                    })();
                   }}
                 >
                   <option value="member">member</option>
@@ -952,10 +958,11 @@ function SendPolicyCard() {
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <strong title="Rules that gate every campaign and broadcast send — quiet hours, per-recipient caps, and the never-send list">Send policy</strong>
+      <strong>Sending rules</strong>
       <div className="muted" style={{ fontSize: 13 }}>
-        Guardrails for campaign + broadcast sends. Checked again at send time —
-        queued sends honor changes.
+        Guardrails for campaign + broadcast sends — quiet hours, per-recipient
+        caps, and the never-send list. Checked again at send time — queued
+        sends honor changes.
       </div>
       <label className="row" style={{ gap: 8, fontSize: 13 }}>
         <input
@@ -1001,7 +1008,7 @@ function SendPolicyCard() {
       </div>
 
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 4 }}>
-        <strong style={{ fontSize: 13 }} title="Addresses Janis will never campaign to — added automatically on bounces and complaints">Suppression list</strong>
+        <strong style={{ fontSize: 13 }}>Blocked senders</strong>
         <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
           Never-send addresses — bounces, complaints and dead numbers land here
           automatically. Sends to these show as "skipped — suppressed" on the
@@ -1009,11 +1016,11 @@ function SendPolicyCard() {
         </div>
         <div className="row" style={{ gap: 8 }}>
           <input className="input grow" style={{ maxWidth: 300 }}
-            placeholder="email or phone to suppress…"
+            placeholder="email or phone to block…"
             value={newAddr} onChange={(e) => setNewAddr(e.target.value)} />
           <button className="btn" disabled={!newAddr.trim() || addSup.isPending}
             onClick={() => addSup.mutate()}>
-            Suppress
+            Block
           </button>
         </div>
         {(sup?.suppressions ?? []).slice(0, 20).map((s) => (
@@ -1024,7 +1031,7 @@ function SendPolicyCard() {
           </div>
         ))}
         {!!sup && !sup.suppressions.length && (
-          <div className="muted" style={{ fontSize: 12 }}>Empty — nothing suppressed.</div>
+          <div className="muted" style={{ fontSize: 12 }}>Empty — nobody is blocked.</div>
         )}
       </div>
     </div>
@@ -1053,15 +1060,17 @@ function EventTokenCard() {
   const url = token ? `${window.location.origin}/events/${token}` : '';
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <strong title="Business outcomes (purchase, signup) reported by your systems — Janis attributes them to the campaign send that caused them">Conversion events</strong>
+      <strong>Goal tracking</strong>
       <div className="muted" style={{ fontSize: 13 }}>
-        Report business outcomes (purchase, signup, booked) — attributed to the
-        contact's most recent campaign send so campaigns show real ROI.
+        Report business outcomes (purchase, signup, booked) from your systems —
+        attributed to the contact's most recent campaign send so campaigns show
+        real ROI.
       </div>
       {token ? (
-        <pre className="muted" style={{ fontSize: 11, overflowX: 'auto', margin: 0 }}>
-          {`curl -XPOST ${url} -H 'content-type: application/json' -d '{"event":"purchase","email":"who@co.com"}'`}
-        </pre>
+        <CodeBlock
+          title="Report a conversion"
+          code={`curl -XPOST ${url} -H 'content-type: application/json' -d '{"event":"purchase","email":"who@co.com"}'`}
+        />
       ) : (
         <div className="muted" style={{ fontSize: 13 }}>No token yet — mint one to get the URL.</div>
       )}
@@ -1149,11 +1158,10 @@ function CrmCard() {
           </span>
           {cn.last_error && <span className="error" style={{ fontSize: 12 }}>{cn.last_error}</span>}
           <span className="grow" />
-          <label className="row" style={{ gap: 5, fontSize: 12 }}
-            title="Log campaign sends, replies, conversions and human replies as notes on the CRM contact">
+          <label className="row" style={{ gap: 5, fontSize: 12 }}>
             <input type="checkbox" checked={cn.activity_writeback}
               onChange={(e) => writeback.mutate({ id: cn.id, on: e.target.checked })} />
-            write activity back
+            log campaign activity on the CRM contact
           </label>
           <button className="btn ghost" onClick={() => syncNow.mutate(cn.id)}>Sync now</button>
           <button className="btn ghost" onClick={() => drop.mutate(cn.id)}>Disconnect</button>

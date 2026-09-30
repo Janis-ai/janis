@@ -87,6 +87,25 @@ export function Empty({ children }: { children: React.ReactNode }) {
   return <div className="card muted" style={{ textAlign: 'center', padding: 40 }}>{children}</div>;
 }
 
+/** Tool-call args as readable key → value rows instead of a JSON blob.
+ *  Non-scalar values stringify inline so structure stays visible. */
+export function ArgsRows({ args }: { args: Record<string, unknown> }) {
+  const entries = Object.entries(args);
+  if (!entries.length) return null;
+  return (
+    <div style={{ margin: '4px 0 2px', fontSize: 12.5 }}>
+      {entries.map(([k, v]) => (
+        <div key={k} style={{ display: 'flex', gap: 8, padding: '1px 0' }}>
+          <span className="muted" style={{ minWidth: 110, flexShrink: 0 }}>{k.replace(/_/g, ' ')}</span>
+          <span className="mono" style={{ overflowWrap: 'anywhere' }}>
+            {typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Shared footer for the public pages (home, docs, legal) — one place to
  * update the year logic and link set. */
 export function SiteFooter({ style }: { style?: React.CSSProperties }) {

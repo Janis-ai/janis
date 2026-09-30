@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { timeAgo } from '../components/bits';
+import { useConfirm } from '../components/Prompt';
 import { useMe } from '../api/hooks';
+import { usePageTitle } from '../lib/title';
 
 type ContactRow = {
   id: string;
@@ -38,6 +40,7 @@ const displayName = (c: { name: string | null; email: string | null; phone: stri
   c.name ?? c.email ?? c.phone ?? 'Unknown';
 
 export function Contacts() {
+  usePageTitle('Contacts');
   const [q, setQ] = useState('');
   const [tab, setTab] = useState<'contacts' | 'lists'>('contacts');
   const { data: me } = useMe();
@@ -145,6 +148,7 @@ type MemberRow = { id: string; name: string | null; email: string | null; phone:
 /** Static audiences — create/rename/delete lists, view + edit membership.
  *  Membership feeds campaign segments (list_id) and CSV imports. */
 function ListsPanel({ isAdmin }: { isAdmin: boolean }) {
+  const [confirmEl, confirm] = useConfirm();
   const qc = useQueryClient();
   const [newName, setNewName] = useState('');
   const [openId, setOpenId] = useState('');
@@ -165,6 +169,7 @@ function ListsPanel({ isAdmin }: { isAdmin: boolean }) {
   });
   return (
     <div className="card">
+      {confirmEl}
       {isAdmin && (
         <div className="row" style={{ marginBottom: 10 }}>
           <input
@@ -194,8 +199,8 @@ function ListsPanel({ isAdmin }: { isAdmin: boolean }) {
             {isAdmin && (
               <button
                 className="btn danger"
-                onClick={() => {
-                  if (confirm(`Delete list "${l.name}"? Contacts stay — only the grouping is removed.`)) del.mutate(l.id);
+                onClick={async () => {
+                  if (await confirm(`Delete list "${l.name}"? Contacts stay — only the grouping is removed.`, undefined, true)) del.mutate(l.id);
                 }}
               >
                 Delete
@@ -283,6 +288,7 @@ export function ContactDetail() {
     queryFn: () => api<ContactDetail>(`/api/contacts/${id}`),
     enabled: !!id,
   });
+  usePageTitle(data ? displayName(data.contact) : 'Contact');
   const [edit, setEdit] = useState<{ name: string; email: string; phone: string; notes: string; tags: string } | null>(null);
   const save = useMutation({
     mutationFn: (body: Record<string, string | string[] | null>) =>
@@ -302,6 +308,7 @@ export function ContactDetail() {
     },
   });
   const nav = useNavigate();
+  const [confirmEl, confirm] = useConfirm();
   const del = useMutation({
     mutationFn: (purge: boolean) =>
       api(`/api/contacts/${id}${purge ? '?mode=purge' : ''}`, { method: 'DELETE' }),
@@ -316,6 +323,7 @@ export function ContactDetail() {
 
   return (
     <>
+      {confirmEl}
       <div className="page-head">
         <h1>{displayName(c)}</h1>
         {!edit && <button className="btn" onClick={() => setEdit({ name: c.name ?? '', email: c.email ?? '', phone: c.phone ?? '', notes: c.notes ?? '', tags: (c.tags ?? []).join(', ') })}>Edit</button>}
@@ -326,13 +334,16 @@ export function ContactDetail() {
             </a>
             <button
               className="btn danger"
-              onClick={() => {
-                if (!confirm(`Delete ${displayName(c)}? Channel identities are removed; conversations stay but lose the contact link.`)) return;
-                if (confirm('GDPR purge? OK = also delete every conversation and transcript for this person. Cancel = keep anonymized transcripts.')) {
-                  del.mutate(true);
-                } else {
-                  del.mutate(false);
-                }
+              onClick={async () => {
+                const choice = await confirm(
+                  `Delete ${displayName(c)}? Channel identities are removed. Purge also deletes every conversation and transcript for this person; delete-only keeps anonymized transcripts.`,
+                  [
+                    { key: 'delete', label: 'Delete contact only' },
+                    { key: 'purge', label: 'Purge all data', danger: true },
+                  ],
+                );
+                if (choice === 'purge') del.mutate(true);
+                else if (choice === 'delete') del.mutate(false);
               }}
             >
               Delete
@@ -408,8 +419,8 @@ export function ContactDetail() {
                 <button
                   className="btn"
                   disabled={merge.isPending}
-                  onClick={() => {
-                    if (confirm(`Merge ${displayName(d)} (${[d.email, d.phone].filter(Boolean).join(', ') || 'no contact info'}) into ${displayName(c)} (${[c.email, c.phone].filter(Boolean).join(', ') || 'no contact info'})? Their conversations, identities, and any differing email/phone move over.`))
+                  onClick={async () => {
+                    if (await confirm(`Merge ${displayName(d)} (${[d.email, d.phone].filter(Boolean).join(', ') || 'no contact info'}) into ${displayName(c)} (${[c.email, c.phone].filter(Boolean).join(', ') || 'no contact info'})? Their conversations, identities, and any differing email/phone move over.`))
                       merge.mutate(d.id);
                   }}
                 >

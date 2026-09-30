@@ -3,7 +3,9 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
+import { useConfirm } from '../components/Prompt';
 import { useChannels } from '../api/hooks';
+import { usePageTitle } from '../lib/title';
 
 const SENDABLE = ['sms', 'whatsapp', 'email', 'gmail', 'outlook'];
 
@@ -28,12 +30,13 @@ const SEND_STATUS: Record<string, string> = {
   sent: 'sent',
   failed: 'failed',
   skipped_opted_out: 'skipped — opted out',
-  skipped_suppressed: 'skipped — suppressed (bounce/complaint)',
+  skipped_suppressed: 'skipped — blocked (bounce/complaint)',
   skipped_frequency_cap: 'skipped — 24h frequency cap',
   skipped_cancelled: 'skipped — campaign stopped',
 };
 
 export default function Campaigns() {
+  usePageTitle('Campaigns');
   const qc = useQueryClient();
   const { data: chans } = useChannels();
   const channels = (chans?.channels ?? []).filter((c) => SENDABLE.includes(c.kind));
@@ -48,6 +51,7 @@ export default function Campaigns() {
     refetchInterval: 10_000,
   });
   const [openId, setOpenId] = useState('');
+  const [confirmEl, confirm] = useConfirm();
   const detail = useQuery({
     queryKey: ['campaign', openId],
     enabled: !!openId,
@@ -157,6 +161,7 @@ export default function Campaigns() {
 
   return (
     <div className="page-pad" style={{ maxWidth: 900 }}>
+      {confirmEl}
       <h1>Campaigns</h1>
       <p className="muted">
         Proactive sends to contacts on a channel. SMS, email, Outlook and Gmail open new
@@ -184,9 +189,11 @@ export default function Campaigns() {
             value={form.scheduled_at}
             onChange={(e) => setForm({ ...form, scheduled_at: e.target.value })} />
         </div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          Pick a channel, leave the date blank to save a draft, or set one to schedule.
+        </div>
         <div className="row" style={{ gap: 10, marginTop: 10 }}>
           <select className="input" value={form.enrollment}
-            title="one-time resolves the audience at send; ongoing keeps enrolling new matching contacts and accepts webhook enrollments"
             onChange={(e) => setForm({ ...form, enrollment: e.target.value })}>
             <option value="once">One-time blast</option>
             <option value="continuous">Ongoing — auto-enroll new matches + webhook</option>
@@ -199,6 +206,12 @@ export default function Campaigns() {
             title="Conversion event name that counts as this campaign's goal (from POST /events/:token)"
             placeholder="Goal event (e.g. purchase)" value={form.goal}
             onChange={(e) => setForm({ ...form, goal: e.target.value })} />
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          {form.enrollment === 'continuous'
+            ? 'Ongoing: new contacts matching the audience enroll automatically, and external tools can enroll via webhook.'
+            : 'One-time: the audience is resolved when the campaign runs.'}
+          {' '}Max sends caps the total (blank = unlimited). Goal event is the conversion name reported to your events endpoint that marks this campaign a success.
         </div>
         <div className="row wrap" style={{ gap: 10, marginTop: 10 }}>
           <select className="input" value={form.list_id}
@@ -256,7 +269,8 @@ export default function Campaigns() {
           <div className="row" style={{ marginBottom: 6 }}>
             <span className="muted grow" style={{ fontSize: 13 }}>
               Follow-up steps — each reaches recipients matching its condition,
-              delayed after the previous step (up to 10)
+              delayed after the previous step (up to 10) — the "if" dropdown chooses
+              who gets it, based on how the previous send ended
             </span>
             {form.steps.length < 10 && (
               <button
@@ -288,7 +302,6 @@ export default function Campaigns() {
                   placeholder="Wait hrs" value={s.delay_hrs}
                   onChange={(e) => setStep(i, { delay_hrs: e.target.value })} />
                 <select className="input" style={{ width: 230 }}
-                  title="Who gets this step — branches on the previous send's outcome"
                   value={s.cond}
                   onChange={(e) => setStep(i, { cond: e.target.value })}>
                   <option value="if_not_replied">if no reply (classic drip)</option>
@@ -343,13 +356,16 @@ export default function Campaigns() {
               <strong>{cp.name}</strong>{' '}
               <span className="chip">{cp.enrollment === 'continuous' ? 'ongoing' : cp.status}</span>
               <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-                {cp.channel_name} · replies → {cp.agent_name} · {cp.stats.sent}/{cp.stats.total} sent
-                {!!cp.stats.replied && ` · ${cp.stats.replied} replied`}
-                {!!cp.stats.converted && ` · ${cp.stats.converted} converted`}
-                {!!cp.stats.failed && ` · ${cp.stats.failed} failed`}
-                {!!cp.stats.skipped && ` · ${cp.stats.skipped} opted out`}
-                {!!cp.stats.pending && ` · ${cp.stats.pending} pending`}
+                {cp.channel_name} · replies → {cp.agent_name}
                 {cp.scheduled_at && ` · runs ${new Date(cp.scheduled_at).toLocaleString()}`}
+              </div>
+              <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
+                <span className="chip">{cp.stats.sent}/{cp.stats.total} sent</span>
+                {!!cp.stats.replied && <span className="chip">{cp.stats.replied} replied</span>}
+                {!!cp.stats.converted && <span className="chip">{cp.stats.converted} converted</span>}
+                {!!cp.stats.pending && <span className="chip">{cp.stats.pending} queued</span>}
+                {!!cp.stats.failed && <span className="chip" style={{ color: 'var(--danger)' }}>{cp.stats.failed} failed</span>}
+                {!!cp.stats.skipped && <span className="chip">{cp.stats.skipped} skipped (opted out/suppressed)</span>}
               </div>
             </div>
             {['draft', 'scheduled'].includes(cp.status) && (
@@ -357,7 +373,13 @@ export default function Campaigns() {
                 <button className="btn primary" onClick={() => mutate.mutate({ id: cp.id, action: 'send' })}>
                   Send now
                 </button>
-                <button className="btn ghost" onClick={() => mutate.mutate({ id: cp.id, action: 'delete' })}>
+                <button
+                  className="btn ghost"
+                  onClick={async () => {
+                    if (await confirm(`Delete campaign "${cp.name}"? ${cp.stats.total ? `Its ${cp.stats.total} queued send${cp.stats.total === 1 ? '' : 's'} will be dropped.` : 'This cannot be undone.'}`, [{ key: 'ok', label: 'Delete', danger: true }]))
+                      mutate.mutate({ id: cp.id, action: 'delete' });
+                  }}
+                >
                   Delete
                 </button>
               </>
@@ -375,8 +397,8 @@ export default function Campaigns() {
             {['sending', 'paused', 'scheduled'].includes(cp.status) && (
               <button
                 className="btn ghost"
-                onClick={() => {
-                  if (confirm('Cancel this campaign? Pending sends will be skipped.'))
+                onClick={async () => {
+                  if (await confirm('Cancel this campaign? Pending sends will be skipped.', [{ key: 'ok', label: 'Cancel campaign', danger: true }]))
                     mutate.mutate({ id: cp.id, action: 'cancel' });
                 }}
               >
@@ -400,9 +422,10 @@ export default function Campaigns() {
                 <div key={s.id} className="row muted" style={{ fontSize: 13, padding: '2px 0' }}>
                   <span className="mono grow">{s.recipient}</span>
                   <span>
-                    {s.step ? `step ${s.step} · ` : ''}{SEND_STATUS[s.status] ?? s.status}
-                    {s.replied_at ? ' · replied' : ''}
-                    {s.error ? ` — ${s.error}` : ''}
+                    {s.step ? `step ${s.step} · ` : ''}
+                    {s.status === 'pending' && s.error?.startsWith('held')
+                      ? s.error
+                      : `${SEND_STATUS[s.status] ?? s.status}${s.replied_at ? ' · replied' : ''}${s.error ? ` — ${s.error}` : ''}`}
                   </span>
                 </div>
               ))}

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAgents, useChannels, useDigests } from '../api/hooks';
 import { Empty, channelLabel } from '../components/bits';
+import { usePageTitle } from '../lib/title';
 
 interface HandoffMetrics {
   days: number;
@@ -84,6 +85,7 @@ function TrendChart({ series }: { series: { date: string; total: number; contain
 
 /** Daily digests + handoff/escalation metrics. */
 export default function Reports() {
+  usePageTitle('Reports');
   const { data } = useDigests();
   // Drill-down: overall → per agent → per channel of that agent.
   const [agentId, setAgentId] = useState('');
@@ -213,7 +215,7 @@ export default function Reports() {
         return (
           <div className="card">
             <div className="row">
-              <strong className="grow">Containment — last {k.days} days</strong>
+              <strong className="grow">AI vs human — last {k.days} days</strong>
             </div>
             <div className="metric-grid" style={{ marginTop: 10 }}>
               <div className="metric">
@@ -256,7 +258,7 @@ export default function Reports() {
                 <div className="metric-num">
                   {t.deflection_rate === null ? '—' : `${t.deflection_rate}%`}
                 </div>
-                <div className="muted">deflection — resolved with no human touch</div>
+                <div className="muted">resolved with no human touch</div>
               </div>
               <div className="metric"><div className="metric-num">{fmtMin(t.median_frt_min)}</div><div className="muted">median first response</div></div>
               <div className="metric"><div className="metric-num">{fmtMin(t.median_resolution_min)}</div><div className="muted">median time to resolve</div></div>

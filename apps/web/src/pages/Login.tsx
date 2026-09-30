@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client';
+import { friendlyError } from '../lib/friendlyError';
+import { usePageTitle } from '../lib/title';
 
 const GoogleLogo = () => (
   <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
@@ -22,9 +24,11 @@ const SlackLogo = () => (
 );
 
 export default function Login() {
+  usePageTitle('Sign in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -36,13 +40,16 @@ export default function Login() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return;
+    setBusy(true);
     setError('');
     try {
       await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
       await qc.invalidateQueries({ queryKey: ['me'] });
       navigate('/conversations');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'login failed');
+      setError(err instanceof ApiError ? friendlyError(err.message).text : 'login failed');
+      setBusy(false);
     }
   };
 
@@ -89,9 +96,11 @@ export default function Login() {
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ width: '100%' }} />
           </>
         )}
-        {(error || oauthError) && <div className="error">{error || oauthError}</div>}
+        {(error || oauthError) && <div className="error" title={oauthError ?? undefined}>{error || friendlyError(oauthError!).text}</div>}
         {passwordLogin && (
-          <button className="btn primary" style={{ width: '100%', marginTop: 20 }}>Sign in</button>
+          <button className="btn primary" disabled={busy} style={{ width: '100%', marginTop: 20 }}>
+            {busy ? 'Signing in…' : 'Sign in'}
+          </button>
         )}
         {providers.data && !anyProvider && !passwordLogin && (
           <div className="muted">Sign-in is not configured on this server.</div>

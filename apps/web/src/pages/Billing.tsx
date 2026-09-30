@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
+import { useConfirm } from '../components/Prompt';
 import { useMe } from '../api/hooks';
 import { catalogForId, prettifyModelName } from '../lib/llmProviders';
+import { usePageTitle } from '../lib/title';
 
 interface BillingSummary {
   period: string;
@@ -49,9 +51,11 @@ interface BillingSummary {
 const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 export default function Billing() {
+  usePageTitle('Billing');
   const { data: me } = useMe();
   const isAdmin = me?.user.role === 'admin';
   const [period, setPeriod] = useState(() => new Date().toISOString().slice(0, 7));
+  const [confirmEl, confirm] = useConfirm();
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const qc = useQueryClient();
@@ -94,7 +98,7 @@ export default function Billing() {
   const downgrade = async () => {
     setError('');
     setNotice('');
-    if (!window.confirm('Move to the Free plan?')) return;
+    if (!(await confirm('Move to the Free plan? Paid features stop at the end of the current period.', [{ key: 'ok', label: 'Move to Free', danger: true }]))) return;
     try {
       const r = await api<{ at_period_end: boolean }>('/api/billing/downgrade', { method: 'POST' });
       setNotice(
@@ -112,6 +116,7 @@ export default function Billing() {
 
   return (
     <>
+      {confirmEl}
       <div className="row" style={{ alignItems: 'baseline' }}>
         <h1 className="page-title grow">Billing</h1>
         <input

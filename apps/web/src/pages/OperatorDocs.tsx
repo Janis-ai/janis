@@ -1,3 +1,5 @@
+import { usePageTitle } from '../lib/title';
+
 const STATES = [
   ['Needs human', 'The agent escalated (handoff, failure, or a routing rule). This is your work queue — claim it, reply, release.'],
   ['Human', 'You own it. The agent stays silent until you release it back.'],
@@ -61,6 +63,7 @@ function Table({ head, rows }: { head: string[]; rows: string[][] }) {
 }
 
 export default function OperatorDocs() {
+  usePageTitle('Operator guide');
   return (
     <>
       <h1>Operator guide</h1>
@@ -136,7 +139,7 @@ export default function OperatorDocs() {
         different follow-ups down two paths.
       </p>
 
-      <h3>Send policy — why a send says what it says</h3>
+      <h3>Sending rules — why a send says what it says</h3>
       <p className="muted" style={{ lineHeight: 1.6 }}>
         Every send decision is recorded on the send row — click into a
         campaign to see per-recipient status. Held sends <em>retry</em>;
@@ -144,7 +147,7 @@ export default function OperatorDocs() {
       </p>
       <Table head={['Status', 'Meaning']} rows={SEND_STATUSES} />
       <p className="muted" style={{ lineHeight: 1.6 }}>
-        Quiet hours are set per workspace in Settings → Send policy — they
+        Quiet hours are set per workspace in Settings → Sending rules — they
         <em>defer</em>, never drop. The frequency cap is global across all
         campaigns so a contact in two drips doesn't get double-mailed.
       </p>

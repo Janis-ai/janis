@@ -6,9 +6,17 @@
 let origHref: string | null = null;
 let badgeData: string | null = null;
 let applied = false;
+let lastCount = 0;
+
+/** Re-applies the remembered unread count — call after something else sets
+ *  document.title (e.g. per-page titles) so the count survives. */
+export function refreshTabBadge() {
+  setTabBadge(lastCount);
+}
 
 export function setTabBadge(count: number) {
   const n = count > 0 ? count : 0;
+  lastCount = n;
   const bare = document.title.replace(/^\(\d+\+?\)\s+/, '');
   document.title = n > 0 ? `(${n > 99 ? '99+' : n}) ${bare}` : bare;
 

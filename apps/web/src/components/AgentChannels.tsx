@@ -6,6 +6,7 @@ import type { Agent, Channel } from '@janis/shared';
 import { useAgents, useChannels, useMe } from '../api/hooks';
 import { Empty } from './bits';
 import { ChannelCard, KIND_LABEL, type PendingAssets } from './Channels';
+import { friendlyError } from '../lib/friendlyError';
 
 /**
  * Per-agent channel manager — everything the old workspace-wide /integrations
@@ -402,9 +403,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         </p>
       </div>
 
-      {metaError && <div className="error" style={{ marginBottom: 12 }}>Meta connect failed: {metaError}</div>}
-      {gmailError && <div className="error" style={{ marginBottom: 12 }}>Gmail connect failed: {gmailError}</div>}
-      {cfError && <div className="error" style={{ marginBottom: 12 }}>Cloudflare setup failed: {cfError}</div>}
+      {metaError && <div className="error" style={{ marginBottom: 12 }} title={metaError}>Meta connect failed: {friendlyError(metaError).text}</div>}
+      {gmailError && <div className="error" style={{ marginBottom: 12 }} title={gmailError}>Gmail connect failed: {friendlyError(gmailError).text}</div>}
+      {cfError && <div className="error" style={{ marginBottom: 12 }} title={cfError}>Cloudflare setup failed: {friendlyError(cfError).text}</div>}
       {cfConnected && (
         <div className="muted" style={{ marginBottom: 12, fontSize: 13 }}>
           ✓ {cfConnected}
@@ -713,7 +714,6 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             type="button"
             className="btn ghost"
             disabled={gmInvite.isPending}
-            title="Link for whoever controls the mailbox — works without a Janis login (expires in 7 days)"
             onClick={() => gmInvite.mutate()}
           >
             Copy invite link
@@ -740,7 +740,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             <strong>Outlook / Microsoft 365</strong>
             <div className="muted" style={{ marginTop: 4 }}>
               Connect an Outlook.com or Microsoft 365 mailbox — mail lands in the same
-              inbox and replies send from that address in the customer's thread.
+              inbox and replies send from that address in the customer's thread. If the
+              mailbox belongs to someone else, send them the invite link — they grant
+              access themselves, no Janis login needed.
             </div>
           </div>
         </div>
@@ -757,7 +759,6 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             type="button"
             className="btn ghost"
             disabled={olInvite.isPending}
-            title="Link for whoever controls the mailbox — works without a Janis login (expires in 7 days)"
             onClick={() => olInvite.mutate()}
           >
             Copy invite link
@@ -775,7 +776,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           </div>
         )}
         {outlookError && (
-          <div className="error" style={{ marginTop: 10 }}>Outlook connect failed: {outlookError}</div>
+          <div className="error" style={{ marginTop: 10 }} title={outlookError}>Outlook connect failed: {friendlyError(outlookError).text}</div>
         )}
       </div>
 

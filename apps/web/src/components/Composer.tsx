@@ -165,8 +165,8 @@ export default function Composer({
           />
           {showModeSelect && (
             <select value={sendAs} onChange={(e) => setSendAs(e.target.value as 'human' | 'agent' | 'note' | 'teach')}>
-              <option value="human">as human</option>
-              <option value="agent">via agent</option>
+              <option value="human">as yourself (human)</option>
+              <option value="agent">as the agent</option>
               <option value="note">🔒 internal note</option>
               {canTeach && <option value="teach">🧠 teach agent</option>}
             </select>

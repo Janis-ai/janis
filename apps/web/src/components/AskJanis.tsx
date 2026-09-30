@@ -11,6 +11,7 @@ import {
 } from '../lib/chatTimeline';
 import { Loader2, Paperclip, Smile } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
+import { ArgsRows } from './bits';
 
 interface ChatConfig {
   agent_name: string;
@@ -551,7 +552,7 @@ export function AskJanis({
                     <div className="mono" style={{ fontSize: 12 }}>
                       {item.m.action.tool}
                     </div>
-                    <pre className="action-args">{JSON.stringify(item.m.action.args, null, 2)}</pre>
+                    <ArgsRows args={item.m.action.args} />
                     {actError && item.m.action.status === 'pending' && (
                       <div className="muted" style={{ color: '#c0392b', fontSize: 12, marginTop: 4 }}>
                         {actError}

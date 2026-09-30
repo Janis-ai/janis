@@ -7,9 +7,10 @@ import { api } from '../api/client';
 import { Avatar, channelLabel, displayName, Empty, StateBadge, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
-import { Moon, Save, Star } from 'lucide-react';
+import { Bot, Cog, Headset, Moon, Save, Star, User, X } from 'lucide-react';
 import { usePrompt } from '../components/Prompt';
 import { isEditableTarget } from '../lib/keys';
+import { usePageTitle } from '../lib/title';
 
 /** Filter options grouped by kind — values map to the `state` list param.
  * Labels match the conversation detail Status dropdown (Agent = agent-driven). */
@@ -142,6 +143,7 @@ function ConvRow({
 
 /** Conversations: triage (needs attention) + search/browse of everything. */
 export default function Conversations() {
+  usePageTitle('Conversations');
   const [tab, setTab] = useSticky<'attention' | 'all'>('conv.tab', 'all');
   const [state, setState] = useSticky('conv.state', '');
   const [activeView, setActiveView] = useSticky('conv.view', '');
@@ -178,6 +180,7 @@ export default function Conversations() {
     mine,
   });
   const convList = data?.pages.flatMap((p) => p.conversations);
+  const knownTags = [...new Set((convList ?? []).flatMap((c) => c.tags ?? []))].sort();
   const { data: agents } = useAgents();
   const { data: views } = useViews();
   const { data: hits } = useSearch(query, {
@@ -203,6 +206,7 @@ export default function Conversations() {
   };
 
   const [promptEl, ask] = usePrompt();
+  const [tagDlg, setTagDlg] = useState<{ tag: string } | null>(null);
 
   const saveView = async () => {
     const name = await ask('Save current filters as a view:', 'My view');
@@ -301,6 +305,74 @@ export default function Conversations() {
   return (
     <>
       {promptEl}
+      {tagDlg && (
+        <div className="modal-backdrop" onClick={() => setTagDlg(null)}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Tag selected conversations"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setTagDlg(null);
+            }}
+          >
+            <div className="modal-msg">Tag {selected.size} selected conversation{selected.size === 1 ? '' : 's'}</div>
+            <input
+              className="input"
+              style={{ width: '100%', marginTop: 10 }}
+              placeholder="Tag name…"
+              value={tagDlg.tag}
+              autoFocus
+              onChange={(e) => setTagDlg({ tag: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && tagDlg.tag.trim()) {
+                  void bulk('tag', { tag: tagDlg.tag.trim() });
+                  setTagDlg(null);
+                }
+              }}
+            />
+            {knownTags.length > 0 && (
+              <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
+                {knownTags.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    className="chip"
+                    style={{ cursor: 'pointer', border: 'none' }}
+                    onClick={() => setTagDlg({ tag: t })}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="row" style={{ marginTop: 12, justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn" onClick={() => setTagDlg(null)}>Cancel</button>
+              <button
+                className="btn danger"
+                disabled={!tagDlg.tag.trim()}
+                onClick={() => {
+                  void bulk('untag', { tag: tagDlg.tag.trim() });
+                  setTagDlg(null);
+                }}
+              >
+                Remove tag
+              </button>
+              <button
+                className="btn primary"
+                disabled={!tagDlg.tag.trim()}
+                onClick={() => {
+                  void bulk('tag', { tag: tagDlg.tag.trim() });
+                  setTagDlg(null);
+                }}
+              >
+                Add tag
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <h1 className="page-title">Conversations</h1>
       <DiscoveryCards />
       <Onboarding />
@@ -334,7 +406,9 @@ export default function Conversations() {
               ))}
             </select>
             {activeView && (
-              <button className="btn" title="Delete this view" onClick={deleteView}>✕</button>
+              <button className="btn" title="Delete this view" aria-label="Delete this view" onClick={deleteView}>
+                <X size={14} style={{ verticalAlign: '-2px' }} />
+              </button>
             )}
           </>
         )}
@@ -391,13 +465,7 @@ export default function Conversations() {
           <button
             className="btn"
             disabled={busy}
-            onClick={async () => {
-              const t = await ask('Tag to add/remove (prefix with - to remove):');
-              if (!t?.trim()) return;
-              const remove = t.trim().startsWith('-');
-              const tag = remove ? t.trim().slice(1) : t.trim();
-              if (tag) void bulk(remove ? 'untag' : 'tag', { tag });
-            }}
+            onClick={() => setTagDlg({ tag: '' })}
           >
             Tag…
           </button>
@@ -432,9 +500,14 @@ export default function Conversations() {
               {hits.messages.slice(0, 20).map((m) => (
                 <div key={m.id} className="muted" style={{ marginTop: 6 }}>
                   <Link to={`/conversations/${m.conversation_id}?msg=${m.id}`}>
-                    {m.flags.help_requested || m.flags.failure || m.flags.custom_alert || m.flags.handoff_offer || m.flags.handoff_cancelled
-                      ? '⚙️'
-                      : m.direction === 'in' ? '👤' : m.direction === 'out' ? '🤖' : '🧑'} {m.text}
+                    {(() => {
+                      const HitIcon =
+                        m.flags.help_requested || m.flags.failure || m.flags.custom_alert || m.flags.handoff_offer || m.flags.handoff_cancelled
+                          ? Cog
+                          : m.direction === 'in' ? User : m.direction === 'out' ? Bot : Headset;
+                      return <HitIcon size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />;
+                    })()}
+                    {m.text}
                   </Link>
                 </div>
               ))}
