@@ -327,9 +327,11 @@ before typecheck/tests/dev.
   unrunnable suite via notifyWorkspace + janis.alert log (adjacent-batch
   compare — steady-state red doesn't re-alert). GET /agents/:id/test-runs +
   history/Auto-run UI on the tests tab, 'eval' SSE event refreshes it.
-  Missing: diff dashboards beyond batch views, multi-model compare,
-  auto-generated tests from rescued conversations (checkpointIndices
-  exists — the Save-as-test flow doesn't auto-suggest yet).
+  Missing: diff dashboards beyond batch views, multi-model compare.
+  Suggestions: DONE — GET /agents/:id/test-suggestions scans 30d of convs
+  for rescue markers (failure/help/custom_alert flags, non-internal human
+  replies) with no saved test; Tests-tab card → "Save as tests" (checkpoint
+  split) or dismiss (config.dismissed_test_suggestions).
 
 **Outbound (new — v1 shipped)**
 - POST /api/channels/:id/send {to,text,subject?,whatsapp_template?} — find-or-

@@ -2403,6 +2403,21 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     queryKey: ['agent-test-runs', agentId],
     queryFn: () => api<{ batches: EvalBatch[] }>(`/api/agents/${agentId}/test-runs`),
   });
+  // Rescued conversations with no saved test — the suggestion list turns
+  // "a human had to step in" into the raw material for regression coverage.
+  const { data: suggestionsData } = useQuery({
+    queryKey: ['test-suggestions', agentId],
+    queryFn: () =>
+      api<{
+        suggestions: {
+          conversation_id: string;
+          name: string;
+          preview: string | null;
+          rescues: number;
+          last_rescue: string;
+        }[];
+      }>(`/api/agents/${agentId}/test-suggestions`),
+  });
   const [running, setRunning] = useState<string | 'all' | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
@@ -2508,10 +2523,44 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     onError: (e) => setErr(e.message),
   });
 
+  // "Save as tests" on a suggestion — POST /:id/tests with conversation_id
+  // runs the checkpoint split (one test per rescue point) server-side.
+  const saveSuggestion = useMutation({
+    mutationFn: (s: { conversation_id: string; name: string }) =>
+      api(`/api/agents/${agentId}/tests`, {
+        method: 'POST',
+        body: JSON.stringify({ name: `${s.name} — rescue`, conversation_id: s.conversation_id }),
+      }),
+    onSuccess: () => {
+      invalidate();
+      void qc.invalidateQueries({ queryKey: ['test-suggestions', agentId] });
+    },
+    onError: (e) => setErr(e.message),
+  });
+  const dismissSuggestion = useMutation({
+    mutationFn: (convId: string) => {
+      const config = { ...(agent.config ?? {}) } as AgentConfig;
+      config.dismissed_test_suggestions = [
+        ...(config.dismissed_test_suggestions ?? []),
+        convId,
+      ];
+      return api(`/api/agents/${agentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ config }),
+      });
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['test-suggestions', agentId] });
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+    },
+    onError: (e) => setErr(e.message),
+  });
+
   const tests = data?.tests ?? [];
   const passed = tests.filter((t) => t.last_run?.passed === true).length;
   const failed = tests.filter((t) => t.last_run?.passed === false).length;
   const batches = runsData?.batches ?? [];
+  const suggestions = suggestionsData?.suggestions ?? [];
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
@@ -2577,6 +2626,68 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           </span>
         )}
       </div>
+      {suggestions.length > 0 && (
+        <div className="card" style={{ padding: '12px 16px' }}>
+          <div className="section-label" style={{ marginBottom: 4 }}>
+            Rescued — not yet covered by a test
+          </div>
+          {suggestions.map((s) => (
+            <div
+              key={s.conversation_id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '8px 0',
+                borderBottom: '1px solid var(--border)',
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <Link
+                  to={`/conversations/${s.conversation_id}`}
+                  style={{ fontSize: 13, fontWeight: 500 }}
+                >
+                  {s.name}
+                </Link>
+                <div
+                  className="muted"
+                  style={{
+                    fontSize: 12,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {s.rescues > 1 ? `${s.rescues} rescues` : 'rescued'} ·{' '}
+                  {timeAgo(s.last_rescue)}
+                  {s.preview ? ` · ${s.preview}` : ''}
+                </div>
+              </div>
+              <ReadOnly off={!isAdmin}>
+                <button
+                  className="btn sm"
+                  onClick={() =>
+                    saveSuggestion.mutate({
+                      conversation_id: s.conversation_id,
+                      name: s.name,
+                    })
+                  }
+                  disabled={saveSuggestion.isPending}
+                >
+                  Save as tests
+                </button>
+                <button
+                  className="btn ghost sm"
+                  onClick={() => dismissSuggestion.mutate(s.conversation_id)}
+                  disabled={dismissSuggestion.isPending}
+                >
+                  dismiss
+                </button>
+              </ReadOnly>
+            </div>
+          ))}
+        </div>
+      )}
       {err && <div className="error">{err}</div>}
 
       {importOpen && (

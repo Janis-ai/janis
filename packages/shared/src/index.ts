@@ -260,6 +260,10 @@ export const AgentConfig = z.object({
   dismissed_learnings: z.array(z.string().max(400)).optional(),
   dismissed_gaps: z.array(z.string().max(400)).optional(),
   dismissed_gap_times: z.record(z.string(), z.string()).optional(),
+  // conversation ids the operator dismissed from the tests tab's "rescued,
+  // untested" suggestions — keeps the list from nagging about convs they've
+  // deliberately decided aren't worth a regression test.
+  dismissed_test_suggestions: z.array(z.string()).optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 

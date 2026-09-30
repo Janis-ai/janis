@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
-import { AgentConfig } from '@janis/shared';
+import { AgentConfig, friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, alertRules, alerts, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import {
@@ -1502,6 +1502,96 @@ export function agentRoutes(db: Db) {
         failed: results.filter((r) => r.passed === false).length,
         unrunnable: results.filter((r) => r.passed === null).length,
       },
+    });
+  });
+
+  // Rescued-but-untested conversations: scan recent convs for human-rescue
+  // markers (failure/help_requested/custom_alert flags, or a non-internal
+  // operator reply) that have NO saved test — the suggestion list on the
+  // Tests tab. Dismissed convs live in config.dismissed_test_suggestions.
+  app.get('/:id/test-suggestions', agentMember, async (c) => {
+    const agentId = c.req.param('id')!;
+    const [agent] = await db
+      .select({ config: agents.config })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .limit(1);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const dismissed = new Set(
+      ((agent.config as { dismissed_test_suggestions?: string[] } | null)
+        ?.dismissed_test_suggestions ?? []),
+    );
+
+    const raw = (await db.execute(sql`
+      select m.conversation_id as conv_id,
+             count(*)::int as rescues,
+             max(m.created_at) as last_rescue
+      from messages m
+      join conversations cv on cv.id = m.conversation_id
+      where cv.agent_id = ${agentId}
+        and cv.created_at > now() - interval '30 days'
+        and (
+          coalesce((m.flags->>'failure')::boolean, false)
+          or coalesce((m.flags->>'help_requested')::boolean, false)
+          or coalesce((m.flags->>'custom_alert')::boolean, false)
+          or (m.direction = 'human'
+              and coalesce((m.payload->>'internal')::boolean, false) = false)
+        )
+      group by m.conversation_id
+      order by max(m.created_at) desc
+      limit 25
+    `)) as unknown;
+    const flagged = ((Array.isArray(raw) ? raw : (raw as { rows?: unknown[] }).rows) ?? []) as {
+      conv_id: string;
+      rescues: number;
+      last_rescue: string;
+    }[];
+    if (!flagged.length) return c.json({ suggestions: [] });
+
+    const covered = await db
+      .select({ convId: agentTests.sourceConversationId })
+      .from(agentTests)
+      .where(
+        and(
+          eq(agentTests.agentId, agentId),
+          inArray(agentTests.sourceConversationId, flagged.map((f) => f.conv_id)),
+        ),
+      );
+    const coveredIds = new Set(covered.map((r) => r.convId).filter(Boolean));
+
+    const open = flagged.filter((f) => !coveredIds.has(f.conv_id) && !dismissed.has(f.conv_id));
+    if (!open.length) return c.json({ suggestions: [] });
+
+    const convs = await db
+      .select({
+        id: conversations.id,
+        externalId: conversations.externalId,
+        userProfile: conversations.userProfile,
+        lastMessageAt: conversations.lastMessageAt,
+        lastMessagePreview: conversations.lastMessagePreview,
+      })
+      .from(conversations)
+      .where(inArray(conversations.id, open.map((f) => f.conv_id)));
+    const byId = new Map(convs.map((cv) => [cv.id, cv]));
+
+    return c.json({
+      suggestions: open
+        .map((f) => {
+          const cv = byId.get(f.conv_id);
+          if (!cv) return null;
+          const name =
+            (cv.userProfile as { name?: string } | undefined)?.name ??
+            friendlyName(cv.externalId);
+          return {
+            conversation_id: f.conv_id,
+            name,
+            preview: cv.lastMessagePreview,
+            rescues: f.rescues,
+            last_rescue: f.last_rescue,
+          };
+        })
+        .filter(Boolean)
+        .slice(0, 10),
     });
   });
 
