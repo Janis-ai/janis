@@ -155,8 +155,8 @@
     '#janis-panel.janis-left{left:20px;right:auto}' +
     '#janis-panel.janis-left.expanded{left:12px;right:auto}' +
     '#janis-head{padding:12px 16px;color:#fff;font-weight:600;display:flex;align-items:center;gap:8px}' +
-    '#janis-head img.janis-logo{width:30px;height:30px;border-radius:50%;object-fit:cover;background:#fff;flex:none}' +
-    '#janis-bubble img{width:26px;height:26px;border-radius:50%;object-fit:cover;display:block}' +
+    '#janis-head img.janis-logo{width:30px;height:30px;border-radius:8px;object-fit:contain;background:#fff;padding:2px;flex:none}' +
+    '#janis-bubble img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}' +
     '#janis-head>div{flex:1;min-width:0}' +
     '#janis-head small{display:block;font-weight:400;opacity:.8}' +
     '#janis-expand{background:none;border:none;color:#fff;cursor:pointer;font-size:16px;padding:4px;opacity:.85;line-height:1}' +
