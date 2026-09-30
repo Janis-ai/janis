@@ -193,10 +193,21 @@ before typecheck/tests/dev.
   suggestion prompt) for campaign-originated conversations via
   campaignContextFor — the agent knows it's answering a campaign reply and
   gets workspace-authored handling guidance. UI shows the reply agent in
-  the channel picker + list rows. Missing: lists/tags/CSV-import audiences
-  (segment is filter-only), branching steps, conversion attribution,
+  the channel picker + list rows.
+  Audiences v2: contact-based targeting — email-kind channels reach
+  email/alt_emails, phone-kinds reach phone/alt_phones (channel identities
+  only gate opt-out, so imported contacts are targetable). contact_lists +
+  contact_list_members + contacts.tags; /api/lists CRUD + POST
+  /lists/import (CSV → upsertContactByAddress: match primary/alt
+  email/phone, enrich don't duplicate). contacts.external_ids {system:id}
+  keeps CRM/event identities on one Janis contact. campaigns.enrollment:
+  'once' resolves+finishes; 'continuous' stays 'sending' — sweeper
+  re-resolves each tick (unique send key dedupes). Drip delay is
+  per-recipient (prior sentAt+delay); step jobs roll while stragglers
+  exist. POST /enroll/:token = public event-enroll webhook (per-IP +
+  per-token caps). Missing: branching steps, conversion attribution,
   frequency caps/quiet hours, bounce→suppression loop, channel-readiness
-  gating.
+  gating, HubSpot/Salesforce sync.
 - Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
   13 articles on prod Demo Agent + Janis agent. Missing: full-text ranked
   search (tsvector — ILIKE only today), article view counts, helpfulness
