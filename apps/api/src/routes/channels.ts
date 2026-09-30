@@ -933,7 +933,7 @@ export function channelWebhookRoutes(db: Db) {
     const fail = (msg: string, agentId?: string) =>
       c.redirect(
         agentId
-          ? `${env.webOrigin}/agents/${agentId}?tab=integrations&cf_error=${encodeURIComponent(msg)}`
+          ? `${env.webOrigin}/agents/${agentId}?tab=channels&cf_error=${encodeURIComponent(msg)}`
           : `${env.webOrigin}/agents?cf_error=${encodeURIComponent(msg)}`,
       );
     const code = c.req.query('code');
@@ -987,7 +987,7 @@ export function channelWebhookRoutes(db: Db) {
       await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
       invalidateChannelCache();
       return c.redirect(
-        `${env.webOrigin}/agents/${row.agentId}?tab=integrations&cf_connect=${encodeURIComponent(`Cloudflare${pushed}`)}`,
+        `${env.webOrigin}/agents/${row.agentId}?tab=channels&cf_connect=${encodeURIComponent(`Cloudflare${pushed}`)}`,
       );
     } catch (e) {
       return failAtAgent(e instanceof Error ? e.message : 'cloudflare setup failed');

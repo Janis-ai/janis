@@ -186,7 +186,7 @@ export function gmailPublicRoutes(db: Db) {
               : `Gmail connect failed: ${msg}`,
           )
         : c.redirect(
-            `${env.webOrigin}/agents/${intent.a}?tab=integrations&${ok ? 'gmail_connect' : 'gmail_error'}=${encodeURIComponent(msg)}`,
+            `${env.webOrigin}/agents/${intent.a}?tab=channels&${ok ? 'gmail_connect' : 'gmail_error'}=${encodeURIComponent(msg)}`,
           );
 
     const code = c.req.query('code');

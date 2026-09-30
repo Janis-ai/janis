@@ -96,7 +96,7 @@ function ChannelRedirect() {
   if (!data) return <div className="login-wrap muted">Loading…</div>;
   return (
     <Navigate
-      to={`/agents/${data.channel.agent_id}?tab=integrations&channel=${channelId}`}
+      to={`/agents/${data.channel.agent_id}?tab=channels&channel=${channelId}`}
       replace
     />
   );

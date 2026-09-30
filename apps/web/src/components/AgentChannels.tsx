@@ -33,7 +33,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   const apiOrigin =
     window.location.hostname === 'localhost' ? 'http://localhost:8787' : window.location.origin;
 
-  // Clear only our params — keep ?tab=integrations etc.
+  // Clear only our params — keep ?tab=channels etc.
   const dropParams = (...keys: string[]) =>
     setParams(
       (prev) => {

@@ -139,7 +139,7 @@ export function metaApiRoutes(db: Db) {
     const dest = (q: string) =>
       c.redirect(
         agentId
-          ? `${env.webOrigin}/agents/${agentId}?tab=integrations&${q}`
+          ? `${env.webOrigin}/agents/${agentId}?tab=channels&${q}`
           : `${env.webOrigin}/agents?${q}`,
       );
     const back = (msg: string) => dest(`meta_error=${encodeURIComponent(msg)}`);

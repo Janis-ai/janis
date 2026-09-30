@@ -135,7 +135,7 @@ export function outlookPublicRoutes(db: Db) {
               : `Outlook connect failed: ${msg}`,
           )
         : c.redirect(
-            `${env.webOrigin}/agents/${intent.a}?tab=integrations&${ok ? 'outlook_connect' : 'outlook_error'}=${encodeURIComponent(msg)}`,
+            `${env.webOrigin}/agents/${intent.a}?tab=channels&${ok ? 'outlook_connect' : 'outlook_error'}=${encodeURIComponent(msg)}`,
           );
 
     const code = c.req.query('code');

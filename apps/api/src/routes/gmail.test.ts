@@ -361,7 +361,7 @@ describe('gmail oauth', () => {
     expect(cb.status).toBe(302);
     const loc = cb.headers.get('location')!;
     // Returns to the connecting agent's Channels tab, not a global page.
-    expect(loc).toContain(`/agents/${agentId}?tab=integrations`);
+    expect(loc).toContain(`/agents/${agentId}?tab=channels`);
     expect(loc).toContain('gmail_connect=cs%40acme.test');
     const [created] = await db
       .select()

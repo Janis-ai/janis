@@ -20,7 +20,7 @@ import { railBus } from '../lib/railBus';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert', 'auto_assign'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
-type Tab = 'integrations' | 'escalation' | 'tools' | 'tests' | 'help' | 'connection' | 'llm' | 'behavior';
+type Tab = 'channels' | 'escalation' | 'tools' | 'tests' | 'help' | 'connection' | 'llm' | 'behavior';
 
 export default function AgentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -56,11 +56,14 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const location = useLocation();
   // Tab lives in the URL (?tab=…) so refresh/back/deep links keep position.
   const [params, setParams] = useSearchParams();
-  const tabParam = params.get('tab') as Tab | null;
+  const tabParam = params.get('tab');
+  // 'integrations' was the pre-rename key for Channels — keep old links working.
   const tab: Tab =
-    tabParam && ['integrations', 'escalation', 'tools', 'tests', 'help', 'connection', 'llm', 'behavior'].includes(tabParam)
-      ? tabParam
-      : 'connection';
+    tabParam === 'integrations'
+      ? 'channels'
+      : tabParam && ['channels', 'escalation', 'tools', 'tests', 'help', 'connection', 'llm', 'behavior'].includes(tabParam)
+        ? (tabParam as Tab)
+        : 'connection';
   const activeTab: Tab =
     (tab === 'tools' || tab === 'tests' || tab === 'llm' || tab === 'help') && !agent.hosted
       ? 'connection'
@@ -170,7 +173,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const tabs: { key: Tab; label: string }[] = [
     { key: 'connection', label: 'Engine' },
     { key: 'behavior', label: 'Behavior' },
-    { key: 'integrations', label: 'Channels' },
+    { key: 'channels', label: 'Channels' },
     { key: 'escalation', label: 'Escalation' },
     ...(agent.hosted
       ? [
@@ -247,7 +250,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
 
       {error && <div className="error">{error}</div>}
 
-      {activeTab === 'integrations' && <AgentChannels agent={agent} />}
+      {activeTab === 'channels' && <AgentChannels agent={agent} />}
       {activeTab === 'help' && <HelpCenter agent={agent} />}
       {activeTab === 'escalation' && (
         <EscalationTab
