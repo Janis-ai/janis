@@ -234,8 +234,22 @@ export function v1Routes(db: Db) {
           : undefined,
       });
       if ('error' in r && !r.conversationId) return c.json({ error: r.error }, 400);
+      // external_id too — reply/escalate/resolve routes key on it, so a
+      // Zap can chain Send Outbound → Send Reply without a lookup step.
+      const [conv] = r.conversationId
+        ? await db
+            .select({ externalId: conversations.externalId })
+            .from(conversations)
+            .where(eq(conversations.id, r.conversationId))
+            .limit(1)
+        : [undefined];
       return c.json(
-        { conversation_id: r.conversationId, mid: r.mid, error: r.error },
+        {
+          conversation_id: r.conversationId,
+          external_id: conv?.externalId,
+          mid: r.mid,
+          error: r.error,
+        },
         r.error ? 502 : 200,
       );
     },
