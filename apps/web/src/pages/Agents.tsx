@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Agent } from '@janis/shared';
 import { api } from '../api/client';
@@ -16,6 +16,10 @@ export default function Agents() {
   const [newName, setNewName] = useState('');
   const [newHosted, setNewHosted] = useState(true);
   const [error, setError] = useState('');
+  // OAuth callbacks that fail before resolving the channel land here.
+  const [params] = useSearchParams();
+  const oauthError =
+    params.get('cf_error') ?? params.get('gmail_error') ?? params.get('outlook_error') ?? '';
 
   const refresh = () => void qc.invalidateQueries({ queryKey: ['agents'] });
 
@@ -42,6 +46,7 @@ export default function Agents() {
   return (
     <>
       <h1 className="page-title">Agents</h1>
+      {oauthError && <div className="error">Connect failed: {oauthError}</div>}
 
       {isAdmin && (
       <form

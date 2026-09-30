@@ -25,6 +25,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   const gmailConnected = params.get('gmail_connect') ?? '';
   const outlookError = params.get('outlook_error') ?? '';
   const outlookConnected = params.get('outlook_connect') ?? '';
+  const cfError = params.get('cf_error') ?? '';
+  const cfConnected = params.get('cf_connect') ?? '';
   const [showManual, setShowManual] = useState(false);
   const [error, setError] = useState('');
   // Same-origin deploys serve the API on the web origin; dev splits :5173/:8787.
@@ -100,11 +102,12 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     return () => clearTimeout(t);
   }, [focusChannel, data]);
 
-  // OAuth returns land back here with ?gmail_connect= / ?outlook_connect=.
+  // OAuth returns land back here with ?gmail_connect= / ?outlook_connect= /
+  // ?cf_connect= — refresh channel state once so new creds render.
   useEffect(() => {
-    if (!gmailConnected && !outlookConnected) return;
+    if (!gmailConnected && !outlookConnected && !cfConnected) return;
     void qc.invalidateQueries({ queryKey: ['channels'] });
-  }, [gmailConnected, outlookConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gmailConnected, outlookConnected, cfConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [form, setForm] = useState({
     kind: 'messenger' as 'messenger' | 'instagram' | 'whatsapp',
@@ -401,6 +404,12 @@ export function AgentChannels({ agent }: { agent: Agent }) {
 
       {metaError && <div className="error" style={{ marginBottom: 12 }}>Meta connect failed: {metaError}</div>}
       {gmailError && <div className="error" style={{ marginBottom: 12 }}>Gmail connect failed: {gmailError}</div>}
+      {cfError && <div className="error" style={{ marginBottom: 12 }}>Cloudflare setup failed: {cfError}</div>}
+      {cfConnected && (
+        <div className="muted" style={{ marginBottom: 12, fontSize: 13 }}>
+          ✓ {cfConnected}
+        </div>
+      )}
       {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
 
       {/* Meta connect (primary path) or the pending asset picker */}
