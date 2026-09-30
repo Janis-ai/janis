@@ -172,16 +172,16 @@ before typecheck/tests/dev.
 - Mobile polish on conversation screen (operators live on phones).
 
 **UX polish (2026-09 review — interaction layer good; reads engineer-polished)**
-- A. Iconography: unicode glyph nav (▤ ◉ 📣 ◫ $) + emoji chrome (💾 😴 ⭐)
-  → lucide-react. Biggest single visual lift; mobile icon-only nav is
-  illegible today.
-- B. Shared Modal component — retire window.prompt (workspace create, tag
-  entry, view naming); unblocks input validation.
+- A. Iconography: DONE — lucide-react nav icons (collapsed-rail legible) +
+  star/snooze/save/paperclip chrome; emoji kept inside <option> text and
+  emoji pickers (native elements can't render SVG).
+- B. Shared usePrompt modal: DONE — workspace create, view naming, bulk
+  tag, workspace-delete confirm all off window.prompt.
 - C. Keyboard layer: j/k rows, e archive, c compose, ⌘K command palette.
   The Intercom/Front retention gap for operators.
-- D. "Why" affordances: surface skip/defer reasons on campaign_send rows
-  (quiet hours, suppression+bounce date, send cap), policy tooltips at the
-  point of decision.
+- D. "Why" affordances: DONE — deferred sends stamp 'held — paused/quiet
+  hours' on the send row (self-clears on real outcome); human status labels
+  in the campaign detail; policy card explains defer-vs-drop.
 - E. Operator docs — /docs covers only the agent API; nothing for
   campaigns, send policy, suppressions, CRM sync, approvals, Slack
   takeover, saved views. Reuse help-center renderer.
