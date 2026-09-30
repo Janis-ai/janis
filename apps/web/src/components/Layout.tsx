@@ -9,7 +9,7 @@ import { setTabBadge } from '../lib/tabBadge';
 import PushBanner from './PushBanner';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
-import { BarChart3, Bot, CreditCard, Inbox, Megaphone, Settings, Sparkles, Users } from 'lucide-react';
+import { BarChart3, BookOpen, Bot, CreditCard, Inbox, Megaphone, Settings, Sparkles, Users } from 'lucide-react';
 import { usePrompt } from './Prompt';
 import { CommandPalette } from './CommandPalette';
 
@@ -242,7 +242,8 @@ export default function Layout() {
     <div className={`layout${railVisible ? ' ask-open' : ''}`}>
       {promptEl}
       <CommandPalette />
-      <nav className="sidebar">
+      <a className="skip-link" href="#main-content">Skip to content</a>
+      <nav className="sidebar" aria-label="Main navigation">
         <Link className="brand" to="/" title="Janis home">
           <img className="brand-wide" src="/img/janis-top.png" alt="Janis" />
           <img className="brand-mark" src="/img/janis-mark.png" alt="" />
@@ -276,6 +277,9 @@ export default function Layout() {
           </button>
         )}
         <div className="spacer" />
+        <Link to="/docs?guide=operator" className="docs-link" style={{ fontSize: 12, opacity: 0.75 }}>
+          <span className="label">Operator guide</span><span className="icon"><BookOpen size={16} /></span>
+        </Link>
         <div className="user">
           {data && data.workspaces.length > 1 ? (
             <select
@@ -298,7 +302,7 @@ export default function Layout() {
           <a href="#" onClick={(e) => { e.preventDefault(); void logout(); }}>Sign out</a>
         </div>
       </nav>
-      <main className="main">
+      <main className="main" id="main-content" tabIndex={-1}>
         {data && data.invites.length > 0 && (
           <div className="card" style={{ marginBottom: 12 }}>
             {data.invites.map((inv) => (
@@ -357,7 +361,7 @@ export default function Layout() {
                 Test{testRail!.label ? ` — ${testRail!.label}` : ''}
               </button>
               <span className="grow" />
-              <button className="btn" onClick={() => setRailOpen(false)} title="Close">✕</button>
+              <button className="btn" onClick={() => setRailOpen(false)} title="Close" aria-label="Close panel">✕</button>
             </div>
           )}
           {hasAsk && (

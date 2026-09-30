@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMe } from '../api/hooks';
 import { api } from '../api/client';
 import { SiteFooter } from '../components/bits';
+import OperatorDocs from './OperatorDocs';
 
 const INBOUND = [
   ['POST /v1/events', 'Batch-ingest events (below). The SDK wraps this — every call returns per-event results including paused.'],
@@ -79,6 +80,8 @@ function Code({ children }: { children: string }) {
 
 export default function Docs() {
   const { data } = useMe();
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('guide') === 'operator' ? 'operator' : 'api';
   const signOut = async () => {
     await api('/auth/logout', { method: 'POST' });
     window.location.href = '/';
@@ -106,6 +109,25 @@ export default function Docs() {
         )}
       </nav>
 
+      <div className="row" style={{ gap: 8, margin: '16px 0 4px' }}>
+        <button
+          className={`btn ${tab === 'api' ? 'primary' : ''}`}
+          onClick={() => setParams({})}
+        >
+          Agent API &amp; BYOK
+        </button>
+        <button
+          className={`btn ${tab === 'operator' ? 'primary' : ''}`}
+          onClick={() => setParams({ guide: 'operator' })}
+        >
+          Operator guide
+        </button>
+      </div>
+
+      {tab === 'operator' ? (
+        <OperatorDocs />
+      ) : (
+        <>
       <h1>Agent API &amp; BYOK</h1>
       <p className="muted" style={{ lineHeight: 1.6 }}>
         Janis can run your agent for you (hosted), or sit in front of an agent you run
@@ -203,6 +225,8 @@ app.post('/janis/webhook', (req, res) => {
         While paused, Janis still transcribes what the human says — your agent just
         shouldn't answer.
       </p>
+        </>
+      )}
 
       <SiteFooter style={{ marginTop: 48 }} />
     </div>

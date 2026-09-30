@@ -204,11 +204,15 @@ before typecheck/tests/dev.
 - D. "Why" affordances: DONE — deferred sends stamp 'held — paused/quiet
   hours' on the send row (self-clears on real outcome); human status labels
   in the campaign detail; policy card explains defer-vs-drop.
-- E. Operator docs — /docs covers only the agent API; nothing for
-  campaigns, send policy, suppressions, CRM sync, approvals, Slack
-  takeover, saved views. Reuse help-center renderer.
-- F. Accessibility sweep: ~27 aria attrs total; icon-only buttons on
-  title= only; focus rings + landmarks for procurement questionnaires.
+- E. Operator docs: DONE — /docs?guide=operator tab (OperatorDocs.tsx)
+  covering inbox states/takeover, keyboard map, handoffs+approvals, Slack
+  thread takeover, campaigns+step conditions+enroll token, send-status
+  table, suppressions, CRM sync/write-back, reports/exports, widget
+  continuity. Sidebar "Operator guide" link; footer link renamed Docs.
+- F. Accessibility sweep: DONE — global :focus-visible ring (inputs keep
+  border-color), skip-link to #main-content, nav/main landmark labels,
+  aria-modal+labelledby on Prompt/CommandPalette dialogs, aria-label on
+  every icon-only button (was title=-only).
 - Deferred: light mode; extended onboarding (checklist ends at first
   takeover — docs cover discovery more durably).
 

@@ -37,12 +37,13 @@ export function usePrompt(): [ReactNode, (message: string, defaultValue?: string
         className="modal"
         role="dialog"
         aria-modal="true"
+        aria-labelledby="prompt-msg"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === 'Escape') close(null);
         }}
       >
-        <div className="modal-msg">{req.message}</div>
+        <div className="modal-msg" id="prompt-msg">{req.message}</div>
         <input
           ref={inputRef}
           className="input"

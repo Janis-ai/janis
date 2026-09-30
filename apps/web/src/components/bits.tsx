@@ -95,7 +95,7 @@ export function SiteFooter({ style }: { style?: React.CSSProperties }) {
       <img src="/img/janis-top.png" alt="Janis" style={{ height: 20, opacity: 0.8 }} />
       <span>© {new Date().getFullYear()} Janis</span>
       <Link to="/">Home</Link>
-      <Link to="/docs">Developer docs</Link>
+      <Link to="/docs">Docs</Link>
       <a href="/slack/add">Add to Slack</a>
       <Link to="/privacy">Privacy Policy</Link>
       <Link to="/terms">Terms of Service</Link>

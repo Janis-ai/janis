@@ -91,6 +91,7 @@ export function CommandPalette() {
         className="modal palette"
         role="dialog"
         aria-modal="true"
+        aria-label="Command palette"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === 'Escape') close();
@@ -109,6 +110,7 @@ export function CommandPalette() {
         <input
           ref={inputRef}
           className="input palette-input"
+          aria-label="Search pages, agents, and conversations"
           placeholder="Jump to a page, agent, or conversation…"
           value={q}
           onChange={(e) => setQ(e.target.value)}

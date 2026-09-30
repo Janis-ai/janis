@@ -628,6 +628,7 @@ export default function ConversationPage() {
           <button
             className="btn icon"
             title={c.is_starred ? 'Unstar' : 'Star'}
+            aria-label={c.is_starred ? 'Unstar conversation' : 'Star conversation'}
             onClick={() => patch.mutate({ is_starred: !c.is_starred })}
           >
             <Star size={16} fill={c.is_starred ? 'currentColor' : 'none'} color={c.is_starred ? 'var(--accent)' : 'currentColor'} />
@@ -1054,6 +1055,7 @@ export default function ConversationPage() {
               <button
                 className="btn icon"
                 title="Try another suggestion"
+                aria-label="Try another suggestion"
                 disabled={suggest.isPending}
                 onClick={() => { void dismissSuggestions(); suggest.mutate(); }}
               >

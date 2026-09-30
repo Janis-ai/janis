@@ -157,10 +157,10 @@ export default function Composer({
         />
 
         <div className="composer-bar">
-          <button type="button" className="btn icon" title="Emoji" onClick={() => setEmojiOpen((o) => !o)}><Smile size={16} /></button>
-          <button type="button" className="btn icon" title="Attach file" onClick={() => fileRef.current?.click()}><Paperclip size={16} /></button>
+          <button type="button" className="btn icon" title="Emoji" aria-label="Emoji picker" onClick={() => setEmojiOpen((o) => !o)}><Smile size={16} /></button>
+          <button type="button" className="btn icon" title="Attach file" aria-label="Attach file" onClick={() => fileRef.current?.click()}><Paperclip size={16} /></button>
           {(savedReplies?.saved_replies.length ?? 0) > 0 && (
-            <button type="button" className="btn icon" title="Saved replies" onClick={() => setRepliesOpen((o) => !o)}><FileText size={16} /></button>
+            <button type="button" className="btn icon" title="Saved replies" aria-label="Saved replies" onClick={() => setRepliesOpen((o) => !o)}><FileText size={16} /></button>
           )}
           <input
             ref={fileRef}

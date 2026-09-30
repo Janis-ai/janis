@@ -46,6 +46,7 @@ export default function Onboarding() {
         <button
           className="btn icon"
           title="Dismiss"
+          aria-label="Dismiss onboarding checklist"
           onClick={() => {
             localStorage.setItem('janis_onboarding_dismissed', '1');
             setDismissed(true);
