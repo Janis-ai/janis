@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useMe } from '../api/hooks';
 import { useStream, type StreamAlert } from '../lib/useStream';
+import { trackOnce } from '../lib/analytics';
 import { playAlertSound } from '../lib/alertSound';
 import { setTabBadge } from '../lib/tabBadge';
 import PushBanner from './PushBanner';
@@ -33,6 +34,17 @@ const ALERT_LABELS: Record<string, string> = {
 
 export default function Layout() {
   const { data } = useMe();
+  // GA4 sign_up — fires once per account, only for users created in the last
+  // day (created_at on /me), so returning users on fresh browsers don't
+  // re-count as signups.
+  useEffect(() => {
+    const createdAt = data?.user?.created_at;
+    if (!createdAt) return;
+    const ageMs = Date.now() - new Date(createdAt).getTime();
+    if (ageMs >= 0 && ageMs < 24 * 3600_000) {
+      trackOnce(`sign_up:${data!.user.id}`, 'sign_up');
+    }
+  }, [data?.user?.created_at, data?.user?.id]);
   // The right rail is one slot with tabs: Ask Janis (concierge) and an agent
   // test chat. Both stay mounted while the rail is open — the inactive pane
   // is hidden so scroll position and drafts survive tab switches.

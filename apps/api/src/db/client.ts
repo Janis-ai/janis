@@ -34,7 +34,37 @@ export async function createDb(): Promise<Db> {
   }
   const { PGlite } = await import('@electric-sql/pglite');
   const { drizzle } = await import('drizzle-orm/pglite');
-  return drizzle(new PGlite(env.pgliteDir), { schema }) as unknown as Db;
+  const fs = await import('node:fs/promises');
+  const open = () => drizzle(new PGlite(env.pgliteDir), { schema }) as unknown as Db;
+  try {
+    const db = open();
+    // PGlite init is lazy — force it now so a wedged dir (a killed tsx watch
+    // leaves one: initdb/WAL aborts on every subsequent boot) fails HERE.
+    await db.execute(sql`select 1`);
+    return db;
+  } catch (err) {
+    // Distinguish lock-contention from corruption: postmaster.pid records the
+    // holder's pid — if that process is alive this is the forbidden
+    // two-watchers-on-one-dir case, so fail loudly instead of renaming a live
+    // server's data out from under it. Dead/stale pid → quarantine + retry.
+    let holderAlive = false;
+    try {
+      const pid = Number(
+        (await fs.readFile(`${env.pgliteDir}/postmaster.pid`, 'utf8')).split('\n')[0],
+      );
+      if (pid) {
+        process.kill(pid, 0);
+        holderAlive = true;
+      }
+    } catch {
+      holderAlive = false; // ESRCH (dead pid) or no pid file
+    }
+    if (holderAlive) throw err;
+    const broken = `${env.pgliteDir}.broken-${Date.now()}`;
+    console.error(`PGlite failed to open ${env.pgliteDir} — quarantining to ${broken}`, err);
+    await fs.rename(env.pgliteDir, broken).catch(() => {});
+    return open();
+  }
 }
 
 // __drizzle_migrations rows written by hand-crafted journal entries carried

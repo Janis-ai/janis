@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMe } from '../api/hooks';
 import { api } from '../api/client';
+import { track } from '../lib/analytics';
 import { SiteFooter } from '../components/bits';
 
 // Inline stroke glyphs — the old PNG set only had three distinct images,
@@ -123,11 +124,6 @@ const DIFFERENT: [string, string, string][] = [
   ['When the AI fails', 'A dashboard shows you where', 'Janis drafts the fix for you'],
   ['Pricing', 'Per seat, per teammate', 'Per message + metered tokens'],
 ];
-
-/** GA4 funnel events — no-op when the tag isn't injected (dev, self-host). */
-function track(event: string, params?: Record<string, string>) {
-  (window as { gtag?: (...a: unknown[]) => void }).gtag?.('event', event, params);
-}
 
 type PlanCard = {
   key: string;

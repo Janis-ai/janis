@@ -316,5 +316,6 @@ export function toWorkspaceUser(
     display_name: row.displayName,
     avatar_url: row.avatarUrl,
     show_identity: row.showIdentity !== false,
+    created_at: row.createdAt?.toISOString(),
   };
 }

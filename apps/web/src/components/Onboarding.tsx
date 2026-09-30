@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAgents } from '../api/hooks';
+import { trackOnce } from '../lib/analytics';
 
 interface Step {
   key: string;
@@ -10,6 +11,16 @@ interface Step {
   hint: string;
   done: boolean;
 }
+
+// Server-observed milestones → GA4 funnel events. trackOnce dedups per
+// browser so the 30s poll doesn't re-fire on every refetch.
+const STEP_EVENTS: Record<string, string> = {
+  create_agent: 'first_agent',
+  agent_live: 'agent_online',
+  add_channel: 'channel_connected',
+  first_message: 'first_conversation',
+  take_over: 'first_takeover',
+};
 
 /** Setup checklist shown on the inbox until every step is done (or dismissed). */
 export default function Onboarding() {
@@ -22,6 +33,16 @@ export default function Onboarding() {
     refetchInterval: 30_000,
   });
   const { data: agents } = useAgents();
+
+  useEffect(() => {
+    if (!data) return;
+    for (const s of data.steps) {
+      const event = STEP_EVENTS[s.key];
+      if (s.done && event) trackOnce(`step:${s.key}`, event);
+    }
+    if (data.complete) trackOnce('onboarding_complete', 'onboarding_complete');
+  }, [data]);
+
   // Channel steps land on the first agent's Channels tab (management is per-agent now).
   const channelsLink = agents?.agents[0]
     ? `/agents/${agents.agents[0].id}?tab=integrations`

@@ -614,6 +614,9 @@ export const WorkspaceUser = z.object({
   avatar_url: z.string().nullable().optional(),
   // false = stay anonymous even on channels with show_operator enabled
   show_identity: z.boolean().optional(),
+  // account creation — the console uses it to fire a once-per-user sign_up
+  // analytics event instead of guessing at "new".
+  created_at: z.string().optional(),
 });
 export type WorkspaceUser = z.infer<typeof WorkspaceUser>;
 

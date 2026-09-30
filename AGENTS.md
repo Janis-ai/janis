@@ -31,7 +31,7 @@ npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod)
 - Repo lives at ~/repos/janis (moved out of iCloud Drive — sync was corrupting
   files mid-edit). Do NOT run the API with .pglite inside a synced dir;
   apps/api/.env sets PGLITE_DIR=~/.janis/pglite.
-- Only ONE tsx watch may run against a PGlite dir at a time; kill extras (pkill -f "tsx watch src/index.ts") before restarting. A wedged watch killed mid-write has now corrupted the dev dir twice (RuntimeError Aborted() at boot) — prefer SIGTERM + wait over -9, and keep ~/.janis/pglite.broken-* copies before recreating.
+- Only ONE tsx watch may run against a PGlite dir at a time; kill extras (pkill -f "tsx watch src/index.ts") before restarting. Boot-time self-heal: createDb probes `select 1` and, when the dir's postmaster.pid holder is dead, quarantines a wedged dir to pglite.broken-<ts> and reopens fresh (corrupt dir → new seed, no boot loop). A LIVE holder still fails loudly — don't run two watchers.
 
 ## Billing / Stripe
 
@@ -443,14 +443,20 @@ before typecheck/tests/dev.
   stable, zod 3→4 (big migration — record/error APIs), npm local: vitest@5
   peer tree crashes npm 10's arborist — install with npm >=10.9/12.
   @esbuild-kit + glob 11 warns are transitive (drizzle-kit/workbox-build).
-- .env.example documents ~30 of ~80 vars — needs a full pass w/ comments
-  on which are dev-defaulted vs required.
+- .env.example: DONE — full pass, all ~85 vars grouped+commented (billing/
+  Twilio/Outlook/WorkOS/gmail-push/caps were the big gaps); legacy vars
+  marked. Remaining: keep in sync as env.ts grows.
 - Legacy to retire eventually: WORDHOP_API_URL, JANIS_SOCKET_SERVER_URL
   (Heroku relay), LEGACY_SLACK_INTERACTIONS_URL, META_LEGACY_WEBHOOK_URL.
 
 **Marketing surface (missing)**
-- GA4 (G-G5W5H3CVR2) fires landing-page demo/CTA events only — funnel events
-  still missing: signup, first_agent, first_conversation, channel_connected.
+- GA4 (G-G5W5H3CVR2) — funnel events DONE: shared lib/analytics.ts (track +
+  localStorage-deduped trackOnce). sign_up fires once per account when /me's
+  created_at <24h (Layout); onboarding steps fire first_agent/agent_online/
+  channel_connected/first_conversation/first_takeover on transition to done
+  (server-observed truth, not clicks) + onboarding_complete. Still missing:
+  server-side GA4 Measurement Protocol (needs GA_API_SECRET — client-side
+  gtag is ad-blockable).
 - Onboarding checklist: DONE (Onboarding.tsx + /api/onboarding). Still missing:
   public API/SDK docs, security/trust page, pricing/comparison pages.
 
