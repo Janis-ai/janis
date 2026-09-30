@@ -156,6 +156,13 @@ before typecheck/tests/dev.
   scope. mailSkipReason() in lib/email.ts is the single decision point —
   gmail/outlook sweeps + Resend inbound all run it. Still missing: true
   multi-address fan-out (one channel per address today).
+- Auto-DNS setup: POST /api/channels/:id/email-domain/dns-setup picks the
+  best path — Domain Connect (signed apply URL, zero-auth; dormant until the
+  janis.ai/email-domain template merges into Domain-Connect/Templates and
+  DC_PRIVATE_KEY is set — pubkey lives at _dc.janis.ai) → Cloudflare OAuth
+  (client ac3f399e…, public+verified, refresh token stored per channel) →
+  manual records table. Cloudflare OAuth callback: GET
+  /channels/email-domain/cf-callback (HMAC state binds channel+workspace).
 - Custom sending domains: DONE — client registers their domain on the
   channel's Custom sending domain card (POST /api/channels/:id/email-domain
   → Resend domains.create → records shown; /verify polls; DELETE cleans

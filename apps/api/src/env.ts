@@ -148,7 +148,7 @@ export const env = {
   // Domain Connect signing key (PEM) — enables the zero-auth DNS path once
   // the janis.ai template is in the public registry. Pubkey lives at
   // _dc.janis.ai as `p=<base64>`.
-  dcPrivateKey: process.env.DC_PRIVATE_KEY ?? '',
+  dcPrivateKey: (process.env.DC_PRIVATE_KEY ?? '').replace(/\\n/g, '\n'),
   metaVerifyToken: process.env.META_VERIFY_TOKEN ?? '',
   // Shared secret for the legacy broadcast-api relay — it forwards Facebook
   // page events for which no legacy client exists. Verified via
