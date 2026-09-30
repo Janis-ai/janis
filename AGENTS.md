@@ -296,10 +296,15 @@ before typecheck/tests/dev.
   guards one-trial-per-workspace; trial_will_end webhook handled. Remaining:
   seat pricing, in-app usage dashboard, add-on SKUs.
 
-**Reporting (missing)**
-- Time-series charts (volume, FRT, resolution over time — all point-in-time
-  today), AI-vs-human resolution split / deflection rate (core ROI metric),
-  CSV export.
+**Reporting**
+- Containment/deflection: DONE — /api/reports/containment (contained vs
+  escalated vs no-reply + daily series + approval/handoff timings) is the
+  AI-vs-human split. Also live: /handoffs, /csat, /intents, /operators,
+  /volume (daily convs + messages by direction — bar chart on Reports),
+  /usage (messages vs plan included + LLM cost/tokens + voice seconds,
+  current vs previous period — card on Reports), /export?kind=
+  conversations|campaign_sends (CSV, scope-filtered, 5k-row cap).
+- Still missing: FRT/resolution-over-time charts (point-in-time today).
 
 **Reliability & scale (missing — honest weak spots)**
 - Observability: no tracing (OTel), no SLO dashboards, no

@@ -1,10 +1,25 @@
 import { Hono } from 'hono';
-import { and, asc, eq, gt, inArray, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, alerts, channelBindings, conversations, messages, pendingActions, users as usersTable } from '../db/schema.js';
+import {
+  agents,
+  alerts,
+  campaignSends,
+  campaigns,
+  channelBindings,
+  channels,
+  contacts,
+  conversations,
+  messages,
+  pendingActions,
+  usageEvents,
+  users as usersTable,
+} from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentVis } from '../lib/access.js';
+import { currentPeriod } from '../lib/billing.js';
+import { effectivePlanKey, messagesInPeriod, planFor } from '../lib/plans.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -504,6 +519,183 @@ export function reportRoutes(db: Db) {
           assigned_now: s.assigned,
         }))
         .sort((a, b) => b.conversations - a.conversations),
+    });
+  });
+
+  // GET /volume?days=30 — daily time-series for the volume chart: new
+  // conversations + messages by direction (in / out / human). Uses the same
+  // workspace scope + drill filters as the metric cards.
+  app.get('/volume', async (c) => {
+    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const scope = and(
+      ...agentVis(c.get('workspaceId'), c.get('agentScope')),
+      gt(conversations.createdAt, cutoff),
+      ...drillFilters(c),
+    );
+    const day = (col: SQL | typeof conversations.createdAt | typeof messages.createdAt) =>
+      sql<string>`to_char(date_trunc('day', ${col} at time zone 'UTC'), 'YYYY-MM-DD')`;
+
+    const convRows = await db
+      .select({ d: day(conversations.createdAt), n: sql<number>`count(*)::int` })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(scope)
+      .groupBy(sql`1`);
+    const msgRows = await db
+      .select({
+        d: day(messages.createdAt),
+        dir: messages.direction,
+        n: sql<number>`count(*)::int`,
+      })
+      .from(messages)
+      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(gt(messages.createdAt, cutoff), ...agentVis(c.get('workspaceId'), c.get('agentScope')), ...drillFilters(c)))
+      .groupBy(sql`1`, messages.direction);
+
+    const series = new Map<string, { date: string; conversations: number; in: number; out: number; human: number }>();
+    const slot = (d: string) => {
+      let s = series.get(d);
+      if (!s) {
+        s = { date: d, conversations: 0, in: 0, out: 0, human: 0 };
+        series.set(d, s);
+      }
+      return s;
+    };
+    for (const r of convRows) slot(r.d).conversations = r.n;
+    for (const r of msgRows) {
+      if (r.dir === 'in') slot(r.d).in += r.n;
+      else if (r.dir === 'out') slot(r.d).out += r.n;
+      else if (r.dir === 'human') slot(r.d).human += r.n;
+    }
+    return c.json({
+      days,
+      series: [...series.values()].sort((a, b) => (a.date < b.date ? -1 : 1)),
+    });
+  });
+
+  // GET /usage — current + previous billing period against the plan:
+  // stored messages vs includedMessages, LLM token/cost burn, voice seconds.
+  app.get('/usage', async (c) => {
+    const ws = c.get('workspaceId');
+    const [planKey, used] = await Promise.all([
+      effectivePlanKey(db, ws),
+      messagesInPeriod(db, ws),
+    ]);
+    const plan = planFor(planKey);
+    const period = currentPeriod();
+    const prevPeriod = (() => {
+      const [y, m] = period.split('-').map(Number);
+      const d = new Date(Date.UTC(y, m - 2, 1));
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    })();
+
+    const rollups = await db
+      .select({
+        period: usageEvents.period,
+        kind: usageEvents.kind,
+        qty: sql<number>`coalesce(sum(${usageEvents.quantity}), 0)::int`,
+        prompt: sql<number>`coalesce(sum(${usageEvents.promptTokens}), 0)::int`,
+        completion: sql<number>`coalesce(sum(${usageEvents.completionTokens}), 0)::int`,
+        micros: sql<number>`coalesce(sum(${usageEvents.costMicros}), 0)::int`,
+      })
+      .from(usageEvents)
+      .where(and(eq(usageEvents.workspaceId, ws), inArray(usageEvents.period, [period, prevPeriod])))
+      .groupBy(usageEvents.period, usageEvents.kind);
+
+    const shape = (p: string) => {
+      const rows = rollups.filter((r) => r.period === p);
+      const llm = rows.find((r) => r.kind === 'llm_tokens');
+      const voice = rows.find((r) => r.kind === 'voice_seconds');
+      return {
+        period: p,
+        llm_prompt_tokens: llm?.prompt ?? 0,
+        llm_completion_tokens: llm?.completion ?? 0,
+        llm_cost_usd: Math.round(((llm?.micros ?? 0) / 1e6) * 100) / 100,
+        voice_seconds: voice?.qty ?? 0,
+      };
+    };
+    return c.json({
+      plan: { key: planKey, name: plan.name, included_messages: plan.includedMessages, base_cents: plan.baseCents, overage_per_1k_cents: plan.overagePer1kCents },
+      messages_used: used,
+      messages_remaining: Math.max(0, plan.includedMessages - used),
+      current: shape(period),
+      previous: shape(prevPeriod),
+    });
+  });
+
+  // GET /export?kind=conversations|campaign_sends&days=90 — CSV download.
+  // Same visibility scope as the metrics; capped at 5000 rows.
+  app.get('/export', async (c) => {
+    const kind = c.req.query('kind') ?? 'conversations';
+    const days = Math.min(Math.max(Number(c.req.query('days')) || 90, 1), 365);
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const scope = and(
+      ...agentVis(c.get('workspaceId'), c.get('agentScope')),
+      gt(conversations.createdAt, cutoff),
+      ...drillFilters(c),
+    );
+    const esc = (v: unknown) => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const iso = (d: Date | null) => (d ? d.toISOString() : '');
+
+    let head: string[];
+    let lines: string[];
+    if (kind === 'campaign_sends') {
+      const rows = await db
+        .select({
+          campaign: campaigns.name,
+          step: campaignSends.stepIndex,
+          recipient: campaignSends.recipient,
+          status: campaignSends.status,
+          sent: campaignSends.sentAt,
+          replied: campaignSends.repliedAt,
+          converted: campaignSends.convertedAt,
+          error: campaignSends.error,
+        })
+        .from(campaignSends)
+        .innerJoin(campaigns, eq(campaignSends.campaignId, campaigns.id))
+        .where(and(eq(campaignSends.workspaceId, c.get('workspaceId')), gt(campaignSends.createdAt, cutoff)))
+        .orderBy(desc(campaignSends.createdAt))
+        .limit(5000);
+      head = ['campaign', 'step', 'recipient', 'status', 'sent_at', 'replied_at', 'converted_at', 'error'];
+      lines = rows.map((r) =>
+        [r.campaign, r.step, r.recipient, r.status, iso(r.sent), iso(r.replied), iso(r.converted), r.error]
+          .map(esc).join(','));
+    } else {
+      const rows = await db
+        .select({
+          id: conversations.id,
+          state: conversations.state,
+          intent: conversations.intent,
+          csat: conversations.csatScore,
+          agent: agents.name,
+          channel: sql<string>`(select ch.kind from ${channelBindings} cb join ${channels} ch on ch.id = cb.channel_id where cb.conversation_id = ${conversations.id} order by cb.created_at limit 1)`,
+          contact: contacts.name,
+          email: contacts.email,
+          phone: contacts.phone,
+          created: conversations.createdAt,
+          archived: conversations.archivedAt,
+        })
+        .from(conversations)
+        .innerJoin(agents, eq(conversations.agentId, agents.id))
+        .leftJoin(contacts, eq(conversations.contactId, contacts.id))
+        .where(scope)
+        .orderBy(desc(conversations.createdAt))
+        .limit(5000);
+      head = ['id', 'created_at', 'state', 'agent', 'channel', 'contact', 'email', 'phone', 'intent', 'csat', 'archived_at'];
+      lines = rows.map((r) =>
+        [r.id, iso(r.created), r.state, r.agent, r.channel, r.contact, r.email, r.phone, r.intent, r.csat, iso(r.archived)]
+          .map(esc).join(','));
+    }
+    return new Response([head.join(','), ...lines].join('\n') + '\n', {
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="janis-${kind}-${days}d.csv"`,
+      },
     });
   });
 

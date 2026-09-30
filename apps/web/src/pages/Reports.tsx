@@ -114,6 +114,24 @@ export default function Reports() {
         `/api/reports/intents?${qs}`,
       ),
   });
+  const volume = useQuery({
+    queryKey: ['volume-metrics', agentId, channelId],
+    queryFn: () =>
+      api<{ days: number; series: { date: string; conversations: number; in: number; out: number; human: number }[] }>(
+        `/api/reports/volume?${qs}`,
+      ),
+  });
+  const usage = useQuery({
+    queryKey: ['usage-metrics'],
+    queryFn: () =>
+      api<{
+        plan: { key: string; name: string; included_messages: number; base_cents: number; overage_per_1k_cents: number | null };
+        messages_used: number;
+        messages_remaining: number;
+        current: { period: string; llm_prompt_tokens: number; llm_completion_tokens: number; llm_cost_usd: number; voice_seconds: number };
+        previous: { period: string; llm_prompt_tokens: number; llm_completion_tokens: number; llm_cost_usd: number; voice_seconds: number };
+      }>('/api/reports/usage'),
+  });
   const qc = useQueryClient();
 
   const generate = useMutation({
@@ -126,6 +144,12 @@ export default function Reports() {
     <>
       <div className="row">
         <h1 className="page-title grow">Reports</h1>
+        <a className="btn" href={`/api/reports/export?kind=conversations&days=90`} download>
+          Export conversations CSV
+        </a>
+        <a className="btn" href={`/api/reports/export?kind=campaign_sends&days=90`} download>
+          Export campaign sends CSV
+        </a>
         <button className="btn" onClick={() => generate.mutate()} disabled={generate.isPending}>
           {generate.isPending ? 'Generating…' : 'Generate digest now'}
         </button>
@@ -186,6 +210,75 @@ export default function Reports() {
               <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
                 {k.no_reply} conversation{k.no_reply === 1 ? '' : 's'} got no agent reply at all —
                 counted in the total, in neither column.
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Volume — daily conversations + message traffic */}
+      {(() => {
+        const v = volume.data;
+        if (!v || v.series.length < 2) return null;
+        const maxConv = Math.max(...v.series.map((d) => d.conversations), 1);
+        const totals = v.series.reduce(
+          (t, d) => ({ in: t.in + d.in, out: t.out + d.out, human: t.human + d.human }),
+          { in: 0, out: 0, human: 0 },
+        );
+        return (
+          <div className="card">
+            <div className="row">
+              <strong className="grow">Volume — last {v.days} days</strong>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {totals.in} in · {totals.out} agent out · {totals.human} human
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 64, marginTop: 12 }}>
+              {v.series.map((d) => (
+                <div key={d.date} style={{ flex: 1, minWidth: 2 }}
+                  title={`${d.date}: ${d.conversations} conversations · ${d.in} in / ${d.out} out / ${d.human} human`}>
+                  <div style={{
+                    height: Math.max((d.conversations / maxConv) * 60, d.conversations ? 2 : 0),
+                    background: 'var(--accent)', borderRadius: 2,
+                  }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Usage — this billing period against the plan */}
+      {(() => {
+        const u = usage.data;
+        if (!u) return null;
+        const capped = u.plan.included_messages >= Number.MAX_SAFE_INTEGER;
+        const pct = capped ? 0 : Math.min(100, Math.round((u.messages_used / u.plan.included_messages) * 100));
+        const fmtUsd = (n: number) => `$${n.toFixed(2)}`;
+        const fmtSec = (s: number) => (s >= 3600 ? `${(s / 3600).toFixed(1)}h` : s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`);
+        return (
+          <div className="card">
+            <div className="row">
+              <strong className="grow">Usage — {u.current.period} · {u.plan.name} plan</strong>
+            </div>
+            <div className="metric-grid" style={{ marginTop: 10 }}>
+              <div className="metric">
+                <div className="metric-num">
+                  {u.messages_used.toLocaleString()}
+                  {!capped && <span className="muted" style={{ fontSize: 14 }}> / {u.plan.included_messages.toLocaleString()}</span>}
+                </div>
+                <div className="muted">messages this period{capped ? ' (uncapped plan)' : ''}</div>
+              </div>
+              <div className="metric"><div className="metric-num">{fmtUsd(u.current.llm_cost_usd)}</div><div className="muted">LLM cost (prev {fmtUsd(u.previous.llm_cost_usd)})</div></div>
+              <div className="metric"><div className="metric-num">{((u.current.llm_prompt_tokens + u.current.llm_completion_tokens) / 1000).toFixed(0)}k</div><div className="muted">LLM tokens</div></div>
+              <div className="metric"><div className="metric-num">{fmtSec(u.current.voice_seconds)}</div><div className="muted">voice (prev {fmtSec(u.previous.voice_seconds)})</div></div>
+            </div>
+            {!capped && (
+              <div style={{ marginTop: 10, background: 'var(--panel-2)', borderRadius: 3, height: 8 }}>
+                <div style={{
+                  width: `${pct}%`, height: '100%', borderRadius: 3,
+                  background: pct > 90 ? 'var(--danger, #e5534b)' : 'var(--accent)',
+                }} />
               </div>
             )}
           </div>
