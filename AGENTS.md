@@ -310,9 +310,12 @@ before typecheck/tests/dev.
   Still pending: full bidirectional field sync (later, separate product).
 - Help center: search/slugs/SEO meta/custom domain/widget link done; seeded
   13 articles on prod Demo Agent + Janis agent. Ranked tsvector search
-  (websearch_to_tsquery + ILIKE fallback), view counts, and zero-result
-  search log → GET /api/articles/insights all DONE (mig 0076).
-  Missing: helpfulness votes, version history, widget article embeds.
+  (websearch_to_tsquery + ILIKE fallback), view counts, zero-result search
+  log → GET /api/articles/insights (mig 0076), and helpfulness votes
+  (help_votes table mig 0080 — POST /api/help/:agent/:article/vote,
+  fingerprint-deduped + flippable; Insights card on the agent Help tab
+  surfaces satisfaction %, downvoted articles, zero-result queries) all DONE.
+  Missing: version history, widget article embeds.
 - Marketplace: webhook template + event export cover Zapier manually; no
   published Zapier app (listing/submission = highest-leverage non-code task),
   no one-click OAuth installs, no public /integrations directory. Outbound

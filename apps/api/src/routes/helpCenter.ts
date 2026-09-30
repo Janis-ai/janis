@@ -1,9 +1,10 @@
+import { createHash } from 'node:crypto';
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, asc, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, helpArticles, helpSearchLog, workspaces } from '../db/schema.js';
+import { agents, helpArticles, helpSearchLog, helpVotes, workspaces } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toHelpArticle } from '../lib/serializers.js';
 
@@ -103,6 +104,10 @@ export function articleRoutes(db: Db) {
         slug: helpArticles.slug,
         category: helpArticles.category,
         viewCount: helpArticles.viewCount,
+        helpful:
+          sql<number>`(select count(*) filter (where helpful) from help_votes where article_id = ${helpArticles.id})::int`,
+        notHelpful:
+          sql<number>`(select count(*) filter (where not helpful) from help_votes where article_id = ${helpArticles.id})::int`,
       })
       .from(helpArticles)
       .where(eq(helpArticles.agentId, agent_id))
@@ -117,7 +122,27 @@ export function articleRoutes(db: Db) {
       limit 20
     `)) as unknown;
     const missedRows = (Array.isArray(missed) ? missed : (missed as { rows?: unknown[] }).rows) ?? [];
-    return c.json({ top_viewed: topViewed, zero_result_searches: missedRows });
+    // Articles readers flagged unhelpful — the fix list alongside the
+    // zero-result content roadmap.
+    const disliked = await db
+      .select({
+        id: helpArticles.id,
+        title: helpArticles.title,
+        slug: helpArticles.slug,
+        notHelpful: sql<number>`count(*) filter (where not ${helpVotes.helpful})::int`,
+        helpful: sql<number>`count(*) filter (where ${helpVotes.helpful})::int`,
+      })
+      .from(helpVotes)
+      .innerJoin(helpArticles, eq(helpVotes.articleId, helpArticles.id))
+      .where(eq(helpArticles.agentId, agent_id))
+      .groupBy(helpArticles.id)
+      .orderBy(desc(sql`count(*) filter (where not ${helpVotes.helpful})`))
+      .limit(10);
+    return c.json({
+      top_viewed: topViewed,
+      zero_result_searches: missedRows,
+      satisfaction: disliked.filter((a) => a.helpful + a.notHelpful > 0),
+    });
   });
 
   app.post('/', zValidator('json', articleBody), async (c) => {
@@ -308,6 +333,45 @@ export function helpPublicRoutes(db: Db) {
       .catch(() => {});
     return c.json({ agent_name: row.agents.name, article: toHelpArticle(row.help_articles) });
   });
+
+  // "Was this helpful?" — anonymous, deduped by a fingerprint of the
+  // reader (IP + UA, hashed with the article id); re-voting flips the row
+  // rather than double-counting. Public surface, so keep it write-light.
+  app.post(
+    '/:agentId/:articleId/vote',
+    zValidator('json', z.object({ helpful: z.boolean() })),
+    async (c) => {
+      const key = c.req.param('articleId');
+      const byId = /^[0-9a-f-]{36}$/i.test(key);
+      const [article] = await db
+        .select({ id: helpArticles.id })
+        .from(helpArticles)
+        .where(
+          and(
+            byId ? eq(helpArticles.id, key) : eq(helpArticles.slug, key),
+            eq(helpArticles.agentId, c.req.param('agentId')),
+            eq(helpArticles.status, 'published'),
+          ),
+        )
+        .limit(1);
+      if (!article) return c.json({ error: 'not found' }, 404);
+      const fp = createHash('sha256')
+        .update(
+          `${c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? ''}|` +
+            `${c.req.header('user-agent') ?? ''}|${article.id}`,
+        )
+        .digest('hex')
+        .slice(0, 40);
+      await db
+        .insert(helpVotes)
+        .values({ articleId: article.id, helpful: c.req.valid('json').helpful, voter: fp })
+        .onConflictDoUpdate({
+          target: [helpVotes.articleId, helpVotes.voter],
+          set: { helpful: c.req.valid('json').helpful },
+        });
+      return c.json({ ok: true });
+    },
+  );
 
   return app;
 }

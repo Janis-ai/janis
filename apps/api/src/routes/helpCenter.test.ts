@@ -163,3 +163,62 @@ describe('view counts + insights', () => {
     expect(m?.n).toBe(2);
   });
 });
+
+describe('helpfulness votes', () => {
+  const vote = (articleId: string, helpful: boolean, ip = '1.2.3.4') =>
+    app.fetch(
+      new Request(`http://t/api/help/${agentId}/${articleId}/vote`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'cf-connecting-ip': ip,
+          'user-agent': 'vitest',
+        },
+        body: JSON.stringify({ helpful }),
+      }),
+    );
+
+  it('records a vote and surfaces it in insights satisfaction', async () => {
+    const res = await vote('refund-policy', true, '9.9.9.9');
+    expect(res.status).toBe(200);
+    const ins = await app.fetch(
+      new Request(`http://t/api/articles/insights?agent_id=${agentId}`, {
+        headers: { cookie },
+      }),
+    );
+    const body = await j(ins);
+    const sat = body.satisfaction as { slug: string; helpful: number; notHelpful: number }[];
+    const row = sat.find((a) => a.slug === 'refund-policy');
+    expect(row?.helpful).toBe(1);
+  });
+
+  it('re-voting flips the row instead of double-counting', async () => {
+    await vote('shipping-times', true, '8.8.8.8');
+    await vote('shipping-times', false, '8.8.8.8'); // same fp → flip
+    const ins = await app.fetch(
+      new Request(`http://t/api/articles/insights?agent_id=${agentId}`, {
+        headers: { cookie },
+      }),
+    );
+    const sat = ((await j(ins)).satisfaction as { slug: string; helpful: number; notHelpful: number }[]).find(
+      (a) => a.slug === 'shipping-times',
+    );
+    expect(sat?.helpful).toBe(0);
+    expect(sat?.notHelpful).toBe(1);
+  });
+
+  it('different fingerprints count independently and drafts reject votes', async () => {
+    await vote('refund-policy', false, '7.7.7.7');
+    const ins = await app.fetch(
+      new Request(`http://t/api/articles/insights?agent_id=${agentId}`, {
+        headers: { cookie },
+      }),
+    );
+    const sat = ((await j(ins)).satisfaction as { slug: string; helpful: number; notHelpful: number }[]).find(
+      (a) => a.slug === 'refund-policy',
+    );
+    expect(sat?.helpful).toBe(1);
+    expect(sat?.notHelpful).toBe(1);
+    expect((await vote('runbook', true)).status).toBe(404);
+  });
+});

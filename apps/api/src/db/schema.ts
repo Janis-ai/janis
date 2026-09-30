@@ -763,6 +763,24 @@ export const helpSearchLog = pgTable(
   (t) => [index('help_search_log_agent').on(t.agentId, t.createdAt)],
 );
 
+/** "Was this helpful?" votes on public articles — one row per (article,
+ *  anonymous voter fingerprint); re-voting flips the same row. Insights
+ *  derives satisfaction ratios from it. */
+export const helpVotes = pgTable(
+  'help_votes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    articleId: uuid('article_id')
+      .notNull()
+      .references(() => helpArticles.id, { onDelete: 'cascade' }),
+    helpful: boolean('helpful').notNull(),
+    // sha256(ip + user-agent + article) — anonymous, one vote per reader.
+    voter: text('voter').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('help_votes_voter').on(t.articleId, t.voter)],
+);
+
 /**
  * Saved regression cases for hosted agents — a transcript slice lifted from
  * a real (usually rescued) conversation plus the operator's expectation.

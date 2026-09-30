@@ -153,7 +153,35 @@ export function HelpArticle() {
           Updated {new Date(data.article.updated_at).toLocaleDateString()}
         </p>
         <div className="help-body">{data.article.body}</div>
+        <VoteRow agentId={agentId!} articleId={articleId!} />
       </div>
+    </div>
+  );
+}
+
+/** "Was this helpful?" — server dedupes by fingerprint; localStorage just
+ *  avoids re-prompting on this browser. */
+function VoteRow({ agentId, articleId }: { agentId: string; articleId: string }) {
+  const key = `help-vote:${agentId}:${articleId}`;
+  const [vote, setVote] = useState<boolean | null>(() => {
+    const v = localStorage.getItem(key);
+    return v === null ? null : v === '1';
+  });
+  const cast = (helpful: boolean) => {
+    setVote(helpful);
+    localStorage.setItem(key, helpful ? '1' : '0');
+    void api(`/api/help/${agentId}/${articleId}/vote`, {
+      method: 'POST',
+      body: JSON.stringify({ helpful }),
+    }).catch(() => {});
+  };
+  if (vote !== null)
+    return <p className="muted" style={{ marginTop: 32, fontSize: 13 }}>Thanks for the feedback!</p>;
+  return (
+    <div style={{ marginTop: 32 }}>
+      <span className="muted" style={{ fontSize: 13 }}>Was this helpful? </span>
+      <button className="secondary sm" style={{ marginLeft: 8 }} onClick={() => cast(true)}>Yes</button>{' '}
+      <button className="secondary sm" onClick={() => cast(false)}>No</button>
     </div>
   );
 }

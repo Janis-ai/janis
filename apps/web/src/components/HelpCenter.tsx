@@ -179,6 +179,8 @@ export function HelpCenter({ agent }: { agent: Agent }) {
         </div>
       )}
 
+      <Insights agentId={agent.id} />
+
       {articles.map((a) => (
         <div key={a.id} className="card">
           <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -210,6 +212,61 @@ export function HelpCenter({ agent }: { agent: Agent }) {
       ))}
       {articles.length === 0 && !editing && (
         <div className="card muted">No articles yet — publish your FAQ here and the agent will answer from it too.</div>
+      )}
+    </div>
+  );
+}
+
+interface Insight {
+  top_viewed: { id: string; title: string; slug: string | null; viewCount: number; helpful: number; notHelpful: number }[];
+  zero_result_searches: { query: string; n: number; last_seen: string }[];
+  satisfaction: { id: string; title: string; slug: string | null; helpful: number; notHelpful: number }[];
+}
+
+/** Reader signal: most-viewed articles with their helpfulness ratio, the
+ *  articles readers are downvoting, and the searches that found nothing —
+ *  together they're the content roadmap. */
+function Insights({ agentId }: { agentId: string }) {
+  const { data: ins } = useQuery({
+    queryKey: ['article-insights', agentId],
+    queryFn: () => api<Insight>(`/api/articles/insights?agent_id=${agentId}`),
+  });
+  const rows = ins?.top_viewed ?? [];
+  const missed = ins?.zero_result_searches ?? [];
+  const disliked = (ins?.satisfaction ?? []).filter((a) => a.notHelpful > 0);
+  if (!ins || (rows.length === 0 && missed.length === 0)) return null;
+  return (
+    <div className="card">
+      <strong>Insights</strong>
+      {rows.length > 0 && (
+        <table style={{ width: '100%', fontSize: 13, marginTop: 8 }}>
+          <tbody>
+            {rows.map((a) => {
+              const votes = a.helpful + a.notHelpful;
+              const pct = votes ? Math.round((a.helpful / votes) * 100) : null;
+              return (
+                <tr key={a.id}>
+                  <td style={{ padding: '3px 0' }}>{a.title}</td>
+                  <td className="muted" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {a.viewCount} views
+                    {pct !== null && ` · ${pct}% helpful (${votes})`}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {disliked.length > 0 && (
+        <p className="muted" style={{ margin: '8px 0 0', fontSize: 12 }}>
+          Needs revision: {disliked.map((a) => `${a.title} (${a.notHelpful} down)`).join(', ')}
+        </p>
+      )}
+      {missed.length > 0 && (
+        <p className="muted" style={{ margin: '8px 0 0', fontSize: 12 }}>
+          Searched, found nothing: {missed.slice(0, 8).map((m) => `${m.query} (${m.n}×)`).join(', ')}
+          {' '}— these are the articles to write next.
+        </p>
       )}
     </div>
   );

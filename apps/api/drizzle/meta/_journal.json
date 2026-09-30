@@ -561,6 +561,13 @@
       "when": 1790832000002,
       "tag": "0079_expectation_draft",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1790832000003,
+      "tag": "0080_help_votes",
+      "breakpoints": true
     }
   ]
 }
