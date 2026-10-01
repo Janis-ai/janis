@@ -10,7 +10,7 @@ import Composer from '../components/Composer';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { typingBus, presenceBus } from '../lib/typingBus';
 import { usePageTitle } from '../lib/title';
-import { Paperclip, Star, X } from 'lucide-react';
+import { Paperclip, RefreshCw, Star, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -1063,7 +1063,7 @@ export default function ConversationPage() {
                 disabled={suggest.isPending}
                 onClick={() => { void dismissSuggestions(); suggest.mutate(); }}
               >
-                ↻
+                <RefreshCw size={13} />
               </button>
               <button
                 className="btn"

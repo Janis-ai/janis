@@ -199,11 +199,9 @@ export default function Campaigns() {
             <option value="continuous">Ongoing — auto-enroll new matches + webhook</option>
           </select>
           <input className="input" type="number" min="1" style={{ width: 150 }}
-            title="Hard cap on total sends — leave blank for unlimited"
             placeholder="Max sends (cap)" value={form.send_cap}
             onChange={(e) => setForm({ ...form, send_cap: e.target.value })} />
           <input className="input" style={{ width: 180 }}
-            title="Conversion event name that counts as this campaign's goal (from POST /events/:token)"
             placeholder="Goal event (e.g. purchase)" value={form.goal}
             onChange={(e) => setForm({ ...form, goal: e.target.value })} />
         </div>

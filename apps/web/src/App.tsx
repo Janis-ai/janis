@@ -20,6 +20,7 @@ import { HelpCenter, HelpArticle, HelpDomain } from './pages/HelpCenter';
 import { Status } from './pages/Status';
 import { Contacts, ContactDetail } from './pages/Contacts';
 import Campaigns from './pages/Campaigns';
+import ChannelPage from './pages/ChannelPage';
 import { finishOpenRouterCallback } from './lib/openrouterAuth';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -83,7 +84,7 @@ function PushDeepLink() {
 }
 
 /** Channels are managed per agent now — old /integrations/:id links resolve
- * to the owning agent's Channels tab (and flash the channel card). */
+ * to the owning agent's channel settings page. */
 function ChannelRedirect() {
   const { channelId } = useParams();
   const { data, error } = useQuery({
@@ -96,7 +97,7 @@ function ChannelRedirect() {
   if (!data) return <div className="login-wrap muted">Loading…</div>;
   return (
     <Navigate
-      to={`/agents/${data.channel.agent_id}?tab=channels&channel=${channelId}`}
+      to={`/agents/${data.channel.agent_id}/channels/${channelId}`}
       replace
     />
   );
@@ -156,6 +157,7 @@ export default function App() {
           <Route path="/campaigns" element={<Campaigns />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/agents/:id" element={<AgentDetail />} />
+          <Route path="/agents/:id/channels/:channelId" element={<ChannelPage />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/integrations" element={<Navigate to="/agents" replace />} />
           <Route path="/integrations/:channelId" element={<ChannelRedirect />} />

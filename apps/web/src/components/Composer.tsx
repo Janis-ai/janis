@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Attachment } from '@janis/shared';
 import { useSavedReplies } from '../api/hooks';
-import { FileText, Image, Paperclip, Smile } from 'lucide-react';
+import { FileText, Image, Paperclip, Smile, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 
 export default function Composer({
@@ -116,12 +116,13 @@ export default function Composer({
               {a.name}
               <a
                 href="#"
+                aria-label={`Remove ${a.name}`}
                 onClick={(e) => {
                   e.preventDefault();
                   setAttachments((prev) => prev.filter((_, j) => j !== i));
                 }}
               >
-                {' '}✕
+                {' '}<X size={11} style={{ verticalAlign: '-1px' }} />
               </a>
             </span>
           ))}

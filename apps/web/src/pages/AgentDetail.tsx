@@ -19,6 +19,7 @@ import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { railBus } from '../lib/railBus';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
+import { RefreshCw, Trash2, X } from 'lucide-react';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert', 'auto_assign'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
@@ -403,8 +404,8 @@ function SlackRouteRow({
           await createChannel.mutateAsync(name);
         }}
       />
-      <button className="btn" disabled={busy} onClick={onRemove} title="Remove destination">
-        ✕
+      <button className="btn" disabled={busy} onClick={onRemove} title="Remove destination" aria-label="Remove destination">
+        <X size={14} />
       </button>
     </div>
   );
@@ -750,7 +751,7 @@ function EscalationTab({
                 : ''}
               {r.config.tag ? ` +tag:${r.config.tag}` : ''}
             </span>
-            <button className="btn danger" onClick={() => onDeleteRule(r.id)}>✕</button>
+            <button className="btn danger" onClick={() => onDeleteRule(r.id)} aria-label="Delete rule"><Trash2 size={14} /></button>
           </div>
         ))}
         <div className="row" style={{ marginTop: 8 }}>
@@ -1121,7 +1122,7 @@ function AgentSavedRepliesCard({ agent }: { agent: Agent }) {
           <span className="grow">
             <strong>{r.title}</strong> — {r.body.slice(0, 80)}
           </span>
-          <button className="btn danger" onClick={() => remove.mutate(r.id)}>✕</button>
+          <button className="btn danger" onClick={() => remove.mutate(r.id)} aria-label="Delete saved reply"><Trash2 size={14} /></button>
         </div>
       ))}
       <form
@@ -1389,8 +1390,9 @@ function ToolsTab({
                     tools: [...managedTools, ...customTools.filter((x) => x !== t)],
                   })
                 }
+                aria-label={`Remove tool ${t.name ?? t.url}`}
               >
-                ✕
+                <X size={14} />
               </button>
             )}
           </div>
@@ -2002,13 +2004,14 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
             <button
               className="btn sm"
               title="Re-crawl now"
+              aria-label="Re-crawl now"
               disabled={refresh.isPending}
               onClick={() => refresh.mutate(f.id)}
             >
-              ↻
+              <RefreshCw size={13} className={refresh.isPending ? 'spin-ic' : ''} />
             </button>
           )}
-          <button className="btn danger" onClick={() => remove.mutate(f.id)}>✕</button>
+          <button className="btn danger" onClick={() => remove.mutate(f.id)} aria-label="Delete file"><Trash2 size={14} /></button>
         </div>
       ))}
       <div className="row" style={{ marginTop: 8 }}>
@@ -2393,7 +2396,7 @@ function Secrets({ agentId }: { agentId: string }) {
           <span className="grow mono">
             🔒 {s.name} <span className="muted">— •••••••• (write-only)</span>
           </span>
-          <button className="btn danger" onClick={() => remove.mutate(s.name)}>✕</button>
+          <button className="btn danger" onClick={() => remove.mutate(s.name)} aria-label={`Delete secret ${s.name}`}><Trash2 size={14} /></button>
         </div>
       ))}
       <form
@@ -2922,9 +2925,10 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                 <button
                   className="btn sm"
                   title="Delete test"
+                  aria-label="Delete test"
                   onClick={() => del.mutate(t.id)}
                 >
-                  ✕
+                  <Trash2 size={13} />
                 </button>
               )}
             </div>

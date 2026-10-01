@@ -137,7 +137,13 @@ export function ChannelCard({
             title="Embed — paste before </body> on your site"
             code={`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
           />
-          <WebchatIdentity channel={ch} />
+          <details className="webhook-details" style={{ marginTop: 8 }}>
+            <summary>
+              <span className="details-title">Developer</span>
+              <span className="details-sub">signed visitor identity — only needed if your site verifies logged-in users</span>
+            </summary>
+            <WebchatIdentity channel={ch} />
+          </details>
           <details className="webhook-details appearance-details" open style={{ marginTop: 8 }}>
             <summary>
               <span className="details-title">Appearance</span>
@@ -600,6 +606,9 @@ function WebchatBranding({ channel }: { channel: Channel }) {
         save.mutate();
       }}
     >
+      <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <button className="btn save" disabled={save.isPending}>Save appearance</button>
+      </div>
       <div className="row">
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           Accent{' '}
@@ -754,9 +763,9 @@ function WebchatBranding({ channel }: { channel: Channel }) {
           onChange={(e) => setF({ ...f, teaser_text: e.target.value })}
         />
       )}
-      <div className="row">
-        <button className="btn" disabled={save.isPending}>Save appearance</button>
+      <div className="row" style={{ justifyContent: 'flex-end' }}>
         {msg && <span className="muted">{msg}</span>}
+        <button className="btn save" disabled={save.isPending}>Save appearance</button>
       </div>
       <WidgetPreview
         accent={f.accent}

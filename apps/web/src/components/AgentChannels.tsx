@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
-import { useAgents, useChannels, useMe } from '../api/hooks';
+import { useChannels, useMe } from '../api/hooks';
 import { Empty } from './bits';
-import { ChannelCard, KIND_LABEL, type PendingAssets } from './Channels';
+import { KIND_LABEL, type PendingAssets } from './Channels';
+import { useConfirm } from './Prompt';
 import { friendlyError } from '../lib/friendlyError';
 
 /**
@@ -16,7 +17,6 @@ import { friendlyError } from '../lib/friendlyError';
 export function AgentChannels({ agent }: { agent: Agent }) {
   const agentId = agent.id;
   const { data } = useChannels();
-  const { data: agents } = useAgents();
   const { data: me } = useMe();
   const isAdmin = me?.user.role === 'admin';
   const qc = useQueryClient();
@@ -91,17 +91,16 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     onError: (e) => setError(e.message),
   });
 
-  // Deep link — ?channel=<id> scrolls to and flashes the card
+  // Deep link — ?channel=<id> opens that channel's settings page
+  const navigate = useNavigate();
   const focusChannel = params.get('channel');
   useEffect(() => {
     if (!focusChannel || !data) return;
-    const el = document.getElementById(`ch-${focusChannel}`);
-    if (!el) return;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.classList.add('flash');
-    const t = setTimeout(() => el.classList.remove('flash'), 2400);
-    return () => clearTimeout(t);
-  }, [focusChannel, data]);
+    const ch = (data.channels ?? []).find((c) => c.id === focusChannel);
+    if (!ch) return;
+    dropParams('channel');
+    navigate(`/agents/${ch.agent_id}/channels/${ch.id}`, { replace: true });
+  }, [focusChannel, data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // OAuth returns land back here with ?gmail_connect= / ?outlook_connect= /
   // ?cf_connect= — refresh channel state once so new creds render.
@@ -304,10 +303,19 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     mutationFn: (channelId: string) => api(`/api/channels/${channelId}`, { method: 'DELETE' }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
   });
+  const [confirmEl, confirm] = useConfirm();
+  const disconnectChannel = async (ch: Channel) => {
+    if (
+      await confirm(
+        `Disconnect ${ch.name}? Inbound messages stop arriving — the channel can be re-added later.`,
+        [{ key: 'ok', label: 'Disconnect', danger: true }],
+      )
+    )
+      removeChannel.mutate(ch.id);
+  };
 
   const allChannels = data?.channels ?? [];
   const channels = allChannels.filter((ch) => ch.agent_id === agentId);
-  const allAgents = agents?.agents ?? [];
 
   const sortedPages = [...(pending.data?.pages ?? [])].sort((a, b) =>
     a.name.localeCompare(b.name),
@@ -327,20 +335,6 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         .map((v) => [v, ch] as const),
     ),
   );
-  // Meta channels managed inline in the picker; anything the picker can't see
-  // (no session, or the asset vanished from the Meta account) still needs a row.
-  const META_KINDS = new Set(['messenger', 'instagram', 'whatsapp']);
-  const pendingAssetIds = new Set([
-    ...sortedPages.flatMap((pg) => [pg.id, ...(pg.instagram ? [pg.instagram.id] : [])]),
-    ...sortedWabas.flatMap((w) => w.phone_numbers.map((n) => n.id)),
-  ]);
-  const uncoveredMeta = channels.filter(
-    (ch) =>
-      META_KINDS.has(ch.kind) &&
-      !pendingAssetIds.has(ch.meta.page_id ?? '') &&
-      !pendingAssetIds.has(ch.meta.phone_number_id ?? ''),
-  );
-  const cardChannels = channels.filter((ch) => !META_KINDS.has(ch.kind));
 
   /** Customer-facing chat link for a connected Meta channel. */
   const launchUrl = (ch: Channel) =>
@@ -413,6 +407,51 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       )}
       {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
 
+      {/* Connected channels — compact index; configuration lives on each
+          channel's own page (/agents/:id/channels/:channelId). */}
+      {channels.length > 0 && (
+        <>
+          <h2 className="section-title">Connected</h2>
+          <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {channels.map((ch) => (
+              <div key={ch.id} className="row" style={{ alignItems: 'baseline' }}>
+                <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
+                <div className="grow" style={{ minWidth: 0 }}>
+                  <strong>{ch.name}</strong>{' '}
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {ch.meta.inbound_address ??
+                      ch.meta.email_address ??
+                      ch.meta.phone_number ??
+                      (ch.meta.chat_url ? 'website widget' : '')}
+                    {overrides(ch) && ` · ${overrides(ch)}`}
+                  </span>
+                </div>
+                {launchUrl(ch) && (
+                  <a href={launchUrl(ch)} target="_blank" rel="noreferrer" className="muted" style={{ fontSize: 12 }}>
+                    Open ↗
+                  </a>
+                )}
+                <Link className="btn" to={`/agents/${agentId}/channels/${ch.id}`}>
+                  Configure
+                </Link>
+                <button
+                  className="btn danger"
+                  disabled={removeChannel.isPending}
+                  onClick={() => void disconnectChannel(ch)}
+                >
+                  Disconnect
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {channels.length === 0 && !connectId && (
+        <Empty>No channels connected yet — this agent isn't answering anywhere.</Empty>
+      )}
+
+      <h2 className="section-title">Add a channel</h2>
+
       {/* Meta connect (primary path) or the pending asset picker */}
       {connectId && pickerOpen ? (
         <div className="card connect-card">
@@ -478,7 +517,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                       {msgr ? (
                         msgr.agent_id === agentId ? (
                           <button className="btn danger" disabled={removeChannel.isPending}
-                            onClick={() => removeChannel.mutate(msgr.id)}>
+                            onClick={() => void disconnectChannel(msgr)}>
                             Disconnect Messenger
                           </button>
                         ) : (
@@ -494,7 +533,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                         igCh ? (
                           igCh.agent_id === agentId ? (
                             <button className="btn danger" disabled={removeChannel.isPending}
-                              onClick={() => removeChannel.mutate(igCh.id)}>
+                              onClick={() => void disconnectChannel(igCh)}>
                               Disconnect Instagram
                             </button>
                           ) : (
@@ -527,7 +566,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                         {wa ? (
                           wa.agent_id === agentId ? (
                             <button className="btn danger" disabled={removeChannel.isPending}
-                              onClick={() => removeChannel.mutate(wa.id)}>
+                              onClick={() => void disconnectChannel(wa)}>
                               Disconnect WhatsApp
                             </button>
                           ) : (
@@ -1019,44 +1058,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         </details>
       </div>
 
-      {/* This agent's connected channels — Meta channels are managed in the
-          picker above; cards here carry the non-Meta config (embed, branding,
-          inbound addresses). Meta channels the picker can't see (no session,
-          asset gone) fall back to a compact row so they're never stranded. */}
-      {(cardChannels.length > 0 || uncoveredMeta.length > 0) && (
-        <h2 className="section-title">Connected channels</h2>
-      )}
-      {cardChannels.map((ch) => (
-        <ChannelCard key={ch.id} ch={ch} agents={allAgents} />
-      ))}
-      {uncoveredMeta.length > 0 && (
-        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {uncoveredMeta.map((ch) => (
-            <div key={ch.id} className="row" style={{ alignItems: 'baseline' }}>
-              <div className="grow">
-                <strong>{ch.name}</strong>
-                <div className="muted">{KIND_LABEL[ch.kind] ?? ch.kind}</div>
-                {launchUrl(ch) && (
-                  <a href={launchUrl(ch)} target="_blank" rel="noreferrer">
-                    Launch chat on {KIND_LABEL[ch.kind] ?? ch.kind} ↗
-                  </a>
-                )}
-              </div>
-              <button
-                className="btn danger"
-                style={{ whiteSpace: 'nowrap' }}
-                disabled={removeChannel.isPending}
-                onClick={() => removeChannel.mutate(ch.id)}
-              >
-                Disconnect {KIND_LABEL[ch.kind] ?? ch.kind}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      {channels.length === 0 && !connectId && (
-        <Empty>No channels connected yet — this agent isn't answering anywhere.</Empty>
-      )}
+      {confirmEl}
     </>
   );
 }

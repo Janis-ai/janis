@@ -15,8 +15,8 @@
       `/channels/email/events` (already configured 2026-09). Bounces feed
       suppression automatically; complaints must kill the sequence for that
       contact.
-- [ ] Sending domain verified — custom Resend domain with SPF/DKIM green in
-      Channels → email channel → sending domain card.
+- [ ] Sending domain verified — custom Resend domain with SPF/DKIM green on
+      the email channel's page (Channels → the channel → sending domain).
 - [ ] GA4 funnel live — signup/first_agent/first_conversation events fire.
 
 ## Send plan

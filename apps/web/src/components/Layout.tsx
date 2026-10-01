@@ -10,7 +10,7 @@ import { setTabBadge } from '../lib/tabBadge';
 import PushBanner from './PushBanner';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
-import { BarChart3, BookOpen, Bot, CreditCard, Inbox, Megaphone, Settings, Sparkles, Users } from 'lucide-react';
+import { BarChart3, BookOpen, Bot, CreditCard, Inbox, Megaphone, Settings, Sparkles, Users, X } from 'lucide-react';
 import { usePrompt } from './Prompt';
 import { CommandPalette } from './CommandPalette';
 
@@ -431,7 +431,7 @@ export default function Layout() {
                 Test{testRail!.label ? ` — ${testRail!.label}` : ''}
               </button>
               <span className="grow" />
-              <button className="btn" onClick={() => setRailOpen(false)} title="Close" aria-label="Close panel">✕</button>
+              <button className="btn" onClick={() => setRailOpen(false)} title="Close" aria-label="Close panel"><X size={14} /></button>
             </div>
           )}
           {hasAsk && (

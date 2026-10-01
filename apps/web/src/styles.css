@@ -366,6 +366,7 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 5px
 }
 .btn:hover { border-color: var(--accent); }
 .btn.primary { background: var(--accent); color: #06281f; border: none; font-weight: 600; }
+.btn.save { background: var(--ok); color: #052e1f; border: none; font-weight: 600; }
 .btn.danger { color: var(--danger); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 textarea:disabled { opacity: .55; }

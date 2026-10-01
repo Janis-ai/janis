@@ -9,7 +9,7 @@ import {
   type ChatMsg,
   type OutEntry,
 } from '../lib/chatTimeline';
-import { Loader2, Paperclip, Smile } from 'lucide-react';
+import { Loader2, Paperclip, Smile, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 import { ArgsRows } from './bits';
 
@@ -492,7 +492,7 @@ export function AskJanis({
         <strong className="grow">{cfg?.agent_name ?? 'Ask Janis'}</strong>
         {badge && <span className="badge">{badge}</span>}
         {onClose && (
-          <button className="btn" onClick={onClose} title="Close">✕</button>
+          <button className="btn" onClick={onClose} title="Close" aria-label="Close panel"><X size={14} /></button>
         )}
       </div>
       <div className="ask-scroll" ref={scrollRef} onScroll={onScroll}>

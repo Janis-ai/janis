@@ -198,6 +198,14 @@ export function useChannels() {
   });
 }
 
+export function useChannel(id: string | undefined) {
+  return useQuery({
+    queryKey: ['channel', id],
+    queryFn: () => api<{ channel: Channel }>(`/api/channels/${id}`),
+    enabled: !!id,
+  });
+}
+
 export function useDeliveries(agentId: string | null) {
   return useQuery({
     queryKey: ['deliveries', agentId],
