@@ -1014,8 +1014,15 @@
   // Firefox lacks the API entirely. The mic hides only where mic capture
   // itself is unavailable.
   var micBtn = panel.querySelector('#janis-mic');
+  // Gemini's audio input accepts webm/ogg/wav/mp3/aiff/flac — NOT mp4/m4a/aac
+  // (Safari's only MediaRecorder output, silently dropped). Pick the first
+  // supported container; where none exists (Safari) the mic hides.
+  var dictMime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg']
+    .find(function (t) {
+      try { return window.MediaRecorder && MediaRecorder.isTypeSupported(t); } catch (e) { return false; }
+    });
   var canDictate = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
-    window.MediaRecorder && window.FormData);
+    window.MediaRecorder && window.FormData && dictMime);
   var mediaRec = null;
   var micStream = null;
   var micTimer = null;
@@ -1047,7 +1054,7 @@
         var chunks = [];
         var rec;
         try {
-          rec = new MediaRecorder(stream);
+          rec = new MediaRecorder(stream, { mimeType: dictMime });
         } catch (e) {
           stream.getTracks().forEach(function (t) { t.stop(); });
           micStream = null;

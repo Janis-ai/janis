@@ -375,10 +375,26 @@ export function AskJanis({
     el.style.overflowY = el.scrollHeight > 110 ? 'auto' : 'hidden';
   };
 
+  // Gemini accepts webm/ogg/wav/mp3/aiff/flac — NOT mp4/m4a/aac, which is
+  // Safari's only MediaRecorder output (silently dropped server-side). Pick
+  // the first supported container; where none exists the mic hides.
+  const dictMime =
+    typeof MediaRecorder !== 'undefined'
+      ? ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg'].find(
+          (t) => {
+            try {
+              return MediaRecorder.isTypeSupported(t);
+            } catch {
+              return false;
+            }
+          },
+        )
+      : undefined;
   const canDictate =
     typeof navigator !== 'undefined' &&
     !!navigator.mediaDevices?.getUserMedia &&
-    typeof MediaRecorder !== 'undefined';
+    typeof MediaRecorder !== 'undefined' &&
+    !!dictMime;
 
   const flashDictNote = (note: string) => {
     setDictNote(note);
@@ -399,7 +415,7 @@ export function AskJanis({
         const chunks: Blob[] = [];
         let rec: MediaRecorder;
         try {
-          rec = new MediaRecorder(stream);
+          rec = new MediaRecorder(stream, dictMime ? { mimeType: dictMime } : undefined);
         } catch {
           stream.getTracks().forEach((t) => t.stop());
           micStreamRef.current = null;

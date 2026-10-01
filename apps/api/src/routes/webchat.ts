@@ -37,11 +37,17 @@ const VISITOR_RE = /^[A-Za-z0-9_-]{8,64}$/;
  * backend errors.
  */
 async function transcribeAudio(file: File): Promise<{ text: string; seconds: number } | null> {
+  // Blob types arrive as e.g. 'audio/webm;codecs=opus' — strip params.
+  const mime = (file.type || 'audio/webm').split(';')[0].trim();
+  // Gemini's inline audio drops unsupported containers silently (mp4/m4a/aac
+  // return "[BLANK_AUDIO]" with zero audio tokens) — only send what it reads.
+  const GEMINI_AUDIO = /^audio\/(webm|ogg|wav|mp3|mpeg|aiff|x-aiff|flac)$/;
   const googleKey =
     process.env.GOOGLE_LLM_API_KEY ||
     env.llmVendorKeys.google?.api_key ||
     (env.llmBaseUrl.includes('generativelanguage.googleapis.com') ? env.llmApiKey : '');
-  if (googleKey) {
+  const googleOk = googleKey && GEMINI_AUDIO.test(mime);
+  if (googleOk) {
     const base = env.llmBaseUrl.includes('generativelanguage.googleapis.com')
       ? env.llmBaseUrl.replace(/\/openai\/?$/, '')
       : 'https://generativelanguage.googleapis.com/v1beta';
@@ -54,7 +60,7 @@ async function transcribeAudio(file: File): Promise<{ text: string; seconds: num
           parts: [
             {
               inlineData: {
-                mimeType: file.type || 'audio/webm',
+                mimeType: mime,
                 data: Buffer.from(await file.arrayBuffer()).toString('base64'),
               },
             },
@@ -79,7 +85,7 @@ async function transcribeAudio(file: File): Promise<{ text: string; seconds: num
     env.llmVendorKeys.openai?.api_key ||
     (env.llmBaseUrl.includes('api.openai.com') ? env.llmApiKey : '');
   if (!openaiKey) {
-    if (!googleKey) return null; // nothing configured at all
+    if (!googleKey || !googleOk) return null; // nothing configured, or format only OpenAI reads
     throw new Error('gemini transcription failed');
   }
   const fd = new FormData();
