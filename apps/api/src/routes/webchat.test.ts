@@ -1695,4 +1695,45 @@ describe('dictation transcribe', () => {
     expect(off.dictation).toBe(false);
     await db.delete(channels).where(eq(channels.id, ch.id));
   });
+
+  it('emits dictation_engine and 403s transcribe on browser-engine channels', async () => {
+    const [ch] = await db
+      .insert(channels)
+      .values({
+        workspaceId: wsId,
+        agentId: (await db.select().from(agents))[0].id,
+        kind: 'webchat',
+        name: 'Browser mic',
+        credentials: { dictation: true, dictation_engine: 'browser' },
+      })
+      .returning();
+    try {
+      const body = (await (await app.request(`/chat/${ch.id}`)).json()) as {
+        dictation?: boolean;
+        dictation_engine?: string;
+      };
+      expect(body.dictation).toBe(true);
+      expect(body.dictation_engine).toBe('browser');
+      // A crafted POST must not burn the metered STT path on a free channel
+      let called = false;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => {
+          called = true;
+          return new Response(JSON.stringify({ text: 'x', duration: 1 }));
+        }),
+      );
+      expect((await postAudio(ch.id)).status).toBe(403);
+      expect(called).toBe(false);
+    } finally {
+      await db.delete(channels).where(eq(channels.id, ch.id));
+      vi.unstubAllGlobals();
+    }
+    // Legacy channels (dictation on, engine never set) keep 'llm' — their
+    // metered coverage is preserved.
+    const legacy = (await (await app.request(`/chat/${channelId}`)).json()) as {
+      dictation_engine?: string;
+    };
+    expect(legacy.dictation_engine).toBe('llm');
+  });
 });

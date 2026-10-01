@@ -455,6 +455,9 @@ export const Channel = z.object({
         // mic dictation in the widget — opt-in: transcription runs on
         // Janis's keys and is metered to the workspace
         dictation: z.boolean().optional(),
+        // 'llm' = metered server transcription (all browsers); 'browser' =
+        // free client-side Web Speech (Chrome/Edge only)
+        dictation_engine: z.enum(['llm', 'browser']).optional(),
       })
       .optional(),
   }),

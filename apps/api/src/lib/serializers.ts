@@ -192,6 +192,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     hide_powered_by?: boolean;
     show_help_link?: boolean;
     dictation?: boolean;
+    dictation_engine?: 'llm' | 'browser';
     identity_secret?: string;
     show_operator?: boolean;
     inbound_address?: string;
@@ -284,6 +285,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
               hide_powered_by: creds.hide_powered_by,
               show_help_link: creds.show_help_link,
               dictation: creds.dictation === true,
+              dictation_engine: creds.dictation_engine === 'browser' ? 'browser' : 'llm',
             }
           : undefined,
     },

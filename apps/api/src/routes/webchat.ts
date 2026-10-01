@@ -400,6 +400,10 @@ export function webchatRoutes(db: Db) {
       theme: creds.theme ?? 'light',
       hide_powered_by: creds.hide_powered_by === true && planKey !== 'free',
       dictation: creds.dictation === true || creds.internal === true,
+      // 'llm' = metered server transcription; 'browser' = free client-side
+      // Web Speech. Absent resolves to 'llm' — channels that opted into
+      // dictation before the engine switch keep their coverage.
+      dictation_engine: creds.dictation_engine === 'browser' ? 'browser' : 'llm',
     });
   });
 
@@ -533,6 +537,10 @@ export function webchatRoutes(db: Db) {
     const creds = channel.credentials as ChannelCredentials;
     if (creds.dictation !== true && creds.internal !== true)
       return c.json({ error: 'dictation not enabled' }, 403);
+    // 'browser'-engine channels opted out of metered transcription — a
+    // crafted POST must not be able to run up the Janis STT meter anyway.
+    if (creds.dictation_engine === 'browser' && creds.internal !== true)
+      return c.json({ error: 'channel uses browser dictation' }, 403);
     const engineQ = c.req.query('engine');
     const engine =
       engineQ === 'gemini' || engineQ === 'openai' ? engineQ : 'auto';

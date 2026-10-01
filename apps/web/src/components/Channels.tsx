@@ -557,6 +557,9 @@ function WebchatBranding({ channel }: { channel: Channel }) {
     hide_powered_by: b.hide_powered_by === true,
     show_help_link: b.show_help_link !== false,
     dictation: b.dictation === true,
+    // absent on channels saved before the engine switch — 'llm' matches
+    // the server default so their behaviour is preserved
+    dictation_advanced: b.dictation_engine !== 'browser',
   });
   const { data: wsDetail } = useQuery({
     queryKey: ['workspace'],
@@ -615,6 +618,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
             hide_powered_by: f.hide_powered_by,
             show_help_link: f.show_help_link,
             dictation: f.dictation,
+            dictation_engine: f.dictation_advanced ? 'llm' : 'browser',
           },
         }),
       }),
@@ -842,11 +846,27 @@ function WebchatBranding({ channel }: { channel: Channel }) {
           Microphone dictation
         </label>
         <span className="muted" style={{ fontSize: 12 }}>
-          adds a mic so visitors can dictate — transcription always runs on
-          Janis's keys and is metered per minute of audio on your plan, even
-          when the agent's own LLM is BYOK
+          adds a mic so visitors can dictate — free via the browser's speech
+          recognition (Chrome/Edge)
         </span>
       </div>
+      {f.dictation && (
+        <div className="row" style={{ paddingLeft: 22 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={f.dictation_advanced}
+              onChange={(e) => setF({ ...f, dictation_advanced: e.target.checked })}
+            />
+            Advanced speech recognition (uses LLM tokens)
+          </label>
+          <span className="muted" style={{ fontSize: 12 }}>
+            transcribes on Janis's keys so the mic also works on Safari and
+            Firefox — metered per minute of audio on your plan, even when the
+            agent's own LLM is BYOK
+          </span>
+        </div>
+      )}
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         {msg && <span className="muted">{msg}</span>}
         <button className="btn save" disabled={save.isPending}>Save appearance</button>

@@ -510,9 +510,10 @@ export function AskJanis({
         return undefined;
       }
     })();
-  // TEMPORARY A/B — sttEngine picks the dictation backend: auto (Gemini→OpenAI
-  // fallback), gemini, openai, or webspeech (client-side Web Speech API —
-  // free, never hits /transcribe). Seed via ?stt= URL param.
+  // Internal debug select — sttEngine picks the dictation backend: auto
+  // (Gemini→OpenAI fallback), gemini, openai, or webspeech (client-side Web
+  // Speech API — free, never hits /transcribe). Customer widgets get this
+  // from the channel's dictation_engine setting instead.
   const [sttEngine, setSttEngine] = useState<SttEngine>(initialSttEngine);
   const speechRef = useRef<SpeechRecognitionLike | null>(null);
   const SpeechRecognitionCtor = (
@@ -1069,7 +1070,7 @@ export function AskJanis({
             <select
               className="btn"
               style={{ fontSize: 11, padding: '0 4px', maxWidth: 92 }}
-              title="Dictation engine (temporary A/B) — webspeech is free/client-side"
+              title="Dictation engine (debug override) — webspeech is free/client-side"
               value={sttEngine}
               onChange={(e) => setSttEngine(e.target.value as SttEngine)}
             >

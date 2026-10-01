@@ -244,6 +244,11 @@ export default function Campaigns() {
         </div>
         <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
           Pick a channel, leave the date blank to save a draft, or set one to schedule.
+          {form.scheduled_at && new Date(form.scheduled_at).getTime() < Date.now() && (
+            <span style={{ color: 'var(--warn, #b45309)' }}>
+              {' '}— that time has already passed, so it sends immediately on save
+            </span>
+          )}
         </div>
         <div className="row" style={{ gap: 10, marginTop: 10 }}>
           <select className="input" value={form.enrollment}

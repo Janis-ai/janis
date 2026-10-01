@@ -56,6 +56,11 @@ export interface ChannelCredentials {
   // webchat: mic dictation in the widget — opt-in; transcription is a metered
   // Janis charge regardless of the agent's LLM (BYOK included)
   dictation?: boolean;
+  // webchat: 'llm' = server-side Gemini→OpenAI transcription (metered);
+  // 'browser' = free client-side Web Speech API (Chrome/Edge only — the mic
+  // hides on Safari/Firefox). Absent resolves to 'llm' so channels that
+  // enabled dictation before this existed keep their coverage.
+  dictation_engine?: 'llm' | 'browser';
   // webchat: HMAC-SHA256 key for host-signed identity assertions — when set,
   // a `sig` on the widget's user payload proves the host vouched for it
   identity_secret?: string;

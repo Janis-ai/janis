@@ -1391,11 +1391,11 @@
   });
 
   // ---- dictation ------------------------------------------------------------
-  // MediaRecorder → POST /chat/:token/transcribe (server-side OpenAI
-  // transcription). Deliberately not the Web Speech API: Chrome's path
-  // silently produces nothing where its speech service is unreachable, and
-  // Firefox lacks the API entirely. The mic hides only where mic capture
-  // itself is unavailable.
+  // Two engines, chosen by the channel's dictation_engine setting:
+  //   'llm' (default) — MediaRecorder → POST /chat/:token/transcribe
+  //     (server-side Gemini→OpenAI). Metered, works in every browser.
+  //   'browser' — free client-side Web Speech API. Chrome/Edge only;
+  //     the mic stays hidden where SpeechRecognition doesn't exist.
   var micBtn = panel.querySelector('#janis-mic');
   // Hidden until bootstrap confirms the channel opted into dictation (it's a
   // metered Janis charge); canDictate adds the browser-capability check.
@@ -1413,11 +1413,20 @@
   })();
   var canDictate = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
     window.MediaRecorder && window.FormData && recMime);
-  // TEMPORARY A/B — data-janis-stt="gemini|openai|webspeech" on the embed tag
-  // or ?janis_stt=… on the page picks the dictation backend. webspeech stays
-  // fully client-side (free, Chrome only); the other two hit the server.
-  var sttEngine = (script.getAttribute('data-janis-stt') ||
-    new URLSearchParams(location.search).get('janis_stt') || 'auto').toLowerCase();
+  // Engine comes from the channel's dictation_engine setting — 'browser'
+  // means free client-side Web Speech (Chrome/Edge; the mic hides where
+  // unsupported), anything else means metered server transcription that
+  // works everywhere. data-janis-stt / ?janis_stt= remain as a debug
+  // override (gemini|openai|webspeech).
+  var sttOverride = (script.getAttribute('data-janis-stt') ||
+    new URLSearchParams(location.search).get('janis_stt') || '').toLowerCase();
+  var hasSpeechRec = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  function dictEngine() {
+    if (sttOverride === 'gemini' || sttOverride === 'openai' || sttOverride === 'webspeech')
+      return sttOverride;
+    var e = state.config && state.config.dictation_engine;
+    return e === 'browser' ? 'webspeech' : 'auto';
+  }
   var speechRec = null;
   function webspeechToggle() {
     var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1542,10 +1551,10 @@
   function stopDictation() {
     if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
   }
-  if (canDictate || sttEngine === 'webspeech') {
+  if (canDictate || hasSpeechRec) {
     micBtn.addEventListener('click', function () {
       if (transcribing) return;
-      if (sttEngine === 'webspeech') { webspeechToggle(); return; }
+      if (dictEngine() === 'webspeech') { webspeechToggle(); return; }
       if (mediaRec) { stopDictation(); return; }
       navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
         micStream = stream;
@@ -1592,7 +1601,8 @@
           up.then(function (u) {
             var fd = new FormData();
             fd.append('audio', u.blob, 'dictation.' + u.ext);
-            var engineQ = sttEngine === 'gemini' || sttEngine === 'openai' ? '?engine=' + sttEngine : '';
+            var de = dictEngine();
+            var engineQ = de === 'gemini' || de === 'openai' ? '?engine=' + de : '';
             return fetch(API + '/chat/' + TOKEN + '/transcribe' + engineQ, { method: 'POST', body: fd });
           })
             .then(function (r) {
@@ -1708,7 +1718,10 @@
     state.config = cfg;
     // Dictation is opt-in per channel (it's metered on Janis's keys) — the
     // mic shows only when bootstrap says the channel enabled it.
-    if (micBtn && cfg.dictation === true && (canDictate || sttEngine === 'webspeech')) micBtn.style.display = '';
+    // Browser-engine dictation needs Web Speech (absent on Firefox, patchy
+    // on Safari); server dictation needs MediaRecorder capture.
+    if (micBtn && cfg.dictation === true && (dictEngine() === 'webspeech' ? hasSpeechRec : canDictate))
+      micBtn.style.display = '';
     if (cfg.accent) {
       accent = cfg.accent;
       bubble.style.background = accent;

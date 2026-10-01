@@ -104,6 +104,8 @@ const patchChannel = z.object({
       hide_powered_by: z.boolean().optional(),
       show_help_link: z.boolean().optional(),
       dictation: z.boolean().optional(),
+      // 'llm' = metered server transcription; 'browser' = free Web Speech
+      dictation_engine: z.enum(['llm', 'browser']).optional(),
     })
     .optional(),
   // webchat: HMAC key for signed visitor identity (Janis.identify sig); '' clears
@@ -517,6 +519,7 @@ export function channelApiRoutes(db: Db) {
       if (b.hide_powered_by !== undefined) creds.hide_powered_by = b.hide_powered_by;
       if (b.show_help_link !== undefined) creds.show_help_link = b.show_help_link;
       if (b.dictation !== undefined) creds.dictation = b.dictation;
+      if (b.dictation_engine !== undefined) creds.dictation_engine = b.dictation_engine;
       if (b.quick_replies !== undefined) {
         if (b.quick_replies.length) creds.quick_replies = b.quick_replies;
         else delete creds.quick_replies;
