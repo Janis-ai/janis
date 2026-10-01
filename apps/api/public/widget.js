@@ -1217,6 +1217,10 @@
       logo.alt = '';
       if (cfg.logo_radius != null) logo.style.borderRadius = cfg.logo_radius + 'px';
       logo.style.padding = logoPad + 'px';
+      // With an inset the logo floats on the header colour — a white matte
+      // would turn the padding into a visible tile. Keep the matte only for
+      // edge-to-edge logos (it backs object-fit:contain letterboxing).
+      logo.style.background = logoPad > 0 ? 'transparent' : '#fff';
       if (cfg.logo_border_width) {
         logo.style.border = cfg.logo_border_width + 'px solid ' + (cfg.logo_border_color || 'rgba(0,0,0,.2)');
       }

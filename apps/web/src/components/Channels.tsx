@@ -894,7 +894,9 @@ function WidgetPreview({
   const tileStyle: CSSProperties = {
     borderRadius: logo_radius,
     padding: logo_padding,
-    background: '#fff',
+    // Inset logos float on the header colour — the white matte only backs
+    // edge-to-edge letterboxing (mirrors widget.js).
+    background: logo_padding > 0 ? 'transparent' : '#fff',
     objectFit: 'contain',
     border: logo_border_width ? `${logo_border_width}px solid ${logo_border_color}` : undefined,
   };

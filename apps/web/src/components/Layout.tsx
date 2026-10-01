@@ -176,12 +176,23 @@ export default function Layout() {
     if (isAskPage) return;
     const key = `${railParam}:${railAgentParam}`;
     if (key === consumedRail.current) return;
-    consumedRail.current = key;
     if (railParam === 'ask') {
-      // Canonical form is the /ask page now — ?q= rides along and the page's
-      // own effect seeds it.
+      // Bare ?rail=ask is the docked state the URL mirror stamps — restore it
+      // as a docked rail so a refresh keeps the page underneath. Only a
+      // seeded question (?q=) upgrades to the /ask page.
       const q = searchParams.get('q');
-      navigate(`/ask${q ? `?q=${encodeURIComponent(q)}` : ''}`, { replace: true });
+      if (q) {
+        consumedRail.current = key;
+        navigate(`/ask?q=${encodeURIComponent(q)}`, { replace: true });
+      } else if (data === undefined) {
+        return; // workspace detail still loading — leave unconsumed, retry
+      } else {
+        consumedRail.current = key;
+        if (hasAsk) {
+          setRailTab('ask');
+          setRailOpen(true);
+        }
+      }
     } else if (railParam === 'test' && railAgentParam) {
       void api<{ channel_id: string; agent_name?: string }>(
         `/api/agents/${railAgentParam}/test-channel`,
@@ -193,18 +204,25 @@ export default function Layout() {
           setRailOpen(true);
         })
         .catch(() => {});
+      consumedRail.current = key;
     } else if (railParam === 'test' && testRail) {
       setRailTab('test');
       setRailOpen(true);
+      consumedRail.current = key;
+    } else {
+      consumedRail.current = key;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [railParam, railAgentParam, navType, isAskPage]);
+  }, [railParam, railAgentParam, navType, isAskPage, hasAsk, data]);
 
   // Reflect rail state back into the URL — refresh or a copied link reopens
   // the same panel. replace: keeps tab flips out of history.
   useEffect(() => {
     setSearchParams(
       (prev) => {
+        // While workspace detail is loading, hasAsk is unknown — stripping a
+        // deeplinked ?rail=ask here would strand the consumer's retry.
+        if (data === undefined) return prev;
         const p = new URLSearchParams(prev);
         if (isAskPage) {
           // The path itself carries the state — ?rail= would fight it.
@@ -224,7 +242,7 @@ export default function Layout() {
       },
       { replace: true },
     );
-  }, [railOpen, railTab, hasAsk, testRail, isAskPage, setSearchParams]);
+  }, [railOpen, railTab, hasAsk, testRail, isAskPage, setSearchParams, data]);
   // No active workspace → skip workspace-scoped queries (they'd 401 no_workspace)
   const hasWorkspace = Boolean(data?.workspace);
   const { data: attention } = useQuery({
