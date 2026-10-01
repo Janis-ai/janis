@@ -1,9 +1,23 @@
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, channels, conversations, memberships, users, workspaces } from '../db/schema.js';
+import {
+  agents,
+  alerts,
+  channelBindings,
+  channels,
+  conversations,
+  memberships,
+  messages,
+  pendingActions,
+  usageEvents,
+  users,
+  webhookDeliveries,
+  workspaces,
+} from '../db/schema.js';
 import type { UserProfile } from '@janis/shared';
 import { env } from '../env.js';
-import { invalidateCapCache, planFor, PLANS } from './plans.js';
+import { invalidateCapCache, messageCap, planFor, PLANS } from './plans.js';
+import { llmSpendOverCap } from './usage.js';
 import { ensureStripeCustomer, planForPrice, stripe } from './stripe.js';
 import { generateWebhookSecret } from './crypto.js';
 import { audit } from './audit.js';
@@ -49,6 +63,61 @@ async function signedInUser(ctx: BuiltinCtx) {
   if (!userId) return null;
   const [user] = await ctx.db.select().from(users).where(eq(users.id, userId)).limit(1);
   return user ?? null;
+}
+
+type WorkspaceRow = typeof workspaces.$inferSelect;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Resolve which of the visitor's workspaces a concierge tool should act on.
+ * Order: explicit `workspace` name hint → the workspace they're currently
+ * viewing (the context pack's current_workspace trait) → their only
+ * membership → a "which workspace?" error listing the options. adminOnly
+ * narrows to workspaces they administer; read-only tools accept any
+ * accepted membership. */
+async function visitorWorkspace(
+  ctx: BuiltinCtx,
+  user: { id: string; name: string | null },
+  hint: string | undefined,
+  opts: { adminOnly?: boolean } = {},
+): Promise<{ ws: WorkspaceRow } | { error: string }> {
+  const conds = [eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)];
+  if (opts.adminOnly) conds.push(eq(memberships.role, 'admin'));
+  const rows = await ctx.db
+    .select({ ws: workspaces })
+    .from(memberships)
+    .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
+    .where(and(...conds));
+  if (!rows.length) {
+    return {
+      error: opts.adminOnly
+        ? 'no workspace where the visitor is an admin — this needs admin rights'
+        : 'the visitor has no workspaces',
+    };
+  }
+  const needle = hint?.trim().toLowerCase();
+  if (needle) {
+    const hit = rows.find(
+      (r) => r.ws.name.toLowerCase() === needle || r.ws.name.toLowerCase().includes(needle),
+    );
+    if (hit) return { ws: hit.ws };
+    return {
+      error: `no workspace matching "${hint}" — the visitor's workspaces: ${rows.map((r) => r.ws.name).join(', ')}`,
+    };
+  }
+  // Default to the workspace open in their console when the pack named it.
+  const [conv] = await ctx.db
+    .select({ userProfile: conversations.userProfile })
+    .from(conversations)
+    .where(eq(conversations.id, ctx.convId))
+    .limit(1);
+  const meta = (conv?.userProfile as UserProfile | undefined)?.metadata ?? {};
+  const cur = String(meta.current_workspace ?? '').toLowerCase();
+  const curHit = cur ? rows.find((r) => r.ws.name.toLowerCase() === cur) : undefined;
+  if (curHit) return { ws: curHit.ws };
+  if (rows.length === 1) return { ws: rows[0].ws };
+  return {
+    error: `which workspace? ${user.name ?? 'The visitor'} has: ${rows.map((r) => r.ws.name).join(', ')}`,
+  };
 }
 
 export const BUILTIN_TOOLS: BuiltinTool[] = [
@@ -306,32 +375,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if (name.length > 120) return JSON.stringify({ error: 'name is too long (120 chars max)' });
 
       // Same gate as POST /api/agents — must administer the target workspace.
-      const adminRows = await ctx.db
-        .select({ ws: workspaces })
-        .from(memberships)
-        .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
-        .where(
-          and(
-            eq(memberships.userId, user.id),
-            eq(memberships.role, 'admin'),
-            isNotNull(memberships.acceptedAt),
-          ),
-        );
-      const hint = (args.workspace ?? '').trim().toLowerCase();
-      const ws = hint
-        ? adminRows.find(
-            (r) => r.ws.name.toLowerCase() === hint || r.ws.name.toLowerCase().includes(hint),
-          )?.ws
-        : adminRows.length === 1
-          ? adminRows[0].ws
-          : undefined;
-      if (!ws) {
-        return JSON.stringify({
-          error: adminRows.length
-            ? `which workspace? ${user.name} administers: ${adminRows.map((r) => r.ws.name).join(', ')}`
-            : 'no workspace where the visitor is an admin — creating an agent needs admin rights',
-        });
-      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
       // Agency children can't grow the fleet — same rule as the API route.
       if (ws.parentWorkspaceId && !ws.stripeSubscriptionId && !ws.connectSubscriptionId) {
         const [parent] = await ctx.db
@@ -405,6 +451,369 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         url: `${env.webOrigin}/agents/${row.id}`,
         channel_id: chan.id,
         note: 'the agent is live on its webchat channel — send the visitor this link to open it',
+      });
+    },
+  },
+  {
+    name: 'workspace_stats',
+    description:
+      "Answer 'how is my workspace doing' questions: conversation volume, containment (how much the agents handled alone), CSAT, open handoffs, and a per-agent breakdown — computed live from the visitor's workspace. Defaults to the last 30 days and the workspace they're currently viewing; pass `days` or `workspace` to change scope. Read-only — any workspace member can use it.",
+    params: {
+      days: 'look-back window in days, default 30, max 90',
+      workspace: 'workspace name — only needed when ambiguous',
+      agent: 'optional agent name to scope the stats to one agent',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace);
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const days = Math.min(Math.max(Number(args.days) || 30, 1), 90);
+      const cutoff = new Date(Date.now() - days * 86_400_000);
+
+      const wsAgents = await ctx.db
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(eq(agents.workspaceId, ws.id));
+      if (!wsAgents.length) {
+        return JSON.stringify({
+          error: `${ws.name} has no agents yet — offer to create one with create_agent`,
+        });
+      }
+      const agentHint = args.agent?.trim().toLowerCase();
+      const scope = agentHint
+        ? wsAgents.filter((a) => a.name.toLowerCase().includes(agentHint))
+        : wsAgents;
+      if (!scope.length) {
+        return JSON.stringify({
+          error: `no agent matching "${args.agent}" — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
+        });
+      }
+      const scopeIds = scope.map((a) => a.id);
+
+      const convs = await ctx.db
+        .select({
+          id: conversations.id,
+          agentId: conversations.agentId,
+          state: conversations.state,
+          csatScore: conversations.csatScore,
+          csatAskedAt: conversations.csatAskedAt,
+          createdAt: conversations.createdAt,
+        })
+        .from(conversations)
+        .where(
+          and(
+            inArray(conversations.agentId, scopeIds),
+            gte(conversations.createdAt, cutoff),
+          ),
+        );
+      const convIds = convs.map((v) => v.id);
+
+      const [msgs, convAlerts, pendings] = convIds.length
+        ? await Promise.all([
+            ctx.db
+              .select({
+                convId: messages.conversationId,
+                direction: messages.direction,
+                payload: messages.payload,
+              })
+              .from(messages)
+              .where(inArray(messages.conversationId, convIds)),
+            ctx.db
+              .select({ convId: alerts.conversationId, type: alerts.type })
+              .from(alerts)
+              .where(inArray(alerts.conversationId, convIds)),
+            ctx.db
+              .select({ convId: pendingActions.conversationId, status: pendingActions.status })
+              .from(pendingActions)
+              .where(inArray(pendingActions.conversationId, convIds)),
+          ])
+        : [[], [], []];
+
+      // Same contained/escalated semantics as /api/reports/containment.
+      const ESCALATING = new Set(['failure', 'help_request', 'handoff_offer', 'custom', 'keyword']);
+      const escalatedConvs = new Set(
+        convAlerts.filter((a) => ESCALATING.has(a.type)).map((a) => a.convId),
+      );
+      const replied = new Set<string>();
+      const touched = new Set<string>();
+      for (const m of msgs) {
+        const p = m.payload as { internal?: boolean; via?: string } | undefined;
+        if (p?.internal) continue;
+        if (m.direction === 'out' && p?.via !== 'operator') replied.add(m.convId);
+        if (m.direction === 'human' || p?.via === 'operator') touched.add(m.convId);
+      }
+      let contained = 0;
+      let escalated = 0;
+      let noReply = 0;
+      for (const v of convs) {
+        if (!replied.has(v.id)) noReply++;
+        else if (touched.has(v.id) || escalatedConvs.has(v.id)) escalated++;
+        else contained++;
+      }
+      const scores = convs.filter((v) => v.csatScore !== null).map((v) => v.csatScore!);
+      const openNow = convs.filter((v) => v.state === 'needs_human').length;
+      const perAgent = scope
+        .map((a) => {
+          const mine = convs.filter((v) => v.agentId === a.id);
+          return { agent: a.name, conversations: mine.length };
+        })
+        .sort((a, b) => b.conversations - a.conversations);
+
+      return JSON.stringify({
+        workspace: ws.name,
+        plan: ws.plan,
+        days,
+        agents: scope.length,
+        conversations: convs.length,
+        contained,
+        escalated,
+        no_reply: noReply,
+        containment_rate: convs.length ? Math.round((contained / convs.length) * 100) : null,
+        needs_human_now: openNow,
+        approvals_pending: pendings.filter((p) => p.status === 'pending').length,
+        csat_prompted: convs.filter((v) => v.csatAskedAt).length,
+        csat_answered: scores.length,
+        csat_avg: scores.length
+          ? Math.round((scores.reduce((s, v) => s + v, 0) / scores.length) * 100) / 100
+          : null,
+        per_agent: perAgent,
+        reports_url: `${env.webOrigin}/reports`,
+      });
+    },
+  },
+  {
+    name: 'debug_conversation',
+    description:
+      "Diagnose 'why didn't my agent reply?' — inspect one conversation in the visitor's workspace and report what's blocking it: human takeover, escalation, spend/message caps, missing channel binding, failed webhook deliveries, a pending approval, or an unanswered inbound. Identify the conversation by its UUID (from the console URL) or a search string matching the customer's name/email. Read-only.",
+    params: {
+      conversation:
+        'conversation UUID (the id in /conversations/<id>) or text to match the customer name/email/external id',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace);
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const q = (args.conversation ?? '').trim();
+      if (!q) return JSON.stringify({ error: 'pass a conversation id or a name/email to search for' });
+
+      // Find the conversation inside the visitor's workspace only.
+      const wsAgentIds = (
+        await ctx.db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(eq(agents.workspaceId, ws.id))
+      ).map((a) => a.id);
+      if (!wsAgentIds.length) return JSON.stringify({ error: `${ws.name} has no agents` });
+
+      let conv: typeof conversations.$inferSelect | undefined;
+      if (UUID.test(q)) {
+        [conv] = await ctx.db
+          .select()
+          .from(conversations)
+          .where(and(eq(conversations.id, q), inArray(conversations.agentId, wsAgentIds)))
+          .limit(1);
+        if (!conv) return JSON.stringify({ error: `no conversation ${q} in ${ws.name}` });
+      } else {
+        const pat = `%${q}%`;
+        const hits = await ctx.db
+          .select()
+          .from(conversations)
+          .where(
+            and(
+              inArray(conversations.agentId, wsAgentIds),
+              or(
+                ilike(conversations.externalId, pat),
+                ilike(sql`${conversations.userProfile}->>'email'`, pat),
+                ilike(sql`${conversations.userProfile}->>'name'`, pat),
+              ),
+            ),
+          )
+          .orderBy(desc(conversations.lastMessageAt))
+          .limit(6);
+        if (!hits.length) return JSON.stringify({ error: `no conversations matching "${q}" in ${ws.name}` });
+        if (hits.length > 1) {
+          return JSON.stringify({
+            error: 'multiple matches — be more specific or use the conversation id',
+            matches: hits.slice(0, 5).map((h) => ({
+              id: h.id,
+              name: (h.userProfile as { name?: string })?.name ?? h.externalId,
+              last_message_at: h.lastMessageAt,
+            })),
+          });
+        }
+        conv = hits[0];
+      }
+
+      const [agent] = await ctx.db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, conv.agentId))
+        .limit(1);
+      const findings: string[] = [];
+      const info: Record<string, unknown> = {
+        conversation_id: conv.id,
+        customer:
+          (conv.userProfile as { name?: string; email?: string })?.name ??
+          (conv.userProfile as { email?: string })?.email ??
+          conv.externalId,
+        state: conv.state,
+        agent: agent?.name,
+        agent_hosted: agent?.hosted,
+        url: `${env.webOrigin}/conversations/${conv.id}`,
+      };
+
+      // Delivery path first — a reply that can't reach anyone reads as "no reply".
+      const bindings = await ctx.db
+        .select({ channelId: channelBindings.channelId })
+        .from(channelBindings)
+        .where(eq(channelBindings.conversationId, conv.id));
+      const boundChannels = bindings.length
+        ? await ctx.db
+            .select({ id: channels.id, kind: channels.kind, name: channels.name })
+            .from(channels)
+            .where(inArray(channels.id, bindings.map((b) => b.channelId)))
+        : [];
+      if (!bindings.length) {
+        findings.push('no channel binding — replies have no route back to the customer');
+      } else if (boundChannels.length < bindings.length) {
+        findings.push('a bound channel was deleted — replies to it fail');
+      } else {
+        info.channels = boundChannels.map((c) => `${c.kind} (${c.name})`);
+      }
+
+      // Conversation state — only 'human' silences the agent.
+      if (conv.state === 'human') {
+        const pause = conv.pauseMinutes ?? agent?.autoResumeMinutes ?? 10;
+        const eta =
+          pause === -1
+            ? 'never — take-over is set to manual release'
+            : conv.humanSince
+              ? `around ${new Date(conv.humanSince.getTime() + pause * 60_000).toISOString()}`
+              : `about ${pause} minutes after the last human message`;
+        findings.push(
+          `a human took over — the agent is paused (auto-resume ${eta}). ` +
+            'That\'s working as intended; archive or wait for auto-resume to hand it back.',
+        );
+      }
+      if (conv.snoozedUntil && conv.snoozedUntil > new Date()) {
+        findings.push(`snoozed until ${conv.snoozedUntil.toISOString()} — hidden from queues`);
+      }
+      if (conv.state === 'needs_human') {
+        findings.push('escalated (needs_human) — waiting on an operator; the agent still replies');
+      }
+
+      // Engine & hosting.
+      const engine = (agent?.config as { engine?: string } | null)?.engine;
+      if (engine === 'monitor') findings.push('legacy monitor engine — this agent never replies');
+      if (agent && !agent.hosted) {
+        const deliveries = await ctx.db
+          .select({
+            status: webhookDeliveries.status,
+            attempts: webhookDeliveries.attempts,
+            lastError: webhookDeliveries.lastError,
+          })
+          .from(webhookDeliveries)
+          .where(eq(webhookDeliveries.agentId, agent.id))
+          .orderBy(desc(webhookDeliveries.createdAt))
+          .limit(10);
+        const failed = deliveries.filter((d) => d.status === 'failed');
+        const pendingRetry = deliveries.filter((d) => d.status === 'pending' && d.attempts > 0);
+        if (!agent.webhookUrl) {
+          findings.push('not a hosted agent and no webhook_url — nothing is answering inbound');
+        } else if (failed.length) {
+          findings.push(
+            `BYO webhook is failing: ${failed[0].lastError ?? 'delivery error'} ` +
+              `(${failed.length} failed of last ${deliveries.length} deliveries)`,
+          );
+        } else if (pendingRetry.length) {
+          findings.push(`${pendingRetry.length} webhook deliveries are retrying — the endpoint may be flaky`);
+        }
+      }
+
+      // Caps — both silence the agent workspace-wide.
+      const cap = await messageCap(ctx.db, ws.id);
+      if (cap.capped) {
+        findings.push(
+          `workspace hit its plan message cap (${cap.used}/${cap.plan?.includedMessages ?? '?'} this period) — inbound is dropped until the period rolls or the plan upgrades`,
+        );
+      }
+      const spent = await llmSpendOverCap(ctx.db, ws.id);
+      if (spent != null) {
+        findings.push(
+          `workspace hit its 24h AI spend ceiling ($${(spent / 1e6).toFixed(2)}) — replies resume as spend rolls out of the window`,
+        );
+      }
+
+      // Open alerts + waiting approvals.
+      const openAlerts = await ctx.db
+        .select({ type: alerts.type, detail: alerts.detail, createdAt: alerts.createdAt })
+        .from(alerts)
+        .where(and(eq(alerts.conversationId, conv.id), eq(alerts.status, 'open')));
+      for (const a of openAlerts) {
+        findings.push(`open ${a.type} alert${a.detail ? `: ${a.detail}` : ''}`);
+      }
+      const pending = await ctx.db
+        .select({ toolName: pendingActions.toolName, createdAt: pendingActions.createdAt })
+        .from(pendingActions)
+        .where(and(eq(pendingActions.conversationId, conv.id), eq(pendingActions.status, 'pending')));
+      for (const p of pending) {
+        findings.push(`the agent asked approval to run "${p.toolName}" — it's waiting on an operator`);
+      }
+
+      // Unanswered inbound + whether generation ever ran on it.
+      const recent = await ctx.db
+        .select({ direction: messages.direction, createdAt: messages.createdAt, payload: messages.payload })
+        .from(messages)
+        .where(eq(messages.conversationId, conv.id))
+        .orderBy(desc(messages.createdAt))
+        .limit(20);
+      const lastIn = recent.find((m) => m.direction === 'in');
+      const lastOut = recent.find(
+        (m) =>
+          (m.direction === 'out' || m.direction === 'human') &&
+          !(m.payload as { internal?: boolean })?.internal,
+      );
+      if (lastIn && (!lastOut || lastOut.createdAt < lastIn.createdAt)) {
+        const waitMin = Math.round((Date.now() - lastIn.createdAt.getTime()) / 60_000);
+        findings.push(`the last customer message (${waitMin} min ago) never got a reply`);
+        const [llm] = await ctx.db
+          .select({ count: sql<number>`count(*)` })
+          .from(usageEvents)
+          .where(
+            and(
+              eq(usageEvents.conversationId, conv.id),
+              eq(usageEvents.kind, 'llm_tokens'),
+              gt(usageEvents.createdAt, lastIn.createdAt),
+            ),
+          );
+        if (agent?.hosted && !Number(llm?.count ?? 0)) {
+          findings.push(
+            'no LLM call ran for that message — the reply never started (check the items above, or it may have hit a crash/lock stall)',
+          );
+        }
+      } else if (lastIn) {
+        info.last_reply = lastOut?.createdAt;
+      }
+
+      return JSON.stringify({
+        ...info,
+        verdict:
+          findings[0] ??
+          'nothing blocking — the conversation looks healthy; if the customer still reports silence it may be a channel delivery issue',
+        findings,
       });
     },
   },

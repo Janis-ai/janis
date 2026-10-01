@@ -4,7 +4,16 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 import { BUILTIN_TOOLS, enabledBuiltins } from '../lib/builtinTools.js';
-import { agents, channels, conversations, memberships, users, workspaces } from '../db/schema.js';
+import {
+  agents,
+  channelBindings,
+  channels,
+  conversations,
+  memberships,
+  messages,
+  users,
+  workspaces,
+} from '../db/schema.js';
 import * as schema from '../db/schema.js';
 import { env } from '../env.js';
 import { setStripeClient } from '../lib/stripe.js';
@@ -320,5 +329,126 @@ describe('create_agent builtin', () => {
     expect(picked.created).toBe(true);
     const [agent] = await db.select().from(agents).where(eq(agents.id, picked.agent_id));
     expect(agent.workspaceId).toBe(w5.id);
+  });
+});
+
+describe('workspace_stats builtin', () => {
+  const stats = () => BUILTIN_TOOLS.find((b) => b.name === 'workspace_stats')!;
+
+  it('is gated to the operator workspace', () => {
+    expect(stats().available(WS)).toBe(true);
+    expect(stats().available('other-ws')).toBe(false);
+  });
+
+  it('rejects unsigned visitors', async () => {
+    const [a] = await db.select().from(agents).where(eq(agents.workspaceId, WS)).limit(1);
+    const [c] = await db
+      .insert(conversations)
+      .values({ agentId: a.id, externalId: 'v:anon2' })
+      .returning();
+    const out = JSON.parse(await stats().run({}, { db, convId: c.id, workspaceId: WS }));
+    expect(out.error).toContain('signed-in');
+  });
+
+  it('asks which workspace when the visitor has several', async () => {
+    const out = JSON.parse(await stats().run({}, ctx(CONV2)));
+    expect(out.error).toContain('which workspace');
+    expect(out.error).toContain('Free WS');
+  });
+
+  it('falls back to the workspace the visitor is viewing', async () => {
+    await db
+      .update(conversations)
+      .set({
+        userProfile: {
+          external_id: USER2,
+          email: 'a@x.com',
+          identity_verified: true,
+          metadata: { current_workspace: 'Free WS' },
+        },
+      })
+      .where(eq(conversations.id, CONV2));
+    const out = JSON.parse(await stats().run({}, ctx(CONV2)));
+    expect(out.workspace).toBe('Free WS');
+    expect(out).not.toHaveProperty('error');
+  });
+
+  it('computes stats scoped to the resolved workspace and honours the hint', async () => {
+    // a conversation + one agent reply inside WS2
+    const [a2] = await db.select().from(agents).where(eq(agents.workspaceId, WS2)).limit(1);
+    const [c] = await db
+      .insert(conversations)
+      .values({ agentId: a2.id, externalId: 'cust:1' })
+      .returning();
+    await db.insert(messages).values([
+      { conversationId: c.id, direction: 'in', text: 'hi' },
+      { conversationId: c.id, direction: 'out', text: 'hello' },
+    ]);
+    const out = JSON.parse(await stats().run({ workspace: 'free' }, ctx(CONV2)));
+    expect(out.workspace).toBe('Free WS');
+    expect(out.conversations).toBeGreaterThanOrEqual(1);
+    expect(out.contained).toBeGreaterThanOrEqual(1);
+    expect(out.containment_rate).toBeGreaterThanOrEqual(0);
+    // a member (not admin) can read stats — read-only tool
+    const memberOut = JSON.parse(await stats().run({ workspace: 'free' }, ctx(CONV4)));
+    expect(memberOut.workspace).toBe('Free WS');
+  });
+});
+
+describe('debug_conversation builtin', () => {
+  const dbg = () => BUILTIN_TOOLS.find((b) => b.name === 'debug_conversation')!;
+  const DBG_CONV = 'dddddddd-0000-4000-8000-00000000000d';
+
+  it('is gated to the operator workspace', () => {
+    expect(dbg().available(WS)).toBe(true);
+    expect(dbg().available('other-ws')).toBe(false);
+  });
+
+  it('scopes to the visitor\'s workspace — same id elsewhere is invisible', async () => {
+    const out = JSON.parse(await dbg().run({ conversation: CONV, workspace: 'free' }, ctx(CONV2)));
+    expect(out.error).toContain('no conversation');
+  });
+
+  it('reports an unanswered inbound on a healthy hosted agent', async () => {
+    const [a2] = await db
+      .insert(agents)
+      .values({ workspaceId: WS2, name: 'Hosted Bot', hosted: true })
+      .returning();
+    const [chan] = await db
+      .insert(channels)
+      .values({ workspaceId: WS2, agentId: a2.id, kind: 'webchat', name: 'web', credentials: {} })
+      .returning();
+    await db.insert(conversations).values({
+      id: DBG_CONV,
+      agentId: a2.id,
+      externalId: 'cust:angry',
+      userProfile: { name: 'Ann Customer', email: 'ann@acme.com' },
+      lastMessageAt: new Date(),
+    });
+    await db.insert(channelBindings).values({
+      channelId: chan.id,
+      conversationId: DBG_CONV,
+      platformUserId: 'ann',
+    });
+    await db.insert(messages).values({
+      conversationId: DBG_CONV,
+      direction: 'in',
+      text: 'where is my order?',
+    });
+    const out = JSON.parse(
+      await dbg().run({ conversation: DBG_CONV, workspace: 'free' }, ctx(CONV2)),
+    );
+    expect(out.conversation_id).toBe(DBG_CONV);
+    expect(out.findings.join(' ')).toContain('never got a reply');
+    expect(out.findings.join(' ')).toContain('no LLM call ran');
+  });
+
+  it('finds conversations by customer email and diagnoses takeover', async () => {
+    await db.update(conversations).set({ state: 'human', humanSince: new Date() }).where(eq(conversations.id, DBG_CONV));
+    const out = JSON.parse(
+      await dbg().run({ conversation: 'ann@acme.com', workspace: 'free' }, ctx(CONV2)),
+    );
+    expect(out.conversation_id).toBe(DBG_CONV);
+    expect(out.verdict).toContain('human took over');
   });
 });
