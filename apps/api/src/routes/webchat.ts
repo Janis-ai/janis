@@ -606,6 +606,14 @@ export function webchatRoutes(db: Db) {
     // the rail should show — the widget's own bootstrap-greeting render is
     // skipped for those, so there's nothing to double.
     const internal = (channel.credentials as ChannelCredentials).internal === true;
+    // The Ask Janis rail rides the support channel — deliberately NOT flagged
+    // internal, since it's also the public widget on janis.ai and internal
+    // rows must never reach anonymous visitors. A verified signed-in operator
+    // polling their own concierge thread should still see approval cards.
+    // Lazy env read so tests can point it at a fixture channel.
+    const supportId = process.env.JANIS_SUPPORT_CHANNEL_ID || env.supportChannelId;
+    const conciergeViewer = supportId !== '' && channel.id === supportId && !!bound;
+    const showActions = internal || conciergeViewer;
 
     return c.json({
       // Internal notes (failures/handoffs/alerts) are stored as 'out' but must
@@ -636,7 +644,7 @@ export function webchatRoutes(db: Db) {
             // Approval cards reach the internal test rail (Ask Janis) so an
             // operator can exercise a gated tool end-to-end; every other
             // internal row stays operator-side.
-            (!p?.internal || (internal && !!p?.action))
+            (!p?.internal || (showActions && !!p?.action))
           );
         })
         .map((m) => ({
@@ -646,9 +654,10 @@ export function webchatRoutes(db: Db) {
         created_at: m.created_at.toISOString(),
         attachments: (m.payload as { attachments?: unknown[] } | undefined)?.attachments,
         quick_replies: (m.payload as { quick_replies?: QuickReply[] } | undefined)?.quick_replies,
-        // approval card payload — serialized only for internal test channels;
-        // external embeds must never see tool args (refund amounts, order ids)
-        ...(internal
+        // approval card payload — serialized only for internal test channels
+        // and signed-in concierge viewers; external embeds must never see
+        // tool args (refund amounts, order ids)
+        ...(showActions
           ? { action: (m.payload as { action?: unknown } | undefined)?.action }
           : {}),
         // operator identity on human replies — gated by each operator's

@@ -595,6 +595,69 @@ describe('webchat authenticated identity', () => {
     expect(p.identity_verified).toBe(true);
   });
 
+  it('shows concierge approval cards only to the verified session viewer', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const prev = process.env.JANIS_SUPPORT_CHANNEL_ID;
+    process.env.JANIS_SUPPORT_CHANNEL_ID = channelId;
+    try {
+      const [u] = await db
+        .insert(users)
+        .values({ email: 'cards@janis.test', name: 'Cards' })
+        .returning();
+      await db.insert(sessions).values({
+        id: sha256('tok-card'),
+        userId: u.id,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      // park a card on the signed-in user's concierge thread
+      await postWithUser({ text: 'hi' }, { cookie: 'janis_session=tok-card' });
+      const [conv] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.externalId, `webchat:u:${u.id}`))
+        .limit(1);
+      const cardPayload = {
+        internal: true,
+        action: { id: 'act_1', tool: 'teach_agent', status: 'pending', display: { Entry: 'x' } },
+      };
+      await db.insert(messages).values({
+        conversationId: conv.id,
+        direction: 'human',
+        text: 'proposed card',
+        payload: cardPayload,
+      });
+      const res = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR_C}`, {
+        headers: { cookie: 'janis_session=tok-card' },
+      });
+      const body = await res.json();
+      const card = body.messages.find((m: { action?: { id: string } }) => m.action?.id === 'act_1');
+      expect(card.action.tool).toBe('teach_agent');
+      // the same internal row on an anonymous visitor's thread never renders
+      await post('anon hello', 'vis_anon0123456789');
+      const [anonConv] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.externalId, 'webchat:vis_anon0123456789'))
+        .limit(1);
+      await db.insert(messages).values({
+        conversationId: anonConv.id,
+        direction: 'human',
+        text: 'hidden card',
+        payload: { ...cardPayload, action: { ...cardPayload.action, id: 'act_2' } },
+      });
+      const anon = await (
+        await app.request(`/chat/${channelId}/messages?visitor_id=vis_anon0123456789`)
+      ).json();
+      expect(
+        anon.messages.every((m: { action?: unknown }) => m.action === undefined),
+      ).toBe(true);
+      expect(anon.messages.some((m: { text: string }) => m.text === 'hidden card')).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.JANIS_SUPPORT_CHANNEL_ID;
+      else process.env.JANIS_SUPPORT_CHANNEL_ID = prev;
+    }
+  });
+
   it('stores the session user\'s avatar as the conversation picture_url', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     const [u] = await db.select().from(users).where(eq(users.email, 'owner@janis.test'));
