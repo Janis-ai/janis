@@ -422,7 +422,14 @@ export function AskJanis({
     try {
       await api(`/chat/${channelId}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ visitor_id: visitor, text: t, attachments: atts }),
+        body: JSON.stringify({
+          visitor_id: visitor,
+          text: t,
+          attachments: atts,
+          // which console page the sender was on — the concierge sees this as
+          // the `page` trait ("the user was on /reports when they asked")
+          page: location.pathname + location.search,
+        }),
       });
       showTyping();
       await poll();

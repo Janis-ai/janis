@@ -633,6 +633,64 @@ describe('webchat authenticated identity', () => {
     expect(texts).toContain('now logged in');
   });
 
+  it('gives session users on internal channels the console context pack', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [ws] = await db.select().from(workspaces).limit(1);
+    const [u] = await db.select().from(users).where(eq(users.email, 'owner@janis.test'));
+    const [a] = await db.select().from(agents).limit(1);
+    // a second channel so the agents trait has something to list
+    await db.insert(channels).values({
+      workspaceId: ws.id, agentId: a.id, kind: 'email', name: 'support@',
+      credentials: {},
+    });
+    const [internalChannel] = await db.insert(channels).values({
+      workspaceId: ws.id, agentId: a.id, kind: 'webchat', name: 'Ask Janis',
+      credentials: { internal: true },
+    }).returning();
+    const res = await app.request(`/chat/${internalChannel.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: 'janis_session=tok-abc' },
+      body: JSON.stringify({
+        visitor_id: 'vis_ctxpack00000001', text: 'where am i', page: '/reports',
+      }),
+    });
+    expect(res.status).toBe(200);
+    // internal channels namespace externalId per channel — the u: thread here
+    // is the test rail's own conversation, not the public widget's
+    const [conv] = await db.select().from(conversations)
+      .where(eq(conversations.externalId, `webchat:test:${internalChannel.id}:u:${u.id}`)).limit(1);
+    const meta = ((conv?.userProfile as Record<string, unknown>)?.metadata ?? {}) as Record<string, unknown>;
+    expect(meta.current_workspace).toBe('Test');
+    expect(meta.page).toBe('/reports');
+    expect(String(meta.agents)).toContain('Support Bot');
+    expect(String(meta.agents)).toContain('webchat');
+
+    // a session user on a customer-facing embed gets no context pack — a
+    // logged-in Janis operator chatting on a client's site must not leak their
+    // workspace's agent inventory into that customer's conversation
+    const [u2] = await db.insert(users)
+      .values({ email: 'other@janis.test', name: 'Other User' }).returning();
+    await db.insert(memberships).values({
+      userId: u2.id, workspaceId: ws.id, role: 'member', acceptedAt: new Date(),
+    });
+    await db.insert(sessions).values({
+      id: sha256('tok-other'), userId: u2.id,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const res2 = await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: 'janis_session=tok-other' },
+      body: JSON.stringify({ visitor_id: 'vis_ctxpack00000002', text: 'hi', page: '/reports' }),
+    });
+    expect(res2.status).toBe(200);
+    const [conv2] = await db.select().from(conversations)
+      .where(eq(conversations.externalId, `webchat:u:${u2.id}`)).limit(1);
+    const meta2 = ((conv2?.userProfile as Record<string, unknown>)?.metadata ?? {}) as Record<string, unknown>;
+    expect(meta2.agents).toBeUndefined();
+    expect(meta2.current_workspace).toBeUndefined();
+    expect(meta2.page).toBeUndefined();
+  });
+
   it('merges cleanly when both threads have a Slack thread link', async () => {
     // fresh Response per call — seeding an installation makes mirrorToSlack
     // hit fetch too, and a reused Response body can only be read once

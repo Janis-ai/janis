@@ -49,6 +49,9 @@ const postMessage = z
     text: z.string().max(4000).default(''),
     name: z.string().max(80).optional(),
     user: identityClaim.optional(),
+    // Console page the sender was on (Ask Janis rail sends location.pathname) —
+    // context for the concierge, surfaced as the `page` trait for session users.
+    page: z.string().max(500).optional(),
     attachments: z.array(attachment).max(5).optional(),
   })
   .refine((d) => d.text.trim().length > 0 || (d.attachments?.length ?? 0) > 0, {
@@ -93,11 +96,12 @@ async function resolveIdentity(
   db: Db,
   channel: ChannelRow,
   claim: Claim | undefined,
+  page?: string,
 ): Promise<InboundMessage['user']> {
   const token = getCookie(c, SESSION_COOKIE);
   if (token) {
     const [row] = await db
-      .select({ user: users })
+      .select({ user: users, wsId: sessions.workspaceId })
       .from(sessions)
       .innerJoin(users, eq(sessions.userId, users.id))
       .where(and(eq(sessions.id, sha256(token)), gt(sessions.expiresAt, new Date())))
@@ -107,10 +111,48 @@ async function resolveIdentity(
       // agent can reason about account questions ("you're on the Default
       // workspace") instead of guessing.
       const ws = await db
-        .select({ name: workspaces.name })
+        .select({ id: workspaces.id, name: workspaces.name })
         .from(memberships)
         .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
         .where(eq(memberships.userId, row.user.id));
+      const traits: Record<string, unknown> = {
+        janis_account: 'yes',
+        ...(ws.length ? { workspaces: ws.map((w) => w.name).join(', ') } : {}),
+      };
+      // Internal channels (the Ask Janis console rail) get the full context
+      // pack: which workspace the session is acting in, the console page the
+      // user was on, and the workspace's agent/channel inventory. Resolved
+      // fresh per message — never stale — and gated to internal channels so a
+      // logged-in operator chatting on a customer's embedded widget doesn't
+      // leak their workspace's agent list into that conversation.
+      if ((channel.credentials as ChannelCredentials).internal === true) {
+        const curWs = ws.find((w) => w.id === row.wsId) ?? ws[0];
+        if (curWs) traits.current_workspace = curWs.name;
+        if (page) traits.page = page;
+        if (curWs) {
+          const agentRows = await db
+            .select({ id: agents.id, name: agents.name })
+            .from(agents)
+            .where(eq(agents.workspaceId, curWs.id));
+          if (agentRows.length) {
+            const chans = await db
+              .select({ agentId: channels.agentId, kind: channels.kind })
+              .from(channels)
+              .where(
+                inArray(
+                  channels.agentId,
+                  agentRows.map((a) => a.id),
+                ),
+              );
+            traits.agents = agentRows
+              .map((a) => {
+                const kinds = chans.filter((ch) => ch.agentId === a.id).map((ch) => ch.kind);
+                return kinds.length ? `${a.name} (${kinds.join(', ')})` : a.name;
+              })
+              .join('; ');
+          }
+        }
+      }
       return {
         id: row.user.id,
         name: row.user.name,
@@ -118,10 +160,7 @@ async function resolveIdentity(
         verified: true,
         via: 'session',
         avatarUrl: row.user.avatarUrl ?? undefined,
-        traits: {
-          janis_account: 'yes',
-          ...(ws.length ? { workspaces: ws.map((w) => w.name).join(', ') } : {}),
-        },
+        traits,
       };
     }
   }
@@ -235,8 +274,8 @@ export function webchatRoutes(db: Db) {
   app.post('/:token/messages', zValidator('json', postMessage), async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
-    const { visitor_id, text, name, user, attachments } = c.req.valid('json');
-    const resolved = await resolveIdentity(c, db, channel, user);
+    const { visitor_id, text, name, user, page, attachments } = c.req.valid('json');
+    const resolved = await resolveIdentity(c, db, channel, user, page);
     await handleChannelMessage(db, channel, {
       objectId: '',
       senderId: visitor_id,

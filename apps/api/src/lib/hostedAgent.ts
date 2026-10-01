@@ -106,8 +106,13 @@ export function conversationContext(
       .slice(0, 10)
       .map(([k, v]) => `  - ${k}: ${String(v).slice(0, 120)}`);
     if (traitLines.length) {
+      // janis_account marks the console context pack (workspaces, agents,
+      // current page) — Janis-injected, not host-provided or self-reported.
+      const janisCtx = meta.janis_account === 'yes';
       lines.push(
-        `- Customer context provided by the host site${p.identity_verified ? '' : ' (self-reported, not verified)'}:`,
+        janisCtx
+          ? '- Customer context (Janis console — verified):'
+          : `- Customer context provided by the host site${p.identity_verified ? '' : ' (self-reported, not verified)'}:`,
         ...traitLines,
       );
     }
