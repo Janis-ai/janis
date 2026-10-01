@@ -1014,15 +1014,83 @@
   // Firefox lacks the API entirely. The mic hides only where mic capture
   // itself is unavailable.
   var micBtn = panel.querySelector('#janis-mic');
-  // Gemini's audio input accepts webm/ogg/wav/mp3/aiff/flac — NOT mp4/m4a/aac
-  // (Safari's only MediaRecorder output, silently dropped). Pick the first
-  // supported container; where none exists (Safari) the mic hides.
+  // Gemini's audio input accepts webm/ogg/wav/mp3/aiff/flac — NOT mp4/m4a/aac.
+  // Safari's MediaRecorder only emits mp4, so those recordings are decoded
+  // through Web Audio and re-uploaded as 16kHz mono WAV (toWav below).
   var dictMime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg']
     .find(function (t) {
       try { return window.MediaRecorder && MediaRecorder.isTypeSupported(t); } catch (e) { return false; }
     });
+  var recMime = dictMime || (function () {
+    try { return window.MediaRecorder && MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : null; }
+    catch (e) { return null; }
+  })();
   var canDictate = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
-    window.MediaRecorder && window.FormData && dictMime);
+    window.MediaRecorder && window.FormData && recMime);
+  // mp4/aac → 16kHz mono PCM WAV — Gemini reads wav natively.
+  function toWav(blob) {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    var actx = new AC();
+    return blob.arrayBuffer()
+      .then(function (ab) { return actx.decodeAudioData(ab); })
+      .then(function (decoded) {
+        var rate = 16000;
+        var off = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+        var src = off.createBufferSource();
+        src.buffer = decoded;
+        src.connect(off.destination);
+        src.start();
+        return off.startRendering();
+      })
+      .then(function (rendered) {
+        actx.close();
+        var pcm = rendered.getChannelData(0);
+        var out = new Int16Array(pcm.length);
+        for (var i = 0; i < pcm.length; i++) {
+          var s = Math.max(-1, Math.min(1, pcm[i]));
+          out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
+        var hdr = new DataView(new ArrayBuffer(44));
+        var ws = function (o, s) { for (var j = 0; j < s.length; j++) hdr.setUint8(o + j, s.charCodeAt(j)); };
+        ws(0, 'RIFF'); hdr.setUint32(4, 36 + out.length * 2, true); ws(8, 'WAVE');
+        ws(12, 'fmt '); hdr.setUint32(16, 16, true); hdr.setUint16(20, 1, true);
+        hdr.setUint16(22, 1, true); hdr.setUint32(24, 16000, true);
+        hdr.setUint32(28, 32000, true); hdr.setUint16(32, 2, true); hdr.setUint16(34, 16, true);
+        ws(36, 'data'); hdr.setUint32(40, out.length * 2, true);
+        return new Blob([hdr.buffer, out.buffer], { type: 'audio/wav' });
+      })
+      .catch(function (e) { actx.close(); throw e; });
+  }
+  // Peak RMS while recording — distinguishes "transcribed silence" (dead mic
+  // input) from "heard but couldn't parse", which previously looked identical.
+  function meterStream(stream) {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      var actx = new AC();
+      var src = actx.createMediaStreamSource(stream);
+      var an = actx.createAnalyser();
+      an.fftSize = 512;
+      src.connect(an);
+      var buf = new Uint8Array(an.fftSize);
+      var peak = 0;
+      var raf = 0;
+      var tick = function () {
+        an.getByteTimeDomainData(buf);
+        var s = 0;
+        for (var i = 0; i < buf.length; i++) { var d = (buf[i] - 128) / 128; s += d * d; }
+        var rms = Math.sqrt(s / buf.length);
+        if (rms > peak) peak = rms;
+        raf = requestAnimationFrame(tick);
+      };
+      tick();
+      return {
+        peak: function () { return peak; },
+        stop: function () { cancelAnimationFrame(raf); src.disconnect(); void actx.close(); },
+      };
+    } catch (e) {
+      return { peak: function () { return 1; }, stop: function () {} };
+    }
+  }
   var mediaRec = null;
   var micStream = null;
   var micTimer = null;
@@ -1052,10 +1120,12 @@
       navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
         micStream = stream;
         var chunks = [];
+        var meter = meterStream(stream);
         var rec;
         try {
-          rec = new MediaRecorder(stream, { mimeType: dictMime });
+          rec = new MediaRecorder(stream, { mimeType: recMime });
         } catch (e) {
+          meter.stop();
           stream.getTracks().forEach(function (t) { t.stop(); });
           micStream = null;
           return;
@@ -1071,14 +1141,29 @@
             micStream.getTracks().forEach(function (t) { t.stop(); });
             micStream = null;
           }
+          var level = meter.peak();
+          meter.stop();
           if (!chunks.length) return;
-          var blob = new Blob(chunks, { type: chunks[0].type || 'audio/webm' });
-          var ext = /mp4|m4a|aac/.test(blob.type) ? 'm4a' : /ogg/.test(blob.type) ? 'ogg' : 'webm';
-          var fd = new FormData();
-          fd.append('audio', blob, 'dictation.' + ext);
+          var blob = new Blob(chunks, { type: chunks[0].type || rec.mimeType || 'audio/webm' });
+          if (window.console && console.debug)
+            console.debug('[janis] dictation blob', blob.type, blob.size + 'B', 'peak', level.toFixed(3));
+          if (level < 0.005) {
+            micNote('No sound captured — check your mic input');
+            return;
+          }
+          var up = /mp4|m4a|aac/.test(blob.type)
+            ? toWav(blob).then(
+                function (w) { return { blob: w, ext: 'wav' }; },
+                function () { return { blob: blob, ext: 'm4a' }; },
+              )
+            : Promise.resolve({ blob: blob, ext: /ogg/.test(blob.type) ? 'ogg' : 'webm' });
           transcribing = true;
           input.placeholder = 'Transcribing…';
-          fetch(API + '/chat/' + TOKEN + '/transcribe', { method: 'POST', body: fd })
+          up.then(function (u) {
+            var fd = new FormData();
+            fd.append('audio', u.blob, 'dictation.' + u.ext);
+            return fetch(API + '/chat/' + TOKEN + '/transcribe', { method: 'POST', body: fd });
+          })
             .then(function (r) {
               if (!r.ok) return Promise.reject(r.status);
               return r.json();

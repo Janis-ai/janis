@@ -116,6 +116,76 @@ function linkify(text: string, onNav: (to: string) => void) {
   });
 }
 
+/** mp4/aac → 16kHz mono PCM WAV — Gemini's audio input drops Safari's mp4
+ *  recordings silently, so they're transcoded before upload. */
+async function toWav(blob: Blob): Promise<Blob> {
+  const actx = new AudioContext();
+  try {
+    const decoded = await actx.decodeAudioData(await blob.arrayBuffer());
+    const rate = 16000;
+    const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+    const src = off.createBufferSource();
+    src.buffer = decoded;
+    src.connect(off.destination);
+    src.start();
+    const pcm = (await off.startRendering()).getChannelData(0);
+    const out = new Int16Array(pcm.length);
+    for (let i = 0; i < pcm.length; i++) {
+      const s = Math.max(-1, Math.min(1, pcm[i]));
+      out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    const hdr = new DataView(new ArrayBuffer(44));
+    const ws = (o: number, s: string) => {
+      for (let j = 0; j < s.length; j++) hdr.setUint8(o + j, s.charCodeAt(j));
+    };
+    ws(0, 'RIFF'); hdr.setUint32(4, 36 + out.length * 2, true); ws(8, 'WAVE');
+    ws(12, 'fmt '); hdr.setUint32(16, 16, true); hdr.setUint16(20, 1, true);
+    hdr.setUint16(22, 1, true); hdr.setUint32(24, rate, true);
+    hdr.setUint32(28, rate * 2, true); hdr.setUint16(32, 2, true); hdr.setUint16(34, 16, true);
+    ws(36, 'data'); hdr.setUint32(40, out.length * 2, true);
+    return new Blob([hdr.buffer, out.buffer], { type: 'audio/wav' });
+  } finally {
+    void actx.close();
+  }
+}
+
+/** Peak RMS while recording — distinguishes "transcribed silence" (dead mic
+ *  input) from "heard but couldn't parse", which otherwise look identical. */
+function meterStream(stream: MediaStream): { peak: () => number; stop: () => void } {
+  try {
+    const actx = new AudioContext();
+    const src = actx.createMediaStreamSource(stream);
+    const an = actx.createAnalyser();
+    an.fftSize = 512;
+    src.connect(an);
+    const buf = new Uint8Array(an.fftSize);
+    let peak = 0;
+    let raf = 0;
+    const tick = () => {
+      an.getByteTimeDomainData(buf);
+      let s = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const d = (buf[i]! - 128) / 128;
+        s += d * d;
+      }
+      const rms = Math.sqrt(s / buf.length);
+      if (rms > peak) peak = rms;
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+    return {
+      peak: () => peak,
+      stop: () => {
+        cancelAnimationFrame(raf);
+        src.disconnect();
+        void actx.close();
+      },
+    };
+  } catch {
+    return { peak: () => 1, stop: () => {} };
+  }
+}
+
 function AttachmentNodes({ atts }: { atts: Attachment[] }) {
   return (
     <>
@@ -376,8 +446,9 @@ export function AskJanis({
   };
 
   // Gemini accepts webm/ogg/wav/mp3/aiff/flac — NOT mp4/m4a/aac, which is
-  // Safari's only MediaRecorder output (silently dropped server-side). Pick
-  // the first supported container; where none exists the mic hides.
+  // Gemini accepts webm/ogg/wav/mp3/aiff/flac — NOT mp4/m4a/aac, which is
+  // Safari's only MediaRecorder output; those are transcoded to WAV
+  // client-side (toWav) before upload.
   const dictMime =
     typeof MediaRecorder !== 'undefined'
       ? ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg'].find(
@@ -390,11 +461,22 @@ export function AskJanis({
           },
         )
       : undefined;
+  const recMime =
+    dictMime ??
+    (() => {
+      try {
+        return typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/mp4')
+          ? 'audio/mp4'
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    })();
   const canDictate =
     typeof navigator !== 'undefined' &&
     !!navigator.mediaDevices?.getUserMedia &&
     typeof MediaRecorder !== 'undefined' &&
-    !!dictMime;
+    !!recMime;
 
   const flashDictNote = (note: string) => {
     setDictNote(note);
@@ -413,10 +495,12 @@ export function AskJanis({
       .then((stream) => {
         micStreamRef.current = stream;
         const chunks: Blob[] = [];
+        const meter = meterStream(stream);
         let rec: MediaRecorder;
         try {
-          rec = new MediaRecorder(stream, dictMime ? { mimeType: dictMime } : undefined);
+          rec = new MediaRecorder(stream, recMime ? { mimeType: recMime } : undefined);
         } catch {
+          meter.stop();
           stream.getTracks().forEach((t) => t.stop());
           micStreamRef.current = null;
           return;
@@ -434,14 +518,28 @@ export function AskJanis({
           }
           micStreamRef.current?.getTracks().forEach((t) => t.stop());
           micStreamRef.current = null;
+          const level = meter.peak();
+          meter.stop();
           if (!chunks.length) return;
-          const blob = new Blob(chunks, { type: chunks[0].type || 'audio/webm' });
-          const ext = /mp4|m4a|aac/.test(blob.type) ? 'm4a' : /ogg/.test(blob.type) ? 'ogg' : 'webm';
-          const fd = new FormData();
-          fd.append('audio', blob, `dictation.${ext}`);
+          const blob = new Blob(chunks, { type: chunks[0].type || rec.mimeType || 'audio/webm' });
+          console.debug('[janis] dictation blob', blob.type, `${blob.size}B`, 'peak', level.toFixed(3));
+          if (level < 0.005) {
+            flashDictNote('No sound captured — check your mic input');
+            return;
+          }
+          const up = /mp4|m4a|aac/.test(blob.type)
+            ? toWav(blob).then(
+                (w) => ({ blob: w, ext: 'wav' }),
+                () => ({ blob, ext: 'm4a' }),
+              )
+            : Promise.resolve({ blob, ext: /ogg/.test(blob.type) ? 'ogg' : 'webm' });
           setTranscribing(true);
           setDictNote('Transcribing…');
-          fetch(`/chat/${channelId}/transcribe`, { method: 'POST', body: fd })
+          up.then((u) => {
+            const fd = new FormData();
+            fd.append('audio', u.blob, `dictation.${u.ext}`);
+            return fetch(`/chat/${channelId}/transcribe`, { method: 'POST', body: fd });
+          })
             .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
             .then((d: { text?: string }) => {
               const said = (d.text ?? '').trim();

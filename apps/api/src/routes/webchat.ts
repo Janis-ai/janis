@@ -499,6 +499,8 @@ export function webchatRoutes(db: Db) {
       return c.json({ error: 'transcription failed' }, 502);
     }
     if (!out) return c.json({ error: 'transcription not configured' }, 503);
+    if (!out.text.trim())
+      console.warn('[stt] empty transcript', file.type, `${file.size}B`);
     const seconds = out.seconds;
     if (seconds > 0) {
       try {
