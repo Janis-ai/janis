@@ -103,6 +103,8 @@ function AgentEditor({ agent }: { agent: Agent }) {
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['agents'] });
+    // channel rows embed agent_name — a rename leaves them stale otherwise
+    void qc.invalidateQueries({ queryKey: ['channels'] });
     void qc.invalidateQueries({ queryKey: ['rules'] });
     void qc.invalidateQueries({ queryKey: ['deliveries'] });
   };

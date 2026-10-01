@@ -53,10 +53,6 @@ export default function ChannelPage() {
           ← {agent?.name ?? 'Agent'} · Channels
         </Link>
       </div>
-      <div className="row" style={{ alignItems: 'baseline' }}>
-        <h1 className="page-title grow" style={{ margin: 0 }}>{ch.name}</h1>
-        <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
-      </div>
       {cfConnected && (
         <div className="muted" style={{ margin: '8px 0', fontSize: 13 }}>
           Connected <strong>{cfConnected}</strong>{' '}

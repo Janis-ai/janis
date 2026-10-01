@@ -45,6 +45,8 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
     // Escalation-rule views aren't stale.
     source.addEventListener('agent', () => {
       void qc.invalidateQueries({ queryKey: ['agents'] });
+      // channel rows embed agent_name — renames must reach them too
+      void qc.invalidateQueries({ queryKey: ['channels'] });
       void qc.invalidateQueries({ queryKey: ['knowledge'] });
       void qc.invalidateQueries({ queryKey: ['knowledge-gaps'] });
       void qc.invalidateQueries({ queryKey: ['rules'] });
