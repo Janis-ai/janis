@@ -413,8 +413,8 @@ export async function teachAgent(
     throw new TakeoverError('teach only applies to hosted agents', 400);
   }
 
-  const cfg = (agent.config ?? {}) as { knowledge?: string[] };
-  const knowledge = [...(cfg.knowledge ?? []), text];
+  const cfg = (agent.config ?? {}) as { knowledge?: unknown };
+  const knowledge = [...(Array.isArray(cfg.knowledge) ? cfg.knowledge : []), text];
   await db
     .update(agents)
     .set({ config: { ...cfg, knowledge } })

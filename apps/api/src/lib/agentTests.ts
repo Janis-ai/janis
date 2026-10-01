@@ -192,11 +192,11 @@ export async function runAgentTest(
 
   const docs = await loadKnowledgeDocs(db, agent.id);
   // same grounding summary the "why this reply" inspector stamps
-  const acfg = (agent.config ?? {}) as { knowledge?: string[]; system_prompt?: string };
+  const acfg = (agent.config ?? {}) as { knowledge?: unknown; system_prompt?: string };
   const context = {
     prompt: (acfg.system_prompt ? 'custom' : 'default') as 'custom' | 'default',
     kb: docs.map((d) => d.name),
-    knowledge: (acfg.knowledge ?? []).slice(0, 20),
+    knowledge: (Array.isArray(acfg.knowledge) ? acfg.knowledge : []).slice(0, 20),
   };
   const secrets = {
     ...(await loadSecretsMap(db, agent.id)),

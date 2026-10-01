@@ -147,7 +147,7 @@ export function systemPrompt(
           : ' If the customer explicitly asks for a human, reply with [HANDOFF]. If they seem stuck or frustrated and you genuinely cannot help further, offer a human once with [OFFER_HUMAN] — otherwise just ask a clarifying question. If they decline a human, reply with [CANCEL_HANDOFF].'
       }`,
   ];
-  if (cfg.knowledge?.length) {
+  if (Array.isArray(cfg.knowledge) && cfg.knowledge.length) {
     parts.push(`\nKnowledge base:\n${cfg.knowledge.map((k) => `- ${k}`).join('\n')}`);
   }
   if (docs.length) {
@@ -1501,14 +1501,14 @@ async function replyAsHostedAgent(
     // reply; the console renders it as the per-message inspector. Knowledge
     // comes from two prompt sources: curated snippets (config.knowledge,
     // where approved gap fixes land) and uploaded files.
-    const acfg = (agent.config ?? {}) as { knowledge?: string[]; system_prompt?: string };
+    const acfg = (agent.config ?? {}) as { knowledge?: unknown; system_prompt?: string };
     const inspectorFlag = {
       inspector: {
         model,
         prompt_tokens: promptTokens,
         completion_tokens: completionTokens,
         kb: docs.map((d) => d.name),
-        knowledge: (acfg.knowledge ?? []).slice(0, 20),
+        knowledge: (Array.isArray(acfg.knowledge) ? acfg.knowledge : []).slice(0, 20),
         prompt: acfg.system_prompt ? 'custom' : 'default',
         tools: gen.toolCalls,
       },

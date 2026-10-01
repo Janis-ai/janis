@@ -211,8 +211,8 @@ export async function detectKnowledgeGaps(
   const agentRow = (
     await db.select().from(agents).where(eq(agents.id, agentId)).limit(1)
   )[0];
-  const knowledge =
-    ((agentRow?.config ?? {}) as { knowledge?: string[] }).knowledge ?? [];
+  const knowledgeRaw = ((agentRow?.config ?? {}) as { knowledge?: unknown }).knowledge;
+  const knowledge = Array.isArray(knowledgeRaw) ? knowledgeRaw : [];
   const knowledgeSets = knowledge.map(normalize);
 
   // Intent-level merge + resolution detection via the agent's LLM. One call:
@@ -432,11 +432,12 @@ export async function listLearnNotes(
     .orderBy(desc(messages.createdAt))
     .limit(300);
 
-  const knowledge = (((await db
+  const knowledgeRaw = (((await db
     .select({ config: agents.config })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .limit(1))[0]?.config ?? {}) as { knowledge?: string[] }).knowledge ?? [];
+    .limit(1))[0]?.config ?? {}) as { knowledge?: unknown }).knowledge;
+  const knowledge = Array.isArray(knowledgeRaw) ? knowledgeRaw : [];
   const knowledgeSets = knowledge.map(normalize);
 
   const seen = new Map<string, LearnNote>();

@@ -570,7 +570,7 @@ function BehaviorSection({
   hosted: boolean;
 }) {
   const [knowledgeText, setKnowledgeText] = useState(() =>
-    (agent.config?.knowledge ?? []).join('\n'),
+    (Array.isArray(agent.config?.knowledge) ? agent.config.knowledge : []).join('\n'),
   );
   const [repliesText, setRepliesText] = useState(() =>
     (agent.config?.quick_replies ?? []).join(', '),
