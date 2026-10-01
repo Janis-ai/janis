@@ -315,7 +315,14 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   };
 
   const allChannels = data?.channels ?? [];
-  const channels = allChannels.filter((ch) => ch.agent_id === agentId);
+  // Grouped by channel type (alphabetical on the display label), then name.
+  const channels = allChannels
+    .filter((ch) => ch.agent_id === agentId)
+    .sort(
+      (a, b) =>
+        (KIND_LABEL[a.kind] ?? a.kind).localeCompare(KIND_LABEL[b.kind] ?? b.kind) ||
+        a.name.localeCompare(b.name),
+    );
 
   const sortedPages = [...(pending.data?.pages ?? [])].sort((a, b) =>
     a.name.localeCompare(b.name),
