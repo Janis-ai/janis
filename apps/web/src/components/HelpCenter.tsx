@@ -41,19 +41,36 @@ export function HelpCenter({ agent }: { agent: Agent }) {
   const [form, setForm] = useState<Form>(emptyForm);
   const [domainDraft, setDomainDraft] = useState<string | null>(null);
   const [domainMsg, setDomainMsg] = useState('');
+  const [helpUrlDraft, setHelpUrlDraft] = useState<string | null>(null);
+  const [helpUrlMsg, setHelpUrlMsg] = useState('');
+
+  const saveAgentConfig = (key: 'help_domain' | 'help_url', value: string | null) =>
+    api(`/api/agents/${agent.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ config: { ...(agent.config ?? {}), [key]: value } }),
+    });
+
+  const saved = () => {
+    void qc.invalidateQueries({ queryKey: ['agents'] });
+    void qc.invalidateQueries({ queryKey: ['agent', agent.id] });
+  };
 
   const saveDomain = useMutation({
-    mutationFn: (value: string | null) =>
-      api(`/api/agents/${agent.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ config: { ...(agent.config ?? {}), help_domain: value } }),
-      }),
+    mutationFn: (value: string | null) => saveAgentConfig('help_domain', value),
     onSuccess: () => {
       setDomainMsg('Saved — point the domain\'s CNAME at this app host.');
-      void qc.invalidateQueries({ queryKey: ['agents'] });
-      void qc.invalidateQueries({ queryKey: ['agent', agent.id] });
+      saved();
     },
     onError: (e) => setDomainMsg(e instanceof Error ? e.message : 'failed'),
+  });
+
+  const saveHelpUrl = useMutation({
+    mutationFn: (value: string | null) => saveAgentConfig('help_url', value),
+    onSuccess: () => {
+      setHelpUrlMsg('Saved — the widget\'s help button now points there.');
+      saved();
+    },
+    onError: (e) => setHelpUrlMsg(e instanceof Error ? e.message : 'failed'),
   });
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['articles', agent.id] });
@@ -98,6 +115,7 @@ export function HelpCenter({ agent }: { agent: Agent }) {
 
   const publicUrl = `${window.location.origin}/help/${agent.id}`;
   const agentDomain = (agent.config as { help_domain?: string | null } | undefined)?.help_domain ?? null;
+  const agentHelpUrl = (agent.config as { help_url?: string | null } | undefined)?.help_url ?? null;
   const helpDomain = agentDomain ?? ws?.workspace.help_domain ?? null;
   const articles = data?.articles ?? [];
 
@@ -114,7 +132,10 @@ export function HelpCenter({ agent }: { agent: Agent }) {
               never contradict the public KB.
             </p>
             <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
-              The chat widget links here automatically once an article is published.
+              The chat widget shows a "Browse help articles" link once at least
+              one article is published. You can hide that link per widget under
+              Channels → appearance, or point it at an external help centre
+              below — neither changes what the agent knows.
               {helpDomain
                 ? ` Serving at https://${helpDomain} — CNAME it at ${window.location.host}.${agentDomain ? ' (agent override)' : ' (workspace domain)'}`
                 : ` Set a custom domain under Settings → Workspace, or override it just for this agent below. Point the domain's CNAME at ${window.location.host} first, then set it here.`}
@@ -149,6 +170,33 @@ export function HelpCenter({ agent }: { agent: Agent }) {
                   : `Workspace domain applies (${ws?.workspace.help_domain}) — set one here to override it for this agent.`}
               </p>
             )}
+            <p className="muted" style={{ margin: '10px 0 0', fontSize: 12 }}>
+              <strong>External help link</strong> — already run a help centre
+              elsewhere (Zendesk, Intercom, your own docs)? Set it here and the
+              widget's help button goes there instead of this centre, even with
+              no published articles. Clear it to use this centre again.
+            </p>
+            <div className="row" style={{ marginTop: 8, gap: 8 }}>
+              <input
+                className="input"
+                style={{ maxWidth: 280 }}
+                placeholder="https://help.yourcompany.com — optional"
+                value={helpUrlDraft ?? agentHelpUrl ?? ''}
+                onChange={(e) => setHelpUrlDraft(e.target.value)}
+              />
+              <button
+                className="btn sm"
+                disabled={saveHelpUrl.isPending || (helpUrlDraft === null || (helpUrlDraft.trim() || null) === agentHelpUrl)}
+                onClick={() => {
+                  const v = (helpUrlDraft ?? '').trim() || null;
+                  saveHelpUrl.mutate(v);
+                  setHelpUrlDraft(null);
+                }}
+              >
+                {saveHelpUrl.isPending ? 'Saving…' : 'Save link'}
+              </button>
+              {helpUrlMsg && <span className="muted" style={{ fontSize: 12 }}>{helpUrlMsg}</span>}
+            </div>
           </div>
           <button
             className="btn primary"

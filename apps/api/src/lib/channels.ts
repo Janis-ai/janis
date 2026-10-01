@@ -49,6 +49,9 @@ export interface ChannelCredentials {
   sound?: boolean; // webchat: chime on a new reply while closed/hidden — default on
   theme?: 'light' | 'dark' | 'auto'; // webchat: widget color scheme — default light
   hide_powered_by?: boolean; // webchat: drop the footer — honored on paid plans only
+  // webchat: show the "Browse help articles" link — default on; an agent-level
+  // config.help_url still overrides where it points
+  show_help_link?: boolean;
   // webchat: HMAC-SHA256 key for host-signed identity assertions — when set,
   // a `sig` on the widget's user payload proves the host vouched for it
   identity_secret?: string;

@@ -345,6 +345,18 @@ export function webchatRoutes(db: Db) {
     const helpHost =
       ((agent?.config ?? {}) as { help_domain?: string }).help_domain ??
       ((wsRow?.config ?? {}) as { help_domain?: string }).help_domain;
+    // An agent-level external help_url wins over the built-in centre and
+    // shows even with zero published articles; the channel-level
+    // show_help_link toggle gates the button entirely.
+    const externalHelp =
+      ((agent?.config ?? {}) as { help_url?: string }).help_url ?? null;
+    const helpUrl =
+      creds.show_help_link === false
+        ? null
+        : externalHelp ??
+          (helpCount > 0
+            ? `${helpHost ? `https://${helpHost}` : env.webOrigin}/help/${channel.agentId}`
+            : null);
     return c.json({
       name: channel.name,
       agent_name: agent?.name ?? 'Assistant',
@@ -360,10 +372,7 @@ export function webchatRoutes(db: Db) {
       logo_border_color: creds.logo_border_color ?? null,
       // channel-level override wins; agent config is the default
       quick_replies: creds.quick_replies?.length ? creds.quick_replies : agentReplies,
-      help_url:
-        helpCount > 0
-          ? `${helpHost ? `https://${helpHost}` : env.webOrigin}/help/${channel.agentId}`
-          : null,
+      help_url: helpUrl,
       teaser_text: creds.teaser_text ?? null,
       proactive: creds.proactive !== false,
       proactive_delay: creds.proactive_delay ?? 20,

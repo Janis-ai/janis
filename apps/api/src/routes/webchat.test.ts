@@ -152,6 +152,50 @@ describe('webchat widget endpoints', () => {
     await db.update(workspaces).set({ config: {} }).where(eq(workspaces.id, wsId));
   });
 
+  it('help_url: external link overrides and works with no articles; show_help_link gates it', async () => {
+    const [agent] = await db.select().from(agents).where(eq(agents.workspaceId, wsId));
+    // No published articles — the built-in centre stays hidden. (Earlier
+    // tests may have published one; clear to assert the zero-state.)
+    await db.delete(helpArticles).where(eq(helpArticles.agentId, agent.id));
+    let body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.help_url).toBeNull();
+
+    // Agent-level external link shows even with zero articles.
+    await db
+      .update(agents)
+      .set({ config: { help_url: 'https://docs.acme.test' } })
+      .where(eq(agents.id, agent.id));
+    body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.help_url).toBe('https://docs.acme.test');
+
+    // …and wins over the built-in centre when articles exist.
+    await db.insert(helpArticles).values({
+      workspaceId: wsId,
+      agentId: agent.id,
+      title: 'Shipping FAQ',
+      body: 'We ship worldwide.',
+      status: 'published',
+    });
+    body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.help_url).toBe('https://docs.acme.test');
+    await db.delete(helpArticles).where(eq(helpArticles.agentId, agent.id));
+
+    // The per-widget toggle hides the button entirely.
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    await db
+      .update(channels)
+      .set({ credentials: { ...(ch.credentials as object), show_help_link: false } })
+      .where(eq(channels.id, channelId));
+    body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.help_url).toBeNull();
+
+    await db
+      .update(channels)
+      .set({ credentials: ch.credentials as object })
+      .where(eq(channels.id, channelId));
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agent.id));
+  });
+
   it('ingests a visitor message into a conversation', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     const res = await post('hello from the website');

@@ -101,6 +101,7 @@ const patchChannel = z.object({
       sound: z.boolean().optional(),
       theme: z.enum(['light', 'dark', 'auto']).optional(),
       hide_powered_by: z.boolean().optional(),
+      show_help_link: z.boolean().optional(),
     })
     .optional(),
   // webchat: HMAC key for signed visitor identity (Janis.identify sig); '' clears
@@ -510,6 +511,7 @@ export function channelApiRoutes(db: Db) {
       if (b.sound !== undefined) creds.sound = b.sound;
       if (b.theme !== undefined) creds.theme = b.theme;
       if (b.hide_powered_by !== undefined) creds.hide_powered_by = b.hide_powered_by;
+      if (b.show_help_link !== undefined) creds.show_help_link = b.show_help_link;
       if (b.quick_replies !== undefined) {
         if (b.quick_replies.length) creds.quick_replies = b.quick_replies;
         else delete creds.quick_replies;

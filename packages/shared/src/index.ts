@@ -185,6 +185,10 @@ export const AgentConfig = z.object({
     .max(200)
     .nullable()
     .optional(),
+  // External help link — the widget's "Browse help articles" button points
+  // here instead of the built-in centre, and shows even with no published
+  // articles. Full URL (https://help.acme.com); null clears.
+  help_url: z.string().trim().url().max(500).nullable().optional(),
   // hosted agents only — per-agent LLM override (OpenAI-compatible).
   // api_key is write-only: reads return key_set instead. null clears the key.
   llm: z
@@ -418,6 +422,8 @@ export const Channel = z.object({
         theme: z.enum(['light', 'dark', 'auto']).optional(),
         // paid plans only — the bootstrap strips the flag on free workspaces
         hide_powered_by: z.boolean().optional(),
+        // show the "Browse help articles" link — default on
+        show_help_link: z.boolean().optional(),
       })
       .optional(),
   }),

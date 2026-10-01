@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
+import { useAgents } from '../api/hooks';
 import { CodeBlock } from './bits';
 import { friendlyError } from '../lib/friendlyError';
 
@@ -545,6 +546,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
     sound: b.sound !== false,
     theme: b.theme ?? 'light',
     hide_powered_by: b.hide_powered_by === true,
+    show_help_link: b.show_help_link !== false,
   });
   const { data: wsDetail } = useQuery({
     queryKey: ['workspace'],
@@ -559,6 +561,11 @@ function WebchatBranding({ channel }: { channel: Channel }) {
       ),
   });
   const hasHelp = (articles?.articles ?? []).some((a) => a.status === 'published');
+  // An agent-level external help link shows the button even with no
+  // published articles — the preview should reflect that.
+  const { data: agents } = useAgents();
+  const externalHelp = agents?.agents.find((a) => a.id === channel.agent_id)?.config?.help_url;
+  const showHelp = f.show_help_link && (hasHelp || !!externalHelp);
   const [msg, setMsg] = useState('');
   const uploadLogo = async (file: File) => {
     setMsg('Uploading…');
@@ -596,6 +603,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
             sound: f.sound,
             theme: f.theme,
             hide_powered_by: f.hide_powered_by,
+            show_help_link: f.show_help_link,
           },
         }),
       }),
@@ -789,6 +797,23 @@ function WebchatBranding({ channel }: { channel: Channel }) {
           <span className="muted" style={{ fontSize: 12 }}>paid plans only</span>
         )}
       </div>
+      <div className="row">
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={f.show_help_link}
+            onChange={(e) => setF({ ...f, show_help_link: e.target.checked })}
+          />
+          Show help link
+        </label>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {externalHelp
+            ? 'links to the agent\'s external help centre'
+            : hasHelp
+              ? 'links to the agent\'s published help articles'
+              : 'appears once an article is published — or set an external help link on the agent\'s Help page'}
+        </span>
+      </div>
       {f.proactive && (
         <input
           placeholder="Teaser text (optional — defaults to the greeting)"
@@ -815,7 +840,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
         theme={f.theme}
         hidePoweredBy={f.hide_powered_by && !freePlan}
         agentName={channel.agent_name}
-        hasHelp={hasHelp}
+        hasHelp={showHelp}
       />
     </form>
   );
