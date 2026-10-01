@@ -103,7 +103,7 @@ function ConvRow({
           type="checkbox"
           className="conv-check"
           checked={selected ?? false}
-          onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={(e) => e.stopPropagation()}
           onChange={() => onToggle(c.id)}
         />
       )}
