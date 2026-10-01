@@ -228,6 +228,9 @@ describe('agency connect', () => {
   });
 
   it('connect checkout webhook sets the child plan + connect ids', async () => {
+    const { bus } = await import('../lib/bus.js');
+    const events: { type: string; data: unknown }[] = [];
+    const off = bus.subscribe(childId, (e) => events.push(e));
     const res = await fireWebhook({
       type: 'checkout.session.completed',
       account: 'acct_agency1',
@@ -247,6 +250,9 @@ describe('agency connect', () => {
     // and the plan no longer rides on the parent's
     const { effectivePlanKey } = await import('../lib/plans.js');
     expect(await effectivePlanKey(db, childId)).toBe('starter');
+    // plan write notified the workspace's SSE subscribers
+    expect(events).toContainEqual({ type: 'workspace', data: { id: childId } });
+    off();
   });
 
   it('swaps the price in place when a billed client changes plan', async () => {

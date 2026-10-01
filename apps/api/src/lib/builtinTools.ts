@@ -422,6 +422,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           .set({ plan: 'free', stripeSubscriptionId: null })
           .where(eq(workspaces.id, ws.id));
         invalidateCapCache(ws.id);
+        bus.publish(ws.id, { type: 'workspace', data: { id: ws.id } });
         return JSON.stringify({ changed: true, plan: 'Free', at_period_end: false });
       }
 
@@ -474,6 +475,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           .set({ plan: target })
           .where(eq(workspaces.id, ws.id));
         invalidateCapCache(ws.id);
+        bus.publish(ws.id, { type: 'workspace', data: { id: ws.id } });
         return JSON.stringify({
           changed: true,
           plan: plan.name,

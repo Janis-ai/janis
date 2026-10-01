@@ -52,6 +52,17 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
       void qc.invalidateQueries({ queryKey: ['knowledge'] });
       void qc.invalidateQueries({ queryKey: ['knowledge-gaps'] });
       void qc.invalidateQueries({ queryKey: ['rules'] });
+      // bootstrap config embeds agent_name/greeting/quick_replies — stale
+      // in an open Ask Janis rail after update_agent
+      void qc.invalidateQueries({ queryKey: ['ask-janis-config'] });
+    });
+    // Workspace plan changed (checkout, webhook sync, concierge change_plan)
+    // — plan-gated UI (Settings, custom help domain, usage page) refreshes.
+    source.addEventListener('workspace', () => {
+      void qc.invalidateQueries({ queryKey: ['workspace'] });
+      void qc.invalidateQueries({ queryKey: ['me'] });
+      void qc.invalidateQueries({ queryKey: ['billing'] });
+      void qc.invalidateQueries({ queryKey: ['billing-status'] });
     });
     // Visitor typing — ephemeral; routed to the open chat, never a refetch.
     source.addEventListener('typing', (e) => {

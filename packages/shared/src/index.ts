@@ -766,6 +766,9 @@ export const StreamEvent = z.discriminatedUnion('type', [
   // An agent's config changed out-of-band (concierge teach_agent/create_agent)
   // — open agent pages refetch so the KB and gap views aren't stale.
   z.object({ type: z.literal('agent'), data: z.object({ id: z.string() }) }),
+  // Workspace-level state changed — plan, usage caps, plan-gated UI.
+  // Published by billing writes and concierge change_plan.
+  z.object({ type: z.literal('workspace'), data: z.object({ id: z.string() }) }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEvent>;
 

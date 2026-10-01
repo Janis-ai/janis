@@ -9,6 +9,15 @@ import { ensureStripeCustomer, planForPrice, stripe } from '../lib/stripe.js';
 import { env } from '../env.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { audit } from '../lib/audit.js';
+import { bus } from '../lib/bus.js';
+
+// Every plan write must do both: drop the message-cap memo and notify
+// open consoles — plan-gated UI (Settings, Help custom domain, usage)
+// otherwise shows the old plan until the next page load.
+const planChanged = (wsId: string) => {
+  invalidateCapCache(wsId);
+  bus.publish(wsId, { type: 'workspace', data: { id: wsId } });
+};
 
 export function billingRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
@@ -83,7 +92,7 @@ export function billingRoutes(db: Db) {
           .update(workspaces)
           .set({ plan: syncedPlan, stripeSubscriptionId: sub.id })
           .where(eq(workspaces.id, workspaceId));
-        invalidateCapCache(workspaceId);
+        planChanged(workspaceId);
         ws.plan = syncedPlan;
         ws.stripeSubscriptionId = sub.id;
       }
@@ -213,7 +222,7 @@ export function billingRoutes(db: Db) {
       .update(workspaces)
       .set({ plan })
       .where(eq(workspaces.id, c.get('workspaceId')));
-    invalidateCapCache(c.get('workspaceId'));
+    planChanged(c.get('workspaceId'));
     return c.json({ plan });
   });
 
@@ -267,7 +276,7 @@ export function billingRoutes(db: Db) {
             { stripeAccount: parent.stripeConnectId },
           );
           await db.update(workspaces).set({ plan }).where(eq(workspaces.id, workspaceId));
-          invalidateCapCache(workspaceId);
+          planChanged(workspaceId);
           await audit(db, {
             workspaceId, userId: c.get('user').id, userName: c.get('user').name,
             action: 'billing.checkout', targetType: 'workspace', targetId: workspaceId,
@@ -397,7 +406,7 @@ export function billingRoutes(db: Db) {
       .update(workspaces)
       .set({ plan: 'free', stripeSubscriptionId: null, connectSubscriptionId: null })
       .where(eq(workspaces.id, workspaceId));
-    invalidateCapCache(workspaceId);
+    planChanged(workspaceId);
     await audit(db, {
       workspaceId, userId: c.get('user').id, userName: c.get('user').name,
       action: 'billing.downgrade', targetType: 'workspace', targetId: workspaceId,
@@ -644,7 +653,7 @@ export function stripeWebhookRoutes(db: Db) {
             })
             .where(eq(workspaces.id, wsId));
         }
-        invalidateCapCache(wsId);
+        planChanged(wsId);
       }
     } else if (
       connectAccount &&
@@ -675,7 +684,7 @@ export function stripeWebhookRoutes(db: Db) {
                 .where(cond)
                 .returning({ id: workspaces.id })
             : [];
-      for (const ws of updated) invalidateCapCache(ws.id);
+      for (const ws of updated) planChanged(ws.id);
     } else if (
       event.type === 'customer.subscription.created' ||
       event.type === 'customer.subscription.updated'
@@ -695,7 +704,7 @@ export function stripeWebhookRoutes(db: Db) {
             ),
           )
           .returning({ id: workspaces.id });
-        for (const ws of updated) invalidateCapCache(ws.id);
+        for (const ws of updated) planChanged(ws.id);
       }
     } else if (event.type === 'customer.subscription.deleted') {
       const sub = event.data.object;
@@ -710,7 +719,7 @@ export function stripeWebhookRoutes(db: Db) {
           ),
         )
         .returning({ id: workspaces.id });
-      for (const ws of updated) invalidateCapCache(ws.id);
+      for (const ws of updated) planChanged(ws.id);
     }
 
     return c.json({ received: true });

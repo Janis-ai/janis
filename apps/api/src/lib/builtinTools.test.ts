@@ -246,6 +246,9 @@ describe('change_plan builtin', () => {
   });
 
   it('paid→paid swaps the plan price in place and updates the workspace', async () => {
+    const { bus } = await import('../lib/bus.js');
+    const events: { type: string; data: unknown }[] = [];
+    const off = bus.subscribe(WS3, (e) => events.push(e));
     const out = JSON.parse(
       await changePlan().run({ plan: 'pro', workspace: 'paid' }, ctx(CONV3)),
     );
@@ -255,6 +258,9 @@ describe('change_plan builtin', () => {
     // the old-generation overage item was matched by meter and swapped;
     // the LLM item (different meter) was left alone
     expect(siCalls.map((c) => c.id).sort()).toEqual(['si_base', 'si_meter']);
+    // plan write notified the workspace's SSE subscribers
+    expect(events).toContainEqual({ type: 'workspace', data: { id: WS3 } });
+    off();
   });
 
   it('downgrade cancels the subscription at period end', async () => {
