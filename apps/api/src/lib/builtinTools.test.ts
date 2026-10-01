@@ -7,6 +7,7 @@ import { BUILTIN_TOOLS, enabledBuiltins } from '../lib/builtinTools.js';
 import {
   agents,
   channelBindings,
+  alertRules,
   channels,
   conversations,
   memberships,
@@ -591,5 +592,103 @@ describe('teach_agent builtin', () => {
       await teach().run({ workspace: 'free', agent: 'webhook', entry: 'x' }, cctx(CONV2)),
     );
     expect(bad.error).toContain("isn't a hosted agent");
+  });
+});
+
+describe('add_routing_rule builtin', () => {
+  const addRule = () => BUILTIN_TOOLS.find((b) => b.name === 'add_routing_rule')!;
+  const applyRule = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_routing_rule')!;
+
+  it('parks a keyword-rule card; approving writes the alert_rules row', async () => {
+    const out = await addRule().run(
+      {
+        workspace: 'free',
+        agent: 'bot2',
+        kind: 'keyword',
+        keywords: 'dumbass, refund',
+        assign_to: 'ann',
+      },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db.select().from(pendingActions).where(eq(pendingActions.conversationId, CONV2))
+    ).find((p) => p.toolName === 'apply_routing_rule');
+    expect(pa).toBeTruthy();
+    const execArgs = pa!.args as { agent_id: string; kind: string; config: { keywords: string[]; assign_to: string } };
+    expect(execArgs.kind).toBe('keyword');
+    expect(execArgs.config.keywords).toEqual(['dumbass', 'refund']);
+    expect(execArgs.config.assign_to).toBe(USER2); // 'ann' → Ann's id
+    const applied = JSON.parse(
+      await applyRule().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(applied.ok).toBe(true);
+    const [rule] = await db.select().from(alertRules).where(eq(alertRules.id, applied.rule_id));
+    expect(rule.kind).toBe('keyword');
+    expect((rule.config as { assign_to: string }).assign_to).toBe(USER2);
+  });
+
+  it('rejects unknown teammates and auto_assign without a pool', async () => {
+    const bad = JSON.parse(
+      await addRule().run(
+        { workspace: 'free', agent: 'bot2', kind: 'keyword', keywords: 'x', assign_to: 'nobody' },
+        cctx(CONV2),
+      ),
+    );
+    expect(bad.error).toContain("isn't a workspace member");
+    const empty = JSON.parse(
+      await addRule().run({ workspace: 'free', agent: 'bot2', kind: 'auto_assign' }, cctx(CONV2)),
+    );
+    expect(empty.error).toContain('assignees');
+  });
+});
+
+describe('update_agent builtin', () => {
+  const update = () => BUILTIN_TOOLS.find((b) => b.name === 'update_agent')!;
+  const applyCfg = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_agent_config')!;
+
+  it('parks a config card; approving merges the allowlisted patch', async () => {
+    const out = await update().run(
+      { workspace: 'free', agent: 'bot2', csat_enabled: 'false', greeting: 'Hi there' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db.select().from(pendingActions).where(eq(pendingActions.conversationId, CONV2))
+    ).find((p) => p.toolName === 'apply_agent_config');
+    expect(pa).toBeTruthy();
+    const applied = JSON.parse(
+      await applyCfg().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(applied.ok).toBe(true);
+    const [a] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    const cfg = a.config as { greeting?: string; csat?: { enabled?: boolean } };
+    expect(cfg.greeting).toBe('Hi there');
+    expect(cfg.csat?.enabled).toBe(false);
+  });
+
+  it('rejects empty patches and executor strips disallowed keys', async () => {
+    const empty = JSON.parse(
+      await update().run({ workspace: 'free', agent: 'bot2' }, cctx(CONV2)),
+    );
+    expect(empty.error).toContain('nothing to change');
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    const raw = await applyCfg().run(
+      {
+        workspace_id: WS2,
+        agent_id: bot2.id,
+        patch: { llm: { api_key: 'sk-stolen' }, builtin_tools: ['x'] },
+      },
+      { db, convId: CONV2, workspaceId: WS },
+    );
+    expect(raw).toContain('disallowed');
   });
 });

@@ -3,6 +3,7 @@ import type { Db } from '../db/client.js';
 import {
   agents,
   alerts,
+  alertRules,
   channelBindings,
   channels,
   conversations,
@@ -15,6 +16,7 @@ import {
   workspaces,
 } from '../db/schema.js';
 import type { UserProfile } from '@janis/shared';
+import { AgentConfig } from '@janis/shared';
 import { env } from '../env.js';
 import { invalidateCapCache, messageCap, planFor, PLANS } from './plans.js';
 import { llmSpendOverCap } from './usage.js';
@@ -122,6 +124,15 @@ async function visitorWorkspace(
   return {
     error: `which workspace? ${user.name ?? 'The visitor'} has: ${rows.map((r) => r.ws.name).join(', ')}`,
   };
+}
+
+/** Accepted members of a workspace, for name → id resolution in rules. */
+async function workspaceMembers(db: Db, wsId: string) {
+  return db
+    .select({ id: users.id, name: users.name })
+    .from(memberships)
+    .innerJoin(users, eq(memberships.userId, users.id))
+    .where(and(eq(memberships.workspaceId, wsId), isNotNull(memberships.acceptedAt)));
 }
 
 /** Stable stringify for flat exec-args — jsonb sorts keys on read. */
@@ -1159,6 +1170,332 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if (!agent) return 'error: agent not found';
       if (!agent.hosted) return `error: ${agent.name} isn't a hosted agent`;
       return applyKnowledgeEntries(ctx.db, wsId, agent, String(args.entry ?? ''), user);
+    },
+  },
+  {
+    name: 'add_routing_rule',
+    description:
+      "Propose an alert/routing rule on an agent in the visitor's workspace — the same rules the Escalation tab manages: keyword match → assign/alert, inactivity timeout → assign/alert, auto_assign round-robin pool, or failure/handoff_request/custom_alert notifications. Posts an approval card — nothing is created until the visitor approves. Admin-only.",
+    params: {
+      agent: 'agent name (required)',
+      kind: 'keyword | inactivity | auto_assign | failure | handoff_request | custom_alert (required)',
+      keywords: 'keyword kind: comma-separated words/phrases to match',
+      intents: 'optional: comma-separated intent labels that fire the rule',
+      inactivity_minutes: 'inactivity kind: minutes of silence before firing (1-1440)',
+      assign_to: 'keyword/inactivity kinds: teammate name to assign the conversation to',
+      assignees: 'auto_assign kind: comma-separated teammate names for the round-robin pool',
+      tag: 'optional: tag to add to the conversation when the rule fires',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+
+      const hint = args.agent?.trim().toLowerCase();
+      const wsAgents = await ctx.db.select().from(agents).where(eq(agents.workspaceId, ws.id));
+      const agent = hint
+        ? wsAgents.find((a) => a.name.toLowerCase() === hint) ??
+          wsAgents.find((a) => a.name.toLowerCase().includes(hint))
+        : undefined;
+      if (!agent) {
+        return JSON.stringify({
+          error: `which agent? "${args.agent ?? ''}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
+        });
+      }
+      const kind = String(args.kind ?? '').trim();
+      if (!['keyword', 'inactivity', 'auto_assign', 'failure', 'handoff_request', 'custom_alert'].includes(kind)) {
+        return JSON.stringify({ error: `unknown kind "${kind}" — keyword, inactivity, auto_assign, failure, handoff_request or custom_alert` });
+      }
+
+      const members = await workspaceMembers(ctx.db, ws.id);
+      const memberOf = (name: string) => {
+        const h = name.trim().toLowerCase();
+        return (
+          members.find((m) => m.name.toLowerCase() === h) ??
+          members.find((m) => m.name.toLowerCase().split(' ')[0] === h) ??
+          members.find((m) => m.name.toLowerCase().includes(h))
+        );
+      };
+      const csv = (v: unknown) =>
+        String(v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+
+      const config: Record<string, unknown> = { enabled: true };
+      const display: Record<string, unknown> = { agent: agent.name, kind };
+      if (kind === 'keyword') {
+        const kws = csv(args.keywords);
+        if (!kws.length) return JSON.stringify({ error: 'keyword rules need keywords — ask which words should fire it' });
+        config.keywords = kws;
+        display.keywords = kws.join(', ');
+      }
+      if (kind === 'inactivity') {
+        const mins = Number(args.inactivity_minutes);
+        if (!Number.isFinite(mins) || mins < 1 || mins > 1440) {
+          return JSON.stringify({ error: 'inactivity rules need inactivity_minutes (1-1440)' });
+        }
+        config.inactivity_minutes = mins;
+        display.after = `${mins} min quiet`;
+      }
+      if (kind === 'keyword' || kind === 'inactivity') {
+        const ints = csv(args.intents);
+        if (ints.length) {
+          config.intents = ints;
+          display.intents = ints.join(', ');
+        }
+        if (args.assign_to) {
+          const m = memberOf(String(args.assign_to));
+          if (!m) {
+            return JSON.stringify({
+              error: `"${args.assign_to}" isn't a workspace member — teammates: ${members.map((x) => x.name).join(', ')}`,
+            });
+          }
+          config.assign_to = m.id;
+          display.assign_to = m.name;
+        }
+      }
+      if (kind === 'auto_assign') {
+        const names = csv(args.assignees);
+        if (!names.length) return JSON.stringify({ error: 'auto_assign needs assignees — which teammates should take turns?' });
+        const ids: string[] = [];
+        const bad: string[] = [];
+        for (const n of names) {
+          const m = memberOf(n);
+          if (m) ids.push(m.id);
+          else bad.push(n);
+        }
+        if (bad.length) {
+          return JSON.stringify({
+            error: `${bad.join(', ')} not in the workspace — teammates: ${members.map((x) => x.name).join(', ')}`,
+          });
+        }
+        config.assignees = ids;
+        display.assignees = names.join(', ');
+      }
+      if (args.tag) {
+        config.tag = String(args.tag).slice(0, 60);
+        display.tag = config.tag;
+      }
+      const label =
+        kind === 'keyword'
+          ? `Route "${(config.keywords as string[]).join(', ')}"${display.assign_to ? ` → ${display.assign_to}` : ''}`
+          : kind === 'inactivity'
+            ? `Nudge after ${config.inactivity_minutes} min quiet${display.assign_to ? ` → ${display.assign_to}` : ''}`
+            : kind === 'auto_assign'
+              ? `Round-robin → ${display.assignees}`
+              : `Alert on ${kind.replace(/_/g, ' ')}`;
+      return parkConciergeAction(
+        ctx,
+        'apply_routing_rule',
+        { workspace_id: ws.id, agent_id: agent.id, kind, config },
+        `${label} — ${agent.name}`,
+        display,
+      );
+    },
+  },
+  {
+    // Executor for approved add_routing_rule cards — hidden from the model.
+    name: 'apply_routing_rule',
+    description: 'internal — executes an approved add_routing_rule action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+            eq(memberships.role, 'admin'),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs admin rights on the target workspace';
+      const [agent] = await ctx.db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, String(args.agent_id ?? '')), eq(agents.workspaceId, wsId)))
+        .limit(1);
+      if (!agent) return 'error: agent not found';
+      const kind = String(args.kind ?? '');
+      const config = (args.config ?? {}) as unknown as Record<string, unknown>;
+      const [row] = await ctx.db
+        .insert(alertRules)
+        .values({ agentId: agent.id, kind: kind as never, config })
+        .returning();
+      await audit(ctx.db, {
+        workspaceId: wsId,
+        userId: user.id,
+        userName: user.name,
+        action: 'agent.rule.add',
+        targetType: 'agent',
+        targetId: agent.id,
+        meta: { via: 'concierge', kind, config },
+      });
+      bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
+      return JSON.stringify({ ok: true, rule_id: row.id, agent: agent.name, kind });
+    },
+  },
+  {
+    name: 'update_agent',
+    description:
+      "Propose an agent settings change in the visitor's workspace — greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes. Posts an approval card — nothing changes until the visitor approves. Admin-only.",
+    params: {
+      agent: 'agent name (required)',
+      greeting: 'new greeting text (blank string disables it)',
+      greeting_enabled: 'true/false — send the greeting on new conversations',
+      quick_replies: 'comma-separated chips shown in the widget (max 8)',
+      csat_enabled: 'true/false — post-resolution satisfaction survey',
+      csat_prompt: 'the survey question text',
+      csat_thanks: 'the reply sent after a survey answer',
+      sla_minutes: 're-alert when a handoff stays unclaimed for N minutes (1-1440)',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+
+      const hint = args.agent?.trim().toLowerCase();
+      const wsAgents = await ctx.db.select().from(agents).where(eq(agents.workspaceId, ws.id));
+      const agent = hint
+        ? wsAgents.find((a) => a.name.toLowerCase() === hint) ??
+          wsAgents.find((a) => a.name.toLowerCase().includes(hint))
+        : undefined;
+      if (!agent) {
+        return JSON.stringify({
+          error: `which agent? "${args.agent ?? ''}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
+        });
+      }
+
+      // Flat params → nested config patch. Only these keys ever reach the
+      // card — the executor re-validates with the shared schema anyway.
+      const patch: Record<string, unknown> = {};
+      const display: Record<string, unknown> = { agent: agent.name };
+      const bool = (v: unknown) => ['true', 'yes', 'on', '1'].includes(String(v).toLowerCase());
+      const cur = (agent.config ?? {}) as Record<string, unknown>;
+      const curCsat = (cur.csat ?? {}) as Record<string, unknown>;
+      if (args.greeting !== undefined) {
+        patch.greeting = String(args.greeting).slice(0, 500);
+        display.greeting = patch.greeting || '(disabled)';
+      }
+      if (args.greeting_enabled !== undefined) {
+        patch.greeting_enabled = bool(args.greeting_enabled);
+        display.greeting = patch.greeting_enabled ? 'on' : 'off';
+      }
+      if (args.quick_replies !== undefined) {
+        const qr = String(args.quick_replies).split(',').map((s) => s.trim()).filter(Boolean).slice(0, 8);
+        patch.quick_replies = qr;
+        display.quick_replies = qr.join(', ') || '(none)';
+      }
+      const csatPatch: Record<string, unknown> = {};
+      if (args.csat_enabled !== undefined) {
+        csatPatch.enabled = bool(args.csat_enabled);
+        display.csat = csatPatch.enabled ? 'on' : 'off';
+      }
+      if (args.csat_prompt !== undefined) {
+        csatPatch.prompt = String(args.csat_prompt).slice(0, 500);
+        display.csat_prompt = csatPatch.prompt;
+      }
+      if (args.csat_thanks !== undefined) {
+        csatPatch.thanks = String(args.csat_thanks).slice(0, 500);
+        display.csat_thanks = csatPatch.thanks;
+      }
+      if (Object.keys(csatPatch).length) {
+        patch.csat = { ...curCsat, ...csatPatch };
+      }
+      if (args.sla_minutes !== undefined) {
+        const mins = Number(args.sla_minutes);
+        if (!Number.isFinite(mins) || mins < 1 || mins > 1440) {
+          return JSON.stringify({ error: 'sla_minutes must be 1-1440' });
+        }
+        patch.sla_minutes = mins;
+        display.re_alert_after = `${mins} min`;
+      }
+      if (!Object.keys(patch).length) {
+        return JSON.stringify({
+          error: 'nothing to change — pass at least one of greeting, greeting_enabled, quick_replies, csat_*, sla_minutes',
+        });
+      }
+      return parkConciergeAction(
+        ctx,
+        'apply_agent_config',
+        { workspace_id: ws.id, agent_id: agent.id, patch },
+        `Update ${agent.name}`,
+        display,
+      );
+    },
+  },
+  {
+    // Executor for approved update_agent cards — hidden from the model.
+    name: 'apply_agent_config',
+    description: 'internal — executes an approved update_agent action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+            eq(memberships.role, 'admin'),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs admin rights on the target workspace';
+      const [agent] = await ctx.db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, String(args.agent_id ?? '')), eq(agents.workspaceId, wsId)))
+        .limit(1);
+      if (!agent) return 'error: agent not found';
+      // Re-validate the proposed patch against the shared schema — an
+      // approved card must never write keys the console wouldn't accept.
+      const ALLOWED = ['greeting', 'greeting_enabled', 'quick_replies', 'csat', 'sla_minutes'];
+      const patch = (args.patch ?? {}) as unknown as Record<string, unknown>;
+      const clean = Object.fromEntries(
+        Object.entries(patch).filter(([k]) => ALLOWED.includes(k)),
+      );
+      if (!Object.keys(clean).length) return 'error: empty or disallowed patch';
+      const check = AgentConfig.partial().safeParse(clean);
+      if (!check.success) return `error: invalid settings — ${check.error.issues[0]?.message}`;
+      await ctx.db
+        .update(agents)
+        .set({ config: { ...(agent.config as object), ...clean } })
+        .where(eq(agents.id, agent.id));
+      await audit(ctx.db, {
+        workspaceId: wsId,
+        userId: user.id,
+        userName: user.name,
+        action: 'agent.config.update',
+        targetType: 'agent',
+        targetId: agent.id,
+        meta: { via: 'concierge', fields: Object.keys(clean) },
+      });
+      bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
+      return JSON.stringify({ ok: true, agent: agent.name, applied: Object.keys(clean) });
     },
   },
 ];

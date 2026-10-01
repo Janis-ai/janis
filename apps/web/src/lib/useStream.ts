@@ -40,12 +40,14 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
       void qc.invalidateQueries({ queryKey: ['agent-tests'] });
       void qc.invalidateQueries({ queryKey: ['agent-test-runs'] });
     });
-    // Agent config changed out-of-band (concierge teach_agent/create_agent) —
-    // refresh open agent pages so the KB and gap views aren't stale.
+    // Agent config changed out-of-band (concierge teach_agent/create_agent/
+    // apply_routing_rule) — refresh open agent pages so the KB, gap and
+    // Escalation-rule views aren't stale.
     source.addEventListener('agent', () => {
       void qc.invalidateQueries({ queryKey: ['agents'] });
       void qc.invalidateQueries({ queryKey: ['knowledge'] });
       void qc.invalidateQueries({ queryKey: ['knowledge-gaps'] });
+      void qc.invalidateQueries({ queryKey: ['rules'] });
     });
     // Visitor typing — ephemeral; routed to the open chat, never a refetch.
     source.addEventListener('typing', (e) => {
