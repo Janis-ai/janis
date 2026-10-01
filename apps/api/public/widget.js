@@ -691,7 +691,13 @@
           if (state.outbox.indexOf(entry) >= 0) markFailed(entry); // never stored (e.g. plan cap)
         });
       }, 1500);
-    }).catch(function () { markFailed(entry); });
+    }).catch(function () {
+      // The write may have landed even though the response was lost — poll
+      // once so a stored echo reconciles the entry before marking it failed.
+      return poll().then(function () {
+        if (state.outbox.indexOf(entry) >= 0) markFailed(entry);
+      });
+    });
   }
 
   // One 'Delivered' receipt, pinned under the newest confirmed visitor
@@ -795,6 +801,9 @@
 
   function addPending(payload, attachments) {
     hideDelivered(); // a new send clears the previous receipt
+    // Idempotency key — a retried POST (timeout, lost response) dedupes
+    // server-side instead of double-storing the visitor's message.
+    payload.client_id = 'c' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
     var d = addMsg({ direction: 'in', text: payload.text, attachments: attachments });
     d.classList.add('pending');
     var entry = { el: d, statusEl: null, text: payload.text, payload: payload };
@@ -861,8 +870,11 @@
         var gotReply = false;
         var wantPing = false;
         d.messages.forEach(function (m) {
+          // Exact idempotency-key match first — text matching misfires when
+          // the same message is sent twice.
           var i = m.direction === 'in' ? state.outbox.findIndex(function (o) {
-            return o.text === m.text ||
+            return (m.client_id && o.payload.client_id === m.client_id) ||
+              o.text === m.text ||
               (o.payload.attachments.length > 0 && (m.attachments || []).length > 0);
           }) : -1;
           if (i >= 0) {

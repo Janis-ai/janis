@@ -646,6 +646,9 @@ export function AskJanis({
           visitor_id: visitor,
           text: t,
           attachments: atts,
+          // idempotency key — a retried POST (after a timeout or lost
+          // response) dedupes server-side instead of double-storing
+          client_id: entry.localId,
           // which console page the sender was on — the concierge sees this as
           // the `page` trait ("the user was on /reports when they asked")
           page: location.pathname + location.search,
@@ -662,7 +665,11 @@ export function AskJanis({
         );
       }, 1500);
     } catch {
-      setOb((ob) => ob.map((o) => (o.localId === entry.localId ? { ...o, status: 'failed' as const } : o)));
+      // The write may have landed even though the response was lost — poll
+      // once so a stored echo reconciles the entry to delivered before we
+      // call it failed.
+      await poll();
+      setOb((ob) => ob.map((o) => (o.localId === entry.localId && o.status === 'pending' ? { ...o, status: 'failed' as const } : o)));
       hideTyping();
     } finally {
       setSending(false);
@@ -783,7 +790,10 @@ export function AskJanis({
                     {author!.name}
                   </div>
                 )}
-                {linkify(item.m.text, navigate)}
+                {/* A card row's text IS its label ("Teach Acme Returns") —
+                    rendering both doubles the title. */}
+                {!(item.m.action && item.m.text === item.m.action.label) &&
+                  linkify(item.m.text, navigate)}
                 {item.m.action && (
                   <div className="action-card">
                     <div className="mono" style={{ fontSize: 12 }}>

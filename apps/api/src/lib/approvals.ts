@@ -172,12 +172,13 @@ export async function decidePendingAction(
     .limit(1);
   if (!conv || !agent) return null;
 
+  // Concierge action cards store a builtin descriptor ({builtin: name})
+  // instead of a webhook ToolDef — dispatch into BUILTIN_TOOLS in-process.
+  const snap = action.tool as { builtin?: unknown };
+  const builtinName = typeof snap.builtin === 'string' ? snap.builtin : null;
+
   let result: string | null = null;
   if (approve) {
-    // Concierge action cards store a builtin descriptor ({builtin: name})
-    // instead of a webhook ToolDef — dispatch into BUILTIN_TOOLS in-process.
-    const snap = action.tool as { builtin?: unknown };
-    const builtinName = typeof snap.builtin === 'string' ? snap.builtin : null;
     if (builtinName) {
       const { BUILTIN_TOOLS } = await import('./builtinTools.js');
       const b = BUILTIN_TOOLS.find((x) => x.name === builtinName);
@@ -220,6 +221,20 @@ export async function decidePendingAction(
     .returning();
 
   const preview = result ? result.slice(0, RESULT_PREVIEW) : null;
+  // Builtin executors return JSON carrying `summary` — a one-line readable
+  // outcome ("Added to Acme Returns' knowledge: …"). The card shows that
+  // instead of the raw result blob; webhook ToolDef bodies keep the
+  // truncated preview as before.
+  const summary = (() => {
+    if (!result) return null;
+    try {
+      const p = JSON.parse(result) as { summary?: unknown };
+      return typeof p.summary === 'string' ? p.summary : null;
+    } catch {
+      return null;
+    }
+  })();
+  const cardResult = summary ?? preview;
   const resultText = approve
     ? `teammate approved and ran ${action.toolName}${preview ? ` — result: ${preview}` : ''}`
     : `teammate declined the action ${action.toolName} — do not retry it; tell the customer it could not be done`;
@@ -243,7 +258,7 @@ export async function decidePendingAction(
               ...a,
               status: updated.status,
               decided_by: decidedBy.name,
-              ...(preview ? { result: preview } : {}),
+              ...(cardResult ? { result: cardResult } : {}),
             },
           },
         })
@@ -265,6 +280,23 @@ export async function decidePendingAction(
     })
     .returning();
   bus.publish(agent.workspaceId, { type: 'message', data: toMessage(note) });
+
+  // Concierge cards live in the Ask Janis thread, where the resumed agent
+  // turn can be slow or emit nothing — a decision read as typing dots that
+  // never resolve. Post a deterministic confirmation line instead.
+  if (builtinName) {
+    const failed = approve && result !== null && result.startsWith('error:');
+    const confirm = !approve
+      ? 'Dismissed — no changes made.'
+      : failed
+        ? `The action failed — ${(cardResult ?? 'unknown error').replace(/^error:\s*/i, '')}`
+        : `Done — ${cardResult ?? 'the change was applied.'}`;
+    const [out] = await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'out', text: confirm })
+      .returning();
+    bus.publish(agent.workspaceId, { type: 'message', data: toMessage(out) });
+  }
 
   const { resolveSlackActionCards } = await import('./slack.js');
   await resolveSlackActionCards(db, updated, approve, decidedBy.name).catch(() => {});

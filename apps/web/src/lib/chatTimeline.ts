@@ -13,6 +13,9 @@ export interface ChatMsg {
   direction: string;
   text: string;
   created_at: string;
+  /** Sender's own idempotency key, echoed back on inbound rows — exact
+   *  outbox reconciliation even when identical text was sent twice. */
+  client_id?: string;
   attachments?: Attachment[];
   quick_replies?: (string | { type: 'email' | 'phone' })[];
   author?: { name: string; avatar: string | null };
@@ -66,12 +69,23 @@ export function reconcilePoll(
   let minTs: string | null = null;
   for (const m of batch) {
     if (m.direction === 'in') {
-      const i = next.findIndex(
-        (o) =>
-          o.status === 'pending' &&
-          (o.text === m.text ||
-            (o.attachments.length > 0 && (m.attachments ?? []).length > 0)),
-      );
+      // Exact match on the sender's idempotency key first — text matching
+      // misfires when the same text is sent twice in a row. A 'failed'
+      // entry still matches: the write may have landed even though the
+      // response was lost, and the echo promotes it back to delivered.
+      const matchable = (o: OutEntry) => o.status === 'pending' || o.status === 'failed';
+      const byKey = m.client_id
+        ? next.findIndex((o) => matchable(o) && o.localId === m.client_id)
+        : -1;
+      const i =
+        byKey >= 0
+          ? byKey
+          : next.findIndex(
+              (o) =>
+                matchable(o) &&
+                (o.text === m.text ||
+                  (o.attachments.length > 0 && (m.attachments ?? []).length > 0)),
+            );
       if (i >= 0) {
         // one receipt at a time — demote any prior 'delivered' to 'sent'
         for (let j = 0; j < next.length; j++) {

@@ -2,8 +2,9 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { BUILTIN_TOOLS, enabledBuiltins } from '../lib/builtinTools.js';
+import { decidePendingAction } from '../lib/approvals.js';
 import {
   agents,
   channelBindings,
@@ -576,6 +577,46 @@ describe('teach_agent builtin', () => {
     expect(cfg.knowledge).toContain('We ship to Canada — free over $50.');
     // "ship, canada" shared words → jaccard ≥ 0.35 → cluster marked covered
     expect(cfg.gaps_cache?.gaps?.[0]?.added).toBe(true);
+  });
+
+  it('approve via decidePendingAction resolves the card with a friendly summary + Done line', async () => {
+    const out = await teach().run(
+      { workspace: 'free', agent: 'gap bot', entry: 'Refunds land within five working days.' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const [pa] = await db
+      .select()
+      .from(pendingActions)
+      .where(and(eq(pendingActions.conversationId, CONV2), eq(pendingActions.status, 'pending')))
+      .orderBy(desc(pendingActions.createdAt))
+      .limit(1);
+
+    const decided = await decidePendingAction(db, pa.id, { id: USER2, name: 'Ann' }, true);
+    expect(decided).not.toBeNull();
+    expect(decided).not.toBe('not-pending');
+
+    // The card's result is the executor's human-readable summary — never
+    // the raw JSON blob.
+    const [card] = await db.select().from(messages).where(eq(messages.id, pa.messageId!));
+    const act = (
+      card.payload as { action: { status: string; decided_by: string; result: string } }
+    ).action;
+    expect(act.status).toBe('approved');
+    expect(act.decided_by).toBe('Ann');
+    expect(act.result).toContain('Added to Gap Bot');
+    expect(act.result).not.toContain('{');
+
+    // A deterministic confirmation lands in the thread — the Ask Janis
+    // rail never sits on typing dots waiting for a resumed agent turn.
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, CONV2))
+      .orderBy(desc(messages.createdAt))
+      .limit(5);
+    const confirm = rows.find((r) => r.direction === 'out' && r.text.startsWith('Done —'));
+    expect(confirm?.text).toContain('Refunds land within five working days.');
   });
 
   it('apply_knowledge dedupes; teach rejects non-hosted agents', async () => {

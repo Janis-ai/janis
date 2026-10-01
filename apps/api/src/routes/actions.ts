@@ -59,13 +59,18 @@ export function actionRoutes(db: Db) {
     if (decided === 'not-pending') return c.json({ error: 'already decided' }, 409);
     if (!decided) return c.json({ error: 'not found' }, 404);
 
-    // Resume the agent so it can close the loop with the customer.
-    void runHostedEvent(db, decided.agent, {
-      type: 'message.user',
-      conversation_id: decided.conv.externalId,
-      janis_conversation_id: decided.conv.id,
-      timestamp: new Date().toISOString(),
-    }).catch(() => {});
+    // Resume the agent so it can close the loop with the customer. Concierge
+    // (operator-workspace) cards skip the LLM resume — decidePendingAction
+    // already posted a deterministic confirmation, and a resumed turn that
+    // took a while or emitted nothing read as typing dots that never resolve.
+    if (decided.action.workspaceId !== env.operatorWorkspaceId) {
+      void runHostedEvent(db, decided.agent, {
+        type: 'message.user',
+        conversation_id: decided.conv.externalId,
+        janis_conversation_id: decided.conv.id,
+        timestamp: new Date().toISOString(),
+      }).catch(() => {});
+    }
 
     return c.json({ ok: true, status: decided.action.status, result: decided.action.result });
   });

@@ -93,6 +93,37 @@ describe('reconcilePoll + timelineItems', () => {
     expect(next.map((o) => o.status)).toEqual(['sent', 'delivered']);
   });
 
+  // Regression: a POST that lost its response still stored the row — the
+  // entry showed "failed to send" and the late echo rendered the message a
+  // second time. The sender's client_id reconciles it exactly.
+  it('matches an echo by client_id even when the entry was marked failed', () => {
+    const outbox: OutEntry[] = [
+      { localId: 'l-1', text: 'hi', attachments: [], status: 'failed', ts: '2026-02-01T00:00:00.000Z' },
+    ];
+    const echo: ChatMsg = {
+      ...msg('m1', 'in', 'hi', '2026-02-01T00:00:01.000Z'),
+      client_id: 'l-1',
+    };
+    const { outbox: next, fresh } = reconcilePoll(outbox, [echo], new Set());
+    expect(next[0].status).toBe('delivered');
+    expect(fresh).toHaveLength(0);
+  });
+
+  it('client_id disambiguates two identical pending sends', () => {
+    const outbox: OutEntry[] = [
+      { localId: 'l-a', text: 'same', attachments: [], status: 'pending', ts: '2026-02-01T00:00:00.000Z' },
+      { localId: 'l-b', text: 'same', attachments: [], status: 'pending', ts: '2026-02-01T00:00:01.000Z' },
+    ];
+    const echo: ChatMsg = {
+      ...msg('m1', 'in', 'same', '2026-02-01T00:00:02.000Z'),
+      client_id: 'l-b',
+    };
+    const { outbox: next, fresh } = reconcilePoll(outbox, [echo], new Set());
+    expect(next[0].status).toBe('pending');
+    expect(next[1].status).toBe('delivered');
+    expect(fresh).toHaveLength(0);
+  });
+
   it('tracks batch extremes for the poll cursors', () => {
     const { maxTs, minTs } = reconcilePoll(
       [],

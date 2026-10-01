@@ -134,6 +134,10 @@ const postMessage = z
     // context for the concierge, surfaced as the `page` trait for session users.
     page: z.string().max(500).optional(),
     attachments: z.array(attachment).max(5).optional(),
+    // Client-generated send id — a retried POST (timeout, "failed to send"
+    // that actually landed) carries the same id and is deduped server-side
+    // so the retry can't double-store the message.
+    client_id: z.string().max(80).optional(),
   })
   .refine((d) => d.text.trim().length > 0 || (d.attachments?.length ?? 0) > 0, {
     message: 'text or attachments required',
@@ -386,8 +390,29 @@ export function webchatRoutes(db: Db) {
   app.post('/:token/messages', zValidator('json', postMessage), async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
-    const { visitor_id, text, name, user, page, attachments } = c.req.valid('json');
+    const { visitor_id, text, name, user, page, attachments, client_id } = c.req.valid('json');
     const resolved = await resolveIdentity(c, db, channel, user, page);
+    // Retry idempotency — the client resends with the same client_id after a
+    // failed-looking POST (timeout, lost response). The write may have
+    // landed already; if a stored inbound carries this id, acknowledge and
+    // skip rather than double-store.
+    if (client_id) {
+      const conv = await findConversation(db, channel.id, participantFor(resolved, visitor_id));
+      if (conv) {
+        const [dup] = await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, conv.id),
+              eq(messages.direction, 'in'),
+              sql`${messages.payload}->>'client_id' = ${client_id}`,
+            ),
+          )
+          .limit(1);
+        if (dup) return c.json({ ok: true });
+      }
+    }
     await handleChannelMessage(db, channel, {
       objectId: '',
       senderId: visitor_id,
@@ -395,6 +420,7 @@ export function webchatRoutes(db: Db) {
       name: resolved?.name ?? name,
       user: resolved,
       attachments,
+      payload: client_id ? { client_id } : undefined,
     });
     return c.json({ ok: true });
   });
@@ -663,6 +689,9 @@ export function webchatRoutes(db: Db) {
         direction: m.direction,
         text: m.text,
         created_at: m.created_at.toISOString(),
+        // sender's own idempotency key — lets the client reconcile its
+        // optimistic outbox entry exactly, even after a lost response
+        client_id: (m.payload as { client_id?: string } | undefined)?.client_id,
         attachments: (m.payload as { attachments?: unknown[] } | undefined)?.attachments,
         quick_replies: (m.payload as { quick_replies?: QuickReply[] } | undefined)?.quick_replies,
         // approval card payload — serialized only for internal test channels

@@ -214,6 +214,25 @@ describe('webchat widget endpoints', () => {
     expect(body.messages[0].payload).toBeUndefined();
   });
 
+  it('dedupes a retried POST by client_id — one stored message, echo carries the key', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const VISITOR = 'vis_clientid000001';
+    const send = () =>
+      app.request(`/chat/${channelId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visitor_id: VISITOR, text: 'same text twice', client_id: 'c-123' }),
+      });
+    expect((await send()).status).toBe(200);
+    expect((await send()).status).toBe(200);
+
+    const poll = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR}`);
+    const body = await poll.json();
+    const inRows = body.messages.filter((m: { direction: string }) => m.direction === 'in');
+    expect(inRows).toHaveLength(1);
+    expect(inRows[0].client_id).toBe('c-123');
+  });
+
   it('isolates transcripts by visitor id', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     await post('a secret', VISITOR_B);

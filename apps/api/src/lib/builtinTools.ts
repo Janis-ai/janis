@@ -234,7 +234,12 @@ async function applyKnowledgeEntries(
     }
   }
   if (!added.length) {
-    return JSON.stringify({ ok: true, note: 'that entry already exists — nothing added', agent: agent.name });
+    return JSON.stringify({
+      ok: true,
+      note: 'that entry already exists — nothing added',
+      agent: agent.name,
+      summary: `Already in ${agent.name}'s knowledge — nothing added.`,
+    });
   }
   // Keep the cached gap set stable — only "added" flags move.
   const { readGapsCache, markGapsAdded } = await import('../services/knowledgeGaps.js');
@@ -263,6 +268,7 @@ async function applyKnowledgeEntries(
     agent: agent.name,
     knowledge_count: knowledge.length,
     gaps_url: `${env.webOrigin}/agents/${agent.id}?tab=behavior`,
+    summary: `Added to ${agent.name}'s knowledge: ${added.map((a) => `"${a.slice(0, 80)}"`).join(', ')}.`,
   });
 }
 
@@ -1126,12 +1132,24 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         .map((l) => l.trim().replace(/^[-*•]\s+/, '').replace(/\*\*/g, ''))
         .filter(Boolean);
       if (!entries.length) return JSON.stringify({ error: 'entry text is required' });
+      // Already known — a re-ask after an earlier approval parks nothing;
+      // tell the concierge it's covered rather than stacking a card that
+      // would no-op on approve.
+      const known = new Set(
+        Array.isArray((agent.config as { knowledge?: unknown } | null)?.knowledge)
+          ? ((agent.config as { knowledge: string[] }).knowledge ?? [])
+          : [],
+      );
+      const freshEntries = entries.filter((e) => !known.has(e));
+      if (!freshEntries.length) {
+        return 'already_known: every proposed line is already in that agent\'s knowledge — tell the visitor it\'s already covered';
+      }
       return parkConciergeAction(
         ctx,
         'apply_knowledge',
-        { workspace_id: ws.id, agent_id: agent.id, entry: entries.join('\n') },
+        { workspace_id: ws.id, agent_id: agent.id, entry: freshEntries.join('\n') },
         `Teach ${agent.name}`,
-        { agent: agent.name, entry: entries.join('\n') },
+        { agent: agent.name, entry: freshEntries.join('\n') },
       );
     },
   },
@@ -1343,7 +1361,13 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         meta: { via: 'concierge', kind, config },
       });
       bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
-      return JSON.stringify({ ok: true, rule_id: row.id, agent: agent.name, kind });
+      return JSON.stringify({
+        ok: true,
+        rule_id: row.id,
+        agent: agent.name,
+        kind,
+        summary: `Added a ${kind.replace(/_/g, ' ')} rule to ${agent.name}.`,
+      });
     },
   },
   {
@@ -1495,7 +1519,12 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         meta: { via: 'concierge', fields: Object.keys(clean) },
       });
       bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
-      return JSON.stringify({ ok: true, agent: agent.name, applied: Object.keys(clean) });
+      return JSON.stringify({
+        ok: true,
+        agent: agent.name,
+        applied: Object.keys(clean),
+        summary: `Updated ${agent.name}: ${Object.keys(clean).join(', ')}.`,
+      });
     },
   },
 ];
