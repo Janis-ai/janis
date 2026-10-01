@@ -158,9 +158,9 @@ button, input, select, textarea { font: inherit; }
 .ask-qrs .btn:hover { background: var(--accent-dim); }
 /* In-conversation widgets (cards/options/form/status/receipt) — console
    mirror of the janis-w* component styles in apps/api/public/widget.js */
-.wgt { margin-top: 6px; font-size: 13px; min-width: 200px; }
-.wgt-cards-wrap { position: relative; }
-.wgt-cards { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+.wgt { margin-top: 6px; font-size: 13px; min-width: 200px; max-width: 100%; }
+.wgt-cards-wrap { position: relative; min-width: 0; max-width: 100%; }
+.wgt-cards { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; min-width: 0; max-width: 100%; }
 .wgt-cards::-webkit-scrollbar { display: none; }
 .wgt-scroll { position: absolute; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--fg); box-shadow: 0 2px 6px rgba(0,0,0,.18); cursor: pointer; font-size: 16px; line-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 0 2px; z-index: 2; transition: opacity .15s; }
 .wgt-scroll.wgt-prev { left: 2px; }

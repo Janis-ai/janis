@@ -72,7 +72,10 @@ function Widget({ w, onSend }: { w: ChatWidget; onSend: (t: string) => void }) {
 
 function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSend: (t: string) => void }) {
   const rowRef = useRef<HTMLDivElement>(null);
-  const [edges, setEdges] = useState({ prev: false, next: false, over: false });
+  // null = unmeasured. Until a real measurement lands, a multi-card row
+  // assumes it overflows — a measurement that never fires (mounted while
+  // the rail was hidden) must not leave the row unscrollable-looking.
+  const [edges, setEdges] = useState<{ over: boolean; prev: boolean; next: boolean } | null>(null);
   const sync = () => {
     const row = rowRef.current;
     if (!row) return;
@@ -83,6 +86,9 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
       next: over && row.scrollLeft + row.clientWidth < row.scrollWidth - 2,
     });
   };
+  const showArrows = w.items.length > 1 && (edges === null || edges.over);
+  const canPrev = edges ? edges.prev : true;
+  const canNext = edges ? edges.next : true;
   useEffect(() => {
     sync();
     // The rail can mount while Ask Janis is collapsed (scrollWidth 0) or
@@ -130,13 +136,13 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
         </div>
       ))}
       </div>
-      {edges.over && (
+      {showArrows && (
         <>
           <button
             type="button"
             className="wgt-scroll wgt-prev"
             aria-label="Scroll left"
-            disabled={!edges.prev}
+            disabled={!canPrev}
             onClick={() => step(-1)}
           >
             ‹
@@ -145,7 +151,7 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
             type="button"
             className="wgt-scroll wgt-next"
             aria-label="Scroll right"
-            disabled={!edges.next}
+            disabled={!canNext}
             onClick={() => step(1)}
           >
             ›
