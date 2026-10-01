@@ -437,6 +437,7 @@ export default function Settings() {
       {section === 'deliverability' && (
         <>
       {me?.user.role === 'admin' && <SendPolicyCard />}
+      {me?.user.role === 'admin' && <CsatCard />}
       {me?.user.role === 'admin' && <EventTokenCard />}
         </>
       )}
@@ -946,7 +947,78 @@ type SendPolicy = {
   quiet_tz?: string;
   max_per_recipient_per_day?: number | null;
 };
+type CsatSettings = { enabled?: boolean; prompt?: string; thanks?: string };
 type SuppressionRow = { id: string; address: string; kind: string; reason: string; source: string | null };
+
+/** Workspace default CSAT survey — fires when a conversation is archived.
+ *  Agents override per-field via their Escalation tab. Admin-only. */
+function CsatCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () =>
+      api<{ workspace: { csat?: CsatSettings | null } }>('/api/workspace'),
+  });
+  const saved = data?.workspace.csat ?? {};
+  const [draft, setDraft] = useState<CsatSettings | null>(null);
+  const [msg, setMsg] = useState('');
+  const c = draft ?? saved;
+  const dirty = draft !== null;
+  const upd = (patch: Partial<CsatSettings>) => setDraft({ ...(draft ?? saved), ...patch });
+  const save = useMutation({
+    mutationFn: () =>
+      api('/api/workspace', { method: 'PATCH', body: JSON.stringify({ csat: c }) }),
+    onSuccess: () => {
+      setDraft(null);
+      setMsg('Saved — applies to the next archived conversation.');
+      void qc.invalidateQueries({ queryKey: ['workspace'] });
+    },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <strong>Satisfaction survey</strong>
+      <div className="muted" style={{ fontSize: 13 }}>
+        Sent to the customer when a conversation is archived — they reply with a
+        1–5 rating, scored in Reports. Agents can override per-field on their
+        Escalation tab.
+      </div>
+      <label className="row" style={{ gap: 8, fontSize: 13 }}>
+        <input
+          type="checkbox"
+          checked={c.enabled ?? true}
+          onChange={(e) => upd({ enabled: e.target.checked })}
+        />
+        Ask for a rating when a conversation is archived
+      </label>
+      <div className="form-field">
+        <label>Survey question</label>
+        <input
+          className="input"
+          value={c.prompt ?? ''}
+          placeholder="How was your experience? Reply with a rating from 1 (poor) to 5 (great)."
+          onChange={(e) => upd({ prompt: e.target.value || undefined })}
+        />
+      </div>
+      <div className="form-field">
+        <label>Thank-you reply</label>
+        <input
+          className="input"
+          value={c.thanks ?? ''}
+          placeholder="Thanks for the feedback!"
+          onChange={(e) => upd({ thanks: e.target.value || undefined })}
+        />
+      </div>
+      <div className="row">
+        <button className="btn primary" disabled={!dirty || save.isPending}
+          onClick={() => save.mutate()}>
+          {save.isPending ? 'Saving…' : 'Save survey'}
+        </button>
+        {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
 
 /** Bulk-send guardrails — quiet hours + per-recipient cap + the workspace
  *  suppression list. Applies to campaigns/broadcasts only; replies aren't

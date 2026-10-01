@@ -11,12 +11,14 @@ import { captureCsat, parseCsatRating, sendCsatPrompt } from './csat.js';
 
 let db: Db;
 let agentId: string;
+let wsId: string;
 
 beforeAll(async () => {
   const client = new PGlite();
   db = drizzle(client, { schema }) as unknown as Db;
   await migrate(db as never, { migrationsFolder: './drizzle' });
   const [ws] = await db.insert(workspaces).values({ name: 'Test' }).returning();
+  wsId = ws.id;
   const { hash, preview } = generateApiKey();
   const [agent] = await db
     .insert(agents)
@@ -25,10 +27,10 @@ beforeAll(async () => {
   agentId = agent.id;
 });
 
-async function makeConv(msgCount = 0) {
+async function makeConv(msgCount = 0, forAgent = agentId) {
   const [conv] = await db
     .insert(conversations)
-    .values({ agentId, externalId: `t:${crypto.randomUUID()}` })
+    .values({ agentId: forAgent, externalId: `t:${crypto.randomUUID()}` })
     .returning();
   for (let i = 0; i < msgCount; i++) {
     await db
@@ -77,6 +79,67 @@ describe('sendCsatPrompt', () => {
     await sendCsatPrompt(db, row);
     const again = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
     expect(again.filter((m) => (m.payload as { via?: string }).via === 'csat')).toHaveLength(1);
+  });
+});
+
+describe('csat settings resolution', () => {
+  async function makeAgent(config: Record<string, unknown>, wsCfg: Record<string, unknown> = {}) {
+    const [ws] = await db.insert(workspaces).values({ name: 'W', config: wsCfg }).returning();
+    const { hash, preview } = generateApiKey();
+    const [a] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'B', apiKeyHash: hash, apiKeyPreview: preview, config })
+      .returning();
+    return a;
+  }
+  const csatCount = async (convId: string) =>
+    (await db.select().from(messages).where(eq(messages.conversationId, convId))).filter(
+      (m) => (m.payload as { via?: string }).via === 'csat',
+    ).length;
+
+  it('workspace enabled:false suppresses the prompt', async () => {
+    const a = await makeAgent({}, { csat: { enabled: false } });
+    const conv = await makeConv(2, a.id);
+    await sendCsatPrompt(db, conv);
+    expect(await csatCount(conv.id)).toBe(0);
+  });
+
+  it('agent enabled:false wins over workspace enabled:true', async () => {
+    const a = await makeAgent({ csat: { enabled: false } }, { csat: { enabled: true } });
+    const conv = await makeConv(2, a.id);
+    await sendCsatPrompt(db, conv);
+    expect(await csatCount(conv.id)).toBe(0);
+  });
+
+  it('agent enabled:true wins over workspace enabled:false', async () => {
+    const a = await makeAgent({ csat: { enabled: true } }, { csat: { enabled: false } });
+    const conv = await makeConv(2, a.id);
+    await sendCsatPrompt(db, conv);
+    expect(await csatCount(conv.id)).toBe(1);
+  });
+
+  it('agent prompt overrides the workspace prompt and thanks', async () => {
+    const a = await makeAgent(
+      { csat: { prompt: 'Rate us!', thanks: 'Cheers!' } },
+      { csat: { prompt: 'WS prompt', thanks: 'WS thanks' } },
+    );
+    const conv = await makeConv(2, a.id);
+    await sendCsatPrompt(db, conv);
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(msgs.find((m) => (m.payload as { via?: string }).via === 'csat')?.text).toBe('Rate us!');
+    const [pending] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    await captureCsat(db, pending, '5');
+    const all = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(all.filter((m) => (m.payload as { via?: string }).via === 'csat').map((m) => m.text))
+      .toEqual(['Rate us!', 'Cheers!']);
+  });
+
+  it('workspace prompt is used when the agent sets only enabled', async () => {
+    const a = await makeAgent({ csat: { enabled: true } }, { csat: { prompt: 'WS prompt' } });
+    const conv = await makeConv(2, a.id);
+    await sendCsatPrompt(db, conv);
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(msgs.find((m) => (m.payload as { via?: string }).via === 'csat')?.text).toBe('WS prompt');
   });
 });
 

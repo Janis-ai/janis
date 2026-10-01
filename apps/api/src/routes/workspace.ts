@@ -64,6 +64,16 @@ const updateWorkspace = z.object({
     })
     .nullable()
     .optional(),
+  // Workspace-wide CSAT survey defaults — agents inherit unless their own
+  // config.csat overrides a field. null clears the whole block.
+  csat: z
+    .object({
+      enabled: z.boolean().optional(),
+      prompt: z.string().max(500).optional(),
+      thanks: z.string().max(500).optional(),
+    })
+    .nullable()
+    .optional(),
   llm_config: z
     .object({
       provider: z.string().optional(),
@@ -100,6 +110,7 @@ export function workspaceRoutes(db: Db) {
         help_domain:
           (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
         send_policy: (ws.config as { send_policy?: unknown } | undefined)?.send_policy ?? null,
+        csat: (ws.config as { csat?: unknown } | undefined)?.csat ?? null,
         event_token:
           (ws.config as { event_token?: string } | undefined)?.event_token ?? null,
       },
@@ -165,7 +176,8 @@ export function workspaceRoutes(db: Db) {
     if (
       body.event_webhook_url !== undefined ||
       body.help_domain !== undefined ||
-      body.send_policy !== undefined
+      body.send_policy !== undefined ||
+      body.csat !== undefined
     ) {
       const config = {
         ...(ws.config as Record<string, unknown>),
@@ -179,6 +191,12 @@ export function workspaceRoutes(db: Db) {
       if (body.send_policy === null) delete (config as Record<string, unknown>).send_policy;
       else if (body.send_policy !== undefined)
         (config as Record<string, unknown>).send_policy = body.send_policy;
+      if (body.csat === null) delete (config as Record<string, unknown>).csat;
+      else if (body.csat !== undefined)
+        (config as Record<string, unknown>).csat = {
+          ...(((config as Record<string, unknown>).csat ?? {}) as Record<string, unknown>),
+          ...body.csat,
+        };
       await db.update(workspaces).set({ config }).where(eq(workspaces.id, workspaceId));
       ws.config = config;
     }
@@ -230,6 +248,7 @@ export function workspaceRoutes(db: Db) {
         help_domain:
           (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
         send_policy: (ws.config as { send_policy?: unknown } | undefined)?.send_policy ?? null,
+        csat: (ws.config as { csat?: unknown } | undefined)?.csat ?? null,
         event_token:
           (ws.config as { event_token?: string } | undefined)?.event_token ?? null,
       },

@@ -737,6 +737,72 @@ function EscalationTab({
       </div>
 
       <div className="card" style={{ marginTop: 12 }}>
+        <strong>Satisfaction survey</strong>
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          Overrides the workspace survey for this agent — blank fields inherit.
+        </div>
+        <div className="form-field" style={{ marginTop: 8 }}>
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={cfg.csat?.enabled !== undefined}
+              onChange={(e) =>
+                setCfg({
+                  ...cfg,
+                  csat: e.target.checked
+                    ? { ...(cfg.csat ?? {}), enabled: true }
+                    : cfg.csat && (cfg.csat.prompt || cfg.csat.thanks)
+                      ? { prompt: cfg.csat.prompt, thanks: cfg.csat.thanks }
+                      : undefined,
+                })
+              }
+            />
+            Override workspace on/off for this agent
+          </label>
+          {cfg.csat?.enabled !== undefined && (
+            <select
+              value={cfg.csat.enabled ? 'on' : 'off'}
+              onChange={(e) =>
+                setCfg({ ...cfg, csat: { ...(cfg.csat ?? {}), enabled: e.target.value === 'on' } })
+              }
+              style={{ marginLeft: 24 }}
+            >
+              <option value="on">Survey on</option>
+              <option value="off">Survey off</option>
+            </select>
+          )}
+        </div>
+        <div className="form-field">
+          <label>Survey question</label>
+          <input
+            className="input"
+            value={cfg.csat?.prompt ?? ''}
+            placeholder="Workspace default"
+            onChange={(e) =>
+              setCfg({
+                ...cfg,
+                csat: { ...(cfg.csat ?? {}), prompt: e.target.value || undefined },
+              })
+            }
+          />
+        </div>
+        <div className="form-field">
+          <label>Thank-you reply</label>
+          <input
+            className="input"
+            value={cfg.csat?.thanks ?? ''}
+            placeholder="Workspace default"
+            onChange={(e) =>
+              setCfg({
+                ...cfg,
+                csat: { ...(cfg.csat ?? {}), thanks: e.target.value || undefined },
+              })
+            }
+          />
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 12 }}>
         <strong>Alert &amp; routing rules</strong>
         {rules.map((r) => (
           <div key={r.id} className="row muted" style={{ marginTop: 6 }}>

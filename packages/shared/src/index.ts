@@ -222,6 +222,15 @@ export const AgentConfig = z.object({
   eval_interval_hours: z.number().min(1).max(720).optional(),
   // routing: assign handoffs to the least-loaded workspace member
   auto_assign: z.boolean().optional(),
+  // post-resolution satisfaction survey — per-agent override of the
+  // workspace-level csat block (unset fields inherit the workspace's)
+  csat: z
+    .object({
+      enabled: z.boolean().optional(), // unset → workspace default → on
+      prompt: z.string().max(500).optional(),
+      thanks: z.string().max(500).optional(),
+    })
+    .optional(),
   // intent taxonomy — labels the classifier picks from on each conversation's
   // first inbound. Empty/unset uses the default support taxonomy.
   intents: z.array(z.string().min(1).max(60)).max(30).optional(),

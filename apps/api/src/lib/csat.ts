@@ -1,6 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, conversations, messages } from '../db/schema.js';
+import { agents, conversations, messages, workspaces } from '../db/schema.js';
 import { bus } from './bus.js';
 import { deliverToChannel } from './channels.js';
 import { toMessage } from './serializers.js';
@@ -10,6 +10,39 @@ const PROMPT =
 const THANKS = 'Thanks for the feedback!';
 
 type Conv = typeof conversations.$inferSelect;
+type CsatBlock = { enabled?: boolean; prompt?: string; thanks?: string };
+
+/**
+ * Effective survey settings for a conversation: agent.config.csat overrides
+ * workspaces.config.csat field-by-field; anything still unset falls back to
+ * the stock prompt. Enabled defaults to true — CSAT has always fired, so an
+ * explicit false is the only way off.
+ */
+export async function csatSettings(
+  db: Db,
+  agentId: string,
+): Promise<{ enabled: boolean; prompt: string; thanks: string }> {
+  const [agent] = await db
+    .select({ config: agents.config, workspaceId: agents.workspaceId })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .limit(1);
+  if (!agent) return { enabled: false, prompt: PROMPT, thanks: THANKS };
+  const [ws] = await db
+    .select({ config: workspaces.config })
+    .from(workspaces)
+    .where(eq(workspaces.id, agent.workspaceId))
+    .limit(1);
+  const wsCsat =
+    ((ws?.config as { csat?: CsatBlock } | null)?.csat ?? {}) as CsatBlock;
+  const agCsat =
+    ((agent.config as { csat?: CsatBlock } | null)?.csat ?? {}) as CsatBlock;
+  return {
+    enabled: agCsat.enabled ?? wsCsat.enabled ?? true,
+    prompt: agCsat.prompt ?? wsCsat.prompt ?? PROMPT,
+    thanks: agCsat.thanks ?? wsCsat.thanks ?? THANKS,
+  };
+}
 
 /**
  * Post-resolution satisfaction prompt — sent once when an operator archives a
@@ -18,6 +51,8 @@ type Conv = typeof conversations.$inferSelect;
  */
 export async function sendCsatPrompt(db: Db, conv: Conv): Promise<void> {
   if (conv.csatAskedAt) return; // one ask per conversation
+  const settings = await csatSettings(db, conv.agentId);
+  if (!settings.enabled) return;
   const [exchange] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(messages)
@@ -29,7 +64,7 @@ export async function sendCsatPrompt(db: Db, conv: Conv): Promise<void> {
     .values({
       conversationId: conv.id,
       direction: 'out',
-      text: PROMPT,
+      text: settings.prompt,
       payload: { via: 'csat' },
     })
     .returning();
@@ -43,7 +78,7 @@ export async function sendCsatPrompt(db: Db, conv: Conv): Promise<void> {
     .where(eq(agents.id, conv.agentId))
     .limit(1);
   if (agent) bus.publish(agent.workspaceId, { type: 'message', data: toMessage(note) });
-  await deliverToChannel(db, conv.id, PROMPT, undefined, { messageId: note.id });
+  await deliverToChannel(db, conv.id, settings.prompt, undefined, { messageId: note.id });
 }
 
 /** "5", "4!", "3 - ok", "2/5" → rating; anything else → not a rating. */
@@ -65,12 +100,13 @@ export async function captureCsat(db: Db, conv: Conv, text: string): Promise<boo
     .set({ csatPending: false, ...(score !== null ? { csatScore: score } : {}) })
     .where(and(eq(conversations.id, conv.id), eq(conversations.csatPending, true)));
   if (score === null) return false;
+  const settings = await csatSettings(db, conv.agentId);
   const [note] = await db
     .insert(messages)
     .values({
       conversationId: conv.id,
       direction: 'out',
-      text: THANKS,
+      text: settings.thanks,
       payload: { via: 'csat', score },
     })
     .returning();
@@ -80,6 +116,6 @@ export async function captureCsat(db: Db, conv: Conv, text: string): Promise<boo
     .where(eq(agents.id, conv.agentId))
     .limit(1);
   if (agent) bus.publish(agent.workspaceId, { type: 'message', data: toMessage(note) });
-  await deliverToChannel(db, conv.id, THANKS, undefined, { messageId: note.id });
+  await deliverToChannel(db, conv.id, settings.thanks, undefined, { messageId: note.id });
   return true;
 }
