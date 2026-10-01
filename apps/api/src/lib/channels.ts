@@ -47,6 +47,8 @@ export interface ChannelCredentials {
   proactive?: boolean; // webchat: show the teaser at all — default on
   proactive_delay?: number; // webchat: seconds before the teaser appears (default 20)
   sound?: boolean; // webchat: chime on a new reply while closed/hidden — default on
+  theme?: 'light' | 'dark' | 'auto'; // webchat: widget color scheme — default light
+  hide_powered_by?: boolean; // webchat: drop the footer — honored on paid plans only
   // webchat: HMAC-SHA256 key for host-signed identity assertions — when set,
   // a `sig` on the widget's user payload proves the host vouched for it
   identity_secret?: string;

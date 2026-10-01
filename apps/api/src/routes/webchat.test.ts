@@ -18,6 +18,7 @@ import { join } from 'node:path';
 let db: Db;
 let app: Hono;
 let channelId: string;
+let wsId: string;
 
 const VISITOR_A = 'vis_aaaabbbbccccdddd';
 const VISITOR_B = 'vis_eeeeffffgggghhhh';
@@ -41,6 +42,7 @@ beforeAll(async () => {
   app = new Hono().route('/chat', webchatRoutes(db)); // mounted like production
 
   const [ws] = await db.insert(workspaces).values({ name: 'Test' }).returning();
+  wsId = ws.id;
   const { hash, preview } = generateApiKey();
   const [agent] = await db
     .insert(agents)
@@ -91,6 +93,32 @@ describe('webchat widget endpoints', () => {
       })
       .returning();
     expect((await app.request(`/chat/${meta.id}`)).status).toBe(404);
+  });
+
+  it('passes theme through and honors hide_powered_by only on paid plans', async () => {
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    await db
+      .update(channels)
+      .set({
+        credentials: {
+          ...(ch.credentials as object),
+          hide_powered_by: true,
+          theme: 'dark',
+        },
+      })
+      .where(eq(channels.id, channelId));
+    // fixture workspace is on free — the flag is stripped, theme still sent
+    let body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.theme).toBe('dark');
+    expect(body.hide_powered_by).toBe(false);
+    await db.update(workspaces).set({ plan: 'pro' }).where(eq(workspaces.id, wsId));
+    body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.hide_powered_by).toBe(true);
+    await db.update(workspaces).set({ plan: 'free' }).where(eq(workspaces.id, wsId));
+    await db
+      .update(channels)
+      .set({ credentials: ch.credentials as object })
+      .where(eq(channels.id, channelId));
   });
 
   it('ingests a visitor message into a conversation', async () => {

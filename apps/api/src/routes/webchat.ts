@@ -13,6 +13,7 @@ import { sha256 } from '../lib/crypto.js';
 import type { QuickReply } from '@janis/shared';
 import type { ChannelCredentials, InboundMessage } from '../lib/channels.js';
 import { resolveGreeting } from '../lib/greeting.js';
+import { effectivePlanKey } from '../lib/plans.js';
 import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
 import { adoptVisitorConversation, handleChannelMessage } from '../services/channelIngress.js';
 import { bus } from '../lib/bus.js';
@@ -251,6 +252,9 @@ export function webchatRoutes(db: Db) {
       .select({ n: sql<number>`count(*)::int` })
       .from(helpArticles)
       .where(and(eq(helpArticles.agentId, channel.agentId), eq(helpArticles.status, 'published')));
+    // White-labeling is a paid feature — the stored flag only reaches the
+    // widget when the workspace's effective plan isn't free.
+    const planKey = await effectivePlanKey(db, channel.workspaceId);
     return c.json({
       name: channel.name,
       agent_name: agent?.name ?? 'Assistant',
@@ -271,6 +275,8 @@ export function webchatRoutes(db: Db) {
       proactive: creds.proactive !== false,
       proactive_delay: creds.proactive_delay ?? 20,
       sound: creds.sound !== false,
+      theme: creds.theme ?? 'light',
+      hide_powered_by: creds.hide_powered_by === true && planKey !== 'free',
     });
   });
 

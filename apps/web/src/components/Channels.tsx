@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
 import { CodeBlock } from './bits';
@@ -543,7 +543,22 @@ function WebchatBranding({ channel }: { channel: Channel }) {
     proactive: b.proactive !== false,
     proactive_delay: b.proactive_delay ?? 20,
     sound: b.sound !== false,
+    theme: b.theme ?? 'light',
+    hide_powered_by: b.hide_powered_by === true,
   });
+  const { data: wsDetail } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () => api<{ workspace: { plan: string } }>('/api/workspace'),
+  });
+  const freePlan = wsDetail?.workspace.plan === 'free';
+  const { data: articles } = useQuery({
+    queryKey: ['articles', channel.agent_id],
+    queryFn: () =>
+      api<{ articles: { status: string }[] }>(
+        `/api/articles?agent_id=${channel.agent_id}`,
+      ),
+  });
+  const hasHelp = (articles?.articles ?? []).some((a) => a.status === 'published');
   const [msg, setMsg] = useState('');
   const uploadLogo = async (file: File) => {
     setMsg('Uploading…');
@@ -579,6 +594,8 @@ function WebchatBranding({ channel }: { channel: Channel }) {
             proactive: f.proactive,
             proactive_delay: f.proactive_delay,
             sound: f.sound,
+            theme: f.theme,
+            hide_powered_by: f.hide_powered_by,
           },
         }),
       }),
@@ -616,6 +633,17 @@ function WebchatBranding({ channel }: { channel: Channel }) {
           <select value={f.position} onChange={(e) => setF({ ...f, position: e.target.value as 'left' | 'right' })}>
             <option value="right">Bottom right</option>
             <option value="left">Bottom left</option>
+          </select>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          Theme
+          <select
+            value={f.theme}
+            onChange={(e) => setF({ ...f, theme: e.target.value as 'light' | 'dark' | 'auto' })}
+          >
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="auto">Match visitor's OS</option>
           </select>
         </label>
       </div>
@@ -747,6 +775,20 @@ function WebchatBranding({ channel }: { channel: Channel }) {
           Reply sound
         </label>
       </div>
+      <div className="row">
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: freePlan ? 0.55 : 1 }}>
+          <input
+            type="checkbox"
+            checked={f.hide_powered_by}
+            disabled={freePlan}
+            onChange={(e) => setF({ ...f, hide_powered_by: e.target.checked })}
+          />
+          Remove "Powered by Janis"
+        </label>
+        {freePlan && (
+          <span className="muted" style={{ fontSize: 12 }}>paid plans only</span>
+        )}
+      </div>
       {f.proactive && (
         <input
           placeholder="Teaser text (optional — defaults to the greeting)"
@@ -761,7 +803,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
       <WidgetPreview
         accent={f.accent}
         title={f.title || channel.name}
-        subtitle={f.subtitle || 'Powered by Janis'}
+        subtitle={f.subtitle || `${channel.agent_name} · replies in seconds`}
         greeting={f.greeting}
         logo_url={f.logo_url}
         logo_padding={f.logo_padding}
@@ -769,13 +811,21 @@ function WebchatBranding({ channel }: { channel: Channel }) {
         logo_border_width={f.logo_border_width}
         logo_border_color={f.logo_border_color}
         quick_replies={parseReplies(f.quick_replies)}
+        position={f.position}
+        theme={f.theme}
+        hidePoweredBy={f.hide_powered_by && !freePlan}
+        agentName={channel.agent_name}
+        hasHelp={hasHelp}
       />
     </form>
   );
 }
 
-/** Static mock of the embedded widget — reflects the draft branding so the
- *  operator sees accent/logo/greeting changes before saving. */
+/** Static mock of the embedded widget — mirrors public/widget.js 1:1 so the
+ *  operator sees exactly what ships: header (logo only when set), greeting
+ *  with author label, quick replies, composer with attach/emoji/Send, the
+ *  help-center link when articles exist, the powered-by footer, and the
+ *  launcher bubble below the panel on the configured side. */
 function WidgetPreview({
   accent,
   title,
@@ -787,6 +837,11 @@ function WidgetPreview({
   logo_border_width,
   logo_border_color,
   quick_replies,
+  position,
+  theme,
+  hidePoweredBy,
+  agentName,
+  hasHelp,
 }: {
   accent: string;
   title: string;
@@ -798,7 +853,19 @@ function WidgetPreview({
   logo_border_width: number;
   logo_border_color: string;
   quick_replies: string[];
+  position: 'left' | 'right';
+  theme: 'light' | 'dark' | 'auto';
+  hidePoweredBy: boolean;
+  agentName: string;
+  hasHelp: boolean;
 }) {
+  // Neutral palette — mirrors the hardcoded values in public/widget.js.
+  const dark =
+    theme === 'dark' ||
+    (theme === 'auto' && window.matchMedia?.('(prefers-color-scheme: dark)').matches);
+  const pal = dark
+    ? { panel: '#1f2937', msgs: '#111827', out: '#374151', text: '#f3f4f6', muted: '#6b7280', border: '#374151', help: '#60a5fa', author: '#93c5fd' }
+    : { panel: '#fff', msgs: '#f9fafb', out: '#e5e7eb', text: '#1f2937', muted: '#9ca3af', border: '#e5e7eb', help: '#2563eb', author: '#1e40af' };
   const tileStyle: CSSProperties = {
     borderRadius: logo_radius,
     padding: logo_padding,
@@ -807,47 +874,65 @@ function WidgetPreview({
     border: logo_border_width ? `${logo_border_width}px solid ${logo_border_color}` : undefined,
   };
   return (
-    <div className="widget-preview">
-      <div className="wp-head" style={{ background: accent }}>
-        {logo_url ? (
-          <img src={logo_url} alt="" className="wp-logo" style={tileStyle} />
-        ) : (
-          <span className="wp-logo wp-logo-dot" />
+    <div className="wp-stage">
+      <div className="widget-preview" style={{ background: pal.panel, color: pal.text }}>
+        <div className="wp-head" style={{ background: accent }}>
+          {logo_url && <img src={logo_url} alt="" className="wp-logo" style={tileStyle} />}
+          <div className="grow">
+            <div className="wp-title">{title}</div>
+            {subtitle && <div className="wp-sub">{subtitle}</div>}
+          </div>
+          <span className="wp-expand" title="Expand">⤢</span>
+        </div>
+        <div className="wp-body" style={{ background: pal.msgs }}>
+          {greeting && (
+            <div className="wp-msg-wrap">
+              <div className="wp-author" style={{ color: pal.author }}>{agentName}</div>
+              <div className="wp-msg wp-msg-out" style={{ background: pal.out, color: pal.text }}>
+                {greeting}
+              </div>
+            </div>
+          )}
+          <div className="wp-msg wp-msg-in" style={{ background: accent }}>
+            Hi — how much is the pro plan?
+          </div>
+          {quick_replies.length > 0 && (
+            <div className="wp-qr">
+              {quick_replies.map((q) => (
+                <span key={q} className="wp-qr-btn" style={{ borderColor: accent, color: accent }}>
+                  {q}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="wp-foot" style={{ background: pal.panel, borderTopColor: pal.border }}>
+          <span className="wp-ico" style={{ color: pal.muted }}>📎</span>
+          <span className="wp-ico" style={{ color: pal.muted }}>😊</span>
+          <span className="wp-input" style={{ color: pal.muted }}>Type a message…</span>
+          <span className="wp-send" style={{ background: accent }}>Send</span>
+        </div>
+        {hasHelp && (
+          <div className="wp-help" style={{ background: pal.panel, borderTopColor: pal.border, color: pal.help }}>
+            Browse help articles
+          </div>
         )}
-        <div>
-          <div className="wp-title">{title}</div>
-          <div className="wp-sub">{subtitle}</div>
-        </div>
-      </div>
-      <div className="wp-body">
-        {greeting && <div className="wp-msg wp-msg-out">{greeting}</div>}
-        <div className="wp-msg wp-msg-in" style={{ background: accent }}>
-          Hi — how much is the pro plan?
-        </div>
-        {quick_replies.length > 0 && (
-          <div className="wp-qr">
-            {quick_replies.map((q) => (
-              <span key={q} className="wp-qr-btn" style={{ borderColor: accent, color: accent }}>
-                {q}
-              </span>
-            ))}
+        {!hidePoweredBy && (
+          <div className="wp-power" style={{ background: pal.panel, color: pal.muted }}>
+            Powered by Janis
           </div>
         )}
       </div>
-      <div className="wp-foot">
-        <span className="wp-input muted">Type a message…</span>
-        <span className="wp-send" style={{ background: accent }}>
-          ↑
-        </span>
-      </div>
-      <div className="wp-bubble" style={{ background: accent }}>
-        {logo_url ? (
-          <img
-            src={logo_url}
-            alt=""
-            style={logo_padding > 0 ? { width: `calc(100% - ${logo_padding * 2}px)`, height: `calc(100% - ${logo_padding * 2}px)` } : undefined}
-          />
-        ) : '💬'}
+      <div className="wp-launcher" style={{ justifyContent: position === 'left' ? 'flex-start' : 'flex-end' }}>
+        <div className="wp-bubble" style={{ background: accent }}>
+          {logo_url ? (
+            <img
+              src={logo_url}
+              alt=""
+              style={logo_padding > 0 ? { width: `calc(100% - ${logo_padding * 2}px)`, height: `calc(100% - ${logo_padding * 2}px)` } : undefined}
+            />
+          ) : '💬'}
+        </div>
       </div>
     </div>
   );

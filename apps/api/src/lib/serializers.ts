@@ -186,6 +186,8 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     proactive?: boolean;
     proactive_delay?: number;
     sound?: boolean;
+    theme?: 'light' | 'dark' | 'auto';
+    hide_powered_by?: boolean;
     identity_secret?: string;
     show_operator?: boolean;
     inbound_address?: string;
@@ -272,6 +274,8 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
               proactive: creds.proactive,
               proactive_delay: creds.proactive_delay,
               sound: creds.sound,
+              theme: creds.theme,
+              hide_powered_by: creds.hide_powered_by,
             }
           : undefined,
     },

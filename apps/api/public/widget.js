@@ -232,6 +232,28 @@
     'font-family:inherit}' +
     '#janis-jump:hover{background:#374151}' +
     '.janis-when{opacity:.55;font-weight:400;margin-left:4px}' +
+    // Dark scheme — applied via .janis-dark on the panel when branding.theme
+    // is 'dark', or 'auto' + the visitor's OS prefers dark. Only neutrals
+    // flip; the accent and its white text stay.
+    '#janis-panel.janis-dark{background:#1f2937;color:#f3f4f6}' +
+    '#janis-panel.janis-dark #janis-msgs{background:#111827}' +
+    '#janis-panel.janis-dark .janis-msg.out{background:#374151;color:#f3f4f6}' +
+    '#janis-panel.janis-dark .janis-msg.human{background:#1e3a8a;color:#dbeafe}' +
+    '#janis-panel.janis-dark .janis-author{color:#93c5fd}' +
+    '#janis-panel.janis-dark .janis-qr{background:transparent}' +
+    '#janis-panel.janis-dark .janis-qr-ask input{background:#111827;border-color:#4b5563;color:#f3f4f6}' +
+    '#janis-panel.janis-dark #janis-form{background:#1f2937;border-top-color:#374151}' +
+    '#janis-panel.janis-dark #janis-input{background:#1f2937;color:#f3f4f6}' +
+    '#janis-panel.janis-dark #janis-input::placeholder{color:#6b7280}' +
+    '#janis-panel.janis-dark .janis-ico{color:#9ca3af!important}' +
+    '#janis-panel.janis-dark #janis-attach,#janis-panel.janis-dark #janis-emoji{background:#1f2937;border-top-color:#374151}' +
+    '#janis-panel.janis-dark .janis-chip{background:#374151;color:#e5e7eb}' +
+    '#janis-panel.janis-dark #janis-help{background:#1f2937;border-top-color:#374151;color:#60a5fa}' +
+    '#janis-panel.janis-dark #janis-power{background:#1f2937;color:#6b7280}' +
+    '#janis-panel.janis-dark .janis-status{color:#6b7280}' +
+    '#janis-panel.janis-dark .janis-file{background:rgba(255,255,255,.12)}' +
+    '#janis-panel.janis-dark .janis-loading{color:#6b7280}' +
+    '#janis-teaser.janis-dark{background:#1f2937;color:#f3f4f6}' +
     // iOS Safari zooms the whole page when a focused field is under 16px —
     // keep the input at 16px on touch devices so opening the widget doesn't
     // blow up the host site's layout.
@@ -376,6 +398,7 @@
     var txt = state.config.teaser_text || state.config.greeting || 'Questions? Chat with us.';
     teaserEl = el('div', {}, { id: 'janis-teaser', role: 'button' });
     if (state.config.position === 'left') teaserEl.classList.add('janis-left');
+    if (panel.classList.contains('janis-dark')) teaserEl.classList.add('janis-dark');
     var tx = el('span', {}, {});
     tx.textContent = txt;
     teaserEl.appendChild(tx);
@@ -1095,6 +1118,23 @@
       var helpLink = panel.querySelector('#janis-help');
       helpLink.href = cfg.help_url;
       helpLink.style.display = '';
+    }
+    // Branding the API chose to send: theme applies to panel + teaser;
+    // hide_powered_by only reaches here for paid workspaces.
+    var darkQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    var applyTheme = function () {
+      var dark = cfg.theme === 'dark' || (cfg.theme === 'auto' && darkQ && darkQ.matches);
+      panel.classList.toggle('janis-dark', dark);
+      var t = document.getElementById('janis-teaser');
+      if (t) t.classList.toggle('janis-dark', dark);
+    };
+    applyTheme();
+    if (cfg.theme === 'auto' && darkQ && darkQ.addEventListener) {
+      darkQ.addEventListener('change', applyTheme);
+    }
+    if (cfg.hide_powered_by) {
+      var pw = panel.querySelector('#janis-power');
+      if (pw) pw.style.display = 'none';
     }
     if (cfg.position === 'left') {
       bubble.classList.add('janis-left');

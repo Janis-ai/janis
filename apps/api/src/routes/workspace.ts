@@ -104,6 +104,7 @@ export function workspaceRoutes(db: Db) {
       workspace: {
         id: ws.id,
         name: ws.name,
+        plan: await effectivePlanKey(db, ws.id),
         llm_config: scrubLlmBlock(ws.llmConfig),
         event_webhook_url:
           (ws.config as { event_webhook_url?: string } | undefined)?.event_webhook_url ?? null,

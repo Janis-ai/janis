@@ -404,6 +404,10 @@ export const Channel = z.object({
         proactive: z.boolean().optional(),
         proactive_delay: z.number().optional(),
         sound: z.boolean().optional(),
+        // light (default) | dark | auto (follows the visitor's OS setting)
+        theme: z.enum(['light', 'dark', 'auto']).optional(),
+        // paid plans only — the bootstrap strips the flag on free workspaces
+        hide_powered_by: z.boolean().optional(),
       })
       .optional(),
   }),
