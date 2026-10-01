@@ -123,6 +123,47 @@ export function v1Routes(db: Db) {
     return conv;
   };
 
+  // Server-to-server profile push — the client's backend asserts what their
+  // own system knows about the end user (account id, plan, tier…) between
+  // messages. More trustworthy than browser traits: the caller holds the
+  // agent's API key, so external_id lands verified (same trust bar as an
+  // HMAC-signed claim) and traits merge into profile.metadata.
+  app.patch(
+    '/conversations/:externalId/user',
+    zValidator(
+      'json',
+      z.object({
+        name: z.string().max(80).optional(),
+        email: z.string().max(200).optional(),
+        external_id: z.string().max(120).optional(),
+        traits: z.record(z.unknown()).optional(),
+      }),
+    ),
+    async (c) => {
+      const agent = c.get('agent');
+      const conv = await convFor(agent.id, c.req.param('externalId'));
+      if (!conv) return c.json({ error: 'conversation not found' }, 404);
+      const { name, email, external_id, traits } = c.req.valid('json');
+      const base = (conv.userProfile ?? {}) as Record<string, unknown>;
+      const patch: Record<string, unknown> = {
+        ...(name ? { name } : {}),
+        ...(email ? { email } : {}),
+        ...(external_id ? { external_id, identity_verified: true } : {}),
+      };
+      if (traits) {
+        patch.metadata = {
+          ...((base.metadata as Record<string, unknown>) ?? {}),
+          ...traits,
+        };
+      }
+      await db
+        .update(conversations)
+        .set({ userProfile: { ...base, ...patch } })
+        .where(eq(conversations.id, conv.id));
+      return c.json({ ok: true });
+    },
+  );
+
   // Reply to an existing conversation — stored + delivered through its channel.
   app.post(
     '/conversations/:externalId/reply',

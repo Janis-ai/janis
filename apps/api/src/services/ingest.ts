@@ -447,7 +447,8 @@ async function insertEventMessage(db: Db, conversationId: string, event: IngestE
   return message;
 }
 
-/** Overlay defined values from `update` onto the stored profile. */
+/** Overlay defined values from `update` onto the stored profile. `metadata`
+ *  merges key-wise so a later partial trait set can't erase earlier keys. */
 function mergeProfile(
   existing: unknown,
   update: Record<string, unknown>,
@@ -456,7 +457,14 @@ function mergeProfile(
   const defined = Object.fromEntries(
     Object.entries(update).filter(([, v]) => v != null && v !== ''),
   );
-  return { ...base, ...defined };
+  const out = { ...base, ...defined };
+  if (defined.metadata || base.metadata) {
+    out.metadata = {
+      ...((base.metadata as Record<string, unknown>) ?? {}),
+      ...((defined.metadata as Record<string, unknown>) ?? {}),
+    };
+  }
+  return out;
 }
 
 function directionFor(event: IngestEvent): 'in' | 'out' | 'human' {

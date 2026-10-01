@@ -398,15 +398,29 @@ export async function handleChannelMessage(
     if (stale && profile.id) {
       void refreshProfile(db, channel, conv).catch(() => {});
     }
-    const changed = Object.entries(updates).some(
-      ([k, v]) => (profile as Record<string, unknown>)[k] !== v,
+    // metadata is a dict of traits — merge keys rather than letting a later
+    // message's partial trait set erase earlier ones.
+    const mergedMeta =
+      updates.metadata || profile.metadata
+        ? {
+            ...((profile.metadata as Record<string, unknown>) ?? {}),
+            ...((updates.metadata as Record<string, unknown>) ?? {}),
+          }
+        : undefined;
+    const nextProfile = {
+      ...profile,
+      ...updates,
+      ...(mergedMeta ? { metadata: mergedMeta } : {}),
+    };
+    const changed = Object.entries(nextProfile).some(
+      ([k, v]) => JSON.stringify((profile as Record<string, unknown>)[k]) !== JSON.stringify(v),
     );
     if (changed) {
       await db
         .update(conversations)
-        .set({ userProfile: { ...profile, ...updates } })
+        .set({ userProfile: nextProfile })
         .where(eq(conversations.id, conv.id));
-      conv = { ...conv, userProfile: { ...profile, ...updates } };
+      conv = { ...conv, userProfile: nextProfile };
     }
   }
 

@@ -36,6 +36,7 @@ const AUTOMATION = [
   ['GET /v1/me', 'Agent identity — { id, name }. Zapier uses this to label the connection.'],
   ['GET /v1/conversations', 'Newest-first list. ?state=needs_human|archived|active|human|snoozed filters.'],
   ['POST /v1/conversations/:external_id/reply', '{ text } — send a reply as the agent.'],
+  ['PATCH /v1/conversations/:external_id/user', '{ name?, email?, external_id?, traits? } — push what your backend knows about the end user. Server-to-server, so external_id lands verified and traits merge into the profile the agent sees.'],
   ['POST /v1/conversations/:external_id/escalate', '{ reason? } — flag needs_human, alerts operators.'],
   ['POST /v1/conversations/:external_id/resume', 'Hand a needs_human conversation back to the AI.'],
   ['POST /v1/conversations/:external_id/resolve', 'Archive + send the CSAT survey. Idempotent.'],

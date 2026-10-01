@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
+import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -98,6 +99,48 @@ describe('v1 integration surface', () => {
     });
     expect(done.status).toBe(200);
     expect((await done.json()).state).toBe('archived');
+  });
+
+  it('PATCH /user pushes backend traits and verified account id', async () => {
+    await app.request('/v1/events', {
+      method: 'POST',
+      headers: { ...authed(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: [{ type: 'message_in', conversation_id: 'c-user', text: 'hi' }] }),
+    });
+    const res = await app.request('/v1/conversations/c-user/user', {
+      method: 'PATCH',
+      headers: { ...authed(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        external_id: 'acct_77',
+        email: 'vip@acme.test',
+        traits: { plan: 'enterprise', ltv: 4200 },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c-user'));
+    const p = (conv?.userProfile ?? {}) as Record<string, unknown>;
+    expect(p.external_id).toBe('acct_77');
+    expect(p.identity_verified).toBe(true);
+    const meta = (p.metadata ?? {}) as Record<string, unknown>;
+    expect(meta.plan).toBe('enterprise');
+    expect(meta.ltv).toBe(4200);
+
+    // a second push merges traits rather than replacing them
+    await app.request('/v1/conversations/c-user/user', {
+      method: 'PATCH',
+      headers: { ...authed(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ traits: { region: 'eu' } }),
+    });
+    const [conv2] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c-user'));
+    const meta2 = ((conv2?.userProfile as Record<string, unknown>).metadata ?? {}) as Record<string, unknown>;
+    expect(meta2.plan).toBe('enterprise');
+    expect(meta2.region).toBe('eu');
   });
 
   it('lists conversations newest-first with state filter', async () => {
