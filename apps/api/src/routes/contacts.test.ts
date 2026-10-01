@@ -309,4 +309,43 @@ describe('contacts', () => {
     expect(gone.length).toBe(0);
     expect(goneMsgs.length).toBe(0);
   });
+
+  it('filter params match the segment rules smart lists store', async () => {
+    const marker = 'flt-' + Math.random().toString(36).slice(2, 8);
+    const [emailed] = await db
+      .insert(contacts)
+      .values({ workspaceId, name: `${marker} a`, email: `${marker}@x.com`, tags: [marker] })
+      .returning();
+    const [phoned] = await db
+      .insert(contacts)
+      .values({ workspaceId, name: `${marker} b`, phone: `+1555${Date.now() % 10000}` })
+      .returning();
+    await db.insert(contactIdentities).values({
+      contactId: phoned.id, channelId: smsChId, platformUserId: `flt:${marker}`,
+    });
+    const get_ = async (qs: string) =>
+      ((await (await api.request(`/api/contacts?${qs}`, { headers: { cookie } })).json()) as {
+        contacts: { id: string }[];
+      }).contacts.map((c) => c.id);
+
+    // tag filter narrows to just the marker pair.
+    const byTag = await get_(`tag=${marker}`);
+    expect(byTag.sort()).toEqual([emailed.id].sort());
+
+    // has_email / has_phone narrow within the marked set via q + flag.
+    const withEmail = await get_(`q=${marker}&has_email=1`);
+    expect(withEmail).toEqual([emailed.id]);
+    const withPhone = await get_(`q=${marker}&has_phone=1`);
+    expect(withPhone).toEqual([phoned.id]);
+
+    // channel_id = has an identity on that channel.
+    const onSms = await get_(`q=${marker}&channel_id=${smsChId}`);
+    expect(onSms).toEqual([phoned.id]);
+
+    // never_replied: no inbound messages → no-conversation contacts qualify.
+    expect((await get_(`q=${marker}&never_replied=1`)).sort())
+      .toEqual([emailed.id, phoned.id].sort());
+    // active_within_days needs a recent conversation → neither qualifies.
+    expect(await get_(`q=${marker}&active_within_days=30`)).toEqual([]);
+  });
 });

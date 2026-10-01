@@ -4,8 +4,56 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { timeAgo } from '../components/bits';
 import { useConfirm } from '../components/Prompt';
-import { useMe } from '../api/hooks';
+import { useChannels, useMe } from '../api/hooks';
 import { usePageTitle } from '../lib/title';
+
+/** Filter state for the People tab — mirrors the segment rules the API
+ *  (and a smart list's saved `filter`) understands. */
+type ContactFilter = {
+  tag: string;
+  channel_id: string;
+  list_id: string;
+  has_email: boolean;
+  has_phone: boolean;
+  active_within_days: string;
+  never_replied: boolean;
+};
+const EMPTY_FILTER: ContactFilter = {
+  tag: '',
+  channel_id: '',
+  list_id: '',
+  has_email: false,
+  has_phone: false,
+  active_within_days: '',
+  never_replied: false,
+};
+
+function filterParams(q: string, f: ContactFilter): string {
+  const p = new URLSearchParams();
+  if (q.trim()) p.set('q', q.trim());
+  if (f.tag.trim()) p.set('tag', f.tag.trim());
+  if (f.channel_id) p.set('channel_id', f.channel_id);
+  if (f.list_id) p.set('list_id', f.list_id);
+  if (f.has_email) p.set('has_email', '1');
+  if (f.has_phone) p.set('has_phone', '1');
+  if (f.active_within_days) p.set('active_within_days', f.active_within_days);
+  if (f.never_replied) p.set('never_replied', '1');
+  return p.toString();
+}
+
+/** Same state as a saved-filter object for POST /api/lists. */
+function filterObject(q: string, f: ContactFilter) {
+  return {
+    q: q.trim() || undefined,
+    tags: f.tag.trim() ? f.tag.split(',').map((t) => t.trim()).filter(Boolean) : undefined,
+    channel_id: f.channel_id || undefined,
+    list_id: f.list_id || undefined,
+    has_email: f.has_email || undefined,
+    has_phone: f.has_phone || undefined,
+    active_within_days: f.active_within_days ? parseInt(f.active_within_days, 10) : undefined,
+    never_replied: f.never_replied || undefined,
+  };
+}
 
 type ContactRow = {
   id: string;
@@ -42,15 +90,28 @@ const displayName = (c: { name: string | null; email: string | null; phone: stri
 export function Contacts() {
   usePageTitle('Contacts');
   const [q, setQ] = useState('');
+  const [filter, setFilter] = useState<ContactFilter>(EMPTY_FILTER);
+  const [showFilters, setShowFilters] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
   const [tab, setTab] = useState<'contacts' | 'lists'>('contacts');
   const { data: me } = useMe();
   const isAdmin = me?.user.role === 'admin';
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [importMsg, setImportMsg] = useState('');
+  const params = filterParams(q, filter);
+  const filtered = JSON.stringify(filter) !== JSON.stringify(EMPTY_FILTER);
   const { data } = useQuery({
-    queryKey: ['contacts', q],
-    queryFn: () => api<{ contacts: ContactRow[] }>(`/api/contacts${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+    queryKey: ['contacts', params],
+    queryFn: () => api<{ contacts: ContactRow[] }>(`/api/contacts${params ? `?${params}` : ''}`),
+  });
+  const saveList = useMutation({
+    mutationFn: (body: { name: string; filter: ReturnType<typeof filterObject>; snapshot: boolean }) =>
+      api('/api/lists', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      setSaveOpen(false);
+      void qc.invalidateQueries({ queryKey: ['lists'] });
+    },
   });
   const importCsv = useMutation({
     mutationFn: async (file: File) => {
@@ -96,6 +157,19 @@ export function Contacts() {
             onChange={(e) => setQ(e.target.value)}
           />
         )}
+        {tab === 'contacts' && (
+          <button
+            className={`btn ${showFilters || filtered ? 'primary' : 'ghost'}`}
+            onClick={() => setShowFilters(!showFilters)}
+          >
+            Filters{filtered ? ' •' : ''}
+          </button>
+        )}
+        {isAdmin && tab === 'contacts' && (filtered || q.trim()) && (
+          <button className="btn" onClick={() => setSaveOpen(!saveOpen)}>
+            Save as list
+          </button>
+        )}
         {isAdmin && tab === 'contacts' && (
           <>
             <input
@@ -116,6 +190,17 @@ export function Contacts() {
         )}
       </div>
       {importMsg && <div className="muted" style={{ marginBottom: 8 }}>{importMsg}</div>}
+      {tab === 'contacts' && showFilters && (
+        <FilterBar filter={filter} onChange={setFilter} onClear={() => setFilter(EMPTY_FILTER)} />
+      )}
+      {tab === 'contacts' && saveOpen && (
+        <SaveListPanel
+          filter={filterObject(q, filter)}
+          isPending={saveList.isPending}
+          onSave={(name, snapshot) => saveList.mutate({ name, filter: filterObject(q, filter), snapshot })}
+          onClose={() => setSaveOpen(false)}
+        />
+      )}
       {tab === 'lists' && <ListsPanel isAdmin={isAdmin} />}
       {tab === 'contacts' && (
       <div className="card">
@@ -142,7 +227,126 @@ export function Contacts() {
   );
 }
 
-type ListRow = { id: string; name: string; members: number; created_at: string };
+/** Property filters over the people list — same rule fields a smart list
+ *  stores, so "save this filter" round-trips losslessly. */
+function FilterBar({
+  filter: f,
+  onChange,
+  onClear,
+}: {
+  filter: ContactFilter;
+  onChange: (f: ContactFilter) => void;
+  onClear: () => void;
+}) {
+  const { data: chans } = useChannels();
+  const { data: listsData } = useQuery({
+    queryKey: ['lists'],
+    queryFn: () => api<{ lists: ListRow[] }>('/api/lists'),
+  });
+  const set = (patch: Partial<ContactFilter>) => onChange({ ...f, ...patch });
+  return (
+    <div className="card row" style={{ marginBottom: 12, flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+      <input
+        style={{ maxWidth: 140 }}
+        placeholder="Tag"
+        value={f.tag}
+        onChange={(e) => set({ tag: e.target.value })}
+      />
+      <select className="input" value={f.channel_id} onChange={(e) => set({ channel_id: e.target.value })}>
+        <option value="">Any channel</option>
+        {(chans?.channels ?? []).map((ch) => (
+          <option key={ch.id} value={ch.id}>{ch.name}</option>
+        ))}
+      </select>
+      <select className="input" value={f.list_id} onChange={(e) => set({ list_id: e.target.value })}>
+        <option value="">Any list</option>
+        {(listsData?.lists ?? []).map((l) => (
+          <option key={l.id} value={l.id}>{l.name}{l.smart ? ' (smart)' : ''}</option>
+        ))}
+      </select>
+      <label className="muted" style={{ fontSize: 13 }}>
+        <input type="checkbox" checked={f.has_email} onChange={(e) => set({ has_email: e.target.checked })} /> has email
+      </label>
+      <label className="muted" style={{ fontSize: 13 }}>
+        <input type="checkbox" checked={f.has_phone} onChange={(e) => set({ has_phone: e.target.checked })} /> has phone
+      </label>
+      <label className="muted" style={{ fontSize: 13 }}>
+        active within{' '}
+        <input
+          type="number"
+          min={1}
+          style={{ width: 60 }}
+          placeholder="—"
+          value={f.active_within_days}
+          onChange={(e) => set({ active_within_days: e.target.value })}
+        />{' '}
+        days
+      </label>
+      <label className="muted" style={{ fontSize: 13 }}>
+        <input type="checkbox" checked={f.never_replied} onChange={(e) => set({ never_replied: e.target.checked })} /> never replied
+      </label>
+      <button className="btn ghost" onClick={onClear}>Clear</button>
+    </div>
+  );
+}
+
+/** Save the current search+filters as either a live smart list or a
+ *  frozen snapshot of the matching contacts. */
+function SaveListPanel({
+  filter,
+  isPending,
+  onSave,
+  onClose,
+}: {
+  filter: ReturnType<typeof filterObject>;
+  isPending: boolean;
+  onSave: (name: string, snapshot: boolean) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [kind, setKind] = useState<'smart' | 'snapshot'>('smart');
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <strong>Save as list</strong>
+      <div className="row" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
+        <input
+          style={{ maxWidth: 220 }}
+          placeholder="List name…"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <label className="muted" style={{ fontSize: 13 }}>
+          <input type="radio" checked={kind === 'smart'} onChange={() => setKind('smart')} /> smart — updates itself as contacts change
+        </label>
+        <label className="muted" style={{ fontSize: 13 }}>
+          <input type="radio" checked={kind === 'snapshot'} onChange={() => setKind('snapshot')} /> snapshot — freeze today's matches
+        </label>
+        <button className="btn primary" disabled={isPending || !name.trim()} onClick={() => onSave(name.trim(), kind === 'snapshot')}>
+          Save
+        </button>
+        <button className="btn ghost" onClick={onClose}>Cancel</button>
+      </div>
+      <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+        Rules: {summariseFilter(filter) || 'all contacts'}
+      </div>
+    </div>
+  );
+}
+
+function summariseFilter(f: ReturnType<typeof filterObject>): string {
+  const bits: string[] = [];
+  if (f.q) bits.push(`matching "${f.q}"`);
+  if (f.tags?.length) bits.push(`tagged ${f.tags.join(' or ')}`);
+  if (f.channel_id) bits.push('on the chosen channel');
+  if (f.list_id) bits.push('in the chosen list');
+  if (f.has_email) bits.push('has email');
+  if (f.has_phone) bits.push('has phone');
+  if (f.active_within_days) bits.push(`active in ${f.active_within_days}d`);
+  if (f.never_replied) bits.push('never replied');
+  return bits.join(' · ');
+}
+
+type ListRow = { id: string; name: string; members: number; smart?: boolean; filter?: Record<string, unknown>; created_at: string };
 type MemberRow = { id: string; name: string | null; email: string | null; phone: string | null; tags?: string[] };
 
 /** Static audiences — create/rename/delete lists, view + edit membership.
@@ -194,8 +398,9 @@ function ListsPanel({ isAdmin }: { isAdmin: boolean }) {
           <div className="row">
             <button className="btn ghost grow" style={{ textAlign: 'left' }} onClick={() => setOpenId(openId === l.id ? '' : l.id)}>
               <strong>{l.name}</strong>
+              {l.smart && <span className="chip" style={{ marginLeft: 8 }}>smart</span>}
             </button>
-            <span className="muted">{l.members} member{l.members === 1 ? '' : 's'}</span>
+            <span className="muted">{l.members} member{l.members === 1 ? '' : 's'}{l.smart ? ' now' : ''}</span>
             {isAdmin && (
               <button
                 className="btn danger"
@@ -207,7 +412,12 @@ function ListsPanel({ isAdmin }: { isAdmin: boolean }) {
               </button>
             )}
           </div>
-          {openId === l.id && <ListMembers listId={l.id} isAdmin={isAdmin} />}
+          {l.smart && (
+            <div className="muted" style={{ fontSize: 13 }}>
+              {summariseFilter(l.filter as ReturnType<typeof filterObject>)} — membership updates itself
+            </div>
+          )}
+          {openId === l.id && <ListMembers listId={l.id} isAdmin={isAdmin && !l.smart} />}
         </div>
       ))}
     </div>
@@ -273,7 +483,9 @@ function ListMembers({ listId, isAdmin }: { listId: string; isAdmin: boolean }) 
           )}
         </div>
       ))}
-      {!!data && !data.members.length && <div className="muted">Empty — search above to add contacts.</div>}
+      {!!data && !data.members.length && (
+        <div className="muted">{isAdmin ? 'Empty — search above to add contacts.' : 'No contacts match the rules right now.'}</div>
+      )}
     </div>
   );
 }

@@ -23,6 +23,14 @@ import {
 } from '../db/schema.js';
 import { sessionAuth, adminOnly, type SessionEnv } from '../middleware/sessionAuth.js';
 import { audit } from '../lib/audit.js';
+import { segmentConditions, type CampaignSegment } from '../lib/campaigns.js';
+
+const boolParam = (v: string | undefined) =>
+  v === '1' || v === 'true' ? true : undefined;
+const intParam = (v: string | undefined) => {
+  const n = parseInt(v ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+};
 
 /**
  * Unified customer records. A contact collects every channel identity
@@ -54,7 +62,19 @@ export function contactRoutes(db: Db) {
   // GET /api/contacts?q= — search name/email/phone, newest activity first
   app.get('/', async (c) => {
     const workspaceId = c.get('workspaceId');
-    const q = c.req.query('q')?.trim();
+    // Filter params mirror CampaignSegment fields — the same rules a smart
+    // list stores, so "save this view as a list" is lossless.
+    const seg: CampaignSegment = {
+      q: c.req.query('q')?.trim() || undefined,
+      list_id: c.req.query('list_id') || undefined,
+      channel_id: c.req.query('channel_id') || undefined,
+      tags: c.req.query('tag')?.split(',').map((t) => t.trim()).filter(Boolean),
+      has_email: boolParam(c.req.query('has_email')),
+      has_phone: boolParam(c.req.query('has_phone')),
+      active_within_days: intParam(c.req.query('active_within_days')),
+      never_replied: boolParam(c.req.query('never_replied')),
+    };
+    const conds = await segmentConditions(db, workspaceId, seg);
     const rows = await db
       .select({
         contact: contacts,
@@ -63,23 +83,7 @@ export function contactRoutes(db: Db) {
       })
       .from(contacts)
       .leftJoin(conversations, eq(conversations.contactId, contacts.id))
-      .where(
-        and(
-          eq(contacts.workspaceId, workspaceId),
-          q
-            ? or(
-                sql`${contacts.name} ilike ${'%' + q + '%'}`,
-                sql`${contacts.email} ilike ${'%' + q + '%'}`,
-                sql`${contacts.phone} ilike ${'%' + q + '%'}`,
-                sql`exists (select 1 from unnest(${contacts.altEmails}) e where e ilike ${'%' + q + '%'})`,
-                sql`exists (select 1 from unnest(${contacts.altPhones}) p where p ilike ${'%' + q + '%'})`,
-                // Identity ids too — a merged-away email/phone still finds
-                // the person via the channel identity that carried it.
-                sql`exists (select 1 from ${contactIdentities} ci where ci.contact_id = ${contacts.id} and ci.platform_user_id ilike ${'%' + q + '%'})`,
-              )
-            : undefined,
-        ),
-      )
+      .where(and(...conds))
       .groupBy(contacts.id)
       .orderBy(sql`max(${conversations.lastMessageAt}) desc nulls last`, desc(contacts.createdAt))
       .limit(100);

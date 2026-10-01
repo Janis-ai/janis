@@ -116,6 +116,48 @@ describe('campaign segments', () => {
     expect(byList.recipients[0].platformUserId).toBe('listy@x.com');
   });
 
+  it('a smart list in list_id expands its rules — no member rows needed', async () => {
+    const [emailCh] = await db
+      .insert(channels)
+      .values({ workspaceId, agentId, kind: 'email', name: 'E2', credentials: {} })
+      .returning();
+    const { contactLists } = await import('../db/schema.js');
+    const [smart] = await db
+      .insert(contactLists)
+      .values({ workspaceId, name: 'smart-vip', filter: { tags: ['smartvip'] } })
+      .returning();
+    const hit = await mkContact({ name: 'SmartHit', email: 'sh@x.com', tags: ['smartvip'] });
+    await mkContact({ name: 'Miss', email: 'miss@x.com' });
+
+    const r = await resolveSegment(db, {
+      workspaceId, channelId: emailCh.id, segment: { list_id: smart.id },
+    });
+    expect(r.recipients.map((x) => x.contactId)).toEqual([hit.id]);
+
+    // Self-updating: a contact created after the list still resolves.
+    const later = await mkContact({ name: 'Late', email: 'late@x.com', tags: ['smartvip'] });
+    const again = await resolveSegment(db, {
+      workspaceId, channelId: emailCh.id, segment: { list_id: smart.id },
+    });
+    expect(again.recipients.map((x) => x.contactId).sort())
+      .toEqual([hit.id, later.id].sort());
+  });
+
+  it('channel_id filters contacts by identity', async () => {
+    const [otherCh] = await db
+      .insert(channels)
+      .values({ workspaceId, agentId, kind: 'webchat', name: 'W', credentials: {} })
+      .returning();
+    const onOther = await mkContact({ name: 'OtherCh', phone: '+1777' });
+    await db.insert(contactIdentities).values({
+      contactId: onOther.id, channelId: otherCh.id, platformUserId: 'wc:1',
+    });
+    const r = await resolveSegment(db, {
+      workspaceId, channelId, segment: { channel_id: otherCh.id },
+    });
+    expect(r.recipients.map((x) => x.contactId)).toEqual([onOther.id]);
+  });
+
   it('flags opted-out identities on the target channel', async () => {
     const c = await mkContact({ name: 'Stopper', phone: '+1999' });
     // Rebind the helper's identity to the phone — that address is what

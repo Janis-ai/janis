@@ -115,6 +115,105 @@ describe('lists', () => {
     expect(all.length).toBe(3); // vip-list contact + existing + new@x.com
   });
 
+  it('smart lists resolve members live from saved rules', async () => {
+    const tag = `vip-${Math.random().toString(36).slice(2, 8)}`;
+    const [vip] = await db
+      .insert(contacts)
+      .values({ workspaceId, email: 'vip1@x.com', tags: [tag] })
+      .returning();
+    await db.insert(contacts).values({ workspaceId, email: 'plain@x.com' });
+
+    const created = await post('/api/lists', {
+      name: 'vips',
+      filter: { tags: [tag] },
+    });
+    expect(created.status).toBe(201);
+    const { list } = await created.json();
+    expect(list.smart).toBe(true);
+    expect(list.members).toBe(1);
+
+    // Members resolve from the rules — no member rows exist.
+    const members = await (await get(`/api/lists/${list.id}/members`)).json();
+    expect(members.members.map((m: { id: string }) => m.id)).toEqual([vip.id]);
+
+    // A contact created AFTER the list still joins — self-updating.
+    const [later] = await db
+      .insert(contacts)
+      .values({ workspaceId, email: 'vip2@x.com', tags: [tag] })
+      .returning();
+    const after = await (await get(`/api/lists/${list.id}/members`)).json();
+    expect(after.members.map((m: { id: string }) => m.id).sort())
+      .toEqual([vip.id, later.id].sort());
+
+    // List index reports a live count + the smart flag.
+    const lists = await (await get('/api/lists')).json();
+    const row = lists.lists.find((l: { id: string }) => l.id === list.id);
+    expect(row.smart).toBe(true);
+    expect(row.members).toBe(2);
+
+    // Manual membership edits don't apply to a self-updating list.
+    const add = await post(`/api/lists/${list.id}/members`, { contact_id: later.id });
+    expect(add.status).toBe(400);
+    const del = await api.request(`/api/lists/${list.id}/members/${vip.id}`, {
+      method: 'DELETE',
+      headers: { cookie },
+    });
+    expect(del.status).toBe(400);
+    const imp = await post('/api/lists/import', { list_id: list.id, csv: 'email\nz@x.co' });
+    expect(imp.status).toBe(400);
+  });
+
+  it('snapshot lists freeze the current matches as members', async () => {
+    const tag = `snap-${Math.random().toString(36).slice(2, 8)}`;
+    await db.insert(contacts).values({ workspaceId, email: 'snap1@x.com', tags: [tag] });
+    await db.insert(contacts).values({ workspaceId, email: 'snap2@x.com', tags: [tag] });
+    const created = await post('/api/lists', {
+      name: 'oct-vips',
+      filter: { tags: [tag] },
+      snapshot: true,
+    });
+    expect(created.status).toBe(201);
+    const { list } = await created.json();
+    expect(list.smart).toBe(false);
+    expect(list.members).toBe(2); // vip1 + vip2 from the previous test
+
+    // Membership is frozen — a new vip contact does not join.
+    const [after] = await db
+      .insert(contacts)
+      .values({ workspaceId, email: 'snap3@x.com', tags: [tag] })
+      .returning();
+    const members = await (await get(`/api/lists/${list.id}/members`)).json();
+    expect(members.members.length).toBe(2);
+    expect(members.members.map((m: { id: string }) => m.id)).not.toContain(after.id);
+
+    // But manual edits do work on a snapshot list.
+    const add = await post(`/api/lists/${list.id}/members`, { contact_id: after.id });
+    expect(add.status).toBe(200);
+  });
+
+  it('smart list rules apply on member resolution', async () => {
+    const created = await post('/api/lists', {
+      name: 'emailers',
+      filter: { has_email: true },
+    });
+    const { list } = await created.json();
+    const [phoneOnly] = await db
+      .insert(contacts)
+      .values({ workspaceId, phone: '+1999' })
+      .returning();
+
+    // Filtering contacts by the smart list expands its rules — the
+    // phone-only contact is excluded even though it has no member row.
+    const [noEmail] = await db
+      .insert(contacts)
+      .values({ workspaceId, name: 'list-filter-marker' })
+      .returning();
+    const members = await (await get(`/api/lists/${list.id}/members`)).json();
+    const ids = members.members.map((m: { id: string }) => m.id);
+    expect(ids).not.toContain(phoneOnly.id);
+    expect(ids).not.toContain(noEmail.id);
+  });
+
   it('import is workspace-scoped and admin-only', async () => {
     const [ws2] = await db.insert(workspaces).values({ name: 'Other' }).returning();
     const [u2] = await db

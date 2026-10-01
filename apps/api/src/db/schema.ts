@@ -293,6 +293,10 @@ export const contactLists = pgTable(
       .notNull()
       .references(() => workspaces.id),
     name: text('name').notNull(),
+    /** Smart list: saved segment rules resolved at query time — membership
+     *  is always current, no materialisation. Null = static list whose
+     *  members live in contact_list_members. */
+    filter: jsonb('filter'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('contact_lists_ws').on(t.workspaceId)],

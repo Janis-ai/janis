@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   campaignSends,
@@ -6,6 +6,7 @@ import {
   channels,
   contactIdentities,
   contactListMembers,
+  contactLists,
   contacts,
   conversations,
   jobs,
@@ -16,10 +17,14 @@ import { enqueueJob } from './jobs.js';
 export interface CampaignSegment {
   /** Free-text match over contact name/email/phone (alts included). */
   q?: string;
-  /** Static audience — members of this contact_list. */
+  /** Audience = members of this contact_list. A static list resolves to
+   *  its contact_list_members rows; a smart list (contact_lists.filter)
+   *  expands its stored rules inline — membership is always current. */
   list_id?: string;
   /** Any-of tag match on the contact. */
   tags?: string[];
+  /** Contact has an identity on this channel. */
+  channel_id?: string;
   /** Require a reachable email/phone on the contact record. */
   has_email?: boolean;
   has_phone?: boolean;
@@ -27,6 +32,94 @@ export interface CampaignSegment {
   active_within_days?: number;
   /** Contact has never sent an inbound message on any conversation. */
   never_replied?: boolean;
+}
+
+/** Segment → drizzle conditions on `contacts`. Shared by the contacts
+ *  list endpoint, list membership resolution and campaign dispatch, so a
+ *  filter means the same thing everywhere. Smart lists referenced by
+ *  list_id expand their stored filter — capped at depth 2 so a smart list
+ *  that references another list (or itself) can't loop. */
+export async function segmentConditions(
+  db: Db,
+  workspaceId: string,
+  seg: CampaignSegment,
+  depth = 0,
+): Promise<SQL[]> {
+  const conds: SQL[] = [eq(contacts.workspaceId, workspaceId)];
+  const q = seg.q?.trim().toLowerCase();
+  if (q) {
+    conds.push(
+      or(
+        sql`lower(${contacts.name}) like ${`%${q}%`}`,
+        sql`lower(${contacts.email}) like ${`%${q}%`}`,
+        sql`${contacts.phone} like ${`%${q}%`}`,
+        sql`exists (select 1 from unnest(${contacts.altEmails}) e where e ilike ${`%${q}%`})`,
+        sql`exists (select 1 from unnest(${contacts.altPhones}) p where p ilike ${`%${q}%`})`,
+        // Identity ids too — a merged-away email/phone still finds the
+        // person via the channel identity that carried it.
+        sql`exists (select 1 from ${contactIdentities} ci where ci.contact_id = ${contacts.id} and ci.platform_user_id ilike ${`%${q}%`})`,
+      )!,
+    );
+  }
+  if (seg.list_id) {
+    const [list] = await db
+      .select({ filter: contactLists.filter })
+      .from(contactLists)
+      .where(
+        and(eq(contactLists.id, seg.list_id), eq(contactLists.workspaceId, workspaceId)),
+      )
+      .limit(1);
+    if (list?.filter && depth < 2) {
+      conds.push(...(await segmentConditions(db, workspaceId, list.filter as CampaignSegment, depth + 1)));
+    } else if (list) {
+      conds.push(
+        sql`exists (select 1 from ${contactListMembers} lm where lm.list_id = ${seg.list_id} and lm.contact_id = ${contacts.id})`,
+      );
+    } else {
+      conds.push(sql`false`);
+    }
+  }
+  if (seg.tags?.length) {
+    // sql.join — a raw array bind through the template doesn't serialize
+    // to a PG array on this driver.
+    conds.push(
+      sql`exists (select 1 from unnest(${contacts.tags}) t where t in (${sql.join(
+        seg.tags.map((t) => sql`${t}`),
+        sql`, `,
+      )}))`,
+    );
+  }
+  if (seg.channel_id) {
+    conds.push(
+      sql`exists (select 1 from ${contactIdentities} ci where ci.contact_id = ${contacts.id} and ci.channel_id = ${seg.channel_id})`,
+    );
+  }
+  if (seg.has_email) {
+    conds.push(
+      sql`(${contacts.email} is not null or cardinality(${contacts.altEmails}) > 0)`,
+    );
+  }
+  if (seg.has_phone) {
+    conds.push(
+      sql`(${contacts.phone} is not null or cardinality(${contacts.altPhones}) > 0)`,
+    );
+  }
+  if (seg.active_within_days) {
+    const cutoff = new Date(Date.now() - seg.active_within_days * 86_400_000);
+    conds.push(
+      sql`exists (select 1 from ${conversations} cv where cv.contact_id = ${contacts.id} and cv.last_message_at > ${cutoff})`,
+    );
+  }
+  if (seg.never_replied) {
+    conds.push(
+      sql`not exists (
+        select 1 from ${conversations} cv
+        join ${messages} m on m.conversation_id = cv.id
+        where cv.contact_id = ${contacts.id} and m.direction = 'in'
+      )`,
+    );
+  }
+  return conds;
 }
 
 /** One drip step — sent delay_minutes after the previous step to recipients
@@ -103,59 +196,7 @@ export async function resolveSegment(
   const needEmail = EMAIL_KINDS.has(channel.kind);
   const needPhone = PHONE_KINDS.has(channel.kind);
 
-  const q = seg.q?.trim().toLowerCase();
-  const conds = [eq(contacts.workspaceId, campaign.workspaceId)];
-  if (q) {
-    conds.push(
-      or(
-        sql`lower(${contacts.name}) like ${`%${q}%`}`,
-        sql`lower(${contacts.email}) like ${`%${q}%`}`,
-        sql`${contacts.phone} like ${`%${q}%`}`,
-        sql`exists (select 1 from unnest(${contacts.altEmails}) e where e ilike ${`%${q}%`})`,
-        sql`exists (select 1 from unnest(${contacts.altPhones}) p where p ilike ${`%${q}%`})`,
-      )!,
-    );
-  }
-  if (seg.list_id) {
-    conds.push(
-      sql`exists (select 1 from ${contactListMembers} lm where lm.list_id = ${seg.list_id} and lm.contact_id = ${contacts.id})`,
-    );
-  }
-  if (seg.tags?.length) {
-    // sql.join — a raw array bind through the template doesn't serialize
-    // to a PG array on this driver.
-    conds.push(
-      sql`exists (select 1 from unnest(${contacts.tags}) t where t in (${sql.join(
-        seg.tags.map((t) => sql`${t}`),
-        sql`, `,
-      )}))`,
-    );
-  }
-  if (seg.has_email) {
-    conds.push(
-      sql`(${contacts.email} is not null or cardinality(${contacts.altEmails}) > 0)`,
-    );
-  }
-  if (seg.has_phone) {
-    conds.push(
-      sql`(${contacts.phone} is not null or cardinality(${contacts.altPhones}) > 0)`,
-    );
-  }
-  if (seg.active_within_days) {
-    const cutoff = new Date(Date.now() - seg.active_within_days * 86_400_000);
-    conds.push(
-      sql`exists (select 1 from ${conversations} cv where cv.contact_id = ${contacts.id} and cv.last_message_at > ${cutoff})`,
-    );
-  }
-  if (seg.never_replied) {
-    conds.push(
-      sql`not exists (
-        select 1 from ${conversations} cv
-        join ${messages} m on m.conversation_id = cv.id
-        where cv.contact_id = ${contacts.id} and m.direction = 'in'
-      )`,
-    );
-  }
+  const conds = await segmentConditions(db, campaign.workspaceId, seg);
   const rows = await db
     .select({
       id: contacts.id,

@@ -210,8 +210,15 @@ before typecheck/tests/dev.
   carry contact_id, lib/contacts.ts resolves (channel, platform_user_id) →
   contact with cross-channel merge on email/phone; GET/PATCH /api/contacts,
   POST /:id/merge, /contacts UI with dup detection, contact card on the
-  conversation sidebar. Still missing: conversation merge/split, contact
-  import, custom fields, company grouping.
+  conversation sidebar. Filtering + lists DONE: GET /api/contacts accepts
+  segment params (q/tag/channel_id/list_id/has_email/has_phone/
+  active_within_days/never_replied) via the shared segmentConditions in
+  lib/campaigns.ts; contact_lists.filter jsonb = smart list (rules resolved
+  at query time, self-updating — contact_list_members unused; list_id in a
+  segment expands smart rules, depth-capped at 2); POST /api/lists accepts
+  {filter} smart or {filter, snapshot:true} frozen; campaigns' seg.list_id
+  picks up smart lists automatically. Still missing: conversation
+  merge/split, custom fields, company grouping.
 - Webhook ops: DONE — deliveries list on the agent page (payload, attempts,
   next_attempt_at), POST /api/agents/:id/deliveries/:did/replay re-sends a
   failed delivery with a fresh signature + full retry budget.

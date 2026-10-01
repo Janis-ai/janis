@@ -6,9 +6,26 @@ import type { Db } from '../db/client.js';
 import { contactListMembers, contactLists, contacts } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { upsertContactByAddress } from '../lib/contacts.js';
+import { segmentConditions, type CampaignSegment } from '../lib/campaigns.js';
 import { audit } from '../lib/audit.js';
 
 const MAX_IMPORT_ROWS = 5_000;
+
+/** Segment rules a smart list saves — same fields the contacts filter and
+ *  campaign segments accept (list_id included: smart lists can reference
+ *  other lists, expansion is depth-capped in segmentConditions). */
+const filterSchema = z
+  .object({
+    q: z.string().max(200).optional(),
+    list_id: z.string().uuid().optional(),
+    channel_id: z.string().uuid().optional(),
+    tags: z.array(z.string().max(60)).max(20).optional(),
+    has_email: z.boolean().optional(),
+    has_phone: z.boolean().optional(),
+    active_within_days: z.number().int().min(1).max(3650).optional(),
+    never_replied: z.boolean().optional(),
+  })
+  .strict();
 
 /** Minimal RFC4180 reader — quoted fields, escaped quotes, CRLF. */
 function parseCsv(text: string): string[][] {
@@ -48,42 +65,127 @@ function normalizePhone(p: string): string {
   return s.startsWith('+') ? s : s.length ? `+${s}` : s;
 }
 
-/** Contact lists — static audiences for campaigns. Members can read;
- *  mutations are admin-only (import is bulk contact creation). */
+/** Contact lists — audiences for campaigns. Static lists store members in
+ *  contact_list_members; smart lists store segment rules in `filter` and
+ *  resolve membership live (always current, updates itself). Members can
+ *  read; mutations are admin-only (import is bulk contact creation). */
 export function listRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
 
+  /** Contacts matching a smart list's rules — same rows the contacts
+   *  endpoint would return with these filters. */
+  const smartMemberRows = async (workspaceId: string, filter: CampaignSegment) => {
+    const conds = await segmentConditions(db, workspaceId, filter);
+    return db
+      .select({
+        id: contacts.id,
+        name: contacts.name,
+        email: contacts.email,
+        phone: contacts.phone,
+        tags: contacts.tags,
+      })
+      .from(contacts)
+      .where(and(...conds))
+      .orderBy(asc(contacts.name))
+      .limit(2_000);
+  };
+
   app.get('/', async (c) => {
+    const workspaceId = c.get('workspaceId');
     const rows = await db
       .select({
         id: contactLists.id,
         name: contactLists.name,
+        filter: contactLists.filter,
         createdAt: contactLists.createdAt,
         members: sql<number>`count(${contactListMembers.contactId})::int`,
       })
       .from(contactLists)
       .leftJoin(contactListMembers, eq(contactListMembers.listId, contactLists.id))
-      .where(eq(contactLists.workspaceId, c.get('workspaceId')))
+      .where(eq(contactLists.workspaceId, workspaceId))
       .groupBy(contactLists.id)
       .orderBy(asc(contactLists.name));
-    return c.json({
-      lists: rows.map((r) => ({
-        id: r.id,
-        name: r.name,
-        members: r.members,
-        created_at: r.createdAt.toISOString(),
-      })),
-    });
+    // Smart lists have no member rows — count live matches instead.
+    const lists = await Promise.all(
+      rows.map(async (r) => {
+        let members = r.members;
+        if (r.filter != null) {
+          const conds = await segmentConditions(db, workspaceId, r.filter as CampaignSegment);
+          const [n] = await db
+            .select({ n: sql<number>`count(*)::int` })
+            .from(contacts)
+            .where(and(...conds));
+          members = n?.n ?? 0;
+        }
+        return {
+          id: r.id,
+          name: r.name,
+          members,
+          smart: r.filter != null,
+          filter: r.filter ?? undefined,
+          created_at: r.createdAt.toISOString(),
+        };
+      }),
+    );
+    return c.json({ lists });
   });
 
-  app.post('/', adminOnly, zValidator('json', z.object({ name: z.string().min(1).max(120) })), async (c) => {
-    const [row] = await db
-      .insert(contactLists)
-      .values({ workspaceId: c.get('workspaceId'), name: c.req.valid('json').name })
-      .returning();
-    return c.json({ list: { id: row.id, name: row.name, members: 0 } }, 201);
-  });
+  app.post(
+    '/',
+    adminOnly,
+    zValidator(
+      'json',
+      z.object({
+        name: z.string().min(1).max(120),
+        /** Rules → smart list (self-updating). With snapshot:true, the
+         *  current matches are frozen into member rows instead. */
+        filter: filterSchema.optional(),
+        snapshot: z.boolean().optional(),
+      }),
+    ),
+    async (c) => {
+      const workspaceId = c.get('workspaceId');
+      const { name, filter, snapshot } = c.req.valid('json');
+      const hasRules = filter && Object.values(filter).some((v) => v !== undefined && v !== '');
+      const [row] = await db
+        .insert(contactLists)
+        .values({
+          workspaceId,
+          name,
+          filter: hasRules && !snapshot ? filter : null,
+        })
+        .returning();
+      let members = 0;
+      if (hasRules && snapshot) {
+        const matched = await smartMemberRows(workspaceId, filter!);
+        if (matched.length) {
+          await db
+            .insert(contactListMembers)
+            .values(matched.map((m) => ({ listId: row.id, contactId: m.id })))
+            .onConflictDoNothing();
+        }
+        members = matched.length;
+      } else if (row.filter != null) {
+        const conds = await segmentConditions(db, workspaceId, row.filter as CampaignSegment);
+        const [n] = await db
+          .select({ n: sql<number>`count(*)::int` })
+          .from(contacts)
+          .where(and(...conds));
+        members = n?.n ?? 0;
+      }
+      await audit(db, {
+        workspaceId,
+        userId: c.get('user').id,
+        userName: c.get('user').name,
+        action: 'list.create',
+        targetType: 'contact_list',
+        targetId: row.id,
+        meta: { name, smart: !!hasRules && !snapshot },
+      });
+      return c.json({ list: { id: row.id, name: row.name, members, smart: row.filter != null } }, 201);
+    },
+  );
 
   app.delete('/:id', adminOnly, async (c) => {
     const [row] = await db
@@ -104,13 +206,18 @@ export function listRoutes(db: Db) {
   });
 
   // GET /:id/members — who is in this list (contact rows, not just ids).
+  // Smart lists resolve rules live instead of reading member rows.
   app.get('/:id/members', async (c) => {
+    const workspaceId = c.get('workspaceId');
     const [list] = await db
-      .select({ id: contactLists.id })
+      .select({ id: contactLists.id, filter: contactLists.filter })
       .from(contactLists)
-      .where(and(eq(contactLists.id, c.req.param('id')), eq(contactLists.workspaceId, c.get('workspaceId'))))
+      .where(and(eq(contactLists.id, c.req.param('id')), eq(contactLists.workspaceId, workspaceId)))
       .limit(1);
     if (!list) return c.json({ error: 'not found' }, 404);
+    if (list.filter != null) {
+      return c.json({ members: await smartMemberRows(workspaceId, list.filter as CampaignSegment) });
+    }
     const rows = await db
       .select({
         id: contacts.id,
@@ -136,11 +243,14 @@ export function listRoutes(db: Db) {
       const listId = c.req.param('id');
       const contactId = c.req.valid('json').contact_id;
       const [list] = await db
-        .select({ id: contactLists.id })
+        .select({ id: contactLists.id, filter: contactLists.filter })
         .from(contactLists)
         .where(and(eq(contactLists.id, listId), eq(contactLists.workspaceId, workspaceId)))
         .limit(1);
       if (!list) return c.json({ error: 'not found' }, 404);
+      if (list.filter != null) {
+        return c.json({ error: 'smart lists update themselves — edit the rules, not members' }, 400);
+      }
       const [contact] = await db
         .select({ id: contacts.id })
         .from(contacts)
@@ -157,11 +267,14 @@ export function listRoutes(db: Db) {
 
   app.delete('/:id/members/:contactId', adminOnly, async (c) => {
     const [list] = await db
-      .select({ id: contactLists.id })
+      .select({ id: contactLists.id, filter: contactLists.filter })
       .from(contactLists)
       .where(and(eq(contactLists.id, c.req.param('id')), eq(contactLists.workspaceId, c.get('workspaceId'))))
       .limit(1);
     if (!list) return c.json({ error: 'not found' }, 404);
+    if (list.filter != null) {
+      return c.json({ error: 'smart lists update themselves — edit the rules, not members' }, 400);
+    }
     await db
       .delete(contactListMembers)
       .where(
@@ -194,11 +307,14 @@ export function listRoutes(db: Db) {
       let listId = list_id;
       if (listId) {
         const [list] = await db
-          .select({ id: contactLists.id })
+          .select({ id: contactLists.id, filter: contactLists.filter })
           .from(contactLists)
           .where(and(eq(contactLists.id, listId), eq(contactLists.workspaceId, workspaceId)))
           .limit(1);
         if (!list) return c.json({ error: 'list not found' }, 404);
+        if (list.filter != null) {
+          return c.json({ error: 'import targets static lists — smart lists fill themselves' }, 400);
+        }
       } else {
         if (!name) return c.json({ error: 'name or list_id required' }, 400);
         const [row] = await db
