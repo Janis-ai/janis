@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
@@ -100,6 +100,39 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const [cfg, setCfg] = useState<AgentConfig>(agent.config ?? {});
   const [autoResume, setAutoResume] = useState(agent.auto_resume_minutes?.toString() ?? '');
   const [webhookUrl, setWebhookUrl] = useState(agent.webhook_url ?? '');
+
+  // The agent row refetches on SSE invalidation — concierge card approvals,
+  // teammate saves. Adopt external changes into the drafts, but never stomp
+  // an unsaved edit: a field only follows the server when its draft still
+  // equals the value the server last reported.
+  const prevAgent = useRef(agent);
+  useEffect(() => {
+    const prev = prevAgent.current;
+    if (prev === agent) return;
+    prevAgent.current = agent;
+    setName((cur) => (cur === prev.name ? agent.name : cur));
+    setAutoResume((cur) =>
+      cur === (prev.auto_resume_minutes?.toString() ?? '')
+        ? agent.auto_resume_minutes?.toString() ?? ''
+        : cur,
+    );
+    setWebhookUrl((cur) => (cur === (prev.webhook_url ?? '') ? agent.webhook_url ?? '' : cur));
+    setCfg((cur) => {
+      const prevCfg = (prev.config ?? {}) as Record<string, unknown>;
+      const nextCfg = (agent.config ?? {}) as Record<string, unknown>;
+      const curR = cur as Record<string, unknown>;
+      const next = { ...curR };
+      let changed = false;
+      for (const key of new Set([...Object.keys(prevCfg), ...Object.keys(nextCfg)])) {
+        const serverVal = nextCfg[key];
+        if (JSON.stringify(curR[key]) !== JSON.stringify(prevCfg[key])) continue; // user diverged — keep the edit
+        if (JSON.stringify(curR[key]) === JSON.stringify(serverVal)) continue;
+        if (serverVal === undefined) delete next[key]; else next[key] = serverVal;
+        changed = true;
+      }
+      return changed ? (next as AgentConfig) : cur;
+    });
+  }, [agent]);
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['agents'] });
@@ -571,12 +604,27 @@ function BehaviorSection({
   isAdmin: boolean;
   hosted: boolean;
 }) {
-  const [knowledgeText, setKnowledgeText] = useState(() =>
-    (Array.isArray(agent.config?.knowledge) ? agent.config.knowledge : []).join('\n'),
-  );
-  const [repliesText, setRepliesText] = useState(() =>
-    (agent.config?.quick_replies ?? []).join(', '),
-  );
+  const joinLines = (v: unknown) => (Array.isArray(v) ? (v as string[]).join('\n') : '');
+  const joinCsv = (v: unknown) => (Array.isArray(v) ? (v as string[]).join(', ') : '');
+  const [knowledgeText, setKnowledgeText] = useState(() => joinLines(cfg.knowledge));
+  const [repliesText, setRepliesText] = useState(() => joinCsv(cfg.quick_replies));
+  // Follow external writes into cfg (concierge approvals, teammate saves via
+  // SSE refetch) — unless the user has diverged from the last server value
+  // in this field, in which case the in-progress edit wins.
+  const knowledgeBase = joinLines(cfg.knowledge);
+  const knowledgeBaseRef = useRef(knowledgeBase);
+  useEffect(() => {
+    if (knowledgeBase === knowledgeBaseRef.current) return;
+    setKnowledgeText((cur) => (cur === knowledgeBaseRef.current ? knowledgeBase : cur));
+    knowledgeBaseRef.current = knowledgeBase;
+  }, [knowledgeBase]);
+  const repliesBase = joinCsv(cfg.quick_replies);
+  const repliesBaseRef = useRef(repliesBase);
+  useEffect(() => {
+    if (repliesBase === repliesBaseRef.current) return;
+    setRepliesText((cur) => (cur === repliesBaseRef.current ? repliesBase : cur));
+    repliesBaseRef.current = repliesBase;
+  }, [repliesBase]);
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>

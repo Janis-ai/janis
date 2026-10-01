@@ -1,5 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
+import { env } from '../env.js';
 import { agents, alerts, conversations, messages, pendingActions } from '../db/schema.js';
 import { bus } from './bus.js';
 import { openAlertOnce } from './alerts.js';
@@ -283,8 +284,10 @@ export async function decidePendingAction(
 
   // Concierge cards live in the Ask Janis thread, where the resumed agent
   // turn can be slow or emit nothing — a decision read as typing dots that
-  // never resolve. Post a deterministic confirmation line instead.
-  if (builtinName) {
+  // never resolve. Post a deterministic confirmation line instead. Applies
+  // to every decision on a concierge thread, not just builtin executors —
+  // webhook-tool cards parked there are decided the same way.
+  if (env.operatorWorkspaceId && action.workspaceId === env.operatorWorkspaceId) {
     const failed = approve && result !== null && result.startsWith('error:');
     const confirm = !approve
       ? 'Dismissed — no changes made.'
