@@ -1,8 +1,9 @@
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
 import { CodeBlock } from './bits';
+import { friendlyError } from '../lib/friendlyError';
 
 export interface PendingAssets {
   pages: { id: string; name: string; instagram: { id: string; username?: string } | null }[];
@@ -410,25 +411,8 @@ function EmailAnswerRules({ channel }: { channel: Channel }) {
               : `Any address on ${channel.meta.inbound_address?.split('@')[1] ?? 'the inbound domain'} — or on a verified custom domain below.`}
         </div>
       </div>
-      {channel.kind === 'email' && channel.meta.mirror_address && (
-        <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-          Mail looks forwarded from <strong>{channel.meta.mirror_address}</strong> — replies are
-          BCC'd there so its copy of the thread stays complete.{' '}
-          <button
-            className="btn sm"
-            onClick={() =>
-              api(`/api/channels/${channel.id}`, {
-                method: 'PATCH',
-                body: JSON.stringify({ mirror_address: '' }),
-              }).then(() => {
-                void qc.invalidateQueries({ queryKey: ['channels'] });
-                void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
-              })
-            }
-          >
-            Stop mirroring
-          </button>
-        </div>
+      {channel.kind === 'email' && (
+        <MirrorRow channel={channel} />
       )}
       {channel.kind === 'email' && <EmailDomainCard channel={channel} />}
       {channel.kind === 'gmail' && (
@@ -866,6 +850,99 @@ function WidgetPreview({
  *  the platform Resend account, show the DNS records to add, verify.
  *  Replies still route through the channel's inbound address (Reply-To),
  *  so only sending-side records are needed. */
+/** Forwarded-mail mirror — auto-detected when mail arrives via a forwarder,
+ *  but also settable/removable by hand. Replies get BCC'd to the mirror so
+ *  the upstream mailbox keeps a complete copy of the thread. */
+function MirrorRow({ channel }: { channel: Channel }) {
+  const qc = useQueryClient();
+  const [draft, setDraft] = useState(channel.meta.mirror_address ?? '');
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const current = channel.meta.mirror_address;
+  const save = async (value: string) => {
+    setBusy(true);
+    setErr('');
+    try {
+      await api(`/api/channels/${channel.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ mirror_address: value }),
+      });
+      setEditing(false);
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (current && !editing) {
+    return (
+      <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+        Mail looks forwarded from <strong>{current}</strong> — replies are
+        BCC'd there so its copy of the thread stays complete.{' '}
+        <button className="btn sm" onClick={() => setEditing(true)}>Change</button>{' '}
+        <button className="btn sm" disabled={busy} onClick={() => void save('')}>
+          Stop mirroring
+        </button>
+        {err && <span className="error" style={{ marginLeft: 8 }}>{err}</span>}
+      </div>
+    );
+  }
+  if (!editing && !current) {
+    return (
+      <div style={{ marginTop: 8 }}>
+        <button
+          className="muted"
+          style={{ fontSize: 12, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+          onClick={() => setEditing(true)}
+        >
+          Mirror replies to a mailbox →
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Mirror replies to a mailbox — BCC's every reply so that mailbox keeps a
+        complete copy of each thread.
+      </div>
+      <div className="row" style={{ gap: 6 }}>
+        <input
+          className="input"
+          style={{ maxWidth: 280 }}
+          type="email"
+          placeholder="you@company.com"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button
+          className="btn sm"
+          disabled={busy || !/^\S+@\S+\.\S+$/.test(draft.trim())}
+          onClick={() => void save(draft.trim().toLowerCase())}
+        >
+          {busy ? 'Saving…' : 'Mirror replies'}
+        </button>
+        <button className="btn ghost sm" onClick={() => { setEditing(false); setErr(''); }}>
+          Cancel
+        </button>
+      </div>
+      {err && <div className="error" style={{ fontSize: 12, marginTop: 4 }}>{err}</div>}
+    </div>
+  );
+}
+
+type DomainResp = {
+  email_domain?: string;
+  status?: string;
+  records?: { type: string; name: string; value: string; status?: string }[];
+  created?: number;
+  skipped?: number;
+  zone?: string;
+};
+
 function EmailDomainCard({ channel }: { channel: Channel }) {
   const qc = useQueryClient();
   const [domain, setDomain] = useState(channel.meta.email_domain ?? '');
@@ -875,27 +952,39 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
   const [cfToken, setCfToken] = useState('');
   const [cfOpen, setCfOpen] = useState(false);
   const [msg, setMsg] = useState('');
+  // Local copies exist for instant feedback after a mutation — but re-sync
+  // whenever the channel prop changes, or a stale query snapshot freezes the
+  // card on whatever domain was registered at mount.
+  useEffect(() => {
+    setRegistered(channel.meta.email_domain ?? '');
+    setStatus(channel.meta.email_domain_status ?? '');
+    if (channel.meta.email_domain_records) setRecords(channel.meta.email_domain_records);
+  }, [channel.id, channel.meta.email_domain, channel.meta.email_domain_status, channel.meta.email_domain_records]); // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
     void qc.invalidateQueries({ queryKey: ['channels'] });
   };
-  type DomainState = { email_domain?: string; status?: string; records?: typeof records };
-  const apply = (d: DomainState) => {
+  const apply = (d: DomainResp) => {
     if (d.email_domain !== undefined) setRegistered(d.email_domain);
     if (d.status !== undefined) setStatus(d.status);
     if (d.records) setRecords(d.records);
   };
-  const act = (path: string, body?: unknown, okMsg = 'Done.') =>
+  const act = (path: string, body?: unknown, okMsg: string | ((d: DomainResp) => string) = 'Done.') =>
     api(`/api/channels/${channel.id}${path}`, {
       method: body === undefined ? 'DELETE' : 'POST',
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
       .then((d) => {
-        setMsg(okMsg);
-        apply(d as DomainState);
+        const r = d as DomainResp;
+        setMsg(typeof okMsg === 'function' ? okMsg(r) : okMsg);
+        apply(r);
         refresh();
+        return true;
       })
-      .catch((e) => setMsg(e instanceof Error ? e.message : 'failed'));
+      .catch((e) => {
+        setMsg(friendlyError(e instanceof Error ? e.message : 'failed').text);
+        return false;
+      });
   return (
     <div style={{ marginTop: 14 }}>
       <div style={{ fontSize: 13, fontWeight: 600 }}>
@@ -963,11 +1052,27 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
             </tbody>
           </table>
           <div className="row" style={{ marginTop: 6 }}>
-            <button className="btn sm" onClick={() => act('/email-domain/verify', {}, 'Verification requested.')}>
+            <button
+              className="btn sm"
+              onClick={() =>
+                act('/email-domain/verify', {}, (d) =>
+                  d.status === 'verified'
+                    ? 'Verified — replies can send from this domain.'
+                    : `Still ${d.status ?? 'pending'} — ${records.filter((r) => r.status === 'verified').length} of ${records.length} records confirmed. DNS can take a few minutes.`,
+                )
+              }
+            >
               Verify DNS
             </button>
             {channel.meta.cf_connected ? (
-              <button className="btn sm" onClick={() => act('/email-domain/cf-setup', {})}>
+              <button
+                className="btn sm"
+                onClick={() =>
+                  act('/email-domain/cf-setup', {}, (d) =>
+                    `Cloudflare: ${d.created ?? 0} record${d.created === 1 ? '' : 's'} created on ${d.zone ?? 'the zone'}${d.skipped ? `, ${d.skipped} already existed` : ''}.`,
+                  )
+                }
+              >
                 Push records via Cloudflare
               </button>
             ) : (
@@ -1043,10 +1148,12 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
                   style={{ marginTop: 6 }}
                   disabled={!cfToken.trim()}
                   onClick={() =>
-                    act('/email-domain/cf-setup', { api_token: cfToken.trim() }).then(() => {
+                    act('/email-domain/cf-setup', { api_token: cfToken.trim() }, (d) =>
+                      `Cloudflare: ${d.created ?? 0} record${d.created === 1 ? '' : 's'} created on ${d.zone ?? 'the zone'}${d.skipped ? `, ${d.skipped} already existed` : ''} — verification may take a minute.`,
+                    ).then((ok) => {
+                      if (!ok) return;
                       setCfToken('');
                       setCfOpen(false);
-                      setMsg('Records created on Cloudflare — verification may take a minute.');
                     })
                   }
                 >

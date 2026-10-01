@@ -1,7 +1,10 @@
-import { Link, useParams } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAgents, useChannel } from '../api/hooks';
 import { ChannelCard, KIND_LABEL } from '../components/Channels';
 import { usePageTitle } from '../lib/title';
+import { friendlyError } from '../lib/friendlyError';
 
 /** One connected channel's settings page — the full editor (embed, appearance,
  *  credentials, per-kind config) lives here instead of inline on the Channels
@@ -10,6 +13,23 @@ export default function ChannelPage() {
   const { id: agentId, channelId } = useParams<{ id: string; channelId: string }>();
   const { data, isLoading } = useChannel(channelId);
   const { data: agentsData } = useAgents();
+  const qc = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  // Cloudflare OAuth lands back here with ?cf_connect= / ?cf_error= —
+  // refetch the channel so new creds (e.g. pushed DNS records) render.
+  const cfConnected = params.get('cf_connect') ?? '';
+  const cfError = params.get('cf_error') ?? '';
+  useEffect(() => {
+    if (!cfConnected && !cfError) return;
+    void qc.invalidateQueries({ queryKey: ['channel', channelId] });
+    void qc.invalidateQueries({ queryKey: ['channels'] });
+  }, [cfConnected, cfError]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dropCfParams = () => {
+    const next = new URLSearchParams(params);
+    next.delete('cf_connect');
+    next.delete('cf_error');
+    setParams(next, { replace: true });
+  };
   const agents = agentsData?.agents ?? [];
   const ch = data?.channel;
   const agent = agents.find((a) => a.id === ch?.agent_id) ?? agents.find((a) => a.id === agentId);
@@ -37,7 +57,19 @@ export default function ChannelPage() {
         <h1 className="page-title grow" style={{ margin: 0 }}>{ch.name}</h1>
         <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
       </div>
-      <ChannelCard ch={ch} agents={agents} />
+      {cfConnected && (
+        <div className="muted" style={{ margin: '8px 0', fontSize: 13 }}>
+          Connected <strong>{cfConnected}</strong>{' '}
+          <a href="#" onClick={(e) => { e.preventDefault(); dropCfParams(); }}>dismiss</a>
+        </div>
+      )}
+      {cfError && (
+        <div className="error" style={{ margin: '8px 0' }}>
+          Cloudflare setup failed: {friendlyError(cfError).text}{' '}
+          <a href="#" onClick={(e) => { e.preventDefault(); dropCfParams(); }} className="muted">dismiss</a>
+        </div>
+      )}
+      <ChannelCard key={ch.id} ch={ch} agents={agents} />
     </>
   );
 }

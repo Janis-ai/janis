@@ -942,11 +942,13 @@ export function channelWebhookRoutes(db: Db) {
   // the channel; on success we keep the refresh token and immediately push
   // the pending DNS records + trigger Resend verification.
   app.get('/email-domain/cf-callback', async (c) => {
-    const fail = (msg: string, agentId?: string) =>
+    const fail = (msg: string, agentId?: string, channelId?: string) =>
       c.redirect(
-        agentId
-          ? `${env.webOrigin}/agents/${agentId}?tab=channels&cf_error=${encodeURIComponent(msg)}`
-          : `${env.webOrigin}/agents?cf_error=${encodeURIComponent(msg)}`,
+        channelId && agentId
+          ? `${env.webOrigin}/agents/${agentId}/channels/${channelId}?cf_error=${encodeURIComponent(msg)}`
+          : agentId
+            ? `${env.webOrigin}/agents/${agentId}?tab=channels&cf_error=${encodeURIComponent(msg)}`
+            : `${env.webOrigin}/agents?cf_error=${encodeURIComponent(msg)}`,
       );
     const code = c.req.query('code');
     const state = c.req.query('state') ?? '';
@@ -973,7 +975,7 @@ export function channelWebhookRoutes(db: Db) {
       .where(and(eq(channels.id, st.ch), eq(channels.workspaceId, st.w)))
       .limit(1);
     if (!row) return fail('channel not found');
-    const failAtAgent = (msg: string) => fail(msg, row.agentId);
+    const failAtAgent = (msg: string) => fail(msg, row.agentId, row.id);
     const creds = row.credentials as ChannelCredentials;
     try {
       const tokens = await cfExchangeCode(
@@ -999,7 +1001,7 @@ export function channelWebhookRoutes(db: Db) {
       await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
       invalidateChannelCache();
       return c.redirect(
-        `${env.webOrigin}/agents/${row.agentId}?tab=channels&cf_connect=${encodeURIComponent(`Cloudflare${pushed}`)}`,
+        `${env.webOrigin}/agents/${row.agentId}/channels/${row.id}?cf_connect=${encodeURIComponent(`Cloudflare${pushed}`)}`,
       );
     } catch (e) {
       return failAtAgent(e instanceof Error ? e.message : 'cloudflare setup failed');

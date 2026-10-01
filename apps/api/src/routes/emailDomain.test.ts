@@ -209,7 +209,8 @@ describe('custom email domain', () => {
       new Request(`http://t/channels/email-domain/cf-callback?code=CODE&state=${encodeURIComponent(state)}`),
     );
     expect(cb.status).toBe(302);
-    expect(cb.headers.get('location')).toContain('tab=channels');
+    // OAuth returns land on the channel's own page, not the index
+    expect(cb.headers.get('location')).toContain(`/channels/${channelId}?`);
     expect(cb.headers.get('location')).toContain('cf_connect=');
     expect(decodeURIComponent(cb.headers.get('location')!)).toContain('1 record created');
     const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
