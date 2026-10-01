@@ -1,10 +1,19 @@
 import { and, eq, isNotNull } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, conversations, memberships, users, workspaces } from '../db/schema.js';
+import { agents, channels, conversations, memberships, users, workspaces } from '../db/schema.js';
 import type { UserProfile } from '@janis/shared';
 import { env } from '../env.js';
 import { invalidateCapCache, planFor, PLANS } from './plans.js';
 import { ensureStripeCustomer, planForPrice, stripe } from './stripe.js';
+import { generateWebhookSecret } from './crypto.js';
+import { audit } from './audit.js';
+import { invalidateChannelCache } from './channels.js';
+import {
+  createSlackChannel,
+  getInstallation,
+  inviteWorkspaceMembers,
+  sanitizeChannelName,
+} from './slack.js';
 
 /** Context a builtin can reach — matches AgentRunContext in hostedAgent. */
 export interface BuiltinCtx {
@@ -269,6 +278,133 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         changed: false,
         checkout_url: session.url,
         note: `send the visitor this secure Stripe checkout link to complete the upgrade to ${plan.name}`,
+      });
+    },
+  },
+  {
+    name: 'create_agent',
+    description:
+      "Create a new hosted AI agent in a workspace the signed-in visitor administers — 'take a prompt, get a working agent'. Confirm the name and purpose with the visitor first, then call this with a system_prompt you draft from their description. Creates the agent with a live webchat channel and returns its console URL. Ask which workspace only if they administer more than one.",
+    params: {
+      name: 'agent name, e.g. "Acme Support"',
+      system_prompt:
+        'the operating prompt you draft from the visitor\'s description — persona, scope, tone, what it should/shouldn\'t do',
+      greeting: 'optional first message the widget sends when a conversation opens',
+      workspace: 'workspace name — required only when the visitor administers more than one',
+    },
+    // Operator-workspace only — it writes to visitor workspaces, so it must
+    // never be offered on customer agents.
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const name = (args.name ?? '').trim();
+      if (!name) return JSON.stringify({ error: 'name is required' });
+      if (name.length > 120) return JSON.stringify({ error: 'name is too long (120 chars max)' });
+
+      // Same gate as POST /api/agents — must administer the target workspace.
+      const adminRows = await ctx.db
+        .select({ ws: workspaces })
+        .from(memberships)
+        .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.role, 'admin'),
+            isNotNull(memberships.acceptedAt),
+          ),
+        );
+      const hint = (args.workspace ?? '').trim().toLowerCase();
+      const ws = hint
+        ? adminRows.find(
+            (r) => r.ws.name.toLowerCase() === hint || r.ws.name.toLowerCase().includes(hint),
+          )?.ws
+        : adminRows.length === 1
+          ? adminRows[0].ws
+          : undefined;
+      if (!ws) {
+        return JSON.stringify({
+          error: adminRows.length
+            ? `which workspace? ${user.name} administers: ${adminRows.map((r) => r.ws.name).join(', ')}`
+            : 'no workspace where the visitor is an admin — creating an agent needs admin rights',
+        });
+      }
+      // Agency children can't grow the fleet — same rule as the API route.
+      if (ws.parentWorkspaceId && !ws.stripeSubscriptionId && !ws.connectSubscriptionId) {
+        const [parent] = await ctx.db
+          .select({ name: workspaces.name })
+          .from(workspaces)
+          .where(eq(workspaces.id, ws.parentWorkspaceId))
+          .limit(1);
+        return JSON.stringify({
+          error: `${ws.name} is covered by ${parent?.name ?? 'an agency plan'} — contact ${ws.parentContact ?? 'the account administrator'} to add agents`,
+        });
+      }
+
+      const prompt = (args.system_prompt ?? '').trim();
+      const greeting = (args.greeting ?? '').trim();
+      const [row] = await ctx.db
+        .insert(agents)
+        .values({
+          workspaceId: ws.id,
+          ownerUserId: user.id,
+          name,
+          webhookSecret: generateWebhookSecret(),
+          hosted: true,
+          autoResumeMinutes: 10,
+          config: {
+            ...(prompt ? { system_prompt: prompt } : {}),
+            ...(greeting ? { greeting } : {}),
+          },
+        })
+        .returning();
+      // A hosted agent with no channel can't talk to anyone — give it a
+      // webchat channel so it's live the moment the link opens.
+      const [chan] = await ctx.db
+        .insert(channels)
+        .values({
+          workspaceId: ws.id,
+          agentId: row.id,
+          kind: 'webchat',
+          name: 'Web chat',
+          credentials: {},
+        })
+        .returning();
+      invalidateChannelCache();
+      // Same Slack nicety as the API route — per-agent alert channel when the
+      // workspace is connected; best-effort, never blocks creation.
+      const inst = await getInstallation(ctx.db, ws.id);
+      if (inst) {
+        const slug = sanitizeChannelName(`janis-${row.name}`) || 'janis-agent';
+        const { channel } = await createSlackChannel(inst, slug);
+        if (channel) {
+          const routes = [{ installation_id: inst.id, channel_id: channel.id }];
+          await ctx.db
+            .update(agents)
+            .set({ slackRoutes: routes })
+            .where(eq(agents.id, row.id));
+          void inviteWorkspaceMembers(ctx.db, inst, channel.id, row.id);
+        }
+      }
+      await audit(ctx.db, {
+        workspaceId: ws.id,
+        userId: user.id,
+        userName: user.name,
+        action: 'agent.create',
+        targetType: 'agent',
+        targetId: row.id,
+        meta: { name: row.name, hosted: true, via: 'concierge' },
+      });
+      return JSON.stringify({
+        created: true,
+        agent_id: row.id,
+        name: row.name,
+        url: `${env.webOrigin}/agents/${row.id}`,
+        channel_id: chan.id,
+        note: 'the agent is live on its webchat channel — send the visitor this link to open it',
       });
     },
   },

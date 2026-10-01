@@ -4,7 +4,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 import { BUILTIN_TOOLS, enabledBuiltins } from '../lib/builtinTools.js';
-import { agents, conversations, memberships, users, workspaces } from '../db/schema.js';
+import { agents, channels, conversations, memberships, users, workspaces } from '../db/schema.js';
 import * as schema from '../db/schema.js';
 import { env } from '../env.js';
 import { setStripeClient } from '../lib/stripe.js';
@@ -248,5 +248,77 @@ describe('change_plan builtin', () => {
     });
     const out = JSON.parse(await changePlan().run({ plan: 'pro' }, ctx(CONV3)));
     expect(out.error).toContain('Paid WS');
+  });
+});
+
+describe('create_agent builtin', () => {
+  const createAgent = () => BUILTIN_TOOLS.find((b) => b.name === 'create_agent')!;
+  beforeAll(() => {
+    env.operatorWorkspaceId = WS;
+    env.webOrigin = 'https://app.janis.ai';
+  });
+
+  it('is gated to the operator workspace', () => {
+    expect(createAgent().available(WS)).toBe(true);
+    expect(createAgent().available('other-ws')).toBe(false);
+    expect(enabledBuiltins(['create_agent'], WS).map((b) => b.name)).toEqual(['create_agent']);
+  });
+
+  it('rejects visitors who are not signed in', async () => {
+    const [a] = await db.select().from(agents).where(eq(agents.workspaceId, WS)).limit(1);
+    const [c] = await db
+      .insert(conversations)
+      .values({ agentId: a.id, externalId: 'v:anon' })
+      .returning();
+    const out = JSON.parse(await createAgent().run({ name: 'X' }, { db, convId: c.id, workspaceId: WS }));
+    expect(out.error).toContain('signed-in');
+  });
+
+  it('rejects members without admin rights', async () => {
+    const out = JSON.parse(
+      await createAgent().run({ name: 'Nope Bot' }, ctx(CONV4)),
+    );
+    expect(out.error).toContain('admin');
+  });
+
+  it('creates a hosted agent + webchat channel in the visitor\'s workspace', async () => {
+    const out = JSON.parse(
+      await createAgent().run(
+        { name: 'Acme Support', system_prompt: 'You answer Acme shipping questions.', greeting: 'Hi!' },
+        ctx(CONV2),
+      ),
+    );
+    expect(out.created).toBe(true);
+    expect(out.url).toBe(`https://app.janis.ai/agents/${out.agent_id}`);
+    const [agent] = await db.select().from(agents).where(eq(agents.id, out.agent_id));
+    expect(agent.workspaceId).toBe(WS2); // visitor's workspace, not the concierge's
+    expect(agent.hosted).toBe(true);
+    const cfg = agent.config as { system_prompt?: string; greeting?: string };
+    expect(cfg.system_prompt).toContain('shipping');
+    expect(cfg.greeting).toBe('Hi!');
+    const [chan] = await db
+      .select()
+      .from(channels)
+      .where(eq(channels.agentId, agent.id))
+      .limit(1);
+    expect(chan.kind).toBe('webchat');
+  });
+
+  it('asks which workspace when the visitor administers several, honours the hint', async () => {
+    const [w5] = await db.insert(workspaces).values({ name: 'Ann Second' }).returning();
+    await db.insert(memberships).values({
+      userId: USER2,
+      workspaceId: w5.id,
+      role: 'admin',
+      acceptedAt: new Date(),
+    });
+    const ambiguous = JSON.parse(await createAgent().run({ name: 'B' }, ctx(CONV2)));
+    expect(ambiguous.error).toContain('Free WS');
+    const picked = JSON.parse(
+      await createAgent().run({ name: 'B2', workspace: 'ann second' }, ctx(CONV2)),
+    );
+    expect(picked.created).toBe(true);
+    const [agent] = await db.select().from(agents).where(eq(agents.id, picked.agent_id));
+    expect(agent.workspaceId).toBe(w5.id);
   });
 });
