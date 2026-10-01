@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, conversations, messages, uploads, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, stripTranscriptNotes, transcriptFor } from './hostedAgent.js';
+import { blessedUrlsFor, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, stripEscalationClaims, stripTranscriptNotes, transcriptFor } from './hostedAgent.js';
 
 let db: Db;
 let convId: string;
@@ -258,6 +258,45 @@ describe('stripTranscriptNotes', () => {
 
   it('leaves normal parentheticals alone', () => {
     expect(stripTranscriptNotes('Sure (no problem) — done.')).toBe('Sure (no problem) — done.');
+  });
+});
+
+describe('stripEscalationClaims', () => {
+  it('drops an untagged human promise, keeps the rest', () => {
+    // prod incident: customer tapped "No thanks" on a human offer; the
+    // reply still read "let me get you connected with a human teammate".
+    const r = stripEscalationClaims(
+      'I hear you, Michael, and I apologize for the trouble. ' +
+        "Since you'd rather not share a photo right now, let me get you " +
+        'connected with a human teammate who can help you process your ' +
+        'return directly.',
+    );
+    expect(r.stripped).toBe(1);
+    expect(r.text).toBe('I hear you, Michael, and I apologize for the trouble.');
+  });
+
+  it('catches the common claim phrasings', () => {
+    for (const s of [
+      'A human teammate will reach out shortly.',
+      "I'll transfer you to a specialist right away.",
+      'Let me hand you over to our support team.',
+      'Someone from our team will be in touch soon.',
+      "I'm connecting you with a human agent now.",
+      'We can escalate this to a representative for you.',
+    ]) {
+      expect(stripEscalationClaims(s).text).toBe('');
+    }
+  });
+
+  it('leaves questions and non-escalation text alone', () => {
+    for (const s of [
+      'Would you like me to get a human?',
+      'Our support team is available weekdays 9-5.',
+      'Your return window is 30 days.',
+      'I can help you with that directly.',
+    ]) {
+      expect(stripEscalationClaims(s).stripped).toBe(0);
+    }
   });
 });
 

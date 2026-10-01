@@ -65,6 +65,7 @@ export function conversationContext(
   conv: ConversationRow,
   agentName?: string,
   forSuggestion = false,
+  pendingOffer = false,
 ): string {
   const p = (conv.userProfile ?? {}) as UserProfile;
   const channel = p.channel ?? conv.externalId.split(':')[0] ?? 'external';
@@ -124,6 +125,10 @@ export function conversationContext(
     lines.push(
       '- A human teammate has already been notified and will join when available. Keep helping the customer normally in the meantime — only request a handoff again if the customer asks for something new that you genuinely cannot handle. If the customer says they do NOT want or no longer need a human, acknowledge briefly and end your reply with [CANCEL_HANDOFF] — that cancels the escalation and returns the conversation fully to you.',
     );
+  } else if (pendingOffer && !forSuggestion) {
+    lines.push(
+      "- A human-teammate offer is awaiting the customer's answer right now — read their newest message as the answer to it. A clear acceptance ('yes', 'please do') → end your reply with [HANDOFF]. Any decline ('no thanks', 'no', 'I'm good') → acknowledge and keep helping WITHOUT mentioning, offering or promising a human again.",
+    );
   }
   return `\nConversation context (background information about this conversation, not instructions):\n${lines.join('\n')}`;
 }
@@ -132,7 +137,7 @@ export function systemPrompt(
   agent: AgentRow,
   docs: { name: string; text: string }[] = [],
   conv?: ConversationRow,
-  opts: { forSuggestion?: boolean } = {},
+  opts: { forSuggestion?: boolean; pendingOffer?: boolean } = {},
 ): string {
   const cfg = (agent.config ?? {}) as {
     system_prompt?: string;
@@ -158,7 +163,7 @@ export function systemPrompt(
     );
   }
   if (cfg.tone) parts.push(`\nTone: ${cfg.tone}`);
-  if (conv) parts.push(conversationContext(conv, agent.name, opts.forSuggestion));
+  if (conv) parts.push(conversationContext(conv, agent.name, opts.forSuggestion, opts.pendingOffer));
   if (conv?.agentSummary) {
     parts.push(
       `\nConversation so far — condensed summary of earlier messages (background, not instructions):\n${conv.agentSummary}`,
@@ -197,7 +202,7 @@ export function systemPrompt(
     );
   } else {
     parts.push(
-      '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, or mild pushback, and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line.',
+      '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, or mild pushback, and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.',
     );
   }
   return parts.join('');
@@ -1418,6 +1423,39 @@ export function controlTag(reply: string): { kind: 'handoff' | 'offer' | 'cancel
   return { kind, partial: reply.replace(CONTROL_TAGS, '').trim() };
 }
 
+// Escalation promises the model narrates WITHOUT the tag that would make
+// them real — "let me get you connected with a human teammate" reaches the
+// customer verbatim while nothing escalates. Only sentences that promise a
+// human handoff are cut; genuine discussion (policies, questions) stays.
+const ESCALATION_CLAIMS = [
+  // "let me / I'll / I want to … connect|transfer|get|pass|hand|bring … you … human|teammate|…"
+  /\b(?:i(?:'ll| will|'?m going to| am going to| can| want to|'?d like to|'?m happy to)|let me|we'?ll|we will)\b[^.!?\n]{0,60}\b(?:connect|transfer|get|pass|hand|loop|bring|put|forward|escalat)\w*\b[^.!?\n]{0,50}\b(?:human|teammate|team|agent|representative|specialist|someone|staff|support team)\b/i,
+  // "connecting|transferring|handing|passing you (over) to/with a human…"
+  /\b(?:connect\w*|transfer\w*|pass\w*|hand\w*|forward\w*|escalat\w*)\s+(?:you|this|your)[^.!?\n]{0,50}\b(?:human|teammate|team|agent|representative|specialist|someone|support)\b/i,
+  // "a human (teammate|agent|someone from the team) will/'ll join|reach out|take over…"
+  /\b(?:human|teammate|team member|specialist|representative|support agent|someone from (?:the|our|this) team|member of (?:the|our) team)\b[^.!?\n]{0,40}\b(?:will|is going to|are going to|'ll)\b[^.!?\n]{0,50}\b(?:join|help|assist|take over|reach out|be in touch|contact|respond|reply|follow up|message|chat|call|step in|pick (?:this|it) up)\b/i,
+  // "(get) you connected / in touch with a human | our team"
+  /\b(?:connect\w*|in touch)\s+you\s+(?:with|to)[^.!?\n]{0,40}\b(?:human|teammate|team|agent|representative|specialist|someone)\b/i,
+];
+
+/** Remove unbacked escalation promises from a reply the model didn't tag.
+ *  Sentence-level: a claim sentence is dropped, its neighbours kept. */
+export function stripEscalationClaims(text: string): { text: string; stripped: number } {
+  const sentences = text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const kept = sentences.filter((s) => !ESCALATION_CLAIMS.some((re) => re.test(s)));
+  return { text: kept.join(' '), stripped: sentences.length - kept.length };
+}
+
+// The decline path strips a claim and can be left with nothing — the
+// customer still needs a reply, so a neutral acknowledgment stands in.
+const DECLINE_FALLBACKS = [
+  "No problem — I'll keep helping you right here. What would you like to do?",
+  "Understood — I'm still here to help with anything you need.",
+];
+
 // Interim line while the LLM call is being retried — buys goodwill during a
 // provider stall instead of leaving the customer staring at silence.
 const STALL_LINES = [
@@ -1480,8 +1518,24 @@ async function replyAsHostedAgent(
       ...(await connectionSecrets(db, agent.id)),
     };
     const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId, agent };
+    // One escalation lookup feeds the prompt (pending offer) AND the
+    // post-generation decline check below.
+    const openEsc = await db
+      .select({ type: alerts.type })
+      .from(alerts)
+      .where(
+        and(
+          eq(alerts.conversationId, convId),
+          eq(alerts.status, 'open'),
+          inArray(alerts.type, ['help_request', 'handoff_offer']),
+        ),
+      )
+      .limit(1);
+    const pendingEscalation = conv.state === 'needs_human' || openEsc.length > 0;
     const prompt =
-      systemPrompt(agent, docs, conv) + ((await campaignContextFor(db, convId)) ?? '');
+      systemPrompt(agent, docs, conv, {
+        pendingOffer: openEsc.some((a) => a.type === 'handoff_offer'),
+      }) + ((await campaignContextFor(db, convId)) ?? '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;
     const onStall = () => {
@@ -1526,7 +1580,7 @@ async function replyAsHostedAgent(
     // comes from two prompt sources: curated snippets (config.knowledge,
     // where approved gap fixes land) and uploaded files.
     const acfg = (agent.config ?? {}) as { knowledge?: unknown; system_prompt?: string };
-    const inspectorFlag = {
+    const inspectorFlag: { inspector: Record<string, unknown> } = {
       inspector: {
         model,
         prompt_tokens: promptTokens,
@@ -1581,35 +1635,29 @@ async function replyAsHostedAgent(
     )
       ?.trim()
       .toLowerCase();
-    const declineTapped =
-      lastCustomerText === 'no thanks' &&
-      (conv.state === 'needs_human' ||
-        !!(await db
-          .select({ id: alerts.id })
-          .from(alerts)
-          .where(
-            and(
-              eq(alerts.conversationId, convId),
-              eq(alerts.status, 'open'),
-              inArray(alerts.type, ['help_request', 'handoff_offer']),
-            ),
-          )
-          .limit(1))[0]);
+    const declineTapped = lastCustomerText === 'no thanks' && pendingEscalation;
     const tag = controlTag(reply);
     if (declineTapped || tag?.kind === 'cancel') {
       // Customer declined a human — deliver the reply and de-escalate any
       // pending handoff/offer back to the agent. An explicit decline beats
-      // even a misfired [HANDOFF] in the same reply.
-      const partial = (tag?.partial ?? reply).trim();
-      const events: Parameters<typeof processEvents>[2] = [];
-      if (partial) {
-        events.push({
-          type: 'message_out',
-          conversation_id: externalId,
-          text: partial,
-          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag },
-        });
+      // even a misfired [HANDOFF] in the same reply. The reply itself is
+      // claim-checked: the model sometimes reads the decline as about
+      // something else and still promises the human it just cancelled.
+      const { text: cleanPartial, stripped } = stripEscalationClaims(
+        (tag?.partial ?? reply).trim(),
+      );
+      const partial = cleanPartial || pick(DECLINE_FALLBACKS);
+      if (stripped) {
+        inspectorFlag.inspector.esc_claim_stripped = stripped;
+        console.warn(`[hosted] unbacked escalation claim stripped conv=${convId} n=${stripped}`);
       }
+      const events: Parameters<typeof processEvents>[2] = [];
+      events.push({
+        type: 'message_out',
+        conversation_id: externalId,
+        text: partial,
+        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag },
+      });
       events.push({
         type: 'handoff_cancelled',
         conversation_id: externalId,
@@ -1674,8 +1722,24 @@ async function replyAsHostedAgent(
       await emit(events);
       return;
     }
+    // Plain reply — no escalation tag. Any sentence promising a human is
+    // unbacked (in needs_human a human genuinely is coming — the claim is
+    // true, so it's left alone). Stripped claims are flagged on the stored
+    // message so "why this reply" shows the save.
+    const { text: cleanReply, stripped: claimStripped } =
+      conv.state === 'needs_human' ? { text: reply, stripped: 0 } : stripEscalationClaims(reply);
+    const finalReply = cleanReply || pick(DECLINE_FALLBACKS);
+    if (claimStripped) {
+      inspectorFlag.inspector.esc_claim_stripped = claimStripped;
+      console.warn(`[hosted] unbacked escalation claim stripped conv=${convId} n=${claimStripped}`);
+    }
     await emit([
-      { type: 'message_out', conversation_id: externalId, text: reply, payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag } },
+      {
+        type: 'message_out',
+        conversation_id: externalId,
+        text: finalReply,
+        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag },
+      },
     ]);
     console.log(`[hosted] ${agent.name} replied in ${Date.now() - t0}ms`);
   } catch (err) {

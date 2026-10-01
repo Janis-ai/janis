@@ -1353,6 +1353,7 @@ interface InspectorData {
   knowledge?: string[];
   prompt?: 'custom' | 'default';
   tools?: { name: string; gated?: boolean; outcome: string }[];
+  esc_claim_stripped?: number;
 }
 
 const TOOL_OUTCOME: Record<string, string> = {
@@ -1415,6 +1416,15 @@ function InspectorPanel({ data }: { data: unknown }) {
           </span>
         </div>
       ))}
+      {!!d.esc_claim_stripped && (
+        <div className="inspector-row">
+          <span className="muted">guard</span>
+          <span>
+            removed {d.esc_claim_stripped} unbacked human-escalation claim
+            {d.esc_claim_stripped === 1 ? '' : 's'}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
