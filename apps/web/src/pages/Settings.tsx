@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceUser } from '@janis/shared';
@@ -947,6 +947,32 @@ type SendPolicy = {
   quiet_tz?: string;
   max_per_recipient_per_day?: number | null;
 };
+/** Multiline text field that grows with its content (cap 160px) — wider than
+ *  the default input so survey copy isn't truncated mid-sentence. */
+function AutosizeText(props: { value: string; placeholder: string; onChange: (v: string) => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const grow = () => {
+    const t = ref.current;
+    if (!t) return;
+    t.style.height = 'auto';
+    t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
+    t.style.overflowY = t.scrollHeight > 160 ? 'auto' : 'hidden';
+  };
+  useEffect(grow, [props.value]);
+  return (
+    <textarea
+      ref={ref}
+      className="input"
+      rows={1}
+      style={{ width: '100%', resize: 'vertical', minHeight: 38 }}
+      value={props.value}
+      placeholder={props.placeholder}
+      onChange={(e) => props.onChange(e.target.value)}
+      onInput={grow}
+    />
+  );
+}
+
 type CsatSettings = { enabled?: boolean; prompt?: string; thanks?: string };
 type SuppressionRow = { id: string; address: string; kind: string; reason: string; source: string | null };
 
@@ -993,20 +1019,18 @@ function CsatCard() {
       </label>
       <div className="form-field">
         <label>Survey question</label>
-        <input
-          className="input"
+        <AutosizeText
           value={c.prompt ?? ''}
           placeholder="How was your experience? Reply with a rating from 1 (poor) to 5 (great)."
-          onChange={(e) => upd({ prompt: e.target.value || undefined })}
+          onChange={(v) => upd({ prompt: v || undefined })}
         />
       </div>
       <div className="form-field">
         <label>Thank-you reply</label>
-        <input
-          className="input"
+        <AutosizeText
           value={c.thanks ?? ''}
           placeholder="Thanks for the feedback!"
-          onChange={(e) => upd({ thanks: e.target.value || undefined })}
+          onChange={(v) => upd({ thanks: v || undefined })}
         />
       </div>
       <div className="row">
