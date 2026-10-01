@@ -381,7 +381,15 @@ describe('email reply send', () => {
     expect(result?.error).toBeNull();
     expect(result?.mid).toBe('re_1');
     expect(sent?.url).toBe('https://api.resend.com/emails');
-    expect(sent?.body.from).toBe('Mike via Acme Support <ch_aaaa1111@inbound.janis.ai>');
+    // From = the channel's unique reply address (slug of channel name) —
+    // Reply-To identical, so the visible address is what routes back.
+    expect(sent?.body.from).toBe('Mike via Acme Support <support-inbox@inbound.janis.ai>');
+    expect(sent?.body.reply_to).toEqual(['support-inbox@inbound.janis.ai']);
+    // …and it persists on the channel creds for stable threading
+    const [after] = await db.select().from(channels).where(eq(channels.id, channel.id));
+    expect((after.credentials as { reply_address?: string }).reply_address).toBe(
+      'support-inbox@inbound.janis.ai',
+    );
     expect(sent?.body.to).toEqual(['sender@x.com']);
     expect(sent?.body.subject).toBe('Re: Help request');
     const headers = sent?.body.headers as Record<string, string>;
@@ -393,6 +401,96 @@ describe('email reply send', () => {
     expect(sent?.body.bcc).toEqual(['janis@janis.ai']);
     // Suggested replies flatten to a numbered list — email's button equivalent
     expect(sent?.body.text).toBe('Your order shipped today.\n\n1. Track it\n2. Talk to a human');
+  });
+
+  it('keeps a custom-domain From while Reply-To stays the channel address', async () => {
+    await db
+      .update(channels)
+      .set({
+        credentials: {
+          ...(channel.credentials as object),
+          reply_address: 'support-inbox@inbound.janis.ai',
+          from_address: 'help@acme.test',
+        },
+      })
+      .where(eq(channels.id, channel.id));
+    let sent: { body: Record<string, unknown> } | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        sent = { body: JSON.parse(String(init?.body)) };
+        return Promise.resolve(new Response(JSON.stringify({ id: 're_2' }), { status: 200 }));
+      }),
+    );
+    const { sendChannelMessage } = await import('../lib/channels.js');
+    const [fresh] = await db.select().from(channels).where(eq(channels.id, channel.id));
+    await sendChannelMessage(fresh, 'sender@x.com', 'hi', undefined, undefined, db);
+    expect(sent?.body.from).toBe('Acme Support <help@acme.test>');
+    expect(sent?.body.reply_to).toEqual(['support-inbox@inbound.janis.ai']);
+    await db
+      .update(channels)
+      .set({ credentials: channel.credentials as object })
+      .where(eq(channels.id, channel.id));
+  });
+});
+
+describe('reply address routing', () => {
+  it('routes inbound mail addressed to the reply_address to the channel', async () => {
+    await db
+      .update(channels)
+      .set({
+        credentials: {
+          ...(channel.credentials as object),
+          reply_address: 'support-inbox@inbound.janis.ai',
+        },
+      })
+      .where(eq(channels.id, channel.id));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => Promise.resolve(new Response('{}', { status: 500 }))),
+    );
+    const res = await inboundEvent({
+      email_id: 'em_reply_addr',
+      from: 'pat@x.com',
+      to: ['support-inbox@inbound.janis.ai'],
+      subject: 're',
+      message_id: '<r1@mail.x.com>',
+      text: 'reply to the pretty address',
+    });
+    expect(res.status).toBe(200);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'email:pat@x.com'));
+    // the channel's agent owns the conversation — the reply address routed
+    expect(conv?.agentId).toBe(channel.agentId);
+    const [binding] = await db
+      .select()
+      .from(channelBindings)
+      .where(eq(channelBindings.conversationId, conv.id));
+    expect(binding.channelId).toBe(channel.id);
+  });
+
+  it('allocates unique slugs — same channel name gets a -2 suffix', async () => {
+    const { uniqueReplyAddress } = await import('../lib/channels.js');
+    await db
+      .update(channels)
+      .set({
+        credentials: {
+          ...(channel.credentials as object),
+          reply_address: 'acme-co@inbound.janis.ai',
+        },
+      })
+      .where(eq(channels.id, channel.id));
+    const addr = await uniqueReplyAddress(db, 'Acme Co', 'deadbeef');
+    expect(addr).toBe('acme-co-2@inbound.janis.ai');
+    // and a names-empty channel falls back to a ch- prefixed id
+    const blank = await uniqueReplyAddress(db, '!!!', 'c0ffee11');
+    expect(blank).toBe('ch-c0ffee11@inbound.janis.ai');
+    await db
+      .update(channels)
+      .set({ credentials: channel.credentials as object })
+      .where(eq(channels.id, channel.id));
   });
 });
 

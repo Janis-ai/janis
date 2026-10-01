@@ -23,6 +23,7 @@ import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import {
   findChannelByEmailAddress,
+  uniqueReplyAddress,
   findChannelByObjectId,
   invalidateChannelCache,
   parseMetaWebhook,
@@ -254,8 +255,10 @@ export function channelApiRoutes(db: Db) {
     };
     if (body.kind === 'email') {
       // Each email channel gets a unique inbound address — customer mail is
-      // routed to this channel by matching the To: header against it.
+      // routed to this channel by matching the To: header against it — plus a
+      // readable reply_address used as From/Reply-To on outbound replies.
       credentials.inbound_address = `ch_${randomBytes(4).toString('hex')}@${env.emailInboundDomain}`;
+      credentials.reply_address = await uniqueReplyAddress(db, body.name, 'new');
       credentials.from_name = body.from_name;
     }
     if (body.kind === 'sms' && body.from_voice_channel_id) {

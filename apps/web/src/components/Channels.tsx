@@ -164,12 +164,21 @@ export function ChannelCard({
           <div className="mono" style={{ marginTop: 6, fontSize: 14 }}>
             {ch.meta.inbound_address}
           </div>
+          {ch.meta.reply_address && (
+            <div className="mono" style={{ marginTop: 4, fontSize: 14 }}>
+              {ch.meta.reply_address}
+              <span className="muted" style={{ fontFamily: 'inherit', fontSize: 12 }}>
+                {' '}
+                — replies send from this address
+              </span>
+            </div>
+          )}
           <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
             To receive mail: point the inbound domain's MX record at your inbound provider
             (Resend → Receiving), register the webhook{' '}
             <span className="mono">{apiOrigin}/channels/email/inbound</span>, or forward an
-            existing mailbox to this address. Replies send back from the same address, threaded
-            onto the customer's message.
+            existing mailbox to this address. Replies send back from the channel's reply
+            address — unique to this channel — threaded onto the customer's message.
           </div>
           <EmailFromName channel={ch} />
         </details>
@@ -409,7 +418,7 @@ function EmailAnswerRules({ channel }: { channel: Channel }) {
             ? 'A send-as alias verified in Gmail settings (Settings → Accounts → Send mail as) — e.g. the group address.'
             : channel.kind === 'outlook'
               ? 'A shared mailbox or alias the account can Send As in Microsoft 365.'
-              : `Any address on ${channel.meta.inbound_address?.split('@')[1] ?? 'the inbound domain'} — or on a verified custom domain below.`}
+              : `On the inbound domain, replies send from the channel's own reply address (${channel.meta.reply_address ?? 'auto-generated'}). For a custom-domain From, verify a domain below — customer replies still route to the reply address.`}
         </div>
       </div>
       {channel.kind === 'email' && (

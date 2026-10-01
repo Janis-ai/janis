@@ -64,6 +64,11 @@ export interface ChannelCredentials {
   // webchat: console test-chat channel — works through the real /chat
   // pipeline but is hidden from the Integrations channel list
   internal?: boolean;
+  // email: readable per-channel reply address on the inbound domain
+  // (e.g. acme-support@inbound.janis.ai) — used as From AND Reply-To so the
+  // address customers see is the address that routes their reply back.
+  // Generated lazily for channels created before this field existed.
+  reply_address?: string;
   // messenger: cached Meta Persona ids per operator user id — recreated
   // when the operator's display name or avatar changes
   personas?: Record<string, { id: string; name: string; avatar: string }>;
@@ -944,14 +949,26 @@ async function sendEmailReply(
   opts: SendOptions | undefined,
 ): Promise<SendResult> {
   const creds = channel.credentials as ChannelCredentials;
-  const fromAddr = creds.inbound_address;
-  if (!fromAddr) {
+  // The channel's unique reply address carries From + Reply-To: the address
+  // customers see is the one that routes their reply back. A from_address on
+  // the inbound domain is superseded by it; a from_address on a verified
+  // custom domain stays the From (reply routing still goes to replyAddr).
+  const replyAddr = db
+    ? await replyAddressFor(db, channel)
+    : (creds.reply_address ?? creds.inbound_address);
+  if (!replyAddr) {
     return {
       mid: null,
       error: 'email channel has no inbound address — recreate it under Integrations',
       retryable: false,
     };
   }
+  const onInboundDomain = (a?: string) =>
+    (a ?? '').toLowerCase().endsWith(`@${env.emailInboundDomain}`);
+  const customFrom =
+    creds.from_address && !onInboundDomain(creds.from_address)
+      ? creds.from_address
+      : undefined;
   if (!env.resendApiKey) {
     return { mid: null, error: 'RESEND_API_KEY not configured', retryable: false };
   }
@@ -966,10 +983,11 @@ async function sendEmailReply(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: `${displayName} <${creds.from_address ?? fromAddr}>`,
-        // A branded From still routes replies to the channel's inbound
-        // address — otherwise the customer's reply never reaches us.
-        ...(creds.from_address ? { reply_to: [fromAddr] } : {}),
+        from: `${displayName} <${customFrom ?? replyAddr}>`,
+        // Replies always target the channel's unique reply address — same as
+        // the From on inbound-domain channels, the routing address when a
+        // custom-domain From is in use.
+        reply_to: [replyAddr],
         to: [platformUserId],
         subject,
         text: body,
@@ -1104,17 +1122,81 @@ async function sendOutlookReply(
   }
 }
 
-/** Find the email channel owning a recipient address (To: match, case-folded). */
+/** Find the email channel owning a recipient address (To: match, case-folded)
+ *  — inbound_address and the channel's reply_address both route here. */
 export async function findChannelByEmailAddress(
   db: Db,
   toAddress: string,
 ): Promise<ChannelRow | undefined> {
   const rows = await db.select().from(channels).where(eq(channels.kind, 'email'));
   const want = toAddress.trim().toLowerCase();
-  return rows.find(
-    (c) =>
-      ((c.credentials as ChannelCredentials).inbound_address ?? '').toLowerCase() === want,
+  return rows.find((c) => {
+    const creds = c.credentials as ChannelCredentials;
+    return (
+      (creds.inbound_address ?? '').toLowerCase() === want ||
+      (creds.reply_address ?? '').toLowerCase() === want
+    );
+  });
+}
+
+/** "acme support desk" → "acme-support-desk" (≤32 chars, DNS-safe). */
+function replyLocalPart(name: string, id: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32)
+    .replace(/-+$/g, '');
+  return slug || `ch-${id.replace(/-/g, '').slice(0, 8)}`;
+}
+
+/** Allocate a unique reply address on the inbound domain for a channel name —
+ *  checks both inbound_address and reply_address of every email channel,
+ *  suffixing -2/-3/… on collision. Exported for channel creation. */
+export async function uniqueReplyAddress(
+  db: Db,
+  name: string,
+  fallbackId: string,
+): Promise<string> {
+  const base = replyLocalPart(name, fallbackId);
+  const rows = await db
+    .select({ credentials: channels.credentials })
+    .from(channels)
+    .where(eq(channels.kind, 'email'));
+  const taken = new Set(
+    rows.flatMap((r) => {
+      const rc = r.credentials as ChannelCredentials;
+      return [rc.inbound_address, rc.reply_address]
+        .filter((a): a is string => !!a)
+        .map((a) => a.toLowerCase());
+    }),
   );
+  let addr = `${base}@${env.emailInboundDomain}`;
+  for (let i = 2; taken.has(addr.toLowerCase()); i++) {
+    addr = `${base}-${i}@${env.emailInboundDomain}`;
+  }
+  return addr;
+}
+
+/** The channel's unique reply address — readable (acme-support@inbound…),
+ *  persisted on first use so an early channel rename doesn't orphan the
+ *  address customers already have. Falls back to the opaque inbound_address
+ *  when no db is available to persist with. */
+export async function replyAddressFor(
+  db: Db | undefined,
+  channel: ChannelRow,
+): Promise<string | undefined> {
+  const creds = channel.credentials as ChannelCredentials;
+  if (creds.reply_address) return creds.reply_address;
+  if (!db) return creds.inbound_address;
+  const addr = await uniqueReplyAddress(db, channel.name, channel.id);
+  creds.reply_address = addr;
+  await db
+    .update(channels)
+    .set({ credentials: creds })
+    .where(eq(channels.id, channel.id))
+    .catch(() => {});
+  return addr;
 }
 
 /** Channel binding for a conversation — channel row + the platform user id. */

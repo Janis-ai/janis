@@ -193,6 +193,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     identity_secret?: string;
     show_operator?: boolean;
     inbound_address?: string;
+    reply_address?: string;
     email_address?: string;
     from_name?: string;
     from_address?: string;
@@ -242,6 +243,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
         (row.kind === 'voice' || row.kind === 'sms') && creds.hosted ? true : undefined,
       show_operator: row.kind === 'webchat' ? creds.show_operator === true : undefined,
       inbound_address: row.kind === 'email' ? creds.inbound_address : undefined,
+      reply_address: row.kind === 'email' ? creds.reply_address : undefined,
       email_address: (row.kind === 'gmail' || row.kind === 'outlook') ? creds.email_address : undefined,
       from_name:
         ['email', 'gmail', 'outlook'].includes(row.kind) ? creds.from_name : undefined,

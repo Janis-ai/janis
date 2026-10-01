@@ -364,6 +364,8 @@ export const Channel = z.object({
     show_operator: z.boolean().optional(),
     // email: the channel's unique inbound address + From display name
     inbound_address: z.string().optional(),
+    // email: readable per-channel reply address — used as From and Reply-To
+    reply_address: z.string().optional(),
     // gmail: the connected mailbox address (oauth identity)
     email_address: z.string().optional(),
     from_name: z.string().optional(),
