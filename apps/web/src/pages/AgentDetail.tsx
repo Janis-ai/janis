@@ -13,7 +13,7 @@ import { api } from '../api/client';
 import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
 import { AgentChannels } from '../components/AgentChannels';
 import { HelpCenter } from '../components/HelpCenter';
-import { timeAgo } from '../components/bits';
+import { AutosizeText, timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { railBus } from '../lib/railBus';
@@ -774,28 +774,26 @@ function EscalationTab({
         </div>
         <div className="form-field">
           <label>Survey question</label>
-          <input
-            className="input"
+          <AutosizeText
             value={cfg.csat?.prompt ?? ''}
             placeholder="Workspace default"
-            onChange={(e) =>
+            onChange={(v) =>
               setCfg({
                 ...cfg,
-                csat: { ...(cfg.csat ?? {}), prompt: e.target.value || undefined },
+                csat: { ...(cfg.csat ?? {}), prompt: v || undefined },
               })
             }
           />
         </div>
         <div className="form-field">
           <label>Thank-you reply</label>
-          <input
-            className="input"
+          <AutosizeText
             value={cfg.csat?.thanks ?? ''}
             placeholder="Workspace default"
-            onChange={(e) =>
+            onChange={(v) =>
               setCfg({
                 ...cfg,
-                csat: { ...(cfg.csat ?? {}), thanks: e.target.value || undefined },
+                csat: { ...(cfg.csat ?? {}), thanks: v || undefined },
               })
             }
           />

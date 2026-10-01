@@ -1,4 +1,4 @@
-import { useEffect, useState, type ImgHTMLAttributes } from 'react';
+import { useEffect, useRef, useState, type ImgHTMLAttributes } from 'react';
 import { Link } from 'react-router-dom';
 import type { Conversation, ConversationState, UserProfile } from '@janis/shared';
 import { friendlyName } from '@janis/shared';
@@ -160,4 +160,30 @@ export function fmtTime(iso: string): string {
     ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),
   });
   return `${date}, ${time}`;
+}
+
+/** Multiline text field that grows with its content (cap 160px) — wider than
+ *  the default input so longer copy isn't truncated mid-sentence. */
+export function AutosizeText(props: { value: string; placeholder: string; onChange: (v: string) => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const grow = () => {
+    const t = ref.current;
+    if (!t) return;
+    t.style.height = 'auto';
+    t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
+    t.style.overflowY = t.scrollHeight > 160 ? 'auto' : 'hidden';
+  };
+  useEffect(grow, [props.value]);
+  return (
+    <textarea
+      ref={ref}
+      className="input"
+      rows={1}
+      style={{ width: '100%', resize: 'vertical', minHeight: 38 }}
+      value={props.value}
+      placeholder={props.placeholder}
+      onChange={(e) => props.onChange(e.target.value)}
+      onInput={grow}
+    />
+  );
 }
