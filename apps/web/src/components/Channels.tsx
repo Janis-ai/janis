@@ -959,6 +959,9 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
     setRegistered(channel.meta.email_domain ?? '');
     setStatus(channel.meta.email_domain_status ?? '');
     if (channel.meta.email_domain_records) setRecords(channel.meta.email_domain_records);
+    // A refetch that lands on verified makes any lingering "add the DNS
+    // records" instruction stale — the verified state speaks for itself.
+    if (channel.meta.email_domain_status === 'verified') setMsg('');
   }, [channel.id, channel.meta.email_domain, channel.meta.email_domain_status, channel.meta.email_domain_records]); // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
@@ -1017,40 +1020,46 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
             </button>
           </div>
         </>
-      ) : status !== 'verified' && records.length > 0 ? (
+      ) : status !== 'verified' ? (
         <>
-          <table style={{ width: '100%', fontSize: 12, marginTop: 6 }}>
-            <thead>
-              <tr className="muted" style={{ textAlign: 'left' }}>
-                <th />
-                <th>Type</th>
-                <th>Name</th>
-                <th>Value</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {records.map((r, i) => (
-                <tr key={i}>
-                  <td style={{ padding: '2px 6px 2px 0', width: 16 }}>
-                    {r.status === 'verified' ? '✓' : '·'}
-                  </td>
-                  <td style={{ padding: '2px 6px 2px 0' }}>{r.type}</td>
-                  <td style={{ padding: '2px 6px 2px 0', wordBreak: 'break-all' }}>{r.name}</td>
-                  <td style={{ padding: '2px 6px 2px 0', wordBreak: 'break-all' }}>{r.value}</td>
-                  <td style={{ padding: '2px 0', width: 22 }}>
-                    <button
-                      className="btn sm"
-                      title="Copy"
-                      onClick={() => void navigator.clipboard.writeText(r.value)}
-                    >
-                      ⧉
-                    </button>
-                  </td>
+          {records.length > 0 ? (
+            <table style={{ width: '100%', fontSize: 12, marginTop: 6 }}>
+              <thead>
+                <tr className="muted" style={{ textAlign: 'left' }}>
+                  <th />
+                  <th>Type</th>
+                  <th>Name</th>
+                  <th>Value</th>
+                  <th />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {records.map((r, i) => (
+                  <tr key={i}>
+                    <td style={{ padding: '2px 6px 2px 0', width: 16 }}>
+                      {r.status === 'verified' ? '✓' : '·'}
+                    </td>
+                    <td style={{ padding: '2px 6px 2px 0' }}>{r.type}</td>
+                    <td style={{ padding: '2px 6px 2px 0', wordBreak: 'break-all' }}>{r.name}</td>
+                    <td style={{ padding: '2px 6px 2px 0', wordBreak: 'break-all' }}>{r.value}</td>
+                    <td style={{ padding: '2px 0', width: 22 }}>
+                      <button
+                        className="btn sm"
+                        title="Copy"
+                        onClick={() => void navigator.clipboard.writeText(r.value)}
+                      >
+                        ⧉
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              Waiting on DNS records from the mail provider — try Verify DNS to refresh.
+            </div>
+          )}
           <div className="row" style={{ marginTop: 6 }}>
             <button
               className="btn sm"
