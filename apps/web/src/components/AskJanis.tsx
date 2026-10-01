@@ -9,7 +9,7 @@ import {
   type ChatMsg,
   type OutEntry,
 } from '../lib/chatTimeline';
-import { Loader2, Paperclip, Smile, X } from 'lucide-react';
+import { Loader2, Mic, MicOff, Paperclip, Smile, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 import { ArgsRows } from './bits';
 
@@ -172,6 +172,11 @@ export function AskJanis({
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Dictation — Web Speech API (Chrome/Edge/Safari); the mic button hides
+  // where recognition is unavailable instead of dead-ending on click.
+  const recRef = useRef<{ stop: () => void } | null>(null);
+  const dictBase = useRef('');
+  const [dictating, setDictating] = useState(false);
   const seen = useRef(new Set<string>());
   const lastTs = useRef<string | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -357,6 +362,63 @@ export function AskJanis({
     // no scrollbar until content actually overflows the cap
     el.style.overflowY = el.scrollHeight > 110 ? 'auto' : 'hidden';
   };
+
+  type SpeechResult = { isFinal: boolean; 0: { transcript: string } };
+  type SpeechRec = {
+    continuous: boolean;
+    interimResults: boolean;
+    onresult: ((e: { resultIndex: number; results: ArrayLike<SpeechResult> }) => void) | null;
+    onend: (() => void) | null;
+    onerror: (() => void) | null;
+    start: () => void;
+    stop: () => void;
+  };
+  const SpeechCtor = (
+    window as unknown as {
+      SpeechRecognition?: new () => SpeechRec;
+      webkitSpeechRecognition?: new () => SpeechRec;
+    }
+  ).SpeechRecognition ??
+    (window as unknown as { webkitSpeechRecognition?: new () => SpeechRec }).webkitSpeechRecognition;
+
+  const toggleDictate = () => {
+    if (recRef.current) {
+      recRef.current.stop();
+      return;
+    }
+    if (!SpeechCtor) return;
+    const r = new SpeechCtor();
+    r.continuous = true;
+    r.interimResults = true;
+    dictBase.current = text;
+    r.onresult = (e) => {
+      let finals = '';
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finals += e.results[i][0].transcript;
+        else interim += e.results[i][0].transcript;
+      }
+      if (finals) dictBase.current = (dictBase.current.replace(/\s+$/, '') + (dictBase.current ? ' ' : '') + finals.trim());
+      setText(dictBase.current + (interim ? (dictBase.current ? ' ' : '') + interim : ''));
+      autoresize();
+    };
+    const done = () => {
+      recRef.current = null;
+      setDictating(false);
+    };
+    r.onend = done;
+    r.onerror = done;
+    try {
+      r.start();
+      recRef.current = r;
+      setDictating(true);
+    } catch {
+      /* permission denied or unsupported context — leave the button idle */
+    }
+  };
+
+  // Rail closing mid-dictation shouldn't keep the mic live.
+  useEffect(() => () => recRef.current?.stop(), []);
 
   const insertEmoji = (em: string) => {
     const el = inputRef.current;
@@ -701,6 +763,17 @@ export function AskJanis({
         <div className="ask-input-row">
           <button className="btn" title="Emoji" disabled={!loaded} onClick={() => setEmojiOpen((o) => !o)}><Smile size={15} /></button>
           <button className="btn" title="Attach" disabled={!loaded} onClick={() => fileRef.current?.click()}><Paperclip size={15} /></button>
+          {SpeechCtor && (
+            <button
+              className="btn"
+              title={dictating ? 'Stop dictating' : 'Dictate'}
+              disabled={!loaded}
+              style={dictating ? { color: 'var(--danger)' } : undefined}
+              onClick={toggleDictate}
+            >
+              {dictating ? <MicOff size={15} /> : <Mic size={15} />}
+            </button>
+          )}
           <input
             ref={fileRef}
             type="file"

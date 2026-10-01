@@ -909,6 +909,7 @@ function WidgetPreview({
         <div className="wp-foot" style={{ background: pal.panel, borderTopColor: pal.border }}>
           <span className="wp-ico" style={{ color: pal.muted }}>📎</span>
           <span className="wp-ico" style={{ color: pal.muted }}>😊</span>
+          <span className="wp-ico" style={{ color: pal.muted }}>🎤</span>
           <span className="wp-input" style={{ color: pal.muted }}>Type a message…</span>
           <span className="wp-send" style={{ background: accent }}>Send</span>
         </div>

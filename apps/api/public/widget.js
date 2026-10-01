@@ -205,6 +205,8 @@
     '#janis-form{display:flex;align-items:flex-end;border-top:1px solid #e5e7eb;background:#fff}' +
     '#janis-form .janis-ico{background:none;border:none;cursor:pointer;font-size:16px;padding:10px 4px 10px 10px;color:#6b7280;line-height:1}' +
     '#janis-form .janis-ico:hover{color:#374151}' +
+    '#janis-form .janis-ico.on{color:var(--janis-accent);animation:janis-micpulse 1.2s ease-in-out infinite}' +
+    '@keyframes janis-micpulse{0%,100%{opacity:1}50%{opacity:.45}}' +
     '#janis-input{flex:1;border:none;padding:12px 6px;font-size:14px;outline:none;background:#fff;color:#1f2937;' +
     'resize:none;font-family:inherit;line-height:1.35;max-height:110px;overflow-y:auto}' +
     '#janis-send{border:none;align-self:stretch;padding:0 16px;cursor:pointer;color:#fff;font-weight:600;background:var(--janis-accent)}' +
@@ -276,6 +278,7 @@
     '<form id="janis-form">' +
     '<button id="janis-clip" class="janis-ico" type="button" aria-label="Attach a file" title="Attach a file">📎</button>' +
     '<button id="janis-smile" class="janis-ico" type="button" aria-label="Emoji" title="Emoji">😊</button>' +
+    '<button id="janis-mic" class="janis-ico" type="button" aria-label="Dictate a message" title="Dictate">🎤</button>' +
     '<textarea id="janis-input" placeholder="Type a message…" rows="1"></textarea>' +
     '<button id="janis-send" type="submit">Send</button></form>' +
     '<input id="janis-file" type="file" multiple />' +
@@ -994,6 +997,48 @@
       form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', { cancelable: true }));
     }
   });
+
+  // ---- dictation ------------------------------------------------------------
+  // Web Speech API — Chrome/Edge/Safari only; the mic hides where
+  // recognition doesn't exist (Firefox) rather than dead-ending on click.
+  var micBtn = panel.querySelector('#janis-mic');
+  var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var recog = null;
+  var dictBase = ''; // committed text — interim results render after it
+  if (!SpeechRec) {
+    micBtn.style.display = 'none';
+  } else {
+    micBtn.addEventListener('click', function () {
+      if (recog) { recog.stop(); return; }
+      try {
+        recog = new SpeechRec();
+        recog.continuous = true;
+        recog.interimResults = true;
+        dictBase = input.value;
+        recog.onresult = function (e) {
+          var finals = '', interim = '';
+          for (var i = e.resultIndex; i < e.results.length; i++) {
+            if (e.results[i].isFinal) finals += e.results[i][0].transcript;
+            else interim += e.results[i][0].transcript;
+          }
+          if (finals) dictBase = (dictBase ? dictBase.replace(/\s+$/, '') + ' ' : '') + finals.trim();
+          input.value = dictBase + (interim ? (dictBase ? ' ' : '') + interim : '');
+          autoresize();
+          sendTyping();
+        };
+        var done = function () {
+          recog = null;
+          micBtn.classList.remove('on');
+          micBtn.setAttribute('aria-label', 'Dictate a message');
+        };
+        recog.onend = done;
+        recog.onerror = done;
+        recog.start();
+        micBtn.classList.add('on');
+        micBtn.setAttribute('aria-label', 'Stop dictating');
+      } catch (e) { recog = null; }
+    });
+  }
 
   // ---- emoji --------------------------------------------------------------
   EMOJIS.forEach(function (em) {
