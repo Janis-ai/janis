@@ -29,6 +29,8 @@ const post = (text: string, visitor = VISITOR_A) =>
     body: JSON.stringify({ visitor_id: visitor, text }),
   });
 
+const SUPPORT_CHANNEL_ID = 'c0ffee00-0000-4000-8000-0000000000c5';
+
 beforeAll(async () => {
   // uploads land in a tmpdir, not the repo
   process.env.UPLOAD_DIR = mkdtempSync(join(tmpdir(), 'janis-uploads-'));
@@ -689,6 +691,35 @@ describe('webchat authenticated identity', () => {
     expect(meta2.agents).toBeUndefined();
     expect(meta2.current_workspace).toBeUndefined();
     expect(meta2.page).toBeUndefined();
+  });
+
+  it('gives the context pack on the support channel (Ask Janis rail)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [ws] = await db.select().from(workspaces).limit(1);
+    const [u] = await db.select().from(users).where(eq(users.email, 'owner@janis.test'));
+    const [a] = await db.select().from(agents).limit(1);
+    // Ask Janis posts through the support channel — a plain public webchat
+    // channel (internal: false), matched by JANIS_SUPPORT_CHANNEL_ID
+    await db.insert(channels).values({
+      id: SUPPORT_CHANNEL_ID, workspaceId: ws.id, agentId: a.id,
+      kind: 'webchat', name: 'Janis Agent', credentials: {},
+    });
+    // env.supportChannelId is snapshotted at module load — set the field
+    // directly (the env var was never exported in the test process)
+    const { env } = await import('../env.js');
+    env.supportChannelId = SUPPORT_CHANNEL_ID;
+    const res = await app.request(`/chat/${SUPPORT_CHANNEL_ID}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: 'janis_session=tok-abc' },
+      body: JSON.stringify({ visitor_id: 'vis_support0000001', text: 'hi', page: '/conversations' }),
+    });
+    expect(res.status).toBe(200);
+    const [conv] = await db.select().from(conversations)
+      .where(eq(conversations.externalId, `webchat:u:${u.id}`)).limit(1);
+    const meta = ((conv?.userProfile as Record<string, unknown>)?.metadata ?? {}) as Record<string, unknown>;
+    expect(meta.current_workspace).toBe('Test');
+    expect(meta.page).toBe('/conversations');
+    expect(String(meta.agents)).toContain('Support Bot');
   });
 
   it('merges cleanly when both threads have a Slack thread link', async () => {

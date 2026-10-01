@@ -119,13 +119,17 @@ async function resolveIdentity(
         janis_account: 'yes',
         ...(ws.length ? { workspaces: ws.map((w) => w.name).join(', ') } : {}),
       };
-      // Internal channels (the Ask Janis console rail) get the full context
-      // pack: which workspace the session is acting in, the console page the
-      // user was on, and the workspace's agent/channel inventory. Resolved
-      // fresh per message — never stale — and gated to internal channels so a
-      // logged-in operator chatting on a customer's embedded widget doesn't
-      // leak their workspace's agent list into that conversation.
-      if ((channel.credentials as ChannelCredentials).internal === true) {
+      // The concierge surfaces (internal test channels + the Ask Janis rail,
+      // which posts through the support channel) get the full context pack:
+      // which workspace the session is acting in, the console page the user
+      // was on, and the workspace's agent/channel inventory. Resolved fresh
+      // per message — never stale — and gated so a logged-in operator
+      // chatting on a customer's embedded widget doesn't leak their
+      // workspace's agent list into that conversation.
+      const isConcierge =
+        (channel.credentials as ChannelCredentials).internal === true ||
+        (env.supportChannelId !== '' && channel.id === env.supportChannelId);
+      if (isConcierge) {
         const curWs = ws.find((w) => w.id === row.wsId) ?? ws[0];
         if (curWs) traits.current_workspace = curWs.name;
         if (page) traits.page = page;
