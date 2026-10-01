@@ -47,6 +47,13 @@
 :root[data-theme='light'] .badge.active { background: #d1fae5; color: #065f46; }
 :root[data-theme='light'] .badge.needs_human { background: #ffedd5; color: #9a3412; }
 :root[data-theme='light'] .badge.warn { background: #fef3c7; color: #92400e; }
+/* Outbound bubbles use a dark navy in dark mode; on light that navy with
+   dark text is illegible — flip to pale blue with dark text. */
+:root[data-theme='light'] .msg.out,
+:root[data-theme='light'] .demo-msg.out { background: #dbeafe; color: #1e3a5f; }
+:root[data-theme='light'] .msg.out .who,
+:root[data-theme='light'] .demo-msg.out .who { color: #3b5a80; }
+:root[data-theme='light'] .oauth-btn:hover { background: var(--panel-alt); border-color: var(--muted); }
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }
