@@ -2075,6 +2075,7 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
 
   const [url, setUrl] = useState('');
   const [urlHours, setUrlHours] = useState(24);
+  const [urlMode, setUrlMode] = useState<'page' | 'centre'>('page');
   const [importMsg, setImportMsg] = useState('');
   const addUrl = useMutation({
     mutationFn: () =>
@@ -2165,14 +2166,33 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
         />
         {uploading && <span className="muted">extracting…</span>}
       </div>
-      <div className="row" style={{ marginTop: 8 }}>
+      <div className="muted" style={{ marginTop: 12, fontSize: 13 }}>
+        Or keep a live web source — re-crawled on the schedule you pick:
+      </div>
+      <div className="row" style={{ marginTop: 6 }}>
         <input
           className="grow"
-          placeholder="Or add a URL — e.g. https://acme.com/faq — re-crawled on a schedule"
+          placeholder={
+            urlMode === 'page'
+              ? 'A single page — e.g. https://acme.com/faq'
+              : 'A help centre root — e.g. https://acme.zendesk.com (add /hc/en-us to scope a locale)'
+          }
           value={url}
           onChange={(e) => setUrl(e.target.value)}
         />
-        <select value={urlHours} onChange={(e) => setUrlHours(Number(e.target.value))}>
+        <select
+          value={urlMode}
+          onChange={(e) => setUrlMode(e.target.value as 'page' | 'centre')}
+          title="What to import"
+        >
+          <option value="page">Single page</option>
+          <option value="centre">Whole help centre</option>
+        </select>
+        <select
+          value={urlHours}
+          onChange={(e) => setUrlHours(Number(e.target.value))}
+          title="How often it re-crawls"
+        >
           <option value={1}>every hour</option>
           <option value={24}>daily</option>
           <option value={168}>weekly</option>
@@ -2180,18 +2200,15 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
         <button
           className="btn sm"
           disabled={!url.trim() || addUrl.isPending || importCentre.isPending}
-          onClick={() => addUrl.mutate()}
+          onClick={() => (urlMode === 'page' ? addUrl : importCentre).mutate()}
         >
-          {addUrl.isPending ? 'Fetching…' : 'Add URL'}
+          {addUrl.isPending ? 'Fetching…' : importCentre.isPending ? 'Importing…' : 'Add'}
         </button>
-        <button
-          className="btn sm"
-          title="Paste a help centre root (Zendesk, or any site with a sitemap) — every article becomes a re-crawled URL source"
-          disabled={!url.trim() || addUrl.isPending || importCentre.isPending}
-          onClick={() => importCentre.mutate()}
-        >
-          {importCentre.isPending ? 'Importing…' : 'Import centre'}
-        </button>
+      </div>
+      <div className="muted" style={{ marginTop: 4, fontSize: 12.5 }}>
+        {urlMode === 'page'
+          ? 'Fetches this one page now and re-crawls it on the cadence — good for a pricing or FAQ page that changes.'
+          : 'Imports every article it finds: Zendesk help centres use their API directly; any other site is discovered via its sitemap. Each article becomes its own re-crawled source.'}
       </div>
       {importMsg && <div className="muted" style={{ marginTop: 4 }}>{importMsg}</div>}
       {error && <div className="error">{error}</div>}
