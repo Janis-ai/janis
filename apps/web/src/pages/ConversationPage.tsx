@@ -957,6 +957,25 @@ export default function ConversationPage() {
                   )}
                 </div>
               ))}
+              {(m.payload.widgets as { type: string; items?: unknown[]; fields?: unknown[]; steps?: unknown[]; rows?: unknown[] }[] | undefined)?.map(
+                (w, i) => (
+                  <div key={i} className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    ▦{' '}
+                    {w.type === 'cards'
+                      ? `cards — ${w.items?.length ?? 0} item(s)`
+                      : w.type === 'options'
+                        ? `picker — ${w.items?.length ?? 0} option(s)`
+                        : w.type === 'form'
+                          ? `form — ${w.fields?.length ?? 0} field(s)`
+                          : w.type === 'status'
+                            ? `tracker — ${w.steps?.length ?? 0} step(s)`
+                            : w.type === 'receipt'
+                              ? `receipt — ${w.rows?.length ?? 0} row(s)`
+                              : `${w.type} widget`}{' '}
+                    <span style={{ opacity: 0.7 }}>(renders as an interactive component in the widget)</span>
+                  </div>
+                ),
+              )}
             </div>
             {m.direction === 'out' && m.payload.inspector && (
               <div className="inspector-wrap">

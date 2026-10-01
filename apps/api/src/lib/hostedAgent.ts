@@ -15,6 +15,7 @@ import { getUpload } from './uploads.js';
 import { callTool, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
+import { extractWidgets } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -261,6 +262,19 @@ export function systemPrompt(
       '\nYou CAN offer tappable reply buttons — they render as real buttons on the customer\'s chat. When 2-4 short choices would move the conversation forward (e.g. picking a plan, yes/no, sharing an email vs learning more), end your reply with lines starting "BUTTON:" — one per choice, each under 20 characters (e.g. "BUTTON: See pricing"). They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps.' +
       '\nIf you need the customer\'s email or phone number, end your reply with a line "ASK: email" or "ASK: phone" — it becomes a one-tap share control where the channel supports it (otherwise they can type it). Still ask in the text — never rely on the control alone.',
     );
+    // Rich in-conversation widgets — webchat only (the embed renders them;
+    // other channels would carry dead payload, so don't teach it there).
+    if (chan === 'webchat') {
+      parts.push(
+        '\nOn this channel you can render an interactive component instead of describing it — a card beats a paragraph. Emit a line starting "WIDGET:" followed by one JSON object on the same line, anywhere in your reply; it is removed from the text and rendered for the customer. Shapes:' +
+          '\n{"type":"cards","items":[{"title","subtitle","image","price","link","link_label","select_label"}]} — product/plan carousel. "link" must be a URL from your context (opens it); "select_label" sends that text as the customer\'s message when tapped.' +
+          '\n{"type":"options","title","items":[{"label","description"}]} — tappable picker (time slots, plans, locations); tapping sends the label.' +
+          '\n{"type":"form","title","submit_label","fields":[{"name","label","type":"text|email|tel|textarea|select","options":[...],"required":true}]} — collects fields and submits them as a message you\'ll receive.' +
+          '\n{"type":"status","title","steps":[{"label","state":"done|current|todo","note"}]} — order/application tracker.' +
+          '\n{"type":"receipt","title","rows":[{"label","value"}],"total":{"label","value"}} — order summary.' +
+          '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.',
+      );
+    }
   }
   if (opts.forSuggestion) {
     parts.push(
@@ -1647,11 +1661,14 @@ async function replyAsHostedAgent(
       console.warn(`[hosted] slow generateReply conv=${convId} ${genMs}ms`);
     const { text: guardedReply, promptTokens, completionTokens, model } = gen;
     const { text: noLearns, learns } = extractLearns(stripTranscriptNotes(guardedReply));
-    const { text: reply, buttons } = extractButtons(noLearns);
+    const { text: noWidgets, widgets } = extractWidgets(noLearns);
+    const { text: reply, buttons } = extractButtons(noWidgets);
     const learnFlag = learns.length ? { learn: learns } : {};
     // model-emitted tappable choices ride payload.quick_replies → native
     // buttons on Messenger/WhatsApp, chips on webchat
     const buttonFlag = buttons.length ? { quick_replies: buttons } : {};
+    // interactive components render inside the widget on webchat
+    const widgetFlag = widgets.length ? { widgets } : {};
     // "Why did it say that?" — model/token/tool trace stamped on the stored
     // reply; the console renders it as the per-message inspector. Knowledge
     // comes from two prompt sources: curated snippets (config.knowledge,
@@ -1733,7 +1750,7 @@ async function replyAsHostedAgent(
         type: 'message_out',
         conversation_id: externalId,
         text: partial,
-        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag },
+        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
       });
       events.push({
         type: 'handoff_cancelled',
@@ -1754,7 +1771,7 @@ async function replyAsHostedAgent(
           type: 'message_out',
           conversation_id: externalId,
           text: partial,
-          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag },
+          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
         });
       }
       events.push({
@@ -1785,8 +1802,8 @@ async function replyAsHostedAgent(
           conversation_id: externalId,
           text: partial,
           payload: offeredBefore
-            ? { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag }
-            : { via: 'hosted', quick_replies: OFFER_CHOICES, ...linkFlag, ...inspectorFlag },
+            ? { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag }
+            : { via: 'hosted', quick_replies: OFFER_CHOICES, ...linkFlag, ...widgetFlag, ...inspectorFlag },
         });
       }
       if (!offeredBefore) {
@@ -1815,7 +1832,7 @@ async function replyAsHostedAgent(
         type: 'message_out',
         conversation_id: externalId,
         text: finalReply,
-        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...inspectorFlag },
+        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
       },
     ]);
     console.log(`[hosted] ${agent.name} replied in ${Date.now() - t0}ms`);

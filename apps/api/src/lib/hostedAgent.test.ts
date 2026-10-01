@@ -6,6 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, conversations, messages, uploads, workspaces } from '../db/schema.js';
 import { blessedUrlsFor, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripEscalationClaims, stripTranscriptNotes, transcriptFor } from './hostedAgent.js';
+import { extractWidgets } from './widgets.js';
 
 let db: Db;
 let convId: string;
@@ -391,6 +392,41 @@ describe('extractButtons', () => {
     );
     expect(r.text).toBe('Could I get your email?');
     expect(r.buttons).toEqual([{ type: 'email' }, 'skip for now', { type: 'phone' }]);
+  });
+});
+
+describe('extractWidgets', () => {
+  it('strips WIDGET lines into validated components', () => {
+    const r = extractWidgets(
+      'Here are the plans:\nWIDGET: {"type":"options","title":"Pick a slot","items":[{"label":"Tue 3pm"},{"label":"Wed 10am","description":"with Dr. Lee"}]}',
+    );
+    expect(r.text).toBe('Here are the plans:');
+    expect(r.widgets).toEqual([
+      {
+        type: 'options',
+        title: 'Pick a slot',
+        items: [{ label: 'Tue 3pm' }, { label: 'Wed 10am', description: 'with Dr. Lee' }],
+      },
+    ]);
+  });
+
+  it('drops malformed JSON and schema violations without leaking them', () => {
+    const r = extractWidgets(
+      'reply text\nWIDGET: {not json\nWIDGET: {"type":"options","items":[]}\nWIDGET: {"type":"nonsense"}',
+    );
+    expect(r.text).toBe('reply text');
+    expect(r.widgets).toEqual([]);
+  });
+
+  it('caps at 3 widgets and accepts every component type', () => {
+    const card = 'WIDGET: {"type":"cards","items":[{"title":"Shoe","price":"$40","link":"https://x.com/p","select_label":"Buy"}]}';
+    const form = 'WIDGET: {"type":"form","title":"Support","fields":[{"name":"email","label":"Email","type":"email","required":true}]}';
+    const status = 'WIDGET: {"type":"status","steps":[{"label":"Filed","state":"done"},{"label":"Review","state":"current"}]}';
+    const receipt = 'WIDGET: {"type":"receipt","rows":[{"label":"Shoes","value":"$40"}],"total":{"label":"Total","value":"$40"}}';
+    const r = extractWidgets(`x\n${card}\n${form}\n${status}\n${receipt}`);
+    // four emitted, capped at three — the receipt line is dropped
+    expect(r.widgets.map((w) => w.type)).toEqual(['cards', 'form', 'status']);
+    expect(r.text).toBe('x');
   });
 });
 

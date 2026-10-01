@@ -240,6 +240,47 @@
     '#janis-help:hover{text-decoration:underline}' +
     '.janis-loading{text-align:center;color:#9ca3af;font-size:12px;padding:18px 0}' +
     '#janis-form :disabled{opacity:.55;cursor:default}' +
+    // in-conversation widgets — agent-emitted interactive components
+    '.janis-w{margin-top:6px;font-size:13px}' +
+    '.janis-msg.janis-hasw{max-width:95%;min-width:180px}' +
+    '.janis-wcards{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}' +
+    '.janis-wcard{flex:0 0 150px;max-width:150px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;color:#1f2937;overflow:hidden}' +
+    '.janis-wcard img{width:100%;height:90px;object-fit:cover;display:block;margin:0!important;max-width:none!important;max-height:90px!important;border-radius:0}' +
+    '.janis-wcard-body{padding:8px}' +
+    '.janis-wcard-t{font-weight:600;font-size:13px;line-height:1.3}' +
+    '.janis-wcard-s{color:#6b7280;font-size:12px;margin-top:2px;line-height:1.3}' +
+    '.janis-wcard-p{font-weight:600;font-size:13px;margin-top:4px}' +
+    '.janis-wcard-btns{display:flex;gap:4px;padding:0 8px 8px;flex-wrap:wrap}' +
+    '.janis-wbtn{display:inline-block;border:1px solid var(--janis-accent);color:var(--janis-accent);background:#fff;' +
+    'border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit}' +
+    '.janis-wbtn.janis-wbtn-primary{background:var(--janis-accent);color:#fff}' +
+    '.janis-wtitle{font-weight:600;margin-bottom:6px;color:#374151}' +
+    '.janis-wopts{display:flex;flex-direction:column;gap:5px}' +
+    '.janis-wopt{display:block;text-align:left;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#1f2937;' +
+    'padding:7px 10px;font-size:13px;cursor:pointer;font-family:inherit}' +
+    '.janis-wopt:hover:not(:disabled){border-color:var(--janis-accent);color:var(--janis-accent)}' +
+    '.janis-wopt small{display:block;color:#6b7280;font-size:11.5px;margin-top:1px}' +
+    '.janis-wopt.janis-wsel{border-color:var(--janis-accent);background:var(--janis-accent);color:#fff}' +
+    '.janis-wopt.janis-wsel small{color:rgba(255,255,255,.8)}' +
+    '.janis-wopts.janis-wdone .janis-wopt:not(.janis-wsel){opacity:.5;pointer-events:none}' +
+    '.janis-wform{display:flex;flex-direction:column;gap:6px;min-width:200px}' +
+    '.janis-wform input,.janis-wform textarea,.janis-wform select{border:1px solid #d1d5db;border-radius:8px;' +
+    'padding:7px 10px;font-size:13px;font-family:inherit;background:#fff;color:#1f2937;outline:none;width:100%;box-sizing:border-box}' +
+    '.janis-wform input:focus,.janis-wform textarea:focus,.janis-wform select:focus{border-color:var(--janis-accent)}' +
+    '.janis-wform textarea{min-height:56px;resize:vertical}' +
+    '.janis-wform label{font-size:12px;color:#6b7280;display:block;margin-bottom:2px}' +
+    '.janis-wsent{color:#059669;font-size:12.5px;font-weight:600;padding:4px 0}' +
+    '.janis-wsteps{display:flex;flex-direction:column;gap:7px}' +
+    '.janis-wstep{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:#1f2937}' +
+    '.janis-wdot{flex:0 0 10px;width:10px;height:10px;border-radius:50%;margin-top:4px;background:#d1d5db}' +
+    '.janis-wstep.done .janis-wdot{background:#059669}' +
+    '.janis-wstep.current .janis-wdot{background:var(--janis-accent);box-shadow:0 0 0 3px rgba(91,33,182,.2)}' +
+    '.janis-wstep.todo{color:#9ca3af}' +
+    '.janis-wstep small{display:block;color:#6b7280;font-size:11.5px}' +
+    '.janis-wreceipt{border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#fff;color:#1f2937}' +
+    '.janis-wrow{display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:13px}' +
+    '.janis-wrow .janis-wv{text-align:right;font-weight:500;white-space:pre-line}' +
+    '.janis-wrow.janis-wtotal{border-top:1px solid #e5e7eb;margin-top:6px;padding-top:7px;font-weight:700}' +
     '#janis-badge{position:absolute;top:-5px;left:-5px;min-width:22px;height:22px;border-radius:11px;' +
     'background:#ef4444;color:#fff;font-size:12px;font-weight:700;line-height:22px;text-align:center;' +
     'padding:0 6px;box-sizing:border-box;display:none;box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:none}' +
@@ -616,7 +657,204 @@
       d.appendChild(span);
     }
     (m.attachments || []).forEach(function (a) { addAttachmentNode(d, a); });
+    if (m.direction === 'out' && m.widgets && m.widgets.length) renderWidgets(d, m.widgets);
     return d;
+  }
+
+  // ---- in-conversation widgets -------------------------------------------
+  // Agent-emitted interactive components (payload.widgets). DOM nodes only —
+  // content is model output and must never become markup. Interactions send
+  // back through sendText() as ordinary customer messages.
+
+  function wtext(parent, str) {
+    parent.appendChild(document.createTextNode(String(str)));
+  }
+
+  function wTitle(parent, title) {
+    if (!title) return;
+    var t = el('div', {}, { class: 'janis-wtitle' });
+    wtext(t, title);
+    parent.appendChild(t);
+  }
+
+  function renderCards(box, w) {
+    var row = el('div', {}, { class: 'janis-wcards' });
+    (w.items || []).forEach(function (item) {
+      var card = el('div', {}, { class: 'janis-wcard' });
+      if (item.image) {
+        card.appendChild(el('img', {}, { src: item.image, alt: '', loading: 'lazy' }));
+      }
+      var body = el('div', {}, { class: 'janis-wcard-body' });
+      var t = el('div', {}, { class: 'janis-wcard-t' });
+      wtext(t, item.title);
+      body.appendChild(t);
+      if (item.subtitle) {
+        var sEl = el('div', {}, { class: 'janis-wcard-s' });
+        wtext(sEl, item.subtitle);
+        body.appendChild(sEl);
+      }
+      if (item.price) {
+        var p = el('div', {}, { class: 'janis-wcard-p' });
+        wtext(p, item.price);
+        body.appendChild(p);
+      }
+      card.appendChild(body);
+      if (item.link || item.select_label) {
+        var btns = el('div', {}, { class: 'janis-wcard-btns' });
+        if (item.link) {
+          var a = el('a', {}, { class: 'janis-wbtn', href: item.link, target: '_blank', rel: 'noopener noreferrer' });
+          wtext(a, item.link_label || 'View');
+          btns.appendChild(a);
+        }
+        if (item.select_label) {
+          var b = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
+          wtext(b, item.select_label);
+          b.onclick = function () { sendText(item.select_label); };
+          btns.appendChild(b);
+        }
+        card.appendChild(btns);
+      }
+      row.appendChild(card);
+    });
+    box.appendChild(row);
+  }
+
+  function renderOptions(box, w) {
+    wTitle(box, w.title);
+    var list = el('div', {}, { class: 'janis-wopts' });
+    (w.items || []).forEach(function (item) {
+      var b = el('button', {}, { class: 'janis-wopt', type: 'button' });
+      wtext(b, item.label);
+      if (item.description) {
+        var sEl = document.createElement('small');
+        wtext(sEl, item.description);
+        b.appendChild(sEl);
+      }
+      b.onclick = function () {
+        list.classList.add('janis-wdone');
+        b.classList.add('janis-wsel');
+        sendText(item.label);
+      };
+      list.appendChild(b);
+    });
+    box.appendChild(list);
+  }
+
+  function renderForm(box, w) {
+    wTitle(box, w.title);
+    var form = el('div', {}, { class: 'janis-wform' });
+    var fields = [];
+    (w.fields || []).forEach(function (f) {
+      var lab = document.createElement('label');
+      wtext(lab, f.label + (f.required ? ' *' : ''));
+      var input;
+      if (f.type === 'textarea') {
+        input = document.createElement('textarea');
+      } else if (f.type === 'select' && f.options && f.options.length) {
+        input = document.createElement('select');
+        f.options.forEach(function (o) {
+          var opt = document.createElement('option');
+          opt.value = o;
+          wtext(opt, o);
+          input.appendChild(opt);
+        });
+      } else {
+        input = document.createElement('input');
+        input.type = f.type === 'email' ? 'email' : f.type === 'tel' ? 'tel' : 'text';
+      }
+      form.appendChild(lab);
+      form.appendChild(input);
+      fields.push({ f: f, input: input });
+    });
+    var submit = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
+    wtext(submit, w.submit_label || 'Submit');
+    submit.onclick = function () {
+      var pairs = [];
+      for (var i = 0; i < fields.length; i++) {
+        var v = fields[i].input.value.trim();
+        if (fields[i].f.required && !v) { fields[i].input.focus(); return; }
+        if (fields[i].f.type === 'email' && v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+          fields[i].input.focus();
+          return;
+        }
+        if (v) pairs.push(fields[i].f.label + ': ' + v);
+      }
+      if (!pairs.length) return;
+      // The submission lands as a normal customer message — the agent reads
+      // it like any other turn, no special wire needed.
+      var text = (w.title ? 'Form "' + w.title + '"' : 'Form') + ' — ' + pairs.join(' · ');
+      box.innerHTML = '';
+      var done = el('div', {}, { class: 'janis-wsent' });
+      wtext(done, 'Sent ✓');
+      box.appendChild(done);
+      sendText(text);
+    };
+    form.appendChild(submit);
+    box.appendChild(form);
+  }
+
+  function renderStatus(box, w) {
+    wTitle(box, w.title);
+    var list = el('div', {}, { class: 'janis-wsteps' });
+    (w.steps || []).forEach(function (st) {
+      var row = el('div', {}, { class: 'janis-wstep ' + (st.state || 'todo') });
+      row.appendChild(el('div', {}, { class: 'janis-wdot' }));
+      var txt = el('div', {});
+      wtext(txt, st.label);
+      if (st.note) {
+        var n = document.createElement('small');
+        wtext(n, st.note);
+        txt.appendChild(n);
+      }
+      row.appendChild(txt);
+      list.appendChild(row);
+    });
+    box.appendChild(list);
+  }
+
+  function renderReceipt(box, w) {
+    var card = el('div', {}, { class: 'janis-wreceipt' });
+    wTitle(card, w.title);
+    (w.rows || []).forEach(function (r) {
+      var row = el('div', {}, { class: 'janis-wrow' });
+      var l = el('span', {});
+      wtext(l, r.label);
+      var v = el('span', {}, { class: 'janis-wv' });
+      wtext(v, r.value);
+      row.appendChild(l);
+      row.appendChild(v);
+      card.appendChild(row);
+    });
+    if (w.total) {
+      var tr = el('div', {}, { class: 'janis-wrow janis-wtotal' });
+      var tl = el('span', {});
+      wtext(tl, w.total.label);
+      var tv = el('span', {}, { class: 'janis-wv' });
+      wtext(tv, w.total.value);
+      tr.appendChild(tl);
+      tr.appendChild(tv);
+      card.appendChild(tr);
+    }
+    box.appendChild(card);
+  }
+
+  function renderWidgets(msgEl, widgets) {
+    widgets.forEach(function (w) {
+      if (!w || typeof w !== 'object' || typeof w.type !== 'string') return;
+      try {
+        var box = el('div', {}, { class: 'janis-w janis-w-' + w.type });
+        if (w.type === 'cards') renderCards(box, w);
+        else if (w.type === 'options') renderOptions(box, w);
+        else if (w.type === 'form') renderForm(box, w);
+        else if (w.type === 'status') renderStatus(box, w);
+        else if (w.type === 'receipt') renderReceipt(box, w);
+        else return;
+        msgEl.classList.add('janis-hasw');
+        msgEl.appendChild(box);
+      } catch (e) {
+        // a malformed component must never break the transcript
+      }
+    });
   }
 
   function addMsg(m) {

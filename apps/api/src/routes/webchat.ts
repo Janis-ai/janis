@@ -707,6 +707,9 @@ export function webchatRoutes(db: Db) {
         client_id: (m.payload as { client_id?: string } | undefined)?.client_id,
         attachments: (m.payload as { attachments?: unknown[] } | undefined)?.attachments,
         quick_replies: (m.payload as { quick_replies?: QuickReply[] } | undefined)?.quick_replies,
+        // interactive components (cards, pickers, forms) — validated on
+        // ingest; the widget renders what it understands
+        widgets: (m.payload as { widgets?: unknown[] } | undefined)?.widgets,
         // approval card payload — serialized only for internal test channels
         // and signed-in concierge viewers; external embeds must never see
         // tool args (refund amounts, order ids)
