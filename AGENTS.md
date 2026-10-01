@@ -92,6 +92,94 @@ before typecheck/tests/dev.
 
 ## Open work — competitive gap tracker (updated 2026-10-01)
 
+**Launch backlog — consolidated plan index (the canonical list; detailed
+implementation notes live in the sections below)**
+
+*A. External gates — manual, clock-bound (Mike's track; every day delayed
+is a day on launch)*
+1. `www.janis.ai` cutover — the hard campaign gate. Cloud Run domain
+   mapping, OAuth redirect re-registration (Google/Slack/Meta consoles),
+   Stripe webhook re-registration, DNS, CORS tighten, cookie flags. Old
+   app stays up for legacy clients.
+2. Verify + export the 17k legacy list (Mongo export) — campaign prep is
+   fiction without it.
+3. IG App Review — submit `instagram_manage_messages` screencast +
+   business verification (scope already declared in meta.ts).
+4. Zapier publishing tail — toggle existing Zaps off/on (old polling
+   triggers → REST hooks now), 2 more users via Sharing-tab invite, ToS
+   checkbox.
+5. Twilio — paid account, A2P 10DLC brand + campaign registration, non-US
+   regulatory bundles.
+6. Azure app registration → `MS_*` envs (unblocks Outlook — code DONE).
+7. WorkOS account → SSO/SCIM (code DONE, env-gated).
+8. Stripe yearly Prices (live+test) → `STRIPE_*_YEARLY` + `TRIAL_DAYS`
+   envs (checkout code DONE).
+9. `JANIS_SEARCH_API_KEY` — platform web-search tool key (unset, dead).
+
+*B. Quick wins — ALL DONE or moot* (10 plan-meter + /billing/status ✓,
+11 Agents View/Manage ✓, 12 per-event notify prefs grid ✓, 13 DB_POOL_MAX
+✓, 14 JOB_CONCURRENCY ✓, 15 migrate-as-pre-deploy-step ✓, 16 .env.example
+full pass ✓, 17 dep cleanup — @esbuild-kit/glob are transitive via
+drizzle-kit/workbox-build, nothing to drop directly).
+
+*C. Medium features (~1 session each)*
+18. Discovery cards → Ask Janis — railBus.seed, ?rail=ask&q= deeplink,
+    concierge knowledge CTAs, card-click tracking (needs 22).
+19. Language Model tab — provider cards (platform/OpenAI/Gemini/custom),
+    BYOK base_url-without-key guard.
+20. Editor reorg remainder — Branding tab (agent-level webchat
+    meta.branding editor + mock preview), finish knowledge split.
+21. Webhook recipes in Docs — ManyChat/GHL HTTP-Request → POST /v1/events
+    handoff recipe.
+22. `analytics_events` + POST /api/track — in-product activation events
+    (GA4 covers the funnel; this feeds 18's click tracking).
+23. DONE — in-process state audit closed (convLock advisory lock, voice
+    queue table, Meta OAuth stateless; remaining Maps are caches).
+
+*D. Ops/reliability — needs console access or ceremony*
+24. Neon PITR rehearsal — runbook below, unrehearsed.
+25. k6 load test run + documented ceiling — scripts/load-test.js exists.
+26. DONE — Cloud Monitoring → Slack live (status/monitoring below).
+
+*E. Product depth tail (pull by customer demand)*
+27. Eval tail — missing: run-diff dashboards, multi-model compare.
+    (Scheduled runs, regression alerts, history, rescue→test suggestions
+    all DONE — closest-to-done differentiator.)
+28. Intent tail — sentiment, auto-topic clustering, confidence scores.
+29. Help center tail — version history, widget article embeds.
+30. Rate-limit tail — widget CAPTCHA after N, blocklist, per-plan tiers.
+31. Channels tail — shared-email multi-address fan-out (answer_rules
+    PARTIAL), WhatsApp template manager UI + business verification,
+    voicemail/IVR/recording consent/transcripts, Outlook (blocked on A6).
+32. Autonomous agent-led campaigns — rails exist (send policy, drip
+    conditions, conversion attribution); last.
+
+*F. Writing/marketing (non-code)*
+33. Reactivation email sequence — 3 emails (approvals-led), subjects/
+    preview/CTA → app.janis.ai.
+34. docs/marketing/reactivation/RUNBOOK.md exists — verify against the
+    checklist (export steps, send tool, UTMs, community posts,
+    import-legacy workflow, metrics).
+35. Agency economics decision — "what does my 12th client cost?"
+36. Proof assets — 2–3 testimonials, logo wall, vs-Chatbase/Intercom
+    comparison pages, trust/security page.
+37. `/for/:slug` landing variants — copy written; ship when campaign
+    data shows platform skew.
+
+*G. Gated/deferred (correctly parked)*
+38. Per-agent member scope — agent_members scoping/'hidden' role exists;
+    full enforcement audit on first real agency ask.
+39. drizzle-orm →1.0 when final.
+40. Campaign holdout groups — on customer ask.
+41. Enterprise — SOC 2 (Vanta/Drata), data residency, RBAC granularity
+    beyond admin/member/viewer. (SSO/SCIM code-complete, GDPR
+    export/delete DONE.)
+
+*Loose ends*
+42. `janis-zapier-logo.png` shows deleted in git — confirm intentional.
+43. Three `big-j*.png` untracked in apps/web/public/img/ — commit or gitignore?
+44. Optional: zapier-platform-core 19 bump before directory submission.
+
 **Infra / reliability**
 - Multi-instance: DONE — bus_events SSE relay, viewers + voice_queue tables,
   sweeper_locks leader election (sweeps, gmail poll, digests). Deploy raises
@@ -443,10 +531,11 @@ before typecheck/tests/dev.
   offenders, per-plan cap tiers.
 - Reply-claim verifier (TODO): prompt rules only reduce unfounded claims —
   a model can say "here are the cards/plans" when no tool ran and no widget
-  was emitted. Fix: post-gen check detecting card/picker-claim phrasing in
-  concierge replies where toolCalls is empty and payload.widgets absent,
-  strip or rewrite the claim. Triggered by a real incident where the
-  concierge described cards it never rendered.
+  was emitted. Fix: post-gen check detecting card/picker/action-claim
+  phrasing in any hosted reply where toolCalls is empty and
+  payload.widgets absent → strip or rewrite the claim. Triggered by real
+  incidents (concierge describing cards it never rendered; agent-only
+  WIDGET replies previously escalated).
 - Load test: scripts/load-test.js (k6) — staged 10→150 RPS on health +
   session-auth'd reads, p95<800ms / <1% errors thresholds; run against a
   preview revision, never prod at 150rps without warning. Read-only by
@@ -552,10 +641,8 @@ before typecheck/tests/dev.
   (needs an evaluator pass); weekly-digest card (scheduled concierge
   summary); usage-limit + failed-payment cards (need Stripe state in
   the concierge prompt); Shopify link-out card (not a mutation).
-- Model-honesty backstop: concierge replies can still CLAIM a card was
-  posted without a tool call (only prompt rules + stripTranscriptNotes
-  mitigate today). Verifier idea: detect card-claim phrasing in concierge
-  replies when zero card tools ran → strip or rewrite the claim.
+- Model-honesty backstop: see "Reply-claim verifier" under Reliability —
+  same check applies to concierge card-claim phrasing.
 
 **Done so far** (don't rebuild): voice (BYO + hosted via Twilio subaccounts),
 CSAT on archive, Shopify/HubSpot/Zendesk/Stripe/Cal.com/iTunes/webhook tool
