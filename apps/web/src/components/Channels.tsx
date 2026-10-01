@@ -909,10 +909,10 @@ function WidgetPreview({
         <div className="wp-foot" style={{ background: pal.panel, borderTopColor: pal.border }}>
           <span className="wp-ico" style={{ color: pal.muted }}>📎</span>
           <span className="wp-ico" style={{ color: pal.muted }}>😊</span>
+          <span className="wp-input" style={{ color: pal.muted }}>Type a message…</span>
           <span className="wp-ico" style={{ color: pal.muted, display: 'flex' }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
           </span>
-          <span className="wp-input" style={{ color: pal.muted }}>Type a message…</span>
           <span className="wp-send" style={{ background: accent }}>Send</span>
         </div>
         {hasHelp && (

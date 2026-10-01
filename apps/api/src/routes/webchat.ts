@@ -7,13 +7,14 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channelBindings, channels, conversations, helpArticles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations, helpArticles, memberships, messages, sessions, usageEvents, users, workspaces } from '../db/schema.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
 import type { QuickReply } from '@janis/shared';
 import type { ChannelCredentials, InboundMessage } from '../lib/channels.js';
 import { resolveGreeting } from '../lib/greeting.js';
 import { effectivePlanKey } from '../lib/plans.js';
+import { currentPeriod } from '../lib/billing.js';
 import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
 import { adoptVisitorConversation, handleChannelMessage } from '../services/channelIngress.js';
 import { bus } from '../lib/bus.js';
@@ -385,6 +386,60 @@ export function webchatRoutes(db: Db) {
       data: Buffer.from(await file.arrayBuffer()),
     });
     return c.json(ref, 201);
+  });
+
+  // Widget/rail dictation — MediaRecorder audio transcribed server-side via
+  // OpenAI. Deliberately not Web Speech API on the client: Chrome's path
+  // silently no-ops where its speech service is unreachable (VPNs, DNS
+  // filters, on-device packs), and Firefox lacks the API entirely. The
+  // channel token is the credential; the chat-token-upload limiter caps spend.
+  // gpt-4o-mini-transcribe ≈ $0.003/min — usage rows recorded for later
+  // metering, not yet Stripe-reported.
+  app.post('/:token/transcribe', async (c) => {
+    const channel = await findChannel(db, c.req.param('token'));
+    if (!channel) return c.json({ error: 'not found' }, 404);
+    // Lazy read so tests can inject a key after module load.
+    const key =
+      process.env.OPENAI_LLM_API_KEY ||
+      env.llmVendorKeys.openai?.api_key ||
+      (env.llmBaseUrl.includes('api.openai.com') ? env.llmApiKey : '');
+    if (!key) return c.json({ error: 'transcription not configured' }, 503);
+    const body = await c.req.parseBody();
+    const file = body['audio'];
+    if (!(file instanceof File)) return c.json({ error: 'audio field required' }, 400);
+    if (file.size > MAX_UPLOAD_BYTES) return c.json({ error: 'audio too large (max 10MB)' }, 413);
+    if (!file.size) return c.json({ text: '' });
+
+    const fd = new FormData();
+    fd.append('file', file, file.name || 'dictation.webm');
+    fd.append('model', 'gpt-4o-mini-transcribe');
+    fd.append('response_format', 'verbose_json');
+    const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}` },
+      body: fd,
+    });
+    if (!r.ok) {
+      console.warn('[stt] openai', r.status, (await r.text()).slice(0, 300));
+      return c.json({ error: 'transcription failed' }, 502);
+    }
+    const out = (await r.json()) as { text?: string; duration?: number };
+    const seconds = Math.min(Math.max(out.duration ?? 0, 0), 600);
+    if (seconds > 0) {
+      try {
+        await db.insert(usageEvents).values({
+          workspaceId: channel.workspaceId,
+          agentId: channel.agentId,
+          kind: 'stt_seconds',
+          quantity: Math.ceil(seconds),
+          costMicros: Math.ceil(seconds * 50), // $0.003/min → 50µ/s
+          period: currentPeriod(),
+        });
+      } catch (e) {
+        console.warn('[stt] usage row failed:', e);
+      }
+    }
+    return c.json({ text: (out.text ?? '').trim() });
   });
 
   // Poll for messages. ?visitor_id= identifies anonymous browsers; a session

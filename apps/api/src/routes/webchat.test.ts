@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import { createHmac } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, channels, conversations, helpArticles, memberships, messages, sessions, slackInstallations, slackThreads, users, workspaces } from '../db/schema.js';
+import { agents, channels, conversations, helpArticles, memberships, messages, sessions, slackInstallations, slackThreads, usageEvents, users, workspaces } from '../db/schema.js';
 import { generateApiKey, sha256 } from '../lib/crypto.js';
 import { markOperatorTyping } from '../lib/typingState.js';
 import { takeover, humanReply } from '../services/takeover.js';
@@ -1239,5 +1239,58 @@ describe('webchat transcript polish', () => {
     ).json()) as { messages: { direction: string; text: string }[] };
     const human = body.messages.filter((m) => m.direction === 'human');
     expect(human.map((m) => m.text)).toEqual(['visible reply']);
+  });
+});
+
+describe('dictation transcribe', () => {
+  const postAudio = (token: string, withFile = true) => {
+    const fd = new FormData();
+    if (withFile) fd.append('audio', new File(['fakeaudio'], 'dictation.webm', { type: 'audio/webm' }));
+    return app.request(`/chat/${token}/transcribe`, { method: 'POST', body: fd });
+  };
+
+  it('forwards audio to OpenAI and returns the transcript', async () => {
+    const prev = process.env.OPENAI_LLM_API_KEY;
+    process.env.OPENAI_LLM_API_KEY = 'sk-test-stt';
+    let seenAuth = '';
+    let seenModel = '';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        seenAuth = (init?.headers as Record<string, string>).Authorization;
+        seenModel = (init?.body as FormData).get('model') as string;
+        return new Response(JSON.stringify({ text: 'hello world', duration: 2.5 }));
+      }),
+    );
+    try {
+      const r = await postAudio(channelId);
+      expect(r.status).toBe(200);
+      expect(await r.json()).toEqual({ text: 'hello world' });
+      expect(seenAuth).toBe('Bearer sk-test-stt');
+      expect(seenModel).toBe('gpt-4o-mini-transcribe');
+      const [u] = await db.select().from(usageEvents).where(eq(usageEvents.kind, 'stt_seconds'));
+      expect(u.quantity).toBe(3); // 2.5s → ceil
+      expect(u.costMicros).toBe(125); // 2.5s × 50µ/s
+      expect(u.workspaceId).toBe(wsId);
+    } finally {
+      process.env.OPENAI_LLM_API_KEY = prev;
+    }
+  });
+
+  it('rejects a missing audio field and an unknown channel', async () => {
+    process.env.OPENAI_LLM_API_KEY = 'sk-test-stt';
+    expect((await postAudio(channelId, false)).status).toBe(400);
+    // well-formed uuid that doesn't match a channel
+    expect((await postAudio('00000000-0000-4000-8000-000000000000')).status).toBe(404);
+  });
+
+  it('503s when no OpenAI key is configured', async () => {
+    const prev = process.env.OPENAI_LLM_API_KEY;
+    delete process.env.OPENAI_LLM_API_KEY;
+    try {
+      expect((await postAudio(channelId)).status).toBe(503);
+    } finally {
+      process.env.OPENAI_LLM_API_KEY = prev;
+    }
   });
 });

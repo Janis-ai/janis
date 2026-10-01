@@ -163,6 +163,14 @@ export function createApp(db: Db) {
     methods: ['POST'],
     key: (c) => c.req.param('token') ?? 'unknown',
   }));
+  // Dictation burns OpenAI per call — same per-token hourly budget as uploads.
+  app.use('/chat/:token/transcribe', dbRateLimit(db, {
+    scope: 'chat-token-transcribe',
+    windowMs: 3_600_000,
+    max: env.chatTokenUploadHourlyMax,
+    methods: ['POST'],
+    key: (c) => c.req.param('token') ?? 'unknown',
+  }));
   // Public read surfaces — in-memory ceilings are enough here (scrape
   // deterrence, not spend protection).
   app.use('/api/help/*', rateLimit({ scope: 'help', windowMs: 60_000, max: 120 }));

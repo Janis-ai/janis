@@ -280,8 +280,8 @@
     '<form id="janis-form">' +
     '<button id="janis-clip" class="janis-ico" type="button" aria-label="Attach a file" title="Attach a file">📎</button>' +
     '<button id="janis-smile" class="janis-ico" type="button" aria-label="Emoji" title="Emoji">😊</button>' +
-    '<button id="janis-mic" class="janis-ico" type="button" aria-label="Dictate a message" title="Dictate"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg></button>' +
     '<textarea id="janis-input" placeholder="Type a message…" rows="1"></textarea>' +
+    '<button id="janis-mic" class="janis-ico" type="button" aria-label="Dictate a message" title="Dictate"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg></button>' +
     '<button id="janis-send" type="submit">Send</button></form>' +
     '<input id="janis-file" type="file" multiple />' +
     '<a id="janis-help" target="_blank" rel="noopener" style="display:none">Browse help articles</a>' +
@@ -1008,65 +1008,99 @@
   });
 
   // ---- dictation ------------------------------------------------------------
-  // Web Speech API — Chrome/Edge/Safari only; the mic hides where
-  // recognition doesn't exist (Firefox) rather than dead-ending on click.
+  // MediaRecorder → POST /chat/:token/transcribe (server-side OpenAI
+  // transcription). Deliberately not the Web Speech API: Chrome's path
+  // silently produces nothing where its speech service is unreachable, and
+  // Firefox lacks the API entirely. The mic hides only where mic capture
+  // itself is unavailable.
   var micBtn = panel.querySelector('#janis-mic');
-  var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-  var recog = null;
-  var dictBase = ''; // committed text — interim results render after it
-  if (!SpeechRec) {
+  var canDictate = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
+    window.MediaRecorder && window.FormData);
+  var mediaRec = null;
+  var micStream = null;
+  var micTimer = null;
+  var transcribing = false;
+  var basePlaceholder = input.placeholder;
+  function micNote(msg) {
+    micBtn.classList.add('err');
+    micBtn.title = msg;
+    setTimeout(function () {
+      micBtn.classList.remove('err');
+      micBtn.title = 'Dictate';
+    }, 3000);
+    input.placeholder = msg;
+    setTimeout(function () {
+      if (input.placeholder === msg) input.placeholder = basePlaceholder;
+    }, 4000);
+  }
+  function stopDictation() {
+    if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
+  }
+  if (!canDictate) {
     micBtn.style.display = 'none';
   } else {
     micBtn.addEventListener('click', function () {
-      if (recog) { recog.stop(); return; }
-      try {
-        recog = new SpeechRec();
-        recog.continuous = true;
-        recog.interimResults = true;
-        recog.lang = navigator.language || 'en-US';
-        dictBase = input.value;
-        recog.onresult = function (e) {
-          var finals = '', interim = '';
-          for (var i = e.resultIndex; i < e.results.length; i++) {
-            var alt = e.results[i][0];
-            if (!alt) continue;
-            if (e.results[i].isFinal) finals += alt.transcript;
-            else interim += alt.transcript;
-          }
-          if (finals) dictBase = (dictBase ? dictBase.replace(/\s+$/, '') + ' ' : '') + finals.trim();
-          input.value = dictBase + (interim ? (dictBase ? ' ' : '') + interim : '');
-          autoresize();
-          sendTyping();
-          syncSend();
-        };
-        var done = function () {
-          recog = null;
+      if (transcribing) return;
+      if (mediaRec) { stopDictation(); return; }
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+        micStream = stream;
+        var chunks = [];
+        var rec;
+        try {
+          rec = new MediaRecorder(stream);
+        } catch (e) {
+          stream.getTracks().forEach(function (t) { t.stop(); });
+          micStream = null;
+          return;
+        }
+        mediaRec = rec;
+        rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+        rec.onstop = function () {
+          mediaRec = null;
+          if (micTimer) { clearTimeout(micTimer); micTimer = null; }
           micBtn.classList.remove('on');
           micBtn.setAttribute('aria-label', 'Dictate a message');
+          if (micStream) {
+            micStream.getTracks().forEach(function (t) { t.stop(); });
+            micStream = null;
+          }
+          if (!chunks.length) return;
+          var blob = new Blob(chunks, { type: chunks[0].type || 'audio/webm' });
+          var ext = /mp4|m4a|aac/.test(blob.type) ? 'm4a' : /ogg/.test(blob.type) ? 'ogg' : 'webm';
+          var fd = new FormData();
+          fd.append('audio', blob, 'dictation.' + ext);
+          transcribing = true;
+          input.placeholder = 'Transcribing…';
+          fetch(API + '/chat/' + TOKEN + '/transcribe', { method: 'POST', body: fd })
+            .then(function (r) {
+              if (!r.ok) return Promise.reject(r.status);
+              return r.json();
+            })
+            .then(function (d) {
+              var said = ((d && d.text) || '').trim();
+              if (said) {
+                input.value = (input.value ? input.value.replace(/\s+$/, '') + ' ' : '') + said;
+                autoresize();
+                syncSend();
+              } else {
+                micNote('Did not catch that — try again');
+              }
+            })
+            .catch(function () { micNote('Transcription failed — try again'); })
+            .finally(function () {
+              transcribing = false;
+              if (input.placeholder === 'Transcribing…') input.placeholder = basePlaceholder;
+            });
         };
-        recog.onend = done;
-        recog.onerror = function (e) {
-          var code = e && e.error;
-          done();
-          if (!code || code === 'aborted') return;
-          console.warn('[janis] dictation ended:', code);
-          micBtn.classList.add('err');
-          setTimeout(function () { micBtn.classList.remove('err'); }, 3000);
-          micBtn.title = code === 'not-allowed' || code === 'service-not-allowed'
-            ? 'Microphone access denied'
-            : code === 'audio-capture'
-              ? 'No microphone found'
-              : code === 'network'
-                ? 'Dictation could not reach the speech service'
-                : 'Did not catch that — try again';
-          var prev = input.placeholder;
-          input.placeholder = micBtn.title;
-          setTimeout(function () { input.placeholder = prev; }, 4000);
-        };
-        recog.start();
+        rec.start();
         micBtn.classList.add('on');
         micBtn.setAttribute('aria-label', 'Stop dictating');
-      } catch (e) { recog = null; }
+        // hard cap — keeps a forgotten mic from recording for hours
+        micTimer = setTimeout(stopDictation, 90 * 1000);
+        input.focus();
+      }).catch(function (err) {
+        micNote(err && err.name === 'NotAllowedError' ? 'Microphone access denied' : 'No microphone found');
+      });
     });
   }
 

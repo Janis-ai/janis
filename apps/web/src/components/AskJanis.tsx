@@ -177,11 +177,16 @@ export function AskJanis({
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  // Dictation — Web Speech API (Chrome/Edge/Safari); the mic button hides
-  // where recognition is unavailable instead of dead-ending on click.
-  const recRef = useRef<{ stop: () => void } | null>(null);
-  const dictBase = useRef('');
+  // Dictation — MediaRecorder → server-side transcription (POST
+  // /chat/:id/transcribe). Deliberately not Web Speech: Chrome's path
+  // silently produces nothing where its speech service is unreachable, and
+  // Firefox lacks the API entirely. Mic hides only where capture is
+  // unavailable.
+  const recRef = useRef<MediaRecorder | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const micTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dictating, setDictating] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   // Transient dictation-failure note — shown in place of the placeholder.
   const [dictNote, setDictNote] = useState<string | null>(null);
   const seen = useRef(new Set<string>());
@@ -370,81 +375,94 @@ export function AskJanis({
     el.style.overflowY = el.scrollHeight > 110 ? 'auto' : 'hidden';
   };
 
-  type SpeechResult = { isFinal: boolean; 0?: { transcript: string } };
-  type SpeechRec = {
-    continuous: boolean;
-    interimResults: boolean;
-    lang: string;
-    onresult: ((e: { resultIndex: number; results: ArrayLike<SpeechResult> }) => void) | null;
-    onend: (() => void) | null;
-    onerror: ((e: { error?: string }) => void) | null;
-    start: () => void;
-    stop: () => void;
+  const canDictate =
+    typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices?.getUserMedia &&
+    typeof MediaRecorder !== 'undefined';
+
+  const flashDictNote = (note: string) => {
+    setDictNote(note);
+    setTimeout(() => setDictNote(null), 4000);
   };
-  const SpeechCtor = (
-    window as unknown as {
-      SpeechRecognition?: new () => SpeechRec;
-      webkitSpeechRecognition?: new () => SpeechRec;
-    }
-  ).SpeechRecognition ??
-    (window as unknown as { webkitSpeechRecognition?: new () => SpeechRec }).webkitSpeechRecognition;
 
   const toggleDictate = () => {
+    if (transcribing) return;
     if (recRef.current) {
-      recRef.current.stop();
+      if (recRef.current.state !== 'inactive') recRef.current.stop();
       return;
     }
-    if (!SpeechCtor) return;
-    const r = new SpeechCtor();
-    r.continuous = true;
-    r.interimResults = true;
-    r.lang = navigator.language || 'en-US';
-    dictBase.current = text;
-    r.onresult = (e) => {
-      let finals = '';
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const alt = e.results[i][0];
-        if (!alt) continue;
-        if (e.results[i].isFinal) finals += alt.transcript;
-        else interim += alt.transcript;
-      }
-      if (finals) dictBase.current = (dictBase.current.replace(/\s+$/, '') + (dictBase.current ? ' ' : '') + finals.trim());
-      setText(dictBase.current + (interim ? (dictBase.current ? ' ' : '') + interim : ''));
-      autoresize();
-    };
-    const done = () => {
-      recRef.current = null;
-      setDictating(false);
-    };
-    r.onend = done;
-    r.onerror = (e) => {
-      const code = e?.error;
-      done();
-      if (!code || code === 'aborted') return;
-      console.warn('[ask-janis] dictation ended:', code);
-      const note =
-        code === 'not-allowed' || code === 'service-not-allowed'
-          ? 'Microphone access denied'
-          : code === 'audio-capture'
-            ? 'No microphone found'
-            : code === 'network'
-              ? 'Dictation could not reach the speech service'
-              : 'Did not catch that — try again';
-      setDictNote(note);
-      setTimeout(() => setDictNote(null), 4000);
-    };
-    try {
-      r.start();
-      recRef.current = r;
-      setDictating(true);
-    } catch {
-      /* permission denied or unsupported context — leave the button idle */
-    }
+    if (!canDictate) return;
+    navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then((stream) => {
+        micStreamRef.current = stream;
+        const chunks: Blob[] = [];
+        let rec: MediaRecorder;
+        try {
+          rec = new MediaRecorder(stream);
+        } catch {
+          stream.getTracks().forEach((t) => t.stop());
+          micStreamRef.current = null;
+          return;
+        }
+        recRef.current = rec;
+        rec.ondataavailable = (e) => {
+          if (e.data.size) chunks.push(e.data);
+        };
+        rec.onstop = () => {
+          recRef.current = null;
+          setDictating(false);
+          if (micTimerRef.current) {
+            clearTimeout(micTimerRef.current);
+            micTimerRef.current = null;
+          }
+          micStreamRef.current?.getTracks().forEach((t) => t.stop());
+          micStreamRef.current = null;
+          if (!chunks.length) return;
+          const blob = new Blob(chunks, { type: chunks[0].type || 'audio/webm' });
+          const ext = /mp4|m4a|aac/.test(blob.type) ? 'm4a' : /ogg/.test(blob.type) ? 'ogg' : 'webm';
+          const fd = new FormData();
+          fd.append('audio', blob, `dictation.${ext}`);
+          setTranscribing(true);
+          setDictNote('Transcribing…');
+          fetch(`/chat/${channelId}/transcribe`, { method: 'POST', body: fd })
+            .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+            .then((d: { text?: string }) => {
+              const said = (d.text ?? '').trim();
+              if (said) {
+                setText((t) => (t ? t.replace(/\s+$/, '') + ' ' : '') + said);
+                requestAnimationFrame(autoresize);
+              } else {
+                flashDictNote('Did not catch that — try again');
+              }
+            })
+            .catch(() => flashDictNote('Transcription failed — try again'))
+            .finally(() => {
+              setTranscribing(false);
+              setDictNote((n) => (n === 'Transcribing…' ? null : n));
+            });
+        };
+        rec.start();
+        setDictating(true);
+        // hard cap — keeps a forgotten mic from recording for hours
+        micTimerRef.current = setTimeout(() => {
+          if (rec.state !== 'inactive') rec.stop();
+        }, 90_000);
+        inputRef.current?.focus();
+      })
+      .catch((err: { name?: string }) => {
+        flashDictNote(err?.name === 'NotAllowedError' ? 'Microphone access denied' : 'No microphone found');
+      });
   };
 
   // Rail closing mid-dictation shouldn't keep the mic live.
-  useEffect(() => () => recRef.current?.stop(), []);
+  useEffect(
+    () => () => {
+      if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop();
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    },
+    [],
+  );
 
   const insertEmoji = (em: string) => {
     const el = inputRef.current;
@@ -799,17 +817,6 @@ export function AskJanis({
         <div className="ask-input-row">
           <button className="btn" title="Emoji" disabled={!loaded} onClick={() => setEmojiOpen((o) => !o)}><Smile size={15} /></button>
           <button className="btn" title="Attach" disabled={!loaded} onClick={() => fileRef.current?.click()}><Paperclip size={15} /></button>
-          {SpeechCtor && (
-            <button
-              className="btn"
-              title={dictating ? 'Stop dictating' : 'Dictate'}
-              disabled={!loaded}
-              style={dictating ? { color: 'var(--danger)' } : undefined}
-              onClick={toggleDictate}
-            >
-              {dictating ? <MicOff size={15} /> : <Mic size={15} />}
-            </button>
-          )}
           <input
             ref={fileRef}
             type="file"
@@ -821,6 +828,17 @@ export function AskJanis({
             }}
           />
           <span className="grow" />
+          {canDictate && (
+            <button
+              className="btn"
+              title={dictating ? 'Stop dictating' : 'Dictate'}
+              disabled={!loaded || transcribing}
+              style={dictating ? { color: 'var(--danger)' } : undefined}
+              onClick={toggleDictate}
+            >
+              {dictating ? <MicOff size={15} /> : <Mic size={15} />}
+            </button>
+          )}
           <button
             className="btn primary"
             disabled={!loaded || sending || (!text.trim() && !pending.some((p) => !p.uploading))}
