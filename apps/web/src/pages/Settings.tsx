@@ -1193,17 +1193,31 @@ function EventTokenCard() {
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <strong>Goal tracking</strong>
       <div className="muted" style={{ fontSize: 13 }}>
-        Report business outcomes (purchase, signup, booked) from your systems —
-        attributed to the contact's most recent campaign send so campaigns show
-        real ROI.
+        When a contact buys, books or signs up, tell Janis — we credit the
+        campaign that last messaged them, so campaign stats show conversions
+        and revenue, not just sends.
       </div>
       {token ? (
-        <CodeBlock
-          title="Report a conversion"
-          code={`curl -XPOST ${url} -H 'content-type: application/json' -d '{"event":"purchase","email":"who@co.com"}'`}
-        />
+        <>
+          <div className="muted" style={{ fontSize: 13 }}>
+            Your webhook URL is <code>{url}</code> — POST it a JSON body like{' '}
+            <code>{'{"event":"purchase","email":"who@co.com","value_cents":4999}'}</code>.
+            Identify the contact with <code>email</code>, <code>phone</code> or{' '}
+            <code>external_id</code>; <code>value_cents</code> is optional.
+          </div>
+          <div className="muted" style={{ fontSize: 13 }}>
+            From Zapier or Make: add a <em>Webhooks → POST</em> step, paste the URL
+            and map the fields — no code needed.
+          </div>
+          <CodeBlock
+            title="Test it from a terminal"
+            code={`curl -XPOST ${url} -H 'content-type: application/json' -d '{"event":"purchase","email":"who@co.com"}'`}
+          />
+        </>
       ) : (
-        <div className="muted" style={{ fontSize: 13 }}>No token yet — mint one to get the URL.</div>
+        <div className="muted" style={{ fontSize: 13 }}>
+          Mint a token to get your webhook URL.
+        </div>
       )}
       <div className="row">
         <button className="btn" disabled={rotate.isPending} onClick={() => rotate.mutate()}>

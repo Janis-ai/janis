@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { campaignSends, conversionEvents } from '../db/schema.js';
+import { campaignSends, conversionEvents, workspaces } from '../db/schema.js';
 import { upsertContactByAddress } from '../lib/contacts.js';
 import { queueCrmActivity } from '../lib/crm.js';
 import { dbRateLimit } from '../lib/rateLimit.js';
@@ -45,10 +45,11 @@ export function eventRoutes(db: Db) {
     async (c) => {
       const body = c.req.valid('json');
       // Token lives in workspaces.config.event_token — jsonb lookup.
-      const { rows } = await db.execute(
-        sql`select id from workspaces where config->>'event_token' = ${c.req.param('token')} limit 1`,
-      );
-      const found = (rows as unknown as { id: string }[])[0];
+      const [found] = await db
+        .select({ id: workspaces.id })
+        .from(workspaces)
+        .where(sql`config->>'event_token' = ${c.req.param('token')}`)
+        .limit(1);
       if (!found) return c.json({ error: 'not found' }, 404);
       const workspaceId = found.id;
 
