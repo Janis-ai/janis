@@ -1064,11 +1064,15 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
             <button
               className="btn sm"
               onClick={() =>
-                act('/email-domain/verify', {}, (d) =>
-                  d.status === 'verified'
-                    ? 'Verified — replies can send from this domain.'
-                    : `Still ${d.status ?? 'pending'} — ${records.filter((r) => r.status === 'verified').length} of ${records.length} records confirmed. DNS can take a few minutes.`,
-                )
+                act('/email-domain/verify', {}, (d) => {
+                  if (d.status === 'verified')
+                    return 'Verified — replies can send from this domain.';
+                  // count from the fresh response — `records` state is still
+                  // the pre-verify snapshot at this point
+                  const recs = d.records ?? records;
+                  const confirmed = recs.filter((r) => r.status === 'verified').length;
+                  return `Still ${d.status ?? 'pending'} — ${confirmed} of ${recs.length} records confirmed. DNS can take a few minutes.`;
+                })
               }
             >
               Verify DNS
