@@ -757,6 +757,9 @@ export const StreamEvent = z.discriminatedUnion('type', [
     type: z.literal('eval'),
     data: z.object({ agent_id: z.string(), batch_id: z.string(), regressed: z.boolean() }),
   }),
+  // An agent's config changed out-of-band (concierge teach_agent/create_agent)
+  // — open agent pages refetch so the KB and gap views aren't stale.
+  z.object({ type: z.literal('agent'), data: z.object({ id: z.string() }) }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEvent>;
 

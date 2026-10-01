@@ -21,6 +21,7 @@ import { llmSpendOverCap } from './usage.js';
 import { ensureStripeCustomer, planForPrice, stripe } from './stripe.js';
 import { generateWebhookSecret } from './crypto.js';
 import { audit } from './audit.js';
+import { bus } from './bus.js';
 import { invalidateChannelCache } from './channels.js';
 import {
   createSlackChannel,
@@ -444,6 +445,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         targetId: row.id,
         meta: { name: row.name, hosted: true, via: 'concierge' },
       });
+      // Open agent pages on the visitor's workspace refresh over SSE.
+      bus.publish(ws.id, { type: 'agent', data: { id: row.id } });
       return JSON.stringify({
         created: true,
         agent_id: row.id,
@@ -1009,6 +1012,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         targetId: agent.id,
         meta: { via: 'concierge', entries: added },
       });
+      // Open agent pages on the visitor's workspace refresh over SSE.
+      bus.publish(ws.id, { type: 'agent', data: { id: agent.id } });
       return JSON.stringify({
         ok: true,
         added,
