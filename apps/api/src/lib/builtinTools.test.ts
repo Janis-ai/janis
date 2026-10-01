@@ -753,6 +753,68 @@ describe('update_agent builtin', () => {
     await db.update(agents).set({ name: 'Bot2' }).where(eq(agents.id, a.id));
   });
 
+  it('accent + email_alerts park a card; approving writes channel creds and member prefs', async () => {
+    const [bot2pre] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    const [webChan] = await db
+      .insert(channels)
+      .values({
+        workspaceId: WS2,
+        agentId: bot2pre.id,
+        kind: 'webchat',
+        name: 'Web chat',
+      })
+      .returning();
+    const out = await update().run(
+      { workspace: 'free', agent: 'bot2', accent: '#635bff', email_alerts: 'true' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_agent_config' && p.status === 'pending');
+    expect((pa!.args as { accent?: string }).accent).toBe('#635bff');
+    const applied = JSON.parse(
+      await applyCfg().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(applied.ok).toBe(true);
+    expect(applied.applied).toContain('accent');
+    expect(applied.applied).toContain('email_alerts');
+    const [chan] = await db.select().from(channels).where(eq(channels.id, webChan.id));
+    expect(chan).toBeTruthy();
+    expect((chan.credentials as { accent?: string }).accent).toBe('#635bff');
+    const { agentMembers } = await import('../db/schema.js');
+    const [mrow] = await db
+      .select()
+      .from(agentMembers)
+      .where(and(eq(agentMembers.agentId, bot2pre.id), eq(agentMembers.userId, USER2)));
+    expect((mrow.notifyPrefs as { email?: boolean }).email).toBe(true);
+    // blank accent clears the creds key
+    const cleared = JSON.parse(
+      await applyCfg().run(
+        { workspace_id: WS2, agent_id: bot2pre.id, accent: '' },
+        { db, convId: CONV2, workspaceId: WS },
+      ),
+    );
+    expect(cleared.ok).toBe(true);
+    const [chan2] = await db.select().from(channels).where(eq(channels.id, webChan.id));
+    expect((chan2.credentials as { accent?: string }).accent).toBeUndefined();
+  });
+
+  it('rejects a bad accent colour before parking', async () => {
+    const bad = JSON.parse(
+      await update().run({ workspace: 'free', agent: 'bot2', accent: 'blue!' }, cctx(CONV2)),
+    );
+    expect(bad.error).toContain('hex colour');
+  });
+
   it('rejects empty patches and executor strips disallowed keys', async () => {
     const empty = JSON.parse(
       await update().run({ workspace: 'free', agent: 'bot2' }, cctx(CONV2)),
@@ -768,5 +830,112 @@ describe('update_agent builtin', () => {
       { db, convId: CONV2, workspaceId: WS },
     );
     expect(raw).toContain('disallowed');
+  });
+});
+
+describe('teach_from_conversation + assign_conversation builtins', () => {
+  const teachFrom = () => BUILTIN_TOOLS.find((b) => b.name === 'teach_from_conversation')!;
+  const assign = () => BUILTIN_TOOLS.find((b) => b.name === 'assign_conversation')!;
+  const applyAssign = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_assignment')!;
+  let targetConv: string;
+
+  it('read mode returns the transcript; entry mode parks a Teach card on the conv agent', async () => {
+    // teach only applies to hosted agents — give WS2 one to rescue against
+    const [hostBot] = await db
+      .insert(agents)
+      .values({ workspaceId: WS2, name: 'Host Bot', hosted: true })
+      .returning();
+    const [rescued] = await db
+      .insert(conversations)
+      .values({
+        agentId: hostBot.id,
+        externalId: 'cust:rescue@example.com',
+        userProfile: { name: 'Rescue Customer', email: 'rescue@example.com' },
+        state: 'active',
+      })
+      .returning();
+    targetConv = rescued.id;
+    await db.insert(messages).values([
+      { conversationId: rescued.id, direction: 'in', text: 'do you ship to Norway?' },
+      { conversationId: rescued.id, direction: 'human', text: 'Yes — Norway ships in 3-5 days.' },
+    ]);
+    const readRaw = await teachFrom().run(
+      { workspace: 'free', conversation: 'rescue@example.com' },
+      cctx(CONV2),
+    );
+    const read = JSON.parse(readRaw);
+    expect(read.agent, readRaw).toBe('Host Bot');
+    // same-timestamp test rows — assert content, not order
+    expect(read.transcript.map((m: { dir: string }) => m.dir).sort()).toEqual(['customer', 'human']);
+    expect(read.transcript.map((m: { text: string }) => m.text)).toContain(
+      'Yes — Norway ships in 3-5 days.',
+    );
+    const out = await teachFrom().run(
+      {
+        workspace: 'free',
+        conversation: 'rescue@example.com',
+        entry: 'We ship to Norway — delivery takes 3-5 days.',
+      },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_knowledge' && p.status === 'pending');
+    expect((pa!.args as { agent_id: string }).agent_id).toBe(hostBot.id);
+    const [cardMsg] = await db.select().from(messages).where(eq(messages.id, pa!.messageId!));
+    const disp = (cardMsg.payload as { action: { display: { source?: string } } }).action.display;
+    expect(disp.source).toContain('Rescue Customer');
+  });
+
+  it('assign_conversation parks a card; approving sets the assignee', async () => {
+    const out = await assign().run(
+      { workspace: 'free', conversation: 'rescue@example.com', assignee: 'me' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_assignment' && p.status === 'pending');
+    expect((pa!.args as { assignee_id: string }).assignee_id).toBe(USER2);
+    const applied = JSON.parse(
+      await applyAssign().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(applied.ok).toBe(true);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, targetConv));
+    expect(conv.assigneeId).toBe(USER2);
+    // Re-park on the same assignee is refused at the tool layer.
+    const dupe = JSON.parse(
+      await assign().run(
+        { workspace: 'free', conversation: 'rescue@example.com', assignee: 'me' },
+        cctx(CONV2),
+      ),
+    );
+    expect(dupe.error).toContain('already assigned');
+  });
+
+  it('assign rejects an assignee outside the workspace', async () => {
+    const bad = JSON.parse(
+      await assign().run(
+        { workspace: 'free', conversation: 'rescue@example.com', assignee: 'nobody' },
+        cctx(CONV2),
+      ),
+    );
+    expect(bad.error).toContain("isn't a member");
   });
 });

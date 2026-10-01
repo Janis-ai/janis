@@ -499,6 +499,40 @@ before typecheck/tests/dev.
 - Onboarding checklist: DONE (Onboarding.tsx + /api/onboarding). Still missing:
   public API/SDK docs, security/trust page, pricing/comparison pages.
 
+**Concierge ops — Ask Janis action catalogue (added 2026-10-01)**
+- Live tools (writers): create_agent, teach_agent→apply_knowledge,
+  add_routing_rule→apply_routing_rule, update_agent→apply_agent_config
+  (name/greeting/CSAT/quick_replies/help_url), change_plan; all park
+  concierge approval cards (parkConciergeAction) that never page Slack.
+  Reads: web_search, account_status, workspace_stats, debug_conversation,
+  knowledge_gaps. SSE: agent events invalidate agents/channels/channel/
+  knowledge/knowledge-gaps/rules/ask-janis-config; workspace events
+  invalidate workspace/me/billing/billing-status.
+- Queued — cheap (config allowlist, same card path): widget accent colour
+  (channels.meta.branding.accent on the agent's webchat channel),
+  escalation email.
+- Queued — medium (new tool + executor, same plumbing):
+  rescued-conversation → teach card; waiting-conversation → assign-to-me
+  card; help-article draft → publish card; contact delete card
+  (GDPR-scoped, admin-only — mirror routes/contacts delete semantics).
+- Queued — ops breadth (cards for existing mutations): conversation
+  tag/note/close/bulk-close cards; knowledge edit/delete + dismiss-gap
+  (teach only adds); rule edit/disable/delete (create-only today);
+  contact merge + export cards; "run eval suite" card with pass/fail
+  result; member admin (invite/remove teammate) cards.
+- Queued — trust: undo/revert window on mutating cards (store inverse
+  payload in pending_actions.args; offer "Revert" while safe).
+- Deferred — need upstream machinery first: eval-regression revert
+  (needs prompt version history); campaign send/schedule cards (needs
+  concierge-facing campaign lifecycle); repeated-wrong-answer detection
+  (needs an evaluator pass); weekly-digest card (scheduled concierge
+  summary); usage-limit + failed-payment cards (need Stripe state in
+  the concierge prompt); Shopify link-out card (not a mutation).
+- Model-honesty backstop: concierge replies can still CLAIM a card was
+  posted without a tool call (only prompt rules + stripTranscriptNotes
+  mitigate today). Verifier idea: detect card-claim phrasing in concierge
+  replies when zero card tools ran → strip or rewrite the claim.
+
 **Done so far** (don't rebuild): voice (BYO + hosted via Twilio subaccounts),
 CSAT on archive, Shopify/HubSpot/Zendesk/Stripe/Cal.com/iTunes/webhook tool
 templates, operator metrics report, routing automations (keyword/inactivity/

@@ -2,6 +2,7 @@ import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, or, sql } from 'driz
 import type { Db } from '../db/client.js';
 import {
   agents,
+  agentMembers,
   alerts,
   alertRules,
   channelBindings,
@@ -133,6 +134,61 @@ async function workspaceMembers(db: Db, wsId: string) {
     .from(memberships)
     .innerJoin(users, eq(memberships.userId, users.id))
     .where(and(eq(memberships.workspaceId, wsId), isNotNull(memberships.acceptedAt)));
+}
+
+/** Find one conversation inside a workspace by UUID or a customer name/
+ *  email/external-id search string. Shared by the concierge's conversation
+ *  tools — debug (read), teach-from (write) and assign. */
+async function findVisitorConversation(
+  db: Db,
+  ws: WorkspaceRow,
+  q: string,
+): Promise<
+  | { conv: typeof conversations.$inferSelect }
+  | { error: string; matches?: { id: string; name: string; last_message_at: Date | null }[] }
+> {
+  const wsAgentIds = (
+    await db.select({ id: agents.id }).from(agents).where(eq(agents.workspaceId, ws.id))
+  ).map((a) => a.id);
+  if (!wsAgentIds.length) return { error: `${ws.name} has no agents` };
+
+  if (UUID.test(q)) {
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.id, q), inArray(conversations.agentId, wsAgentIds)))
+      .limit(1);
+    if (!conv) return { error: `no conversation ${q} in ${ws.name}` };
+    return { conv };
+  }
+  const pat = `%${q}%`;
+  const hits = await db
+    .select()
+    .from(conversations)
+    .where(
+      and(
+        inArray(conversations.agentId, wsAgentIds),
+        or(
+          ilike(conversations.externalId, pat),
+          ilike(sql`${conversations.userProfile}->>'email'`, pat),
+          ilike(sql`${conversations.userProfile}->>'name'`, pat),
+        ),
+      ),
+    )
+    .orderBy(desc(conversations.lastMessageAt))
+    .limit(6);
+  if (!hits.length) return { error: `no conversations matching "${q}" in ${ws.name}` };
+  if (hits.length > 1) {
+    return {
+      error: 'multiple matches — be more specific or use the conversation id',
+      matches: hits.slice(0, 5).map((h) => ({
+        id: h.id,
+        name: (h.userProfile as { name?: string })?.name ?? h.externalId,
+        last_message_at: h.lastMessageAt,
+      })),
+    };
+  }
+  return { conv: hits[0] };
 }
 
 /** Stable stringify for flat exec-args — jsonb sorts keys on read. */
@@ -766,52 +822,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if (!q) return JSON.stringify({ error: 'pass a conversation id or a name/email to search for' });
 
       // Find the conversation inside the visitor's workspace only.
-      const wsAgentIds = (
-        await ctx.db
-          .select({ id: agents.id })
-          .from(agents)
-          .where(eq(agents.workspaceId, ws.id))
-      ).map((a) => a.id);
-      if (!wsAgentIds.length) return JSON.stringify({ error: `${ws.name} has no agents` });
-
-      let conv: typeof conversations.$inferSelect | undefined;
-      if (UUID.test(q)) {
-        [conv] = await ctx.db
-          .select()
-          .from(conversations)
-          .where(and(eq(conversations.id, q), inArray(conversations.agentId, wsAgentIds)))
-          .limit(1);
-        if (!conv) return JSON.stringify({ error: `no conversation ${q} in ${ws.name}` });
-      } else {
-        const pat = `%${q}%`;
-        const hits = await ctx.db
-          .select()
-          .from(conversations)
-          .where(
-            and(
-              inArray(conversations.agentId, wsAgentIds),
-              or(
-                ilike(conversations.externalId, pat),
-                ilike(sql`${conversations.userProfile}->>'email'`, pat),
-                ilike(sql`${conversations.userProfile}->>'name'`, pat),
-              ),
-            ),
-          )
-          .orderBy(desc(conversations.lastMessageAt))
-          .limit(6);
-        if (!hits.length) return JSON.stringify({ error: `no conversations matching "${q}" in ${ws.name}` });
-        if (hits.length > 1) {
-          return JSON.stringify({
-            error: 'multiple matches — be more specific or use the conversation id',
-            matches: hits.slice(0, 5).map((h) => ({
-              id: h.id,
-              name: (h.userProfile as { name?: string })?.name ?? h.externalId,
-              last_message_at: h.lastMessageAt,
-            })),
-          });
-        }
-        conv = hits[0];
-      }
+      const found = await findVisitorConversation(ctx.db, ws, q);
+      if ('error' in found) return JSON.stringify(found);
+      const conv = found.conv;
 
       const [agent] = await ctx.db
         .select()
@@ -1373,9 +1386,253 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     },
   },
   {
+    name: 'teach_from_conversation',
+    description:
+      "Teach an agent from a real conversation — 'that rescue was good, add it to the bot's knowledge'. Call with just `conversation` (uuid or customer name/email) to read the transcript first, then call again with `entry` — one line per fact the human resolved — to post a Teach card against that conversation's agent. Admin-only to park.",
+    params: {
+      conversation: 'conversation UUID or customer name/email (required)',
+      entry: 'the confirmed knowledge entry text — one line per fact (omit to read the transcript first)',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const q = (args.conversation ?? '').trim();
+      if (!q) return JSON.stringify({ error: 'pass a conversation id or a name/email to search for' });
+      const found = await findVisitorConversation(ctx.db, ws, q);
+      if ('error' in found) return JSON.stringify(found);
+      const conv = found.conv;
+      const [agent] = await ctx.db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, conv.agentId))
+        .limit(1);
+      if (!agent) return JSON.stringify({ error: 'conversation has no agent' });
+      if (!agent.hosted) {
+        return JSON.stringify({
+          error: `${agent.name} isn't a hosted agent — knowledge entries only apply to Janis-hosted agents`,
+        });
+      }
+      const customer =
+        (conv.userProfile as { name?: string; email?: string })?.name ??
+        (conv.userProfile as { email?: string })?.email ??
+        conv.externalId;
+      const entry = String(args.entry ?? '').trim();
+      if (!entry) {
+        // Read mode — hand the concierge the transcript so it can draft the
+        // entry from what the human actually resolved.
+        const recent = await ctx.db
+          .select({ direction: messages.direction, text: messages.text, payload: messages.payload })
+          .from(messages)
+          .where(eq(messages.conversationId, conv.id))
+          .orderBy(desc(messages.createdAt))
+          .limit(30);
+        const transcript = recent
+          .filter((m) => !(m.payload as { internal?: boolean } | null)?.internal)
+          .reverse()
+          .slice(-20)
+          .map((m) => ({ dir: m.direction === 'in' ? 'customer' : m.direction === 'out' ? 'agent' : 'human', text: m.text }));
+        return JSON.stringify({
+          conversation_id: conv.id,
+          customer,
+          agent: agent.name,
+          url: `${env.webOrigin}/conversations/${conv.id}`,
+          transcript,
+          next: 'draft one knowledge line per fact the human supplied, then call again with entry to post the approval card',
+        });
+      }
+      // Normalise now so the card shows exactly what would land (mirrors
+      // teach_agent — strip list/markdown decoration).
+      const entries = entry
+        .split('\n')
+        .map((l) => l.trim().replace(/^[-*•]\s+/, '').replace(/\*\*/g, ''))
+        .filter(Boolean);
+      if (!entries.length) return JSON.stringify({ error: 'entry text is required' });
+      const known = new Set(
+        Array.isArray((agent.config as { knowledge?: unknown } | null)?.knowledge)
+          ? ((agent.config as { knowledge: string[] }).knowledge ?? [])
+          : [],
+      );
+      const freshEntries = entries.filter((e) => !known.has(e));
+      if (!freshEntries.length) {
+        return 'already_known: every proposed line is already in that agent\'s knowledge — tell the visitor it\'s already covered';
+      }
+      return parkConciergeAction(
+        ctx,
+        'apply_knowledge',
+        {
+          workspace_id: ws.id,
+          agent_id: agent.id,
+          entry: freshEntries.join('\n'),
+          source_conversation: conv.id,
+        },
+        `Teach ${agent.name}`,
+        {
+          agent: agent.name,
+          entry: freshEntries.join('\n'),
+          source: `from ${customer}'s chat`,
+          url: `${env.webOrigin}/conversations/${conv.id}`,
+        },
+      );
+    },
+  },
+  {
+    name: 'assign_conversation',
+    description:
+      "Assign a conversation in the visitor's workspace to a teammate — 'put that waiting one on me' or 'give it to Ann'. Posts an approval card; on approve the inbox assigns it and refreshes live. Any member can propose.",
+    params: {
+      conversation: 'conversation UUID or customer name/email (required)',
+      assignee: "teammate name — 'me' assigns the approver (default: me)",
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace);
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const q = (args.conversation ?? '').trim();
+      if (!q) return JSON.stringify({ error: 'pass a conversation id or a name/email to search for' });
+      const found = await findVisitorConversation(ctx.db, ws, q);
+      if ('error' in found) return JSON.stringify(found);
+      const conv = found.conv;
+      const [agent] = await ctx.db
+        .select({ name: agents.name })
+        .from(agents)
+        .where(eq(agents.id, conv.agentId))
+        .limit(1);
+      const members = await workspaceMembers(ctx.db, ws.id);
+      const assigneeHint = (args.assignee ?? 'me').trim().toLowerCase();
+      const assignee =
+        assigneeHint === 'me'
+          ? { id: user.id, name: user.name ?? 'you' }
+          : members.find((m) => m.name?.toLowerCase() === assigneeHint) ??
+            members.find((m) => (m.name ?? '').toLowerCase().includes(assigneeHint));
+      if (!assignee) {
+        return JSON.stringify({
+          error: `"${args.assignee}" isn't a member of ${ws.name} — members: ${members.map((m) => m.name).join(', ')}`,
+        });
+      }
+      const customer =
+        (conv.userProfile as { name?: string; email?: string })?.name ??
+        (conv.userProfile as { email?: string })?.email ??
+        conv.externalId;
+      if (conv.assigneeId === assignee.id) {
+        return JSON.stringify({
+          error: `${customer}'s conversation is already assigned to ${assignee.name}`,
+        });
+      }
+      return parkConciergeAction(
+        ctx,
+        'apply_assignment',
+        {
+          workspace_id: ws.id,
+          conversation_id: conv.id,
+          assignee_id: assignee.id,
+        },
+        `Assign ${customer}`,
+        {
+          conversation: customer,
+          agent: agent?.name,
+          assignee: assignee.name,
+          url: `${env.webOrigin}/conversations/${conv.id}`,
+        },
+      );
+    },
+  },
+  {
+    // Executor for approved assign_conversation cards — hidden from the model.
+    name: 'apply_assignment',
+    description: 'internal — executes an approved assign_conversation action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs workspace membership';
+      const wsAgentIds = (
+        await ctx.db.select({ id: agents.id }).from(agents).where(eq(agents.workspaceId, wsId))
+      ).map((a) => a.id);
+      if (!wsAgentIds.length) return 'error: workspace has no agents';
+      const [conv] = await ctx.db
+        .select()
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.id, String(args.conversation_id ?? '')),
+            inArray(conversations.agentId, wsAgentIds),
+          ),
+        )
+        .limit(1);
+      if (!conv) return 'error: conversation not found in that workspace';
+      const assigneeId = String(args.assignee_id ?? '');
+      const [stillMember] = await ctx.db
+        .select({ id: memberships.userId, name: users.name })
+        .from(memberships)
+        .innerJoin(users, eq(memberships.userId, users.id))
+        .where(
+          and(
+            eq(memberships.userId, assigneeId),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+          ),
+        )
+        .limit(1);
+      if (!stillMember) return 'error: the assignee is no longer a member of that workspace';
+      await ctx.db
+        .update(conversations)
+        .set({ assigneeId })
+        .where(eq(conversations.id, conv.id));
+      const customer =
+        (conv.userProfile as { name?: string; email?: string })?.name ??
+        (conv.userProfile as { email?: string })?.email ??
+        conv.externalId;
+      await audit(ctx.db, {
+        workspaceId: wsId,
+        userId: user.id,
+        userName: user.name,
+        action: 'conversation.assign',
+        targetType: 'conversation',
+        targetId: conv.id,
+        meta: { via: 'concierge', assignee: assigneeId },
+      });
+      bus.publish(wsId, {
+        type: 'conversation',
+        data: { id: conv.id, state: conv.state },
+      });
+      return JSON.stringify({
+        ok: true,
+        summary: `Assigned ${customer}'s conversation to ${stillMember.name ?? 'the teammate'}.`,
+      });
+    },
+  },
+  {
     name: 'update_agent',
     description:
-      "Propose an agent settings change in the visitor's workspace — rename, greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes. Posts an approval card — nothing changes until the visitor approves. Admin-only.",
+      "Propose an agent settings change in the visitor's workspace — rename, greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes, auto-assign, widget accent colour, or email alerts. Posts an approval card — nothing changes until the visitor approves. Admin-only.",
     params: {
       agent: 'agent name (required)',
       name: 'new agent name — renames the agent',
@@ -1386,6 +1643,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       csat_prompt: 'the survey question text',
       csat_thanks: 'the reply sent after a survey answer',
       sla_minutes: 're-alert when a handoff stays unclaimed for N minutes (1-1440)',
+      auto_assign: 'true/false — route handoffs to the least-loaded teammate',
+      accent: 'widget accent/bubble colour, e.g. #635bff (webchat only)',
+      email_alerts: "true/false — email the approver this agent's escalation alerts",
       workspace: 'workspace name — only needed when ambiguous',
     },
     available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
@@ -1462,12 +1722,42 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         patch.sla_minutes = mins;
         display.re_alert_after = `${mins} min`;
       }
+      if (args.auto_assign !== undefined) {
+        patch.auto_assign = bool(args.auto_assign);
+        display.auto_assign = patch.auto_assign ? 'on' : 'off';
+      }
+      // Widget accent lives on the webchat channel's credentials, not
+      // agents.config — it travels as its own exec arg like `rename`.
+      const accent = args.accent !== undefined ? String(args.accent).trim().slice(0, 40) : '';
+      if (args.accent !== undefined) {
+        if (accent && !/^#[0-9a-f]{3,8}$/i.test(accent)) {
+          return JSON.stringify({ error: 'accent must be a hex colour like #635bff' });
+        }
+        display.accent = accent || '(default)';
+      }
+      // Email alerts are the approver's own per-agent notify override — an
+      // agent_members write, also outside agents.config.
+      const emailAlerts = args.email_alerts !== undefined ? bool(args.email_alerts) : undefined;
+      if (emailAlerts !== undefined) display.email_alerts = emailAlerts ? 'on' : 'off';
       const willRename = rename !== '' && rename !== agent.name;
-      if (!Object.keys(patch).length && !willRename) {
+      if (
+        !Object.keys(patch).length &&
+        !willRename &&
+        args.accent === undefined &&
+        emailAlerts === undefined
+      ) {
         return JSON.stringify({
-          error: 'nothing to change — pass at least one of name, greeting, greeting_enabled, quick_replies, csat_*, sla_minutes',
+          error: 'nothing to change — pass at least one of name, greeting, greeting_enabled, quick_replies, csat_*, sla_minutes, auto_assign, accent, email_alerts',
         });
       }
+      const extras =
+        !Object.keys(patch).length && !willRename
+          ? accent
+            ? 'Recolour'
+            : 'Update'
+          : willRename && !Object.keys(patch).length
+            ? 'Rename'
+            : 'Update';
       return parkConciergeAction(
         ctx,
         'apply_agent_config',
@@ -1476,8 +1766,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           agent_id: agent.id,
           patch,
           ...(willRename ? { rename } : {}),
+          ...(args.accent !== undefined ? { accent } : {}),
+          ...(emailAlerts !== undefined ? { email_alerts: String(emailAlerts) } : {}),
         },
-        willRename && !Object.keys(patch).length ? `Rename ${agent.name}` : `Update ${agent.name}`,
+        `${extras} ${agent.name}`,
         display,
       );
     },
@@ -1513,13 +1805,33 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if (!agent) return 'error: agent not found';
       // Re-validate the proposed patch against the shared schema — an
       // approved card must never write keys the console wouldn't accept.
-      const ALLOWED = ['greeting', 'greeting_enabled', 'quick_replies', 'csat', 'sla_minutes'];
+      const ALLOWED = [
+        'greeting',
+        'greeting_enabled',
+        'quick_replies',
+        'csat',
+        'sla_minutes',
+        'auto_assign',
+      ];
       const patch = (args.patch ?? {}) as unknown as Record<string, unknown>;
       const clean = Object.fromEntries(
         Object.entries(patch).filter(([k]) => ALLOWED.includes(k)),
       );
       const rename = String(args.rename ?? '').trim().slice(0, 80);
-      if (!Object.keys(clean).length && !rename) return 'error: empty or disallowed patch';
+      const accent = args.accent !== undefined ? String(args.accent).trim().slice(0, 40) : null;
+      const emailAlerts =
+        args.email_alerts !== undefined ? args.email_alerts === 'true' : undefined;
+      if (
+        !Object.keys(clean).length &&
+        !rename &&
+        accent === null &&
+        emailAlerts === undefined
+      ) {
+        return 'error: empty or disallowed patch';
+      }
+      if (accent !== null && accent !== '' && !/^#[0-9a-f]{3,8}$/i.test(accent)) {
+        return 'error: accent must be a hex colour like #635bff';
+      }
       if (Object.keys(clean).length) {
         const check = AgentConfig.partial().safeParse(clean);
         if (!check.success) return `error: invalid settings — ${check.error.issues[0]?.message}`;
@@ -1527,9 +1839,50 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const set: Record<string, unknown> = {};
       if (Object.keys(clean).length) set.config = { ...(agent.config as object), ...clean };
       if (rename && rename !== agent.name) set.name = rename;
-      if (!Object.keys(set).length) return 'error: nothing to change';
-      await ctx.db.update(agents).set(set).where(eq(agents.id, agent.id));
+      if (Object.keys(set).length) {
+        await ctx.db.update(agents).set(set).where(eq(agents.id, agent.id));
+      }
       const applied = [...Object.keys(clean), ...(rename && rename !== agent.name ? ['name'] : [])];
+      if (accent !== null) {
+        // Widget accent is channel credentials, not agent config — repaint
+        // every webchat channel the agent fronts.
+        const webChans = await ctx.db
+          .select({ id: channels.id, credentials: channels.credentials })
+          .from(channels)
+          .where(and(eq(channels.agentId, agent.id), eq(channels.kind, 'webchat')));
+        for (const ch of webChans) {
+          const creds = { ...((ch.credentials ?? {}) as Record<string, unknown>) };
+          if (accent === '') delete creds.accent;
+          else creds.accent = accent;
+          await ctx.db
+            .update(channels)
+            .set({ credentials: creds })
+            .where(eq(channels.id, ch.id));
+        }
+        invalidateChannelCache();
+        applied.push('accent');
+      }
+      if (emailAlerts !== undefined) {
+        // The decider's own per-agent notify override — null fields inherit
+        // their workspace prefs, so merge only the email flag.
+        const [self] = await ctx.db
+          .select({ notifyPrefs: agentMembers.notifyPrefs })
+          .from(agentMembers)
+          .where(
+            and(eq(agentMembers.agentId, agent.id), eq(agentMembers.userId, user.id)),
+          )
+          .limit(1);
+        const prefs = { ...((self?.notifyPrefs ?? {}) as Record<string, unknown>), email: emailAlerts };
+        await ctx.db
+          .insert(agentMembers)
+          .values({ agentId: agent.id, userId: user.id, notifyPrefs: prefs, acceptedAt: new Date() })
+          .onConflictDoUpdate({
+            target: [agentMembers.agentId, agentMembers.userId],
+            set: { notifyPrefs: prefs },
+          });
+        applied.push('email_alerts');
+      }
+      if (!applied.length) return 'error: nothing to change';
       const newName = rename && rename !== agent.name ? rename : agent.name;
       await audit(ctx.db, {
         workspaceId: wsId,
