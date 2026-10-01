@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, conversations, messages, uploads, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, stripEscalationClaims, stripTranscriptNotes, transcriptFor } from './hostedAgent.js';
+import { blessedUrlsFor, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripEscalationClaims, stripTranscriptNotes, transcriptFor } from './hostedAgent.js';
 
 let db: Db;
 let convId: string;
@@ -297,6 +297,60 @@ describe('stripEscalationClaims', () => {
     ]) {
       expect(stripEscalationClaims(s).stripped).toBe(0);
     }
+  });
+});
+
+describe('rankDocs', () => {
+  const docs = [
+    { name: 'Shipping policy', text: 'We ship worldwide. Parcels leave the warehouse within 2 business days.' },
+    { name: 'Returns', text: 'Returns are accepted within 30 days of delivery. Start a return from your account page.' },
+    { name: 'Billing FAQ', text: 'Invoices are issued monthly. Update your card under Settings → Billing.' },
+  ];
+
+  it('ranks the doc matching the conversation first', () => {
+    const r = rankDocs(docs, 'hi — how do I return an order? does the return window apply?');
+    expect(r[0].name).toBe('Returns');
+  });
+
+  it('title hits outrank incidental body mentions', () => {
+    const withIncidental = [
+      { name: 'Getting started', text: 'Billing billing billing billing is mentioned a lot here.' },
+      { name: 'Billing FAQ', text: 'One billing note.' },
+    ];
+    const r = rankDocs(withIncidental, 'billing question');
+    expect(r[0].name).toBe('Billing FAQ');
+  });
+
+  it('keeps original order when the query matches nothing or is absent', () => {
+    expect(rankDocs(docs, 'zqxwv unmatchable jjj').map((d) => d.name)).toEqual(
+      docs.map((d) => d.name),
+    );
+    expect(rankDocs(docs, '').map((d) => d.name)).toEqual(docs.map((d) => d.name));
+  });
+
+  it('zero-score docs trail ranked ones as budget filler', () => {
+    const r = rankDocs(docs, 'return policy please');
+    // Returns first, the two unmatched docs keep their original order after.
+    expect(r.map((d) => d.name)).toEqual(['Returns', 'Shipping policy', 'Billing FAQ']);
+  });
+});
+
+describe('knowledgeQueryFor', () => {
+  it('uses recent customer messages plus the conversation summary', () => {
+    const conv = { agentSummary: 'customer is asking about a refund' } as Parameters<
+      typeof knowledgeQueryFor
+    >[1];
+    const q = knowledgeQueryFor(
+      [
+        { role: 'user', content: 'first question' },
+        { role: 'assistant', content: 'answer' },
+        { role: 'user', content: 'where is my refund' },
+      ],
+      conv,
+    );
+    expect(q).toContain('refund');
+    expect(q).toContain('first question');
+    expect(q).not.toContain('answer');
   });
 });
 

@@ -11,6 +11,7 @@ import {
   extractLearns,
   generateReply,
   llmFor,
+  knowledgeQueryFor,
   loadKnowledgeDocs,
   systemPrompt,
   type AgentRunContext,
@@ -190,7 +191,13 @@ export async function runAgentTest(
   const llm = await llmFor(db, agent);
   if (!llm.apiKey) return { ...base, reason: 'no LLM configured for this agent' };
 
-  const docs = await loadKnowledgeDocs(db, agent.id);
+  const history = turns.map((t) => ({
+    role: t.role === 'customer' ? 'user' : 'assistant',
+    content: t.text,
+  }));
+  // Retrieve against the test's customer turns — evals should see the same
+  // knowledge slice a live conversation would.
+  const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history));
   // same grounding summary the "why this reply" inspector stamps
   const acfg = (agent.config ?? {}) as { knowledge?: unknown; system_prompt?: string };
   const context = {
@@ -211,10 +218,6 @@ export async function runAgentTest(
     suggesting: true,
   };
   const prompt = systemPrompt(agent, docs);
-  const history = turns.map((t) => ({
-    role: t.role === 'customer' ? 'user' : 'assistant',
-    content: t.text,
-  }));
   const cfg = (agent.config ?? {}) as { builtin_tools?: string[] };
   const gen = await generateReply(
     llm,

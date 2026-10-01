@@ -30,10 +30,75 @@ import { acquireConvLock, newestInboundIsPending } from './convLock.js';
 
 const MAX_KNOWLEDGE_CHARS = 80_000;
 
-/** Extracted text from the agent's uploaded knowledge files, capped for the prompt. */
+const KNOWLEDGE_STOP_WORDS = new Set(
+  ('the a an and or to of in is it its for on at as be are was were do does did i you we they he she my ' +
+    'your me us them him her this that these those with from by not no yes can could would should will shall ' +
+    'how what when where why who which about hi hello hey thanks thank please just so if but have has had ' +
+    "im ive dont cant wont ill youll am pm ok okay sure get got let like want need know").split(' '),
+);
+
+/** Lowercase alphanumeric term frequencies — the retrieval vocabulary.
+ *  Trailing 's' is stripped so 'returns' and 'return' collide; deeper
+ *  stemming belongs to a real analyzer if lexical retrieval outgrows this. */
+function termFreq(text: string): Map<string, number> {
+  const freq = new Map<string, number>();
+  for (const t of text.toLowerCase().match(/[a-z0-9']{2,}/g) ?? []) {
+    if (KNOWLEDGE_STOP_WORDS.has(t)) continue;
+    const stem = t.length > 3 && t.endsWith('s') ? t.slice(0, -1) : t;
+    freq.set(stem, (freq.get(stem) ?? 0) + 1);
+  }
+  return freq;
+}
+
+/** Order docs by relevance to the conversation's recent text — TF·IDF-ish:
+ *  each query term scores its doc frequency-weighted occurrences, with
+ *  name/title hits worth 5× body hits (an article titled "Refunds" matters
+ *  more than one that mentions the word once). Zero-score docs keep their
+ *  original order at the tail — leftover budget still fills the same way
+ *  it used to, so a query that matches nothing degrades to old behaviour
+ *  instead of empty knowledge. */
+export function rankDocs(
+  docs: { name: string; text: string }[],
+  query: string,
+): { name: string; text: string }[] {
+  const qTerms = [...termFreq(query).keys()];
+  if (!qTerms.length || docs.length < 2) return docs;
+  const perDoc = docs.map((d) => ({ nameT: termFreq(d.name), bodyT: termFreq(d.text) }));
+  const N = docs.length;
+  const scored = docs.map((d, i) => {
+    let score = 0;
+    for (const q of qTerms) {
+      const df = perDoc.reduce((n, t) => n + (t.nameT.has(q) || t.bodyT.has(q) ? 1 : 0), 0);
+      if (!df) continue;
+      const idf = Math.log(1 + (N + 1) / (1 + df));
+      const tf = (perDoc[i].bodyT.get(q) ?? 0) + 5 * (perDoc[i].nameT.get(q) ?? 0);
+      score += tf * idf;
+    }
+    return { d, score, i };
+  });
+  scored.sort((a, b) => b.score - a.score || a.i - b.i);
+  return scored.map((s) => s.d);
+}
+
+/** Text the retrieval ranks against — the customer's recent messages plus
+ *  the rolling summary (it carries the thread's older context). */
+export function knowledgeQueryFor(history: ChatMsg[], conv?: ConversationRow): string {
+  const recent = history
+    .filter((m) => m.role === 'user')
+    .slice(-4)
+    .map((m) => contentText(m.content))
+    .join('\n');
+  return `${conv?.agentSummary ?? ''}\n${recent}`.slice(-1500);
+}
+
+/** Extracted text from the agent's uploaded knowledge files, capped for the
+ *  prompt. When `query` (the conversation's recent text) is present, docs
+ *  rank by relevance before the budget fills — a 200-article centre sends
+ *  the matching articles, not just the first 80k chars. */
 export async function loadKnowledgeDocs(
   db: Db,
   agentId: string,
+  query?: string,
 ): Promise<{ name: string; text: string }[]> {
   const rows = await db
     .select({ name: knowledgeFiles.name, text: knowledgeFiles.text })
@@ -46,9 +111,10 @@ export async function loadKnowledgeDocs(
     .from(helpArticles)
     .where(and(eq(helpArticles.agentId, agentId), eq(helpArticles.status, 'published')));
   for (const a of articles) rows.push({ name: `Help center: ${a.name}`, text: a.text });
+  const ordered = query ? rankDocs(rows, query) : rows;
   let used = 0;
   const docs: { name: string; text: string }[] = [];
-  for (const row of rows) {
+  for (const row of ordered) {
     const remaining = MAX_KNOWLEDGE_CHARS - used;
     if (remaining <= 0) break;
     const text = row.text.slice(0, remaining);
@@ -1217,7 +1283,7 @@ export async function runHostedEvent(
     const llm = await llmFor(db, agent);
     void foldConversationMemory(db, agent, conv, llm);
     const history = await transcriptFor(db, convId, await fileAnalysisAllowed(db, agent.workspaceId));
-    const docs = await loadKnowledgeDocs(db, agent.id);
+    const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history, conv));
     const secrets = {
       ...(await loadSecretsMap(db, agent.id)),
       ...(await connectionSecrets(db, agent.id)),
@@ -1512,7 +1578,7 @@ async function replyAsHostedAgent(
     const fileAnalysis = await fileAnalysisAllowed(db, agent.workspaceId);
     console.log(`[files] conv=${convId} analysis=${fileAnalysis}`);
     const history = await transcriptFor(db, convId, fileAnalysis);
-    const docs = await loadKnowledgeDocs(db, agent.id);
+    const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history, conv));
     const secrets = {
       ...(await loadSecretsMap(db, agent.id)),
       ...(await connectionSecrets(db, agent.id)),
