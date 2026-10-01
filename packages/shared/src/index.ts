@@ -774,6 +774,9 @@ export const StreamEvent = z.discriminatedUnion('type', [
   // Workspace-level state changed — plan, usage caps, plan-gated UI.
   // Published by billing writes and concierge change_plan.
   z.object({ type: z.literal('workspace'), data: z.object({ id: z.string() }) }),
+  // A channel changed out-of-band (concierge update_channel — rename,
+  // widget title) — open channel lists/details refetch.
+  z.object({ type: z.literal('channel'), data: z.object({ id: z.string() }) }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEvent>;
 

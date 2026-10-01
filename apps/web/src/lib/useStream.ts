@@ -56,6 +56,12 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
       // in an open Ask Janis rail after update_agent
       void qc.invalidateQueries({ queryKey: ['ask-janis-config'] });
     });
+    // Channel edited out-of-band (concierge update_channel — rename,
+    // widget title) — refresh the channel list + open channel detail.
+    source.addEventListener('channel', () => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel'] });
+    });
     // Workspace plan changed (checkout, webhook sync, concierge change_plan)
     // — plan-gated UI (Settings, custom help domain, usage page) refreshes.
     source.addEventListener('workspace', () => {

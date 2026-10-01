@@ -939,3 +939,95 @@ describe('teach_from_conversation + assign_conversation builtins', () => {
     expect(bad.error).toContain("isn't a member");
   });
 });
+
+describe('update_channel builtin', () => {
+  const updateChan = () => BUILTIN_TOOLS.find((b) => b.name === 'update_channel')!;
+  const applyChan = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_channel')!;
+
+  it('rename parks a card; approving updates channels.name', async () => {
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    const [ch] = await db
+      .insert(channels)
+      .values({ workspaceId: WS2, agentId: bot2.id, kind: 'webchat', name: 'Site widget' })
+      .returning();
+
+    const out = await updateChan().run(
+      { workspace: 'free', channel: 'site widget', name: 'Acme Widget' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_channel' && p.status === 'pending');
+    expect((pa!.args as { name?: string }).name).toBe('Acme Widget');
+    expect((pa!.args as { channel_id?: string }).channel_id).toBe(ch.id);
+    const applied = JSON.parse(
+      await applyChan().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(applied.summary).toBe('Renamed channel "Site widget" to "Acme Widget".');
+    const [renamed] = await db.select().from(channels).where(eq(channels.id, ch.id));
+    expect(renamed.name).toBe('Acme Widget');
+  });
+
+  it('title writes creds.title on webchat; rejects title on other kinds', async () => {
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    const [smsCh] = await db
+      .insert(channels)
+      .values({ workspaceId: WS2, agentId: bot2.id, kind: 'sms', name: 'Text line' })
+      .returning();
+    const bad = JSON.parse(
+      await updateChan().run(
+        { workspace: 'free', channel: 'text line', title: 'Nope' },
+        cctx(CONV2),
+      ),
+    );
+    expect(bad.error).toContain('webchat');
+
+    const out = await updateChan().run(
+      { workspace: 'free', channel: 'acme widget', title: 'Chat with Acme' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_channel' && p.status === 'pending');
+    const applied = JSON.parse(
+      await applyChan().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(applied.ok).toBe(true);
+    expect(applied.applied).toEqual(['title']);
+    const [ch] = await db
+      .select()
+      .from(channels)
+      .where(eq(channels.id, (pa!.args as { channel_id: string }).channel_id));
+    expect((ch.credentials as { title?: string }).title).toBe('Chat with Acme');
+    void smsCh;
+  });
+
+  it('no-op args and unknown channels error without a card', async () => {
+    const nothing = JSON.parse(
+      await updateChan().run({ workspace: 'free', channel: 'acme widget' }, cctx(CONV2)),
+    );
+    expect(nothing.error).toContain('nothing to change');
+    const missing = JSON.parse(
+      await updateChan().run({ workspace: 'free', channel: 'zzzz', name: 'X' }, cctx(CONV2)),
+    );
+    expect(missing.error).toContain("didn't match");
+  });
+});

@@ -1905,6 +1905,146 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       });
     },
   },
+  {
+    name: 'update_channel',
+    description:
+      "Propose a channel settings change in the visitor's workspace — rename a channel (the console label like 'Web chat', which is also the widget header's default title) or set a webchat widget's header title. Posts an approval card — nothing changes until the visitor approves. Use this when the visitor asks to rename the widget/channel itself, NOT the agent — that is update_agent's name param. Admin-only.",
+    params: {
+      channel: 'channel name (required) — the label in the channels list, e.g. "Web chat"',
+      name: 'new channel name',
+      title: "widget header title text (webchat only; blank string clears it back to the channel name)",
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+
+      const hint = args.channel?.trim().toLowerCase();
+      const wsChannels = await ctx.db
+        .select({ id: channels.id, name: channels.name, kind: channels.kind })
+        .from(channels)
+        .where(eq(channels.workspaceId, ws.id));
+      const channel = hint
+        ? wsChannels.find((ch) => ch.name.toLowerCase() === hint) ??
+          wsChannels.find((ch) => ch.name.toLowerCase().includes(hint))
+        : undefined;
+      if (!channel) {
+        return JSON.stringify({
+          error: `which channel? "${args.channel ?? ''}" didn't match — channels: ${wsChannels.map((ch) => ch.name).join(', ')}`,
+        });
+      }
+
+      const rename = args.name !== undefined ? String(args.name).trim().slice(0, 80) : '';
+      if (args.name !== undefined && !rename) {
+        return JSON.stringify({ error: 'name cannot be blank' });
+      }
+      const title = args.title !== undefined ? String(args.title).trim().slice(0, 120) : undefined;
+      if (title !== undefined && channel.kind !== 'webchat') {
+        return JSON.stringify({ error: 'title applies to webchat channels' });
+      }
+      if (!rename && title === undefined) {
+        return JSON.stringify({ error: 'nothing to change — pass name or title' });
+      }
+      const display: Record<string, unknown> = { channel: channel.name };
+      if (rename && rename !== channel.name) display.name = `${channel.name} → ${rename}`;
+      if (title !== undefined) display.title = title || `(default: channel name)`;
+      return parkConciergeAction(
+        ctx,
+        'apply_channel',
+        {
+          workspace_id: ws.id,
+          channel_id: channel.id,
+          ...(rename && rename !== channel.name ? { name: rename } : {}),
+          ...(title !== undefined ? { title } : {}),
+        },
+        `${rename && rename !== channel.name ? 'Rename' : 'Update'} channel "${channel.name}"`,
+        display,
+      );
+    },
+  },
+  {
+    // Executor for approved update_channel cards — hidden from the model.
+    name: 'apply_channel',
+    description: 'internal — executes an approved update_channel action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+            eq(memberships.role, 'admin'),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs admin rights on the target workspace';
+      const [channel] = await ctx.db
+        .select()
+        .from(channels)
+        .where(
+          and(eq(channels.id, String(args.channel_id ?? '')), eq(channels.workspaceId, wsId)),
+        )
+        .limit(1);
+      if (!channel) return 'error: channel not found';
+      const name = String(args.name ?? '').trim().slice(0, 80);
+      const title = args.title !== undefined ? String(args.title).trim().slice(0, 120) : undefined;
+      if (title !== undefined && channel.kind !== 'webchat') {
+        return 'error: title applies to webchat channels';
+      }
+      if (!name && title === undefined) return 'error: empty or disallowed patch';
+      const creds = { ...((channel.credentials ?? {}) as Record<string, unknown>) };
+      if (title !== undefined) {
+        if (title === '') delete creds.title;
+        else creds.title = title;
+      }
+      await ctx.db
+        .update(channels)
+        .set({
+          name: name || channel.name,
+          credentials: creds,
+        })
+        .where(eq(channels.id, channel.id));
+      invalidateChannelCache();
+      const applied = [
+        ...(name && name !== channel.name ? ['name'] : []),
+        ...(title !== undefined ? ['title'] : []),
+      ];
+      await audit(ctx.db, {
+        workspaceId: wsId,
+        userId: user.id,
+        userName: user.name,
+        action: 'channel.update',
+        targetType: 'channel',
+        targetId: channel.id,
+        meta: { via: 'concierge', fields: applied },
+      });
+      bus.publish(wsId, { type: 'channel', data: { id: channel.id } });
+      const newName = name || channel.name;
+      return JSON.stringify({
+        ok: true,
+        channel: newName,
+        applied,
+        summary:
+          name && name !== channel.name
+            ? `Renamed channel "${channel.name}" to "${newName}".`
+            : `Updated channel "${newName}": ${applied.join(', ')}.`,
+      });
+    },
+  },
 ];
 
 /** Builtins enabled on this agent's config AND available in this environment. */
