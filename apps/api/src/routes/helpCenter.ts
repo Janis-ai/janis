@@ -209,14 +209,36 @@ export function articleRoutes(db: Db) {
 export function helpPublicRoutes(db: Db) {
   const app = new Hono();
 
-  // GET /domain?host=help.acme.com — resolves a CNAME'd help domain to the
-  // workspace that claimed it (config.help_domain) so a custom domain can
-  // serve the help index at its root.
+  // GET /domain?host=help.acme.com — resolves a CNAME'd help domain. An
+  // agent-level override (agents.config.help_domain) wins and serves just
+  // that agent's centre; otherwise the workspace claim (config.help_domain)
+  // lists every agent with published articles.
   app.get('/domain', async (c) => {
     const host = (c.req.query('host') ?? c.req.header('host') ?? '')
       .toLowerCase()
       .replace(/:\d+$/, '');
     if (!host) return c.json({ error: 'not found' }, 404);
+    const [override] = await db
+      .select({ id: agents.id, name: agents.name, workspaceId: agents.workspaceId })
+      .from(agents)
+      .where(sql`${agents.config}->>'help_domain' = ${host}`)
+      .limit(1);
+    if (override) {
+      const [{ n }] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(helpArticles)
+        .where(and(eq(helpArticles.agentId, override.id), eq(helpArticles.status, 'published')));
+      if (n > 0) {
+        const [ws] = await db
+          .select({ name: workspaces.name })
+          .from(workspaces)
+          .where(eq(workspaces.id, override.workspaceId))
+          .limit(1);
+        return c.json({ workspace_name: ws?.name ?? '', agents: [{ id: override.id, name: override.name }] });
+      }
+      // A claimed domain with nothing published falls through to a
+      // workspace-level claim rather than 404ing on an unrelated centre.
+    }
     const rows = await db
       .select({ id: workspaces.id, name: workspaces.name })
       .from(workspaces)

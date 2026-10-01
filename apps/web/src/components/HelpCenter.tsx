@@ -39,6 +39,22 @@ export function HelpCenter({ agent }: { agent: Agent }) {
   });
   const [editing, setEditing] = useState<HelpArticle | 'new' | null>(null);
   const [form, setForm] = useState<Form>(emptyForm);
+  const [domainDraft, setDomainDraft] = useState<string | null>(null);
+  const [domainMsg, setDomainMsg] = useState('');
+
+  const saveDomain = useMutation({
+    mutationFn: (value: string | null) =>
+      api(`/api/agents/${agent.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ config: { ...(agent.config ?? {}), help_domain: value } }),
+      }),
+    onSuccess: () => {
+      setDomainMsg('Saved — point the domain\'s CNAME at this app host.');
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      void qc.invalidateQueries({ queryKey: ['agent', agent.id] });
+    },
+    onError: (e) => setDomainMsg(e instanceof Error ? e.message : 'failed'),
+  });
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['articles', agent.id] });
 
@@ -81,7 +97,8 @@ export function HelpCenter({ agent }: { agent: Agent }) {
   });
 
   const publicUrl = `${window.location.origin}/help/${agent.id}`;
-  const helpDomain = ws?.workspace.help_domain;
+  const agentDomain = (agent.config as { help_domain?: string | null } | undefined)?.help_domain ?? null;
+  const helpDomain = agentDomain ?? ws?.workspace.help_domain ?? null;
   const articles = data?.articles ?? [];
 
   return (
@@ -99,9 +116,39 @@ export function HelpCenter({ agent }: { agent: Agent }) {
             <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
               The chat widget links here automatically once an article is published.
               {helpDomain
-                ? ` Custom domain: ${helpDomain} (CNAME → ${window.location.host}).`
-                : ' Set a custom domain under Settings → Workspace to serve this at help.yourdomain.com.'}
+                ? ` Serving at https://${helpDomain} — CNAME it at ${window.location.host}.${agentDomain ? ' (agent override)' : ' (workspace domain)'}`
+                : ' Set a custom domain under Settings → Workspace, or override it just for this agent below.'}
             </p>
+            <div className="row" style={{ marginTop: 8, gap: 8 }}>
+              <input
+                className="input"
+                style={{ maxWidth: 280 }}
+                placeholder="help.yourdomain.com — optional"
+                value={domainDraft ?? agentDomain ?? ''}
+                onChange={(e) => setDomainDraft(e.target.value)}
+              />
+              <button
+                className="btn sm"
+                disabled={saveDomain.isPending || (domainDraft === null || (domainDraft.trim().toLowerCase() || null) === agentDomain)}
+                onClick={() => {
+                  const v = (domainDraft ?? '').trim().toLowerCase() || null;
+                  saveDomain.mutate(v);
+                  setDomainDraft(null);
+                }}
+              >
+                {saveDomain.isPending ? 'Saving…' : 'Save domain'}
+              </button>
+              {domainMsg && <span className="muted" style={{ fontSize: 12 }}>{domainMsg}</span>}
+            </div>
+            {(agentDomain || ws?.workspace.help_domain) && (
+              <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                {agentDomain
+                  ? ws?.workspace.help_domain
+                    ? `Overrides the workspace domain (${ws.workspace.help_domain}) for this agent. Clear to inherit it.`
+                    : 'Overrides the workspace default for this agent. Clear to inherit.'
+                  : `Workspace domain applies (${ws?.workspace.help_domain}) — set one here to override it for this agent.`}
+              </p>
+            )}
           </div>
           <button
             className="btn primary"

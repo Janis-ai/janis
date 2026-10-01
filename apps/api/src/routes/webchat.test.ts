@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import { createHmac } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, channels, conversations, memberships, messages, sessions, slackInstallations, slackThreads, users, workspaces } from '../db/schema.js';
+import { agents, channels, conversations, helpArticles, memberships, messages, sessions, slackInstallations, slackThreads, users, workspaces } from '../db/schema.js';
 import { generateApiKey, sha256 } from '../lib/crypto.js';
 import { markOperatorTyping } from '../lib/typingState.js';
 import { takeover, humanReply } from '../services/takeover.js';
@@ -119,6 +119,37 @@ describe('webchat widget endpoints', () => {
       .update(channels)
       .set({ credentials: ch.credentials as object })
       .where(eq(channels.id, channelId));
+  });
+
+  it('help_url honours the agent domain override, then the workspace claim', async () => {
+    const [agent] = await db.select().from(agents).where(eq(agents.workspaceId, wsId));
+    await db.insert(helpArticles).values({
+      workspaceId: wsId,
+      agentId: agent.id,
+      title: 'Shipping FAQ',
+      body: 'We ship worldwide.',
+      status: 'published',
+    });
+    let body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.help_url).toMatch(new RegExp(`/help/${agent.id}$`));
+    expect(body.help_url).not.toContain('acme.test');
+
+    await db
+      .update(workspaces)
+      .set({ config: { help_domain: 'help.acme.test' } })
+      .where(eq(workspaces.id, wsId));
+    body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.help_url).toBe(`https://help.acme.test/help/${agent.id}`);
+
+    await db
+      .update(agents)
+      .set({ config: { help_domain: 'vip.acme.test' } })
+      .where(eq(agents.id, agent.id));
+    body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.help_url).toBe(`https://vip.acme.test/help/${agent.id}`);
+
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agent.id));
+    await db.update(workspaces).set({ config: {} }).where(eq(workspaces.id, wsId));
   });
 
   it('ingests a visitor message into a conversation', async () => {

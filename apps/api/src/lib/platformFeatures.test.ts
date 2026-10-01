@@ -202,6 +202,29 @@ describe('public help center', () => {
     const bad = await app.request('/api/help/domain?host=unknown.example');
     expect(bad.status).toBe(404);
     await db.update(workspaces).set({ config: {} }).where(eq(workspaces.id, wsId));
+
+    // agent-level override wins over the workspace claim and serves just
+    // that agent's centre at the domain root
+    const [other] = await db
+      .insert(agents)
+      .values({ workspaceId: wsId, name: 'Second' })
+      .returning();
+    await db
+      .update(agents)
+      .set({ config: { help_domain: 'vip.acme.test' } })
+      .where(eq(agents.id, agentId));
+    await db
+      .update(workspaces)
+      .set({ config: { help_domain: 'ws.acme.test' } })
+      .where(eq(workspaces.id, wsId));
+    const ov = await (await app.request('/api/help/domain?host=vip.acme.test')).json();
+    expect(ov.agents.map((x: { id: string }) => x.id)).toEqual([agentId]);
+    // workspace claim still resolves separately and lists only published agents
+    const wsDom = await (await app.request('/api/help/domain?host=ws.acme.test')).json();
+    expect(wsDom.agents.map((x: { id: string }) => x.id)).toContain(agentId);
+    expect(wsDom.agents.map((x: { id: string }) => x.id)).not.toContain(other.id);
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agentId));
+    await db.update(workspaces).set({ config: {} }).where(eq(workspaces.id, wsId));
   });
 });
 

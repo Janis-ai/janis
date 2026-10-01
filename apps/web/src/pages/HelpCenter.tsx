@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 
 interface ArticleStub {
@@ -208,6 +208,9 @@ export function HelpDomain() {
 
   if (error) return <div className="login-wrap"><div className="card">Help center not found.</div></div>;
   if (!data) return <div className="login-wrap muted">Loading…</div>;
+  // An agent-claimed domain (or a one-agent workspace) serves the centre
+  // directly — no interstitial picker for a single choice.
+  if (data.agents.length === 1) return <Navigate to={`/help/${data.agents[0].id}`} replace />;
 
   return (
     <div className="help-center">

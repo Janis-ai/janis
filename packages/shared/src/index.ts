@@ -175,6 +175,16 @@ export const AgentConfig = z.object({
   system_prompt: z.string().optional(),
   knowledge: z.array(z.string()).optional(), // facts/snippets injected into the prompt
   tone: z.string().optional(),
+  // Per-agent help-center domain override — beats the workspace-level
+  // help_domain when both are set. Bare domain only (help.acme.com).
+  help_domain: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/, 'must be a bare domain like help.acme.com')
+    .max(200)
+    .nullable()
+    .optional(),
   // hosted agents only — per-agent LLM override (OpenAI-compatible).
   // api_key is write-only: reads return key_set instead. null clears the key.
   llm: z

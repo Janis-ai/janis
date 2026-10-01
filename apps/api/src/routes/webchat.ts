@@ -255,6 +255,16 @@ export function webchatRoutes(db: Db) {
     // White-labeling is a paid feature — the stored flag only reaches the
     // widget when the workspace's effective plan isn't free.
     const planKey = await effectivePlanKey(db, channel.workspaceId);
+    // Custom help domain: the agent's own override wins, else the workspace
+    // claim — the widget then links to help.acme.com rather than app.janis.ai.
+    const [wsRow] = await db
+      .select({ config: workspaces.config })
+      .from(workspaces)
+      .where(eq(workspaces.id, channel.workspaceId))
+      .limit(1);
+    const helpHost =
+      ((agent?.config ?? {}) as { help_domain?: string }).help_domain ??
+      ((wsRow?.config ?? {}) as { help_domain?: string }).help_domain;
     return c.json({
       name: channel.name,
       agent_name: agent?.name ?? 'Assistant',
@@ -270,7 +280,10 @@ export function webchatRoutes(db: Db) {
       logo_border_color: creds.logo_border_color ?? null,
       // channel-level override wins; agent config is the default
       quick_replies: creds.quick_replies?.length ? creds.quick_replies : agentReplies,
-      help_url: helpCount > 0 ? `${env.webOrigin}/help/${channel.agentId}` : null,
+      help_url:
+        helpCount > 0
+          ? `${helpHost ? `https://${helpHost}` : env.webOrigin}/help/${channel.agentId}`
+          : null,
       teaser_text: creds.teaser_text ?? null,
       proactive: creds.proactive !== false,
       proactive_delay: creds.proactive_delay ?? 20,
