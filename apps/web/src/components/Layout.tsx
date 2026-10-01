@@ -399,7 +399,9 @@ export default function Layout() {
         {!data?.agent_scope && (
           <>
             <NavLink to="/reports"><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
-            <NavLink to="/errors"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
+            {data?.operator && (
+              <NavLink to="/errors"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
+            )}
             <NavLink to="/billing"><span className="label">Billing</span><span className="icon"><CreditCard size={18} /></span></NavLink>
             <NavLink to="/settings"><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </>

@@ -304,6 +304,10 @@ export function authRoutes(db: Db) {
         .map((m) => ({ id: m.membership.id, workspace_name: m.workspace.name })),
       agent_invites: agentInvites,
       support_channel_id: env.supportChannelId || null,
+      // Janis-internal surfaces (error reports) — only the operator workspace.
+      operator:
+        Boolean(env.operatorWorkspaceId) &&
+        (active?.workspace.id ?? scopedWorkspace?.id) === env.operatorWorkspaceId,
     });
   });
 

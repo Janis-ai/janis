@@ -31,6 +31,8 @@ export function useMe() {
          *  accepted, shown as "added to X" rows with a Switch action. */
         agent_invites: { workspace_id: string; workspace_name: string; agents: string[] }[];
         support_channel_id: string | null;
+        /** Janis operator workspace — unlocks the error-reports surface. */
+        operator?: boolean;
       }>('/auth/me'),
     retry: false,
     staleTime: 60_000,

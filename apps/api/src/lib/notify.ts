@@ -26,7 +26,8 @@ export type NotifyEvent =
   | 'mention'
   | 'digest'
   | 'approval'
-  | 'eval';
+  | 'eval'
+  | 'ops';
 
 interface NotifyPrefs {
   push?: boolean;

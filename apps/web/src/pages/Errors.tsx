@@ -46,6 +46,23 @@ export default function Errors() {
     queryFn: () => api<{ report: Report }>(`/api/error-reports/${openId}`),
   });
 
+  const [downloaded, setDownloaded] = useState('');
+  const downloadNew = async () => {
+    const res = await fetch('/api/error-reports/export', { credentials: 'include' });
+    if (!res.ok) {
+      setDownloaded('Export failed');
+      return;
+    }
+    const bundle = await res.json();
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `janis-errors-${new Date().toISOString().slice(0, 19)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setDownloaded(`Downloaded ${bundle.count} report(s) — the next export starts after them.`);
+  };
+
   const copyBundle = async () => {
     if (!detail.data) return;
     await navigator.clipboard.writeText(JSON.stringify(detail.data.report, null, 2));
@@ -59,8 +76,14 @@ export default function Errors() {
       <p className="muted">
         Uncaught console errors and API failures package themselves here — screenshot, DOM,
         console tail and settings included. Copy a bundle straight into a debugging agent,
-        or ask Janis about recent breakage.
+        or ask Janis about recent breakage. Operator-only.
       </p>
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="btn" onClick={() => void downloadNew()}>
+          Download new errors (.json)
+        </button>
+        <span className="muted" style={{ fontSize: 13 }}>{downloaded}</span>
+      </div>
       {(data?.reports ?? []).map((r) => (
         <div key={r.id} className="card" style={{ marginTop: 12 }}>
           <div className="row">
