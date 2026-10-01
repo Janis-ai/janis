@@ -716,6 +716,37 @@ describe('update_agent builtin', () => {
     expect(cfg.csat?.enabled).toBe(false);
   });
 
+  it('rename parks a card; approving updates agents.name', async () => {
+    const out = await update().run(
+      { workspace: 'free', agent: 'bot2', name: 'Renamed Bot' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_agent_config' && p.status === 'pending');
+    expect((pa!.args as { rename?: string }).rename).toBe('Renamed Bot');
+    const applied = JSON.parse(
+      await applyCfg().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(applied.summary).toBe('Renamed Bot2 to Renamed Bot.');
+    const [a] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, (pa!.args as { agent_id: string }).agent_id));
+    expect(a.name).toBe('Renamed Bot');
+    // restore for later tests that look the agent up by name
+    await db.update(agents).set({ name: 'Bot2' }).where(eq(agents.id, a.id));
+  });
+
   it('rejects empty patches and executor strips disallowed keys', async () => {
     const empty = JSON.parse(
       await update().run({ workspace: 'free', agent: 'bot2' }, cctx(CONV2)),

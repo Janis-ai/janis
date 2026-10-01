@@ -1373,9 +1373,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'update_agent',
     description:
-      "Propose an agent settings change in the visitor's workspace — greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes. Posts an approval card — nothing changes until the visitor approves. Admin-only.",
+      "Propose an agent settings change in the visitor's workspace — rename, greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes. Posts an approval card — nothing changes until the visitor approves. Admin-only.",
     params: {
       agent: 'agent name (required)',
+      name: 'new agent name — renames the agent',
       greeting: 'new greeting text (blank string disables it)',
       greeting_enabled: 'true/false — send the greeting on new conversations',
       quick_replies: 'comma-separated chips shown in the widget (max 8)',
@@ -1412,6 +1413,13 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       // card — the executor re-validates with the shared schema anyway.
       const patch: Record<string, unknown> = {};
       const display: Record<string, unknown> = { agent: agent.name };
+      // agents.name is a column, not config — it travels as its own exec arg
+      // so the patch stays AgentConfig-shaped for the executor's validation.
+      const rename = args.name !== undefined ? String(args.name).trim().slice(0, 80) : '';
+      if (args.name !== undefined) {
+        if (!rename) return JSON.stringify({ error: 'name cannot be blank' });
+        if (rename !== agent.name) display.name = `${agent.name} → ${rename}`;
+      }
       const bool = (v: unknown) => ['true', 'yes', 'on', '1'].includes(String(v).toLowerCase());
       const cur = (agent.config ?? {}) as Record<string, unknown>;
       const curCsat = (cur.csat ?? {}) as Record<string, unknown>;
@@ -1452,16 +1460,22 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         patch.sla_minutes = mins;
         display.re_alert_after = `${mins} min`;
       }
-      if (!Object.keys(patch).length) {
+      const willRename = rename !== '' && rename !== agent.name;
+      if (!Object.keys(patch).length && !willRename) {
         return JSON.stringify({
-          error: 'nothing to change — pass at least one of greeting, greeting_enabled, quick_replies, csat_*, sla_minutes',
+          error: 'nothing to change — pass at least one of name, greeting, greeting_enabled, quick_replies, csat_*, sla_minutes',
         });
       }
       return parkConciergeAction(
         ctx,
         'apply_agent_config',
-        { workspace_id: ws.id, agent_id: agent.id, patch },
-        `Update ${agent.name}`,
+        {
+          workspace_id: ws.id,
+          agent_id: agent.id,
+          patch,
+          ...(willRename ? { rename } : {}),
+        },
+        willRename && !Object.keys(patch).length ? `Rename ${agent.name}` : `Update ${agent.name}`,
         display,
       );
     },
@@ -1502,13 +1516,19 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const clean = Object.fromEntries(
         Object.entries(patch).filter(([k]) => ALLOWED.includes(k)),
       );
-      if (!Object.keys(clean).length) return 'error: empty or disallowed patch';
-      const check = AgentConfig.partial().safeParse(clean);
-      if (!check.success) return `error: invalid settings — ${check.error.issues[0]?.message}`;
-      await ctx.db
-        .update(agents)
-        .set({ config: { ...(agent.config as object), ...clean } })
-        .where(eq(agents.id, agent.id));
+      const rename = String(args.rename ?? '').trim().slice(0, 80);
+      if (!Object.keys(clean).length && !rename) return 'error: empty or disallowed patch';
+      if (Object.keys(clean).length) {
+        const check = AgentConfig.partial().safeParse(clean);
+        if (!check.success) return `error: invalid settings — ${check.error.issues[0]?.message}`;
+      }
+      const set: Record<string, unknown> = {};
+      if (Object.keys(clean).length) set.config = { ...(agent.config as object), ...clean };
+      if (rename && rename !== agent.name) set.name = rename;
+      if (!Object.keys(set).length) return 'error: nothing to change';
+      await ctx.db.update(agents).set(set).where(eq(agents.id, agent.id));
+      const applied = [...Object.keys(clean), ...(rename && rename !== agent.name ? ['name'] : [])];
+      const newName = rename && rename !== agent.name ? rename : agent.name;
       await audit(ctx.db, {
         workspaceId: wsId,
         userId: user.id,
@@ -1516,14 +1536,17 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         action: 'agent.config.update',
         targetType: 'agent',
         targetId: agent.id,
-        meta: { via: 'concierge', fields: Object.keys(clean) },
+        meta: { via: 'concierge', fields: applied },
       });
       bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
       return JSON.stringify({
         ok: true,
-        agent: agent.name,
-        applied: Object.keys(clean),
-        summary: `Updated ${agent.name}: ${Object.keys(clean).join(', ')}.`,
+        agent: newName,
+        applied,
+        summary:
+          applied.length === 1 && applied[0] === 'name'
+            ? `Renamed ${agent.name} to ${newName}.`
+            : `Updated ${newName}: ${applied.join(', ')}.`,
       });
     },
   },

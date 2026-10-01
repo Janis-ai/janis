@@ -46,7 +46,9 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
     source.addEventListener('agent', () => {
       void qc.invalidateQueries({ queryKey: ['agents'] });
       // channel rows embed agent_name — renames must reach them too
+      // (the list key AND the single-channel ['channel', id] key)
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel'] });
       void qc.invalidateQueries({ queryKey: ['knowledge'] });
       void qc.invalidateQueries({ queryKey: ['knowledge-gaps'] });
       void qc.invalidateQueries({ queryKey: ['rules'] });
