@@ -15,7 +15,7 @@ import { getUpload } from './uploads.js';
 import { callTool, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
-import { extractWidgets } from './widgets.js';
+import { extractWidgets, widgetFromToolResult, type WidgetComponent } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -263,17 +263,27 @@ export function systemPrompt(
       '\nYou CAN offer tappable reply buttons — they render as real buttons on the customer\'s chat. When 2-4 short choices would move the conversation forward (e.g. picking a plan, yes/no, sharing an email vs learning more), end your reply with lines starting "BUTTON:" — one per choice, each under 20 characters (e.g. "BUTTON: See pricing"). They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps.' +
       '\nIf you need the customer\'s email or phone number, end your reply with a line "ASK: email" or "ASK: phone" — it becomes a one-tap share control where the channel supports it (otherwise they can type it). Still ask in the text — never rely on the control alone.',
     );
-    // Rich in-conversation widgets — webchat only (the embed renders them;
-    // other channels would carry dead payload, so don't teach it there).
-    if (chan === 'webchat') {
+    // Rich in-conversation widgets. Webchat renders all five shapes; Meta
+    // channels translate cards → generic-template carousel and options →
+    // native quick replies/list, so those two are taught there too. Other
+    // kinds (form/status/receipt) have no Meta equivalent — webchat only.
+    if (chan === 'webchat' || chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp') {
+      const metaOnly =
+        chan === 'webchat'
+          ? ''
+          : '\nOn this channel only "cards" and "options" render (as a native carousel / tappable list) — never emit the other types here.';
       parts.push(
         '\nOn this channel you can render an interactive component instead of describing it — a card beats a paragraph. Emit a line starting "WIDGET:" followed by one JSON object on the same line, anywhere in your reply; it is removed from the text and rendered for the customer. Shapes:' +
           '\n{"type":"cards","items":[{"title","subtitle","image","price","link","link_label","select_label"}]} — product/plan carousel. "link" must be a URL from your context (opens it); "select_label" sends that text as the customer\'s message when tapped.' +
           '\n{"type":"options","title","items":[{"label","description"}]} — tappable picker (time slots, plans, locations); tapping sends the label.' +
-          '\n{"type":"form","title","submit_label","fields":[{"name","label","type":"text|email|tel|textarea|select","options":[...],"required":true}]} — collects fields and submits them as a message you\'ll receive.' +
-          '\n{"type":"status","title","steps":[{"label","state":"done|current|todo","note"}]} — order/application tracker.' +
-          '\n{"type":"receipt","title","rows":[{"label","value"}],"total":{"label","value"}} — order summary.' +
-          '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.',
+          (chan === 'webchat'
+            ? '\n{"type":"form","title","submit_label","fields":[{"name","label","type":"text|email|tel|textarea|select","options":[...],"required":true}]} — collects fields and submits them as a message you\'ll receive.' +
+              '\n{"type":"status","title","steps":[{"label","state":"done|current|todo","note"}]} — order/application tracker.' +
+              '\n{"type":"receipt","title","rows":[{"label","value"}],"total":{"label","value"}} — order summary.'
+            : '') +
+          '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.' +
+          '\nWhen the customer asks to see products, plans or options that carry data (price, image, description), prefer a "cards" or "options" widget over a BUTTON: list — and when a tool call returns list data (search results, products, availability), render it as a widget rather than retelling it as text. Always pair a widget with a one-line lead-in ("Here are our plans:") — never emit a WIDGET: line alone.' +
+          metaOnly,
       );
     }
   }
@@ -534,15 +544,15 @@ export async function generateReply(
   ctx: AgentRunContext | undefined,
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
-): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[] }> {
+): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[] }> {
   const first = await complete(llm, prompt, msgs, tools, secrets, ctx, builtins, onStall);
   const draft = first.text;
   if (!draft) {
-    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, fixed: [], stripped: [], verified: [], unverified: [] };
+    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, fixed: [], stripped: [], verified: [], unverified: [] };
   }
   const guard = await guardReplyLinks(draft, blessedUrls);
   if (!guard.stripped.length) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, ...guard };
   }
   const retry = await complete(
     llm,
@@ -558,7 +568,7 @@ export async function generateReply(
     builtins,
   ).catch(() => null);
   if (!retry?.text) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, ...guard };
   }
   const g2 = await guardReplyLinks(retry.text, blessedUrls);
   return {
@@ -566,6 +576,7 @@ export async function generateReply(
     completionTokens: first.completionTokens + retry.completionTokens,
     model: retry.model,
     toolCalls: [...first.toolCalls, ...retry.toolCalls],
+    widgets: [...first.widgets, ...retry.widgets],
     ...g2,
   };
 }
@@ -640,6 +651,9 @@ interface Completion {
    *  the configured model when the fallback answered. Bill against this. */
   model: string;
   toolCalls: InspectorToolCall[];
+  /** Widgets built from widget-bound tool results (live data binding) —
+   *  merged into the reply's payload.widgets by the caller. */
+  widgets: WidgetComponent[];
 }
 
 /** OpenAI-compat multimodal content part — Gemini accepts image_url parts. */
@@ -705,7 +719,7 @@ export async function complete(
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
 ): Promise<Completion> {
-  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [] };
+  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[] };
   if (!llm.apiKey) return empty;
 
   const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
@@ -720,7 +734,12 @@ export async function complete(
       type: 'function',
       function: {
         name: t.name,
-        description: t.description,
+        // Widget-bound tools auto-render their result as a component — tell
+        // the model so it narrates ("Here are our plans:") instead of
+        // transcribing the same data into its own WIDGET: line.
+        description: t.widget
+          ? `${t.description} (result auto-renders as an in-conversation ${t.widget.type} widget — respond with a short lead-in, do NOT repeat the data as a WIDGET: line or list)`
+          : t.description,
         parameters: {
           type: 'object',
           properties: Object.fromEntries(
@@ -773,6 +792,7 @@ export async function complete(
   let completionTokens = 0;
   let servedModel = llm.model;
   const toolCalls: InspectorToolCall[] = [];
+  const toolWidgets: WidgetComponent[] = [];
 
   for (let round = 0; round < 4; round++) {
     // Retry network timeouts and transient upstream errors (429 / 5xx —
@@ -901,7 +921,7 @@ export async function complete(
     if (!calls.length) {
       const text = msg?.content?.trim() ?? null;
       completionTokens += json.usage?.completion_tokens ?? (text ? Math.ceil(text.length / 4) : 0);
-      return { text, promptTokens, completionTokens, model: servedModel, toolCalls };
+      return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets };
     }
 
     completionTokens += json.usage?.completion_tokens ?? 0;
@@ -947,10 +967,16 @@ export async function complete(
         result = `error: ${err instanceof Error ? err.message : 'tool failed'}`;
       }
       toolCalls.push({ name: call.function.name, gated, outcome });
+      // Live data binding — a widget-bound tool's JSON result renders as a
+      // component on the reply, no model transcription needed.
+      if (tool?.widget && outcome === 'ran') {
+        const w = widgetFromToolResult(tool.widget, result, secrets);
+        if (w) toolWidgets.push(w);
+      }
       msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
     }
   }
-  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls };
+  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets };
 }
 
 const RECENT_WINDOW = 20;
@@ -1654,27 +1680,53 @@ async function replyAsHostedAgent(
       ]);
     };
     const tGen = Date.now();
-    const gen = await generateReply(
-      llm,
-      prompt,
-      history,
-      blessedUrls,
-      toolsFor(agent),
-      secrets,
-      ctx,
-      enabledBuiltins(
-        ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
-        agent.workspaceId,
-      ),
-      onStall,
+    // An empty completion is usually a provider blip (transient 500, timeout,
+    // a tool loop that never wrapped up) — one retry is cheaper than paging
+    // a human over it. Only the retry's output is kept.
+    const builtins = enabledBuiltins(
+      ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
+      agent.workspaceId,
     );
+    let gen!: Awaited<ReturnType<typeof generateReply>>;
+    let reply = '';
+    let widgets: ReturnType<typeof extractWidgets>['widgets'] = [];
+    let buttons: ReturnType<typeof extractButtons>['buttons'] = [];
+    let learns: ReturnType<typeof extractLearns>['learns'] = [];
+    const toolWidgets: WidgetComponent[] = [];
+    let promptTokens = 0;
+    let completionTokens = 0;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      gen = await generateReply(
+        llm,
+        prompt,
+        history,
+        blessedUrls,
+        toolsFor(agent),
+        secrets,
+        ctx,
+        builtins,
+        onStall,
+      );
+      promptTokens += gen.promptTokens;
+      completionTokens += gen.completionTokens;
+      toolWidgets.push(...gen.widgets);
+      const { text: noLearns, learns: l } = extractLearns(stripTranscriptNotes(gen.text));
+      const { text: noWidgets, widgets: w } = extractWidgets(noLearns);
+      const { text: r, buttons: b } = extractButtons(noWidgets);
+      reply = r;
+      widgets = w;
+      buttons = b;
+      learns = l;
+      if (reply || widgets.length || toolWidgets.length || attempt === 1) break;
+      console.warn(`[hosted] empty completion conv=${convId} — retrying once`);
+    }
+    // Data-bound components from widget-bound tools lead the reply; the
+    // model's own WIDGET: lines trail, capped at 3 total.
+    widgets = [...toolWidgets, ...widgets].slice(0, 3);
     const genMs = Date.now() - tGen;
     if (genMs > 10_000)
       console.warn(`[hosted] slow generateReply conv=${convId} ${genMs}ms`);
-    const { text: guardedReply, promptTokens, completionTokens, model } = gen;
-    const { text: noLearns, learns } = extractLearns(stripTranscriptNotes(guardedReply));
-    const { text: noWidgets, widgets } = extractWidgets(noLearns);
-    const { text: reply, buttons } = extractButtons(noWidgets);
+    const { model } = gen;
     const learnFlag = learns.length ? { learn: learns } : {};
     // model-emitted tappable choices ride payload.quick_replies → native
     // buttons on Messenger/WhatsApp, chips on webchat
@@ -1710,7 +1762,7 @@ async function replyAsHostedAgent(
         byok: llm.byok,
       });
     }
-    if (!reply) {
+    if (!reply && !widgets.length) {
       await emit([
         { type: 'handoff_request', conversation_id: externalId, reason: 'no LLM configured or empty reply' },
       ]);
@@ -1734,6 +1786,20 @@ async function replyAsHostedAgent(
         : {}),
       ...learnFlag,
     };
+    if (!reply) {
+      // Widget-only reply — the component IS the answer (a plan picker, a
+      // form). It still needs a text line on the wire; a bare lead-in is
+      // better than escalating a perfectly good widget as "empty reply".
+      await emit([
+        {
+          type: 'message_out',
+          conversation_id: externalId,
+          text: 'Here you go:',
+          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+        },
+      ]);
+      return;
+    }
     // A tapped "No thanks" chip is an explicit decline — de-escalate even if
     // the model forgets (or misfires [HANDOFF] on) the tag. Only fires while
     // an escalation is actually pending: needs_human or an open handoff alert.

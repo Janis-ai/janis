@@ -12,6 +12,7 @@ import {
 import { Loader2, Maximize2, Mic, MicOff, Minimize2, Paperclip, Smile, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 import { ArgsRows } from './bits';
+import { Widgets } from './ChatWidgets';
 import { splitEmphasis } from '../lib/richText';
 
 interface ChatConfig {
@@ -903,6 +904,9 @@ export function AskJanis({
                     rendering both doubles the title. */}
                 {!(item.m.action && item.m.text === item.m.action.label) &&
                   richText(item.m.text, navigate)}
+                {item.m.widgets?.length ? (
+                  <Widgets widgets={item.m.widgets} onSend={(t) => void send(t, [])} />
+                ) : null}
                 {item.m.action && (
                   <div className="action-card">
                     <div className="mono" style={{ fontSize: 12 }}>

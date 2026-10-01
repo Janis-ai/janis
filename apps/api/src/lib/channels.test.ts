@@ -460,6 +460,110 @@ describe('sendChannelMessage quick replies', () => {
     expect(message.quick_replies[0].title).toBe(`${'a'.repeat(19)}🎉`);
   });
 
+  it('messenger: a cards widget becomes a generic-template carousel', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await sendChannelMessage(ch('messenger'), 'PSID1', 'Here are our plans:', undefined, {
+      widgets: [
+        {
+          type: 'cards',
+          items: [
+            {
+              title: 'Pro plan',
+              subtitle: 'For growing teams',
+              price: '$99/mo',
+              image: 'https://x.com/pro.png',
+              link: 'https://x.com/pro',
+              link_label: 'Details',
+              select_label: 'Choose Pro',
+            },
+            { title: 'Starter', select_label: 'Choose Starter' },
+          ],
+        },
+      ],
+    });
+    const { message } = lastBody(fetchMock);
+    const tpl = message.attachment.payload;
+    expect(tpl.template_type).toBe('generic');
+    expect(tpl.elements[0]).toEqual({
+      title: 'Pro plan',
+      subtitle: 'For growing teams · $99/mo',
+      image_url: 'https://x.com/pro.png',
+      buttons: [
+        { type: 'web_url', url: 'https://x.com/pro', title: 'Details' },
+        { type: 'postback', title: 'Choose Pro', payload: 'Choose Pro' },
+      ],
+    });
+    // relative image urls are dropped — Meta needs absolute
+    expect(tpl.elements[1]).toEqual({
+      title: 'Starter',
+      buttons: [{ type: 'postback', title: 'Choose Starter', payload: 'Choose Starter' }],
+    });
+  });
+
+  it('messenger: an options widget becomes quick replies', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await sendChannelMessage(ch('messenger'), 'PSID1', 'When works?', undefined, {
+      widgets: [
+        {
+          type: 'options',
+          title: 'Pick a slot',
+          items: [{ label: 'Tue 3pm' }, { label: 'Wed 10am' }],
+        },
+      ],
+    });
+    const { message } = lastBody(fetchMock);
+    expect(message.text).toBe('Pick a slot');
+    expect(message.quick_replies).toEqual([
+      { content_type: 'text', title: 'Tue 3pm', payload: 'Tue 3pm' },
+      { content_type: 'text', title: 'Wed 10am', payload: 'Wed 10am' },
+    ]);
+  });
+
+  it('whatsapp: an options widget becomes an interactive list', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await sendChannelMessage(ch('whatsapp'), '1555', 'When works?', undefined, {
+      widgets: [
+        {
+          type: 'options',
+          title: 'Pick a slot',
+          items: [
+            { label: 'Tuesday 3pm', description: 'with Dr. Lee' },
+            { label: 'Wednesday 10am' },
+          ],
+        },
+      ],
+    });
+    const body = lastBody(fetchMock);
+    expect(body.type).toBe('interactive');
+    expect(body.interactive.type).toBe('list');
+    expect(body.interactive.body.text).toBe('Pick a slot');
+    expect(body.interactive.action.sections[0].rows).toEqual([
+      { id: 'wopt_0', title: 'Tuesday 3pm', description: 'with Dr. Lee' },
+      { id: 'wopt_1', title: 'Wednesday 10am' },
+    ]);
+  });
+
+  it('whatsapp: cards flatten to a formatted text block', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await sendChannelMessage(ch('whatsapp'), '1555', 'Our plans:', undefined, {
+      widgets: [
+        {
+          type: 'cards',
+          items: [
+            { title: 'Pro', price: '$99/mo', subtitle: 'Big teams', link: 'https://x.com/pro' },
+          ],
+        },
+      ],
+    });
+    const body = lastBody(fetchMock);
+    expect(body.type).toBe('text');
+    expect(body.text.body).toBe('1. *Pro* — $99/mo\nBig teams\nhttps://x.com/pro');
+  });
+
   it('sends plain text when no quick replies configured', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);

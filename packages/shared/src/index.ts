@@ -230,6 +230,19 @@ export const AgentConfig = z.object({
         bodyFormat: z.enum(['json', 'form']).optional(),
         // mutating tools park as pending actions until a teammate decides
         approval: z.boolean().optional(),
+        // live data binding: a JSON result renders as an in-conversation
+        // component instead of the model retelling it. `items` is the dot
+        // path to the rows array; `map` maps widget fields to row paths.
+        widget: z
+          .object({
+            type: z.enum(['cards', 'options']),
+            title: z.string().optional(),
+            link_label: z.string().optional(),
+            select_label: z.string().optional(),
+            items: z.string().optional(),
+            map: z.record(z.string(), z.string()).optional(),
+          })
+          .optional(),
         // catalog template id that installed this tool — managed via the
         // integrations UI, hidden from the custom-tools JSON editor
         template: z.string().optional(),

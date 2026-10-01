@@ -517,4 +517,63 @@ describe('hosted handoff offers', () => {
       ((await lastOut())?.payload as { quick_replies?: unknown[] })?.quick_replies,
     ).toBeUndefined();
   });
+
+  it('a widget-only reply delivers the widget instead of escalating', async () => {
+    // Regression: "show me your plans" made the concierge emit a bare WIDGET
+    // line — extraction left empty text and the reply path read it as
+    // "no LLM configured or empty reply" → spurious handoff to a human.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          llmResponse('WIDGET: {"type":"options","title":"Pick a plan","items":[{"label":"Starter"},{"label":"Pro"}]}'),
+        ),
+      ),
+    );
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'WidgetBot',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-widget-only' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'show me your plans' });
+
+    await runHostedEvent(db, hosted, {
+      type: 'message.user',
+      conversation_id: 'ext-widget-only',
+      janis_conversation_id: conv.id,
+      text: 'show me your plans',
+    } as Parameters<typeof runHostedEvent>[2]);
+
+    const out = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id))
+      .then((rows) => rows.filter((m) => m.direction === 'out'));
+    const widgetMsg = out.find(
+      (m) => ((m.payload as { widgets?: unknown[] })?.widgets?.length ?? 0) > 0,
+    );
+    expect(widgetMsg?.text).toBe('Here you go:');
+    expect(
+      (widgetMsg?.payload as { widgets?: { type: string }[] }).widgets[0].type,
+    ).toBe('options');
+    // no escalation was raised — the widget WAS the answer
+    const [after] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(after.state).not.toBe('needs_human');
+  });
 });

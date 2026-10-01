@@ -216,6 +216,28 @@ export default function OperatorDocs() {
         human, and Slack activity on the conversation all live in the same
         thread regardless of which channel the customer wrote from.
       </p>
+
+      <h2>In-conversation widgets</h2>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        Agents can answer with interactive components — product/plan{' '}
+        <em>cards</em>, tap-to-pick <em>options</em>, <em>forms</em>, order{' '}
+        <em>status</em> trackers and <em>receipts</em> — rendered inside the
+        chat. Taps and submissions arrive as ordinary customer messages, so the
+        agent can reason over them like typed replies. On webchat they render
+        as rich components; on WhatsApp they become native interactive
+        lists/buttons, on Messenger card carousels, and SMS flattens them to
+        text. The transcript shows the same component so you can see exactly
+        what the customer was offered.
+      </p>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        Two ways they get emitted: the agent writes a{' '}
+        <span className="mono">WIDGET:</span> directive itself when a visual
+        answer beats prose, or a custom action declares{' '}
+        <strong>Show the result as</strong> cards/options and its JSON result
+        renders automatically — live catalogue data without the model copying
+        it. The Shopify "Search products" template ships bound to cards out of
+        the box.
+      </p>
     </>
   );
 }

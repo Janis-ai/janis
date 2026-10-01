@@ -1,6 +1,7 @@
 import type { Db } from '../db/client.js';
 import type { agents } from '../db/schema.js';
 import { interpolateSecrets } from './secrets.js';
+import type { ToolWidgetConfig } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 
@@ -17,6 +18,10 @@ export interface ToolDef {
   /** Mutating tools: the model proposes the call, a teammate approves or
    *  denies it in the console or Slack, and only then it executes. */
   approval?: boolean;
+  /** Live data binding — the tool's JSON result renders as an in-conversation
+   *  component (cards carousel / options picker) instead of the model
+   *  retelling it as text. `map` selects fields off each result row. */
+  widget?: ToolWidgetConfig;
 }
 
 export function toolsFor(agent: AgentRow): ToolDef[] {

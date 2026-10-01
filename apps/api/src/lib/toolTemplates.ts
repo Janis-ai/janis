@@ -1,4 +1,5 @@
 import type { ToolTemplateInfo } from '@janis/shared';
+import type { ToolWidgetConfig } from './widgets.js';
 
 interface CatalogTool {
   name: string;
@@ -13,6 +14,8 @@ interface CatalogTool {
   bodyFormat?: 'json' | 'form';
   /** Mutating/money-moving calls — the agent proposes, a teammate approves. */
   approval?: boolean;
+  /** Live data binding — JSON results render as cards/options. */
+  widget?: ToolWidgetConfig;
 }
 
 export interface ToolTemplate {
@@ -92,6 +95,29 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders.json?status=any&limit=5&fields=id,name,order_number,email,financial_status,fulfillment_status,total_price,currency,created_at&email={email}',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         params: { email: 'customer email address' },
+      },
+      {
+        name: 'shopify_search_products',
+        label: 'Search products',
+        description:
+          'Search the Shopify product catalogue by title keyword. Returns product cards with images and prices to show the customer.',
+        method: 'GET',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/products.json?title={query}&status=active&limit=8&fields=id,title,handle,vendor,product_type,images,variants',
+        headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        params: { query: 'keyword to match in product titles' },
+        widget: {
+          type: 'cards',
+          items: 'products',
+          link_label: 'View product',
+          select_label: "I'm interested in the {title}",
+          map: {
+            title: 'title',
+            subtitle: 'vendor',
+            image: 'images.0.src',
+            price: 'variants.0.price',
+            link: 'https://{{secrets.SHOPIFY_SHOP}}/products/{handle}',
+          },
+        },
       },
       {
         name: 'shopify_cancel_order',
@@ -450,6 +476,11 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         method: 'GET',
         url: 'https://api.stripe.com/v1/products?active=true&limit=20',
         headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
+        widget: {
+          type: 'cards',
+          items: 'data',
+          map: { title: 'name', subtitle: 'description', image: 'images.0' },
+        },
       },
       {
         name: 'stripe_list_prices',

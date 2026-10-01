@@ -157,6 +157,9 @@ const postMessage = z
   });
 
 async function findChannel(db: Db, token: string) {
+  // A non-UUID token (link expanders, typos, scanner probes hitting
+  // /chat/anything) would throw in Postgres's uuid parser — 404 instead.
+  if (!UUID_RE.test(token)) return undefined;
   const [channel] = await db
     .select()
     .from(channels)

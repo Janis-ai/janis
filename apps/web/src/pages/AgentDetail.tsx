@@ -3410,6 +3410,10 @@ function CustomToolForm({
   const [paramsText, setParamsText] = useState('');
   const [headersText, setHeadersText] = useState('');
   const [approval, setApproval] = useState(false);
+  const [widgetType, setWidgetType] = useState<'' | 'cards' | 'options'>('');
+  const [widgetMapText, setWidgetMapText] = useState('');
+  const [widgetItems, setWidgetItems] = useState('');
+  const [widgetSelectLabel, setWidgetSelectLabel] = useState('');
   const [err, setErr] = useState('');
 
   const parseLines = (text: string) =>
@@ -3440,6 +3444,16 @@ function CustomToolForm({
       ...(paramsText.trim() ? { params: parseLines(paramsText) } : {}),
       ...(method !== 'GET' && method !== 'DELETE' ? {} : {}),
       ...(approval ? { approval: true } : {}),
+      ...(widgetType
+        ? {
+            widget: {
+              type: widgetType,
+              ...(widgetItems.trim() ? { items: widgetItems.trim() } : {}),
+              ...(widgetSelectLabel.trim() ? { select_label: widgetSelectLabel.trim() } : {}),
+              ...(widgetMapText.trim() ? { map: parseLines(widgetMapText) } : {}),
+            },
+          }
+        : {}),
     };
     onAdd(tool);
     setName('');
@@ -3448,6 +3462,10 @@ function CustomToolForm({
     setParamsText('');
     setHeadersText('');
     setApproval(false);
+    setWidgetType('');
+    setWidgetMapText('');
+    setWidgetItems('');
+    setWidgetSelectLabel('');
     setErr('');
     setOpen(false);
   };
@@ -3510,6 +3528,58 @@ function CustomToolForm({
         />
         Needs approval — the agent proposes this action; a teammate must approve before it runs
       </label>
+      <div className="row" style={{ marginTop: 8, alignItems: 'center', gap: 8 }}>
+        <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+          Show the result as
+        </span>
+        <select
+          value={widgetType}
+          onChange={(e) => setWidgetType(e.target.value as typeof widgetType)}
+        >
+          <option value="">just text</option>
+          <option value="cards">cards (product/plan carousel)</option>
+          <option value="options">options (tap-to-pick list)</option>
+        </select>
+      </div>
+      {widgetType && (
+        <>
+          <textarea
+            rows={3}
+            placeholder={
+              widgetType === 'cards'
+                ? 'field mapping, one per line — title: name\nsubtitle: category\nprice: price\nimage: image_url\nlink: url'
+                : 'field mapping, one per line — label: name\ndescription: summary'
+            }
+            value={widgetMapText}
+            onChange={(e) => setWidgetMapText(e.target.value)}
+            className="mono"
+            style={{ width: '100%', fontSize: 12, marginTop: 8 }}
+          />
+          <div className="row" style={{ marginTop: 8, gap: 8 }}>
+            <input
+              className="grow mono"
+              placeholder="rows path (optional) — e.g. data.products"
+              value={widgetItems}
+              onChange={(e) => setWidgetItems(e.target.value)}
+              style={{ fontSize: 12 }}
+            />
+            {widgetType === 'cards' && (
+              <input
+                className="grow"
+                placeholder="tap label (optional) — e.g. Choose this"
+                value={widgetSelectLabel}
+                onChange={(e) => setWidgetSelectLabel(e.target.value)}
+                style={{ fontSize: 12 }}
+              />
+            )}
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            JSON responses render as the component automatically — the agent narrates them,
+            the customer sees real data. Defaults map {widgetType === 'cards' ? 'title/subtitle/price/image/link' : 'label/description'}{' '}
+            off each row; override only what differs.
+          </div>
+        </>
+      )}
       {err && <div className="error" style={{ marginTop: 8 }}>{err}</div>}
       <div className="row" style={{ marginTop: 8 }}>
         <button className="btn primary sm" onClick={submit}>

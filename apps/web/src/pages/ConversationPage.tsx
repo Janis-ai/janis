@@ -6,6 +6,7 @@ import type { Attachment, Conversation, ConversationState, Message } from '@jani
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
 import { ArgsRows, Avatar, channelLabel, displayName, fmtTime, StateBadge } from '../components/bits';
+import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { typingBus, presenceBus } from '../lib/typingBus';
@@ -957,24 +958,15 @@ export default function ConversationPage() {
                   )}
                 </div>
               ))}
-              {(m.payload.widgets as { type: string; items?: unknown[]; fields?: unknown[]; steps?: unknown[]; rows?: unknown[] }[] | undefined)?.map(
-                (w, i) => (
-                  <div key={i} className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    ▦{' '}
-                    {w.type === 'cards'
-                      ? `cards — ${w.items?.length ?? 0} item(s)`
-                      : w.type === 'options'
-                        ? `picker — ${w.items?.length ?? 0} option(s)`
-                        : w.type === 'form'
-                          ? `form — ${w.fields?.length ?? 0} field(s)`
-                          : w.type === 'status'
-                            ? `tracker — ${w.steps?.length ?? 0} step(s)`
-                            : w.type === 'receipt'
-                              ? `receipt — ${w.rows?.length ?? 0} row(s)`
-                              : `${w.type} widget`}{' '}
-                    <span style={{ opacity: 0.7 }}>(renders as an interactive component in the widget)</span>
+              {!!(m.payload.widgets as ChatWidget[] | undefined)?.length && (
+                <div className="transcript-widgets">
+                  {/* Mirror of what the customer saw — controls are inert here
+                      so an operator can't accidentally send as the visitor. */}
+                  <Widgets widgets={m.payload.widgets as ChatWidget[]} onSend={() => {}} />
+                  <div className="muted" style={{ fontSize: 11, marginTop: 2, opacity: 0.75 }}>
+                    interactive for the customer — preview only here
                   </div>
-                ),
+                </div>
               )}
             </div>
             {m.direction === 'out' && m.payload.inspector && (

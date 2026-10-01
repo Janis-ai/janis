@@ -20,6 +20,7 @@ import { emitHookEvent } from '../lib/hooks.js';
 import { mirrorToSlack, postSlackAlert, setSlackThreadStatus } from '../lib/slack.js';
 import { agentEligibleMembers } from '../lib/members.js';
 import { deliverToChannel, type AttachmentRef } from '../lib/channels.js';
+import type { WidgetComponent } from '../lib/widgets.js';
 import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
 import { METER_MESSAGES, billingCustomerFor, reportMeter } from '../lib/stripe.js';
 import { messageCap } from '../lib/plans.js';
@@ -135,9 +136,12 @@ export async function processEvents(
           const atts = (message.payload as { attachments?: AttachmentRef[] } | undefined)?.attachments;
           const qrs = (message.payload as { quick_replies?: QuickReply[] } | undefined)
             ?.quick_replies;
+          const widgets = (message.payload as { widgets?: WidgetComponent[] } | undefined)
+            ?.widgets;
           void deliverToChannel(db, conv.id, message.text, atts, {
             messageId: message.id,
             quickReplies: qrs,
+            widgets,
           });
         }
       }

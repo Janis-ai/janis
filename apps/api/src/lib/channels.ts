@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { QuickReply, UserProfile } from '@janis/shared';
+import type { WidgetComponent } from './widgets.js';
 import type { Db } from '../db/client.js';
 import { agents, channelBindings, channels, conversations, messages } from '../db/schema.js';
 import { env } from '../env.js';
@@ -467,6 +468,11 @@ export interface SendOptions {
   /** WhatsApp template send — required for business-initiated messages
    * outside the 24h customer-service window. */
   whatsappTemplate?: { name: string; language?: string; bodyParams?: string[] };
+  /** Interactive in-conversation components (cards, pickers, receipts) —
+   * webchat renders them natively; Meta kinds get the nearest platform
+   * equivalent (generic-template carousel for cards, quick replies /
+   * interactive list for pickers). Other types stay text-only. */
+  widgets?: WidgetComponent[];
 }
 
 /** Send a message (text and/or attachments) to a platform user through the channel's credentials. */
@@ -680,6 +686,63 @@ export async function sendChannelMessage(
         retryable = r.retryable;
       }
     }
+    // In-conversation widgets → the nearest WhatsApp primitive: an option
+    // picker becomes an interactive list (taps arrive as inbound text),
+    // cards flatten to a text block since WhatsApp has no carousel.
+    for (const w of opts?.widgets ?? []) {
+      if (w.type === 'options') {
+        const r = await send({
+          messaging_product: 'whatsapp',
+          to: platformUserId,
+          type: 'interactive',
+          interactive: {
+            type: 'list',
+            body: { text: w.title ?? 'Choose an option' },
+            action: {
+              button: 'See options',
+              sections: [
+                {
+                  rows: w.items.slice(0, 10).map((it, i) => ({
+                    id: `wopt_${i}`,
+                    title: [...it.label].slice(0, 24).join(''),
+                    ...(it.description
+                      ? { description: [...it.description].slice(0, 72).join('') }
+                      : {}),
+                  })),
+                },
+              ],
+            },
+          },
+        });
+        mid = r.mid ?? mid;
+        if (r.error && !error) {
+          error = r.error;
+          retryable = r.retryable;
+        }
+      } else if (w.type === 'cards') {
+        const lines = w.items
+          .map(
+            (it, i) =>
+              `${i + 1}. *${it.title}*${it.price ? ` — ${it.price}` : ''}` +
+              (it.subtitle ? `\n${it.subtitle}` : '') +
+              (it.link ? `\n${it.link}` : ''),
+          )
+          .join('\n\n');
+        const r = await send({
+          messaging_product: 'whatsapp',
+          to: platformUserId,
+          type: 'text',
+          text: { body: lines.slice(0, 4000) },
+        });
+        mid = r.mid ?? mid;
+        if (r.error && !error) {
+          error = r.error;
+          retryable = r.retryable;
+        }
+      }
+      // form/status/receipt have no WhatsApp equivalent — the accompanying
+      // text carries them
+    }
     return { mid, error, retryable };
   }
   // messenger / instagram — page access token. Meta echoes our sends back
@@ -781,6 +844,61 @@ export async function sendChannelMessage(
         payload: { url: absoluteAttachmentUrl(a), is_reusable: true },
       },
     });
+    mid = r.mid ?? mid;
+    if (r.error && !error) {
+      error = r.error;
+      retryable = r.retryable;
+    }
+  }
+  // In-conversation widgets → the nearest Meta primitive: cards become a
+  // generic-template carousel, an option picker becomes quick replies. Card
+  // taps land back as postback text — the same path as a typed reply.
+  for (const w of opts?.widgets ?? []) {
+    let msg: Record<string, unknown> | null = null;
+    if (w.type === 'cards') {
+      const elements = w.items.slice(0, 10).map((it) => {
+        const buttons: Record<string, unknown>[] = [];
+        if (it.link && /^https?:\/\//.test(it.link)) {
+          buttons.push({ type: 'web_url', url: it.link, title: (it.link_label || 'View').slice(0, 20) });
+        }
+        if (it.select_label) {
+          buttons.push({
+            type: 'postback',
+            title: it.select_label.slice(0, 20),
+            payload: it.select_label.slice(0, 1000),
+          });
+        }
+        return {
+          title: it.title.slice(0, 80),
+          ...(it.subtitle || it.price
+            ? { subtitle: [it.subtitle, it.price].filter(Boolean).join(' · ').slice(0, 80) }
+            : {}),
+          ...(it.image && /^https?:\/\//.test(it.image) ? { image_url: it.image } : {}),
+          ...(buttons.length ? { buttons } : {}),
+        };
+      });
+      if (elements.length) {
+        msg = {
+          attachment: {
+            type: 'template',
+            payload: { template_type: 'generic', elements },
+          },
+        };
+      }
+    } else if (w.type === 'options') {
+      msg = {
+        text: w.title ?? 'Choose an option:',
+        quick_replies: w.items.slice(0, 13).map((it) => ({
+          content_type: 'text',
+          title: [...it.label].slice(0, 20).join(''),
+          payload: it.label.slice(0, 1000),
+        })),
+      };
+    }
+    // form/status/receipt have no Meta equivalent — the accompanying text
+    // carries them
+    if (!msg) continue;
+    const r = await send(msg);
     mid = r.mid ?? mid;
     if (r.error && !error) {
       error = r.error;

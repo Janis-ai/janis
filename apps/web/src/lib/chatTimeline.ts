@@ -8,11 +8,16 @@ export interface Attachment {
   size: number;
 }
 
+import type { ChatWidget } from '../components/ChatWidgets';
+
 export interface ChatMsg {
   id: string;
   direction: string;
   text: string;
   created_at: string;
+  /** Agent-emitted interactive components (cards, pickers, forms…) —
+   *  rendered by <Widgets> in the rail, mirroring widget.js. */
+  widgets?: ChatWidget[];
   /** Sender's own idempotency key, echoed back on inbound rows — exact
    *  outbox reconciliation even when identical text was sent twice. */
   client_id?: string;

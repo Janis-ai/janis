@@ -153,7 +153,47 @@ button, input, select, textarea { font: inherit; }
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
   30% { transform: translateY(-4px); opacity: 1; }
 }
-.ask-qrs { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.ask-qrs { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 4px 8px; }
+.ask-qrs .btn { border-radius: 16px; padding: 7px 14px; font-size: 13px; border-color: var(--accent); color: var(--accent); }
+.ask-qrs .btn:hover { background: var(--accent-dim); }
+/* In-conversation widgets (cards/options/form/status/receipt) — console
+   mirror of the janis-w* component styles in apps/api/public/widget.js */
+.wgt { margin-top: 6px; font-size: 13px; min-width: 200px; }
+.wgt-cards { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.wgt-card { flex: 0 0 150px; max-width: 150px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.wgt-card img { width: 100%; height: 90px; object-fit: cover; display: block; }
+.wgt-card-body { padding: 8px; }
+.wgt-card-t { font-weight: 600; font-size: 13px; line-height: 1.3; }
+.wgt-card-s { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.3; }
+.wgt-card-p { font-weight: 600; font-size: 13px; margin-top: 4px; }
+.wgt-card-btns { display: flex; gap: 4px; padding: 0 8px 8px; flex-wrap: wrap; }
+.wgt-btn { display: inline-block; border: 1px solid var(--accent); color: var(--accent); background: var(--panel); border-radius: 14px; padding: 5px 10px; font-size: 12px; cursor: pointer; text-decoration: none; font-family: inherit; }
+.wgt-btn.wgt-btn-primary { background: var(--accent); color: #fff; }
+.wgt-title { font-weight: 600; margin-bottom: 6px; }
+.wgt-opts { display: flex; flex-direction: column; gap: 5px; }
+.wgt-opt { display: block; text-align: left; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 7px 10px; font-size: 13px; cursor: pointer; font-family: inherit; }
+.wgt-opt:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.wgt-opt small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+.wgt-opt.wgt-sel { border-color: var(--accent); background: var(--accent); color: #fff; }
+.wgt-opt.wgt-sel small { color: rgba(255,255,255,.8); }
+.wgt-opts.wgt-done .wgt-opt:not(.wgt-sel) { opacity: .5; pointer-events: none; }
+.wgt-form { display: flex; flex-direction: column; gap: 6px; }
+.wgt-form input, .wgt-form textarea, .wgt-form select { border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 13px; font-family: inherit; background: var(--bg); color: inherit; }
+.wgt-form input:focus, .wgt-form textarea:focus, .wgt-form select:focus { border-color: var(--accent); outline: none; }
+.wgt-form textarea { min-height: 56px; resize: vertical; }
+.wgt-form label { font-size: 12px; color: var(--muted); display: block; }
+.wgt-sent { color: var(--ok); font-size: 12.5px; font-weight: 600; padding: 4px 0; }
+.wgt-steps { display: flex; flex-direction: column; gap: 7px; }
+.wgt-step { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.wgt-dot { flex: 0 0 10px; width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; background: var(--border); }
+.wgt-step.done .wgt-dot { background: var(--ok); }
+.wgt-step.current .wgt-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.wgt-step.todo { color: var(--muted); }
+.wgt-step small { display: block; color: var(--muted); font-size: 11.5px; }
+.wgt-receipt { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: var(--panel); }
+.wgt-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13px; }
+.wgt-row .wgt-v { text-align: right; font-weight: 500; white-space: pre-line; }
+.wgt-row.wgt-total { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 7px; font-weight: 700; }
 .ask-attach { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }
 .ask-chip {
   display: inline-flex; align-items: center; gap: 4px;
