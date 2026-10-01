@@ -103,6 +103,14 @@ button, input, select, textarea { font: inherit; }
   /* above the bottom push banner (z-80), below alert toasts (z-100) */
   position: relative; z-index: 81;
 }
+/* /ask — the concierge IS the page: hide the outlet, rail takes the row.
+   The same mounted rail flexes open, so drafts and scroll survive the
+   expand ↔ dock round-trip. */
+.layout.ask-page .main { display: none; }
+.layout.ask-page .ask-rail { flex: 1; width: auto; }
+/* keep the chat column readable at desktop widths — centre like a chat page */
+.layout.ask-page .ask-pane { max-width: 820px; width: 100%; margin: 0 auto; }
+
 .ask-head {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 14px; border-bottom: 1px solid var(--border);

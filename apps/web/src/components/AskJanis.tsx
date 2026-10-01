@@ -9,7 +9,7 @@ import {
   type ChatMsg,
   type OutEntry,
 } from '../lib/chatTimeline';
-import { Loader2, Mic, MicOff, Paperclip, Smile, X } from 'lucide-react';
+import { Loader2, Maximize2, Mic, MicOff, Minimize2, Paperclip, Smile, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 import { ArgsRows } from './bits';
 
@@ -141,11 +141,16 @@ export function AskJanis({
   channelId,
   badge,
   onClose,
+  onToggleExpand,
+  expanded,
   seedMessage,
 }: {
   channelId: string;
   badge?: string;
   onClose?: () => void; // omitted when the rail's own tab strip handles close
+  /** Concierge-only: expand to /ask / dock back to the rail. */
+  onToggleExpand?: () => void;
+  expanded?: boolean;
   // Auto-sent once on load — discovery cards / ?rail=ask&q= deeplinks.
   seedMessage?: string;
 }) {
@@ -581,6 +586,16 @@ export function AskJanis({
       <div className="ask-head">
         <strong className="grow">{cfg?.agent_name ?? 'Ask Janis'}</strong>
         {badge && <span className="badge">{badge}</span>}
+        {onToggleExpand && (
+          <button
+            className="btn"
+            onClick={onToggleExpand}
+            title={expanded ? 'Dock panel' : 'Expand'}
+            aria-label={expanded ? 'Dock panel' : 'Expand panel'}
+          >
+            {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+        )}
         {onClose && (
           <button className="btn" onClick={onClose} title="Close" aria-label="Close panel"><X size={14} /></button>
         )}

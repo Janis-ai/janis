@@ -114,12 +114,45 @@ export default function Layout() {
   );
   const hasAsk = Boolean(data?.support_channel_id);
   const hasBoth = hasAsk && Boolean(testRail);
-  const railVisible = railOpen && ((railTab === 'ask' && hasAsk) || (railTab === 'test' && testRail));
+
+  // /ask — the concierge rail as a full page. The same mounted rail fills the
+  // content column so drafts/scroll survive expand ↔ dock round-trips.
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isAskPage = location.pathname === '/ask';
+  const lastNonAsk = useRef('/conversations');
+  useEffect(() => {
+    if (!isAskPage) lastNonAsk.current = location.pathname + location.search;
+  }, [location.pathname, location.search, isAskPage]);
+
+  const railVisible =
+    (railOpen && ((railTab === 'ask' && hasAsk) || (railTab === 'test' && testRail))) ||
+    (isAskPage && hasAsk);
+
+  // On /ask the rail must be open on the ask tab; a workspace with no
+  // concierge has nothing to show there — bounce back to the last page.
+  // ?q= deep-links a seeded question the same way ?rail=ask&q= did.
+  useEffect(() => {
+    if (!isAskPage) return;
+    if (data && !hasAsk) {
+      navigate(lastNonAsk.current, { replace: true });
+      return;
+    }
+    setRailTab('ask');
+    setRailOpen(true);
+    const q = searchParams.get('q');
+    if (q) {
+      setAskSeed(q);
+      const p = new URLSearchParams(searchParams);
+      p.delete('q');
+      setSearchParams(p, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAskPage, hasAsk, data, searchParams]);
 
   // At ≤720px the rail is position:fixed over the whole view — a nav click
   // beneath it lands on an invisible page, so fold the rail on navigation.
   // Declared before the ?rail= consumer so a deeplinked rail still opens.
-  const location = useLocation();
   const prevPath = useRef(location.pathname);
   useEffect(() => {
     if (location.pathname === prevPath.current) return;
@@ -129,7 +162,6 @@ export default function Layout() {
 
   // Deeplinks: ?rail=ask | ?rail=test&agent=<id> — merged into the existing
   // params so page params like ?tab= survive. Consumed once per combo.
-  const [searchParams, setSearchParams] = useSearchParams();
   const railParam = searchParams.get('rail');
   const railAgentParam = searchParams.get('agent');
   const consumedRail = useRef('');
@@ -139,16 +171,17 @@ export default function Layout() {
     // deeplink. Without this guard a stamped param survives into the next
     // location and the consumer re-opens the rail a nav click just closed.
     if (navType === 'REPLACE') return;
+    // On /ask the path is the state — a stray ?rail= param must not pop a
+    // docked rail over the expanded page.
+    if (isAskPage) return;
     const key = `${railParam}:${railAgentParam}`;
     if (key === consumedRail.current) return;
     consumedRail.current = key;
     if (railParam === 'ask') {
-      // ?q= seeds the concierge with a question — discovery cards and emails
-      // can deep-link a conversation, not just a panel.
+      // Canonical form is the /ask page now — ?q= rides along and the page's
+      // own effect seeds it.
       const q = searchParams.get('q');
-      if (q) setAskSeed(q);
-      setRailTab('ask');
-      setRailOpen(true);
+      navigate(`/ask${q ? `?q=${encodeURIComponent(q)}` : ''}`, { replace: true });
     } else if (railParam === 'test' && railAgentParam) {
       void api<{ channel_id: string; agent_name?: string }>(
         `/api/agents/${railAgentParam}/test-channel`,
@@ -165,7 +198,7 @@ export default function Layout() {
       setRailOpen(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [railParam, railAgentParam, navType]);
+  }, [railParam, railAgentParam, navType, isAskPage]);
 
   // Reflect rail state back into the URL — refresh or a copied link reopens
   // the same panel. replace: keeps tab flips out of history.
@@ -173,7 +206,11 @@ export default function Layout() {
     setSearchParams(
       (prev) => {
         const p = new URLSearchParams(prev);
-        if (railOpen && railTab === 'ask' && hasAsk) {
+        if (isAskPage) {
+          // The path itself carries the state — ?rail= would fight it.
+          p.delete('rail');
+          p.delete('agent');
+        } else if (railOpen && railTab === 'ask' && hasAsk) {
           p.set('rail', 'ask');
           p.delete('agent');
         } else if (railOpen && railTab === 'test' && testRail?.agentId) {
@@ -187,7 +224,7 @@ export default function Layout() {
       },
       { replace: true },
     );
-  }, [railOpen, railTab, hasAsk, testRail, setSearchParams]);
+  }, [railOpen, railTab, hasAsk, testRail, isAskPage, setSearchParams]);
   // No active workspace → skip workspace-scoped queries (they'd 401 no_workspace)
   const hasWorkspace = Boolean(data?.workspace);
   const { data: attention } = useQuery({
@@ -201,6 +238,12 @@ export default function Layout() {
   // it stays live; the 60s poll is the fallback.
   useEffect(() => setTabBadge(attention?.unread ?? 0), [attention?.unread]);
   const navigate = useNavigate();
+  // Closing the rail on /ask has to leave the page too — otherwise the aside
+  // just re-renders over an empty column. Back to wherever the user was.
+  const closeRail = () => {
+    setRailOpen(false);
+    if (isAskPage) navigate(lastNonAsk.current);
+  };
   const qc = useQueryClient();
   const [toasts, setToasts] = useState<Toast[]>([]);
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -307,11 +350,24 @@ export default function Layout() {
   };
 
   return (
-    <div className={`layout${railVisible ? ' ask-open' : ''}`}>
+    <div className={`layout${railVisible ? ' ask-open' : ''}${isAskPage ? ' ask-page' : ''}`}>
       {promptEl}
       <CommandPalette />
       <a className="skip-link" href="#main-content">Skip to content</a>
-      <nav className="sidebar" aria-label="Main navigation">
+      {/* Clicking a nav item while the rail overlays (≤720px) folds it — even
+          a click on the section you're already on, which changes no path. */}
+      <nav
+        className="sidebar"
+        aria-label="Main navigation"
+        onClick={(e) => {
+          if (
+            (e.target as HTMLElement).closest('a') &&
+            window.matchMedia('(max-width: 720px)').matches
+          ) {
+            setRailOpen(false);
+          }
+        }}
+      >
         <Link className="brand" to="/" title="Janis home">
           <BrandImg className="brand-wide" alt="Janis" />
           <BrandImg className="brand-mark" mark alt="" />
@@ -332,10 +388,13 @@ export default function Layout() {
         {data?.support_channel_id && (
           <button
             type="button"
-            className={`ask-toggle${railVisible && railTab === 'ask' ? ' active' : ''}`}
+            className={`ask-toggle${(railVisible && railTab === 'ask') || isAskPage ? ' active' : ''}`}
             onClick={() => {
-              if (railOpen && railTab === 'ask') setRailOpen(false);
-              else {
+              if (isAskPage) {
+                closeRail();
+              } else if (railOpen && railTab === 'ask') {
+                setRailOpen(false);
+              } else {
                 setRailTab('ask');
                 setRailOpen(true);
               }
@@ -416,7 +475,7 @@ export default function Layout() {
         )}
       </main>
       {railVisible && (
-        <aside className="ask-rail">
+        <aside className={`ask-rail${isAskPage ? ' expanded' : ''}`}>
           {hasBoth && (
             <div className="ask-tabs">
               <button
@@ -432,7 +491,7 @@ export default function Layout() {
                 Test{testRail!.label ? ` — ${testRail!.label}` : ''}
               </button>
               <span className="grow" />
-              <button className="btn" onClick={() => setRailOpen(false)} title="Close" aria-label="Close panel"><X size={14} /></button>
+              <button className="btn" onClick={closeRail} title="Close" aria-label="Close panel"><X size={14} /></button>
             </div>
           )}
           {hasAsk && (
@@ -440,7 +499,9 @@ export default function Layout() {
               <AskJanis
                 channelId={data!.support_channel_id!}
                 seedMessage={askSeed ?? undefined}
-                onClose={hasBoth ? undefined : () => setRailOpen(false)}
+                expanded={isAskPage}
+                onToggleExpand={() => navigate(isAskPage ? lastNonAsk.current : '/ask')}
+                onClose={hasBoth ? undefined : closeRail}
               />
             </div>
           )}
@@ -452,7 +513,7 @@ export default function Layout() {
               <AskJanis
                 channelId={testRail.channelId}
                 badge="TEST"
-                onClose={hasBoth ? undefined : () => setRailOpen(false)}
+                onClose={hasBoth ? undefined : closeRail}
               />
             </div>
           )}

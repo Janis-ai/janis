@@ -163,6 +163,8 @@ export default function App() {
           <Route path="/integrations/:channelId" element={<ChannelRedirect />} />
           <Route path="/billing" element={<Billing />} />
           <Route path="/settings" element={<Settings />} />
+          {/* Ask Janis expanded — the concierge rail becomes the page. */}
+          <Route path="/ask" element={null} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
