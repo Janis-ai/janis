@@ -898,6 +898,51 @@ describe('webchat authenticated identity', () => {
     expect(p.email).toBe('late@acme.test');
     expect(p.identity_verified).toBe(true);
   });
+
+  it('stores host-provided traits on the profile and merges them on identify', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const VIS = 'vis_traits00000001';
+    const user = { id: 'acct_traits', email: 't@acme.test', name: 'Traits' };
+    await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        visitor_id: VIS,
+        text: 'hello with traits',
+        user: { ...user, sig: sign('sek_test', user), traits: { plan: 'pro' } },
+      }),
+    });
+    // identify can add or overwrite traits later — merged, not replaced
+    await app.request(`/chat/${channelId}/identify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        visitor_id: VIS,
+        user: { ...user, sig: sign('sek_test', user), traits: { company: 'Acme' } },
+      }),
+    });
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, `webchat:${VIS}`))
+      .limit(1);
+    const meta = ((conv?.userProfile as Record<string, unknown>)?.metadata ?? {}) as Record<string, unknown>;
+    expect(meta.plan).toBe('pro');
+    expect(meta.company).toBe('Acme');
+  });
+
+  it('attaches workspace names as traits for session-identified Janis users', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [u] = await db.select().from(users).where(eq(users.email, 'owner@janis.test'));
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, `webchat:u:${u.id}`))
+      .limit(1);
+    const meta = ((conv?.userProfile as Record<string, unknown>)?.metadata ?? {}) as Record<string, unknown>;
+    expect(meta.janis_account).toBe('yes');
+    expect(meta.workspaces).toContain('Test');
+  });
 });
 
 describe('webchat transcript polish', () => {

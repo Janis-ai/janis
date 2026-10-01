@@ -7,7 +7,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channelBindings, channels, conversations, helpArticles, messages, sessions, users } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations, helpArticles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
 import type { QuickReply } from '@janis/shared';
@@ -38,6 +38,9 @@ const identityClaim = z.object({
   name: z.string().max(80).optional(),
   email: z.string().max(200).optional(),
   sig: z.string().max(200).optional(),
+  /** Host-provided context for the agent (plan, company, page, …). Unsigned
+   *  — treated as self-reported context, never proof of anything. */
+  traits: z.record(z.unknown()).optional(),
 });
 
 const postMessage = z
@@ -100,6 +103,14 @@ async function resolveIdentity(
       .where(and(eq(sessions.id, sha256(token)), gt(sessions.expiresAt, new Date())))
       .limit(1);
     if (row) {
+      // A signed-in Janis user gets their workspace names as traits so the
+      // agent can reason about account questions ("you're on the Default
+      // workspace") instead of guessing.
+      const ws = await db
+        .select({ name: workspaces.name })
+        .from(memberships)
+        .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
+        .where(eq(memberships.userId, row.user.id));
       return {
         id: row.user.id,
         name: row.user.name,
@@ -107,6 +118,10 @@ async function resolveIdentity(
         verified: true,
         via: 'session',
         avatarUrl: row.user.avatarUrl ?? undefined,
+        traits: {
+          janis_account: 'yes',
+          ...(ws.length ? { workspaces: ws.map((w) => w.name).join(', ') } : {}),
+        },
       };
     }
   }
@@ -135,6 +150,7 @@ async function resolveIdentity(
     via: 'claim',
     janisUser,
     avatarUrl,
+    traits: claim.traits,
   };
 }
 
@@ -251,6 +267,9 @@ export function webchatRoutes(db: Db) {
         ...(resolved.avatarUrl ? { picture_url: resolved.avatarUrl } : {}),
         ...(resolved.verified && resolved.id ? { external_id: resolved.id } : {}),
         identity_verified: resolved.verified === true,
+        ...(resolved.traits
+          ? { metadata: { ...((profile.metadata as object) ?? {}), ...resolved.traits } }
+          : {}),
       };
       await db
         .update(conversations)

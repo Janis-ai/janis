@@ -169,6 +169,9 @@ export interface InboundMessage {
     /** Janis-local avatar path (/uploads/…) when the identity resolves to a
      *  real Janis user — becomes the conversation's picture_url. */
     avatarUrl?: string;
+    /** Host-provided context (Janis.identify traits) — lands on
+     *  user_profile.metadata and reaches the agent as background context. */
+    traits?: Record<string, unknown>;
   };
   attachments?: AttachmentRef[];
 }

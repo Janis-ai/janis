@@ -96,6 +96,22 @@ export function conversationContext(
       '- Customer identity VERIFIED (logged-in session) — name/email above are authoritative.',
     );
   }
+  // Host-provided traits (Janis.identify / signed claim). Self-reported
+  // unless the identity was verified — label accordingly so the model
+  // doesn't treat a visitor-supplied "plan: enterprise" as fact.
+  const meta = p.metadata;
+  if (meta && typeof meta === 'object') {
+    const traitLines = Object.entries(meta)
+      .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v) && String(v) !== '')
+      .slice(0, 10)
+      .map(([k, v]) => `  - ${k}: ${String(v).slice(0, 120)}`);
+    if (traitLines.length) {
+      lines.push(
+        `- Customer context provided by the host site${p.identity_verified ? '' : ' (self-reported, not verified)'}:`,
+        ...traitLines,
+      );
+    }
+  }
   lines.push(
     '- Earlier messages marked "(passed to a human teammate)" were already escalated — always answer the newest message normally.',
   );

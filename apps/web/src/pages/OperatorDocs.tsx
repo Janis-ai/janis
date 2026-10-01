@@ -115,21 +115,22 @@ export default function OperatorDocs() {
         internal.
       </p>
       <Table
-        head={['Typed in an alert thread', 'Does']}
+        head={['In an alert thread', 'Does']}
         rows={[
           ['plain text', 'Sent to the customer as a human reply (auto takes over)'],
-          ['/note or note: <text>', 'Internal note — never reaches the customer'],
-          ['/agent <text>', 'Delivered as the agent — no takeover'],
-          ['/teach or teach: <text>', 'Adds a knowledge entry — admins only'],
-          ['/pause [minutes|forever]', 'Takes over or extends the human window'],
-          ['/resume', 'Hands the conversation back to the agent'],
+          ['note: <text>', 'Internal note — never reaches the customer'],
+          ['agent: <text>', 'Delivered as the agent — no takeover'],
+          ['teach: <text>', 'Adds a knowledge entry — admins only'],
+          ['pause: [minutes|forever]', 'Takes over or extends the human window'],
+          ['resume:', 'Hands the conversation back to the agent'],
+          ['Take over / Resume buttons', 'Same as the above — on the alert message'],
         ]}
       />
       <p className="muted" style={{ lineHeight: 1.6 }}>
-        Slack can't invoke real slash commands inside threads, so these are
-        typed as plain text and Janis parses them in the thread. /pause and
-        /resume also work as actual Slack commands at channel level — they act
-        on the channel's most recent conversation.
+        Slack blocks slash commands inside threads entirely — they never reach
+        Janis — so in threads use the colon forms or the buttons. /pause and
+        /resume do work as real Slack commands at channel level, acting on the
+        channel's most recent conversation.
       </p>
 
       <h2>Campaigns</h2>

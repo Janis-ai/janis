@@ -61,7 +61,7 @@
   };
 
   // Public API — the embedding site identifies its logged-in user:
-  //   Janis.identify({ id, name, email, sig })
+  //   Janis.identify({ id, name, email, sig, traits })
   // `sig` is HMAC-SHA256 of "id|email|name" with the channel's identity
   // secret — compute it server-side so identity can't be forged client-side.
   // Call with no args to clear identity (e.g. on logout).

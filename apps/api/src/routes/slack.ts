@@ -685,20 +685,23 @@ export function slackPublicRoutes(db: Db) {
 
     try {
       // Thread vocabulary:
-      //   /pause [N|forever]            → take over / extend the human window
-      //   /resume                       → hand back to the agent
+      //   /pause [N|forever] | pause:   → take over / extend the human window
+      //   /resume | resume:             → hand back to the agent
       //   /note <text> | note: <text>   → internal operator note (never sent to customer)
       //   /teach <text> | teach: <text> → append to agent knowledge (admin only)
-      //   /agent <text>                 → deliver as the agent
+      //   /agent <text> | agent: <text> → deliver as the agent
       //   anything else                 → human reply to the customer
-      // Slack can't invoke app slash commands inside threads — typed /pause
-      // arrives as literal text, so parse it here with exact thread context.
-      const isPause = /^\/pause\b/i.test(ev.text);
-      const isResume = /^\/resume\b/i.test(ev.text);
+      // Slack rejects app slash commands inside threads entirely ("not
+      // supported in threads") — they never reach us. The colon forms are
+      // plain text and DO arrive, so document those; the / forms stay as a
+      // fallback for clients that pass them through.
+      const isPause = /^(?:\/pause\b|pause:\s*$|pause:\s+)/i.test(ev.text);
+      const isResume = /^(?:\/resume\b|resume:\s*$|resume:\s+)/i.test(ev.text);
       const noteText = /^(?:\/note\s+|note:\s*)(.+)$/is.exec(ev.text)?.[1]?.trim();
       const teachText = /^(?:\/teach\s+|teach:\s*)(.+)$/is.exec(ev.text)?.[1]?.trim();
-      const asAgent = ev.text.startsWith('/agent ');
-      const text = asAgent ? ev.text.slice('/agent '.length).trim() : noteText ?? teachText ?? ev.text;
+      const agentText = /^(?:\/agent\s+|agent:\s*)(.+)$/is.exec(ev.text)?.[1]?.trim();
+      const text = agentText ?? noteText ?? teachText ?? ev.text;
+      const asAgent = agentText !== undefined;
       if (!text) return c.json({ ok: true });
 
       // Teach is permission-gated: members can reply and leave notes but only
@@ -732,7 +735,7 @@ export function slackPublicRoutes(db: Db) {
 
       if (isPause || isResume) {
         if (isPause) {
-          const arg = ev.text.replace(/^\/pause\b/i, '').trim();
+          const arg = ev.text.replace(/^(?:\/pause|pause:)\b/i, '').trim();
           let minutes: number | undefined;
           if (/^(unlimited|forever|infinity)$/i.test(arg)) minutes = -1;
           else if (arg) {

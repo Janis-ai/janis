@@ -54,6 +54,7 @@ function baseProfile(channel: ChannelRow, msg: InboundMessage): UserProfile {
     // the field every avatar surface (console, Slack) already reads.
     ...(msg.user?.avatarUrl ? { picture_url: msg.user.avatarUrl } : {}),
     ...(msg.user ? { identity_verified: msg.user.verified === true } : {}),
+    ...(msg.user?.traits ? { metadata: msg.user.traits } : {}),
   };
 }
 

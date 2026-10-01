@@ -1157,6 +1157,13 @@ export default function ConversationPage() {
             <div>Email: {p.email ?? '—'}</div>
             {p.phone && <div>Phone: {p.phone}</div>}
             <div>User id: {p.id ?? c.external_id}</div>
+            {Object.entries(p.metadata ?? {})
+              .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v) && String(v) !== '')
+              .map(([k, v]) => (
+                <div key={k} style={{ overflowWrap: 'anywhere' }}>
+                  {k}: {String(v)}
+                </div>
+              ))}
             <div>
               Agent:{' '}
               {agent ? (

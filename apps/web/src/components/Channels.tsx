@@ -485,8 +485,15 @@ function WebchatIdentity({ channel }: { channel: Channel }) {
         title="Your page — after the widget script"
         code={`Janis.identify({ id: user.id, name: user.name, email: user.email, sig });
 // or unsigned (self-reported name/email only):
-Janis.identify({ id: user.id, name: user.name, email: user.email });`}
+Janis.identify({ id: user.id, name: user.name, email: user.email });
+// pass extra context the agent can use (plan, company, page…):
+Janis.identify({ id: user.id, name: user.name, email: user.email, sig,
+  traits: { plan: 'pro', company: 'Acme Inc' } });`}
       />
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+        <span className="mono">traits</span> reaches the agent as host-provided context —
+        unsigned traits are labelled self-reported, so don't use them as proof of entitlement.
+      </div>
       <div className="row" style={{ marginTop: 8 }}>
         <input
           className="grow mono"
