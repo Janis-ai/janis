@@ -34,9 +34,14 @@ const VISITOR_RE = /^[A-Za-z0-9_-]{8,64}$/;
  * api.openai.com — then falls back to a vendor-scoped OPENAI_LLM_API_KEY.
  * Keys are read lazily so tests can inject them after module load.
  * Returns null when no backend is configured; throws when a configured
- * backend errors.
+ * backend errors. `engine` is a temporary A/B knob: 'auto' prefers Gemini,
+ * 'gemini'/'openai' force that backend (unsupported mime on gemini throws —
+ * no silent cross-engine fallback, or the comparison is meaningless).
  */
-async function transcribeAudio(file: File): Promise<{ text: string; seconds: number } | null> {
+async function transcribeAudio(
+  file: File,
+  engine: 'auto' | 'gemini' | 'openai' = 'auto',
+): Promise<{ text: string; seconds: number } | null> {
   // Blob types arrive as e.g. 'audio/webm;codecs=opus' — strip params.
   const mime = (file.type || 'audio/webm').split(';')[0].trim();
   // Gemini's inline audio drops unsupported containers silently (mp4/m4a/aac
@@ -46,7 +51,7 @@ async function transcribeAudio(file: File): Promise<{ text: string; seconds: num
     process.env.GOOGLE_LLM_API_KEY ||
     env.llmVendorKeys.google?.api_key ||
     (env.llmBaseUrl.includes('generativelanguage.googleapis.com') ? env.llmApiKey : '');
-  const googleOk = googleKey && GEMINI_AUDIO.test(mime);
+  const googleOk = googleKey && GEMINI_AUDIO.test(mime) && engine !== 'openai';
   if (googleOk) {
     const base = env.llmBaseUrl.includes('generativelanguage.googleapis.com')
       ? env.llmBaseUrl.replace(/\/openai\/?$/, '')
@@ -79,6 +84,12 @@ async function transcribeAudio(file: File): Promise<{ text: string; seconds: num
       return { text: text.trim(), seconds: Math.min(Math.max(file.size / 16_000, 0), 600) };
     }
     console.warn('[stt] gemini', r.status, (await r.text()).slice(0, 300));
+  }
+  if (engine === 'gemini') {
+    // Forced engine: a readable mime with a configured key that failed above
+    // is an error; anything else means the engine can't serve this file.
+    if (googleKey && GEMINI_AUDIO.test(mime)) throw new Error('gemini transcription failed');
+    return null;
   }
   const openaiKey =
     process.env.OPENAI_LLM_API_KEY ||
@@ -517,6 +528,9 @@ export function webchatRoutes(db: Db) {
     const creds = channel.credentials as ChannelCredentials;
     if (creds.dictation !== true && creds.internal !== true)
       return c.json({ error: 'dictation not enabled' }, 403);
+    const engineQ = c.req.query('engine');
+    const engine =
+      engineQ === 'gemini' || engineQ === 'openai' ? engineQ : 'auto';
     const body = await c.req.parseBody();
     const file = body['audio'];
     if (!(file instanceof File)) return c.json({ error: 'audio field required' }, 400);
@@ -525,7 +539,7 @@ export function webchatRoutes(db: Db) {
 
     let out: { text: string; seconds: number } | null;
     try {
-      out = await transcribeAudio(file);
+      out = await transcribeAudio(file, engine);
     } catch (e) {
       console.warn('[stt]', e);
       return c.json({ error: 'transcription failed' }, 502);

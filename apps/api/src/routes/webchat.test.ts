@@ -1568,6 +1568,51 @@ describe('dictation transcribe', () => {
     }
   });
 
+  it('honours the ?engine= A/B override — openai skips Gemini, gemini never falls back', async () => {
+    process.env.GOOGLE_LLM_API_KEY = 'goog-test';
+    process.env.OPENAI_LLM_API_KEY = 'sk-test-stt';
+    const seenUrls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        seenUrls.push(String(url));
+        return new Response(JSON.stringify({ text: 'x', duration: 1 }));
+      }),
+    );
+    try {
+      const fd1 = new FormData();
+      fd1.append('audio', new File(['fakeaudio'], 'd.webm', { type: 'audio/webm' }));
+      const r1 = await app.request(`/chat/${channelId}/transcribe?engine=openai`, {
+        method: 'POST',
+        body: fd1,
+      });
+      expect(r1.status).toBe(200);
+      expect(seenUrls[0]).toBe('https://api.openai.com/v1/audio/transcriptions');
+
+      // engine=gemini forces Gemini — failure must not silently fall back
+      seenUrls.length = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: unknown) => {
+          seenUrls.push(String(url));
+          return new Response('quota', { status: 429 });
+        }),
+      );
+      const fd2 = new FormData();
+      fd2.append('audio', new File(['fakeaudio'], 'd.webm', { type: 'audio/webm' }));
+      const r2 = await app.request(`/chat/${channelId}/transcribe?engine=gemini`, {
+        method: 'POST',
+        body: fd2,
+      });
+      expect(r2.status).toBe(502);
+      expect(seenUrls).toHaveLength(1);
+      expect(seenUrls[0]).toContain('generativelanguage.googleapis.com');
+    } finally {
+      delete process.env.GOOGLE_LLM_API_KEY;
+      delete process.env.OPENAI_LLM_API_KEY;
+    }
+  });
+
   it('exposes the dictation flag in the widget bootstrap', async () => {
     const body = (await (await app.request(`/chat/${channelId}`)).json()) as {
       dictation?: boolean;

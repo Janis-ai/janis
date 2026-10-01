@@ -23,6 +23,25 @@ interface ChatConfig {
   dictation?: boolean;
 }
 
+/** Minimal Web Speech surface — TS's dom lib omits SpeechRecognition. */
+interface SpeechRecognitionLike {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((e: { results: ArrayLike<{ 0: { transcript: string } }> }) => void) | null;
+  onerror: ((e: { error?: string }) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+
+type SttEngine = 'auto' | 'gemini' | 'openai' | 'webspeech';
+
+function initialSttEngine(): SttEngine {
+  const q = new URLSearchParams(window.location.search).get('stt');
+  return q === 'gemini' || q === 'openai' || q === 'webspeech' ? q : 'auto';
+}
+
 interface PendingFile {
   name: string;
   uploading: boolean;
@@ -490,14 +509,28 @@ export function AskJanis({
         return undefined;
       }
     })();
+  // TEMPORARY A/B — sttEngine picks the dictation backend: auto (Gemini→OpenAI
+  // fallback), gemini, openai, or webspeech (client-side Web Speech API —
+  // free, never hits /transcribe). Seed via ?stt= URL param.
+  const [sttEngine, setSttEngine] = useState<SttEngine>(initialSttEngine);
+  const speechRef = useRef<SpeechRecognitionLike | null>(null);
+  const SpeechRecognitionCtor = (
+    window as unknown as {
+      SpeechRecognition?: new () => SpeechRecognitionLike;
+      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    }
+  ).SpeechRecognition ??
+    (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognitionLike })
+      .webkitSpeechRecognition;
+
   // Dictation is opt-in per channel (metered on Janis's keys) — cfg.dictation
   // is true for enabled webchat channels and internal concierge/test rails.
   const canDictate =
     cfg?.dictation === true &&
     typeof navigator !== 'undefined' &&
     !!navigator.mediaDevices?.getUserMedia &&
-    typeof MediaRecorder !== 'undefined' &&
-    !!recMime;
+    ((typeof MediaRecorder !== 'undefined' && !!recMime) ||
+      (sttEngine === 'webspeech' && !!SpeechRecognitionCtor));
 
   const flashDictNote = (note: string) => {
     setDictNote(note);
@@ -506,6 +539,54 @@ export function AskJanis({
 
   const toggleDictate = () => {
     if (transcribing) return;
+    if (sttEngine === 'webspeech') {
+      if (!SpeechRecognitionCtor) {
+        flashDictNote('Web Speech unavailable in this browser');
+        return;
+      }
+      if (speechRef.current) {
+        try {
+          speechRef.current.stop();
+        } catch {
+          /* already stopped */
+        }
+        return;
+      }
+      const rec = new SpeechRecognitionCtor();
+      speechRef.current = rec;
+      rec.lang = navigator.language || 'en-US';
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.onresult = (e) => {
+        let said = '';
+        for (let i = 0; i < e.results.length; i++) said += e.results[i][0].transcript;
+        said = said.trim();
+        if (said) {
+          setText((t) => (t ? t.replace(/\s+$/, '') + ' ' : '') + said);
+          requestAnimationFrame(autoresize);
+        } else {
+          flashDictNote('Did not catch that — try again');
+        }
+      };
+      rec.onerror = (e) => {
+        if (e.error && e.error !== 'aborted')
+          flashDictNote(
+            e.error === 'not-allowed' ? 'Microphone access denied' : 'Web Speech failed — try again',
+          );
+      };
+      rec.onend = () => {
+        speechRef.current = null;
+        setDictating(false);
+      };
+      try {
+        rec.start();
+        setDictating(true);
+      } catch {
+        speechRef.current = null;
+        flashDictNote('Web Speech failed — try again');
+      }
+      return;
+    }
     if (recRef.current) {
       if (recRef.current.state !== 'inactive') recRef.current.stop();
       return;
@@ -559,7 +640,9 @@ export function AskJanis({
           up.then((u) => {
             const fd = new FormData();
             fd.append('audio', u.blob, `dictation.${u.ext}`);
-            return fetch(`/chat/${channelId}/transcribe`, { method: 'POST', body: fd });
+            const engineQ =
+              sttEngine === 'gemini' || sttEngine === 'openai' ? `?engine=${sttEngine}` : '';
+            return fetch(`/chat/${channelId}/transcribe${engineQ}`, { method: 'POST', body: fd });
           })
             .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
             .then((d: { text?: string }) => {
@@ -595,6 +678,11 @@ export function AskJanis({
     () => () => {
       if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
+      try {
+        speechRef.current?.stop();
+      } catch {
+        /* already stopped */
+      }
     },
     [],
   );
@@ -973,6 +1061,20 @@ export function AskJanis({
             }}
           />
           <span className="grow" />
+          {cfg?.dictation === true && (
+            <select
+              className="btn"
+              style={{ fontSize: 11, padding: '0 4px', maxWidth: 92 }}
+              title="Dictation engine (temporary A/B) — webspeech is free/client-side"
+              value={sttEngine}
+              onChange={(e) => setSttEngine(e.target.value as SttEngine)}
+            >
+              <option value="auto">stt: auto</option>
+              <option value="gemini">gemini</option>
+              <option value="openai">openai</option>
+              <option value="webspeech">webspeech·free</option>
+            </select>
+          )}
           {canDictate && (
             <button
               className="btn"

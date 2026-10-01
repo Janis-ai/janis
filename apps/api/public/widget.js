@@ -1064,6 +1064,51 @@
   })();
   var canDictate = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
     window.MediaRecorder && window.FormData && recMime);
+  // TEMPORARY A/B — data-janis-stt="gemini|openai|webspeech" on the embed tag
+  // or ?janis_stt=… on the page picks the dictation backend. webspeech stays
+  // fully client-side (free, Chrome only); the other two hit the server.
+  var sttEngine = (script.getAttribute('data-janis-stt') ||
+    new URLSearchParams(location.search).get('janis_stt') || 'auto').toLowerCase();
+  var speechRec = null;
+  function webspeechToggle() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { micNote('Web Speech unavailable in this browser'); return; }
+    if (speechRec) { try { speechRec.stop(); } catch (e) {} return; }
+    var rec = new SR();
+    speechRec = rec;
+    rec.lang = navigator.language || 'en-US';
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.onresult = function (e) {
+      var said = '';
+      for (var i = 0; i < e.results.length; i++) said += e.results[i][0].transcript;
+      said = said.trim();
+      if (said) {
+        input.value = (input.value ? input.value.replace(/\s+$/, '') + ' ' : '') + said;
+        autoresize();
+        syncSend();
+      } else {
+        micNote('Did not catch that — try again');
+      }
+    };
+    rec.onerror = function (e) {
+      if (e.error && e.error !== 'aborted')
+        micNote(e.error === 'not-allowed' ? 'Microphone access denied' : 'Web Speech failed — try again');
+    };
+    rec.onend = function () {
+      speechRec = null;
+      micBtn.classList.remove('on');
+      micBtn.setAttribute('aria-label', 'Dictate a message');
+    };
+    try {
+      rec.start();
+      micBtn.classList.add('on');
+      micBtn.setAttribute('aria-label', 'Stop dictating');
+    } catch (e) {
+      speechRec = null;
+      micNote('Web Speech failed — try again');
+    }
+  }
   // mp4/aac → 16kHz mono PCM WAV — Gemini reads wav natively.
   function toWav(blob) {
     var AC = window.AudioContext || window.webkitAudioContext;
@@ -1148,9 +1193,10 @@
   function stopDictation() {
     if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
   }
-  if (canDictate) {
+  if (canDictate || sttEngine === 'webspeech') {
     micBtn.addEventListener('click', function () {
       if (transcribing) return;
+      if (sttEngine === 'webspeech') { webspeechToggle(); return; }
       if (mediaRec) { stopDictation(); return; }
       navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
         micStream = stream;
@@ -1197,7 +1243,8 @@
           up.then(function (u) {
             var fd = new FormData();
             fd.append('audio', u.blob, 'dictation.' + u.ext);
-            return fetch(API + '/chat/' + TOKEN + '/transcribe', { method: 'POST', body: fd });
+            var engineQ = sttEngine === 'gemini' || sttEngine === 'openai' ? '?engine=' + sttEngine : '';
+            return fetch(API + '/chat/' + TOKEN + '/transcribe' + engineQ, { method: 'POST', body: fd });
           })
             .then(function (r) {
               if (!r.ok) return Promise.reject(r.status);
@@ -1312,7 +1359,7 @@
     state.config = cfg;
     // Dictation is opt-in per channel (it's metered on Janis's keys) — the
     // mic shows only when bootstrap says the channel enabled it.
-    if (micBtn && cfg.dictation === true && canDictate) micBtn.style.display = '';
+    if (micBtn && cfg.dictation === true && (canDictate || sttEngine === 'webspeech')) micBtn.style.display = '';
     if (cfg.accent) {
       accent = cfg.accent;
       bubble.style.background = accent;
