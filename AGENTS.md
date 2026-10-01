@@ -282,6 +282,14 @@ drizzle-kit/workbox-build, nothing to drop directly).
   call transcripts rendered in the transcript view.
 - Widget polish: unread badges, proactive messages, file uploads, sound,
   per-agent branding, chat-on-article-page.
+- Custom Reply-To display address (TODO): email replies carry the
+  per-conversation reply_address (conv-…@inbound.janis.ai) as From+Reply-To
+  so replies route. Operators who forward their own mailbox into Janis
+  don't want clients seeing that address — let the channel set a friendly
+  Reply-To (e.g. their real support@). Caveat: replies to it only route if
+  that address itself forwards into Janis (the forwarding setup already
+  does), and reply-binding must then rely on In-Reply-To/References
+  threading + sender match rather than the unique local part.
 
 **Inbox & operator experience**
 - Snooze: DONE — conversations.snoozed_until, hidden from every queue except
@@ -305,8 +313,11 @@ drizzle-kit/workbox-build, nothing to drop directly).
   at query time, self-updating — contact_list_members unused; list_id in a
   segment expands smart rules, depth-capped at 2); POST /api/lists accepts
   {filter} smart or {filter, snapshot:true} frozen; campaigns' seg.list_id
-  picks up smart lists automatically. Still missing: conversation
-  merge/split, custom fields, company grouping.
+  picks up smart lists automatically. TODO — smart-list materialisation:
+  lists resolve at query time today and contact_list_members sits idle; if
+  list-indexed queries get hot or members need per-member state, the
+  upgrade is materialising smart rules into members + a sweeper re-sync.
+  Still missing: conversation merge/split, custom fields, company grouping.
 - Webhook ops: DONE — deliveries list on the agent page (payload, attempts,
   next_attempt_at), POST /api/agents/:id/deliveries/:did/replay re-sends a
   failed delivery with a fresh signature + full retry budget.
