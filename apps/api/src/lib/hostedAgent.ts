@@ -151,7 +151,9 @@ export function systemPrompt(
     '\nIf answering exposed knowledge you\'re missing, end your reply with lines starting "LEARN:" describing each missing fact (e.g. "LEARN: returns are accepted within 30 days") — it\'s hidden from the customer and queued for human review.',
   );
   parts.push(
-    '\nKeep replies short and conversational — this is a live chat, not an essay. A sentence or three unless the customer asks for detail.',
+    '\nKeep replies short and conversational — this is a live chat, not an essay. A sentence or three unless the customer asks for detail.' +
+      ' Write plain text: no markdown emphasis (no **bold**, *italics*, or headings) — most chat channels show the markup literally.' +
+      ' When your answer points the customer at a page and a URL for it appears in your knowledge base or context, include it rather than describing where to click — a bare https:// URL renders clickable on every channel.',
   );
   if (!opts.forSuggestion) {
     parts.push(
