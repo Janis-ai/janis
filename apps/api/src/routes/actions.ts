@@ -3,10 +3,12 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { pendingActions } from '../db/schema.js';
+import { conversations, pendingActions } from '../db/schema.js';
 import { conversationAgent } from '../lib/access.js';
 import { decidePendingAction } from '../lib/approvals.js';
 import { runHostedEvent } from '../lib/hostedAgent.js';
+import { env } from '../env.js';
+import type { UserProfile } from '@janis/shared';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
 const decideBody = z.object({ decision: z.enum(['approved', 'denied']) });
@@ -23,13 +25,29 @@ export function actionRoutes(db: Db) {
     const [action] = await db
       .select()
       .from(pendingActions)
-      .where(and(eq(pendingActions.id, c.req.param('id')), eq(pendingActions.workspaceId, workspaceId)))
+      .where(eq(pendingActions.id, c.req.param('id')))
       .limit(1);
     if (!action) return c.json({ error: 'not found' }, 404);
-    // The conversation must be visible to the caller — scoped users are
-    // limited to their grants, and hidden agents are excluded for members.
-    if (!(await conversationAgent(db, workspaceId, c.get('agentScope'), action.conversationId))) {
-      return c.json({ error: 'not found' }, 404);
+    if (action.workspaceId === env.operatorWorkspaceId) {
+      // Concierge action cards live on Janis's own workspace — the decider is
+      // the verified signed-in visitor of the concierge conversation, not a
+      // member here.
+      const [conv] = await db
+        .select({ userProfile: conversations.userProfile })
+        .from(conversations)
+        .where(eq(conversations.id, action.conversationId))
+        .limit(1);
+      const p = (conv?.userProfile ?? {}) as UserProfile;
+      if (!p.identity_verified || p.external_id !== user.id) {
+        return c.json({ error: 'not found' }, 404);
+      }
+    } else {
+      if (action.workspaceId !== workspaceId) return c.json({ error: 'not found' }, 404);
+      // The conversation must be visible to the caller — scoped users are
+      // limited to their grants, and hidden agents are excluded for members.
+      if (!(await conversationAgent(db, workspaceId, c.get('agentScope'), action.conversationId))) {
+        return c.json({ error: 'not found' }, 404);
+      }
     }
 
     const decided = await decidePendingAction(

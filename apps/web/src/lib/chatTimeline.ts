@@ -19,7 +19,12 @@ export interface ChatMsg {
   action?: {
     id: string;
     tool: string;
+    /** Card title — concierge actions set a friendly label ("Teach X");
+     *  webhook approvals fall back to the tool name. */
+    label?: string;
     args: Record<string, unknown>;
+    /** Human-readable args for the card body — exec args may carry ids. */
+    display?: Record<string, unknown>;
     status: string;
     decided_by?: string;
     result?: string;

@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
+import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -15,11 +16,14 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { generateApiKey, generateSessionToken, hashPassword } from '../lib/crypto.js';
+import { env } from '../env.js';
 import { actionRoutes } from './actions.js';
 
 let app: Hono;
 let db: Db;
 let cookie: string;
+let outsiderId: string;
+let otherId: string;
 let agent: typeof agents.$inferSelect;
 let conv: typeof conversations.$inferSelect;
 
@@ -39,6 +43,7 @@ beforeAll(async () => {
 
   const [ws] = await db.insert(workspaces).values({ name: 'Test' }).returning();
   const [other] = await db.insert(workspaces).values({ name: 'Other' }).returning();
+  otherId = other.id;
   const [user] = await db
     .insert(users)
     .values({ email: 'op@x.c', name: 'Op', passwordHash: await hashPassword('password123') })
@@ -47,6 +52,7 @@ beforeAll(async () => {
     .insert(users)
     .values({ email: 'out@x.c', name: 'Out', passwordHash: await hashPassword('password123') })
     .returning();
+  outsiderId = outsider.id;
   await db.insert(memberships).values([
     { userId: user.id, workspaceId: ws.id, role: 'member', acceptedAt: new Date() },
     { userId: outsider.id, workspaceId: other.id, role: 'admin', acceptedAt: new Date() },
@@ -147,5 +153,51 @@ describe('action decide route', () => {
     expect((await decide(action.id, 'denied', cookie)).status).toBe(200);
     expect((await decide(action.id, 'approved', cookie)).status).toBe(409);
     vi.unstubAllGlobals();
+  });
+
+  it('concierge actions decide by verified visitor, not workspace membership', async () => {
+    const prev = env.operatorWorkspaceId;
+    try {
+      const [opWs] = await db.insert(workspaces).values({ name: 'Operator' }).returning();
+      env.operatorWorkspaceId = opWs.id;
+      // The outsider is an admin of `other` — the workspace the card targets.
+      const [target] = await db
+        .insert(agents)
+        .values({ workspaceId: otherId, name: 'Target', hosted: true })
+        .returning();
+      const [concierge] = await db
+        .insert(agents)
+        .values({ workspaceId: opWs.id, name: 'Concierge', hosted: true })
+        .returning();
+      const [cconv] = await db
+        .insert(conversations)
+        .values({
+          agentId: concierge.id,
+          externalId: 'webchat:op',
+          userProfile: { external_id: outsiderId, email: 'out@x.c', identity_verified: true },
+        })
+        .returning();
+      const [action] = await db
+        .insert(pendingActions)
+        .values({
+          workspaceId: opWs.id,
+          agentId: concierge.id,
+          conversationId: cconv.id,
+          toolName: 'apply_knowledge',
+          tool: { builtin: 'apply_knowledge' },
+          args: { workspace_id: otherId, agent_id: target.id, entry: 'Decide-time entry.' },
+        })
+        .returning();
+      // The operator-workspace member isn't the conversation's visitor.
+      expect((await decide(action.id, 'approved', cookie)).status).toBe(404);
+      // The verified visitor is — and approving executes the builtin.
+      const res = await decide(action.id, 'approved', outsiderCookie);
+      expect(res.status).toBe(200);
+      expect((await res.json()).status).toBe('approved');
+      const [tgt] = await db.select().from(agents).where(eq(agents.id, target.id));
+      expect((tgt.config as { knowledge?: string[] }).knowledge).toContain('Decide-time entry.');
+    } finally {
+      env.operatorWorkspaceId = prev;
+    }
   });
 });

@@ -22,6 +22,7 @@ import { ensureStripeCustomer, planForPrice, stripe } from './stripe.js';
 import { generateWebhookSecret } from './crypto.js';
 import { audit } from './audit.js';
 import { bus } from './bus.js';
+import { toMessage } from './serializers.js';
 import { invalidateChannelCache } from './channels.js';
 import {
   createSlackChannel,
@@ -35,6 +36,8 @@ export interface BuiltinCtx {
   db: Db;
   convId: string;
   workspaceId: string;
+  /** The agent this conversation belongs to — the concierge for Ask Janis. */
+  agent?: { id: string; workspaceId: string };
 }
 
 /**
@@ -119,6 +122,137 @@ async function visitorWorkspace(
   return {
     error: `which workspace? ${user.name ?? 'The visitor'} has: ${rows.map((r) => r.ws.name).join(', ')}`,
   };
+}
+
+/** Stable stringify for flat exec-args — jsonb sorts keys on read. */
+const canonArgs = (o: Record<string, unknown>) =>
+  JSON.stringify(Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b))));
+
+/** Park a concierge action as an approval card in the rail. Unlike
+ *  requestToolApproval (customer-facing gated tools) this pages nobody — the
+ *  decider is the operator already reading the chat, so no alert, no Slack
+ *  post, no needs_human flip. The card renders because internal channels keep
+ *  internal messages that carry payload.action. */
+async function parkConciergeAction(
+  ctx: BuiltinCtx,
+  toolName: string,
+  execArgs: Record<string, unknown>,
+  label: string,
+  display: Record<string, unknown>,
+): Promise<string> {
+  const conciergeAgentId = ctx.agent?.id;
+  if (!conciergeAgentId) return 'error: no agent context';
+  const existing = await ctx.db
+    .select()
+    .from(pendingActions)
+    .where(
+      and(eq(pendingActions.conversationId, ctx.convId), eq(pendingActions.status, 'pending')),
+    );
+  if (
+    existing.some(
+      // jsonb normalises key order — compare args with sorted keys, not raw
+      // string equality.
+      (p) =>
+        p.toolName === toolName &&
+        canonArgs(p.args as Record<string, unknown>) === canonArgs(execArgs),
+    )
+  ) {
+    return 'action_card: an identical card is already awaiting a decision in this chat — point the visitor at it';
+  }
+  const [action] = await ctx.db
+    .insert(pendingActions)
+    .values({
+      workspaceId: ctx.workspaceId,
+      agentId: conciergeAgentId,
+      conversationId: ctx.convId,
+      toolName,
+      // A builtin descriptor, not a webhook ToolDef — decidePendingAction
+      // dispatches on the `builtin` key into BUILTIN_TOOLS.
+      tool: { builtin: toolName } as never,
+      args: execArgs as never,
+    })
+    .returning();
+  const [row] = await ctx.db
+    .insert(messages)
+    .values({
+      conversationId: ctx.convId,
+      direction: 'human',
+      text: label,
+      flags: { action_request: true },
+      payload: {
+        internal: true,
+        event: 'action proposed',
+        action: {
+          id: action.id,
+          tool: toolName,
+          label,
+          args: execArgs,
+          display,
+          status: 'pending',
+        },
+      },
+    })
+    .returning();
+  await ctx.db
+    .update(pendingActions)
+    .set({ messageId: row.id })
+    .where(eq(pendingActions.id, action.id));
+  bus.publish(ctx.workspaceId, { type: 'message', data: toMessage(row) });
+  return 'action_card: an approval card was posted to the chat — the visitor applies or dismisses it there; do not claim the change is done';
+}
+
+/** The teach_agent write path — shared by the apply_knowledge executor. */
+async function applyKnowledgeEntries(
+  db: Db,
+  wsId: string,
+  agent: typeof agents.$inferSelect,
+  entry: string,
+  user: { id: string; name: string | null },
+): Promise<string> {
+  const cfg = (agent.config ?? {}) as Record<string, unknown> & { knowledge?: unknown };
+  const entries = entry
+    .split('\n')
+    .map((l) => l.trim().replace(/^[-*•]\s+/, '').replace(/\*\*/g, ''))
+    .filter(Boolean);
+  const knowledge = Array.isArray(cfg.knowledge) ? [...(cfg.knowledge as string[])] : [];
+  const added: string[] = [];
+  for (const e of entries) {
+    if (!knowledge.includes(e)) {
+      knowledge.push(e);
+      added.push(e);
+    }
+  }
+  if (!added.length) {
+    return JSON.stringify({ ok: true, note: 'that entry already exists — nothing added', agent: agent.name });
+  }
+  // Keep the cached gap set stable — only "added" flags move.
+  const { readGapsCache, markGapsAdded } = await import('../services/knowledgeGaps.js');
+  const cache = readGapsCache(cfg);
+  const gaps_cache = cache
+    ? { ...cache, gaps: markGapsAdded(cache.gaps, knowledge) }
+    : undefined;
+  await db
+    .update(agents)
+    .set({ config: { ...cfg, knowledge, ...(gaps_cache ? { gaps_cache } : {}) } })
+    .where(eq(agents.id, agent.id));
+  await audit(db, {
+    workspaceId: wsId,
+    userId: user.id,
+    userName: user.name,
+    action: 'agent.knowledge.add',
+    targetType: 'agent',
+    targetId: agent.id,
+    meta: { via: 'concierge', entries: added },
+  });
+  // Open agent pages on the visitor's workspace refresh over SSE.
+  bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
+  return JSON.stringify({
+    ok: true,
+    added,
+    agent: agent.name,
+    knowledge_count: knowledge.length,
+    gaps_url: `${env.webOrigin}/agents/${agent.id}?tab=behavior`,
+  });
 }
 
 export const BUILTIN_TOOLS: BuiltinTool[] = [
@@ -936,7 +1070,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'teach_agent',
     description:
-      "Add a knowledge entry to an agent in the visitor's workspace — the fix for a recurring gap, so the agent answers it next time. Draft the entry (a factual line the agent can quote, e.g. \"Refunds under $50 are auto-approved within 24h\"), show it to the visitor and only call this once they confirm. Admin-only.",
+      "Propose a knowledge entry for an agent in the visitor's workspace — the fix for a recurring gap, so the agent answers it next time. Draft the entry (a factual line the agent can quote, e.g. \"Refunds under $50 are auto-approved within 24h\") and call this as soon as the proposal is reasonable — it posts an approval card in the chat, no verbal confirmation needed. Admin-only.",
     params: {
       agent: 'agent name (required)',
       entry: 'the confirmed knowledge entry text — one line per fact',
@@ -974,53 +1108,57 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           error: `${agent.name} isn't a hosted agent — knowledge entries only apply to Janis-hosted agents`,
         });
       }
-
-      // Same normalisation as the Behavior-tab approve route: split lines,
-      // strip list/markdown decoration, dedupe.
-      const cfg = (agent.config ?? {}) as Record<string, unknown> & { knowledge?: unknown };
+      // Normalise now so the card shows exactly what would land — split
+      // lines, strip list/markdown decoration (mirrors the approve route).
       const entries = entry
         .split('\n')
         .map((l) => l.trim().replace(/^[-*•]\s+/, '').replace(/\*\*/g, ''))
         .filter(Boolean);
-      const knowledge = Array.isArray(cfg.knowledge) ? [...(cfg.knowledge as string[])] : [];
-      const added: string[] = [];
-      for (const e of entries) {
-        if (!knowledge.includes(e)) {
-          knowledge.push(e);
-          added.push(e);
-        }
-      }
-      if (!added.length) {
-        return JSON.stringify({ ok: true, note: 'that entry already exists — nothing added', agent: agent.name });
-      }
-      // Keep the cached gap set stable — only "added" flags move.
-      const { readGapsCache, markGapsAdded } = await import('../services/knowledgeGaps.js');
-      const cache = readGapsCache(cfg);
-      const gaps_cache = cache
-        ? { ...cache, gaps: markGapsAdded(cache.gaps, knowledge) }
-        : undefined;
-      await ctx.db
-        .update(agents)
-        .set({ config: { ...cfg, knowledge, ...(gaps_cache ? { gaps_cache } : {}) } })
-        .where(eq(agents.id, agent.id));
-      await audit(ctx.db, {
-        workspaceId: ws.id,
-        userId: user.id,
-        userName: user.name,
-        action: 'agent.knowledge.add',
-        targetType: 'agent',
-        targetId: agent.id,
-        meta: { via: 'concierge', entries: added },
-      });
-      // Open agent pages on the visitor's workspace refresh over SSE.
-      bus.publish(ws.id, { type: 'agent', data: { id: agent.id } });
-      return JSON.stringify({
-        ok: true,
-        added,
-        agent: agent.name,
-        knowledge_count: knowledge.length,
-        gaps_url: `${env.webOrigin}/agents/${agent.id}?tab=behavior`,
-      });
+      if (!entries.length) return JSON.stringify({ error: 'entry text is required' });
+      return parkConciergeAction(
+        ctx,
+        'apply_knowledge',
+        { workspace_id: ws.id, agent_id: agent.id, entry: entries.join('\n') },
+        `Teach ${agent.name}`,
+        { agent: agent.name, entry: entries.join('\n') },
+      );
+    },
+  },
+  {
+    // Executor for approved teach_agent cards — available() is false so the
+    // model never sees it; decidePendingAction dispatches here by name.
+    name: 'apply_knowledge',
+    description: 'internal — executes an approved teach_agent action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      const agentId = String(args.agent_id ?? '');
+      // Re-verify at decide time — the approver must still administer the
+      // target workspace.
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+            eq(memberships.role, 'admin'),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs admin rights on the target workspace';
+      const [agent] = await ctx.db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, agentId), eq(agents.workspaceId, wsId)))
+        .limit(1);
+      if (!agent) return 'error: agent not found';
+      if (!agent.hosted) return `error: ${agent.name} isn't a hosted agent`;
+      return applyKnowledgeEntries(ctx.db, wsId, agent, String(args.entry ?? ''), user);
     },
   },
 ];

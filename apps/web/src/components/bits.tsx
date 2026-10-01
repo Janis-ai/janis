@@ -113,7 +113,7 @@ export function ArgsRows({ args }: { args: Record<string, unknown> }) {
       {entries.map(([k, v]) => (
         <div key={k} style={{ display: 'flex', gap: 8, padding: '1px 0' }}>
           <span className="muted" style={{ minWidth: 110, flexShrink: 0 }}>{k.replace(/_/g, ' ')}</span>
-          <span className="mono" style={{ overflowWrap: 'anywhere' }}>
+          <span className="mono" style={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
             {typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}
           </span>
         </div>

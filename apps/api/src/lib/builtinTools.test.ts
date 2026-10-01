@@ -11,6 +11,7 @@ import {
   conversations,
   memberships,
   messages,
+  pendingActions,
   users,
   workspaces,
 } from '../db/schema.js';
@@ -21,6 +22,7 @@ import Stripe from 'stripe';
 import type { Db } from '../db/client.js';
 
 let db: Db;
+let conciergeId: string;
 const WS = 'aaaaaaaa-0000-4000-8000-000000000001';
 const USER = 'bbbbbbbb-0000-4000-8000-000000000002';
 const CONV = 'cccccccc-0000-4000-8000-000000000003';
@@ -36,7 +38,15 @@ const CONV4 = 'cccccccc-0000-4000-8000-00000000000b';
 const siCalls: { id: string; method: string }[] = [];
 const accountStatus = () => BUILTIN_TOOLS.find((b) => b.name === 'account_status')!;
 const changePlan = () => BUILTIN_TOOLS.find((b) => b.name === 'change_plan')!;
-const ctx = (convId: string) => ({ db, convId, workspaceId: WS });
+const ctx = (convId: string, agent?: { id: string; workspaceId: string }) => ({
+  db,
+  convId,
+  workspaceId: WS,
+  agent,
+});
+// Concierge ctx — the parked action hangs off the concierge agent, not the
+// visitor's agent the conversation row happens to name.
+const cctx = (convId: string) => ctx(convId, { id: conciergeId, workspaceId: WS });
 const jsonRes = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -51,6 +61,11 @@ beforeAll(async () => {
   await db.insert(workspaces).values({ id: WS, name: 'W1', plan: 'pro' });
   await db.insert(memberships).values({ userId: USER, workspaceId: WS, role: 'owner', acceptedAt: new Date() });
   const [agent] = await db.insert(agents).values({ workspaceId: WS, name: 'Bot' }).returning();
+  const [concierge] = await db
+    .insert(agents)
+    .values({ workspaceId: WS, name: 'Concierge', hosted: true })
+    .returning();
+  conciergeId = concierge.id;
   await db.insert(conversations).values({ id: CONV, agentId: agent.id, externalId: 'v:test' });
 
   // free workspace the visitor administers — for checkout-link paths
@@ -124,7 +139,8 @@ describe('account_status builtin', () => {
     const out = JSON.parse(await accountStatus().run({}, { db, convId: CONV, workspaceId: WS }));
     expect(out.signed_in).toBe(true);
     expect(out.email).toBe('m@x.com');
-    expect(out.workspaces).toEqual([{ name: 'W1', plan: 'Pro', agents: 1 }]);
+    // Bot + the concierge agent on the same test workspace.
+    expect(out.workspaces).toEqual([{ name: 'W1', plan: 'Pro', agents: 2 }]);
   });
 });
 
@@ -517,20 +533,43 @@ describe('knowledge_gaps builtin', () => {
 
 describe('teach_agent builtin', () => {
   const teach = () => BUILTIN_TOOLS.find((b) => b.name === 'teach_agent')!;
+  const apply = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_knowledge')!;
 
-  it('appends a knowledge entry and marks matching gaps covered', async () => {
+  it('posts an approval card; approving applies the entry and marks gaps covered', async () => {
     // Repopulate the gaps cache (the dismissal test overwrote the config) —
     // detection still sees the cluster; dismissal only filters the output.
     const gapsTool = () => BUILTIN_TOOLS.find((b) => b.name === 'knowledge_gaps')!;
     await gapsTool().run({ workspace: 'free', agent: 'gap' }, ctx(CONV2));
-    const out = JSON.parse(
-      await teach().run(
-        { workspace: 'free', agent: 'gap bot', entry: 'We ship to Canada — free over $50.' },
-        ctx(CONV2),
-      ),
+    const out = await teach().run(
+      { workspace: 'free', agent: 'gap bot', entry: 'We ship to Canada — free over $50.' },
+      cctx(CONV2),
     );
-    expect(out.ok).toBe(true);
-    expect(out.added).toEqual(['We ship to Canada — free over $50.']);
+    expect(out).toContain('action_card');
+    // The parked action + the transcript card message it rides on.
+    const [pa] = await db
+      .select()
+      .from(pendingActions)
+      .where(eq(pendingActions.conversationId, CONV2));
+    expect(pa.toolName).toBe('apply_knowledge');
+    expect((pa.tool as { builtin: string }).builtin).toBe('apply_knowledge');
+    const [cardMsg] = await db.select().from(messages).where(eq(messages.id, pa.messageId!));
+    const act = (
+      cardMsg.payload as { action: { status: string; label: string; display: { entry: string } } }
+    ).action;
+    expect(act.status).toBe('pending');
+    expect(act.label).toBe('Teach Gap Bot');
+    expect(act.display.entry).toContain('Canada');
+    // An identical proposal while pending doesn't stack a second card.
+    const dupe = await teach().run(
+      { workspace: 'free', agent: 'gap bot', entry: 'We ship to Canada — free over $50.' },
+      cctx(CONV2),
+    );
+    expect(dupe).toContain('already awaiting');
+    // Approve → the hidden executor runs the real write.
+    const applied = JSON.parse(
+      await apply().run(pa.args as Record<string, string>, { db, convId: CONV2, workspaceId: WS }),
+    );
+    expect(applied.ok).toBe(true);
     const [a] = await db.select().from(agents).where(eq(agents.name, 'Gap Bot'));
     const cfg = a.config as { knowledge?: string[]; gaps_cache?: { gaps: { added: boolean }[] } };
     expect(cfg.knowledge).toContain('We ship to Canada — free over $50.');
@@ -538,20 +577,18 @@ describe('teach_agent builtin', () => {
     expect(cfg.gaps_cache?.gaps?.[0]?.added).toBe(true);
   });
 
-  it('dedupes and rejects non-hosted agents', async () => {
-    const dupe = JSON.parse(
-      await teach().run(
-        { workspace: 'free', agent: 'gap bot', entry: 'We ship to Canada — free over $50.' },
-        ctx(CONV2),
+  it('apply_knowledge dedupes; teach rejects non-hosted agents', async () => {
+    const [gapBot] = await db.select().from(agents).where(eq(agents.name, 'Gap Bot'));
+    const again = JSON.parse(
+      await apply().run(
+        { workspace_id: WS2, agent_id: gapBot.id, entry: 'We ship to Canada — free over $50.' },
+        { db, convId: CONV2, workspaceId: WS },
       ),
     );
-    expect(dupe.note).toContain('already exists');
-    const [plain] = await db
-      .insert(agents)
-      .values({ workspaceId: WS2, name: 'Webhook Bot', hosted: false })
-      .returning();
+    expect(again.note).toContain('already exists');
+    await db.insert(agents).values({ workspaceId: WS2, name: 'Webhook Bot', hosted: false });
     const bad = JSON.parse(
-      await teach().run({ workspace: 'free', agent: 'webhook', entry: 'x' }, ctx(CONV2)),
+      await teach().run({ workspace: 'free', agent: 'webhook', entry: 'x' }, cctx(CONV2)),
     );
     expect(bad.error).toContain("isn't a hosted agent");
   });

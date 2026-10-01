@@ -655,9 +655,9 @@ export function AskJanis({
                 {item.m.action && (
                   <div className="action-card">
                     <div className="mono" style={{ fontSize: 12 }}>
-                      {item.m.action.tool}
+                      {item.m.action.label ?? item.m.action.tool}
                     </div>
-                    <ArgsRows args={item.m.action.args} />
+                    <ArgsRows args={item.m.action.display ?? item.m.action.args} />
                     {actError && item.m.action.status === 'pending' && (
                       <div className="muted" style={{ color: '#c0392b', fontSize: 12, marginTop: 4 }}>
                         {actError}

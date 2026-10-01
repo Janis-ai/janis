@@ -174,15 +174,37 @@ export async function decidePendingAction(
 
   let result: string | null = null;
   if (approve) {
-    const secrets = {
-      ...(await loadSecretsMap(db, agent.id)),
-      ...(await connectionSecrets(db, agent.id)),
-    };
-    result = await callTool(
-      action.tool as ToolDef,
-      action.args as Record<string, unknown>,
-      secrets,
-    ).catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`);
+    // Concierge action cards store a builtin descriptor ({builtin: name})
+    // instead of a webhook ToolDef — dispatch into BUILTIN_TOOLS in-process.
+    const snap = action.tool as { builtin?: unknown };
+    const builtinName = typeof snap.builtin === 'string' ? snap.builtin : null;
+    if (builtinName) {
+      const { BUILTIN_TOOLS } = await import('./builtinTools.js');
+      const b = BUILTIN_TOOLS.find((x) => x.name === builtinName);
+      result = b
+        ? await b
+            .run(
+              Object.fromEntries(
+                Object.entries(action.args as Record<string, unknown>).map(([k, v]) => [
+                  k,
+                  String(v),
+                ]),
+              ),
+              { db, convId: conv.id, workspaceId: action.workspaceId },
+            )
+            .catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`)
+        : `error: unknown builtin ${builtinName}`;
+    } else {
+      const secrets = {
+        ...(await loadSecretsMap(db, agent.id)),
+        ...(await connectionSecrets(db, agent.id)),
+      };
+      result = await callTool(
+        action.tool as ToolDef,
+        action.args as Record<string, unknown>,
+        secrets,
+      ).catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`);
+    }
   }
 
   const [updated] = await db
