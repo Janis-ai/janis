@@ -206,6 +206,8 @@
     '#janis-form .janis-ico{background:none;border:none;cursor:pointer;font-size:16px;padding:10px 4px 10px 10px;color:#6b7280;line-height:1}' +
     '#janis-form .janis-ico:hover{color:#374151}' +
     '#janis-form .janis-ico.on{color:var(--janis-accent);animation:janis-micpulse 1.2s ease-in-out infinite}' +
+    '#janis-mic{display:flex;align-items:center;justify-content:center}' +
+    '#janis-mic.err{color:#ef4444}' +
     '@keyframes janis-micpulse{0%,100%{opacity:1}50%{opacity:.45}}' +
     '#janis-input{flex:1;border:none;padding:12px 6px;font-size:14px;outline:none;background:#fff;color:#1f2937;' +
     'resize:none;font-family:inherit;line-height:1.35;max-height:110px;overflow-y:auto}' +
@@ -278,7 +280,7 @@
     '<form id="janis-form">' +
     '<button id="janis-clip" class="janis-ico" type="button" aria-label="Attach a file" title="Attach a file">📎</button>' +
     '<button id="janis-smile" class="janis-ico" type="button" aria-label="Emoji" title="Emoji">😊</button>' +
-    '<button id="janis-mic" class="janis-ico" type="button" aria-label="Dictate a message" title="Dictate">🎤</button>' +
+    '<button id="janis-mic" class="janis-ico" type="button" aria-label="Dictate a message" title="Dictate"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg></button>' +
     '<textarea id="janis-input" placeholder="Type a message…" rows="1"></textarea>' +
     '<button id="janis-send" type="submit">Send</button></form>' +
     '<input id="janis-file" type="file" multiple />' +
@@ -457,9 +459,9 @@
     state.loaded = true;
     loadingEl.remove();
     input.disabled = false;
-    sendBtn.disabled = false;
     clipBtn.disabled = false;
     smileBtn.disabled = false;
+    syncSend();
   }
 
   // ---- rendering ----------------------------------------------------------
@@ -990,7 +992,14 @@
       body: JSON.stringify({ visitor_id: visitor }),
     }).catch(function () {});
   }
-  input.addEventListener('input', function () { autoresize(); sendTyping(); });
+  // Send stays dead until there's text or a finished attachment — an
+  // enabled-but-empty button just swallows clicks.
+  function syncSend() {
+    var ready = 0;
+    for (var i = 0; i < state.pending.length; i++) if (!state.pending[i].uploading) ready++;
+    sendBtn.disabled = !state.loaded || (!input.value.trim() && ready === 0);
+  }
+  input.addEventListener('input', function () { autoresize(); sendTyping(); syncSend(); });
   input.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -1014,17 +1023,21 @@
         recog = new SpeechRec();
         recog.continuous = true;
         recog.interimResults = true;
+        recog.lang = navigator.language || 'en-US';
         dictBase = input.value;
         recog.onresult = function (e) {
           var finals = '', interim = '';
           for (var i = e.resultIndex; i < e.results.length; i++) {
-            if (e.results[i].isFinal) finals += e.results[i][0].transcript;
-            else interim += e.results[i][0].transcript;
+            var alt = e.results[i][0];
+            if (!alt) continue;
+            if (e.results[i].isFinal) finals += alt.transcript;
+            else interim += alt.transcript;
           }
           if (finals) dictBase = (dictBase ? dictBase.replace(/\s+$/, '') + ' ' : '') + finals.trim();
           input.value = dictBase + (interim ? (dictBase ? ' ' : '') + interim : '');
           autoresize();
           sendTyping();
+          syncSend();
         };
         var done = function () {
           recog = null;
@@ -1032,7 +1045,24 @@
           micBtn.setAttribute('aria-label', 'Dictate a message');
         };
         recog.onend = done;
-        recog.onerror = done;
+        recog.onerror = function (e) {
+          var code = e && e.error;
+          done();
+          if (!code || code === 'aborted') return;
+          console.warn('[janis] dictation ended:', code);
+          micBtn.classList.add('err');
+          setTimeout(function () { micBtn.classList.remove('err'); }, 3000);
+          micBtn.title = code === 'not-allowed' || code === 'service-not-allowed'
+            ? 'Microphone access denied'
+            : code === 'audio-capture'
+              ? 'No microphone found'
+              : code === 'network'
+                ? 'Dictation could not reach the speech service'
+                : 'Did not catch that — try again';
+          var prev = input.placeholder;
+          input.placeholder = micBtn.title;
+          setTimeout(function () { input.placeholder = prev; }, 4000);
+        };
         recog.start();
         micBtn.classList.add('on');
         micBtn.setAttribute('aria-label', 'Stop dictating');
@@ -1071,6 +1101,7 @@
       chip.appendChild(x);
       attachRow.appendChild(chip);
     });
+    syncSend();
   }
 
   panel.querySelector('#janis-clip').onclick = function () { fileInput.click(); };
@@ -1106,6 +1137,7 @@
     clearChips();
     input.value = '';
     autoresize();
+    syncSend();
     state.pending = state.pending.filter(function (a) { return a.uploading; });
     renderPending();
     var atts = ready.map(function (a) { return { name: a.name, url: a.url, type: a.type, size: a.size }; });

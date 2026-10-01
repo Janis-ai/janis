@@ -177,6 +177,8 @@ export function AskJanis({
   const recRef = useRef<{ stop: () => void } | null>(null);
   const dictBase = useRef('');
   const [dictating, setDictating] = useState(false);
+  // Transient dictation-failure note — shown in place of the placeholder.
+  const [dictNote, setDictNote] = useState<string | null>(null);
   const seen = useRef(new Set<string>());
   const lastTs = useRef<string | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -363,13 +365,14 @@ export function AskJanis({
     el.style.overflowY = el.scrollHeight > 110 ? 'auto' : 'hidden';
   };
 
-  type SpeechResult = { isFinal: boolean; 0: { transcript: string } };
+  type SpeechResult = { isFinal: boolean; 0?: { transcript: string } };
   type SpeechRec = {
     continuous: boolean;
     interimResults: boolean;
+    lang: string;
     onresult: ((e: { resultIndex: number; results: ArrayLike<SpeechResult> }) => void) | null;
     onend: (() => void) | null;
-    onerror: (() => void) | null;
+    onerror: ((e: { error?: string }) => void) | null;
     start: () => void;
     stop: () => void;
   };
@@ -390,13 +393,16 @@ export function AskJanis({
     const r = new SpeechCtor();
     r.continuous = true;
     r.interimResults = true;
+    r.lang = navigator.language || 'en-US';
     dictBase.current = text;
     r.onresult = (e) => {
       let finals = '';
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) finals += e.results[i][0].transcript;
-        else interim += e.results[i][0].transcript;
+        const alt = e.results[i][0];
+        if (!alt) continue;
+        if (e.results[i].isFinal) finals += alt.transcript;
+        else interim += alt.transcript;
       }
       if (finals) dictBase.current = (dictBase.current.replace(/\s+$/, '') + (dictBase.current ? ' ' : '') + finals.trim());
       setText(dictBase.current + (interim ? (dictBase.current ? ' ' : '') + interim : ''));
@@ -407,7 +413,22 @@ export function AskJanis({
       setDictating(false);
     };
     r.onend = done;
-    r.onerror = done;
+    r.onerror = (e) => {
+      const code = e?.error;
+      done();
+      if (!code || code === 'aborted') return;
+      console.warn('[ask-janis] dictation ended:', code);
+      const note =
+        code === 'not-allowed' || code === 'service-not-allowed'
+          ? 'Microphone access denied'
+          : code === 'audio-capture'
+            ? 'No microphone found'
+            : code === 'network'
+              ? 'Dictation could not reach the speech service'
+              : 'Did not catch that — try again';
+      setDictNote(note);
+      setTimeout(() => setDictNote(null), 4000);
+    };
     try {
       r.start();
       recRef.current = r;
@@ -740,7 +761,7 @@ export function AskJanis({
           rows={1}
           value={text}
           disabled={!loaded}
-          placeholder={`Message ${cfg?.agent_name ?? 'Janis'}…`}
+          placeholder={dictNote ?? `Message ${cfg?.agent_name ?? 'Janis'}…`}
           onChange={(e) => {
             setText(e.target.value);
             autoresize();
