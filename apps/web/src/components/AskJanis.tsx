@@ -12,6 +12,7 @@ import {
 import { Loader2, Maximize2, Mic, MicOff, Minimize2, Paperclip, Smile, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 import { ArgsRows } from './bits';
+import { splitEmphasis } from '../lib/richText';
 
 interface ChatConfig {
   agent_name: string;
@@ -113,6 +114,23 @@ function linkify(text: string, onNav: (to: string) => void) {
         {p.label}
       </a>
     );
+  });
+}
+
+/** Markdown-ish emphasis on top of linkify — agent text uses **bold**,
+ *  *italic*, ~~strike~~ and `code` (canonical format; push channels get it
+ *  translated at send time). */
+function richText(text: string, onNav: (to: string) => void) {
+  return splitEmphasis(text).flatMap((seg, i) => {
+    const inner = linkify(seg.text, onNav);
+    if (seg.kind === 'text') return inner;
+    const Tag =
+      seg.kind === 'bold' ? 'b' : seg.kind === 'italic' ? 'em' : seg.kind === 'strike' ? 's' : 'code';
+    return [
+      <Tag key={i} className={seg.kind === 'code' ? 'md-code' : undefined}>
+        {inner}
+      </Tag>,
+    ];
   });
 }
 
@@ -755,7 +773,7 @@ export function AskJanis({
                 {cfg.agent_name}
               </div>
             )}
-            {linkify(cfg.greeting, navigate)}
+            {richText(cfg.greeting, navigate)}
           </div>
         )}
         {timelineItems(msgs, outbox)
@@ -793,7 +811,7 @@ export function AskJanis({
                 {/* A card row's text IS its label ("Teach Acme Returns") —
                     rendering both doubles the title. */}
                 {!(item.m.action && item.m.text === item.m.action.label) &&
-                  linkify(item.m.text, navigate)}
+                  richText(item.m.text, navigate)}
                 {item.m.action && (
                   <div className="action-card">
                     <div className="mono" style={{ fontSize: 12 }}>
@@ -839,7 +857,7 @@ export function AskJanis({
                   className={`ask-msg me ${item.o.status === 'pending' ? 'pending' : ''} ${item.o.status === 'failed' ? 'failed' : ''}`}
                   onClick={item.o.status === 'failed' ? () => void send(item.o.text, item.o.attachments, item.o) : undefined}
                 >
-                  {linkify(item.o.text, navigate)}
+                  {richText(item.o.text, navigate)}
                   <AttachmentNodes atts={item.o.attachments} />
                 </div>
                 {item.o.status === 'delivered' && deliveredEntry === item.o && <div className="ask-status">Delivered</div>}

@@ -1230,6 +1230,31 @@ async function stampDelivery(
   }
 }
 
+/** Canonical message text is markdown-ish: **bold**, *italic*, ~~strike~~,
+ * `code`, [label](url). Egress translates it per channel — the webchat
+ * widget renders the markdown itself, WhatsApp has its own dialect
+ * (*bold*, _italic_, ~strike~, ```code```), and every text-only channel
+ * gets the markers stripped so customers never see literal asterisks.
+ * Stored transcripts keep the canonical form. Guards against mangling
+ * ordinary asterisks: emphasis needs non-space content at both ends. */
+const CHANNEL_FMT_RE =
+  /\*\*([^\s*](?:[^*]*[^\s*])?)\*\*|\*([^\s*](?:[^*]*[^\s*])?)\*|~~([^\s~](?:[^~]*[^\s~])?)~~|`([^`\n]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+
+export function formatForChannel(text: string, kind: string): string {
+  const wa = kind === 'whatsapp';
+  return text.replace(
+    CHANNEL_FMT_RE,
+    (m, bold, ital, strike, code, label, url) => {
+      if (kind === 'webchat') return m; // the widget renders the markdown
+      if (bold != null) return wa ? `*${bold}*` : bold;
+      if (ital != null) return wa ? `_${ital}_` : ital;
+      if (strike != null) return wa ? `~${strike}~` : strike;
+      if (code != null) return wa ? `\`\`\`${code}\`\`\`` : code;
+      return `${label} (${url})`; // no link syntax outside webchat
+    },
+  );
+}
+
 /** Deliver a message (text and/or attachments) to the end user if the conversation is bound to a hosted channel. */
 export async function deliverToChannel(
   db: Db,
@@ -1271,10 +1296,13 @@ export async function deliverToChannel(
     }
     return { delivered: false, error, retryable: false };
   }
+  // Translate canonical markdown-ish text into the channel's dialect once —
+  // voice, the SDK socket and the push send below all ship the same body.
+  const body = formatForChannel(text, row.channel.kind);
   // Voice is turn-based — Twilio holds the line and the reply is spoken in
   // the next webhook response, not pushed. Queue it for the /voice/turn loop.
   if (row.channel.kind === 'voice') {
-    void voiceDeliver(db, conversationId, text).catch(() => {});
+    void voiceDeliver(db, conversationId, body).catch(() => {});
     if (opts?.messageId) {
       const [a] = await db
         .select({ workspaceId: agents.workspaceId })
@@ -1292,13 +1320,13 @@ export async function deliverToChannel(
     .from(agents)
     .where(eq(agents.id, row.conv.agentId))
     .limit(1);
-  if (agent && (await emitChatResponse(agent, row.binding.platformUserId, text))) {
+  if (agent && (await emitChatResponse(agent, row.binding.platformUserId, body))) {
     if (opts?.messageId) {
       await stampDelivery(db, agent.workspaceId, opts.messageId, { delivered: true });
     }
     return { delivered: true };
   }
-  const result = await sendChannelMessage(row.channel, row.binding.platformUserId, text, attachments, opts, db).catch(
+  const result = await sendChannelMessage(row.channel, row.binding.platformUserId, body, attachments, opts, db).catch(
     (e) => ({ mid: null, error: `send failed: ${e instanceof Error ? e.message : e}`, retryable: true }),
   );
   // null = no push channel (webchat) — the widget pulls on its next poll.

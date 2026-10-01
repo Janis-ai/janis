@@ -2,6 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   deliverToChannel,
   fetchPlatformProfile,
+  formatForChannel,
   parseMetaWebhook,
   sendChannelMessage,
   verifyMetaSignature,
@@ -309,6 +310,49 @@ describe('fetchPlatformProfile', () => {
     expect(await fetchPlatformProfile(ch('messenger'), 'PSID1')).toEqual({});
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')));
     expect(await fetchPlatformProfile(ch('messenger'), 'PSID1')).toEqual({});
+  });
+});
+
+describe('formatForChannel', () => {
+  it('keeps canonical markdown for webchat — the widget renders it', () => {
+    const t = '**bold** and *italic* and ~~strike~~ and `code` and [docs](https://x.com/a)';
+    expect(formatForChannel(t, 'webchat')).toBe(t);
+  });
+
+  it('translates to WhatsApp mrkdwn-ish', () => {
+    expect(formatForChannel('**bold** *ital* ~~strike~~ `c`', 'whatsapp')).toBe(
+      '*bold* _ital_ ~strike~ ```c```',
+    );
+  });
+
+  it('strips markers on text-only channels', () => {
+    const t = 'see **this** and *that* ~~thing~~ `x=1`';
+    for (const kind of ['messenger', 'instagram', 'sms', 'email', 'gmail', 'outlook', 'voice']) {
+      expect(formatForChannel(t, kind)).toBe('see this and that thing x=1');
+    }
+  });
+
+  it('flattens markdown links to "label (url)" off-webchat', () => {
+    expect(formatForChannel('see [docs](https://x.com/a)', 'whatsapp')).toBe(
+      'see docs (https://x.com/a)',
+    );
+    expect(formatForChannel('see [docs](https://x.com/a)', 'sms')).toBe(
+      'see docs (https://x.com/a)',
+    );
+  });
+
+  it('leaves ordinary asterisks alone', () => {
+    for (const kind of ['whatsapp', 'sms', 'messenger']) {
+      expect(formatForChannel('5 * 3 = 15 * 2', kind)).toBe('5 * 3 = 15 * 2');
+      expect(formatForChannel('2**10 is 1024', kind)).toBe('2**10 is 1024');
+      expect(formatForChannel('refund_window is_30_days', kind)).toBe('refund_window is_30_days');
+    }
+  });
+
+  it('handles mixed text and emphasis inline', () => {
+    expect(formatForChannel('hi **there** pal, click [here](https://x.com)', 'whatsapp')).toBe(
+      'hi *there* pal, click here (https://x.com)',
+    );
   });
 });
 

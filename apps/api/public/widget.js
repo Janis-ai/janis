@@ -104,6 +104,26 @@
     if (last < text.length) span.appendChild(document.createTextNode(text.slice(last)));
   }
 
+  // Canonical agent text is markdown-ish — the widget renders **bold**,
+  // *italic*, ~~strike~~ and `code` natively (push channels get them
+  // translated server-side). Content inside a tag still linkifies.
+  var EM_RE = /\*\*([^\s*](?:[^*]*[^\s*])?)\*\*|\*([^\s*](?:[^*]*[^\s*])?)\*|~~([^\s~](?:[^~]*[^\s~])?)~~|`([^`\n]+)`/g;
+  function appendRich(span, text) {
+    EM_RE.lastIndex = 0;
+    var last = 0;
+    var m;
+    while ((m = EM_RE.exec(text))) {
+      if (m.index > last) linkify(span, text.slice(last, m.index));
+      var el = document.createElement(
+        m[1] != null ? 'b' : m[2] != null ? 'i' : m[3] != null ? 's' : 'code',
+      );
+      linkify(el, m[1] != null ? m[1] : m[2] != null ? m[2] : m[3] != null ? m[3] : m[4]);
+      span.appendChild(el);
+      last = EM_RE.lastIndex;
+    }
+    if (last < text.length) linkify(span, text.slice(last));
+  }
+
   // Sentence punctuation glued to a URL — "see https://x.com/a." should link
   // the URL, not the period. Closers are only stripped when unbalanced, so
   // https://x.com/f_(b) keeps its parens while "(see https://x.com)" doesn't
@@ -171,6 +191,8 @@
     '.janis-msg.in{align-self:flex-end;background:var(--janis-accent);color:#fff;border-bottom-right-radius:4px}' +
     '.janis-msg.out,.janis-msg.human{align-self:flex-start;background:#e5e7eb;color:#1f2937;border-bottom-left-radius:4px}' +
     '.janis-msg a{color:inherit;text-decoration:underline;word-break:break-all}' +
+    '.janis-msg code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;background:rgba(0,0,0,.08);padding:0 3px;border-radius:4px}' +
+    '.janis-msg.in code{background:rgba(255,255,255,.18)}' +
     '.janis-msg.human{background:#dbeafe}' +
     '.janis-author{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#1e40af;margin-bottom:2px}' +
     '.janis-author-img{width:16px;height:16px;border-radius:50%;margin:0!important;max-width:16px!important;max-height:16px!important}' +
@@ -590,7 +612,7 @@
     }
     if (m.text) {
       var span = document.createElement('span');
-      linkify(span, m.text);
+      appendRich(span, m.text);
       d.appendChild(span);
     }
     (m.attachments || []).forEach(function (a) { addAttachmentNode(d, a); });

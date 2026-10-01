@@ -9,6 +9,7 @@ import { ArgsRows, Avatar, channelLabel, displayName, fmtTime, StateBadge } from
 import Composer from '../components/Composer';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { typingBus, presenceBus } from '../lib/typingBus';
+import { splitEmphasis } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { Paperclip, RefreshCw, Star, X } from 'lucide-react';
 
@@ -874,7 +875,22 @@ export default function ConversationPage() {
                   </span>
                 </div>
               )}
-              {m.text}
+              {splitEmphasis(m.text ?? '').map((seg, i) => {
+                if (seg.kind === 'text') return seg.text;
+                const Tag =
+                  seg.kind === 'bold'
+                    ? 'b'
+                    : seg.kind === 'italic'
+                      ? 'em'
+                      : seg.kind === 'strike'
+                        ? 's'
+                        : 'code';
+                return (
+                  <Tag key={i} className={seg.kind === 'code' ? 'md-code' : undefined}>
+                    {seg.text}
+                  </Tag>
+                );
+              })}
               {isSystem && !isInternal && (
                 <span className="time" title={new Date(m.created_at).toLocaleString()}>
                   {' '}· {fmtTime(m.created_at)}

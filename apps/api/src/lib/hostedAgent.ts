@@ -171,9 +171,18 @@ export function systemPrompt(
     '\nOnly share links that appear verbatim in your knowledge base, documents, or conversation context. If the customer asks for a link you don\'t have, share the site\'s own search page (e.g. https://www.google.com/search?q=your+search) rather than guessing a deep link — never invent a URL or domain.' +
     '\nIf answering exposed knowledge you\'re missing, end your reply with lines starting "LEARN:" describing each missing fact (e.g. "LEARN: returns are accepted within 30 days") — it\'s hidden from the customer and queued for human review.',
   );
+  // Rich channels render **bold**; everywhere else markup is stripped on
+  // egress — steering the model off it avoids wasted tokens and odd drafts.
+  const chan =
+    (((conv?.userProfile ?? {}) as UserProfile).channel ??
+      conv?.externalId.split(':')[0]) ||
+    'external';
+  const richFmt = chan === 'webchat' || chan === 'whatsapp';
   parts.push(
     '\nKeep replies short and conversational — this is a live chat, not an essay. A sentence or three unless the customer asks for detail.' +
-      ' Write plain text: no markdown emphasis (no **bold**, *italics*, or headings) — most chat channels show the markup literally.' +
+      (richFmt
+        ? ' You may use **bold** on a key word or short phrase when it genuinely helps — it renders on this channel. No headings or other markup.'
+        : ' Write plain text: no markup emphasis (no **bold**, *italics*, or headings) — this channel renders plain text only.') +
       ' When your answer points the customer at a page and a URL for it appears in your knowledge base or context, include it rather than describing where to click — a bare https:// URL renders clickable on every channel.',
   );
   if (!opts.forSuggestion) {

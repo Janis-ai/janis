@@ -6,7 +6,7 @@ import {
   messages,
   type channels,
 } from '../db/schema.js';
-import { sendChannelMessage } from './channels.js';
+import { formatForChannel, sendChannelMessage } from './channels.js';
 import { contactForBinding, linkConversationContact } from './contacts.js';
 import { isOptedOut } from './optout.js';
 import { bus } from './bus.js';
@@ -117,7 +117,9 @@ export async function sendOutbound(
       .values({ channelId: channel.id, conversationId, platformUserId: to });
   }
 
-  const sent = await sendChannelMessage(channel, to, args.text, undefined, {
+  // /send + broadcast call sendChannelMessage directly (deliverToChannel's
+  // formatting step is on the reply path) — translate to the dialect here.
+  const sent = await sendChannelMessage(channel, to, formatForChannel(args.text, channel.kind), undefined, {
     senderName: user?.name ?? undefined,
     senderId: user?.id,
     subject: args.subject,

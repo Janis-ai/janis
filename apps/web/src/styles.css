@@ -281,6 +281,10 @@ button, input, select, textarea { font: inherit; }
   align-self: center; background: none; border: none; padding: 2px 12px;
   max-width: 90%; color: var(--muted); font-style: italic; font-size: 13px; text-align: center;
 }
+.md-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em;
+  background: rgba(127, 127, 127, 0.16); padding: 0 4px; border-radius: 4px;
+}
 .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
 .msg .who .who-avatar { width: 14px; height: 14px; border-radius: 50%; object-fit: cover; margin-right: 4px; vertical-align: -2px; }
 .msg .who .time { margin-left: 6px; }
