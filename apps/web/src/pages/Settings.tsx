@@ -357,7 +357,7 @@ export default function Settings() {
               }}
             >
               <input
-                style={{ maxWidth: 240 }}
+                style={{ maxWidth: 340 }}
                 value={wsName}
                 onChange={(e) => setWsName(e.target.value)}
                 maxLength={120}

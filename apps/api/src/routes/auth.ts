@@ -126,7 +126,10 @@ export function authRoutes(db: Db) {
           .where(eq(users.id, userId));
       }
     }
-    const base = u.name && u.name !== u.email ? u.name : u.email.split('@')[0];
+    // First name keeps the default short — "Michael's workspace" sits better
+    // in the switcher and invite emails than "Michael Nathanson's workspace".
+    const base =
+      u.name && u.name !== u.email ? u.name.split(' ')[0] : u.email.split('@')[0];
     await db.transaction(async (tx) => {
       const [ws] = await tx
         .insert(workspaces)
