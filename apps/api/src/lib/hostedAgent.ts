@@ -689,6 +689,12 @@ export async function complete(
   if (!llm.apiKey) return empty;
 
   const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
+  // Gemini (and its OpenAI shim) rejects a request whose final turn isn't
+  // the customer's — an already-answered transcript or a textless inbound
+  // filtered out of history can leave it ending on our own reply. Trailing
+  // non-user turns carry nothing new — drop them rather than 400.
+  while (msgs.length > 1 && msgs[msgs.length - 1].role !== 'user') msgs.pop();
+  if (msgs.length === 1) return empty;
   const openaiTools = [
     ...tools.map((t) => ({
       type: 'function',
@@ -1578,6 +1584,11 @@ async function replyAsHostedAgent(
     const fileAnalysis = await fileAnalysisAllowed(db, agent.workspaceId);
     console.log(`[files] conv=${convId} analysis=${fileAnalysis}`);
     const history = await transcriptFor(db, convId, fileAnalysis);
+    // A pending-flag pass can fire on an already-answered transcript — the
+    // inbound landed mid-run and the reply it raced ahead of covered it.
+    // Ending on our own turn means nothing is pending: bail quietly rather
+    // than 400 the provider and drop a failure line on the customer.
+    if (history[history.length - 1]?.role !== 'user') return;
     const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history, conv));
     const secrets = {
       ...(await loadSecretsMap(db, agent.id)),

@@ -442,6 +442,40 @@ describe('testRun tool stubbing', () => {
     expect(fetchMock.mock.calls.every((c) => String(c[0]).includes('llm.example'))).toBe(true);
   });
 
+  it('trims trailing assistant turns — providers reject a request ending on a model turn', async () => {
+    // prod incident: a pending-flag pass fired on a transcript whose newest
+    // row was our own reply — Gemini 400s "ending with a model turn".
+    fetchMock.mockResolvedValueOnce(reply({ content: 'ok' }));
+    const r = await complete(
+      llm,
+      'sys',
+      [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello there' },
+      ],
+      [],
+      {},
+      { db, convId: 'c', workspaceId: wsId },
+    );
+    expect(r.text).toBe('ok');
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(sent.messages[sent.messages.length - 1].role).toBe('user');
+    expect(sent.messages).toHaveLength(2); // system + user — the stale reply is gone
+  });
+
+  it('returns empty rather than calling the provider with no user turn at all', async () => {
+    const r = await complete(
+      llm,
+      'sys',
+      [{ role: 'assistant', content: 'unanswered? no — nothing to answer' }],
+      [],
+      {},
+      { db, convId: 'c', workspaceId: wsId },
+    );
+    expect(r.text).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('returns no text when the model loops on tool calls for all 4 rounds', async () => {
     const [agent] = await db
       .insert(agents)
