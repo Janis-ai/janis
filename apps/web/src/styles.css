@@ -159,7 +159,13 @@ button, input, select, textarea { font: inherit; }
 /* In-conversation widgets (cards/options/form/status/receipt) — console
    mirror of the janis-w* component styles in apps/api/public/widget.js */
 .wgt { margin-top: 6px; font-size: 13px; min-width: 200px; }
-.wgt-cards { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.wgt-cards-wrap { position: relative; }
+.wgt-cards { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+.wgt-cards::-webkit-scrollbar { display: none; }
+.wgt-scroll { position: absolute; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--fg); box-shadow: 0 2px 6px rgba(0,0,0,.18); cursor: pointer; font-size: 16px; line-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 0 2px; z-index: 2; transition: opacity .15s; }
+.wgt-scroll.wgt-prev { left: 2px; }
+.wgt-scroll.wgt-next { right: 2px; }
+.wgt-scroll:disabled { opacity: 0; pointer-events: none; }
 .wgt-card { flex: 0 0 150px; max-width: 150px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
 .wgt-card img { width: 100%; height: 90px; object-fit: cover; display: block; }
 .wgt-card-body { padding: 8px; }

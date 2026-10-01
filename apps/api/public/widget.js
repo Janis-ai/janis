@@ -252,7 +252,14 @@
     // in-conversation widgets — agent-emitted interactive components
     '.janis-w{margin-top:6px;font-size:13px}' +
     '.janis-msg.janis-hasw{max-width:95%;min-width:180px}' +
-    '.janis-wcards{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}' +
+    '.janis-wcards-wrap{position:relative}' +
+    '.janis-wcards{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}' +
+    '.janis-wcards::-webkit-scrollbar{display:none}' +
+    '.janis-wscroll{position:absolute;top:50%;transform:translateY(-50%);width:26px;height:26px;border-radius:50%;' +
+    'border:1px solid #e5e7eb;background:#fff;color:#374151;box-shadow:0 2px 6px rgba(0,0,0,.18);' +
+    'cursor:pointer;font-size:16px;line-height:0;display:flex;align-items:center;justify-content:center;padding:0 1px 2px 0;z-index:2;transition:opacity .15s}' +
+    '.janis-wscroll.janis-wprev{left:2px;padding-right:2px}.janis-wscroll.janis-wnext{right:2px;padding-left:2px}' +
+    '.janis-wscroll[disabled]{opacity:0;pointer-events:none}' +
     '.janis-wcard{flex:0 0 150px;max-width:150px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;color:#1f2937;overflow:hidden}' +
     '.janis-wcard img{width:100%;height:90px;object-fit:cover;display:block;margin:0!important;max-width:none!important;max-height:90px!important;border-radius:0}' +
     '.janis-wcard-body{padding:8px}' +
@@ -756,6 +763,7 @@
   }
 
   function renderCards(box, w) {
+    var wrap = el('div', {}, { class: 'janis-wcards-wrap' });
     var row = el('div', {}, { class: 'janis-wcards' });
     (w.items || []).forEach(function (item) {
       var card = el('div', {}, { class: 'janis-wcard' });
@@ -794,7 +802,31 @@
       }
       row.appendChild(card);
     });
-    box.appendChild(row);
+    wrap.appendChild(row);
+    // Overflow arrows — the row scrolls natively but nothing signals that on
+    // desktop. ‹ › step one card at a time and fade out at the edges.
+    function arrow(cls, dir, label) {
+      var b = el('button', {}, { class: 'janis-wscroll ' + cls, type: 'button', 'aria-label': label });
+      wtext(b, dir < 0 ? '‹' : '›');
+      b.onclick = function () { row.scrollBy({ left: dir * 168, behavior: 'smooth' }); };
+      return b;
+    }
+    var prev = arrow('janis-wprev', -1, 'Scroll left');
+    var next = arrow('janis-wnext', 1, 'Scroll right');
+    function syncArrows() {
+      var over = row.scrollWidth > row.clientWidth + 4;
+      prev.style.display = over ? 'flex' : 'none';
+      next.style.display = over ? 'flex' : 'none';
+      prev.disabled = !over || row.scrollLeft <= 0;
+      next.disabled = !over || row.scrollLeft + row.clientWidth >= row.scrollWidth - 2;
+    }
+    row.addEventListener('scroll', syncArrows, { passive: true });
+    wrap.appendChild(prev);
+    wrap.appendChild(next);
+    box.appendChild(wrap);
+    // scrollWidth settles once fonts/images paint — re-check after a tick
+    requestAnimationFrame(syncArrows);
+    setTimeout(syncArrows, 300);
   }
 
   function renderOptions(box, w) {

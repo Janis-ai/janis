@@ -3,7 +3,7 @@
 // shapes (cards, options, form, status, receipt), same interaction model:
 // taps/submits go back through the normal message-send path so the agent
 // reads them as ordinary customer turns.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export interface WidgetCardItem {
   title: string;
@@ -71,8 +71,28 @@ function Widget({ w, onSend }: { w: ChatWidget; onSend: (t: string) => void }) {
 }
 
 function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSend: (t: string) => void }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ prev: false, next: false, over: false });
+  const sync = () => {
+    const row = rowRef.current;
+    if (!row) return;
+    const over = row.scrollWidth > row.clientWidth + 4;
+    setEdges({
+      over,
+      prev: over && row.scrollLeft > 0,
+      next: over && row.scrollLeft + row.clientWidth < row.scrollWidth - 2,
+    });
+  };
+  useEffect(() => {
+    sync();
+    // scrollWidth settles once fonts/images paint — re-check after a tick
+    const t = setTimeout(sync, 300);
+    return () => clearTimeout(t);
+  }, [w.items.length]);
+  const step = (dir: number) => rowRef.current?.scrollBy({ left: dir * 168, behavior: 'smooth' });
   return (
-    <div className="wgt-cards">
+    <div className="wgt-cards-wrap">
+      <div className="wgt-cards" ref={rowRef} onScroll={sync}>
       {w.items.map((item, i) => (
         <div key={i} className="wgt-card">
           {item.image && <img src={item.image} alt="" loading="lazy" />}
@@ -101,6 +121,29 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
           )}
         </div>
       ))}
+      </div>
+      {edges.over && (
+        <>
+          <button
+            type="button"
+            className="wgt-scroll wgt-prev"
+            aria-label="Scroll left"
+            disabled={!edges.prev}
+            onClick={() => step(-1)}
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            className="wgt-scroll wgt-next"
+            aria-label="Scroll right"
+            disabled={!edges.next}
+            onClick={() => step(1)}
+          >
+            ›
+          </button>
+        </>
+      )}
     </div>
   );
 }
