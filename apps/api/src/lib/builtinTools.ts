@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -8,6 +8,7 @@ import {
   channelBindings,
   channels,
   conversations,
+  errorReports,
   memberships,
   messages,
   pendingActions,
@@ -1097,6 +1098,76 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
               note: 'no recurring failures detected — either the agents are handling their conversations or there is not enough traffic yet',
             },
       );
+    },
+  },
+  {
+    name: 'error_reports',
+    description:
+      "Answer 'what just broke / is the console erroring' — recent self-captured error bundles from the web console and API (message, stack, route, console tail, DOM snapshot). List mode shows the latest reports; pass `id` to read one packet in full (DOM + screenshot are summarised — tell the user to open /errors for the pixel view). Read-only, operator workspace only.",
+    params: {
+      id: 'report UUID to inspect — omit to list the most recent reports',
+      limit: 'how many to list, default 10, max 50',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 50);
+      if (args.id) {
+        const [row] = await ctx.db
+          .select()
+          .from(errorReports)
+          .where(
+            and(
+              eq(errorReports.id, String(args.id)),
+              or(eq(errorReports.workspaceId, ctx.workspaceId), isNull(errorReports.workspaceId)),
+            ),
+          )
+          .limit(1);
+        if (!row) return JSON.stringify({ error: 'report not found' });
+        const payload = (row.payload ?? {}) as Record<string, unknown>;
+        return JSON.stringify({
+          id: row.id,
+          source: row.source,
+          message: row.message,
+          stack: row.stack,
+          url: row.url,
+          created_at: row.createdAt,
+          route: payload.route,
+          ua: payload.ua,
+          viewport: payload.viewport,
+          console_tail: payload.console_tail,
+          failed_requests: payload.failed_requests,
+          settings: payload.settings,
+          dom_excerpt: typeof payload.dom === 'string' ? payload.dom.slice(0, 4000) : undefined,
+          has_screenshot: typeof payload.screenshot === 'string',
+          view_url: `${env.webOrigin}/errors`,
+        });
+      }
+      const rows = await ctx.db
+        .select({
+          id: errorReports.id,
+          source: errorReports.source,
+          message: errorReports.message,
+          url: errorReports.url,
+          payload: errorReports.payload,
+          createdAt: errorReports.createdAt,
+        })
+        .from(errorReports)
+        .where(
+          or(eq(errorReports.workspaceId, ctx.workspaceId), isNull(errorReports.workspaceId)),
+        )
+        .orderBy(desc(errorReports.createdAt))
+        .limit(limit);
+      return JSON.stringify({
+        reports: rows.map((r) => ({
+          id: r.id,
+          source: r.source,
+          message: r.message.slice(0, 200),
+          route: (r.payload as { route?: string } | null)?.route,
+          at: r.createdAt,
+        })),
+        view_url: `${env.webOrigin}/errors`,
+      });
     },
   },
   {

@@ -14,6 +14,7 @@ import ConversationPage from './pages/ConversationPage';
 import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
 import Reports from './pages/Reports';
+import Errors from './pages/Errors';
 import Billing from './pages/Billing';
 import Settings from './pages/Settings';
 import { HelpCenter, HelpArticle, HelpDomain } from './pages/HelpCenter';
@@ -22,6 +23,7 @@ import { Contacts, ContactDetail } from './pages/Contacts';
 import Campaigns from './pages/Campaigns';
 import ChannelPage from './pages/ChannelPage';
 import { finishOpenRouterCallback } from './lib/openrouterAuth';
+import { reportClientError } from './lib/errorReporter';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -30,13 +32,10 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
   componentDidCatch(error: Error, info: { componentStack?: string }) {
     console.error(error, info.componentStack);
-    const params = new URLSearchParams({
-      msg: error.message,
-      stack: (error.stack ?? '').slice(0, 1500),
-      comp: (info.componentStack ?? '').slice(0, 500),
-      at: window.location.pathname,
+    void reportClientError(error.message, {
+      stack: `${error.stack ?? ''}\n\ncomponent stack:${info.componentStack ?? ''}`.slice(0, 10_000),
+      trigger: 'react-error-boundary',
     });
-    fetch(`/api/__client_error?${params}`).catch(() => {});
   }
   render() {
     if (this.state.error) {
@@ -159,6 +158,7 @@ export default function App() {
           <Route path="/agents/:id" element={<AgentDetail />} />
           <Route path="/agents/:id/channels/:channelId" element={<ChannelPage />} />
           <Route path="/reports" element={<Reports />} />
+          <Route path="/errors" element={<Errors />} />
           <Route path="/integrations" element={<Navigate to="/agents" replace />} />
           <Route path="/integrations/:channelId" element={<ChannelRedirect />} />
           <Route path="/billing" element={<Billing />} />

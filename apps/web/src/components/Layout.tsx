@@ -11,7 +11,7 @@ import PushBanner from './PushBanner';
 import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
-import { BarChart3, BookOpen, Bot, CreditCard, Inbox, Megaphone, Settings, Sparkles, Users, X } from 'lucide-react';
+import { BarChart3, BookOpen, Bot, Bug, CreditCard, Inbox, Megaphone, Settings, Sparkles, Users, X } from 'lucide-react';
 import { usePrompt } from './Prompt';
 import { CommandPalette } from './CommandPalette';
 
@@ -399,6 +399,7 @@ export default function Layout() {
         {!data?.agent_scope && (
           <>
             <NavLink to="/reports"><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
+            <NavLink to="/errors"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
             <NavLink to="/billing"><span className="label">Billing</span><span className="icon"><CreditCard size={18} /></span></NavLink>
             <NavLink to="/settings"><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </>

@@ -1261,6 +1261,30 @@ export const hookSubscriptions = pgTable(
  * server-side funnel complement to GA4's marketing funnel. Fire-and-forget
  * writes from POST /api/track; queried by hand for activation metrics.
  */
+/**
+ * Self-captured error bundles — the console's window.onerror /
+ * unhandledrejection / API-failure reporter posts here, and app.onError
+ * writes server-side failures with source 'api'. Payload is the agent-
+ * readable packet: DOM snapshot, screenshot data-url, console tail,
+ * recent failed requests, client settings. workspace_id is null for
+ * pre-login reports — only the operator workspace can read those.
+ */
+export const errorReports = pgTable(
+  'error_reports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    source: text('source').notNull().default('web'),
+    message: text('message').notNull(),
+    stack: text('stack'),
+    url: text('url'),
+    payload: jsonb('payload'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('error_reports_ws_time').on(t.workspaceId, t.createdAt)],
+);
+
 export const analyticsEvents = pgTable(
   'analytics_events',
   {

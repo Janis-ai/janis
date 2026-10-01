@@ -32,6 +32,7 @@ import { savedReplyRoutes } from './routes/savedReplies.js';
 import { searchRoutes } from './routes/search.js';
 import { digestRoutes } from './routes/digests.js';
 import { reportRoutes } from './routes/reports.js';
+import { errorReportIngest, errorReportRoutes, recordApiError } from './routes/errorReports.js';
 import { slackApiRoutes, slackPublicRoutes } from './routes/slack.js';
 import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 import { metaApiRoutes, metaPublicRoutes } from './routes/meta.js';
@@ -266,7 +267,10 @@ export function createApp(db: Db) {
   api.route('/workspace', workspaceRoutes(db));
   api.route('/views', viewRoutes(db));
   api.route('/track', trackRoutes(db));
+  api.route('/error-reports', errorReportRoutes(db));
   app.route('/api', api);
+  // Public ingest for client error bundles — errors happen pre-login too.
+  app.route('/api/error-report', errorReportIngest(db));
 
   // Uploaded attachments are stored in Postgres (durable across deploys);
   // fall through to disk for files written before the DB store existed.
@@ -373,6 +377,7 @@ export function createApp(db: Db) {
   app.onError((err, c) => {
     if (err instanceof HTTPException) return err.getResponse();
     reportError(err, c);
+    recordApiError(db, err, c);
     return c.json({ error: 'Internal server error' }, 500);
   });
 
