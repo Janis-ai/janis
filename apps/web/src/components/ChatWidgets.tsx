@@ -85,9 +85,17 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
   };
   useEffect(() => {
     sync();
+    // The rail can mount while Ask Janis is collapsed (scrollWidth 0) or
+    // resize later — observe so the arrows appear whenever the row
+    // actually overflows, not just at mount.
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
+    if (rowRef.current) ro?.observe(rowRef.current);
     // scrollWidth settles once fonts/images paint — re-check after a tick
     const t = setTimeout(sync, 300);
-    return () => clearTimeout(t);
+    return () => {
+      ro?.disconnect();
+      clearTimeout(t);
+    };
   }, [w.items.length]);
   const step = (dir: number) => rowRef.current?.scrollBy({ left: dir * 168, behavior: 'smooth' });
   return (

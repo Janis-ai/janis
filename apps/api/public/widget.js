@@ -824,7 +824,11 @@
     wrap.appendChild(prev);
     wrap.appendChild(next);
     box.appendChild(wrap);
-    // scrollWidth settles once fonts/images paint — re-check after a tick
+    // The panel may be closed (scrollWidth 0) when the cards render, and the
+    // window can resize — observe so arrows track real overflow.
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(syncArrows).observe(row);
+    }
     requestAnimationFrame(syncArrows);
     setTimeout(syncArrows, 300);
   }
