@@ -191,7 +191,7 @@ export function ChannelCard({
         </details>
       )}
       {['email', 'gmail', 'outlook'].includes(ch.kind) && (
-        <details className="webhook-details" style={{ marginTop: 8 }}>
+        <details className="webhook-details" open style={{ marginTop: 8 }}>
           <summary>
             <span className="details-title">Answer rules</span>
             <span className="details-sub">
