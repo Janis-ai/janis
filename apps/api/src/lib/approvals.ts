@@ -40,7 +40,7 @@ export async function requestToolApproval(
       (p) => p.toolName === tool.name && JSON.stringify(p.args) === JSON.stringify(args),
     )
   ) {
-    return 'pending_approval: this exact action is already awaiting teammate approval — tell the customer it is still being confirmed, and do not claim it is done';
+    return 'pending_approval: this exact action is already awaiting approval — an open card sits in the chat; tell them it is still pending their decision, and do not claim it is done';
   }
 
   const [action] = await db

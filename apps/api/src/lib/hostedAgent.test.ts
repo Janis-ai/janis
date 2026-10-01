@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, conversations, messages, uploads, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, transcriptFor } from './hostedAgent.js';
+import { blessedUrlsFor, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, stripTranscriptNotes, transcriptFor } from './hostedAgent.js';
 
 let db: Db;
 let convId: string;
@@ -238,6 +238,26 @@ describe('controlTag', () => {
     expect(controlTag('Just a normal answer.')).toBeNull();
     expect(controlTag('[HANDOFF]').partial).toBe('');
     expect(controlTag('a [HANDOF] b [handoff] c').partial).toBe('a  b  c');
+  });
+});
+
+describe('stripTranscriptNotes', () => {
+  it('removes parroted approval annotations from replies', () => {
+    // prod incident: the concierge learned "(an action was submitted for
+    // teammate approval)" from transcript context and emitted it as reply
+    // text when it narrated a card it never submitted.
+    expect(
+      stripTranscriptNotes(
+        "(an action was submitted for teammate approval) I've proposed that for you.",
+      ),
+    ).toBe("I've proposed that for you.");
+    expect(
+      stripTranscriptNotes('Done. (a proposal card was shown — awaiting approval)'),
+    ).toBe('Done.');
+  });
+
+  it('leaves normal parentheticals alone', () => {
+    expect(stripTranscriptNotes('Sure (no problem) — done.')).toBe('Sure (no problem) — done.');
   });
 });
 

@@ -878,7 +878,7 @@ function summaryLine(m: {
     action_request?: boolean;
     action_result?: boolean;
   };
-  if (f?.action_request) return '(an action was submitted for teammate approval)';
+  if (f?.action_request) return '(a proposal card was shown — awaiting approval)';
   if (f?.action_result) return `(${m.text})`;
   if (f?.failure || f?.help_requested || f?.custom_alert) {
     return '(passed to a human teammate)';
@@ -1094,7 +1094,7 @@ export async function transcriptFor(
     };
     // Approval cards/results read as bracketed context, not operator chatter.
     if (f?.action_request) {
-      out.push({ role: 'assistant', content: '(an action was submitted for teammate approval)' });
+      out.push({ role: 'assistant', content: '(a proposal card was shown — awaiting approval)' });
       continue;
     }
     if (f?.action_result) {
@@ -1251,9 +1251,11 @@ export async function runHostedEvent(
     // ("(human operator) ...") — strip any leading role prefix. LEARN:/
     // BUTTON: lines are reply-path machinery — never show them in a draft.
     const stripLabel = (t?: string | null) => {
-      const clean = t?.replace(
-        /^\s*\(?(human operator|operator|agent|assistant)\)?\s*[:\-–—]\s*/i,
-        '',
+      const clean = stripTranscriptNotes(
+        t?.replace(
+          /^\s*\(?(human operator|operator|agent|assistant)\)?\s*[:\-–—]\s*/i,
+          '',
+        ) ?? '',
       );
       return clean ? extractButtons(extractLearns(clean).text).text || undefined : undefined;
     };
@@ -1394,6 +1396,19 @@ const convRuns = new Map<string, { running: boolean; pending: boolean }>();
 const CONTROL_TAG = /\[(CANCEL[\s_-]*HANDOF+|OF+ER[\s_-]*HUM+AN+|HANDOF+)\]/i;
 const CONTROL_TAGS = new RegExp(CONTROL_TAG.source, 'gi');
 
+// Internal transcript annotations ("(a proposal card was shown…)") the model
+// sometimes parrots verbatim into a reply — strip them; they're context for
+// the model, never for the reader. The legacy "(an action was submitted for
+// teammate approval)" wording is covered too.
+const TRANSCRIPT_NOTE =
+  /\s*\((?:an action was submitted for (?:teammate\s+|your\s+)?approval|a proposal card was shown[^)]*)\)\s*/gi;
+
+export function stripTranscriptNotes(text: string): string {
+  // A matched annotation takes its surrounding whitespace with it — replace
+  // with a single space so sentences on either side don't join, then trim.
+  return text.replace(TRANSCRIPT_NOTE, ' ').trim();
+}
+
 /** Split a control token out of the model's reply — null when absent. */
 export function controlTag(reply: string): { kind: 'handoff' | 'offer' | 'cancel'; partial: string } | null {
   const m = reply.match(CONTROL_TAG);
@@ -1500,7 +1515,7 @@ async function replyAsHostedAgent(
     if (genMs > 10_000)
       console.warn(`[hosted] slow generateReply conv=${convId} ${genMs}ms`);
     const { text: guardedReply, promptTokens, completionTokens, model } = gen;
-    const { text: noLearns, learns } = extractLearns(guardedReply);
+    const { text: noLearns, learns } = extractLearns(stripTranscriptNotes(guardedReply));
     const { text: reply, buttons } = extractButtons(noLearns);
     const learnFlag = learns.length ? { learn: learns } : {};
     // model-emitted tappable choices ride payload.quick_replies → native
