@@ -7,7 +7,7 @@ const FETCH_TIMEOUT_MS = 15_000;
 
 /** Strip HTML to readable text — script/style dropped, tags collapsed to
  *  whitespace, common entities decoded. Good enough for FAQ/help pages. */
-function htmlToText(html: string): string {
+export function htmlToText(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')

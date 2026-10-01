@@ -17,6 +17,7 @@ import { env } from '../env.js';
 import { deliverWebhook, replayDelivery } from '../lib/webhooks.js';
 import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
 import { fetchUrlText, refreshKnowledgeSource } from '../lib/urlSource.js';
+import { importHelpCentre, MAX_KNOWLEDGE_SOURCES } from '../lib/helpCentreImport.js';
 import {
   detectKnowledgeGaps,
   draftKnowledgeEntry,
@@ -554,7 +555,8 @@ export function agentRoutes(db: Db) {
       .select({ count: sql<number>`count(*)::int` })
       .from(knowledgeFiles)
       .where(eq(knowledgeFiles.agentId, agent.id));
-    if (count >= 50) return c.json({ error: 'knowledge file limit reached (50)' }, 409);
+    if (count >= MAX_KNOWLEDGE_SOURCES)
+      return c.json({ error: `knowledge file limit reached (${MAX_KNOWLEDGE_SOURCES})` }, 409);
 
     const buf = Buffer.from(await file.arrayBuffer());
     let text: string;
@@ -606,7 +608,8 @@ export function agentRoutes(db: Db) {
       .select({ count: sql<number>`count(*)::int` })
       .from(knowledgeFiles)
       .where(eq(knowledgeFiles.agentId, agent.id));
-    if (count >= 50) return c.json({ error: 'knowledge file limit reached (50)' }, 409);
+    if (count >= MAX_KNOWLEDGE_SOURCES)
+      return c.json({ error: `knowledge file limit reached (${MAX_KNOWLEDGE_SOURCES})` }, 409);
     let fetched: { text: string; sizeBytes: number };
     try {
       fetched = await fetchUrlText(url);
@@ -630,6 +633,28 @@ export function agentRoutes(db: Db) {
       })
       .returning();
     return c.json({ file: { id: row.id } }, 201);
+  });
+
+  // Whole-centre import — paste a help centre root and we fan it out into
+  // per-article URL sources. Zendesk centres fill rows inline from the
+  // articles API; everything else falls back to the sitemap and the
+  // sweeper's bounded re-crawl fills the stub rows.
+  app.post('/:id/knowledge-import', agentAdmin, zValidator('json', urlBody), async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const { url, refresh_hours } = c.req.valid('json');
+    try {
+      const result = await importHelpCentre(
+        db,
+        c.get('workspaceId'),
+        agent.id,
+        url,
+        refresh_hours,
+      );
+      return c.json(result, 201);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : 'import failed' }, 422);
+    }
   });
 
   // Manual re-crawl — also how a failed source retries without waiting.

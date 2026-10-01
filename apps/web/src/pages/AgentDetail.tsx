@@ -2075,6 +2075,7 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
 
   const [url, setUrl] = useState('');
   const [urlHours, setUrlHours] = useState(24);
+  const [importMsg, setImportMsg] = useState('');
   const addUrl = useMutation({
     mutationFn: () =>
       api(`/api/agents/${agentId}/knowledge-url`, {
@@ -2083,6 +2084,27 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
       }),
     onSuccess: () => {
       setUrl('');
+      void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
+    },
+    onError: (e) => setError(e.message),
+  });
+  const importCentre = useMutation({
+    mutationFn: () =>
+      api<{ kind: string; imported: number; queued: number; skipped: number; discovered: number }>(
+        `/api/agents/${agentId}/knowledge-import`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ url: url.trim(), refresh_hours: urlHours }),
+        },
+      ),
+    onSuccess: (r) => {
+      setUrl('');
+      const dup = r.skipped ? ` (${r.skipped} already imported)` : '';
+      setImportMsg(
+        r.kind === 'zendesk'
+          ? `Imported ${r.imported} article${r.imported === 1 ? '' : 's'} from the Zendesk API${dup} — they re-crawl on this schedule.`
+          : `Found ${r.discovered} pages${dup} — ${r.queued} queued; the sweeper fetches them in batches.`,
+      );
       void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
     },
     onError: (e) => setError(e.message),
@@ -2157,12 +2179,21 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
         </select>
         <button
           className="btn sm"
-          disabled={!url.trim() || addUrl.isPending}
+          disabled={!url.trim() || addUrl.isPending || importCentre.isPending}
           onClick={() => addUrl.mutate()}
         >
           {addUrl.isPending ? 'Fetching…' : 'Add URL'}
         </button>
+        <button
+          className="btn sm"
+          title="Paste a help centre root (Zendesk, or any site with a sitemap) — every article becomes a re-crawled URL source"
+          disabled={!url.trim() || addUrl.isPending || importCentre.isPending}
+          onClick={() => importCentre.mutate()}
+        >
+          {importCentre.isPending ? 'Importing…' : 'Import centre'}
+        </button>
       </div>
+      {importMsg && <div className="muted" style={{ marginTop: 4 }}>{importMsg}</div>}
       {error && <div className="error">{error}</div>}
     </div>
   );

@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentConnections, agents, channelBindings, channels, conversations, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
+import { agentConnections, agents, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { env } from '../env.js';
@@ -803,5 +803,158 @@ describe('DELETE /agents/:id', () => {
     expect(chans).toHaveLength(0);
     const binds = await db.select().from(channelBindings).where(eq(channelBindings.channelId, chan.id));
     expect(binds).toHaveLength(0);
+  });
+});
+
+describe('knowledge-import', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const newAgent = async () => {
+    const res = await postAgent(parentCookie);
+    return (await res.json()).agent.id as string;
+  };
+  const post = (id: string, url: string) =>
+    app.request(`/api/agents/${id}/knowledge-import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ url }),
+    });
+  const rows = (id: string) =>
+    db.select().from(knowledgeFiles).where(eq(knowledgeFiles.agentId, id));
+
+  it('imports a Zendesk centre via the articles API, deduping on re-import', async () => {
+    const id = await newAgent();
+    const pages: Record<string, unknown> = {
+      'https://acme.zendesk.com/api/v2/help_center/en-us/articles.json?per_page=100': {
+        articles: [
+          {
+            html_url: 'https://acme.zendesk.com/hc/en-us/articles/1-returns',
+            title: 'Returns',
+            body: '<p>Return <b>within 30 days</b>.</p>',
+          },
+          {
+            html_url: 'https://acme.zendesk.com/hc/en-us/articles/2-shipping',
+            title: 'Shipping',
+            body: '<p>Ships in 2 days.</p>',
+          },
+          { html_url: 'https://acme.zendesk.com/hc/en-us/articles/9-draft', title: 'Draft', draft: true },
+        ],
+        next_page:
+          'https://acme.zendesk.com/api/v2/help_center/en-us/articles.json?page=2&per_page=100',
+      },
+      'https://acme.zendesk.com/api/v2/help_center/en-us/articles.json?page=2&per_page=100': {
+        articles: [
+          {
+            html_url: 'https://acme.zendesk.com/hc/en-us/articles/3-warranty',
+            title: 'Warranty',
+            body: '<p>Two years.</p>',
+          },
+        ],
+        next_page: null,
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (u: unknown) => {
+        const page = pages[String(u)];
+        return page
+          ? new Response(JSON.stringify(page), { status: 200 })
+          : new Response('not found', { status: 404 });
+      }),
+    );
+    const res = await post(id, 'https://acme.zendesk.com/hc/en-us');
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    // drafts skipped; both pages walked
+    expect(body).toMatchObject({ kind: 'zendesk', discovered: 3, imported: 3, skipped: 0 });
+    const files = await rows(id);
+    expect(files.map((f) => f.name).sort()).toEqual(['Returns', 'Shipping', 'Warranty']);
+    const ret = files.find((f) => f.name === 'Returns')!;
+    expect(ret.sourceUrl).toBe('https://acme.zendesk.com/hc/en-us/articles/1-returns');
+    expect(ret.text).toContain('within 30 days');
+    expect(ret.text).not.toContain('<b>');
+    // normal URL-source cadence — the sweeper re-crawls it
+    expect(ret.nextFetchAt!.getTime()).toBeGreaterThan(Date.now() + 20 * 3600_000);
+
+    const again = await post(id, 'https://acme.zendesk.com/hc/en-us');
+    expect((await again.json()).skipped).toBe(3);
+    expect(await rows(id)).toHaveLength(3);
+  });
+
+  it('falls back to the sitemap and queues stub rows scoped to the pasted path', async () => {
+    const id = await newAgent();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (u: unknown) => {
+        const url = String(u);
+        if (url.includes('/api/v2/help_center')) return new Response('no', { status: 404 });
+        if (url.endsWith('/robots.txt'))
+          return new Response('User-agent: *\nSitemap: https://help.acme.com/map.xml', {
+            status: 200,
+          });
+        if (url.endsWith('/map.xml'))
+          return new Response(
+            '<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' +
+              '<url><loc>https://help.acme.com/en/returns</loc></url>' +
+              '<url><loc>https://help.acme.com/en/shipping</loc></url>' +
+              '<url><loc>https://help.acme.com/fr/retours</loc></url>' +
+              '<url><loc>https://other.example.com/x</loc></url>' +
+              '</urlset>',
+            { status: 200 },
+          );
+        return new Response('no', { status: 404 });
+      }),
+    );
+    const res = await post(id, 'https://help.acme.com/en');
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body).toMatchObject({ kind: 'sitemap', discovered: 2, queued: 2 });
+    const files = await rows(id);
+    expect(files.map((f) => f.sourceUrl).sort()).toEqual([
+      'https://help.acme.com/en/returns',
+      'https://help.acme.com/en/shipping',
+    ]);
+    // stubs — no text yet, due immediately so the sweeper fills them
+    expect(files[0].text).toBe('');
+    expect(files[0].nextFetchAt!.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('follows sitemap index files', async () => {
+    const id = await newAgent();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (u: unknown) => {
+        const url = String(u);
+        if (url.includes('/api/v2/help_center')) return new Response('no', { status: 404 });
+        if (url.endsWith('/robots.txt')) return new Response('no', { status: 404 });
+        if (url.endsWith('/sitemap.xml'))
+          return new Response(
+            '<?xml version="1.0"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' +
+              '<sitemap><loc>https://kb.acme.com/sitemap-help.xml</loc></sitemap>' +
+              '</sitemapindex>',
+            { status: 200 },
+          );
+        if (url.endsWith('/sitemap-help.xml'))
+          return new Response(
+            '<urlset><url><loc>https://kb.acme.com/help/refunds</loc></url></urlset>',
+            { status: 200 },
+          );
+        return new Response('no', { status: 404 });
+      }),
+    );
+    const res = await post(id, 'https://kb.acme.com/help');
+    const body = await res.json();
+    expect(body).toMatchObject({ kind: 'sitemap', queued: 1 });
+    const files = await rows(id);
+    expect(files[0].sourceUrl).toBe('https://kb.acme.com/help/refunds');
+  });
+
+  it('422s when the site is neither Zendesk nor sitemap-discoverable', async () => {
+    const id = await newAgent();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('no', { status: 404 })));
+    const res = await post(id, 'https://acme.com');
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toContain('no help centre found');
+    expect(await rows(id)).toHaveLength(0);
   });
 });
