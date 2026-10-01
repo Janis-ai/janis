@@ -256,6 +256,29 @@ export async function handleChannelMessage(
 
   let conv = binding?.conversation;
 
+  // A conversation can exist for (agent, externalId) without this channel's
+  // binding — a channel deleted and re-created, a binding pruned, or the same
+  // participant arriving through a sibling channel. The insert below is
+  // unique on (agent_id, external_id), so without this reattach path the
+  // insert violates the constraint and gmail polls retry the same mail every
+  // sweep forever.
+  if (!conv) {
+    const [byExt] = await db
+      .select()
+      .from(conversations)
+      .where(
+        and(eq(conversations.agentId, channel.agentId), eq(conversations.externalId, externalId)),
+      )
+      .limit(1);
+    if (byExt) {
+      await db
+        .insert(channelBindings)
+        .values({ channelId: channel.id, conversationId: byExt.id, platformUserId: participantId })
+        .onConflictDoNothing();
+      conv = byExt;
+    }
+  }
+
   // Test threads created before externalId namespacing still carry
   // `webchat:u:*` — re-key on the next message so they stop colliding with
   // (or shadowing) a real visitor conversation for the same user+agent.

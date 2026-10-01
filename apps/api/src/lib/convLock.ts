@@ -40,11 +40,15 @@ export async function acquireConvLock(
   // dedicated connection for the lock's lifetime.
   const client = (db as unknown as { $client: { reserve(): Promise<ReservedSql> } }).$client;
   const conn = await client.reserve();
-  const deadline = Date.now() + WAIT_BUDGET_MS;
+  const started = Date.now();
+  const deadline = started + WAIT_BUDGET_MS;
   try {
     while (true) {
       const [{ ok }] = await conn`select pg_try_advisory_lock(${LOCK_NS}, hashtext(${convId})) as ok`;
       if (ok) {
+        const waited = Date.now() - started;
+        if (waited > 5_000)
+          console.warn(`[convLock] ${convId}: acquired after ${waited}ms wait`);
         return async () => {
           try {
             await conn`select pg_advisory_unlock_all()`; // belt & suspenders before pooling

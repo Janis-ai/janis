@@ -1467,6 +1467,7 @@ async function replyAsHostedAgent(
         },
       ]);
     };
+    const tGen = Date.now();
     const gen = await generateReply(
       llm,
       prompt,
@@ -1481,6 +1482,9 @@ async function replyAsHostedAgent(
       ),
       onStall,
     );
+    const genMs = Date.now() - tGen;
+    if (genMs > 10_000)
+      console.warn(`[hosted] slow generateReply conv=${convId} ${genMs}ms`);
     const { text: guardedReply, promptTokens, completionTokens, model } = gen;
     const { text: noLearns, learns } = extractLearns(guardedReply);
     const { text: reply, buttons } = extractButtons(noLearns);

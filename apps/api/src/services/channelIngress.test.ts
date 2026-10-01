@@ -145,6 +145,28 @@ describe('handleChannelMessage dedup', () => {
   });
 });
 
+describe('orphaned conversation reattach', () => {
+  it('reattaches when a conversation exists for the externalId but the binding is gone', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    // conversation exists (agent+externalId) but its channel_binding row is
+    // missing — e.g. the channel was deleted and re-created. The insert path
+    // would violate conversations_agent_external; the fix must reattach.
+    const { channelBindings } = await import('../db/schema.js');
+    const msg = { objectId: 'PG1', senderId: 'PSID-ORPHAN', text: 'first', messageId: 'mid.o1' };
+    await handleChannelMessage(db, channel, msg);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'messenger:PSID-ORPHAN'));
+    await db.delete(channelBindings).where(eq(channelBindings.conversationId, conv.id));
+
+    // second message must not throw a duplicate-key
+    await handleChannelMessage(db, channel, { ...msg, text: 'second', messageId: 'mid.o2' });
+    const all = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(all.filter((m) => m.direction === 'in').map((m) => m.text)).toEqual(['first', 'second']);
+  });
+});
+
 describe('archived conversations', () => {
   it('still dispatches to the agent — archive is inbox organization, not a mute', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
