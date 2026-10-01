@@ -424,6 +424,9 @@ export const Channel = z.object({
         hide_powered_by: z.boolean().optional(),
         // show the "Browse help articles" link — default on
         show_help_link: z.boolean().optional(),
+        // mic dictation in the widget — opt-in: transcription runs on
+        // Janis's keys and is metered to the workspace
+        dictation: z.boolean().optional(),
       })
       .optional(),
   }),

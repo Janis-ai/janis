@@ -209,6 +209,7 @@ export const env = {
     scale: process.env.STRIPE_METER_PRICE_SCALE ?? '',
     llm: process.env.STRIPE_METER_PRICE_LLM ?? '',
     voice: process.env.STRIPE_METER_PRICE_VOICE ?? '',
+    stt: process.env.STRIPE_METER_PRICE_STT ?? '',
   } as Record<string, string>,
   // GA4 measurement id (G-…) — when set, the served SPA gets the gtag snippet
   // injected into <head>. Empty disables (dev/tests embed nothing).

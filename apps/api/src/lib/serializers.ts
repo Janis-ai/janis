@@ -188,6 +188,8 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     sound?: boolean;
     theme?: 'light' | 'dark' | 'auto';
     hide_powered_by?: boolean;
+    show_help_link?: boolean;
+    dictation?: boolean;
     identity_secret?: string;
     show_operator?: boolean;
     inbound_address?: string;
@@ -276,6 +278,8 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
               sound: creds.sound,
               theme: creds.theme,
               hide_powered_by: creds.hide_powered_by,
+              show_help_link: creds.show_help_link,
+              dictation: creds.dictation === true,
             }
           : undefined,
     },

@@ -13,6 +13,27 @@ import { markOperatorTyping } from '../lib/typingState.js';
 import { takeover, humanReply } from '../services/takeover.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import type Stripe from 'stripe';
+import { setStripeClient } from '../lib/stripe.js';
+
+// env.ts reads process.env at import time — a truthy secret lets the
+// setStripeClient seam intercept meter reporting (no real Stripe calls).
+vi.hoisted(() => {
+  process.env.STRIPE_SECRET_KEY = 'sk_test_fake';
+});
+
+/** Captured billing.meterEvents.create calls for usage-report assertions. */
+const meteredEvents: { event_name: string; payload: Record<string, string>; identifier?: string }[] = [];
+const fakeStripe = {
+  billing: {
+    meterEvents: {
+      create: async (p: (typeof meteredEvents)[number]) => {
+        meteredEvents.push(p);
+        return {};
+      },
+    },
+  },
+};
 import { join } from 'node:path';
 
 let db: Db;
@@ -36,6 +57,7 @@ beforeAll(async () => {
   // uploads land in a tmpdir, not the repo
   process.env.UPLOAD_DIR = mkdtempSync(join(tmpdir(), 'janis-uploads-'));
   const { webchatRoutes } = await import('./webchat.js');
+  setStripeClient(fakeStripe as unknown as Stripe);
   const client = new PGlite();
   db = drizzle(client, { schema }) as unknown as Db;
   await migrate(db as never, { migrationsFolder: './drizzle' });
@@ -61,7 +83,7 @@ beforeAll(async () => {
       agentId: agent.id,
       kind: 'webchat',
       name: 'Acme website',
-      credentials: { greeting: 'Hey there!' },
+      credentials: { greeting: 'Hey there!', dictation: true },
     })
     .returning();
   channelId = channel.id;
@@ -1369,6 +1391,20 @@ describe('webchat transcript polish', () => {
 });
 
 describe('dictation transcribe', () => {
+  // Earlier tests rewrite channel credentials wholesale (identity_secret) —
+  // re-assert the opt-in flag before these run.
+  beforeAll(async () => {
+    const [ch] = await db
+      .select()
+      .from(channels)
+      .where(eq(channels.id, channelId))
+      .limit(1);
+    await db
+      .update(channels)
+      .set({ credentials: { ...(ch.credentials as object), dictation: true } })
+      .where(eq(channels.id, channelId));
+  });
+
   const postAudio = (token: string, withFile = true) => {
     const fd = new FormData();
     if (withFile) fd.append('audio', new File(['fakeaudio'], 'dictation.webm', { type: 'audio/webm' }));
@@ -1461,5 +1497,96 @@ describe('dictation transcribe', () => {
       if (prevG === undefined) delete process.env.GOOGLE_LLM_API_KEY;
       else process.env.GOOGLE_LLM_API_KEY = prevG;
     }
+  });
+
+  it('403s and never calls STT when the channel has not enabled dictation', async () => {
+    process.env.OPENAI_LLM_API_KEY = 'sk-test-stt';
+    const [ch] = await db
+      .insert(channels)
+      .values({
+        workspaceId: wsId,
+        agentId: (await db.select().from(agents))[0].id,
+        kind: 'webchat',
+        name: 'No mic',
+        credentials: { greeting: 'hi' },
+      })
+      .returning();
+    let sttCalled = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        sttCalled = true;
+        return new Response(JSON.stringify({ text: 'x', duration: 1 }));
+      }),
+    );
+    try {
+      const r = await postAudio(ch.id);
+      expect(r.status).toBe(403);
+      expect(sttCalled).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      await db.delete(channels).where(eq(channels.id, ch.id));
+    }
+  });
+
+  it('reports stt_seconds to the Stripe meter with margin, idempotent by row id', async () => {
+    process.env.OPENAI_LLM_API_KEY = 'sk-test-stt';
+    await db
+      .update(workspaces)
+      .set({ stripeCustomerId: 'cus_test_stt' })
+      .where(eq(workspaces.id, wsId));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ text: 'bill me', duration: 2.5 }))),
+    );
+    try {
+      const before = meteredEvents.length;
+      const prior = new Set(
+        (await db.select({ id: usageEvents.id }).from(usageEvents)).map((u) => u.id),
+      );
+      const r = await postAudio(channelId);
+      expect(r.status).toBe(200);
+      // reportMeter is fire-and-forget — flush the microtask queue
+      await new Promise((r2) => setTimeout(r2, 10));
+      const ev = meteredEvents.slice(before).find((e) => e.event_name === 'janis.stt_micros');
+      expect(ev).toBeDefined();
+      // 2.5s → cost 125µ → billed 125 × 1.2 margin = 150 micro-USD
+      expect(ev!.payload).toEqual({ stripe_customer_id: 'cus_test_stt', value: '150' });
+      const rows = await db
+        .select()
+        .from(usageEvents)
+        .where(eq(usageEvents.kind, 'stt_seconds'));
+      const fresh = rows.filter((u) => !prior.has(u.id));
+      expect(fresh).toHaveLength(1);
+      expect(ev!.identifier).toBe(fresh[0].id);
+    } finally {
+      vi.unstubAllGlobals();
+      await db
+        .update(workspaces)
+        .set({ stripeCustomerId: null })
+        .where(eq(workspaces.id, wsId));
+    }
+  });
+
+  it('exposes the dictation flag in the widget bootstrap', async () => {
+    const body = (await (await app.request(`/chat/${channelId}`)).json()) as {
+      dictation?: boolean;
+    };
+    expect(body.dictation).toBe(true);
+    const [ch] = await db
+      .insert(channels)
+      .values({
+        workspaceId: wsId,
+        agentId: (await db.select().from(agents))[0].id,
+        kind: 'webchat',
+        name: 'Mic off',
+        credentials: {},
+      })
+      .returning();
+    const off = (await (await app.request(`/chat/${ch.id}`)).json()) as {
+      dictation?: boolean;
+    };
+    expect(off.dictation).toBe(false);
+    await db.delete(channels).where(eq(channels.id, ch.id));
   });
 });

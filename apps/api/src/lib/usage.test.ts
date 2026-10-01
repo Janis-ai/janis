@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
@@ -6,8 +6,18 @@ import { eq } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import { usageEvents, workspaces } from '../db/schema.js';
 import type { Db } from '../db/client.js';
-import { recordLlmUsage } from './usage.js';
+import type Stripe from 'stripe';
+import { recordLlmUsage, recordSttUsage } from './usage.js';
 import { rateFor } from './billing.js';
+import { setStripeClient } from './stripe.js';
+
+// env.ts reads process.env at import time — a truthy secret lets the
+// setStripeClient seam intercept meter reporting (no real Stripe calls).
+vi.hoisted(() => {
+  process.env.STRIPE_SECRET_KEY = 'sk_test_fake';
+});
+
+const meteredEvents: { event_name: string; payload: Record<string, string>; identifier?: string }[] = [];
 
 let db: Db;
 let wsId: string;
@@ -16,6 +26,16 @@ beforeAll(async () => {
   const client = new PGlite();
   db = drizzle(client, { schema }) as unknown as Db;
   await migrate(db as never, { migrationsFolder: './drizzle' });
+  setStripeClient({
+    billing: {
+      meterEvents: {
+        create: async (p: (typeof meteredEvents)[number]) => {
+          meteredEvents.push(p);
+          return {};
+        },
+      },
+    },
+  } as unknown as Stripe);
   const [ws] = await db.insert(workspaces).values({ name: 'U' }).returning();
   wsId = ws.id;
 });
@@ -73,6 +93,45 @@ describe('recordLlmUsage', () => {
     });
     const rows2 = await db.select().from(usageEvents).where(eq(usageEvents.workspaceId, wsId));
     expect(rows2[rows2.length - 1].costMicros).toBe(500_000);
+  });
+});
+
+describe('recordSttUsage', () => {
+  it('writes an stt_seconds row at 50µ/s and meters cost+margin to Stripe', async () => {
+    await db
+      .update(workspaces)
+      .set({ stripeCustomerId: 'cus_stt' })
+      .where(eq(workspaces.id, wsId));
+    const before = meteredEvents.length;
+    await recordSttUsage(db, { workspaceId: wsId, seconds: 12.4 });
+    await new Promise((r) => setTimeout(r, 10));
+    const rows = await db.select().from(usageEvents).where(eq(usageEvents.kind, 'stt_seconds'));
+    const row = rows[rows.length - 1];
+    expect(row.workspaceId).toBe(wsId);
+    expect(row.quantity).toBe(13); // ceil
+    expect(row.costMicros).toBe(620); // 12.4s × 50µ/s
+    const ev = meteredEvents.slice(before).find((e) => e.event_name === 'janis.stt_micros');
+    expect(ev).toBeDefined();
+    // billed = 620 × 1.2 margin = 744 micro-USD, deduped by the row id
+    expect(ev!.payload).toEqual({ stripe_customer_id: 'cus_stt', value: '744' });
+    expect(ev!.identifier).toBe(row.id);
+    await db.update(workspaces).set({ stripeCustomerId: null }).where(eq(workspaces.id, wsId));
+  });
+
+  it('agency children meter to the parent workspace customer', async () => {
+    const [parent] = await db
+      .insert(workspaces)
+      .values({ name: 'Agency', stripeCustomerId: 'cus_agency' })
+      .returning();
+    const [child] = await db
+      .insert(workspaces)
+      .values({ name: 'Client', parentWorkspaceId: parent.id })
+      .returning();
+    const before = meteredEvents.length;
+    await recordSttUsage(db, { workspaceId: child.id, seconds: 5 });
+    await new Promise((r) => setTimeout(r, 10));
+    const ev = meteredEvents.slice(before).find((e) => e.event_name === 'janis.stt_micros');
+    expect(ev?.payload.stripe_customer_id).toBe('cus_agency');
   });
 });
 

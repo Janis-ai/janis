@@ -4,6 +4,7 @@ import { usageEvents, workspaces } from '../db/schema.js';
 import { billingConfig, currentPeriod, llmCostMicros, pricedRateFor } from './billing.js';
 import {
   METER_LLM_MICROS,
+  METER_STT_MICROS,
   METER_VOICE_MICROS,
   billingCustomerFor,
   reportMeter,
@@ -140,5 +141,37 @@ export async function recordVoiceUsage(
     }
   } catch {
     // metering failure is never worth breaking a call
+  }
+}
+
+/**
+ * Meter one dictation transcription. Always platform-keyed — dictation runs
+ * on JANIS_LLM / OPENAI creds regardless of the agent's LLM config, so BYOK
+ * workspaces are billed too (that's why the widget toggle is opt-in).
+ * Cost is fixed-rate ($0.003/min → 50µ/s), margin applied on report.
+ */
+export async function recordSttUsage(
+  db: Db,
+  args: { workspaceId: string; agentId?: string | null; seconds: number },
+): Promise<void> {
+  try {
+    if (args.seconds <= 0) return;
+    const [row] = await db
+      .insert(usageEvents)
+      .values({
+        workspaceId: args.workspaceId,
+        agentId: args.agentId ?? null,
+        kind: 'stt_seconds',
+        quantity: Math.ceil(args.seconds),
+        costMicros: Math.ceil(args.seconds * 50),
+        period: currentPeriod(),
+      })
+      .returning({ id: usageEvents.id });
+    const billed = Math.ceil(row ? Math.ceil(args.seconds * 50) * (1 + billingConfig.margin) : 0);
+    if (billed > 0) {
+      reportMeter(await billingCustomerFor(db, args.workspaceId), METER_STT_MICROS, billed, row?.id);
+    }
+  } catch {
+    // metering failure is never worth breaking dictation
   }
 }

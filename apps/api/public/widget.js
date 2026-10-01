@@ -1048,6 +1048,9 @@
   // Firefox lacks the API entirely. The mic hides only where mic capture
   // itself is unavailable.
   var micBtn = panel.querySelector('#janis-mic');
+  // Hidden until bootstrap confirms the channel opted into dictation (it's a
+  // metered Janis charge); canDictate adds the browser-capability check.
+  micBtn.style.display = 'none';
   // Gemini's audio input accepts webm/ogg/wav/mp3/aiff/flac — NOT mp4/m4a/aac.
   // Safari's MediaRecorder only emits mp4, so those recordings are decoded
   // through Web Audio and re-uploaded as 16kHz mono WAV (toWav below).
@@ -1145,9 +1148,7 @@
   function stopDictation() {
     if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
   }
-  if (!canDictate) {
-    micBtn.style.display = 'none';
-  } else {
+  if (canDictate) {
     micBtn.addEventListener('click', function () {
       if (transcribing) return;
       if (mediaRec) { stopDictation(); return; }
@@ -1309,6 +1310,9 @@
   fetch(API + '/chat/' + TOKEN).then(function (r) { return r.ok ? r.json() : null; }).then(function (cfg) {
     if (!cfg) return;
     state.config = cfg;
+    // Dictation is opt-in per channel (it's metered on Janis's keys) — the
+    // mic shows only when bootstrap says the channel enabled it.
+    if (micBtn && cfg.dictation === true && canDictate) micBtn.style.display = '';
     if (cfg.accent) {
       accent = cfg.accent;
       bubble.style.background = accent;

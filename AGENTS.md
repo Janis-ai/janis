@@ -140,6 +140,17 @@ before typecheck/tests/dev.
   moot until the first real customer checks out.
 - Hosted voice bills Twilio cost × (1 + BILLING_MARGIN); VOICE_COST_MICROS_PER_MIN
   env overrides the $0.014/min default if Twilio rates change.
+- janis.stt_micros: DONE — widget dictation (POST /chat/:token/transcribe)
+  meters per-transcription seconds × 50µ/s cost ($0.003/min) × margin to
+  Stripe via recordSttUsage. Live meter mtr_61VVCEyYCM6z1OPzz41LuGzRk7fCQ8rI,
+  product prod_VMXMb0XpGR8CVq, price price_1ULoHkLuGzRk7fCQ129lzSUk; test
+  meter mtr_test_61VVCFE4MO5QgSemY41LuGzRk7fCQEW8, price
+  price_1ULoHtLuGzRk7fCQDfNvk73L. STRIPE_METER_PRICE_STT(+_TEST) in .env,
+  checkout adds it as a line item. Dictation is OPT-IN per webchat channel
+  (credentials.dictation, Channels → appearance toggle) because it always
+  runs on platform keys and bills even BYOK workspaces; internal channels
+  (Ask Janis rail, test chat) bypass the flag. Widget + rail hide the mic
+  unless the bootstrap emits dictation:true; the endpoint 403s when off.
 
 **Channels (missing entirely)**
 - Outlook/Office 365 mailbox channel (Graph API watch → same push plumbing as Gmail).

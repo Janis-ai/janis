@@ -7,14 +7,14 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channelBindings, channels, conversations, helpArticles, memberships, messages, sessions, usageEvents, users, workspaces } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations, helpArticles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
 import type { QuickReply } from '@janis/shared';
 import type { ChannelCredentials, InboundMessage } from '../lib/channels.js';
 import { resolveGreeting } from '../lib/greeting.js';
 import { effectivePlanKey } from '../lib/plans.js';
-import { currentPeriod } from '../lib/billing.js';
+import { recordSttUsage } from '../lib/usage.js';
 import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
 import { adoptVisitorConversation, handleChannelMessage } from '../services/channelIngress.js';
 import { bus } from '../lib/bus.js';
@@ -383,6 +383,7 @@ export function webchatRoutes(db: Db) {
       sound: creds.sound !== false,
       theme: creds.theme ?? 'light',
       hide_powered_by: creds.hide_powered_by === true && planKey !== 'free',
+      dictation: creds.dictation === true || creds.internal === true,
     });
   });
 
@@ -506,11 +507,16 @@ export function webchatRoutes(db: Db) {
   // Deliberately not Web Speech API on the client: Chrome's path silently
   // no-ops where its speech service is unreachable (VPNs, DNS filters,
   // on-device packs), and Firefox lacks the API entirely. The channel token
-  // is the credential; the chat-token-upload limiter caps spend. Usage rows
-  // recorded for later metering, not yet Stripe-reported.
+  // is the credential; the chat-token-upload limiter caps spend. Opt-in per
+  // channel (credentials.dictation) because it's a metered Janis charge even
+  // when the agent is BYOK — dictation always runs on platform keys. Internal
+  // channels (Ask Janis rail, console test chat) always allow it.
   app.post('/:token/transcribe', async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
+    const creds = channel.credentials as ChannelCredentials;
+    if (creds.dictation !== true && creds.internal !== true)
+      return c.json({ error: 'dictation not enabled' }, 403);
     const body = await c.req.parseBody();
     const file = body['audio'];
     if (!(file instanceof File)) return c.json({ error: 'audio field required' }, 400);
@@ -529,18 +535,11 @@ export function webchatRoutes(db: Db) {
       console.warn('[stt] empty transcript', file.type, `${file.size}B`);
     const seconds = out.seconds;
     if (seconds > 0) {
-      try {
-        await db.insert(usageEvents).values({
-          workspaceId: channel.workspaceId,
-          agentId: channel.agentId,
-          kind: 'stt_seconds',
-          quantity: Math.ceil(seconds),
-          costMicros: Math.ceil(seconds * 50), // $0.003/min → 50µ/s
-          period: currentPeriod(),
-        });
-      } catch (e) {
-        console.warn('[stt] usage row failed:', e);
-      }
+      await recordSttUsage(db, {
+        workspaceId: channel.workspaceId,
+        agentId: channel.agentId,
+        seconds,
+      });
     }
     return c.json({ text: (out.text ?? '').trim() });
   });

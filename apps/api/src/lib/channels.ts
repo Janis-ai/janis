@@ -52,6 +52,9 @@ export interface ChannelCredentials {
   // webchat: show the "Browse help articles" link — default on; an agent-level
   // config.help_url still overrides where it points
   show_help_link?: boolean;
+  // webchat: mic dictation in the widget — opt-in; transcription is a metered
+  // Janis charge regardless of the agent's LLM (BYOK included)
+  dictation?: boolean;
   // webchat: HMAC-SHA256 key for host-signed identity assertions — when set,
   // a `sig` on the widget's user payload proves the host vouched for it
   identity_secret?: string;

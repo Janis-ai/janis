@@ -339,6 +339,7 @@ export function billingRoutes(db: Db) {
     if (meterPrice) line_items.push({ price: meterPrice });
     if (env.stripeMeterPrices.llm) line_items.push({ price: env.stripeMeterPrices.llm });
     if (env.stripeMeterPrices.voice) line_items.push({ price: env.stripeMeterPrices.voice });
+    if (env.stripeMeterPrices.stt) line_items.push({ price: env.stripeMeterPrices.stt });
 
     const session = await s.checkout.sessions.create({
       customer: customerId,

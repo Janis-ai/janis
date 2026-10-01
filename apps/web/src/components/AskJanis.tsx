@@ -20,6 +20,7 @@ interface ChatConfig {
   greeting: string | null;
   quick_replies: string[];
   logo_url: string | null;
+  dictation?: boolean;
 }
 
 interface PendingFile {
@@ -464,7 +465,6 @@ export function AskJanis({
   };
 
   // Gemini accepts webm/ogg/wav/mp3/aiff/flac — NOT mp4/m4a/aac, which is
-  // Gemini accepts webm/ogg/wav/mp3/aiff/flac — NOT mp4/m4a/aac, which is
   // Safari's only MediaRecorder output; those are transcoded to WAV
   // client-side (toWav) before upload.
   const dictMime =
@@ -490,7 +490,10 @@ export function AskJanis({
         return undefined;
       }
     })();
+  // Dictation is opt-in per channel (metered on Janis's keys) — cfg.dictation
+  // is true for enabled webchat channels and internal concierge/test rails.
   const canDictate =
+    cfg?.dictation === true &&
     typeof navigator !== 'undefined' &&
     !!navigator.mediaDevices?.getUserMedia &&
     typeof MediaRecorder !== 'undefined' &&

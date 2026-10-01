@@ -547,6 +547,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
     theme: b.theme ?? 'light',
     hide_powered_by: b.hide_powered_by === true,
     show_help_link: b.show_help_link !== false,
+    dictation: b.dictation === true,
   });
   const { data: wsDetail } = useQuery({
     queryKey: ['workspace'],
@@ -604,6 +605,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
             theme: f.theme,
             hide_powered_by: f.hide_powered_by,
             show_help_link: f.show_help_link,
+            dictation: f.dictation,
           },
         }),
       }),
@@ -821,6 +823,21 @@ function WebchatBranding({ channel }: { channel: Channel }) {
           onChange={(e) => setF({ ...f, teaser_text: e.target.value })}
         />
       )}
+      <div className="row">
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={f.dictation}
+            onChange={(e) => setF({ ...f, dictation: e.target.checked })}
+          />
+          Microphone dictation
+        </label>
+        <span className="muted" style={{ fontSize: 12 }}>
+          adds a mic so visitors can dictate — transcription always runs on
+          Janis's keys and is metered per minute of audio on your plan, even
+          when the agent's own LLM is BYOK
+        </span>
+      </div>
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         {msg && <span className="muted">{msg}</span>}
         <button className="btn save" disabled={save.isPending}>Save appearance</button>
