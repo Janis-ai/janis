@@ -83,6 +83,22 @@ function TrendChart({ series }: { series: { date: string; total: number; contain
   );
 }
 
+interface CampaignStats {
+  id: string;
+  name: string;
+  sends: number;
+  sent: number;
+  pending: number;
+  failed: number;
+  skipped: number;
+  replied: number;
+  converted: number;
+  reply_rate: number | null;
+}
+
+const today = () => new Date().toISOString().slice(0, 10);
+const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+
 /** Daily digests + handoff/escalation metrics. */
 export default function Reports() {
   usePageTitle('Reports');
@@ -90,41 +106,56 @@ export default function Reports() {
   // Drill-down: overall → per agent → per channel of that agent.
   const [agentId, setAgentId] = useState('');
   const [channelId, setChannelId] = useState('');
+  // Range: preset days or a custom from/to window ('custom' uses the inputs).
+  const [preset, setPreset] = useState('30');
+  const [customFrom, setCustomFrom] = useState(daysAgo(30));
+  const [customTo, setCustomTo] = useState(today());
   const { data: agents } = useAgents();
   const { data: chans } = useChannels();
-  const qs = `days=30${agentId ? `&agent_id=${agentId}` : ''}${channelId ? `&channel_id=${channelId}` : ''}`;
+  const custom = preset === 'custom' && customFrom && customTo;
+  const rangeQs = custom ? `from=${customFrom}&to=${customTo}` : `days=${preset}`;
+  const qs = `${rangeQs}${agentId ? `&agent_id=${agentId}` : ''}${channelId ? `&channel_id=${channelId}` : ''}`;
+  // Deep-link params for topic drill-down — created_at bounds on the
+  // conversations list use the same window semantics as the report.
+  const drillFrom = custom ? customFrom : daysAgo(Number(preset));
+  const drillTo = custom ? customTo : '';
+  const drillQs = (extra: Record<string, string>) =>
+    Object.entries({ from: drillFrom, to: drillTo, agent: agentId, ...extra })
+      .filter(([, v]) => v)
+      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+      .join('&');
   const metrics = useQuery({
-    queryKey: ['handoff-metrics', agentId, channelId],
+    queryKey: ['handoff-metrics', qs],
     queryFn: () => api<HandoffMetrics>(`/api/reports/handoffs?${qs}`),
   });
   const containment = useQuery({
-    queryKey: ['containment-metrics', agentId, channelId],
+    queryKey: ['containment-metrics', qs],
     queryFn: () => api<ContainmentMetrics>(`/api/reports/containment?${qs}`),
   });
   const csat = useQuery({
-    queryKey: ['csat-metrics', agentId, channelId],
+    queryKey: ['csat-metrics', qs],
     queryFn: () => api<CsatMetrics>(`/api/reports/csat?${qs}`),
   });
   const operators = useQuery({
-    queryKey: ['operator-metrics', agentId, channelId],
+    queryKey: ['operator-metrics', qs],
     queryFn: () => api<{ days: number; operators: OperatorStat[] }>(`/api/reports/operators?${qs}`),
   });
   const intents = useQuery({
-    queryKey: ['intent-metrics', agentId, channelId],
+    queryKey: ['intent-metrics', qs],
     queryFn: () =>
       api<{ days: number; classified: number; total: number; intents: { intent: string; count: number; avg_csat: number | null }[] }>(
         `/api/reports/intents?${qs}`,
       ),
   });
   const volume = useQuery({
-    queryKey: ['volume-metrics', agentId, channelId],
+    queryKey: ['volume-metrics', qs],
     queryFn: () =>
       api<{ days: number; series: { date: string; conversations: number; in: number; out: number; human: number }[] }>(
         `/api/reports/volume?${qs}`,
       ),
   });
   const timeline = useQuery({
-    queryKey: ['timeline-metrics', agentId, channelId],
+    queryKey: ['timeline-metrics', qs],
     queryFn: () =>
       api<{
         days: number;
@@ -146,6 +177,13 @@ export default function Reports() {
           human_resolved: number;
         }[];
       }>(`/api/reports/timeline?${qs}`),
+  });
+  const campaignsReport = useQuery({
+    queryKey: ['campaign-metrics', qs],
+    queryFn: () =>
+      api<{ days: number; totals: Omit<CampaignStats, 'id' | 'name' | 'reply_rate'>; campaigns: CampaignStats[] }>(
+        `/api/reports/campaigns?${qs}`,
+      ),
   });
   const usage = useQuery({
     queryKey: ['usage-metrics'],
@@ -170,10 +208,10 @@ export default function Reports() {
     <>
       <div className="row">
         <h1 className="page-title grow">Reports</h1>
-        <a className="btn" href={`/api/reports/export?kind=conversations&days=90`} download>
+        <a className="btn" href={`/api/reports/export?kind=conversations&${rangeQs}`} download>
           Export conversations CSV
         </a>
-        <a className="btn" href={`/api/reports/export?kind=campaign_sends&days=90`} download>
+        <a className="btn" href={`/api/reports/export?kind=campaign_sends&${rangeQs}`} download>
           Export campaign sends CSV
         </a>
         <button className="btn" onClick={() => generate.mutate()} disabled={generate.isPending}>
@@ -182,6 +220,31 @@ export default function Reports() {
       </div>
 
       <div className="filters">
+        <select value={preset} onChange={(e) => setPreset(e.target.value)} aria-label="Date range">
+          <option value="7">Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="custom">Custom…</option>
+        </select>
+        {preset === 'custom' && (
+          <>
+            <input
+              type="date"
+              value={customFrom}
+              max={customTo}
+              onChange={(e) => setCustomFrom(e.target.value)}
+              aria-label="From date"
+            />
+            <input
+              type="date"
+              value={customTo}
+              min={customFrom}
+              max={today()}
+              onChange={(e) => setCustomTo(e.target.value)}
+              aria-label="To date"
+            />
+          </>
+        )}
         <select
           value={agentId}
           onChange={(e) => {
@@ -365,7 +428,20 @@ export default function Reports() {
       {/* CSAT — post-resolution customer ratings */}
       {(() => {
         const s = csat.data;
-        if (!s || s.prompted === 0) return null;
+        if (!s) return null;
+        if (s.prompted === 0)
+          return (
+            <div className="card">
+              <div className="row">
+                <strong className="grow">Customer satisfaction — last {s.days} days</strong>
+              </div>
+              <div className="muted" style={{ marginTop: 8 }}>
+                No rating prompts sent in this range. Customers are asked to
+                rate 1–5 when a conversation is archived — and ratings follow
+                the workspace the conversation belongs to.
+              </div>
+            </div>
+          );
         const max = Math.max(...s.distribution.map((d) => d.count), 1);
         return (
           <div className="card">
@@ -425,7 +501,12 @@ export default function Reports() {
               </span>
             </div>
             {top.map((i) => (
-              <div key={i.intent} className="row" style={{ marginTop: 8, gap: 10 }}>
+              <Link
+                key={i.intent}
+                to={`/conversations?${drillQs({ intent: i.intent })}`}
+                className="row"
+                style={{ marginTop: 8, gap: 10, textDecoration: 'none', color: 'inherit' }}
+              >
                 <span style={{ width: 120, fontSize: 13 }}>{i.intent}</span>
                 <div style={{ flex: 1, background: 'var(--panel-2)', borderRadius: 3, height: 10 }}>
                   <div
@@ -443,8 +524,57 @@ export default function Reports() {
                 <span className="muted" style={{ width: 56, textAlign: 'right', fontSize: 12 }}>
                   {i.avg_csat !== null ? `${i.avg_csat.toFixed(1)}★` : ''}
                 </span>
-              </div>
+              </Link>
             ))}
+          </div>
+        );
+      })()}
+
+      {/* Campaigns — outbound sends, replies and conversions in the window */}
+      {(() => {
+        const c = campaignsReport.data;
+        if (!c || !c.campaigns.length) return null;
+        const t = c.totals;
+        return (
+          <div className="card">
+            <div className="row">
+              <strong className="grow">Campaigns — last {c.days} days</strong>
+              <Link to="/campaigns" className="muted" style={{ fontSize: 12 }}>Manage →</Link>
+            </div>
+            <div className="metric-grid" style={{ marginTop: 10 }}>
+              <div className="metric"><div className="metric-num">{t.sent}</div><div className="muted">sent</div></div>
+              <div className="metric"><div className="metric-num">{t.replied}</div><div className="muted">replied</div></div>
+              <div className="metric"><div className="metric-num">{t.converted}</div><div className="muted">converted</div></div>
+              <div className="metric"><div className="metric-num">{t.pending}</div><div className="muted">queued</div></div>
+              <div className="metric"><div className="metric-num">{t.failed}</div><div className="muted">failed</div></div>
+              <div className="metric"><div className="metric-num">{t.skipped}</div><div className="muted">skipped</div></div>
+            </div>
+            <table className="docs-table" style={{ marginTop: 10 }}>
+              <thead>
+                <tr className="muted">
+                  <th style={{ textAlign: 'left' }}>Campaign</th>
+                  <th>Sent</th>
+                  <th>Replied</th>
+                  <th>Reply rate</th>
+                  <th>Converted</th>
+                  <th>Failed</th>
+                  <th>Skipped</th>
+                </tr>
+              </thead>
+              <tbody>
+                {c.campaigns.map((cp) => (
+                  <tr key={cp.id}>
+                    <td><Link to="/campaigns">{cp.name}</Link></td>
+                    <td style={{ textAlign: 'center' }}>{cp.sent}</td>
+                    <td style={{ textAlign: 'center' }}>{cp.replied}</td>
+                    <td style={{ textAlign: 'center' }}>{cp.reply_rate === null ? '—' : `${cp.reply_rate}%`}</td>
+                    <td style={{ textAlign: 'center' }}>{cp.converted}</td>
+                    <td style={{ textAlign: 'center' }}>{cp.failed}</td>
+                    <td style={{ textAlign: 'center' }}>{cp.skipped}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         );
       })()}

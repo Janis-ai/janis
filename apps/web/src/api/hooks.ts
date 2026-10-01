@@ -48,12 +48,18 @@ export function useConversations(filter: {
   agent_id?: string;
   attention?: boolean;
   mine?: boolean;
+  intent?: string;
+  from?: string;
+  to?: string;
 }) {
   const params = new URLSearchParams();
   if (filter.state) params.set('state', filter.state);
   if (filter.agent_id) params.set('agent_id', filter.agent_id);
   if (filter.attention) params.set('attention', '1');
   if (filter.mine) params.set('assignee', 'me');
+  if (filter.intent) params.set('intent', filter.intent);
+  if (filter.from) params.set('from', filter.from);
+  if (filter.to) params.set('to', filter.to);
   params.set('limit', '50');
   return useInfiniteQuery({
     queryKey: ['conversations', filter],
@@ -154,7 +160,7 @@ export function useDigests() {
 
 export function useSearch(
   q: string,
-  filter: { state?: string; agent_id?: string; attention?: boolean; mine?: boolean } = {},
+  filter: { state?: string; agent_id?: string; attention?: boolean; mine?: boolean; intent?: string; from?: string; to?: string } = {},
 ) {
   const params = new URLSearchParams();
   params.set('q', q);
@@ -162,6 +168,9 @@ export function useSearch(
   if (filter.agent_id) params.set('agent_id', filter.agent_id);
   if (filter.attention) params.set('attention', '1');
   if (filter.mine) params.set('assignee', 'me');
+  if (filter.intent) params.set('intent', filter.intent);
+  if (filter.from) params.set('from', filter.from);
+  if (filter.to) params.set('to', filter.to);
   return useQuery({
     queryKey: ['search', q, filter],
     queryFn: () =>

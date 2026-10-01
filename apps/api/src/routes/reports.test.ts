@@ -195,3 +195,39 @@ describe('GET /api/reports/timeline', () => {
     expect(bucket?.human_resolved).toBe(1);
   });
 });
+
+describe('report date ranges', () => {
+  it('?from/&to bounds the window; out-of-range rows are excluded', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const res = await app.request(`/api/reports/intents?from=${today}&to=${today}`, {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { intents: { intent: string; count: number }[] };
+    const shipping = body.intents.find((i) => i.intent === 'shipping');
+    expect(shipping?.count).toBeGreaterThan(0);
+
+    // a window ending yesterday sees nothing created today
+    const past = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const res2 = await app.request(`/api/reports/intents?from=${past}&to=${yesterday}`, {
+      headers: { Cookie: cookie },
+    });
+    const body2 = (await res2.json()) as { intents: { intent: string }[] };
+    expect(body2.intents.find((i) => i.intent === 'shipping')).toBeUndefined();
+  });
+});
+
+describe('GET /api/reports/campaigns', () => {
+  it('aggregates sends, replies and conversions per campaign', async () => {
+    const res = await app.request('/api/reports/campaigns?days=30', { headers: { Cookie: cookie } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      totals: { sent: number; replied: number; converted: number };
+      campaigns: { name: string; sent: number; reply_rate: number | null }[];
+    };
+    const blast = body.campaigns.find((c) => c.name === 'Blast');
+    expect(blast?.sent).toBe(1);
+    expect(body.totals.sent).toBe(1);
+  });
+});

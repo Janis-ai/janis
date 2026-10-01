@@ -1,4 +1,4 @@
-import { eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
+import { eq, gte, inArray, isNull, lt, ne, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { agents, alerts, conversations } from '../db/schema.js';
 import { agentScopeCond, type AgentScope } from './access.js';
@@ -13,6 +13,12 @@ export const convListQuery = z.object({
   agent_id: z.string().uuid().optional(),
   attention: z.enum(['1', 'true']).optional(), // needs_human OR has open alerts
   assignee: z.enum(['me']).optional(), // only conversations assigned to the caller
+  // Reports drill-down: ?intent=support groups by classified topic
+  // ('unclassified' = intent is null); ?from/?to bound created_at — a plain
+  // YYYY-MM-DD `to` is inclusive (shifts to exclusive end-of-day).
+  intent: z.string().trim().min(1).max(100).optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}([T ]|$)/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}([T ]|$)/).optional(),
   // Cursor pagination: `${epochMs}_${uuid}` of the last row's sort key
   // (coalesce(last_message_at, created_at), id). Stable under new arrivals —
   // new rows sort ahead of the cursor, never inside a fetched window.
@@ -62,15 +68,35 @@ export function convListConditions(
     // into the future, whatever its real state
     conditions.push(sql`${conversations.snoozedUntil} > now()`);
   else if (q.state) conditions.push(eq(conversations.state, q.state));
-  else conditions.push(ne(conversations.state, 'archived')); // archived hidden unless filtered
+  // archived hidden unless filtered — but a topic drill-down wants the whole
+  // window (resolved convs are archived), so intent/from/to imply inclusion
+  else if (!q.intent && !q.from && !q.to) conditions.push(ne(conversations.state, 'archived'));
   // actively-snoozed conversations hide from every queue except the Snoozed
-  // view itself (and archived — archive wins over snooze)
-  if (q.state !== 'snoozed' && q.state !== 'archived') {
+  // view itself (and archived — archive wins over snooze); drill-downs count
+  // everything in the window, snoozed or not
+  if (q.state !== 'snoozed' && q.state !== 'archived' && !q.intent && !q.from && !q.to) {
     conditions.push(
       sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
     );
   }
   if (q.agent_id) conditions.push(eq(conversations.agentId, q.agent_id));
+  if (q.intent)
+    conditions.push(
+      q.intent === 'unclassified'
+        ? isNull(conversations.intent)
+        : eq(conversations.intent, q.intent),
+    );
+  if (q.from) {
+    const d = new Date(q.from);
+    if (!Number.isNaN(d.getTime())) conditions.push(gte(conversations.createdAt, d));
+  }
+  if (q.to) {
+    const d = new Date(q.to);
+    if (!Number.isNaN(d.getTime()))
+      conditions.push(
+        lt(conversations.createdAt, /^\d{4}-\d{2}-\d{2}$/.test(q.to) ? new Date(d.getTime() + 86_400_000) : d),
+      );
+  }
   if (q.assignee === 'me') conditions.push(eq(conversations.assigneeId, userId));
   if (q.attention) {
     conditions.push(inArray(conversations.state, ['needs_human', 'human']));

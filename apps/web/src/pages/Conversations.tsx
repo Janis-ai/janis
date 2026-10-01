@@ -168,6 +168,19 @@ export default function Conversations() {
     setParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Reports drill-down: ?intent=&from=&to= seed a topic+window filter that
+  // shows as a chip row; clearing navigates back to the bare list.
+  const [drill, setDrill] = useState<{ intent: string; from: string; to: string } | null>(null);
+  useEffect(() => {
+    const intent = params.get('intent');
+    if (!intent) return;
+    setDrill({ intent, from: params.get('from') ?? '', to: params.get('to') ?? '' });
+    params.delete('intent');
+    params.delete('from');
+    params.delete('to');
+    setParams(params, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [mine, setMine] = useSticky('conv.mine', false);
   const [query, setQuery] = useSticky('conv.query', '');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -178,6 +191,9 @@ export default function Conversations() {
     state: state || undefined,
     agent_id: agentId || undefined,
     mine,
+    intent: drill?.intent || undefined,
+    from: drill?.from || undefined,
+    to: drill?.to || undefined,
   });
   const convList = data?.pages.flatMap((p) => p.conversations);
   const knownTags = [...new Set((convList ?? []).flatMap((c) => c.tags ?? []))].sort();
@@ -188,6 +204,9 @@ export default function Conversations() {
     state: state || undefined,
     agent_id: agentId || undefined,
     mine,
+    intent: drill?.intent || undefined,
+    from: drill?.from || undefined,
+    to: drill?.to || undefined,
   });
 
   const searching = query.trim().length > 0;
@@ -376,6 +395,17 @@ export default function Conversations() {
       <h1 className="page-title">Conversations</h1>
       <DiscoveryCards />
       <Onboarding />
+      {drill && (
+        <div className="row" style={{ marginBottom: 8 }}>
+          <span className="chip">
+            Topic: {drill.intent}
+            {drill.from || drill.to ? ` · ${drill.from || '…'} → ${drill.to || '…'}` : ''}
+          </span>
+          <button className="btn" aria-label="Clear topic filter" onClick={() => setDrill(null)}>
+            <X size={14} style={{ verticalAlign: '-2px', marginRight: 4 }} />Clear
+          </button>
+        </div>
+      )}
       <div className="filters">
         <button
           className={`btn ${tab === 'all' ? 'primary' : ''}`}

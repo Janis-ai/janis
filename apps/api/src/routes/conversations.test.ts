@@ -508,3 +508,52 @@ describe('saved views', () => {
     ).toBe(200);
   });
 });
+
+describe('reports drill-down filters', () => {
+  const ids = (qs: string) =>
+    app
+      .request(`/api/conversations?${qs}`, { headers: { cookie: adminCookie } })
+      .then((r) => r.json())
+      .then((b: { conversations: { id: string; intent: string | null }[] }) =>
+        b.conversations.map((c) => c.id),
+      );
+
+  it('intent filter groups conversations by classified topic', async () => {
+    const shipping = await makeConversation('drill-shipping');
+    await db
+      .update(conversations)
+      .set({ intent: 'shipping' })
+      .where(eq(conversations.id, shipping.id));
+    const billing = await makeConversation('drill-billing');
+    await db
+      .update(conversations)
+      .set({ intent: 'billing' })
+      .where(eq(conversations.id, billing.id));
+    const none = await makeConversation('drill-none');
+
+    expect(await ids('intent=shipping')).toContain(shipping.id);
+    expect(await ids('intent=shipping')).not.toContain(billing.id);
+    expect(await ids('intent=unclassified')).toContain(none.id);
+    expect(await ids('intent=unclassified')).not.toContain(shipping.id);
+  });
+
+  it('from/to bound created_at; a bare date `to` is inclusive', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const conv = await makeConversation('drill-range');
+    const inRange = await ids(`from=${today}&to=${today}`);
+    expect(inRange).toContain(conv.id);
+    // a `to` of yesterday (inclusive) excludes a conversation created today
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const outRange = await ids(`from=2020-01-01&to=${yesterday}`);
+    expect(outRange).not.toContain(conv.id);
+  });
+
+  it('archived conversations appear in drill-down results', async () => {
+    const arc = await makeConversation('drill-archived');
+    await db
+      .update(conversations)
+      .set({ state: 'archived', intent: 'shipping' })
+      .where(eq(conversations.id, arc.id));
+    expect(await ids('intent=shipping')).toContain(arc.id);
+  });
+});

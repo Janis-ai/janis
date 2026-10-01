@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, asc, desc, eq, gt, inArray, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt, ne, sql, type SQL } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import {
@@ -45,7 +45,34 @@ function drillFilters(c: { req: { query: (k: string) => string | undefined } }):
   return conds;
 }
 
-/** Handoff metrics for the Reports page — mounted at /api/reports. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Shared report window: `?days=N` presets, or `?from=`/`?to=` for a custom
+ * range. `to` is inclusive when given as a plain date (YYYY-MM-DD) — the
+ * returned `end` is already exclusive. Invalid/missing params fall back to
+ * the days preset so old links keep working. */
+function reportRange(
+  c: { req: { query: (k: string) => string | undefined } },
+  cap = 90,
+  defDays = 30,
+): { days: number; cutoff: Date; end: Date } {
+  const fromQ = c.req.query('from');
+  const from = fromQ ? new Date(fromQ) : null;
+  if (from && !Number.isNaN(from.getTime())) {
+    const toQ = c.req.query('to');
+    let end = toQ ? new Date(toQ) : new Date();
+    if (toQ && DATE_ONLY.test(toQ)) end = new Date(end.getTime() + 86_400_000);
+    if (!Number.isNaN(end.getTime()) && end > from)
+      return {
+        days: Math.max(1, Math.ceil((end.getTime() - from.getTime()) / 86_400_000)),
+        cutoff: from,
+        end,
+      };
+  }
+  const days = Math.min(Math.max(Number(c.req.query('days')) || defDays, 1), cap);
+  const end = new Date();
+  return { days, cutoff: new Date(end.getTime() - days * 86_400_000), end };
+}
 export function reportRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
@@ -53,8 +80,7 @@ export function reportRoutes(db: Db) {
   // GET /handoffs?days=30&agent_id=&channel_id= — volume, response times,
   // unresolved/overdue counts. Drill down per agent, then per channel.
   app.get('/handoffs', async (c) => {
-    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
-    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const { days, cutoff, end } = reportRange(c);
 
     const handoffs = await db
       .select({
@@ -68,7 +94,8 @@ export function reportRoutes(db: Db) {
       .where(
         and(
           ...agentVis(c.get('workspaceId'), c.get('agentScope')),
-          gt(alerts.createdAt, cutoff),
+          gte(alerts.createdAt, cutoff),
+          lt(alerts.createdAt, end),
           ne(alerts.type, 'sla'), // sla alerts are re-alerts, not new handoffs
           ne(alerts.type, 'keyword'),
           ...drillFilters(c),
@@ -161,8 +188,7 @@ export function reportRoutes(db: Db) {
   // human sent a message or took over; "contained" = the agent replied and
   // none of that happened.
   app.get('/containment', async (c) => {
-    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
-    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const { days, cutoff, end } = reportRange(c);
 
     const convs = await db
       .select({
@@ -175,7 +201,8 @@ export function reportRoutes(db: Db) {
       .where(
         and(
           ...agentVis(c.get('workspaceId'), c.get('agentScope')),
-          gt(conversations.createdAt, cutoff),
+          gte(conversations.createdAt, cutoff),
+          lt(conversations.createdAt, end),
           ...drillFilters(c),
         ),
       );
@@ -310,8 +337,7 @@ export function reportRoutes(db: Db) {
   // GET /csat?days=30 — post-resolution ratings: average score, distribution,
   // and what share of prompted customers answered.
   app.get('/csat', async (c) => {
-    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
-    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const { days, cutoff, end } = reportRange(c);
 
     const rows = await db
       .select({
@@ -326,7 +352,8 @@ export function reportRoutes(db: Db) {
       .where(
         and(
           ...agentVis(c.get('workspaceId'), c.get('agentScope')),
-          gt(conversations.csatAskedAt, cutoff),
+          gte(conversations.csatAskedAt, cutoff),
+          lt(conversations.csatAskedAt, end),
           ...drillFilters(c),
         ),
       );
@@ -356,8 +383,7 @@ export function reportRoutes(db: Db) {
   // with per-topic CSAT so "billing makes people angrier than shipping" is
   // visible, not just counted.
   app.get('/intents', async (c) => {
-    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
-    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const { days, cutoff, end } = reportRange(c);
 
     const rows = await db
       .select({
@@ -369,7 +395,8 @@ export function reportRoutes(db: Db) {
       .where(
         and(
           ...agentVis(c.get('workspaceId'), c.get('agentScope')),
-          gt(conversations.createdAt, cutoff),
+          gte(conversations.createdAt, cutoff),
+          lt(conversations.createdAt, end),
           ...drillFilters(c),
         ),
       );
@@ -402,8 +429,7 @@ export function reportRoutes(db: Db) {
   // conversations each operator touched, replies sent, median first-response
   // and resolution times, and what's currently sitting in their name.
   app.get('/operators', async (c) => {
-    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
-    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const { days, cutoff, end } = reportRange(c);
     const scope = agentVis(c.get('workspaceId'), c.get('agentScope'));
 
     const convs = await db
@@ -415,7 +441,7 @@ export function reportRoutes(db: Db) {
       })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(and(...scope, gt(conversations.createdAt, cutoff), ...drillFilters(c)));
+      .where(and(...scope, gte(conversations.createdAt, cutoff), lt(conversations.createdAt, end), ...drillFilters(c)));
     if (!convs.length) return c.json({ days, operators: [] });
     const convIds = convs.map((v) => v.id);
     const convById = new Map(convs.map((v) => [v.id, v]));
@@ -526,11 +552,11 @@ export function reportRoutes(db: Db) {
   // conversations + messages by direction (in / out / human). Uses the same
   // workspace scope + drill filters as the metric cards.
   app.get('/volume', async (c) => {
-    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
-    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const { days, cutoff, end } = reportRange(c);
     const scope = and(
       ...agentVis(c.get('workspaceId'), c.get('agentScope')),
-      gt(conversations.createdAt, cutoff),
+      gte(conversations.createdAt, cutoff),
+      lt(conversations.createdAt, end),
       ...drillFilters(c),
     );
     const day = (col: SQL | typeof conversations.createdAt | typeof messages.createdAt) =>
@@ -551,7 +577,7 @@ export function reportRoutes(db: Db) {
       .from(messages)
       .innerJoin(conversations, eq(messages.conversationId, conversations.id))
       .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(and(gt(messages.createdAt, cutoff), ...agentVis(c.get('workspaceId'), c.get('agentScope')), ...drillFilters(c)))
+      .where(and(gte(messages.createdAt, cutoff), lt(messages.createdAt, end), ...agentVis(c.get('workspaceId'), c.get('agentScope')), ...drillFilters(c)))
       .groupBy(sql`1`, messages.direction);
 
     const series = new Map<string, { date: string; conversations: number; in: number; out: number; human: number }>();
@@ -575,13 +601,65 @@ export function reportRoutes(db: Db) {
     });
   });
 
+  // GET /campaigns?days=30 — outbound performance over the window: sends by
+  // outcome plus reply/conversion attribution, per campaign. Sends count the
+  // day they were recorded (queued or delivered).
+  app.get('/campaigns', async (c) => {
+    const { days, cutoff, end } = reportRange(c);
+    const rows = await db
+      .select({
+        campaignId: campaigns.id,
+        name: campaigns.name,
+        status: campaignSends.status,
+        repliedAt: campaignSends.repliedAt,
+        convertedAt: campaignSends.convertedAt,
+      })
+      .from(campaignSends)
+      .innerJoin(campaigns, eq(campaignSends.campaignId, campaigns.id))
+      .where(
+        and(
+          eq(campaignSends.workspaceId, c.get('workspaceId')),
+          gte(campaignSends.createdAt, cutoff),
+          lt(campaignSends.createdAt, end),
+        ),
+      );
+
+    interface Agg {
+      sends: number; sent: number; pending: number; failed: number;
+      skipped: number; replied: number; converted: number;
+    }
+    const byCampaign = new Map<string, { name: string } & Agg>();
+    const totals: Agg = { sends: 0, sent: 0, pending: 0, failed: 0, skipped: 0, replied: 0, converted: 0 };
+    const bump = (a: Agg, r: { status: string; repliedAt: Date | null; convertedAt: Date | null }) => {
+      a.sends++;
+      if (r.status === 'sent') a.sent++;
+      else if (r.status === 'pending') a.pending++;
+      else if (r.status === 'failed') a.failed++;
+      else a.skipped++; // skipped_opted_out / suppressed / frequency_cap / cancelled
+      if (r.repliedAt) a.replied++;
+      if (r.convertedAt) a.converted++;
+    };
+    for (const r of rows) {
+      bump(totals, r);
+      const slot = byCampaign.get(r.campaignId) ?? { name: r.name, sends: 0, sent: 0, pending: 0, failed: 0, skipped: 0, replied: 0, converted: 0 };
+      bump(slot, r);
+      byCampaign.set(r.campaignId, slot);
+    }
+    return c.json({
+      days,
+      totals,
+      campaigns: [...byCampaign.entries()]
+        .map(([id, a]) => ({ id, ...a, reply_rate: a.sent ? Math.round((a.replied / a.sent) * 100) : null }))
+        .sort((a, b) => b.sends - a.sends),
+    });
+  });
+
   // GET /timeline?days=30 — response/resolution speed over time + the
   // AI-vs-human split on resolved conversations. "Deflection" = share of
   // resolved convs closed with zero human-authored customer-facing message —
   // the ROI number: how much queue the agent absorbed alone.
   app.get('/timeline', async (c) => {
-    const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 90);
-    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const { days, cutoff, end } = reportRange(c);
     const scope = agentVis(c.get('workspaceId'), c.get('agentScope'));
 
     // Opened-in-window feeds the FRT/opened series; archived-in-window feeds
@@ -598,7 +676,7 @@ export function reportRoutes(db: Db) {
       .where(
         and(
           ...scope,
-          sql`(${conversations.createdAt} > ${cutoff} or ${conversations.archivedAt} > ${cutoff})`,
+          sql`((${conversations.createdAt} >= ${cutoff} and ${conversations.createdAt} < ${end}) or (${conversations.archivedAt} >= ${cutoff} and ${conversations.archivedAt} < ${end}))`,
           ...drillFilters(c),
         ),
       );
@@ -670,7 +748,7 @@ export function reportRoutes(db: Db) {
     let aiResolved = 0;
     let humanResolved = 0;
     for (const conv of convs) {
-      if (conv.createdAt > cutoff) {
+      if (conv.createdAt >= cutoff && conv.createdAt < end) {
         opened++;
         const s = slot(day(conv.createdAt));
         s.opened++;
@@ -682,7 +760,7 @@ export function reportRoutes(db: Db) {
           frtAll.push(m);
         }
       }
-      if (conv.archivedAt && conv.archivedAt > cutoff) {
+      if (conv.archivedAt && conv.archivedAt >= cutoff && conv.archivedAt < end) {
         const s = slot(day(conv.archivedAt));
         s.resolutions++;
         const m = (conv.archivedAt.getTime() - conv.createdAt.getTime()) / 60_000;
@@ -781,11 +859,11 @@ export function reportRoutes(db: Db) {
   // Same visibility scope as the metrics; capped at 5000 rows.
   app.get('/export', async (c) => {
     const kind = c.req.query('kind') ?? 'conversations';
-    const days = Math.min(Math.max(Number(c.req.query('days')) || 90, 1), 365);
-    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const { days, cutoff, end } = reportRange(c, 365, 90);
     const scope = and(
       ...agentVis(c.get('workspaceId'), c.get('agentScope')),
-      gt(conversations.createdAt, cutoff),
+      gte(conversations.createdAt, cutoff),
+      lt(conversations.createdAt, end),
       ...drillFilters(c),
     );
     const esc = (v: unknown) => {
@@ -810,7 +888,7 @@ export function reportRoutes(db: Db) {
         })
         .from(campaignSends)
         .innerJoin(campaigns, eq(campaignSends.campaignId, campaigns.id))
-        .where(and(eq(campaignSends.workspaceId, c.get('workspaceId')), gt(campaignSends.createdAt, cutoff)))
+        .where(and(eq(campaignSends.workspaceId, c.get('workspaceId')), gte(campaignSends.createdAt, cutoff), lt(campaignSends.createdAt, end)))
         .orderBy(desc(campaignSends.createdAt))
         .limit(5000);
       head = ['campaign', 'step', 'recipient', 'status', 'sent_at', 'replied_at', 'converted_at', 'error'];
