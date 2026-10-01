@@ -27,6 +27,79 @@ import { agentWorking, operatorTyping } from '../lib/typingState.js';
  */
 const VISITOR_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
+/**
+ * Server-side dictation backend. Prefers the metered default account —
+ * Gemini natively ingests audio via generateContent when JANIS_LLM_BASE_URL
+ * is Google's OpenAI-compat endpoint, OpenAI /audio/transcriptions when it's
+ * api.openai.com — then falls back to a vendor-scoped OPENAI_LLM_API_KEY.
+ * Keys are read lazily so tests can inject them after module load.
+ * Returns null when no backend is configured; throws when a configured
+ * backend errors.
+ */
+async function transcribeAudio(file: File): Promise<{ text: string; seconds: number } | null> {
+  const googleKey =
+    process.env.GOOGLE_LLM_API_KEY ||
+    env.llmVendorKeys.google?.api_key ||
+    (env.llmBaseUrl.includes('generativelanguage.googleapis.com') ? env.llmApiKey : '');
+  if (googleKey) {
+    const base = env.llmBaseUrl.includes('generativelanguage.googleapis.com')
+      ? env.llmBaseUrl.replace(/\/openai\/?$/, '')
+      : 'https://generativelanguage.googleapis.com/v1beta';
+    const model = env.llmModel.startsWith('gemini') ? env.llmModel : 'gemini-2.0-flash';
+    const r = await fetch(`${base}/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': googleKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            {
+              inlineData: {
+                mimeType: file.type || 'audio/webm',
+                data: Buffer.from(await file.arrayBuffer()).toString('base64'),
+              },
+            },
+            { text: 'Transcribe this audio verbatim. Output only the transcript text — no quotes, labels or commentary.' },
+          ],
+        }],
+        generationConfig: { temperature: 0, maxOutputTokens: 2048 },
+      }),
+    });
+    if (r.ok) {
+      const out = (await r.json()) as {
+        candidates?: { content?: { parts?: { text?: string }[] } }[];
+      };
+      const text = out.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+      // Gemini returns no duration — estimate from size (~16KB/s opus).
+      return { text: text.trim(), seconds: Math.min(Math.max(file.size / 16_000, 0), 600) };
+    }
+    console.warn('[stt] gemini', r.status, (await r.text()).slice(0, 300));
+  }
+  const openaiKey =
+    process.env.OPENAI_LLM_API_KEY ||
+    env.llmVendorKeys.openai?.api_key ||
+    (env.llmBaseUrl.includes('api.openai.com') ? env.llmApiKey : '');
+  if (!openaiKey) {
+    if (!googleKey) return null; // nothing configured at all
+    throw new Error('gemini transcription failed');
+  }
+  const fd = new FormData();
+  fd.append('file', file, file.name || 'dictation.webm');
+  fd.append('model', 'gpt-4o-mini-transcribe');
+  fd.append('response_format', 'verbose_json');
+  const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${openaiKey}` },
+    body: fd,
+  });
+  if (!r.ok) {
+    const detail = (await r.text()).slice(0, 300);
+    console.warn('[stt] openai', r.status, detail);
+    throw new Error(`openai transcription failed: ${r.status}`);
+  }
+  const out = (await r.json()) as { text?: string; duration?: number };
+  return { text: (out.text ?? '').trim(), seconds: Math.min(Math.max(out.duration ?? 0, 0), 600) };
+}
+
 const attachment = z.object({
   name: z.string().max(255),
   url: z.string().regex(/^\/uploads\//),
@@ -388,43 +461,30 @@ export function webchatRoutes(db: Db) {
     return c.json(ref, 201);
   });
 
-  // Widget/rail dictation — MediaRecorder audio transcribed server-side via
-  // OpenAI. Deliberately not Web Speech API on the client: Chrome's path
-  // silently no-ops where its speech service is unreachable (VPNs, DNS
-  // filters, on-device packs), and Firefox lacks the API entirely. The
-  // channel token is the credential; the chat-token-upload limiter caps spend.
-  // gpt-4o-mini-transcribe ≈ $0.003/min — usage rows recorded for later
-  // metering, not yet Stripe-reported.
+  // Widget/rail dictation — MediaRecorder audio transcribed server-side.
+  // Deliberately not Web Speech API on the client: Chrome's path silently
+  // no-ops where its speech service is unreachable (VPNs, DNS filters,
+  // on-device packs), and Firefox lacks the API entirely. The channel token
+  // is the credential; the chat-token-upload limiter caps spend. Usage rows
+  // recorded for later metering, not yet Stripe-reported.
   app.post('/:token/transcribe', async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
-    // Lazy read so tests can inject a key after module load.
-    const key =
-      process.env.OPENAI_LLM_API_KEY ||
-      env.llmVendorKeys.openai?.api_key ||
-      (env.llmBaseUrl.includes('api.openai.com') ? env.llmApiKey : '');
-    if (!key) return c.json({ error: 'transcription not configured' }, 503);
     const body = await c.req.parseBody();
     const file = body['audio'];
     if (!(file instanceof File)) return c.json({ error: 'audio field required' }, 400);
     if (file.size > MAX_UPLOAD_BYTES) return c.json({ error: 'audio too large (max 10MB)' }, 413);
     if (!file.size) return c.json({ text: '' });
 
-    const fd = new FormData();
-    fd.append('file', file, file.name || 'dictation.webm');
-    fd.append('model', 'gpt-4o-mini-transcribe');
-    fd.append('response_format', 'verbose_json');
-    const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}` },
-      body: fd,
-    });
-    if (!r.ok) {
-      console.warn('[stt] openai', r.status, (await r.text()).slice(0, 300));
+    let out: { text: string; seconds: number } | null;
+    try {
+      out = await transcribeAudio(file);
+    } catch (e) {
+      console.warn('[stt]', e);
       return c.json({ error: 'transcription failed' }, 502);
     }
-    const out = (await r.json()) as { text?: string; duration?: number };
-    const seconds = Math.min(Math.max(out.duration ?? 0, 0), 600);
+    if (!out) return c.json({ error: 'transcription not configured' }, 503);
+    const seconds = out.seconds;
     if (seconds > 0) {
       try {
         await db.insert(usageEvents).values({

@@ -1273,7 +1273,8 @@ describe('dictation transcribe', () => {
       expect(u.costMicros).toBe(125); // 2.5s × 50µ/s
       expect(u.workspaceId).toBe(wsId);
     } finally {
-      process.env.OPENAI_LLM_API_KEY = prev;
+      if (prev === undefined) delete process.env.OPENAI_LLM_API_KEY;
+      else process.env.OPENAI_LLM_API_KEY = prev;
     }
   });
 
@@ -1284,13 +1285,55 @@ describe('dictation transcribe', () => {
     expect((await postAudio('00000000-0000-4000-8000-000000000000')).status).toBe(404);
   });
 
-  it('503s when no OpenAI key is configured', async () => {
-    const prev = process.env.OPENAI_LLM_API_KEY;
+  it('prefers the Google metered account — native generateContent — when set', async () => {
+    const prevG = process.env.GOOGLE_LLM_API_KEY;
+    const prevO = process.env.OPENAI_LLM_API_KEY;
+    process.env.GOOGLE_LLM_API_KEY = 'goog-test';
+    process.env.OPENAI_LLM_API_KEY = 'sk-should-not-be-used';
+    let seenUrl = '';
+    let seenKey = '';
+    let seenMime = '';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        seenUrl = String(url);
+        seenKey = (init?.headers as Record<string, string>)['x-goog-api-key'];
+        const body = JSON.parse(String(init?.body)) as {
+          contents: { parts: { inlineData?: { mimeType: string } }[] }[];
+        };
+        seenMime = body.contents[0].parts[0].inlineData?.mimeType ?? '';
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: 'gemini transcript' }] } }] }),
+        );
+      }),
+    );
+    try {
+      const r = await postAudio(channelId);
+      expect(r.status).toBe(200);
+      expect(await r.json()).toEqual({ text: 'gemini transcript' });
+      expect(seenUrl).toContain(':generateContent');
+      expect(seenKey).toBe('goog-test');
+      expect(seenMime).toBe('audio/webm');
+    } finally {
+      if (prevG === undefined) delete process.env.GOOGLE_LLM_API_KEY;
+      else process.env.GOOGLE_LLM_API_KEY = prevG;
+      if (prevO === undefined) delete process.env.OPENAI_LLM_API_KEY;
+      else process.env.OPENAI_LLM_API_KEY = prevO;
+    }
+  });
+
+  it('503s when no transcription key is configured', async () => {
+    const prevO = process.env.OPENAI_LLM_API_KEY;
+    const prevG = process.env.GOOGLE_LLM_API_KEY;
     delete process.env.OPENAI_LLM_API_KEY;
+    delete process.env.GOOGLE_LLM_API_KEY;
     try {
       expect((await postAudio(channelId)).status).toBe(503);
     } finally {
-      process.env.OPENAI_LLM_API_KEY = prev;
+      if (prevO === undefined) delete process.env.OPENAI_LLM_API_KEY;
+      else process.env.OPENAI_LLM_API_KEY = prevO;
+      if (prevG === undefined) delete process.env.GOOGLE_LLM_API_KEY;
+      else process.env.GOOGLE_LLM_API_KEY = prevG;
     }
   });
 });
