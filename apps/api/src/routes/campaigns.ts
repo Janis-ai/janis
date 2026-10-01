@@ -349,10 +349,25 @@ export function campaignRoutes(db: Db) {
       // Resume a paused-scheduled campaign whose time already passed →
       // straight to 'sending' rather than stuck 'scheduled' in the past.
       const next =
-        to === 'sending' || (to === 'scheduled' && campaign.scheduledAt && campaign.scheduledAt > new Date())
-          ? to
-          : 'sending';
+        to === 'cancel'
+          ? 'cancelled'
+          : to === 'pause'
+            ? 'paused'
+            : // resume → back to 'scheduled' if its time is still ahead
+              campaign.scheduledAt && campaign.scheduledAt > new Date()
+              ? 'scheduled'
+              : 'sending';
       await db.update(campaigns).set({ status: next }).where(eq(campaigns.id, campaign.id));
+      // Cancel skips queued sends eagerly — dispatch jobs would stamp the
+      // same status lazily, but operators shouldn't see "pending" forever.
+      if (next === 'cancelled') {
+        await db
+          .update(campaignSends)
+          .set({ status: 'skipped_cancelled' })
+          .where(
+            and(eq(campaignSends.campaignId, campaign.id), eq(campaignSends.status, 'pending')),
+          );
+      }
       await audit(db, {
         workspaceId,
         userId: c.get('user').id,
@@ -367,7 +382,9 @@ export function campaignRoutes(db: Db) {
   transition('resume', ['paused'], 'campaign.resume');
   transition('cancel', ['draft', 'scheduled', 'sending', 'paused'], 'campaign.cancel');
 
-  // Cancel a draft/scheduled campaign before it dispatches.
+  // Delete a campaign and its send history (no FK cascade on
+  // campaign_sends). Queued dispatch jobs re-join the send → campaign, so a
+  // send whose row is gone no-ops as skipped_cancelled.
   app.delete('/:id', async (c) => {
     const [campaign] = await db
       .select()
@@ -377,9 +394,7 @@ export function campaignRoutes(db: Db) {
       )
       .limit(1);
     if (!campaign) return c.json({ error: 'not found' }, 404);
-    if (campaign.status === 'sending' || campaign.status === 'done') {
-      return c.json({ error: `campaign already ${campaign.status}` }, 409);
-    }
+    await db.delete(campaignSends).where(eq(campaignSends.campaignId, campaign.id));
     await db.delete(campaigns).where(eq(campaigns.id, campaign.id));
     await audit(db, {
       workspaceId: c.get('workspaceId'),

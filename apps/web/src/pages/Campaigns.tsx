@@ -61,7 +61,7 @@ export default function Campaigns() {
 
   const [err, setErr] = useState('');
   const [warn, setWarn] = useState('');
-  type Action = 'send' | 'delete' | 'pause' | 'resume' | 'cancel';
+  type Action = 'send' | 'delete' | 'pause' | 'resume';
   const act = (id: string, action: Action) =>
     action === 'delete'
       ? api<{ warnings?: string[] }>(`/api/campaigns/${id}`, { method: 'DELETE' })
@@ -367,20 +367,9 @@ export default function Campaigns() {
               </div>
             </div>
             {['draft', 'scheduled'].includes(cp.status) && (
-              <>
-                <button className="btn primary" onClick={() => mutate.mutate({ id: cp.id, action: 'send' })}>
-                  Send now
-                </button>
-                <button
-                  className="btn ghost"
-                  onClick={async () => {
-                    if (await confirm(`Delete campaign "${cp.name}"? ${cp.stats.total ? `Its ${cp.stats.total} queued send${cp.stats.total === 1 ? '' : 's'} will be dropped.` : 'This cannot be undone.'}`, [{ key: 'ok', label: 'Delete', danger: true }]))
-                      mutate.mutate({ id: cp.id, action: 'delete' });
-                  }}
-                >
-                  Delete
-                </button>
-              </>
+              <button className="btn primary" onClick={() => mutate.mutate({ id: cp.id, action: 'send' })}>
+                Send now
+              </button>
             )}
             {['sending', 'scheduled'].includes(cp.status) && (
               <button className="btn ghost" onClick={() => mutate.mutate({ id: cp.id, action: 'pause' })}>
@@ -392,17 +381,21 @@ export default function Campaigns() {
                 Resume
               </button>
             )}
-            {['sending', 'paused', 'scheduled'].includes(cp.status) && (
-              <button
-                className="btn ghost"
-                onClick={async () => {
-                  if (await confirm('Cancel this campaign? Pending sends will be skipped.', [{ key: 'ok', label: 'Cancel campaign', danger: true }]))
-                    mutate.mutate({ id: cp.id, action: 'cancel' });
-                }}
-              >
-                Cancel
-              </button>
-            )}
+            <button
+              className="btn ghost"
+              onClick={async () => {
+                const active = ['sending', 'paused'].includes(cp.status);
+                if (
+                  await confirm(
+                    `Delete campaign "${cp.name}"?${active ? ' Queued sends are dropped.' : ''}${cp.stats.total ? ' Its send history is removed.' : ''} This cannot be undone.`,
+                    [{ key: 'ok', label: 'Delete campaign', danger: true }],
+                  )
+                )
+                  mutate.mutate({ id: cp.id, action: 'delete' });
+              }}
+            >
+              Delete
+            </button>
             <button className="btn ghost" onClick={() => setOpenId(openId === cp.id ? '' : cp.id)}>
               Details
             </button>
