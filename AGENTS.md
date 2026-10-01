@@ -441,6 +441,12 @@ before typecheck/tests/dev.
   notice). BYOK rows cost 0 — never trip.
   Remaining: CAPTCHA on widget after N messages, blocklisting repeat
   offenders, per-plan cap tiers.
+- Reply-claim verifier (TODO): prompt rules only reduce unfounded claims —
+  a model can say "here are the cards/plans" when no tool ran and no widget
+  was emitted. Fix: post-gen check detecting card/picker-claim phrasing in
+  concierge replies where toolCalls is empty and payload.widgets absent,
+  strip or rewrite the claim. Triggered by a real incident where the
+  concierge described cards it never rendered.
 - Load test: scripts/load-test.js (k6) — staged 10→150 RPS on health +
   session-auth'd reads, p95<800ms / <1% errors thresholds; run against a
   preview revision, never prod at 150rps without warning. Read-only by
