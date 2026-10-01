@@ -9,6 +9,7 @@ import * as schema from '../db/schema.js';
 import {
   agentMembers,
   agents,
+  crmConnections,
   memberships,
   savedReplies,
   sessions,
@@ -20,6 +21,7 @@ import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { env } from '../env.js';
 import { llmFor } from '../lib/llm.js';
 import { agentRoutes } from './agents.js';
+import { crmRoutes } from './crm.js';
 import { savedReplyRoutes } from './savedReplies.js';
 import { userRoutes } from './users.js';
 import { workspaceRoutes } from './workspace.js';
@@ -71,6 +73,7 @@ beforeAll(async () => {
   await migrate(db as never, { migrationsFolder: './drizzle' });
   app = new Hono()
     .route('/api/agents', agentRoutes(db))
+    .route('/api/crm', crmRoutes(db))
     .route('/api/saved-replies', savedReplyRoutes(db))
     .route('/api/users', userRoutes(db))
     .route('/api/workspace', workspaceRoutes(db));
@@ -256,6 +259,58 @@ describe('agent saved replies', () => {
       body: JSON.stringify({ title: 'mine', body: 'agent reply', agent_id: agentA }),
     });
     expect(ok.status).toBe(201);
+  });
+
+  it('member can inline-edit a workspace reply; scoped user cannot', async () => {
+    const [ws] = await db.select().from(savedReplies).where(eq(savedReplies.title, 'ws'));
+    const patch = await app.request(`/api/saved-replies/${ws.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: memberCookie },
+      body: JSON.stringify({ title: 'ws', body: 'edited body' }),
+    });
+    expect(patch.status).toBe(200);
+    expect((await patch.json()).saved_reply.body).toBe('edited body');
+    const denied = await app.request(`/api/saved-replies/${ws.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: scopedCookie },
+      body: JSON.stringify({ title: 'ws', body: 'hijack' }),
+    });
+    expect(denied.status).toBe(403);
+  });
+});
+
+describe('crm connection toggles', () => {
+  it('admin can pause/resume sync and flip write-back independently', async () => {
+    const [conn] = await db
+      .insert(crmConnections)
+      .values({ workspaceId: wsId, provider: 'hubspot', credentialsEnc: 'x' })
+      .returning();
+    const pause = await app.request(`/api/crm/${conn.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(pause.status).toBe(200);
+    let [row] = await db.select().from(crmConnections).where(eq(crmConnections.id, conn.id));
+    expect(row.enabled).toBe(false);
+    expect(row.activityWriteback).toBe(false); // untouched
+
+    await app.request(`/api/crm/${conn.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ activity_writeback: true }),
+    });
+    [row] = await db.select().from(crmConnections).where(eq(crmConnections.id, conn.id));
+    expect(row.enabled).toBe(false); // stays paused
+    expect(row.activityWriteback).toBe(true);
+
+    // member (non-admin) is rejected by the adminOnly guard
+    const denied = await app.request(`/api/crm/${conn.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: memberCookie },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(denied.status).toBe(403);
   });
 });
 

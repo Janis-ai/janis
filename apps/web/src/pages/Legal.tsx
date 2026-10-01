@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { SiteFooter } from '../components/bits';
+import { BrandImg, SiteFooter } from '../components/bits';
 
 const PRIVACY = `Last updated: September 2026
 
@@ -68,7 +68,7 @@ function Doc({ title, body }: { title: string; body: string }) {
   return (
     <div className="landing" style={{ maxWidth: 720 }}>
       <Link to="/">
-        <img className="landing-logo" src="/img/janis-top.png" alt="Janis" />
+        <BrandImg className="landing-logo" alt="Janis" />
       </Link>
       <h1 style={{ marginTop: 40 }}>{title}</h1>
       {body.split('\n\n').map((block, i) =>

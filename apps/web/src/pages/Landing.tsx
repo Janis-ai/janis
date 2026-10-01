@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useMe } from '../api/hooks';
 import { api } from '../api/client';
 import { track } from '../lib/analytics';
-import { SiteFooter } from '../components/bits';
+import { BrandImg, SiteFooter } from '../components/bits';
 
 // Inline stroke glyphs — the old PNG set only had three distinct images,
 // which read as copy-paste once six cards sat side by side.
@@ -447,7 +447,7 @@ export default function Landing() {
   return (
     <div className="landing">
       <header className="landing-nav">
-        <img className="landing-logo" src="/img/janis-top.png" alt="Janis" />
+        <BrandImg className="landing-logo" alt="Janis" />
         <nav className="landing-nav-links">
           <a href="#how">How it works</a>
           <a href="#pricing">Pricing</a>

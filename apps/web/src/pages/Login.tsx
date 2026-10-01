@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client';
 import { friendlyError } from '../lib/friendlyError';
 import { usePageTitle } from '../lib/title';
+import { BrandImg } from '../components/bits';
 
 const GoogleLogo = () => (
   <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
@@ -64,7 +65,7 @@ export default function Login() {
     <div className="login-wrap">
       <form className="card login-card" onSubmit={submit}>
         <div className="login-brand">
-          <img src="/img/janis-top.png" alt="Janis" style={{ height: 40, marginBottom: 6 }} />
+          <BrandImg alt="Janis" style={{ height: 40, marginBottom: 6 }} />
           <p className="muted">Human backup for AI agents</p>
         </div>
         {slackPending && (

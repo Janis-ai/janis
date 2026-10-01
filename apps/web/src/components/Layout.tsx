@@ -8,6 +8,7 @@ import { trackOnce } from '../lib/analytics';
 import { playAlertSound } from '../lib/alertSound';
 import { setTabBadge } from '../lib/tabBadge';
 import PushBanner from './PushBanner';
+import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
 import { BarChart3, BookOpen, Bot, CreditCard, Inbox, Megaphone, Settings, Sparkles, Users, X } from 'lucide-react';
@@ -312,8 +313,8 @@ export default function Layout() {
       <a className="skip-link" href="#main-content">Skip to content</a>
       <nav className="sidebar" aria-label="Main navigation">
         <Link className="brand" to="/" title="Janis home">
-          <img className="brand-wide" src="/img/janis-top.png" alt="Janis" />
-          <img className="brand-mark" src="/img/janis-mark.png" alt="" />
+          <BrandImg className="brand-wide" alt="Janis" />
+          <BrandImg className="brand-mark" mark alt="" />
         </Link>
         <NavLink to="/conversations" end><span className="label">Conversations</span><span className="icon"><Inbox size={18} /></span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
         <NavLink to="/contacts"><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
@@ -468,7 +469,7 @@ export default function Layout() {
               navigate(t.url);
             }}
           >
-            <img src="/img/janis-mark.png" className="toast-icon" alt="" />
+            <BrandImg mark className="toast-icon" alt="" />
             <span className="toast-body">
               <strong>{t.title}</strong>
               <span>{t.body}</span>

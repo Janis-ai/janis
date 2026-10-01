@@ -42,6 +42,11 @@
 :root[data-theme='light'] textarea {
   box-shadow: none;
 }
+/* Status badges invert in light mode — dark-mode pairs are light text on a
+   saturated dark tint; on light they flip to dark text on a pale tint. */
+:root[data-theme='light'] .badge.active { background: #d1fae5; color: #065f46; }
+:root[data-theme='light'] .badge.needs_human { background: #ffedd5; color: #9a3412; }
+:root[data-theme='light'] .badge.warn { background: #fef3c7; color: #92400e; }
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }

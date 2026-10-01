@@ -18,7 +18,7 @@ const SECTIONS: { key: Section; label: string }[] = [
   { key: 'workspace', label: 'Workspace' },
   { key: 'me', label: 'Me' },
   { key: 'integrations', label: 'Integrations' },
-  { key: 'deliverability', label: 'Deliverability' },
+  { key: 'deliverability', label: 'Sending' },
   { key: 'team', label: 'Team' },
 ];
 
@@ -284,6 +284,19 @@ export default function Settings() {
   const removeReply = useMutation({
     mutationFn: (id: string) => api(`/api/saved-replies/${id}`, { method: 'DELETE' }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['savedReplies'] }),
+  });
+
+  // Inline edit — Edit loads the reply into the form; the same fields PATCH.
+  const [editReplyId, setEditReplyId] = useState<string | null>(null);
+  const updateReply = useMutation({
+    mutationFn: ({ id, ...b }: { id: string; title: string; body: string }) =>
+      api(`/api/saved-replies/${id}`, { method: 'PATCH', body: JSON.stringify(b) }),
+    onSuccess: () => {
+      setReply({ title: '', body: '' });
+      setEditReplyId(null);
+      void qc.invalidateQueries({ queryKey: ['savedReplies'] });
+    },
+    onError: (e) => setError(e.message),
   });
 
   const togglePush = async () => {
@@ -696,6 +709,15 @@ export default function Settings() {
         {savedReplies?.saved_replies.map((r) => (
           <div key={r.id} className="row muted" style={{ marginTop: 8 }}>
             <span className="grow"><strong>{r.title}</strong> — {r.body.slice(0, 80)}</span>
+            <button
+              className="btn ghost"
+              onClick={() => {
+                setEditReplyId(r.id);
+                setReply({ title: r.title, body: r.body });
+              }}
+            >
+              Edit
+            </button>
             <button className="btn danger" onClick={() => removeReply.mutate(r.id)}>Delete</button>
           </div>
         ))}
@@ -703,10 +725,11 @@ export default function Settings() {
           style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, maxWidth: 520 }}
           onSubmit={(e) => {
             e.preventDefault();
-            addReply.mutate(reply);
+            if (editReplyId) updateReply.mutate({ id: editReplyId, ...reply });
+            else addReply.mutate(reply);
           }}
         >
-          <label>New saved reply</label>
+          <label>{editReplyId ? 'Edit saved reply' : 'New saved reply'}</label>
           <input
             placeholder="title (e.g. refund-policy)"
             value={reply.title}
@@ -720,8 +743,22 @@ export default function Settings() {
             required
             rows={3}
           />
-          <div>
-            <button className="btn">Add</button>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn" disabled={addReply.isPending || updateReply.isPending}>
+              {editReplyId ? 'Save changes' : 'Add'}
+            </button>
+            {editReplyId && (
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => {
+                  setEditReplyId(null);
+                  setReply({ title: '', body: '' });
+                }}
+              >
+                Cancel
+              </button>
+            )}
           </div>
         </form>
       </div>
@@ -929,6 +966,7 @@ function SendPolicyCard() {
   const [draft, setDraft] = useState<SendPolicy | null>(null);
   const [msg, setMsg] = useState('');
   const [newAddr, setNewAddr] = useState('');
+  const [supQuery, setSupQuery] = useState('');
   const p = draft ?? saved;
   const dirty = draft !== null;
   const upd = (patch: Partial<SendPolicy>) => setDraft({ ...(draft ?? saved), ...patch });
@@ -1023,13 +1061,34 @@ function SendPolicyCard() {
             Block
           </button>
         </div>
-        {(sup?.suppressions ?? []).slice(0, 20).map((s) => (
+        {(sup?.suppressions?.length ?? 0) > 0 && (
+          <input
+            placeholder="Search blocked senders…"
+            value={supQuery}
+            onChange={(e) => setSupQuery(e.target.value)}
+            style={{ maxWidth: 280, marginTop: 8 }}
+          />
+        )}
+        {(sup?.suppressions ?? [])
+          .filter((s) =>
+            supQuery
+              ? s.address.toLowerCase().includes(supQuery.toLowerCase()) ||
+                s.reason.toLowerCase().includes(supQuery.toLowerCase())
+              : true,
+          )
+          .slice(0, 100)
+          .map((s) => (
           <div key={s.id} className="row" style={{ fontSize: 13, padding: '3px 0' }}>
             <span className="mono grow">{s.address}</span>
             <span className="muted">{s.kind} · {s.reason}</span>
             <button className="btn ghost" onClick={() => delSup.mutate(s.id)}>Remove</button>
           </div>
         ))}
+        {!!sup && sup.suppressions.length > 100 && !supQuery && (
+          <div className="muted" style={{ fontSize: 12 }}>
+            Showing first 100 of {sup.suppressions.length} — search to find a specific sender.
+          </div>
+        )}
         {!!sup && !sup.suppressions.length && (
           <div className="muted" style={{ fontSize: 12 }}>Empty — nobody is blocked.</div>
         )}
@@ -1137,6 +1196,11 @@ function CrmCard() {
       api(`/api/crm/${id}`, { method: 'PATCH', body: JSON.stringify({ activity_writeback: on }) }),
     onSuccess: invalidate,
   });
+  const toggleEnabled = useMutation({
+    mutationFn: ({ id, on }: { id: string; on: boolean }) =>
+      api(`/api/crm/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled: on }) }),
+    onSuccess: invalidate,
+  });
   const drop = useMutation({
     mutationFn: (id: string) => api(`/api/crm/${id}`, { method: 'DELETE' }),
     onSuccess: invalidate,
@@ -1152,6 +1216,7 @@ function CrmCard() {
       {conns.map((cn) => (
         <div key={cn.id} className="row wrap" style={{ gap: 8, fontSize: 13 }}>
           <strong>{cn.provider}</strong>
+          {!cn.enabled && <span className="badge warn">paused</span>}
           <span className="muted">
             {cn.synced_count} synced
             {cn.last_synced_at && ` · last ${new Date(cn.last_synced_at).toLocaleString()}`}
@@ -1159,10 +1224,17 @@ function CrmCard() {
           {cn.last_error && <span className="error" style={{ fontSize: 12 }}>{cn.last_error}</span>}
           <span className="grow" />
           <label className="row" style={{ gap: 5, fontSize: 12 }}>
-            <input type="checkbox" checked={cn.activity_writeback}
-              onChange={(e) => writeback.mutate({ id: cn.id, on: e.target.checked })} />
-            log campaign activity on the CRM contact
+            <input type="checkbox" checked={cn.enabled}
+              onChange={(e) => toggleEnabled.mutate({ id: cn.id, on: e.target.checked })} />
+            sync enabled
           </label>
+          {cn.enabled && (
+            <label className="row" style={{ gap: 5, fontSize: 12 }}>
+              <input type="checkbox" checked={cn.activity_writeback}
+                onChange={(e) => writeback.mutate({ id: cn.id, on: e.target.checked })} />
+              log campaign activity on the CRM contact
+            </label>
+          )}
           <button className="btn ghost" onClick={() => syncNow.mutate(cn.id)}>Sync now</button>
           <button className="btn ghost" onClick={() => drop.mutate(cn.id)}>Disconnect</button>
         </div>

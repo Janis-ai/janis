@@ -69,6 +69,40 @@ export function savedReplyRoutes(db: Db) {
     return c.json({ saved_reply: toSavedReply(row) }, 201);
   });
 
+  // Inline edit — same permission shape as delete: workspace replies need
+  // workspace scope, agent-scoped replies need a role on that agent.
+  app.patch(
+    '/:id',
+    zValidator('json', body.pick({ title: true, body: true })),
+    async (c) => {
+      const [row] = await db
+        .select()
+        .from(savedReplies)
+        .where(
+          and(
+            eq(savedReplies.id, c.req.param('id')),
+            eq(savedReplies.workspaceId, c.get('workspaceId')),
+          ),
+        )
+        .limit(1);
+      if (!row) return c.json({ error: 'not found' }, 404);
+      if (!row.agentId && c.get('agentScope').grants) return c.json({ error: 'forbidden' }, 403);
+      if (row.agentId) {
+        const role = await agentRoleFor(
+          db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
+        );
+        if (!role) return c.json({ error: 'not found' }, 404);
+      }
+      const b = c.req.valid('json');
+      const [updated] = await db
+        .update(savedReplies)
+        .set({ title: b.title, body: b.body })
+        .where(eq(savedReplies.id, row.id))
+        .returning();
+      return c.json({ saved_reply: toSavedReply(updated) });
+    },
+  );
+
   app.delete('/:id', async (c) => {
     const [row] = await db
       .select()

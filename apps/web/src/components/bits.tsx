@@ -1,7 +1,23 @@
-import { useState } from 'react';
+import { useEffect, useState, type ImgHTMLAttributes } from 'react';
 import { Link } from 'react-router-dom';
 import type { Conversation, ConversationState, UserProfile } from '@janis/shared';
 import { friendlyName } from '@janis/shared';
+import { currentTheme, THEME_CHANGE_EVENT } from '../lib/theme';
+
+/** The wordmark/mark PNGs are white-on-transparent — invisible in light mode.
+ *  Swaps to the ink variant when the theme flips (or on first render). */
+export function BrandImg({ mark, ...rest }: { mark?: boolean } & ImgHTMLAttributes<HTMLImageElement>) {
+  const [theme, setTheme] = useState(currentTheme());
+  useEffect(() => {
+    const on = () => setTheme(currentTheme());
+    window.addEventListener(THEME_CHANGE_EVENT, on);
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, on);
+  }, []);
+  const src = mark
+    ? theme === 'light' ? '/img/janis-mark-dark.png' : '/img/janis-mark.png'
+    : theme === 'light' ? '/img/janis-top-dark.png' : '/img/janis-top.png';
+  return <img src={src} {...rest} />;
+}
 
 export function StateBadge({ state }: { state: ConversationState }) {
   const label = { active: 'Agent', needs_human: 'Needs human', human: 'Human', archived: 'Archived' }[state];
@@ -111,7 +127,7 @@ export function ArgsRows({ args }: { args: Record<string, unknown> }) {
 export function SiteFooter({ style }: { style?: React.CSSProperties }) {
   return (
     <footer className="landing-footer muted" style={style}>
-      <img src="/img/janis-top.png" alt="Janis" style={{ height: 20, opacity: 0.8 }} />
+      <BrandImg alt="Janis" style={{ height: 20, opacity: 0.8 }} />
       <span>© {new Date().getFullYear()} Janis</span>
       <Link to="/">Home</Link>
       <Link to="/docs">Docs</Link>

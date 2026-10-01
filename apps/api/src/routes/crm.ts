@@ -154,15 +154,25 @@ export function crmRoutes(db: Db) {
   });
 
   // Toggle append-only activity write-back — campaign sends/replies,
-  // conversions, human replies and opt-outs become HubSpot notes.
+  // conversions, human replies and opt-outs become HubSpot notes — or pause
+  // the sync entirely with enabled:false (keeps creds + list, stops pulling).
   app.patch(
     '/:id',
-    zValidator('json', z.object({ activity_writeback: z.boolean() })),
+    zValidator(
+      'json',
+      z.object({
+        activity_writeback: z.boolean().optional(),
+        enabled: z.boolean().optional(),
+      }),
+    ),
     async (c) => {
-      const { activity_writeback } = c.req.valid('json');
+      const { activity_writeback, enabled } = c.req.valid('json');
       const [conn] = await db
         .update(crmConnections)
-        .set({ activityWriteback: activity_writeback })
+        .set({
+          ...(activity_writeback !== undefined ? { activityWriteback: activity_writeback } : {}),
+          ...(enabled !== undefined ? { enabled } : {}),
+        })
         .where(
           and(eq(crmConnections.id, c.req.param('id')), eq(crmConnections.workspaceId, c.get('workspaceId'))),
         )

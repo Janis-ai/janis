@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMe } from '../api/hooks';
 import { api } from '../api/client';
-import { SiteFooter } from '../components/bits';
+import { BrandImg, SiteFooter } from '../components/bits';
 import OperatorDocs from './OperatorDocs';
 
 const INBOUND = [
@@ -104,7 +104,7 @@ export default function Docs() {
   return (
     <div className="landing" style={{ maxWidth: 760 }}>
       <nav className="landing-nav">
-        <Link to="/"><img className="landing-logo" src="/img/janis-top.png" alt="Janis" /></Link>
+        <Link to="/"><BrandImg className="landing-logo" alt="Janis" /></Link>
         {data ? (
           <span className="row" style={{ gap: 8 }}>
             <Link to="/conversations" className="btn primary">Open console</Link>
