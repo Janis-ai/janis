@@ -117,7 +117,7 @@ export function HelpCenter({ agent }: { agent: Agent }) {
               The chat widget links here automatically once an article is published.
               {helpDomain
                 ? ` Serving at https://${helpDomain} — CNAME it at ${window.location.host}.${agentDomain ? ' (agent override)' : ' (workspace domain)'}`
-                : ' Set a custom domain under Settings → Workspace, or override it just for this agent below.'}
+                : ` Set a custom domain under Settings → Workspace, or override it just for this agent below. Point the domain's CNAME at ${window.location.host} first, then set it here.`}
             </p>
             <div className="row" style={{ marginTop: 8, gap: 8 }}>
               <input
