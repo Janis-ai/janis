@@ -817,6 +817,207 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       });
     },
   },
+  {
+    name: 'knowledge_gaps',
+    description:
+      "Answer 'what topics are my agents failing at' — clusters of recurring customer questions that forced a handoff, with counts, sample questions and the answers humans gave. Use this before offering fixes; 'already_covered' gaps have a knowledge entry now. Read-only — any member. Defaults to the workspace they're viewing; pass `agent` to scope to one.",
+    params: {
+      workspace: 'workspace name — only needed when ambiguous',
+      agent: 'optional agent name — otherwise covers all workspace agents',
+      days: 'look-back window in days, default 30, max 90',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace);
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const days = Math.min(Math.max(Number(args.days) || 30, 1), 90);
+
+      const wsAgents = await ctx.db
+        .select()
+        .from(agents)
+        .where(eq(agents.workspaceId, ws.id));
+      const hint = args.agent?.trim().toLowerCase();
+      const scope = hint
+        ? wsAgents.filter((a) => a.name.toLowerCase().includes(hint))
+        : wsAgents;
+      if (!scope.length) {
+        return JSON.stringify({
+          error: `no agent matching "${args.agent}" — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
+        });
+      }
+
+      // Lazy import — knowledgeGaps pulls llmFor from hostedAgent, which
+      // imports this module; deferring avoids a load-time cycle.
+      const { detectKnowledgeGaps, readGapsCache, gapsCacheFresh } = await import(
+        '../services/knowledgeGaps.js'
+      );
+
+      const out: {
+        agent: string;
+        gaps_url: string;
+        gaps: {
+          theme: string;
+          times_failed: number;
+          sample_questions: string[];
+          human_resolutions: string[];
+          now_handled: number;
+          already_covered: boolean;
+        }[];
+      }[] = [];
+      for (const agent of scope.slice(0, 10)) {
+        const cfg = (agent.config ?? {}) as Record<string, unknown> & {
+          dismissed_gaps?: string[];
+          dismissed_gap_times?: Record<string, string>;
+        };
+        let gaps;
+        const cached = readGapsCache(cfg);
+        if (gapsCacheFresh(cached)) {
+          gaps = cached!.gaps;
+        } else {
+          gaps = await detectKnowledgeGaps(ctx.db, agent.id, { days });
+          await ctx.db
+            .update(agents)
+            .set({ config: { ...cfg, gaps_cache: { at: new Date().toISOString(), gaps } } })
+            .where(eq(agents.id, agent.id));
+        }
+        // Same dismissal rules as the console — operator-covered clusters
+        // stay hidden unless the question recurs after the dismissal.
+        const dismissed = new Set(cfg.dismissed_gaps ?? []);
+        const times = cfg.dismissed_gap_times ?? {};
+        const qKey = (q: string) => q.toLowerCase().slice(0, 60);
+        gaps = gaps.filter((g) => {
+          const covered =
+            dismissed.has(g.key) ||
+            (g.questions.length > 0 && g.questions.every((q) => dismissed.has(qKey(q))));
+          if (!covered) return true;
+          const ts = [g.key, ...g.questions.map(qKey)]
+            .map((k) => times[k])
+            .filter((t): t is string => !!t)
+            .map(Date.parse)
+            .filter(Number.isFinite);
+          if (!ts.length) return false; // legacy dismissal — never resurface
+          return Date.parse(g.last_seen) > Math.max(...ts);
+        });
+        if (!gaps.length) continue;
+        out.push({
+          agent: agent.name,
+          gaps_url: `${env.webOrigin}/agents/${agent.id}?tab=behavior`,
+          gaps: gaps.slice(0, 5).map((g) => ({
+            theme: g.questions[0] ?? g.key,
+            times_failed: g.count,
+            sample_questions: g.questions.slice(0, 3),
+            human_resolutions: g.resolutions.slice(0, 2),
+            now_handled: g.handled.length,
+            already_covered: g.added,
+          })),
+        });
+      }
+      return JSON.stringify(
+        out.length
+          ? { workspace: ws.name, days, agents: out }
+          : {
+              workspace: ws.name,
+              days,
+              gaps: [],
+              note: 'no recurring failures detected — either the agents are handling their conversations or there is not enough traffic yet',
+            },
+      );
+    },
+  },
+  {
+    name: 'teach_agent',
+    description:
+      "Add a knowledge entry to an agent in the visitor's workspace — the fix for a recurring gap, so the agent answers it next time. Draft the entry (a factual line the agent can quote, e.g. \"Refunds under $50 are auto-approved within 24h\"), show it to the visitor and only call this once they confirm. Admin-only.",
+    params: {
+      agent: 'agent name (required)',
+      entry: 'the confirmed knowledge entry text — one line per fact',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+
+      const hint = args.agent?.trim().toLowerCase();
+      const wsAgents = await ctx.db
+        .select()
+        .from(agents)
+        .where(eq(agents.workspaceId, ws.id));
+      const agent = hint
+        ? wsAgents.find((a) => a.name.toLowerCase() === hint) ??
+          wsAgents.find((a) => a.name.toLowerCase().includes(hint))
+        : undefined;
+      if (!agent) {
+        return JSON.stringify({
+          error: `which agent? "${args.agent ?? ''}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
+        });
+      }
+      const entry = String(args.entry ?? '').trim();
+      if (!entry) return JSON.stringify({ error: 'entry text is required' });
+      if (!agent.hosted) {
+        return JSON.stringify({
+          error: `${agent.name} isn't a hosted agent — knowledge entries only apply to Janis-hosted agents`,
+        });
+      }
+
+      // Same normalisation as the Behavior-tab approve route: split lines,
+      // strip list/markdown decoration, dedupe.
+      const cfg = (agent.config ?? {}) as Record<string, unknown> & { knowledge?: unknown };
+      const entries = entry
+        .split('\n')
+        .map((l) => l.trim().replace(/^[-*•]\s+/, '').replace(/\*\*/g, ''))
+        .filter(Boolean);
+      const knowledge = Array.isArray(cfg.knowledge) ? [...(cfg.knowledge as string[])] : [];
+      const added: string[] = [];
+      for (const e of entries) {
+        if (!knowledge.includes(e)) {
+          knowledge.push(e);
+          added.push(e);
+        }
+      }
+      if (!added.length) {
+        return JSON.stringify({ ok: true, note: 'that entry already exists — nothing added', agent: agent.name });
+      }
+      // Keep the cached gap set stable — only "added" flags move.
+      const { readGapsCache, markGapsAdded } = await import('../services/knowledgeGaps.js');
+      const cache = readGapsCache(cfg);
+      const gaps_cache = cache
+        ? { ...cache, gaps: markGapsAdded(cache.gaps, knowledge) }
+        : undefined;
+      await ctx.db
+        .update(agents)
+        .set({ config: { ...cfg, knowledge, ...(gaps_cache ? { gaps_cache } : {}) } })
+        .where(eq(agents.id, agent.id));
+      await audit(ctx.db, {
+        workspaceId: ws.id,
+        userId: user.id,
+        userName: user.name,
+        action: 'agent.knowledge.add',
+        targetType: 'agent',
+        targetId: agent.id,
+        meta: { via: 'concierge', entries: added },
+      });
+      return JSON.stringify({
+        ok: true,
+        added,
+        agent: agent.name,
+        knowledge_count: knowledge.length,
+        gaps_url: `${env.webOrigin}/agents/${agent.id}?tab=behavior`,
+      });
+    },
+  },
 ];
 
 /** Builtins enabled on this agent's config AND available in this environment. */

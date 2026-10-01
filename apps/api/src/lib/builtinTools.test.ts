@@ -452,3 +452,107 @@ describe('debug_conversation builtin', () => {
     expect(out.verdict).toContain('human took over');
   });
 });
+
+describe('knowledge_gaps builtin', () => {
+  const gapsTool = () => BUILTIN_TOOLS.find((b) => b.name === 'knowledge_gaps')!;
+  let gapAgentId: string;
+
+  it('is gated to the operator workspace', () => {
+    expect(gapsTool().available(WS)).toBe(true);
+    expect(gapsTool().available('other-ws')).toBe(false);
+  });
+
+  it('clusters recurring failed questions for the visitor\'s workspace', async () => {
+    const [a] = await db
+      .insert(agents)
+      .values({ workspaceId: WS2, name: 'Gap Bot', hosted: true })
+      .returning();
+    gapAgentId = a.id;
+    const t0 = Date.now() - 3_600_000;
+    for (const ext of ['g1', 'g2']) {
+      const [cv] = await db
+        .insert(conversations)
+        .values({ agentId: a.id, externalId: `cust:${ext}` })
+        .returning();
+      await db.insert(messages).values([
+        { conversationId: cv.id, direction: 'in', text: 'do you ship to Canada?', createdAt: new Date(t0) },
+        { conversationId: cv.id, direction: 'out', text: 'Let me get a human.', flags: { help_requested: true }, createdAt: new Date(t0 + 60_000) },
+        { conversationId: cv.id, direction: 'human', text: 'Yes — free shipping to Canada over $50.', createdAt: new Date(t0 + 120_000) },
+      ]);
+    }
+    const out = JSON.parse(await gapsTool().run({ workspace: 'free' }, ctx(CONV2)));
+    const mine = out.agents.find((r: { agent: string }) => r.agent === 'Gap Bot');
+    expect(mine).toBeTruthy();
+    expect(mine.gaps_url).toContain(gapAgentId);
+    const gap = mine.gaps[0];
+    expect(gap.times_failed).toBe(2);
+    expect(gap.theme.toLowerCase()).toContain('ship');
+    expect(gap.human_resolutions[0]).toContain('Canada');
+  });
+
+  it('hides dismissed clusters like the console does', async () => {
+    await db
+      .update(agents)
+      .set({
+        config: {
+          dismissed_gaps: ['do you ship to canada?'],
+          dismissed_gap_times: { 'do you ship to canada?': new Date().toISOString() },
+        },
+      })
+      .where(eq(agents.id, gapAgentId));
+    const out = JSON.parse(await gapsTool().run({ workspace: 'free', agent: 'gap' }, ctx(CONV2)));
+    expect(out.gaps ?? []).toEqual([]);
+  });
+
+  it('a member can read gaps but cannot teach', async () => {
+    const out = JSON.parse(await gapsTool().run({ workspace: 'free' }, ctx(CONV4)));
+    expect(out.workspace).toBe('Free WS');
+    const teach = () => BUILTIN_TOOLS.find((b) => b.name === 'teach_agent')!;
+    const denied = JSON.parse(
+      await teach().run({ workspace: 'free', agent: 'gap', entry: 'Shipping to Canada is free over $50.' }, ctx(CONV4)),
+    );
+    expect(denied.error).toContain('admin');
+  });
+});
+
+describe('teach_agent builtin', () => {
+  const teach = () => BUILTIN_TOOLS.find((b) => b.name === 'teach_agent')!;
+
+  it('appends a knowledge entry and marks matching gaps covered', async () => {
+    // Repopulate the gaps cache (the dismissal test overwrote the config) —
+    // detection still sees the cluster; dismissal only filters the output.
+    const gapsTool = () => BUILTIN_TOOLS.find((b) => b.name === 'knowledge_gaps')!;
+    await gapsTool().run({ workspace: 'free', agent: 'gap' }, ctx(CONV2));
+    const out = JSON.parse(
+      await teach().run(
+        { workspace: 'free', agent: 'gap bot', entry: 'We ship to Canada — free over $50.' },
+        ctx(CONV2),
+      ),
+    );
+    expect(out.ok).toBe(true);
+    expect(out.added).toEqual(['We ship to Canada — free over $50.']);
+    const [a] = await db.select().from(agents).where(eq(agents.name, 'Gap Bot'));
+    const cfg = a.config as { knowledge?: string[]; gaps_cache?: { gaps: { added: boolean }[] } };
+    expect(cfg.knowledge).toContain('We ship to Canada — free over $50.');
+    // "ship, canada" shared words → jaccard ≥ 0.35 → cluster marked covered
+    expect(cfg.gaps_cache?.gaps?.[0]?.added).toBe(true);
+  });
+
+  it('dedupes and rejects non-hosted agents', async () => {
+    const dupe = JSON.parse(
+      await teach().run(
+        { workspace: 'free', agent: 'gap bot', entry: 'We ship to Canada — free over $50.' },
+        ctx(CONV2),
+      ),
+    );
+    expect(dupe.note).toContain('already exists');
+    const [plain] = await db
+      .insert(agents)
+      .values({ workspaceId: WS2, name: 'Webhook Bot', hosted: false })
+      .returning();
+    const bad = JSON.parse(
+      await teach().run({ workspace: 'free', agent: 'webhook', entry: 'x' }, ctx(CONV2)),
+    );
+    expect(bad.error).toContain("isn't a hosted agent");
+  });
+});
