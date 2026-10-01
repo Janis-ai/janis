@@ -429,4 +429,33 @@ describe('enrollment', () => {
       .where(eq(campaignSends.campaignId, campaign.id));
     expect(sends.map((s) => s.contactId)).toContain(con.id);
   });
+
+  it('a drip stays sending while its next-step job is queued', async () => {
+    const { sweepCampaigns } = await import('./campaigns.js');
+    const [campaign] = await db
+      .insert(campaigns)
+      .values({
+        workspaceId, channelId, name: 'DripSweep', text: 'hi', status: 'sending',
+        steps: [{ delay_minutes: 60, text: 'follow-up' }],
+      })
+      .returning();
+    await dispatchCampaign(db, campaign.id);
+    // Step-0 sends complete; the step-1 job is still queued for later. The
+    // campaign must NOT close — the step job would fire into 'done' and die.
+    await db
+      .update(campaignSends)
+      .set({ status: 'sent', sentAt: new Date() })
+      .where(eq(campaignSends.campaignId, campaign.id));
+    await sweepCampaigns(db);
+    let [c] = await db.select().from(campaigns).where(eq(campaigns.id, campaign.id));
+    expect(c.status).toBe('sending');
+    // Once the step chain has no queued work left the campaign closes.
+    await db
+      .update(jobs)
+      .set({ status: 'done' })
+      .where(eq(jobs.type, 'campaign.step'));
+    await sweepCampaigns(db);
+    [c] = await db.select().from(campaigns).where(eq(campaigns.id, campaign.id));
+    expect(c.status).toBe('done');
+  });
 });

@@ -245,14 +245,22 @@ export function campaignRoutes(db: Db) {
   });
 
   app.get('/:id', async (c) => {
-    const [campaign] = await db
-      .select()
+    const [row] = await db
+      .select({
+        campaign: campaigns,
+        channelName: channels.name,
+        channelKind: channels.kind,
+        agentName: agents.name,
+      })
       .from(campaigns)
+      .innerJoin(channels, eq(campaigns.channelId, channels.id))
+      .innerJoin(agents, eq(channels.agentId, agents.id))
       .where(
         and(eq(campaigns.id, c.req.param('id')), eq(campaigns.workspaceId, c.get('workspaceId'))),
       )
       .limit(1);
-    if (!campaign) return c.json({ error: 'not found' }, 404);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    const { campaign, channelName, channelKind, agentName } = row;
     const sends = await db
       .select()
       .from(campaignSends)
@@ -264,9 +272,15 @@ export function campaignRoutes(db: Db) {
         id: campaign.id,
         name: campaign.name,
         text: campaign.text,
+        subject: campaign.subject,
+        whatsapp_template: campaign.template,
         channel_id: campaign.channelId,
+        channel_name: channelName,
+        channel_kind: channelKind,
+        agent_name: agentName,
         status: campaign.status,
         scheduled_at: campaign.scheduledAt?.toISOString() ?? null,
+        created_at: campaign.createdAt.toISOString(),
         segment: campaign.segment,
         steps: campaign.steps,
         agent_instructions: campaign.agentInstructions,

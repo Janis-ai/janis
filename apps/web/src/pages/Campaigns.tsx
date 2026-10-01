@@ -23,6 +23,23 @@ type CampaignRow = {
   stats: Stats;
 };
 type SendRow = { id: string; recipient: string; step?: number; status: string; error: string | null; sent_at: string | null; replied_at?: string | null };
+type StepDef = { delay_minutes: number; text?: string; subject?: string; condition?: string; whatsapp_template?: { name: string } };
+type CampaignDetail = {
+  campaign: {
+    id: string; name: string; text: string; subject?: string | null;
+    whatsapp_template?: { name: string } | null;
+    channel_id: string; channel_name?: string; channel_kind?: string; agent_name?: string;
+    status: string; scheduled_at: string | null; created_at?: string;
+    segment?: {
+      q?: string; list_id?: string; tags?: string[]; channel_id?: string;
+      has_email?: boolean; has_phone?: boolean; active_within_days?: number; never_replied?: boolean;
+    };
+    steps?: StepDef[];
+    agent_instructions?: string | null; enrollment?: string; send_cap?: number | null; goal?: string | null;
+  };
+  stats: Stats;
+  sends: SendRow[];
+};
 
 /** Human-readable send outcomes — the "why" behind each status code. */
 const SEND_STATUS: Record<string, string> = {
@@ -34,6 +51,42 @@ const SEND_STATUS: Record<string, string> = {
   skipped_frequency_cap: 'skipped — 24h frequency cap',
   skipped_cancelled: 'skipped — campaign stopped',
 };
+
+const STEP_COND: Record<string, string> = {
+  if_not_replied: 'if no reply',
+  if_replied: 'if they replied',
+  if_converted: 'if converted',
+  if_not_converted: 'if not converted',
+  always: 'everyone who got the previous step',
+};
+
+function fmtDelay(mins: number) {
+  if (mins % 1440 === 0) return `${mins / 1440}d`;
+  if (mins % 60 === 0) return `${mins / 60}h`;
+  return `${mins}m`;
+}
+
+/** Per-step rollup of the send rows — step 0 is the initial blast. */
+function stepStats(sends: SendRow[], step: number) {
+  const rows = sends.filter((s) => (s.step ?? 0) === step);
+  return {
+    sent: rows.filter((s) => s.status === 'sent').length,
+    pending: rows.filter((s) => s.status === 'pending').length,
+    failed: rows.filter((s) => s.status === 'failed').length,
+    skipped: rows.filter((s) => s.status.startsWith('skipped_')).length,
+    replied: rows.filter((s) => s.replied_at).length,
+  };
+}
+
+function statChips(sends: SendRow[], step: number) {
+  const s = stepStats(sends, step);
+  const bits = [`${s.sent} sent`];
+  if (s.pending) bits.push(`${s.pending} queued`);
+  if (s.replied) bits.push(`${s.replied} replied`);
+  if (s.failed) bits.push(`${s.failed} failed`);
+  if (s.skipped) bits.push(`${s.skipped} skipped`);
+  return bits.join(' · ');
+}
 
 export default function Campaigns() {
   usePageTitle('Campaigns');
@@ -55,7 +108,7 @@ export default function Campaigns() {
   const detail = useQuery({
     queryKey: ['campaign', openId],
     enabled: !!openId,
-    queryFn: () => api<{ stats: Stats; sends: SendRow[] }>(`/api/campaigns/${openId}`),
+    queryFn: () => api<CampaignDetail>(`/api/campaigns/${openId}`),
     refetchInterval: 10_000,
   });
 
@@ -400,8 +453,62 @@ export default function Campaigns() {
               Details
             </button>
           </div>
-          {openId === cp.id && detail.data && (
+          {openId === cp.id && detail.data && (() => {
+            const dc = detail.data.campaign;
+            const seg = dc.segment ?? {};
+            const audience: string[] = [];
+            if (seg.list_id)
+              audience.push(`list: ${lists.find((l) => l.id === seg.list_id)?.name ?? seg.list_id}`);
+            if (seg.q) audience.push(`"${seg.q}"`);
+            if (seg.tags?.length) audience.push(`tags: ${seg.tags.join(', ')}`);
+            if (seg.channel_id)
+              audience.push(`identity on ${chans?.channels.find((c) => c.id === seg.channel_id)?.name ?? 'a channel'}`);
+            if (seg.has_email) audience.push('has email');
+            if (seg.has_phone) audience.push('has phone');
+            if (seg.active_within_days) audience.push(`active within ${seg.active_within_days}d`);
+            if (seg.never_replied) audience.push('never replied');
+            const steps = dc.steps ?? [];
+            return (
             <div style={{ marginTop: 10 }}>
+              <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
+                {dc.channel_name && <>{dc.channel_name} ({dc.channel_kind}) · replies → {dc.agent_name} · </>}
+                {dc.enrollment === 'continuous' ? 'ongoing' : 'one-time'}
+                {dc.created_at && ` · created ${new Date(dc.created_at).toLocaleString()}`}
+                {dc.scheduled_at && ` · runs ${new Date(dc.scheduled_at).toLocaleString()}`}
+                {!!dc.send_cap && ` · capped at ${dc.send_cap} sends`}
+                {!!dc.goal && ` · goal: ${dc.goal}`}
+                <br />
+                Audience: {audience.length ? audience.join(' · ') : 'all contacts reachable on the channel'}
+              </div>
+              <div className="card" style={{ padding: 10, marginBottom: 8 }}>
+                <div className="row" style={{ fontSize: 13 }}>
+                  <strong className="grow">Step 1 — initial send</strong>
+                  <span className="muted">{statChips(detail.data.sends, 0)}</span>
+                </div>
+                {dc.subject && <div style={{ fontSize: 13, marginTop: 6 }}>Subject: {dc.subject}</div>}
+                <div className="muted" style={{ fontSize: 13, marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                  {dc.whatsapp_template ? `WhatsApp template: ${dc.whatsapp_template.name}` : dc.text}
+                </div>
+              </div>
+              {steps.map((s, i) => (
+                <div key={i} className="card" style={{ padding: 10, marginBottom: 8 }}>
+                  <div className="row" style={{ fontSize: 13 }}>
+                    <strong className="grow">
+                      Step {i + 2} — +{fmtDelay(s.delay_minutes)} · {STEP_COND[s.condition ?? 'if_not_replied'] ?? s.condition}
+                    </strong>
+                    <span className="muted">{statChips(detail.data.sends, i + 1)}</span>
+                  </div>
+                  {s.subject && <div style={{ fontSize: 13, marginTop: 6 }}>Subject: {s.subject}</div>}
+                  <div className="muted" style={{ fontSize: 13, marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                    {s.whatsapp_template ? `WhatsApp template: ${s.whatsapp_template.name}` : s.text ?? dc.text}
+                  </div>
+                </div>
+              ))}
+              {dc.agent_instructions && (
+                <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                  Reply handling for the agent: {dc.agent_instructions}
+                </div>
+              )}
               {cp.enrollment === 'continuous' && cp.enroll_token && (
                 <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
                   Webhook enroll:{' '}
@@ -423,8 +530,12 @@ export default function Campaigns() {
               {detail.data.sends.length > 25 && (
                 <div className="muted" style={{ fontSize: 13 }}>…and {detail.data.sends.length - 25} more</div>
               )}
+              {!detail.data.sends.length && (
+                <div className="muted" style={{ fontSize: 13 }}>No sends yet.</div>
+              )}
             </div>
-          )}
+            );
+          })()}
         </div>
       ))}
       {!!data && !data.campaigns.length && (

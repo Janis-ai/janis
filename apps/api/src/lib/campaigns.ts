@@ -566,7 +566,23 @@ export async function sweepCampaigns(db: Db): Promise<void> {
       .from(campaignSends)
       .where(and(eq(campaignSends.campaignId, c.id), eq(campaignSends.status, 'pending')));
     if (!pending?.n) {
-      await db.update(campaigns).set({ status: 'done' }).where(eq(campaigns.id, c.id));
+      // A drip still has scheduled work while a campaign.step job is queued
+      // or running — closing here would make that job a silent no-op when
+      // it fires (the handler drops non-'sending' campaigns).
+      const [stepJob] = await db
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.type, 'campaign.step'),
+            inArray(jobs.status, ['pending', 'running']),
+            sql`${jobs.payload}->>'campaignId' = ${c.id}`,
+          ),
+        )
+        .limit(1);
+      if (!stepJob) {
+        await db.update(campaigns).set({ status: 'done' }).where(eq(campaigns.id, c.id));
+      }
     }
   }
 }
