@@ -242,6 +242,14 @@ describe('controlTag', () => {
   });
 });
 
+describe('controlTag end-of-chat', () => {
+  it('recognises [END_CHAT] as an end tag with the sign-off as partial', () => {
+    const t = controlTag('Glad that sorted it — have a great day!\n[END_CHAT]');
+    expect(t?.kind).toBe('end');
+    expect(t?.partial).toBe('Glad that sorted it — have a great day!');
+  });
+});
+
 describe('stripTranscriptNotes', () => {
   it('removes parroted approval annotations from replies', () => {
     // prod incident: the concierge learned "(an action was submitted for

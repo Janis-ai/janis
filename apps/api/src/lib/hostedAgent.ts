@@ -210,6 +210,7 @@ export function systemPrompt(
     system_prompt?: string;
     knowledge?: string[];
     tone?: string;
+    auto_archive?: boolean;
   };
   const parts = [
     cfg.system_prompt ||
@@ -284,6 +285,11 @@ export function systemPrompt(
     parts.push(
       '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, or mild pushback, and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.',
     );
+    if (cfg.auto_archive) {
+      parts.push(
+        '\nEnding a conversation. When the matter is clearly settled — the customer says thanks/goodbye, or confirms there is nothing else after you ask "anything else I can help with?" — give a brief friendly sign-off and end with [END_CHAT] on its own line. That archives the conversation, so only use it once the customer has confirmed they are done — never just because you answered, never mid-exchange. When you ask whether they need anything else, offer "BUTTON: All done" and "BUTTON: I need something else" so the answer is one tap.',
+      );
+    }
   }
   return parts.join('');
 }
@@ -1484,7 +1490,7 @@ const convRuns = new Map<string, { running: boolean; pending: boolean }>();
 // [CANCEL_HANDOFF]) — matched loosely because it misspells them ([HANDOF]
 // shipped to a customer verbatim, tag and all). Loose matching keeps the
 // escalation working AND strips the typo from the visible reply.
-const CONTROL_TAG = /\[(CANCEL[\s_-]*HANDOF+|OF+ER[\s_-]*HUM+AN+|HANDOF+)\]/i;
+const CONTROL_TAG = /\[(CANCEL[\s_-]*HANDOF+|OF+ER[\s_-]*HUM+AN+|HANDOF+|END[\s_-]*CHAT)\]/i;
 const CONTROL_TAGS = new RegExp(CONTROL_TAG.source, 'gi');
 
 // Internal transcript annotations ("(a proposal card was shown…)") the model
@@ -1501,11 +1507,17 @@ export function stripTranscriptNotes(text: string): string {
 }
 
 /** Split a control token out of the model's reply — null when absent. */
-export function controlTag(reply: string): { kind: 'handoff' | 'offer' | 'cancel'; partial: string } | null {
+export function controlTag(reply: string): { kind: 'handoff' | 'offer' | 'cancel' | 'end'; partial: string } | null {
   const m = reply.match(CONTROL_TAG);
   if (!m) return null;
   const t = m[0].toUpperCase();
-  const kind = t.includes('CANCEL') ? 'cancel' : t.includes('HUM') ? 'offer' : 'handoff';
+  const kind = t.includes('CANCEL')
+    ? 'cancel'
+    : t.includes('END')
+      ? 'end'
+      : t.includes('HUM')
+        ? 'offer'
+        : 'handoff';
   return { kind, partial: reply.replace(CONTROL_TAGS, '').trim() };
 }
 
@@ -1673,7 +1685,8 @@ async function replyAsHostedAgent(
     // reply; the console renders it as the per-message inspector. Knowledge
     // comes from two prompt sources: curated snippets (config.knowledge,
     // where approved gap fixes land) and uploaded files.
-    const acfg = (agent.config ?? {}) as { knowledge?: unknown; system_prompt?: string };
+    const acfg = (agent.config ?? {}) as { knowledge?: unknown; system_prompt?: string; auto_archive?: boolean };
+    const cfgAutoArchive = acfg.auto_archive === true;
     const inspectorFlag: { inspector: Record<string, unknown> } = {
       inspector: {
         model,
@@ -1782,6 +1795,25 @@ async function replyAsHostedAgent(
       await emit(events);
       return;
     }
+    if (tag?.kind === 'end' && cfgAutoArchive) {
+      // Customer confirmed done — deliver the sign-off, then archive (fires
+      // the CSAT prompt + resolved hook through the ingest path).
+      const partial = tag.partial || pick(DECLINE_FALLBACKS);
+      await emit([
+        {
+          type: 'message_out',
+          conversation_id: externalId,
+          text: partial,
+          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+        },
+        {
+          type: 'resolve',
+          conversation_id: externalId,
+          reason: 'customer confirmed they are done',
+        },
+      ]);
+      return;
+    }
     if (tag?.kind === 'offer') {
       // Agent thinks a human would help but the customer hasn't asked —
       // deliver the reply (which should include the offer question) and
@@ -1819,9 +1851,13 @@ async function replyAsHostedAgent(
     // Plain reply — no escalation tag. Any sentence promising a human is
     // unbacked (in needs_human a human genuinely is coming — the claim is
     // true, so it's left alone). Stripped claims are flagged on the stored
-    // message so "why this reply" shows the save.
+    // message so "why this reply" shows the save. tag.partial also covers an
+    // [END_CHAT] emitted with auto_archive off — the tag never reaches the
+    // customer, the reply just goes out plain.
     const { text: cleanReply, stripped: claimStripped } =
-      conv.state === 'needs_human' ? { text: reply, stripped: 0 } : stripEscalationClaims(reply);
+      conv.state === 'needs_human'
+        ? { text: (tag?.partial ?? reply).trim(), stripped: 0 }
+        : stripEscalationClaims((tag?.partial ?? reply).trim());
     const finalReply = cleanReply || pick(DECLINE_FALLBACKS);
     if (claimStripped) {
       inspectorFlag.inspector.esc_claim_stripped = claimStripped;

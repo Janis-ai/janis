@@ -181,6 +181,15 @@
     '#janis-head small{display:block;font-weight:400;opacity:.8}' +
     '#janis-expand{background:none;border:none;color:#fff;cursor:pointer;font-size:16px;padding:4px;opacity:.85;line-height:1}' +
     '#janis-expand:hover{opacity:1}' +
+    '#janis-menu-btn{background:none;border:none;color:#fff;cursor:pointer;font-size:18px;padding:2px 4px;opacity:.85;line-height:1}' +
+    '#janis-menu-btn:hover{opacity:1}' +
+    '#janis-menu{display:none;position:absolute;top:44px;right:10px;background:#fff;border:1px solid #e5e7eb;' +
+    'border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:10;min-width:150px;overflow:hidden}' +
+    '#janis-menu.open{display:block}' +
+    '#janis-menu button{display:block;width:100%;text-align:left;background:none;border:none;' +
+    'padding:10px 14px;font-size:13px;color:#1f2937;cursor:pointer;font-family:inherit}' +
+    '#janis-menu button:hover{background:#f3f4f6}' +
+    '.janis-ended{align-self:center;text-align:center;font-size:11.5px;color:#9ca3af;padding:8px 4px;width:100%}' +
     '#janis-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;background:#f9fafb}' +
     '#janis-panel *{scrollbar-width:thin;scrollbar-color:#d1d5db transparent}' +
     '#janis-panel *::-webkit-scrollbar{width:6px;height:6px}' +
@@ -336,7 +345,12 @@
   var panel = el('div', {}, { id: 'janis-panel' });
   panel.innerHTML =
     '<div id="janis-head"><div><span id="janis-title">Chat</span><small id="janis-sub"></small></div>' +
+    '<button id="janis-menu-btn" aria-label="Chat options" title="Options">⋯</button>' +
     '<button id="janis-expand" aria-label="Expand chat" title="Expand">⤢</button></div>' +
+    '<div id="janis-menu">' +
+    '<button type="button" id="janis-menu-end">End chat</button>' +
+    '<button type="button" id="janis-menu-new" style="display:none">Start a new chat</button>' +
+    '</div>' +
     '<div id="janis-msgs"></div>' +
     '<div id="janis-attach"></div>' +
     '<div id="janis-emoji"></div>' +
@@ -362,6 +376,70 @@
   var sendBtn = panel.querySelector('#janis-send');
   var clipBtn = panel.querySelector('#janis-clip');
   var smileBtn = panel.querySelector('#janis-smile');
+  var menuBtn = panel.querySelector('#janis-menu-btn');
+  var menu = panel.querySelector('#janis-menu');
+  var menuEnd = panel.querySelector('#janis-menu-end');
+  var menuNew = panel.querySelector('#janis-menu-new');
+
+  // Chat options (⋯) — Zendesk-style: end the chat, or start a fresh thread
+  // once it's ended. The server archives on end (CSAT prompt follows), and
+  // /new re-points this visitor's binding at a fresh empty conversation.
+  function syncMenu() {
+    var ended = state.convState === 'archived';
+    menuEnd.style.display = ended ? 'none' : 'block';
+    menuNew.style.display = ended ? 'block' : 'none';
+  }
+  function markEnded() {
+    syncMenu();
+    if (msgs.querySelector('.janis-ended')) return;
+    var note = el('div', {}, { class: 'janis-ended' });
+    note.textContent = 'This chat has ended — use ⋯ → Start a new chat to begin a fresh thread.';
+    msgs.appendChild(note);
+    scrollBottom();
+  }
+  menuBtn.onclick = function (e) {
+    e.stopPropagation();
+    syncMenu();
+    menu.classList.toggle('open');
+  };
+  document.addEventListener('click', function (e) {
+    if (menu.classList.contains('open') && !menu.contains(e.target)) menu.classList.remove('open');
+  });
+  menuEnd.onclick = function () {
+    menu.classList.remove('open');
+    fetch(API + '/chat/' + TOKEN + '/end', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: visitor }),
+    }).then(function () {
+      state.convState = 'archived';
+      markEnded();
+      return poll();
+    }).catch(function () {});
+  };
+  menuNew.onclick = function () {
+    menu.classList.remove('open');
+    fetch(API + '/chat/' + TOKEN + '/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: visitor }),
+    }).then(function (r) { return r && r.ok ? r.json() : null; }).then(function (d) {
+      if (!d || d.state !== 'new') return;
+      // Fresh conversation — wipe the rendered thread and re-poll so the
+      // greeting lands on the empty transcript.
+      state.seen = {};
+      state.lastTs = null;
+      state.oldestTs = null;
+      state.hasMore = false;
+      state.greeted = false;
+      state.convState = 'agent';
+      state.lastAuthor = null;
+      msgs.innerHTML = '';
+      var ended = msgs.querySelector('.janis-ended');
+      if (ended) ended.remove();
+      return poll();
+    }).catch(function () {});
+  };
 
   // ---- transcript loading gate ----------------------------------------------
   // The composer stays disabled until the first poll resolves (or fails) —
@@ -1113,6 +1191,7 @@
           }
         }
         state.convState = d.state;
+        if (d.state === 'archived') markEnded();
         if (d.has_more !== undefined) state.hasMore = d.has_more;
         if (!state.greeted) {
           // first poll resolved — only kick off the greeting once we know the

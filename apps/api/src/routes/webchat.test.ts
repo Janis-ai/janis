@@ -269,6 +269,67 @@ describe('webchat widget endpoints', () => {
     ]);
   });
 
+  it('end archives the chat (CSAT queued); new starts a fresh bound thread', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const VISITOR = 'vis_endchat0000001';
+    await post('how do I reset my password?', VISITOR);
+    await post('all sorted, thanks', VISITOR);
+
+    const end = await app.request(`/chat/${channelId}/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: VISITOR }),
+    });
+    expect(end.status).toBe(200);
+    expect((await end.json()).state).toBe('archived');
+
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, `webchat:${VISITOR}`));
+    expect(conv.state).toBe('archived');
+    expect(conv.archivedAt).not.toBeNull();
+    // archive fires the CSAT prompt — it lands on the transcript for the
+    // customer's next reply, and the resolve marker is flagged system-side
+    const convMsgs = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    expect(convMsgs.some((m) => (m.payload as { via?: string }).via === 'csat')).toBe(true);
+    expect(convMsgs.some((m) => (m.flags as { resolved?: boolean }).resolved)).toBe(true);
+    // the poll filters the resolve note — visitors see the CSAT ask, not plumbing
+    const poll = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR}`);
+    const polled = await poll.json();
+    expect(polled.state).toBe('archived');
+    expect(polled.messages.every((m: { text: string }) => m.text !== 'Conversation resolved — customer ended the chat')).toBe(true);
+
+    // a "new chat" re-points the binding at a fresh empty conversation
+    const fresh = await app.request(`/chat/${channelId}/new`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: VISITOR }),
+    });
+    expect((await fresh.json()).state).toBe('new');
+    const poll2 = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR}`);
+    const body2 = await poll2.json();
+    expect(body2.messages).toEqual([]);
+    // …while the archived thread keeps its transcript
+    const stillThere = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    expect(stillThere.length).toBeGreaterThanOrEqual(3);
+
+    // /new is a no-op while a chat is open — no thread-splitting by accident
+    await post('actually one more thing', VISITOR);
+    const again = await app.request(`/chat/${channelId}/new`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: VISITOR }),
+    });
+    expect((await again.json()).state).toBe('active');
+  });
+
   it('returns messages from the cursor (inclusive — client dedupes by id)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     const first = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR_A}`);

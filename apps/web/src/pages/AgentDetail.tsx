@@ -692,6 +692,15 @@ function BehaviorSection({
             value={cfg.tone ?? ''}
             onChange={(e) => setCfg({ ...cfg, tone: e.target.value })}
           />
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={cfg.auto_archive === true}
+              onChange={(e) => setCfg({ ...cfg, auto_archive: e.target.checked || undefined })}
+            />
+            Auto-archive resolved chats — when the customer confirms they're done, the
+            agent signs off and archives the thread (fires the CSAT survey)
+          </label>
           <label>Knowledge files — PDFs, docs, text, images; the agent answers from these</label>
           <KnowledgeFiles agentId={agent.id} />
           <KnowledgeGaps agentId={agent.id} config={agent.config ?? {}} />

@@ -133,6 +133,15 @@ export const CustomAlertEvent = z.object({
   ...eventBase,
 });
 
+/** The agent/operator declares the conversation resolved — archives it and
+ *  fires the CSAT prompt. Emitted by hosted agents on [END_CHAT] and by the
+ *  widget's "End chat" control. */
+export const ResolveEvent = z.object({
+  type: z.literal('resolve'),
+  reason: z.string().optional(),
+  ...eventBase,
+});
+
 export const IngestEvent = z.discriminatedUnion('type', [
   MessageInEvent,
   MessageOutEvent,
@@ -141,6 +150,7 @@ export const IngestEvent = z.discriminatedUnion('type', [
   HandoffOfferEvent,
   HandoffCancelledEvent,
   CustomAlertEvent,
+  ResolveEvent,
 ]);
 export type IngestEvent = z.infer<typeof IngestEvent>;
 
@@ -231,6 +241,9 @@ export const AgentConfig = z.object({
   builtin_tools: z.array(z.string()).optional(),
   // escalation: re-alert when a handoff stays unclaimed past N minutes
   sla_minutes: z.number().min(1).max(1440).optional(),
+  // When on, the agent ends resolved chats itself — [END_CHAT] archives the
+  // conversation (CSAT fires) once the customer confirms they're done.
+  auto_archive: z.boolean().optional(),
   // eval suite: replay saved regression tests every N hours (unset = off).
   // Scheduled runs record to agent_test_runs and alert on pass-rate drops.
   eval_interval_hours: z.number().min(1).max(720).optional(),
@@ -498,6 +511,7 @@ export const Message = z.object({
     custom_alert: z.boolean(),
     handoff_offer: z.boolean(),
     handoff_cancelled: z.boolean(),
+    resolved: z.boolean(),
   }),
   created_at: z.string(),
 });

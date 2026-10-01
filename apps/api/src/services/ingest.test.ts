@@ -146,6 +146,51 @@ describe('processEvents', () => {
     expect(open).toHaveLength(0);
   });
 
+  it('resolve archives an active conversation and marks it resolved', async () => {
+    await processEvents(db, agent, [
+      { type: 'message_in', conversation_id: 'c-res', text: 'hi' },
+      { type: 'message_out', conversation_id: 'c-res', text: 'anything else?' },
+      { type: 'message_in', conversation_id: 'c-res', text: 'no, all good' },
+    ]);
+    const results = await processEvents(db, agent, [
+      { type: 'resolve', conversation_id: 'c-res', reason: 'customer confirmed done' },
+    ]);
+    expect(results[0].conversation_state).toBe('archived');
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c-res'));
+    expect(conv.state).toBe('archived');
+    expect(conv.archivedAt).not.toBeNull();
+    // the resolve marker lands on the transcript as a flagged system note
+    expect(
+      (await db.select().from(messages).where(eq(messages.conversationId, conv.id))).some(
+        (m) => (m.flags as { resolved?: boolean }).resolved === true,
+      ),
+    ).toBe(true);
+    // CSAT fires on archive — the prompt is queued for the customer's reply
+    expect(conv.csatPending === true || conv.csatAskedAt !== null).toBe(true);
+  });
+
+  it('resolve does not archive a conversation a human owns', async () => {
+    await processEvents(db, agent, [
+      { type: 'handoff_request', conversation_id: 'c-hres', reason: 'stuck' },
+    ]);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c-hres'));
+    await takeover(db, agent.workspaceId, conv.id, admin);
+    await processEvents(db, agent, [
+      { type: 'resolve', conversation_id: 'c-hres', reason: 'agent said done' },
+    ]);
+    const [after] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c-hres'));
+    expect(after.state).toBe('human');
+  });
+
   it('handoff_cancelled never releases a human takeover', async () => {
     await processEvents(db, agent, [
       { type: 'handoff_request', conversation_id: 'cc2', reason: 'stuck' },

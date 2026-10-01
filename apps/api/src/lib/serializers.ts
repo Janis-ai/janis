@@ -108,6 +108,7 @@ export function toMessage(row: Row<typeof messages>): Message {
     custom_alert?: boolean;
     handoff_offer?: boolean;
     handoff_cancelled?: boolean;
+    resolved?: boolean;
   };
   return {
     id: row.id,
@@ -122,6 +123,7 @@ export function toMessage(row: Row<typeof messages>): Message {
       custom_alert: Boolean(flags.custom_alert),
       handoff_offer: Boolean(flags.handoff_offer),
       handoff_cancelled: Boolean(flags.handoff_cancelled),
+      resolved: Boolean(flags.resolved),
     },
     created_at: iso(row.createdAt)!,
   };

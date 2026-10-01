@@ -837,7 +837,7 @@ export default function ConversationPage() {
             }
             const m = item.m;
             const isInternal = m.payload.internal === true;
-            const isSystem = m.flags.failure || m.flags.help_requested || m.flags.custom_alert || m.flags.handoff_offer || m.flags.handoff_cancelled || isInternal;
+            const isSystem = m.flags.failure || m.flags.help_requested || m.flags.custom_alert || m.flags.handoff_offer || m.flags.handoff_cancelled || m.flags.resolved || isInternal;
             const authorUser =
               m.direction === 'human' ? users?.users.find((u) => u.id === m.author) : undefined;
             const who =

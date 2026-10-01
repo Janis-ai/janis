@@ -17,7 +17,9 @@ import { effectivePlanKey } from '../lib/plans.js';
 import { recordSttUsage } from '../lib/usage.js';
 import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
 import { adoptVisitorConversation, handleChannelMessage } from '../services/channelIngress.js';
+import { processEvents } from '../services/ingest.js';
 import { bus } from '../lib/bus.js';
+import { rateLimit } from '../lib/rateLimit.js';
 import { agentWorking, operatorTyping } from '../lib/typingState.js';
 
 /**
@@ -676,6 +678,7 @@ export function webchatRoutes(db: Db) {
             custom_alert?: boolean;
             handoff_offer?: boolean;
             handoff_cancelled?: boolean;
+            resolved?: boolean;
           };
           // via:'greeting' rows are real transcript messages, but the widget
           // renders its own greeting from the bootstrap — don't double it.
@@ -690,6 +693,7 @@ export function webchatRoutes(db: Db) {
             !f.custom_alert &&
             !f.handoff_offer &&
             !f.handoff_cancelled &&
+            !f.resolved &&
             (internal || p?.via !== 'greeting') &&
             // Approval cards reach the internal test rail (Ask Janis) so an
             // operator can exercise a gated tool end-to-end; every other
@@ -775,6 +779,82 @@ export function webchatRoutes(db: Db) {
         });
       }
       return c.json({ ok: true });
+    },
+  );
+
+  // Customer-initiated "End chat" (widget ⋯ menu) — archives the thread the
+  // same way an operator's archive does: CSAT prompt + resolved webhook.
+  app.post(
+    '/:token/end',
+    rateLimit({ scope: 'chat-end', windowMs: 60_000, max: 10 }),
+    zValidator('json', z.object({ visitor_id: z.string().regex(VISITOR_RE) })),
+    async (c) => {
+      const channel = await findChannel(db, c.req.param('token'));
+      if (!channel) return c.json({ error: 'not found' }, 404);
+      const { visitor_id } = c.req.valid('json');
+      const resolved = await resolveIdentity(c, db, channel, undefined);
+      const participant = participantFor(resolved, visitor_id);
+      const conv = await findConversation(db, channel.id, participant);
+      if (!conv || conv.state === 'archived') return c.json({ ok: true, state: 'archived' });
+      const [agent] = await db.select().from(agents).where(eq(agents.id, channel.agentId)).limit(1);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      await processEvents(db, agent, [
+        {
+          type: 'resolve',
+          conversation_id: conv.externalId,
+          reason: 'customer ended the chat',
+        },
+      ]);
+      return c.json({ ok: true, state: 'archived' });
+    },
+  );
+
+  // "Start a new chat" — after a chat has ended, the visitor's binding moves
+  // to a fresh conversation so the next thread starts empty (the archived
+  // one keeps its transcript). No-op while a chat is still open.
+  app.post(
+    '/:token/new',
+    rateLimit({ scope: 'chat-new', windowMs: 60_000, max: 5 }),
+    zValidator('json', z.object({ visitor_id: z.string().regex(VISITOR_RE) })),
+    async (c) => {
+      const channel = await findChannel(db, c.req.param('token'));
+      if (!channel) return c.json({ error: 'not found' }, 404);
+      const { visitor_id } = c.req.valid('json');
+      const resolved = await resolveIdentity(c, db, channel, undefined);
+      const participant = participantFor(resolved, visitor_id);
+      const conv = await findConversation(db, channel.id, participant);
+      if (!conv) return c.json({ ok: true, state: 'new' });
+      if (conv.state !== 'archived') return c.json({ ok: true, state: conv.state });
+      const [created] = await db
+        .insert(conversations)
+        .values({
+          agentId: conv.agentId,
+          externalId: `${conv.externalId}#${Date.now().toString(36)}`,
+          userProfile: conv.userProfile,
+          contactId: conv.contactId,
+        })
+        .returning();
+      await db
+        .update(channelBindings)
+        .set({ conversationId: created.id })
+        .where(
+          and(
+            eq(channelBindings.channelId, channel.id),
+            eq(channelBindings.platformUserId, participant),
+          ),
+        );
+      const [agent] = await db
+        .select({ workspaceId: agents.workspaceId })
+        .from(agents)
+        .where(eq(agents.id, created.agentId))
+        .limit(1);
+      if (agent) {
+        bus.publish(agent.workspaceId, {
+          type: 'conversation',
+          data: { id: created.id, state: created.state },
+        });
+      }
+      return c.json({ ok: true, state: 'new' });
     },
   );
 

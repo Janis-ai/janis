@@ -40,7 +40,7 @@ export interface TestRunResult {
   reason: string;
   reply: string | null;
   /** Control tag the reply carried, if any (handoff / offer / cancel). */
-  control?: 'handoff' | 'offer' | 'cancel';
+  control?: 'handoff' | 'offer' | 'cancel' | 'end';
   tools: InspectorToolCall[];
   model?: string;
   /** What grounded the reply — mirrors the conversation inspector payload. */

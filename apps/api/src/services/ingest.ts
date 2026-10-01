@@ -24,6 +24,7 @@ import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
 import { METER_MESSAGES, billingCustomerFor, reportMeter } from '../lib/stripe.js';
 import { messageCap } from '../lib/plans.js';
 import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
+import { sendCsatPrompt } from '../lib/csat.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -95,13 +96,15 @@ export async function processEvents(
           custom_alert?: boolean;
           handoff_offer?: boolean;
           handoff_cancelled?: boolean;
+          resolved?: boolean;
         };
         if (
           flags.failure ||
           flags.help_requested ||
           flags.custom_alert ||
           flags.handoff_offer ||
-          flags.handoff_cancelled
+          flags.handoff_cancelled ||
+          flags.resolved
         ) {
           // Internal notes are system messages in Slack, not agent transcript lines
           const icon = flags.failure
@@ -112,7 +115,9 @@ export async function processEvents(
                 ? ':question:'
                 : flags.handoff_cancelled
                   ? ':arrow_backward:'
-                  : ':rotating_light:';
+                  : flags.resolved
+                    ? ':white_check_mark:'
+                    : ':rotating_light:';
           void mirrorToSlack(db, conv.id, icon, `_${message.text}_`);
         } else {
           const label = message.direction === 'in' ? ':busts_in_silhouette: *user:*' : ':robot_face: *agent:*';
@@ -267,6 +272,10 @@ export async function processEvents(
     // escalation back to the agent. 'human'/'archived' are untouched: a
     // human who took over owns the release decision.
     if (event.type === 'handoff_cancelled' && state === 'needs_human') state = 'active';
+    // Agent/customer-declared resolution archives the thread — CSAT fires
+    // below. 'human' is untouched: a human who took over owns the close.
+    if (event.type === 'resolve' && (state === 'active' || state === 'needs_human'))
+      state = 'archived';
 
     // Automation: keyword rules can route the thread alongside their alert —
     // assign to a teammate (only when unassigned, so a routed thread doesn't
@@ -292,6 +301,9 @@ export async function processEvents(
         // a customer reply wakes a snoozed conversation — snooze means
         // "remind me later", not "ignore the customer"
         snoozedUntil: directionFor(event) === 'in' ? null : conv.snoozedUntil,
+        ...(event.type === 'resolve' && state === 'archived' && !conv.archivedAt
+          ? { archivedAt: new Date() }
+          : {}),
         // Merge, not replace — later events only overwrite the fields they
         // actually carry, so a profile fetched earlier (or an email the
         // customer shared) survives sparse updates
@@ -309,9 +321,18 @@ export async function processEvents(
         emitHookEvent(db, agent.id, 'conversation_escalated', updated);
     }
 
+    // Resolution side effects — identical to an operator pressing archive:
+    // one-shot CSAT prompt (the customer's next reply lands as a rating) and
+    // the conversation_resolved webhook.
+    if (event.type === 'resolve' && conv.state !== 'archived' && updated.state === 'archived') {
+      await sendCsatPrompt(db, updated).catch(() => {});
+      emitHookEvent(db, agent.id, 'conversation_resolved', updated);
+    }
+
     // A declined handoff also closes whatever was paging for it — same
-    // resolution sweep as an operator manually returning it to the agent.
-    if (event.type === 'handoff_cancelled') {
+    // resolution sweep as an operator manually returning it to the agent. A
+    // resolved conversation's open alerts close too: resolved means handled.
+    if (event.type === 'handoff_cancelled' || (event.type === 'resolve' && updated.state === 'archived')) {
       const resolved = await db
         .update(alerts)
         .set({ status: 'resolved' })
@@ -439,6 +460,7 @@ async function insertEventMessage(db: Db, conversationId: string, event: IngestE
       custom_alert: event.type === 'custom_alert',
       handoff_offer: event.type === 'handoff_offer',
       handoff_cancelled: event.type === 'handoff_cancelled',
+      resolved: event.type === 'resolve',
     },
     ...(event.timestamp ? { createdAt: new Date(event.timestamp) } : {}),
   };
@@ -517,6 +539,8 @@ function eventText(event: IngestEvent): string | undefined {
         : 'Customer declined a human — staying with the agent';
     case 'custom_alert':
       return event.text ?? `Alert: ${event.alert_type}`;
+    case 'resolve':
+      return event.reason ? `Conversation resolved — ${event.reason}` : 'Conversation resolved';
   }
 }
 
