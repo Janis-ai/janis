@@ -52,6 +52,8 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
       void qc.invalidateQueries({ queryKey: ['knowledge'] });
       void qc.invalidateQueries({ queryKey: ['knowledge-gaps'] });
       void qc.invalidateQueries({ queryKey: ['rules'] });
+      // save_widget writes agent_widgets — the Tools tab's component list
+      void qc.invalidateQueries({ queryKey: ['agent-widgets'] });
       // bootstrap config embeds agent_name/greeting/quick_replies — stale
       // in an open Ask Janis rail after update_agent
       void qc.invalidateQueries({ queryKey: ['ask-janis-config'] });

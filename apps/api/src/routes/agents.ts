@@ -14,6 +14,7 @@ import {
   type SessionEnv,
 } from '../middleware/sessionAuth.js';
 import { generateApiKey, generateWebhookSecret } from '../lib/crypto.js';
+import { bus } from '../lib/bus.js';
 import { env } from '../env.js';
 import { deliverWebhook, replayDelivery } from '../lib/webhooks.js';
 import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
@@ -1031,6 +1032,7 @@ export function agentRoutes(db: Db) {
         set: { spec: spec.data, autoGreet: !!body.auto_greet, updatedAt: new Date() },
       })
       .returning();
+    bus.publish(agent.workspaceId, { type: 'agent', data: { id: agent.id } });
     return c.json({ widget: row }, 201);
   });
 
@@ -1056,6 +1058,7 @@ export function agentRoutes(db: Db) {
         .where(and(eq(agentWidgets.id, c.req.param('wid')), eq(agentWidgets.agentId, agent.id)))
         .returning();
       if (!row) return c.json({ error: 'not found' }, 404);
+      bus.publish(agent.workspaceId, { type: 'agent', data: { id: agent.id } });
       return c.json({ widget: row });
     },
   );
@@ -1068,6 +1071,7 @@ export function agentRoutes(db: Db) {
       .where(and(eq(agentWidgets.id, c.req.param('wid')), eq(agentWidgets.agentId, agent.id)))
       .returning();
     if (!row) return c.json({ error: 'not found' }, 404);
+    bus.publish(agent.workspaceId, { type: 'agent', data: { id: agent.id } });
     return c.json({ ok: true });
   });
 
