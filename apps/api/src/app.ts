@@ -213,13 +213,13 @@ export function createApp(db: Db) {
   app.use('/ops/*', rateLimit({ scope: 'ops', windowMs: 60_000, max: 60 }));
   app.route('/ops', opsRoutes());
 
-  // Embed script for the web-chat widget — plain JS, cacheable.
-  const widgetJs = readFileSync(
-    fileURLToPath(new URL('../public/widget.js', import.meta.url)),
-    'utf8',
-  );
+  // Embed script for the web-chat widget — plain JS, cacheable. Read once at
+  // boot in production; re-read per request in dev so widget edits don't
+  // need an API restart (tsx watch doesn't watch public/).
+  const widgetPath = fileURLToPath(new URL('../public/widget.js', import.meta.url));
+  const widgetJs = process.env.NODE_ENV === 'production' ? readFileSync(widgetPath, 'utf8') : null;
   app.get('/widget.js', (c) =>
-    c.body(widgetJs, 200, {
+    c.body(widgetJs ?? readFileSync(widgetPath, 'utf8'), 200, {
       'content-type': 'application/javascript; charset=utf-8',
       'cache-control': 'public, max-age=300',
     }),
