@@ -14,7 +14,7 @@ import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
-  CreditCard, FlaskConical, Gauge, Inbox, LayoutGrid, LibraryBig, Megaphone,
+  CreditCard, FlaskConical, Inbox, LayoutGrid, LibraryBig, Megaphone,
   Plug, Radio, Settings, SlidersHorizontal, Sparkles, Users, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
@@ -182,9 +182,6 @@ function ContextSwitcher({
                 <span className="grow ctx-ws-name">{ws.name}</span>
                 {planName && <span className="ctx-plan">{planName}</span>}
                 {!currentAgentId && <Check size={14} />}
-              </button>
-              <button type="button" className="ctx-item ctx-sub" onClick={() => go('/usage')}>
-                Usage
               </button>
               <button type="button" className="ctx-item ctx-sub" onClick={() => go('/settings')}>
                 Workspace settings
@@ -669,7 +666,6 @@ export default function Layout() {
             <NavLink to={`/agents/${routeAgentId}/contacts`}><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
             <NavLink to={`/agents/${routeAgentId}/campaigns`}><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
             <NavLink to={`/agents/${routeAgentId}/reports`}><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
-            <NavLink to={`/agents/${routeAgentId}/usage`}><span className="label">Usage</span><span className="icon"><Gauge size={18} /></span></NavLink>
             <NavLink to={`/agents/${routeAgentId}/settings`}><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </>
         ) : (
@@ -685,7 +681,6 @@ export default function Layout() {
             {!data?.agent_scope && (
               <>
                 <NavLink to="/reports"><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
-                <NavLink to="/usage"><span className="label">Usage</span><span className="icon"><Gauge size={18} /></span></NavLink>
                 {data?.operator && (
                   <NavLink to="/errors"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
                 )}

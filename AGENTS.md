@@ -674,14 +674,14 @@ context switcher, but the workspace stays a real surface (unlike Chatbase's
 admin-only workspace level; contacts merge cross-channel so agent-scoping
 the identity graph is wrong):
 - Top-left switcher popover: workspace block (avatar, name, plan badge,
-  Usage, Workspace settings, Switch/Create-or-join workspace) + Agents
+  Workspace settings, Switch/Create-or-join workspace) + Agents
   list (check on selected) + Add agent. (ContextSwitcher in Layout.tsx,
   .ctx-* styles.)
 - Copilot (Ask Janis) is ever-present at the TOP of BOTH contexts; when an
   agent is selected the concierge is agent-scoped (its tools default to
   that agent, "this agent" resolves).
 - WORKSPACE context nav: Agents · Inbox (all agents — the triage queue) ·
-  Contacts (full identity graph) · Campaigns · Reports · Usage ·
+  Contacts (full identity graph) · Campaigns · Reports ·
   Workspace settings (General/Members/Plans/Billing/API keys/Audit).
 - AGENT context nav: Copilot · Inbox (filtered to agent; toggling to
   another agent there switches whole app context) · Behavior (tabs: LLM,
@@ -689,10 +689,11 @@ the identity graph is wrong):
   Satisfaction survey incl. auto-archive toggle) · Knowledge base (tabs:
   Text, Files, Websites, Gaps, Help center) · Channels · Integrations
   (renamed from Tools) · Chat components (own level, below Integrations) ·
-  Tests · Contacts (filtered) · Campaigns (filtered) · Reports (filtered) ·
-  Usage (filtered) · Settings (current Escalation tab contents).
+  Tests · Contacts (filtered) · Campaigns (filtered) · Reports (filtered —
+  incl. usage meter, UsageCard) · Settings (current Escalation contents).
+  There is no standalone Usage page; /usage redirects to Reports.
 - Implementation: agent context is URL-driven (/agents/:id/* — every
-  section its own path: inbox/contacts/campaigns/reports/usage reuse the
+  section its own path: inbox/contacts/campaigns/reports reuse the
   workspace pages with an agentId prop; channels/:channelId is the
   channel editor; behavior|knowledge|integrations|components|tests|
   settings render AgentDetail with ?sub= tabs). lib/agentContext.ts

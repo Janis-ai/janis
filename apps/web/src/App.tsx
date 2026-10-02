@@ -14,7 +14,6 @@ import ConversationPage from './pages/ConversationPage';
 import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
 import Reports from './pages/Reports';
-import Usage from './pages/Usage';
 import Errors from './pages/Errors';
 import Billing from './pages/Billing';
 import Settings from './pages/Settings';
@@ -146,9 +145,9 @@ function AgentReports() {
   const { id } = useParams();
   return <Reports key={id} agentId={id} />;
 }
-function AgentUsage() {
+function AgentUsageRedirect() {
   const { id } = useParams();
-  return <Usage key={id} agentId={id} />;
+  return <Navigate to={`/agents/${id}/reports`} replace />;
 }
 
 /** OpenRouter OAuth landing: exchange ?code, stash the key, bounce back to
@@ -213,11 +212,11 @@ export default function App() {
           <Route path="/agents/:id/contacts/:cid" element={<ContactDetail />} />
           <Route path="/agents/:id/campaigns" element={<AgentCampaigns />} />
           <Route path="/agents/:id/reports" element={<AgentReports />} />
-          <Route path="/agents/:id/usage" element={<AgentUsage />} />
+          <Route path="/agents/:id/usage" element={<AgentUsageRedirect />} />
           <Route path="/agents/:id/channels/:channelId" element={<ChannelPage />} />
           <Route path="/agents/:id/:section" element={<AgentDetail />} />
           <Route path="/reports" element={<Reports />} />
-          <Route path="/usage" element={<Usage />} />
+          <Route path="/usage" element={<Navigate to="/reports" replace />} />
           <Route path="/errors" element={<Errors />} />
           <Route path="/integrations" element={<Navigate to="/agents" replace />} />
           <Route path="/integrations/:channelId" element={<ChannelRedirect />} />
