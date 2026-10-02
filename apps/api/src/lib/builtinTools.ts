@@ -721,7 +721,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           workspaceId: ws.id,
           agentId: row.id,
           kind: 'webchat',
-          name: 'Web chat',
+          name: 'Bubble',
           credentials: {},
         })
         .returning();
@@ -2237,9 +2237,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'update_channel',
     description:
-      "Propose a channel settings change in the visitor's workspace — rename a channel (the console label like 'Web chat', which is also the widget header's default title) or set a webchat widget's header title. Posts an approval card — nothing changes until the visitor approves. Use this when the visitor asks to rename the widget/channel itself, NOT the agent — that is update_agent's name param. Admin-only.",
+      "Propose a channel settings change in the visitor's workspace — rename a channel (the console label like 'Bubble', which is also the chat bubble's default header title) or set a bubble channel's header title. Posts an approval card — nothing changes until the visitor approves. Use this when the visitor asks to rename the bubble/channel itself, NOT the agent — that is update_agent's name param. Admin-only.",
     params: {
-      channel: 'channel name (required) — the label in the channels list, e.g. "Web chat"',
+      channel: 'channel name (required) — the label in the channels list, e.g. "Bubble"',
       name: 'new channel name',
       title: "widget header title text (webchat only; blank string clears it back to the channel name)",
       workspace: 'workspace name — only needed when ambiguous',

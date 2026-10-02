@@ -208,9 +208,9 @@ export default function OperatorDocs() {
         conversations and campaign sends, up to 5,000 rows.
       </p>
 
-      <h2>Widget channels and guests</h2>
+      <h2>Bubble channels and guests</h2>
       <p className="muted" style={{ lineHeight: 1.6 }}>
-        The web widget identifies visitors by a channel-scoped guest token, so
+        The chat bubble identifies visitors by a channel-scoped guest token, so
         conversations reattach across visits and devices only within the same
         browser profile — that is the channel's continuity boundary. Agent,
         human, and Slack activity on the conversation all live in the same

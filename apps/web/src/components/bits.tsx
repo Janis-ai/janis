@@ -39,7 +39,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   messenger: 'Messenger',
   instagram: 'Instagram',
   whatsapp: 'WhatsApp',
-  webchat: 'Web chat',
+  webchat: 'Bubble',
   email: 'Email',
   gmail: 'Gmail',
 };

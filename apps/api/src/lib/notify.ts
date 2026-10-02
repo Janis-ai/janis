@@ -59,7 +59,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   messenger: 'Messenger',
   instagram: 'Instagram',
   whatsapp: 'WhatsApp',
-  webchat: 'Web chat',
+  webchat: 'Bubble',
 };
 
 /** "Messenger" / "Instagram"… from the hosted-channel binding, falling back

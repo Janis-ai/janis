@@ -16,7 +16,7 @@ export const KIND_LABEL: Record<string, string> = {
   messenger: 'Messenger',
   instagram: 'Instagram',
   whatsapp: 'WhatsApp',
-  webchat: 'Web chat',
+  webchat: 'Bubble',
   email: 'Email',
   gmail: 'Gmail',
   voice: 'Voice',
@@ -126,7 +126,7 @@ export function ChannelCard({
           onClick={async () => {
             if (
               await confirmRemove(
-                `Remove ${ch.name}? Its conversations stay in the inbox, but inbound messages stop arriving and the widget/integration stops working.`,
+                `Remove ${ch.name}? Its conversations stay in the inbox, but inbound messages stop arriving and the bubble/integration stops working.`,
                 [{ key: 'ok', label: 'Remove channel', danger: true }],
               )
             )
@@ -182,7 +182,7 @@ export function ChannelCard({
           <details className="webhook-details appearance-details" open style={{ marginTop: 8 }}>
             <summary>
               <span className="details-title">Appearance</span>
-              <span className="details-sub">branding for the embedded widget</span>
+              <span className="details-sub">branding for the embedded bubble</span>
             </summary>
             <WebchatBranding channel={ch} />
           </details>
@@ -513,7 +513,7 @@ function WebchatIdentity({ channel }: { channel: Channel }) {
     <div style={{ marginTop: 14 }}>
       <strong style={{ fontSize: 13 }}>Identify logged-in visitors</strong>
       <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
-        Anonymous by default. If your site has accounts, tell the widget who the visitor is — the
+        Anonymous by default. If your site has accounts, tell the bubble who the visitor is — the
         agent sees their name/email/account id instead of asking. To mark the identity{' '}
         <em>verified</em> (required before the agent trusts the account id for lookups), sign it on
         your server with the secret below — never in browser JavaScript.
@@ -526,7 +526,7 @@ function WebchatIdentity({ channel }: { channel: Channel }) {
 // send sig to the page with the rest of the user payload`}
       />
       <CodeBlock
-        title="Your page — after the widget script"
+        title="Your page — after the bubble script"
         code={`Janis.identify({ id: user.id, name: user.name, email: user.email, sig });
 // or unsigned (self-reported name/email only):
 Janis.identify({ id: user.id, name: user.name, email: user.email });
@@ -550,7 +550,7 @@ Janis.identify({ id: user.id, name: user.name, email: user.email, sig,
       </div>
       {msg && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
       {channel.meta.identity_secret && secret !== channel.meta.identity_secret && (
-        <div className="muted" style={{ fontSize: 12 }}>unsaved changes — the widget still uses the stored secret</div>
+        <div className="muted" style={{ fontSize: 12 }}>unsaved changes — the bubble still uses the stored secret</div>
       )}
     </div>
   );
@@ -662,7 +662,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
       // Ask Janis caches the bootstrap 5min — drop it so the rail reflects
       // the new branding immediately rather than looking broken.
       void qc.invalidateQueries({ queryKey: ['ask-janis-config', channel.id] });
-      setMsg('Saved — the widget picks it up on the next page load.');
+      setMsg('Saved — the bubble picks it up on the next page load.');
     },
     onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),
   });
@@ -709,7 +709,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
         </label>
       </div>
       <input
-        placeholder="Header title (defaults to widget name)"
+        placeholder="Header title (defaults to bubble name)"
         value={f.title}
         onChange={(e) => setF({ ...f, title: e.target.value })}
       />

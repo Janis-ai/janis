@@ -45,8 +45,8 @@ const CARDS: Card[] = [
   {
     key: 'branding',
     title: 'Your brand, not ours',
-    body: 'Colors, greeting, logo, tone — the widget wears your brand.',
-    question: 'Can I customize the chat widget branding?',
+    body: 'Colors, greeting, logo, tone — the bubble wears your brand.',
+    question: 'Can I customize the chat bubble branding?',
   },
 ];
 

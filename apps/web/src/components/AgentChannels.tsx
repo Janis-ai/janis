@@ -708,11 +708,11 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         </details>
       </div>
 
-      {/* Web chat widget */}
+      {/* Chat bubble (webchat) */}
       <div className="card connect-card">
         <div className="row">
           <div className="grow">
-            <strong>Web chat widget</strong>
+            <strong>Bubble</strong>
             <div className="muted" style={{ marginTop: 4 }}>
               Embed a chat bubble on any website — visitors land in the same inbox, with
               agent answers and human takeover. No Meta app required.
@@ -725,7 +725,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             disabled={createWebchat.isPending}
             onClick={() => createWebchat.mutate()}
           >
-            Create widget
+            Create bubble
           </button>
           <span className="muted" style={{ fontSize: 12 }}>
             Name, greeting and quick replies are set on the channel card.
