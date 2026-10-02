@@ -440,16 +440,38 @@ describe('enrollment', () => {
       })
       .returning();
     await dispatchCampaign(db, campaign.id);
-    // Step-0 sends complete; the step-1 job is still queued for later. The
-    // campaign must NOT close — the step job would fire into 'done' and die.
+    // Step-0 sends complete (past the 60m step delay); the step-1 job is
+    // still queued for later. The campaign must NOT close — the step job
+    // would fire into 'done' and die.
     await db
       .update(campaignSends)
-      .set({ status: 'sent', sentAt: new Date() })
+      .set({ status: 'sent', sentAt: new Date(Date.now() - 2 * 3_600_000) })
       .where(eq(campaignSends.campaignId, campaign.id));
     await sweepCampaigns(db);
     let [c] = await db.select().from(campaigns).where(eq(campaigns.id, campaign.id));
     expect(c.status).toBe('sending');
-    // Once the step chain has no queued work left the campaign closes.
+    // Losing the step job mid-flight (deploy drain, crash window) must not
+    // strand the drip: the sweeper re-arms it while stragglers remain —
+    // the sends above have no step-1 rows yet, so they ARE stragglers.
+    await db
+      .update(jobs)
+      .set({ status: 'done' })
+      .where(eq(jobs.type, 'campaign.step'));
+    await sweepCampaigns(db);
+    const rearmed = await db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.type, 'campaign.step'), eq(jobs.status, 'pending')));
+    expect(rearmed.length).toBe(1);
+    [c] = await db.select().from(campaigns).where(eq(campaigns.id, campaign.id));
+    expect(c.status).toBe('sending');
+    // Dispatch the step — now every prior send has a step-1 row, so the
+    // chain has no queued work left and the campaign closes.
+    await dispatchCampaignStep(db, campaign.id, 1);
+    await db
+      .update(campaignSends)
+      .set({ status: 'sent', sentAt: new Date() })
+      .where(and(eq(campaignSends.campaignId, campaign.id), eq(campaignSends.stepIndex, 1)));
     await db
       .update(jobs)
       .set({ status: 'done' })

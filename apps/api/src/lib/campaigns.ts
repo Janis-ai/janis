@@ -295,7 +295,11 @@ async function stepJobExists(db: Db, campaignId: string, stepIndex: number) {
   return !!row;
 }
 
-/** Queue the next drip step, if the campaign has one and it isn't queued. */
+/** Queue the next drip step, if the campaign has one and it isn't queued.
+ *  The +60s skew matters: delay counts from each recipient's actual send
+ *  (stamped when the outbound job lands it), which is always a beat after
+ *  dispatch — anchoring run_at to bare dispatch time fires the step just
+ *  early enough to qualify nobody and lean on the straggler recheck. */
 async function scheduleStep(db: Db, campaign: typeof campaigns.$inferSelect, stepIndex: number) {
   const steps = (campaign.steps ?? []) as CampaignStep[];
   const step = steps[stepIndex - 1];
@@ -304,8 +308,27 @@ async function scheduleStep(db: Db, campaign: typeof campaigns.$inferSelect, ste
     workspaceId: campaign.workspaceId,
     type: 'campaign.step',
     payload: { campaignId: campaign.id, stepIndex },
-    runAt: new Date(Date.now() + Math.max(1, step.delay_minutes) * 60_000),
+    runAt: new Date(Date.now() + Math.max(1, step.delay_minutes) * 60_000 + 60_000),
   });
+}
+
+/** A pending/running job already exists for this step — the chain is armed.
+ *  (Unlike stepJobExists, done/failed history does not count: the sweeper
+ *  uses this to re-arm a step whose job row never got written.) */
+async function stepJobLive(db: Db, campaignId: string, stepIndex: number) {
+  const [row] = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.type, 'campaign.step'),
+        inArray(jobs.status, ['pending', 'running']),
+        sql`${jobs.payload}->>'campaignId' = ${campaignId}`,
+        sql`(${jobs.payload}->>'stepIndex')::int = ${stepIndex}`,
+      ),
+    )
+    .limit(1);
+  return !!row;
 }
 
 /** Insert the send row + queue its outbound job for one recipient.
@@ -513,25 +536,26 @@ export async function dispatchCampaignStep(
   return queued;
 }
 
-/** True when a prior-step send qualifies for the step's branch condition
- *  but has no step row — recipients enrolled after the step job ran
- *  (continuous campaigns) or sends that landed after the delay check.
- *  The job handler re-enqueues the step while stragglers exist, so late
- *  qualifiers are never dropped. */
-export async function stepStragglersExist(
+/** A straggler is a prior-step send that meets the step's branch condition
+ *  but has no step row — a recipient enrolled after the step job ran
+ *  (continuous campaigns), a send that landed after the delay check, or
+ *  the survivor of a job that died mid-handler. Returns the earliest time
+ *  a straggler becomes eligible (oldest qualifying send + the step's
+ *  delay), or null when the step is fully dispatched. */
+async function stepStragglerEligibleAt(
   db: Db,
   campaignId: string,
   stepIndex: number,
-): Promise<boolean> {
+): Promise<Date | null> {
   const [campaign] = await db
     .select({ steps: campaigns.steps })
     .from(campaigns)
     .where(eq(campaigns.id, campaignId))
     .limit(1);
   const step = ((campaign?.steps ?? []) as CampaignStep[])[stepIndex - 1];
-  if (!step) return false;
+  if (!step) return null;
   const [row] = await db
-    .select({ id: campaignSends.id })
+    .select({ t: sql<string | null>`min(${campaignSends.sentAt})` })
     .from(campaignSends)
     .where(
       and(
@@ -546,9 +570,21 @@ export async function stepStragglersExist(
             and nx.recipient = ${campaignSends.recipient}
         )`,
       ),
-    )
-    .limit(1);
-  return !!row;
+    );
+  return row?.t
+    ? new Date(new Date(row.t).getTime() + Math.max(1, step.delay_minutes) * 60_000)
+    : null;
+}
+
+/** True when a prior-step send qualifies for the step's branch condition
+ *  but has no step row. The job handler re-enqueues the step while
+ *  stragglers exist, so late qualifiers are never dropped. */
+export async function stepStragglersExist(
+  db: Db,
+  campaignId: string,
+  stepIndex: number,
+): Promise<boolean> {
+  return (await stepStragglerEligibleAt(db, campaignId, stepIndex)) !== null;
 }
 
 /** Sweeper hook: dispatch scheduled campaigns whose time has come, gap-fill
@@ -567,12 +603,28 @@ export async function sweepCampaigns(db: Db): Promise<void> {
     await dispatchCampaign(db, c.id);
   }
   const sending = await db
-    .select({ id: campaigns.id, enrollment: campaigns.enrollment })
+    .select({ id: campaigns.id, workspaceId: campaigns.workspaceId, enrollment: campaigns.enrollment, steps: campaigns.steps })
     .from(campaigns)
     .where(eq(campaigns.status, 'sending'))
     .limit(20);
   for (const c of sending) {
     await dispatchCampaign(db, c.id);
+    // Re-arm drip steps whose job never ran to completion — a job lost to
+    // a deploy drain mid-handler, a build predating the straggler recheck,
+    // or a FAILED step row would otherwise leave the chain silently dead
+    // and let the done-mark below retire a half-finished drip.
+    const stepDefs = (c.steps ?? []) as CampaignStep[];
+    for (let i = 1; i <= stepDefs.length; i++) {
+      if (await stepJobLive(db, c.id, i)) continue;
+      const eligibleAt = await stepStragglerEligibleAt(db, c.id, i);
+      if (!eligibleAt) continue;
+      await enqueueJob(db, {
+        workspaceId: c.workspaceId,
+        type: 'campaign.step',
+        payload: { campaignId: c.id, stepIndex: i },
+        runAt: eligibleAt > new Date() ? eligibleAt : new Date(),
+      });
+    }
     // 'continuous' campaigns stay in 'sending' — the tick re-resolves the
     // segment and the unique send key makes re-enrollment a no-op, so new
     // qualifying contacts trickle in and old ones never double-send.
