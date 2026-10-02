@@ -324,7 +324,9 @@ async function messengerChannelFor(db: Db, agentId: string) {
   return row;
 }
 
-/** Find-or-create the conversation for (channel, platform user). */
+/** Find-or-create the conversation for (channel, platform user). The insert
+ *  races the Meta webhook's own find-or-create on the same
+ *  (agent_id, external_id) — onConflict + re-read instead of 23505. */
 async function convForUser(db: Db, channel: ChannelRow, userId: string) {
   const [row] = await db
     .select({ conversation: conversations })
@@ -333,18 +335,31 @@ async function convForUser(db: Db, channel: ChannelRow, userId: string) {
     .where(and(eq(channelBindings.channelId, channel.id), eq(channelBindings.platformUserId, userId)))
     .limit(1);
   if (row) return row.conversation;
+  const externalId = `messenger:${userId}`;
   const [conv] = await db
     .insert(conversations)
     .values({
       agentId: channel.agentId,
-      externalId: `messenger:${userId}`,
+      externalId,
       userProfile: { id: userId, channel: 'messenger', channelName: channel.name },
     })
+    .onConflictDoNothing({ target: [conversations.agentId, conversations.externalId] })
     .returning();
+  const winner =
+    conv ??
+    (
+      await db
+        .select()
+        .from(conversations)
+        .where(and(eq(conversations.agentId, channel.agentId), eq(conversations.externalId, externalId)))
+        .limit(1)
+    )[0];
+  if (!winner) throw new Error('conv create raced and winner not visible');
   await db
     .insert(channelBindings)
-    .values({ channelId: channel.id, conversationId: conv.id, platformUserId: userId });
-  return conv;
+    .values({ channelId: channel.id, conversationId: winner.id, platformUserId: userId })
+    .onConflictDoNothing();
+  return winner;
 }
 
 /** A page-inbox/df pause lapses after takeover_timeout minutes (legacy ~5). */

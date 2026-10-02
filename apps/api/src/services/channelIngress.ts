@@ -298,15 +298,28 @@ export async function handleChannelMessage(
   const cap = await messageCap(db, agent.workspaceId);
   if (cap.capped) {
     if (!conv) {
+      // A parallel delivery (webhook + legacy fallback, Meta retry) can win
+      // the create — on conflict re-read rather than 500.
       [conv] = await db
         .insert(conversations)
         .values({ agentId: channel.agentId, externalId, userProfile: baseProfile(channel, msg) })
+        .onConflictDoNothing({ target: [conversations.agentId, conversations.externalId] })
         .returning();
+      if (!conv) {
+        [conv] = await db
+          .select()
+          .from(conversations)
+          .where(
+            and(eq(conversations.agentId, channel.agentId), eq(conversations.externalId, externalId)),
+          )
+          .limit(1);
+      }
+      if (!conv) return; // winner's insert not yet visible — it owns the row
       await db.insert(channelBindings).values({
         channelId: channel.id,
         conversationId: conv.id,
         platformUserId: participantId,
-      });
+      }).onConflictDoNothing();
       const contactId = await contactForBinding(db, {
         workspaceId: agent.workspaceId,
         channelId: channel.id,
@@ -336,19 +349,42 @@ export async function handleChannelMessage(
     return;
   }
 
+  // First-contact side effects (binding, auto-assign, greeting) belong to
+  // the transaction that actually inserted the row — a delivery that loses
+  // the create race re-reads the winner and skips them.
+  let created = false;
   if (!conv) {
     // First contact — enrich with the platform profile (name/handle/picture)
     const fetched = await fetchPlatformProfile(channel, msg.senderId);
     const userProfile = { ...baseProfile(channel, msg), ...defined(fetched) };
-    [conv] = await db
+    // Two deliveries (Meta retry, webhook + legacy-relay copies, or the
+    // Chatfuel/ManyChat fallback racing the standby feed) can both miss the
+    // lookups above — let the unique index settle it and re-read the winner.
+    const [ins] = await db
       .insert(conversations)
       .values({ agentId: channel.agentId, externalId, userProfile })
+      .onConflictDoNothing({ target: [conversations.agentId, conversations.externalId] })
       .returning();
+    if (ins) {
+      conv = ins;
+      created = true;
+    } else {
+      [conv] = await db
+        .select()
+        .from(conversations)
+        .where(
+          and(eq(conversations.agentId, channel.agentId), eq(conversations.externalId, externalId)),
+        )
+        .limit(1);
+      if (!conv) return; // winner's insert not yet committed — it owns the row
+    }
+  }
+  if (created) {
     await db.insert(channelBindings).values({
       channelId: channel.id,
       conversationId: conv.id,
       platformUserId: participantId,
-    });
+    }).onConflictDoNothing();
     // Routing: an auto_assign rule picks the owner — fixed assignee or a
     // round-robin pool whose cursor persists on the rule config.
     const assignRules = await db
