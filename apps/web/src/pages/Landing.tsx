@@ -438,9 +438,12 @@ export default function Landing() {
     document.body.appendChild(s);
     return () => {
       s.remove();
-      for (const id of ['janis-style', 'janis-bubble', 'janis-panel']) {
-        document.getElementById(id)?.remove();
-      }
+      (window as unknown as { Janis?: { destroy?: () => void } }).Janis?.destroy?.();
+      // Fallback sweep — covers a cached widget.js without destroy(), the
+      // teaser, and any stray nodes a double-mount left behind.
+      document
+        .querySelectorAll('[id^="janis-"]')
+        .forEach((el) => el.remove());
     };
   }, []);
 

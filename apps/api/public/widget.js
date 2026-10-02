@@ -17,6 +17,9 @@
   // Console live-preview (the Bubble editor's iframe): auto-opens the panel,
   // chats as a stable preview visitor, and restyles live on postMessage.
   var PREVIEW = script.getAttribute('data-janis-preview') === '1';
+  // Set by Janis.destroy() — the host SPA tore the widget down; stray timers
+  // and document listeners must become inert instead of re-adding DOM.
+  var destroyed = false;
   var visitor = localStorage.getItem(LS_VISITOR);
   if (!visitor) {
     visitor = (crypto.randomUUID ? crypto.randomUUID() :
@@ -86,6 +89,17 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ visitor_id: visitor, user: state.user || {} }),
     }).catch(function () {});
+  };
+  // Teardown for host SPAs (the Janis console dogfoods the widget on the
+  // landing page) — clears the poll/teaser timers and removes every janis-*
+  // node so nothing leaks onto console routes after unmount.
+  window.Janis.destroy = function () {
+    destroyed = true;
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
+    if (state.closedTimer) { clearInterval(state.closedTimer); state.closedTimer = null; }
+    if (state.typingTimer) { clearTimeout(state.typingTimer); state.typingTimer = null; }
+    var els = document.querySelectorAll('[id^="janis-"]');
+    for (var i = 0; i < els.length; i++) els[i].remove();
   };
 
   var EMOJIS = ('😀 😄 😁 🙂 😉 😊 😍 🤩 😘 😜 🤪 😎 🤔 😅 😂 🤣 😢 😭 😮 😴' +
@@ -481,6 +495,7 @@
     menu.classList.toggle('open');
   };
   document.addEventListener('click', function (e) {
+    if (destroyed) return;
     if (menu.classList.contains('open') && !menu.contains(e.target)) menu.classList.remove('open');
   });
   menuEnd.onclick = function () {
@@ -602,6 +617,7 @@
   // Returned to a visible tab with the panel open — the transcript is in
   // view, so the backlog is seen by definition.
   document.addEventListener('visibilitychange', function () {
+    if (destroyed) return;
     if (!document.hidden && state.open && state.unread) {
       state.unread = 0;
       if (state.lastTs && (!state.lastSeen || state.lastTs > state.lastSeen)) {
@@ -616,8 +632,8 @@
   var teaserEl = null;
   function hideTeaser() { if (teaserEl) { teaserEl.remove(); teaserEl = null; } }
   function maybeTeaser() {
-    if (teaserEl || state.open || state.lastTs || state.unread > 0 || !state.config ||
-        state.config.proactive === false) return;
+    if (destroyed || !panel.isConnected || teaserEl || state.open || state.lastTs ||
+        state.unread > 0 || !state.config || state.config.proactive === false) return;
     try { if (sessionStorage.getItem(SS_TEASER)) return; } catch (e) {}
     var txt = state.config.teaser_text || state.config.greeting || 'Questions? Chat with us.';
     teaserEl = el('div', {}, { id: 'janis-teaser', role: 'button' });
@@ -1263,6 +1279,7 @@
   }
 
   function poll() {
+    if (destroyed || !panel.isConnected) return Promise.resolve();
     if (state.pollBusy) return state.pollPromise || Promise.resolve();
     state.pollBusy = true;
     if (!state.loadStart) state.loadStart = Date.now();
