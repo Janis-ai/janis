@@ -183,9 +183,6 @@ function ContextSwitcher({
                 {planName && <span className="ctx-plan">{planName}</span>}
                 {!currentAgentId && <Check size={14} />}
               </button>
-              <button type="button" className="ctx-item ctx-sub" onClick={() => go('/settings')}>
-                Workspace settings
-              </button>
               <button
                 type="button"
                 className="ctx-item ctx-sub"
@@ -651,9 +648,34 @@ export default function Layout() {
             <span className="label">Copilot</span><span className="icon"><Sparkles size={18} /></span>
           </button>
         )}
-        {/* One stable nav: the shared customer layer always sits in the same
-            spots. The four scoped-able pages default to the context agent;
-            their on-page picker is the context control. */}
+        {/* Agent subsection first — the agent's build surface, present only
+            while an agent is in context. Items indent under the name row;
+            .agent-nav's bottom border separates them from the workspace
+            layer below. */}
+        {currentAgent && (
+          <div className="agent-nav">
+            <div className="nav-sec">
+              <Bot size={13} />
+              <span>{currentAgent.name}</span>
+            </div>
+            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/behavior`}><span className="label">Behavior</span><span className="icon"><SlidersHorizontal size={18} /></span></NavLink>
+            {currentAgent.hosted && (
+              <NavLink className="nav-indent" to={`/agents/${ctxAgent}/knowledge`}><span className="label">Knowledge base</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
+            )}
+            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/channels`}><span className="label">Channels</span><span className="icon"><Radio size={18} /></span></NavLink>
+            {currentAgent.hosted && (
+              <>
+                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/integrations`}><span className="label">Integrations</span><span className="icon"><Plug size={18} /></span></NavLink>
+                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/components`}><span className="label">Chat components</span><span className="icon"><LayoutGrid size={18} /></span></NavLink>
+                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/tests`}><span className="label">Tests</span><span className="icon"><FlaskConical size={18} /></span></NavLink>
+              </>
+            )}
+            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="label">Agent settings</span><span className="icon"><Settings size={18} /></span></NavLink>
+          </div>
+        )}
+        {/* The shared customer layer — always the same spots. The four
+            scoped-able pages default to the context agent; their on-page
+            picker is the context control. */}
         <NavLink to="/conversations" end>
           <span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>
           {(ctxAgent ? agentAttention : attention)?.count ? (
@@ -666,33 +688,8 @@ export default function Layout() {
         {/* Workspace-wide sections vanish for agent-scoped users — they only
             hold grants on specific agents, not the workspace itself. */}
         {!data?.agent_scope && (
-          <NavLink to="/reports"><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
-        )}
-        {/* Agent subsection — this agent's build surface, present only while
-            an agent is in context. */}
-        {currentAgent && (
           <>
-            <div className="nav-sec">
-              <Bot size={13} />
-              <span>{currentAgent.name}</span>
-            </div>
-            <NavLink to={`/agents/${ctxAgent}/behavior`}><span className="label">Behavior</span><span className="icon"><SlidersHorizontal size={18} /></span></NavLink>
-            {currentAgent.hosted && (
-              <NavLink to={`/agents/${ctxAgent}/knowledge`}><span className="label">Knowledge base</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
-            )}
-            <NavLink to={`/agents/${ctxAgent}/channels`}><span className="label">Channels</span><span className="icon"><Radio size={18} /></span></NavLink>
-            {currentAgent.hosted && (
-              <>
-                <NavLink to={`/agents/${ctxAgent}/integrations`}><span className="label">Integrations</span><span className="icon"><Plug size={18} /></span></NavLink>
-                <NavLink to={`/agents/${ctxAgent}/components`}><span className="label">Chat components</span><span className="icon"><LayoutGrid size={18} /></span></NavLink>
-                <NavLink to={`/agents/${ctxAgent}/tests`}><span className="label">Tests</span><span className="icon"><FlaskConical size={18} /></span></NavLink>
-              </>
-            )}
-            <NavLink to={`/agents/${ctxAgent}/settings`}><span className="label">Agent settings</span><span className="icon"><Settings size={18} /></span></NavLink>
-          </>
-        )}
-        {!data?.agent_scope && (
-          <>
+            <NavLink to="/reports"><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
             {data?.operator && (
               <NavLink to="/errors"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
             )}

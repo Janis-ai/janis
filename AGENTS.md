@@ -680,10 +680,11 @@ the identity graph is wrong):
 - Copilot (Ask Janis) is ever-present at the TOP; when an agent is in
   context the concierge is agent-scoped (its tools default to that agent,
   "this agent" resolves).
-- ONE stable nav — no panel swap. Shared items always in place: Inbox ·
-  Agents · Contacts · Campaigns · Reports; tail: Errors · Billing ·
-  Settings (agent_scope users keep seeing Inbox/Agents/Contacts/Campaigns).
-  When an agent is in context an agent subsection appears below: label
+- ONE stable nav — no panel swap. Agent group first while one is in
+  context (indented items under a name row, .agent-nav bottom rule), then
+  the shared layer: Inbox · Agents · Contacts · Campaigns · Reports;
+  tail: Errors · Billing · Settings (agent_scope users keep seeing
+  Inbox/Agents/Contacts/Campaigns). The subsection: label
   row with the agent's name, then Behavior (tabs: LLM, Greeting +
   quick-replies/cards, System prompt, Tone, Satisfaction survey incl.
   auto-archive toggle) · Knowledge base (tabs: Text, Files, Websites,
