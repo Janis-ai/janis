@@ -59,10 +59,18 @@ export function ChannelCard({
   const [nameDraft, setNameDraft] = useState(ch.name);
   const rename = useMutation({
     mutationFn: (name: string) =>
-      api(`/api/channels/${ch.id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
-    onSuccess: () => {
+      api<{ channel: Channel }>(`/api/channels/${ch.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: (data) => {
       setEditingName(false);
+      // Write the saved channel into the detail cache — invalidating
+      // ['channels'] alone left the detail page showing the old name until
+      // a manual refresh (the very bug reported five times).
+      qc.setQueryData(['channel', ch.id], data);
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', ch.id] });
     },
   });
   const [confirmEl, confirmRemove] = useConfirm();
@@ -490,6 +498,7 @@ function WebchatIdentity({ channel }: { channel: Channel }) {
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
       setMsg(secret.trim() ? 'Saved — signed identity is now enabled.' : 'Cleared — signed identity disabled.');
     },
     onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),
