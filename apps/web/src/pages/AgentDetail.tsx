@@ -731,11 +731,17 @@ function PromptSection({
   isAdmin: boolean;
 }) {
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, flex: 1 }}>
       <strong>System prompt</strong>
       <ReadOnly off={!isAdmin}>
+      <label>
+        Who the agent is, what it covers, and the rules it follows — persona,
+        scope, when to bring in a human. Facts and policies belong in the
+        knowledge base, not here.
+      </label>
       <textarea
         rows={8}
+        style={{ flex: 1, resize: 'none' }}
         placeholder="You are the support agent for Acme Co. You help with orders, returns…"
         value={cfg.system_prompt ?? ''}
         onChange={(e) => setCfg({ ...cfg, system_prompt: e.target.value })}
