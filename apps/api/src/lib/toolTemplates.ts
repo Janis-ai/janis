@@ -14,6 +14,9 @@ interface CatalogTool {
   bodyFormat?: 'json' | 'form';
   /** Mutating/money-moving calls — the agent proposes, a teammate approves. */
   approval?: boolean;
+  /** Customer-record tool — args hard-bind to the conversation's verified
+   *  identity at runtime (see ToolDef.identity in toolExec). */
+  identity?: boolean;
   /** Live data binding — JSON results render as cards/options. */
   widget?: ToolWidgetConfig;
 }
@@ -81,20 +84,25 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_lookup_order',
         label: 'Look up order',
         description:
-          'Look up a Shopify order by order number. Returns status, items, totals and fulfilment/tracking info.',
+          'Look up a Shopify order by order number for the verified customer email. Returns status, items, totals and fulfilment/tracking info.',
         method: 'GET',
-        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders.json?status=any&limit=1&fields=id,name,order_number,email,financial_status,fulfillment_status,total_price,currency,created_at,cancelled_at,line_items,fulfillments&name={order_number}',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders.json?status=any&limit=1&fields=id,name,order_number,email,financial_status,fulfillment_status,total_price,currency,created_at,cancelled_at,line_items,fulfillments&name={order_number}&email={email}',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
-        params: { order_number: 'the order number including the # prefix, e.g. #1234' },
+        params: {
+          order_number: 'the order number including the # prefix, e.g. #1234',
+          email: "the verified customer's own email address",
+        },
+        identity: true,
       },
       {
         name: 'shopify_customer_orders',
         label: 'Customer orders',
-        description: 'List the most recent Shopify orders for a customer email address.',
+        description: 'List the most recent Shopify orders for the verified customer email address.',
         method: 'GET',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders.json?status=any&limit=5&fields=id,name,order_number,email,financial_status,fulfillment_status,total_price,currency,created_at&email={email}',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
-        params: { email: 'customer email address' },
+        params: { email: "the verified customer's own email address" },
+        identity: true,
       },
       {
         name: 'shopify_search_products',
@@ -196,12 +204,13 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         method: 'GET',
         url: 'https://api.hubapi.com/crm/v3/objects/contacts/{email}?idProperty=email&properties=email,firstname,lastname,phone,company,lifecyclestage,hs_lead_status',
         headers: { authorization: 'Bearer {{secrets.HUBSPOT_TOKEN}}' },
-        params: { email: 'contact email address' },
+        params: { email: "the verified customer's own email address" },
+        identity: true,
       },
       {
         name: 'hubspot_search_contacts',
         label: 'Search contacts',
-        description: 'Search HubSpot contacts with a filterGroups JSON array (e.g. by name or company).',
+        description: 'Search HubSpot contacts with a filterGroups JSON array — must filter on the verified customer email.',
         method: 'POST',
         url: 'https://api.hubapi.com/crm/v3/objects/contacts/search',
         headers: { authorization: 'Bearer {{secrets.HUBSPOT_TOKEN}}' },
@@ -209,6 +218,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           filterGroups:
             'JSON array, e.g. [{"filters":[{"propertyName":"email","operator":"EQ","value":"a@b.com"}]}]',
         },
+        identity: true,
       },
       {
         name: 'hubspot_create_ticket',
@@ -234,6 +244,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           properties:
             'JSON object of properties to update, e.g. {"phone":"+1…","lifecyclestage":"customer"}',
         },
+        identity: true,
       },
     ],
   },
@@ -260,13 +271,14 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       {
         name: 'zendesk_search',
         label: 'Search',
-        description: 'Search Zendesk tickets and users, e.g. by requester email or keyword.',
+        description: 'Search Zendesk tickets and users — must scope the query to the verified customer (e.g. requester:their-verified-email).',
         method: 'GET',
         url: 'https://{{secrets.ZENDESK_SUBDOMAIN}}.zendesk.com/api/v2/search.json?query={query}',
         headers: { authorization: 'Basic {{secrets.ZENDESK_AUTH}}' },
         params: {
           query: 'Zendesk search query, e.g. "type:ticket requester:customer@email.com"',
         },
+        identity: true,
       },
       {
         name: 'zendesk_create_ticket',
@@ -318,13 +330,14 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       {
         name: 'zendesk_oauth_search',
         label: 'Search',
-        description: 'Search Zendesk tickets and users, e.g. by requester email or keyword.',
+        description: 'Search Zendesk tickets and users — must scope the query to the verified customer (e.g. requester:their-verified-email).',
         method: 'GET',
         url: 'https://{{secrets.ZENDESK_OAUTH_SUBDOMAIN}}.zendesk.com/api/v2/search.json?query={query}',
         headers: { authorization: 'Bearer {{secrets.CONN_ZENDESK_OAUTH_TOKEN}}' },
         params: {
           query: 'Zendesk search query, e.g. "type:ticket requester:customer@email.com"',
         },
+        identity: true,
       },
       {
         name: 'zendesk_oauth_create_ticket',
@@ -382,18 +395,20 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         method: 'GET',
         url: "https://{{secrets.SALESFORCE_HOST}}/services/data/v62.0/query?q=SELECT+Id,Name,Email,Phone,Account.Name+FROM+Contact+WHERE+Email='{email}'",
         headers: { authorization: 'Bearer {{secrets.CONN_SALESFORCE_TOKEN}}' },
-        params: { email: 'customer email address' },
+        params: { email: "the verified customer's own email address" },
+        identity: true,
       },
       {
         name: 'salesforce_query',
         label: 'Run query',
-        description: 'Run a read-only SOQL query against Salesforce for account, case or order lookups.',
+        description: 'Run a read-only SOQL query against Salesforce — must be scoped to the verified customer (e.g. WHERE Contact.Email = their verified address).',
         method: 'GET',
         url: 'https://{{secrets.SALESFORCE_HOST}}/services/data/v62.0/query?q={soql}',
         headers: { authorization: 'Bearer {{secrets.CONN_SALESFORCE_TOKEN}}' },
         params: {
           soql: "SOQL SELECT query, e.g. SELECT Id, Subject, Status FROM Case WHERE Contact.Email = 'a@b.com'",
         },
+        identity: true,
       },
     ],
   },
@@ -443,11 +458,12 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       {
         name: 'stripe_find_customer',
         label: 'Find customer',
-        description: 'Find a Stripe customer by email address.',
+        description: "Find a Stripe customer — only the verified customer's own email address.",
         method: 'GET',
         url: 'https://api.stripe.com/v1/customers?email={email}&limit=3',
         headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
-        params: { email: 'customer email address' },
+        params: { email: "the verified customer's own email address" },
+        identity: true,
       },
       {
         name: 'stripe_customer_charges',
@@ -457,6 +473,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://api.stripe.com/v1/charges?customer={customer_id}&limit=5',
         headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
         params: { customer_id: 'Stripe customer id, e.g. cus_…' },
+        identity: true,
       },
       {
         name: 'stripe_customer_subscriptions',
@@ -467,6 +484,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://api.stripe.com/v1/subscriptions?customer={customer_id}&status=all&limit=10&expand[]=data.items.data.price',
         headers: { authorization: 'Bearer {{secrets.STRIPE_RESTRICTED_KEY}}' },
         params: { customer_id: 'Stripe customer id, e.g. cus_…' },
+        identity: true,
       },
       {
         name: 'stripe_list_products',
@@ -506,6 +524,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           charge: 'charge id ch_… from stripe_customer_charges (or use payment_intent instead)',
           amount: 'refund amount in cents — pass the charge\'s full amount for a full refund',
         },
+        identity: true,
       },
       {
         name: 'stripe_cancel_subscription',
@@ -521,6 +540,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           subscription_id: 'subscription id sub_…',
           cancel_at_period_end: 'always "true" — cancels at period end, not immediately',
         },
+        identity: true,
       },
       {
         name: 'stripe_update_subscription',
@@ -539,6 +559,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           proration_behavior:
             '"always_invoice" (bill the difference now), "create_prorations" (apply at next invoice) or "none"',
         },
+        identity: true,
       },
     ],
   },
@@ -583,11 +604,13 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         label: 'List bookings',
         description: 'List recent bookings to confirm whether a callback or meeting was scheduled.',
         method: 'GET',
-        url: 'https://api.cal.com/v2/bookings?status=upcoming&take=10',
+        url: 'https://api.cal.com/v2/bookings?status=upcoming&take=10&attendeeEmail={email}',
         headers: {
           authorization: 'Bearer {{secrets.CALCOM_API_KEY}}',
           'cal-api-version': '2024-08-13',
         },
+        params: { email: "the verified customer's own email address" },
+        identity: true,
       },
     ],
   },
@@ -643,3 +666,10 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     ],
   },
 ];
+
+/** Names of catalog tools bound to the verified customer identity — applied
+ *  by toolsFor at load time so tools installed before the flag existed are
+ *  covered too (stored config.tools can't carry a stale unflagged def). */
+export const IDENTITY_TOOL_NAMES = new Set(
+  TOOL_TEMPLATES.flatMap((t) => t.tools.filter((x) => x.identity).map((x) => x.name)),
+);

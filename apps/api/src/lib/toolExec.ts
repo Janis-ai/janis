@@ -1,6 +1,7 @@
 import type { Db } from '../db/client.js';
 import type { agents } from '../db/schema.js';
 import { interpolateSecrets } from './secrets.js';
+import { IDENTITY_TOOL_NAMES } from './toolTemplates.js';
 import type { ToolWidgetConfig } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
@@ -18,6 +19,14 @@ export interface ToolDef {
   /** Mutating tools: the model proposes the call, a teammate approves or
    *  denies it in the console or Slack, and only then it executes. */
   approval?: boolean;
+  /** Customer-record tool — reads or writes rows keyed to a specific
+   *  customer (email lookups, charge/order history, free-text CRM search).
+   *  Args must anchor to the conversation's VERIFIED identity: every email
+   *  arg must be one of the customer's verified addresses, and provider ids
+   *  (cus_…, sub_…) must have come from an earlier tool result in this run.
+   *  Operator contexts (signed-in teammate on the agent's workspace) are
+   *  exempt. See identityBlockReason. */
+  identity?: boolean;
   /** Live data binding — the tool's JSON result renders as an in-conversation
    *  component (cards carousel / options picker) instead of the model
    *  retelling it as text. `map` selects fields off each result row. */
@@ -26,7 +35,11 @@ export interface ToolDef {
 
 export function toolsFor(agent: AgentRow): ToolDef[] {
   const cfg = (agent.config ?? {}) as { tools?: ToolDef[] };
-  return (cfg.tools ?? []).filter((t) => t.name && t.url);
+  return (cfg.tools ?? [])
+    .filter((t) => t.name && t.url)
+    // Retroactive identity marking — tools installed before the flag
+    // existed serialize without it; the catalog is the source of truth.
+    .map((t) => (IDENTITY_TOOL_NAMES.has(t.name) ? { ...t, identity: true } : t));
 }
 
 /**
@@ -46,6 +59,69 @@ function toolUrlAllowed(raw: string): boolean {
 }
 
 const MAX_TOOL_RESPONSE = 8_000;
+
+const EMAIL_IN_TEXT = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+/** Provider ids a tool result can "produce" — an identity-scoped arg is
+ *  anchored only if it appeared in an earlier result this run (never typed
+ *  or claimed by the customer). Prefixed ids hard-block when unproduced;
+ *  bare numerics (HubSpot vids, Shopify order ids) only anchor when
+ *  produced — a ticket/phone number in a free-text query must not fail. */
+const PROVIDER_ID = /\b(?:cus|sub|si|ch|in|pi|pm|prod|price|acct|re)_[A-Za-z0-9]{5,}\b/g;
+const NUMERIC_ID = /\b\d{8,}\b/g;
+
+/**
+ * Hard boundary for customer-record tools. Returns a block reason when the
+ * call isn't anchored to the verified identity, else null. Rules:
+ *  - any email appearing in args must be one of the customer's VERIFIED
+ *    addresses (a typed address is a claim, never proof);
+ *  - any provider-id arg must have been produced by a tool result earlier
+ *    in this run (so stripe_customer_charges only chains off a verified
+ *    stripe_find_customer);
+ *  - at least one arg must anchor (verified email or produced id) —
+ *    unanchored calls would return someone else's records.
+ */
+export function identityBlockReason(
+  args: Record<string, unknown>,
+  verifiedEmails: ReadonlySet<string>,
+  producedIds: ReadonlySet<string>,
+): string | null {
+  const vals = Object.values(args).filter((v): v is string => typeof v === 'string');
+  let anchored = false;
+  for (const v of vals) {
+    for (const m of v.matchAll(EMAIL_IN_TEXT)) {
+      const email = m[0].toLowerCase();
+      if (!verifiedEmails.has(email)) {
+        return `identity check: "${email}" is not the verified customer's address — ` +
+          'customer-record tools only act on the verified identity, never an email the customer merely types';
+      }
+      anchored = true;
+    }
+  }
+  for (const v of vals) {
+    for (const m of v.matchAll(PROVIDER_ID)) {
+      if (!producedIds.has(m[0])) {
+        return `identity check: "${m[0]}" was not produced by a verified lookup in this conversation — ` +
+          'look the customer up by their verified email first';
+      }
+      anchored = true;
+    }
+    for (const m of v.matchAll(NUMERIC_ID)) {
+      if (producedIds.has(m[0])) anchored = true;
+    }
+  }
+  if (!anchored) {
+    return 'identity check: no verified customer identity to bind this lookup to — ' +
+      'customer-record tools need a verified sign-in or an email-channel conversation';
+  }
+  return null;
+}
+
+/** Ids a tool result makes available for later identity-scoped calls —
+ *  feeds the producedIds set. */
+export function harvestProducedIds(result: string, into: Set<string>): void {
+  for (const m of result.matchAll(PROVIDER_ID)) into.add(m[0]);
+  for (const m of result.matchAll(NUMERIC_ID)) into.add(m[0]);
+}
 
 function jsonArg(v: string): unknown {
   const t = v.trim();

@@ -39,6 +39,14 @@ npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod)
 - apps/api/.env runs LIVE mode (sk_live + live price ids). Test-mode equivalents are kept alongside as `*_TEST` vars — swap them back for local billing work.
 - Live webhook endpoint we_1UHwWgLuGzRk7fCQQpisSIEG → https://app.janis.ai/billing/stripe-webhook (created via API 2026-09; the old janis.ai endpoint was disabled and deleted). Test mode has its own endpoint at janis.ai. Local dev uses `stripe listen --api-key $STRIPE_SECRET_KEY_TEST --forward-to localhost:8787/billing/stripe-webhook` (the whsec it prints goes in STRIPE_WEBHOOK_SECRET_TEST).
 - Customer Portal configured on both modes: card updates, invoice history, immediate cancel.
+- Customer-record tool security: ToolDef.identity binds catalog reads/writes
+  (Stripe customer/charges/subs, Shopify order+customer orders, HubSpot
+  get/search/update, Zendesk searches, Salesforce find/query, Cal.com list)
+  to the conversation's VERIFIED identity — verified emails come only from
+  sign-in (identity_verified/external_id) or mailbox-channel senders;
+  provider ids must have been produced by an earlier tool result in the run.
+  Signed-in workspace members count as operators (unbound). toolsFor
+  backfills the flag onto configs installed before it existed.
 - Agency rebilling (Stripe Connect): an agency workspace connects an Express account
   (POST /api/billing/connect → account link; account.updated webhook flips
   connect_charges_enabled), sets per-tier retail prices via PUT

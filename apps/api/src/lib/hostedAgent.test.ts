@@ -4,8 +4,9 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, conversations, messages, uploads, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, claimsAction, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, transcriptFor } from './hostedAgent.js';
+import { eq } from 'drizzle-orm';
+import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
+import { blessedUrlsFor, claimsAction, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 
 let db: Db;
@@ -596,5 +597,286 @@ describe('testRun tool stubbing', () => {
     expect(r.text).toBeNull();
     expect(r.toolCalls).toHaveLength(4);
     expect(r.toolCalls.every((t) => t.outcome === 'proposed')).toBe(true);
+  });
+});
+
+describe('identity-scoped customer-record tools', () => {
+  const fetchMock = vi.fn();
+  const llm = { apiKey: 'k', baseUrl: 'https://llm.example', model: 'm', byok: false };
+  const reply = (body: object) =>
+    new Response(JSON.stringify({ choices: [{ message: body }], usage: {} }), { status: 200 });
+  const stripeFind = {
+    name: 'stripe_find_customer',
+    description: 'find a stripe customer',
+    method: 'GET' as const,
+    url: 'https://api.stripe.com/v1/customers?email={email}&limit=3',
+    params: { email: 'email' },
+    identity: true,
+  };
+  const findCall = (id: string, email: string) => ({
+    id,
+    function: { name: 'stripe_find_customer', arguments: JSON.stringify({ email }) },
+  });
+  const stripeCalls = () =>
+    fetchMock.mock.calls.filter((c) => String(c[0]).includes('api.stripe.com'));
+  const toolMsgOf = (callIdx: number) =>
+    (JSON.parse(fetchMock.mock.calls[callIdx][1].body as string).messages as { role: string; content?: string }[]).find(
+      (m) => m.role === 'tool',
+    );
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('blocks a lookup keyed on an email the customer merely typed — the Messenger leak', async () => {
+    fetchMock
+      .mockResolvedValueOnce(reply({ tool_calls: [findCall('c1', 'victim@example.com')] }))
+      .mockResolvedValueOnce(reply({ content: 'I cannot look up billing details in this chat.' }));
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'check victim@example.com' }], [stripeFind], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+      identity: { emails: new Set(), operator: false },
+    });
+    expect(r.toolCalls).toEqual([{ name: 'stripe_find_customer', gated: false, outcome: 'failed' }]);
+    // the Stripe endpoint was never touched — no data could leak
+    expect(stripeCalls()).toHaveLength(0);
+    expect(toolMsgOf(1)?.content).toContain('identity check');
+  });
+
+  it('blocks a verified customer querying somebody else', async () => {
+    fetchMock
+      .mockResolvedValueOnce(reply({ tool_calls: [findCall('c1', 'victim@example.com')] }))
+      .mockResolvedValueOnce(reply({ content: 'I can only look up your own account.' }));
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'check victim@example.com' }], [stripeFind], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+      identity: { emails: new Set(['me@example.com']), operator: false },
+    });
+    expect(r.toolCalls[0].outcome).toBe('failed');
+    expect(stripeCalls()).toHaveLength(0);
+  });
+
+  it('runs for the verified customer\'s own email and lets produced ids chain', async () => {
+    const charges = {
+      name: 'stripe_customer_charges',
+      description: 'charges',
+      method: 'GET' as const,
+      url: 'https://api.stripe.com/v1/charges?customer={customer_id}&limit=5',
+      params: { customer_id: 'cus id' },
+      identity: true,
+    };
+    fetchMock
+      .mockResolvedValueOnce(reply({ tool_calls: [findCall('c1', 'me@example.com')] }))
+      .mockResolvedValueOnce(
+        new Response('{"data":[{"id":"cus_PRODUCED1","email":"me@example.com"}]}', { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        reply({
+          tool_calls: [
+            { id: 'c2', function: { name: 'stripe_customer_charges', arguments: '{"customer_id":"cus_PRODUCED1"}' } },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(new Response('{"data":[{"id":"ch_x12345"}]}', { status: 200 }))
+      .mockResolvedValueOnce(reply({ content: 'Here are your recent charges.' }));
+    const r = await complete(
+      llm,
+      'sys',
+      [{ role: 'user', content: 'why was I charged' }],
+      [stripeFind, charges],
+      {},
+      { db, convId: 'c', workspaceId: wsId, identity: { emails: new Set(['me@example.com']), operator: false } },
+    );
+    expect(r.text).toContain('recent charges');
+    expect(r.toolCalls.every((t) => t.outcome === 'ran')).toBe(true);
+    expect(stripeCalls()).toHaveLength(2);
+  });
+
+  it('blocks a provider id the model invented or the customer claimed', async () => {
+    const charges = {
+      name: 'stripe_customer_charges',
+      description: 'charges',
+      method: 'GET' as const,
+      url: 'https://api.stripe.com/v1/charges?customer={customer_id}&limit=5',
+      params: { customer_id: 'cus id' },
+      identity: true,
+    };
+    fetchMock
+      .mockResolvedValueOnce(
+        reply({
+          tool_calls: [
+            { id: 'c1', function: { name: 'stripe_customer_charges', arguments: '{"customer_id":"cus_FAKE00000"}' } },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(reply({ content: 'I cannot look that up here.' }));
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'charges for cus_FAKE00000' }], [charges], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+      identity: { emails: new Set(['me@example.com']), operator: false },
+    });
+    expect(r.toolCalls[0].outcome).toBe('failed');
+    expect(stripeCalls()).toHaveLength(0);
+  });
+
+  it('bypasses binding for a signed-in operator on the agent workspace', async () => {
+    fetchMock
+      .mockResolvedValueOnce(reply({ tool_calls: [findCall('c1', 'anyone@example.com')] }))
+      .mockResolvedValueOnce(new Response('{"data":[]}', { status: 200 }))
+      .mockResolvedValueOnce(reply({ content: 'No Stripe customer by that email.' }));
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'check anyone@example.com' }], [stripeFind], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+      identity: { emails: new Set(), operator: true },
+    });
+    expect(r.toolCalls[0].outcome).toBe('ran');
+    expect(stripeCalls()).toHaveLength(1);
+  });
+
+  it('blocks an unanchored gated call before it reaches the approval queue', async () => {
+    const refund = {
+      name: 'stripe_create_refund',
+      description: 'refund',
+      method: 'POST' as const,
+      url: 'https://api.stripe.com/v1/refunds',
+      params: { charge: 'ch id', amount: 'cents' },
+      approval: true,
+      identity: true,
+    };
+    fetchMock
+      .mockResolvedValueOnce(
+        reply({
+          tool_calls: [
+            { id: 'c1', function: { name: 'stripe_create_refund', arguments: '{"charge":"ch_FOREIGN1","amount":"500"}' } },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(reply({ content: 'I cannot do that here.' }));
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: wsId, name: 'T3', apiKeyHash: 'h-t3', apiKeyPreview: 'p', hosted: true })
+      .returning();
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'refund charge ch_FOREIGN1' }], [refund], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+      agent,
+      identity: { emails: new Set(['me@example.com']), operator: false },
+    });
+    // not 'proposed' — the call never reached the approval queue
+    expect(r.toolCalls[0].outcome).toBe('failed');
+    expect(stripeCalls()).toHaveLength(0);
+  });
+});
+
+describe('verifiedIdentityFor', () => {
+  const mkAgent = async (name: string, ws = wsId) => {
+    const [a] = await db
+      .insert(agents)
+      .values({ workspaceId: ws, name, apiKeyHash: `h-${name}`, apiKeyPreview: 'p', hosted: true })
+      .returning();
+    return a;
+  };
+  const mkConv = async (agentId: string, externalId: string, userProfile?: object) => {
+    const [c] = await db
+      .insert(conversations)
+      .values({ agentId, externalId, state: 'active', userProfile })
+      .returning();
+    return c;
+  };
+
+  it('a messenger binding verifies nothing — typed emails are just claims', async () => {
+    const a = await mkAgent('msgr');
+    const [ch] = await db
+      .insert(channels)
+      .values({ workspaceId: wsId, agentId: a.id, kind: 'messenger', name: 'Page' })
+      .returning();
+    const conv = await mkConv(a.id, 'messenger:psid1', { id: 'psid1', email: 'claimed@x.com' });
+    await db
+      .insert(channelBindings)
+      .values({ channelId: ch.id, conversationId: conv.id, platformUserId: 'psid1' });
+    const id = await verifiedIdentityFor(db, conv, wsId);
+    expect(id.operator).toBe(false);
+    // a profile email nobody verified does not count
+    expect(id.emails.has('claimed@x.com')).toBe(false);
+  });
+
+  it('an email-channel sender is verified — their address anchors lookups', async () => {
+    const a = await mkAgent('mail');
+    const [ch] = await db
+      .insert(channels)
+      .values({ workspaceId: wsId, agentId: a.id, kind: 'gmail', name: 'Inbox' })
+      .returning();
+    const conv = await mkConv(a.id, 'gmail:thread1', { email: 'real-sender@x.com' });
+    await db
+      .insert(channelBindings)
+      .values({ channelId: ch.id, conversationId: conv.id, platformUserId: 'real-sender@x.com' });
+    const id = await verifiedIdentityFor(db, conv, wsId);
+    expect(id.emails.has('real-sender@x.com')).toBe(true);
+    expect(id.operator).toBe(false);
+  });
+
+  it('a contact\'s email-channel identity counts across channels', async () => {
+    // Same person on Messenger AND email: the email-channel identity
+    // authenticates that address for every conversation of the contact.
+    const a = await mkAgent('xchan');
+    const [messenger] = await db
+      .insert(channels)
+      .values({ workspaceId: wsId, agentId: a.id, kind: 'messenger', name: 'Page2' })
+      .returning();
+    const [gmail] = await db
+      .insert(channels)
+      .values({ workspaceId: wsId, agentId: a.id, kind: 'gmail', name: 'Inbox2' })
+      .returning();
+    const [contact] = await db
+      .insert(contacts)
+      .values({ workspaceId: wsId, email: 'known@x.com' })
+      .returning();
+    await db
+      .insert(contactIdentities)
+      .values({ contactId: contact.id, channelId: gmail.id, platformUserId: 'known@x.com' });
+    const conv = await mkConv(a.id, 'messenger:psid2', { id: 'psid2' });
+    await db.update(conversations).set({ contactId: contact.id }).where(eq(conversations.id, conv.id));
+    await db
+      .insert(channelBindings)
+      .values({ channelId: messenger.id, conversationId: conv.id, platformUserId: 'psid2' });
+    const id = await verifiedIdentityFor(db, { ...conv, contactId: contact.id }, wsId);
+    expect(id.emails.has('known@x.com')).toBe(true);
+    expect(id.operator).toBe(false);
+  });
+
+  it('a signed-in member is operator on their own workspace only', async () => {
+    const a = await mkAgent('op');
+    const [u] = await db
+      .insert(users)
+      .values({ email: 'op@janis.ai', name: 'Op' })
+      .returning();
+    await db.insert(memberships).values({ userId: u.id, workspaceId: wsId, role: 'admin', acceptedAt: new Date() });
+    const conv = await mkConv(a.id, 'webchat:ask1', {
+      email: 'op@janis.ai',
+      external_id: u.id,
+      identity_verified: true,
+    });
+    const own = await verifiedIdentityFor(db, conv, wsId);
+    expect(own.operator).toBe(true);
+    expect(own.emails.has('op@janis.ai')).toBe(true);
+
+    // same signed-in user, someone else's agent → not an operator there
+    const [otherWs] = await db.insert(workspaces).values({ name: 'Other', plan: 'free' }).returning();
+    const otherAgent = await mkAgent('op2', otherWs.id);
+    const foreignConv = await mkConv(otherAgent.id, 'webchat:ask2', {
+      email: 'op@janis.ai',
+      external_id: u.id,
+      identity_verified: true,
+    });
+    const foreign = await verifiedIdentityFor(db, foreignConv, otherWs.id);
+    expect(foreign.operator).toBe(false);
+    expect(foreign.emails.has('op@janis.ai')).toBe(true); // still their own verified email
   });
 });

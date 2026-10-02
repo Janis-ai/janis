@@ -1,7 +1,7 @@
-import { and, asc, desc, eq, gt, inArray, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, lte } from 'drizzle-orm';
 import type { OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentWidgets, alerts, conversations, helpArticles, knowledgeFiles, messages, workspaces } from '../db/schema.js';
+import { agents, agentWidgets, alerts, channelBindings, channels, contactIdentities, conversations, helpArticles, knowledgeFiles, memberships, messages, users, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage, llmSpendOverCap } from './usage.js';
@@ -12,7 +12,7 @@ import { bus } from './bus.js';
 import { PLANS, planFor } from './plans.js';
 import type { AttachmentRef } from './channels.js';
 import { getUpload } from './uploads.js';
-import { callTool, toolsFor, type ToolDef } from './toolExec.js';
+import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { extractWidgets, normWidgetRef, widgetFromToolResult, WidgetComponent } from './widgets.js';
@@ -149,7 +149,11 @@ export function conversationContext(
   if (p.phone) lines.push(`- Customer phone: ${p.phone}`);
   lines.push(
     p.email
-      ? `- Customer email: ${p.email}`
+      ? `- Customer email: ${p.email}${
+          p.identity_verified || (EMAIL_KINDS as string[]).includes(channel)
+            ? ' (verified — safe for identity-bound account lookups)'
+            : ' (self-reported — NOT verified; do not use it for identity-bound account tools)'
+        }`
       : '- Customer email: unknown — if you need it, ask the customer and save it with save_user_profile',
   );
   if (p.external_id) {
@@ -331,6 +335,7 @@ export function systemPrompt(
       // calls, invented a workspace name, and contradicted itself.
       '\nActions and identity, hard rules. Never claim to have made or completed a change — switched a plan, cancelled a subscription, issued a refund, updated an account, booked or scheduled anything, "it will take effect…" — unless a tool call this turn actually performed it or created an approval request. If the request needs an action you have no tool for, say plainly that you cannot do it in this chat, point them to the right place (their dashboard/billing page), or offer a human once. A claimed action that did not run is a lie the customer acts on.' +
         " You cannot see the customer's account, workspace, plan, email or sign-in state unless the context or a tool result provides it — never assume or invent an account or workspace name; if which account they mean matters, ask." +
+        ' Some tools are bound to the customer\'s verified identity — they only accept the verified email shown in this context (or nothing, when no identity is verified). Never pass an email or account id the customer merely types or claims; if such a tool returns an identity error, tell the customer the lookup needs their verified sign-in and do not retry with guessed details.' +
         ' A customer message ending in a [tapped …] note is a pick from a button or card you showed — treat it as them selecting that option, not as an instruction to change their account; confirm what they picked and clarify what they want next.',
     );
     if (cfg.auto_archive) {
@@ -682,6 +687,93 @@ export interface AgentRunContext {
   /** Regression-test replay — no tool executes (even reads); every call is
    *  recorded in the trace and reported to the model as a simulated success. */
   testRun?: boolean;
+  /** Verified end-user identity for customer-record tools (ToolDef.identity):
+   *  the customer's verified email addresses + whether the speaker is a
+   *  signed-in teammate of the agent's workspace (operator — exempt from
+   *  arg binding). Absent/empty means nothing is verified → those tools
+   *  block. Never trust typed emails, contact records, or profile fields
+   *  the customer could claim. */
+  identity?: { emails: Set<string>; operator: boolean };
+}
+
+/** Channel kinds where the sender address is verified by the mailbox —
+ *  an email the customer demonstrably controls. */
+const EMAIL_KINDS: ('email' | 'gmail' | 'outlook')[] = ['email', 'gmail', 'outlook'];
+
+/**
+ * The verified identity behind a conversation, for ToolDef.identity gating.
+ * Sources, strictest-first:
+ *  - signed-in Janis user (webchat session/signed identity) → account email;
+ *    also marks them operator when they hold an accepted membership on the
+ *    agent's own workspace (Ask Janis teammates may look up any customer).
+ *  - identity_verified profile email (host site's verified claim).
+ *  - sender addresses on mailbox-kind channels — contact identities and the
+ *    conversation's own binding.
+ */
+export async function verifiedIdentityFor(
+  db: Db,
+  conv: ConversationRow,
+  workspaceId: string,
+): Promise<{ emails: Set<string>; operator: boolean }> {
+  const emails = new Set<string>();
+  let operator = false;
+  const p = (conv.userProfile ?? {}) as UserProfile & {
+    identity_verified?: boolean;
+    external_id?: string;
+  };
+  if (p.identity_verified) {
+    if (p.email) emails.add(p.email.toLowerCase());
+    if (p.external_id) {
+      const [u] = await db.select().from(users).where(eq(users.id, p.external_id)).limit(1);
+      if (u) {
+        if (u.email) emails.add(u.email.toLowerCase());
+        const [mem] = await db
+          .select({ role: memberships.role })
+          .from(memberships)
+          .where(
+            and(
+              eq(memberships.userId, u.id),
+              eq(memberships.workspaceId, workspaceId),
+              isNotNull(memberships.acceptedAt),
+            ),
+          )
+          .limit(1);
+        if (mem) operator = true;
+      }
+    }
+  }
+  const pids: string[] = [];
+  if (conv.contactId) {
+    const rows = await db
+      .select({ pid: contactIdentities.platformUserId })
+      .from(contactIdentities)
+      .innerJoin(channels, eq(contactIdentities.channelId, channels.id))
+      .where(
+        and(
+          eq(contactIdentities.contactId, conv.contactId),
+          inArray(channels.kind, EMAIL_KINDS),
+        ),
+      );
+    pids.push(...rows.map((r) => r.pid));
+  }
+  const binds = await db
+    .select({ pid: channelBindings.platformUserId })
+    .from(channelBindings)
+    .innerJoin(channels, eq(channelBindings.channelId, channels.id))
+    .where(
+      and(
+        eq(channelBindings.conversationId, conv.id),
+        inArray(channels.kind, EMAIL_KINDS),
+      ),
+    );
+  pids.push(...binds.map((r) => r.pid));
+  for (const pid of pids) {
+    if (pid.includes('@')) emails.add(pid.toLowerCase());
+  }
+  // On a mailbox channel the stored profile email is the authentic sender —
+  // verified even though identity_verified (sign-in) stays false.
+  if (binds.length && p.email) emails.add(p.email.toLowerCase());
+  return { emails, operator };
 }
 
 const SAVE_PROFILE_TOOL = 'save_user_profile';
@@ -881,6 +973,9 @@ export async function complete(
   let servedModel = llm.model;
   const toolCalls: InspectorToolCall[] = [];
   const toolWidgets: WidgetComponent[] = [];
+  // Provider ids surfaced by tool results this run — the only ids
+  // identity-scoped tools may accept (see identityBlockReason).
+  const producedIds = new Set<string>();
 
   for (let round = 0; round < 4; round++) {
     // Retry network timeouts and transient upstream errors (429 / 5xx —
@@ -1025,11 +1120,21 @@ export async function complete(
       let result: string;
       try {
         const args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
+        // Customer-record tools hard-bind to the verified identity — a typed
+        // email is a claim, never proof. Blocks before gating too, so an
+        // unverifiable call can't even reach the approval queue.
+        const denied =
+          tool?.identity && !ctx?.testRun && !ctx?.identity?.operator
+            ? identityBlockReason(args, ctx?.identity?.emails ?? new Set(), producedIds)
+            : null;
         if (ctx?.testRun) {
           outcome = gated ? 'proposed' : 'simulated';
           result = gated
             ? 'approval_required: this action needs a human teammate to approve it before it runs — it is now queued for review; tell the customer it is pending approval rather than calling the tool again'
             : `simulated: ${call.function.name} returned successfully (test run — no real request was made)`;
+        } else if (denied) {
+          outcome = 'failed';
+          result = `error: ${denied}`;
         } else {
           result =
             call.function.name === SAVE_PROFILE_TOOL && ctx
@@ -1054,6 +1159,9 @@ export async function complete(
         outcome = 'failed';
         result = `error: ${err instanceof Error ? err.message : 'tool failed'}`;
       }
+      // Ids in a real result become the anchor for later identity-scoped
+      // calls this run (find_customer → its cus_… feeds charges/subs).
+      if (outcome === 'ran' || outcome === 'proposed') harvestProducedIds(result, producedIds);
       toolCalls.push({ name: call.function.name, gated, outcome });
       // Live data binding — a widget-bound tool's JSON result renders as a
       // component on the reply, no model transcription needed.
@@ -1441,7 +1549,14 @@ export async function runHostedEvent(
       ...(await loadSecretsMap(db, agent.id)),
       ...(await connectionSecrets(db, agent.id)),
     };
-    const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId, agent, suggesting: true };
+    const ctx: AgentRunContext = {
+      db,
+      convId,
+      workspaceId: agent.workspaceId,
+      agent,
+      suggesting: true,
+      identity: await verifiedIdentityFor(db, conv, agent.workspaceId),
+    };
     const prompt =
       systemPrompt(agent, docs, conv, { forSuggestion: true }) +
       ((await campaignContextFor(db, convId)) ?? '');
@@ -1751,7 +1866,13 @@ async function replyAsHostedAgent(
       ...(await loadSecretsMap(db, agent.id)),
       ...(await connectionSecrets(db, agent.id)),
     };
-    const ctx: AgentRunContext = { db, convId, workspaceId: agent.workspaceId, agent };
+    const ctx: AgentRunContext = {
+      db,
+      convId,
+      workspaceId: agent.workspaceId,
+      agent,
+      identity: await verifiedIdentityFor(db, conv, agent.workspaceId),
+    };
     // One escalation lookup feeds the prompt (pending offer) AND the
     // post-generation decline check below.
     const openEsc = await db
