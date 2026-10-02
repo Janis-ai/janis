@@ -182,13 +182,7 @@ export function ChannelCard({
             </div>
             <WebchatIdentity channel={ch} />
           </details>
-          <details className="webhook-details appearance-details" open style={{ marginTop: 8 }}>
-            <summary>
-              <span className="details-title">Appearance</span>
-              <span className="details-sub">branding for the embedded bubble</span>
-            </summary>
-            <WebchatBranding channel={ch} />
-          </details>
+          <WebchatBranding channel={ch} />
         </>
       )}
       {ch.kind === 'email' && ch.meta.inbound_address && (
