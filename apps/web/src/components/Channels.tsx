@@ -93,6 +93,18 @@ export function ChannelCard({
       onRemoved?.();
     },
   });
+  // Legacy meta channels predate auto-generated verify tokens — mint one.
+  const regenToken = useMutation({
+    mutationFn: () =>
+      api(`/api/channels/${ch.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ regenerate_verify_token: true }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', ch.id] });
+    },
+  });
   return (
     <div id={`ch-${ch.id}`} className="card channel-card">
       {confirmEl}
@@ -131,6 +143,26 @@ export function ChannelCard({
           </strong>
         )}
         <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
+        {ch.kind === 'messenger' && ch.meta.page_id && (
+          <a
+            className="btn"
+            href={`https://m.me/${ch.meta.page_id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Open in Messenger
+          </a>
+        )}
+        {ch.kind === 'instagram' && ch.meta.username && (
+          <a
+            className="btn"
+            href={`https://ig.me/m/${ch.meta.username}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Open in Instagram
+          </a>
+        )}
         <button
           className="btn danger"
           disabled={remove.isPending}
@@ -321,13 +353,37 @@ export function ChannelCard({
           </div>
         </details>
       )}
-      {ch.meta.via !== 'oauth' && ch.kind !== 'webchat' && ch.kind !== 'email' && ch.kind !== 'gmail' && ch.kind !== 'outlook' && ch.kind !== 'voice' && ch.kind !== 'sms' && (
+      {ch.meta.via !== 'oauth' && ['messenger', 'instagram', 'whatsapp'].includes(ch.kind) && (
       <details className="webhook-details">
-        <summary>Webhook details</summary>
-        <div className="mono" style={{ marginTop: 6 }}>
-          <div>URL: {apiOrigin}/channels/meta/webhook</div>
-          <div>Verify token: {ch.meta.verify_token}</div>
+        <summary>
+          <span className="details-title">Webhook subscription</span>
+          <span className="details-sub">manual Meta app only — OAuth pages subscribe automatically</span>
+        </summary>
+        <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
+          In the Meta app (developers.facebook.com → your app → Messenger → Webhooks),
+          edit this page's subscription with the callback URL and verify token below,
+          and subscribe to <span className="mono">messages</span> +{' '}
+          <span className="mono">messaging_postbacks</span>. If the page already receives
+          messages, nothing to do here.
         </div>
+        <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
+          <div>URL: {apiOrigin}/channels/meta/webhook</div>
+          {ch.meta.verify_token && <div>Verify token: {ch.meta.verify_token}</div>}
+        </div>
+        {!ch.meta.verify_token && (
+          <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+            This channel predates auto-generated verify tokens —{' '}
+            <button
+              type="button"
+              className="btn"
+              disabled={regenToken.isPending}
+              onClick={() => regenToken.mutate()}
+            >
+              {regenToken.isPending ? 'Generating…' : 'generate one'}
+            </button>{' '}
+            and paste it into the page subscription.
+          </div>
+        )}
       </details>
       )}
     </div>

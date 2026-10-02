@@ -135,6 +135,9 @@ const patchChannel = z.object({
     .optional(),
   // gmail only: extra poll query terms ("label:support -in:spam"); '' clears
   gmail_query: z.string().max(300).optional(),
+  // meta channels: mint a fresh webhook verify token (backfills channels
+  // created before auto-generation)
+  regenerate_verify_token: z.literal(true).optional(),
   // reassign which agent answers this channel
   agent_id: z.string().uuid().optional(),
 });
@@ -426,6 +429,12 @@ export function channelApiRoutes(db: Db) {
     if (body.gmail_query !== undefined && row.kind !== 'gmail') {
       return c.json({ error: 'gmail_query applies to gmail channels' }, 400);
     }
+    if (
+      body.regenerate_verify_token &&
+      !['messenger', 'instagram', 'whatsapp'].includes(row.kind)
+    ) {
+      return c.json({ error: 'verify_token applies to meta channels' }, 400);
+    }
     if (body.agent_id) {
       const [target] = await db
         .select({ id: agents.id })
@@ -471,6 +480,9 @@ export function channelApiRoutes(db: Db) {
     if (body.gmail_query !== undefined) {
       if (body.gmail_query === '') delete creds.gmail_query;
       else creds.gmail_query = body.gmail_query;
+    }
+    if (body.regenerate_verify_token) {
+      creds.verify_token = randomBytes(16).toString('hex');
     }
     if (body.email_filters !== undefined) {
       const f = body.email_filters;
