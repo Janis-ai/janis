@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, stripWidgetClaims, systemPrompt, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, stripWidgetClaims, systemPrompt, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 
 let db: Db;
@@ -503,6 +503,19 @@ describe('extractButtons', () => {
     const long = 'this button label is far too long to ever fit on a chat chip anywhere';
     const r = extractButtons(`x\nBUTTON: ${long}`);
     expect(r.buttons).toEqual(['this button label is far too long to ever fit on a chat']);
+  });
+
+  it('derives the channel key from profile or externalId', () => {
+    expect(channelKeyFor({ externalId: 'whatsapp:+1555', userProfile: null } as never)).toBe('whatsapp');
+    expect(channelKeyFor({ externalId: 'web:abc', userProfile: { channel: 'webchat' } } as never)).toBe('webchat');
+    expect(channelKeyFor(undefined)).toBe('external');
+  });
+
+  it('flags labels over the Meta 20-char display cap', () => {
+    expect(buttonLabelOverflow(['No, try something else'])).toBe(true);
+    expect(buttonLabelOverflow(['No, try something', 'ok'])).toBe(false);
+    expect(buttonLabelOverflow([{ type: 'email' }, 'a'.repeat(25)])).toBe(true);
+    expect(buttonLabelOverflow([])).toBe(false);
   });
 
   it('turns ASK lines into contact-field quick replies', () => {

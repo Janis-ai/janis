@@ -83,6 +83,16 @@ export function rankDocs(
 
 /** Text the retrieval ranks against — the customer's recent messages plus
  *  the rolling summary (it carries the thread's older context). */
+/** Channel kind for a conversation — userProfile.channel when the profile
+ * knows it, else the externalId prefix. Shared by the prompt builder and
+ * the reply-path guards that behave differently per channel. */
+export function channelKeyFor(conv?: ConversationRow | null): string {
+  return (
+    (((conv?.userProfile ?? {}) as UserProfile).channel ?? conv?.externalId.split(':')[0]) ||
+    'external'
+  );
+}
+
 export function knowledgeQueryFor(history: ChatMsg[], conv?: ConversationRow): string {
   const recent = history
     .filter((m) => m.role === 'user')
@@ -278,10 +288,7 @@ export function systemPrompt(
   );
   // Rich channels render **bold**; everywhere else markup is stripped on
   // egress — steering the model off it avoids wasted tokens and odd drafts.
-  const chan =
-    (((conv?.userProfile ?? {}) as UserProfile).channel ??
-      conv?.externalId.split(':')[0]) ||
-    'external';
+  const chan = channelKeyFor(conv);
   const richFmt = chan === 'webchat' || chan === 'whatsapp';
   parts.push(
     '\nKeep replies short and conversational — this is a live chat, not an essay. A sentence or three unless the customer asks for detail.' +
@@ -292,7 +299,11 @@ export function systemPrompt(
   );
   if (!opts.forSuggestion) {
     parts.push(
-      '\nYou CAN offer tappable reply buttons — they render as real buttons on the customer\'s chat. When 2-4 short choices would move the conversation forward (e.g. picking a plan, yes/no, sharing an email vs learning more), end your reply with lines starting "BUTTON:" — one per choice, each under 20 characters (e.g. "BUTTON: See pricing"). They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps.' +
+      '\nYou CAN offer tappable reply buttons — they render as real buttons on the customer\'s chat. When 2-4 short choices would move the conversation forward (e.g. picking a plan, yes/no, sharing an email vs learning more), end your reply with lines starting "BUTTON:" — one per choice, each under 20 characters (e.g. "BUTTON: See pricing").' +
+      (chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp'
+        ? ' This channel hard-cuts button labels at 20 characters — a longer label ships visibly truncated, so count them.'
+        : '') +
+      ' They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps.' +
       ' Never tell the customer you cannot show buttons, cards or other components — you always can here; emit the BUTTON:/WIDGET: line rather than claiming it is impossible.' +
       '\nIf you need the customer\'s email or phone number, end your reply with a line "ASK: email" or "ASK: phone" — it becomes a one-tap share control where the channel supports it (otherwise they can type it). Still ask in the text — never rely on the control alone.',
     );
@@ -683,6 +694,17 @@ const CLAIM_GUARD_RETRY =
 const WIDGET_GUARD_RETRY =
   'Your previous draft mis-described the components in this reply: never say "here are the cards/buttons" unless you emitted a WIDGET: or button line this turn, ' +
   'and never apologise that a component failed to render — if you emitted one, it rendered. Rewrite without the false claim.';
+
+const BUTTON_LEN_GUARD_RETRY =
+  'Your previous draft was not sent: a BUTTON: label was over 20 characters, which this channel cuts off. ' +
+  'Rewrite it with every button label at 20 characters or fewer — count the characters including spaces ' +
+  '("Something else" is 14, "No, try something else" is 22). Keep the reply text and any components the same.';
+
+/** Meta channels display-truncate button titles at 20 chars — a label past
+ * that ships visibly cut. Pure predicate so the regen guard is testable. */
+export function buttonLabelOverflow(buttons: ReturnType<typeof extractButtons>['buttons']): boolean {
+  return buttons.some((b) => typeof b === 'string' && [...b].length > 20);
+}
 
 const LINK_GUARD_RETRY =
   'Your previous draft included links that do not work — they were removed, so the reply now points at nothing. ' +
@@ -1995,6 +2017,10 @@ async function replyAsHostedAgent(
       ]);
     };
     const tGen = Date.now();
+    // Meta display-truncates button titles at 20 chars — only those channels
+    // gate on label length.
+    const chan = channelKeyFor(conv);
+    const buttonCapApplies = chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp';
     // An empty completion is usually a provider blip (transient 500, timeout,
     // a tool loop that never wrapped up) — one retry is cheaper than paging
     // a human over it. Only the retry's output is kept.
@@ -2038,6 +2064,15 @@ async function replyAsHostedAgent(
       widgets = w;
       buttons = b;
       learns = l;
+      // Over-long BUTTON label on a 20-char channel — the model cannot count,
+      // so prompt guidance alone leaks mid-word truncations. Regenerate once
+      // with explicit feedback; a survivor ships with display-only truncation
+      // (the tap marker still carries the full label).
+      if (attempt === 0 && buttonCapApplies && buttonLabelOverflow(buttons)) {
+        console.warn(`[hosted] over-long button label conv=${convId} — regenerating`);
+        prompt += '\n\n' + BUTTON_LEN_GUARD_RETRY;
+        continue;
+      }
       // Unbacked action claim — "I've set your plan to Free" with zero tool
       // calls. Regenerate once with explicit feedback before stripping.
       if (

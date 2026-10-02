@@ -4,6 +4,7 @@ import {
   fetchPlatformProfile,
   formatForChannel,
   parseMetaWebhook,
+  qrTitle,
   selectMarker,
   sendChannelMessage,
   verifyMetaSignature,
@@ -392,6 +393,18 @@ describe('fetchPlatformProfile', () => {
   });
 });
 
+describe('qrTitle', () => {
+  it('passes short labels through and cuts long ones at a word boundary', () => {
+    expect(qrTitle('No thanks')).toBe('No thanks');
+    expect(qrTitle('No, try something else')).toBe('No, try something');
+    expect(qrTitle('A very long reply title that gets cut')).toBe('A very long reply');
+  });
+  it('hard-slices when no usable word boundary exists', () => {
+    expect(qrTitle('ABCDEFGHIJKLMNOPQRSTUV')).toBe('ABCDEFGHIJKLMNOPQRST');
+    expect(qrTitle('x supercalifragilisticexpialidocious')).toBe('x supercalifragilist');
+  });
+});
+
 describe('formatForChannel', () => {
   it('keeps canonical markdown for webchat — the widget renders it', () => {
     const t = '**bold** and *italic* and ~~strike~~ and `code` and [docs](https://x.com/a)';
@@ -509,7 +522,7 @@ describe('sendChannelMessage quick replies', () => {
         type: 'reply',
         reply: {
           id: selectMarker('A very long reply title that gets cut').slice(0, 256),
-          title: 'A very long reply ti',
+          title: 'A very long reply',
         },
       },
       { type: 'reply', reply: { id: selectMarker('B'), title: 'B' } },

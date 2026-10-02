@@ -159,9 +159,16 @@ export interface AttachmentRef {
  *  truncate at 20 chars), `of` = which card/widget it sat on. */
 const SELECT_MARKER = 'janis:sel:';
 /** Meta/WhatsApp hard-cap button titles at 20 CHARACTERS — slice by code
- * point so an emoji never gets cut mid-surrogate-pair into mojibake.
+ * point so an emoji never gets cut mid-surrogate-pair into mojibake, at a
+ * word boundary when a usable one exists ("…something" beats "…el").
  * Display-only: payloads/ids carry the full label so taps resolve whole. */
-export const qrTitle = (t: string) => [...t].slice(0, 20).join('');
+export function qrTitle(t: string): string {
+  const chars = [...t];
+  if (chars.length <= 20) return t;
+  const win = chars.slice(0, 20).join('');
+  const cut = win.lastIndexOf(' ');
+  return (cut >= 8 ? win.slice(0, cut) : win).trimEnd();
+}
 
 export function selectMarker(label: string, of?: string): string {
   return (
