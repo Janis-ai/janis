@@ -1,4 +1,5 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { Sun, Moon, Monitor } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
@@ -567,16 +568,77 @@ const normHex = (v: string | undefined) => {
   return '#' + (h.length === 3 ? [...h].map((c) => c + c).join('') : h);
 };
 
-/** Webchat widget appearance editor — PATCHes display config on the channel. */
+/** Chatbase-style radius choices — corner glyph + px value. */
+const RADIUS_OPTS = [
+  { v: 0, label: 'Square' },
+  { v: 8, label: 'Soft' },
+  { v: 14, label: 'Round' },
+  { v: 22, label: 'Bubble' },
+] as const;
+
+/** Label-above-control wrapper used inside the bubble editor sections. */
+function BubField({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="bub-field">
+      <span className="bub-field-label">{label}</span>
+      {children}
+      {hint && <span className="hint">{hint}</span>}
+    </div>
+  );
+}
+
+/** Toggle row — label + hint left, pill switch right. */
+function BubSwitch({
+  label,
+  hint,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label className="bub-toggle" style={disabled ? { opacity: 0.55 } : undefined}>
+      <span className="grow" style={{ minWidth: 0 }}>
+        {label}
+        {hint && <span className="hint">{hint}</span>}
+      </span>
+      <input
+        type="checkbox"
+        className="bub-switch"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+    </label>
+  );
+}
+
+/** Webchat bubble appearance editor — PATCHes display config on the channel.
+ *  Chatbase-inspired: sectioned controls left, live preview right, sticky
+ *  unsaved-changes bar. */
 function WebchatBranding({ channel }: { channel: Channel }) {
   const qc = useQueryClient();
   const b = channel.meta.branding ?? {};
-  const [f, setF] = useState({
+  const initial = {
     title: b.title ?? '',
     subtitle: b.subtitle ?? '',
     greeting: b.greeting ?? '',
     accent: normHex(b.accent),
     position: b.position ?? 'right',
+    radius: b.radius ?? 14,
     logo_url: b.logo_url ?? '',
     logo_padding: b.logo_padding ?? 2,
     logo_radius: b.logo_radius ?? 8,
@@ -594,7 +656,11 @@ function WebchatBranding({ channel }: { channel: Channel }) {
     // absent on channels saved before the engine switch — 'llm' matches
     // the server default so their behaviour is preserved
     dictation_advanced: b.dictation_engine !== 'browser',
-  });
+  };
+  const [f, setF] = useState(initial);
+  // Snapshot of the last persisted values — drives the unsaved-changes bar.
+  const [saved, setSaved] = useState(initial);
+  const dirty = JSON.stringify(f) !== JSON.stringify(saved);
   const { data: wsDetail } = useQuery({
     queryKey: ['workspace'],
     queryFn: () => api<{ workspace: { plan: string } }>('/api/workspace'),
@@ -643,6 +709,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
             logo_radius: f.logo_radius,
             logo_border_width: f.logo_border_width,
             logo_border_color: f.logo_border_color,
+            radius: f.radius,
             quick_replies: parseReplies(f.quick_replies),
             teaser_text: f.teaser_text,
             proactive: f.proactive,
@@ -662,270 +729,340 @@ function WebchatBranding({ channel }: { channel: Channel }) {
       // Ask Janis caches the bootstrap 5min — drop it so the rail reflects
       // the new branding immediately rather than looking broken.
       void qc.invalidateQueries({ queryKey: ['ask-janis-config', channel.id] });
+      setSaved(f);
       setMsg('Saved — the bubble picks it up on the next page load.');
     },
     onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),
   });
+  const accentValid = f.accent === '' || /^#[0-9a-fA-F]{6}$/.test(f.accent);
   return (
     <form
-      className="branding-form"
-      style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, maxWidth: 460 }}
+      className="bub-editor"
       onSubmit={(e) => {
         e.preventDefault();
+        if (!accentValid) {
+          setMsg('Accent needs a 6-digit hex colour, e.g. #5b21b6');
+          return;
+        }
         save.mutate();
       }}
     >
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <button className="btn save" disabled={save.isPending}>Save appearance</button>
+      <div className="bub-controls">
+        <details className="bub-sec" open>
+          <summary>Content</summary>
+          <div className="bub-sec-body">
+            <BubField label="Header title">
+              <input
+                placeholder={`Defaults to the bubble name (${channel.name})`}
+                value={f.title}
+                onChange={(e) => setF({ ...f, title: e.target.value })}
+              />
+            </BubField>
+            <BubField label="Subtitle">
+              <input
+                placeholder="Defaults to the agent name"
+                value={f.subtitle}
+                onChange={(e) => setF({ ...f, subtitle: e.target.value })}
+              />
+            </BubField>
+            <BubField label="Greeting">
+              <input
+                placeholder="Overrides the agent's greeting (optional)"
+                value={f.greeting}
+                onChange={(e) => setF({ ...f, greeting: e.target.value })}
+              />
+            </BubField>
+            <BubField label="Quick replies" hint="Comma-separated — tappable prompts under the greeting">
+              <input
+                placeholder="Pricing, Support, Book demo"
+                value={f.quick_replies}
+                onChange={(e) => setF({ ...f, quick_replies: e.target.value })}
+              />
+            </BubField>
+          </div>
+        </details>
+        <details className="bub-sec">
+          <summary>Style</summary>
+          <div className="bub-sec-body">
+            <BubField label="Theme">
+              <div className="bub-seg">
+                {(
+                  [
+                    ['light', Sun, 'Light'],
+                    ['dark', Moon, 'Dark'],
+                    ['auto', Monitor, 'Match OS'],
+                  ] as const
+                ).map(([v, Icon, label]) => (
+                  <button
+                    key={v}
+                    type="button"
+                    className={f.theme === v ? 'on' : ''}
+                    onClick={() => setF({ ...f, theme: v })}
+                  >
+                    <Icon size={13} strokeWidth={1.8} /> {label}
+                  </button>
+                ))}
+              </div>
+            </BubField>
+            <BubField label="Accent colour" hint="Header, launcher and visitor bubbles">
+              <div className="bub-color">
+                <input
+                  type="color"
+                  className="swatch"
+                  value={normHex(f.accent)}
+                  onChange={(e) => setF({ ...f, accent: e.target.value })}
+                />
+                <input
+                  className="mono bub-hex"
+                  value={f.accent}
+                  spellCheck={false}
+                  onChange={(e) => {
+                    const v = e.target.value.trim();
+                    setF({ ...f, accent: v.startsWith('#') || v === '' ? v : '#' + v });
+                  }}
+                />
+              </div>
+            </BubField>
+            <BubField label="Corner radius">
+              <div className="bub-radius">
+                {RADIUS_OPTS.map(({ v, label }) => (
+                  <button
+                    key={v}
+                    type="button"
+                    title={`${label} · ${v}px`}
+                    className={f.radius === v ? 'on' : ''}
+                    onClick={() => setF({ ...f, radius: v })}
+                  >
+                    <i
+                      className="bub-corner"
+                      style={{ borderTopLeftRadius: v === 0 ? 0 : Math.max(3, Math.round(v * 0.65)) }}
+                    />
+                  </button>
+                ))}
+              </div>
+            </BubField>
+          </div>
+        </details>
+        <details className="bub-sec">
+          <summary>Launcher</summary>
+          <div className="bub-sec-body">
+            <BubField label="Position">
+              <div className="bub-pos">
+                {(['left', 'right'] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    className={f.position === p ? 'on' : ''}
+                    onClick={() => setF({ ...f, position: p })}
+                  >
+                    <span className={`bub-pos-page ${p}`} />
+                    {p === 'left' ? 'Bottom left' : 'Bottom right'}
+                  </button>
+                ))}
+              </div>
+            </BubField>
+            <BubField label="Logo" hint="Shows in the panel header and inside the launcher button">
+              <div className="row">
+                <input
+                  className="grow"
+                  placeholder="Image URL (optional)"
+                  value={f.logo_url}
+                  onChange={(e) => setF({ ...f, logo_url: e.target.value })}
+                />
+                <label className="btn" style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  Upload
+                  <input
+                    type="file"
+                    accept="image/*"
+                    hidden
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void uploadLogo(file);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+              </div>
+            </BubField>
+            {f.logo_url && (
+              <>
+                <div className="row">
+                  <img
+                    src={f.logo_url}
+                    alt="logo preview"
+                    style={{
+                      width: 32, height: 32, objectFit: 'contain',
+                      background: '#fff',
+                      padding: f.logo_padding,
+                      borderRadius: f.logo_radius,
+                      border: f.logo_border_width ? `${f.logo_border_width}px solid ${f.logo_border_color}` : '1px solid var(--border, #ddd)',
+                    }}
+                  />
+                  <button type="button" className="btn" onClick={() => setF({ ...f, logo_url: '' })}>
+                    Remove logo
+                  </button>
+                </div>
+                <div className="row wrap" style={{ gap: 12 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                    Inset
+                    <input
+                      type="number" min={0} max={16} style={{ width: 56 }}
+                      value={f.logo_padding}
+                      onChange={(e) => setF({ ...f, logo_padding: Math.max(0, Math.min(16, Number(e.target.value) || 0)) })}
+                    />
+                    px
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                    Corners
+                    <input
+                      type="number" min={0} max={16} style={{ width: 56 }}
+                      value={f.logo_radius}
+                      onChange={(e) => setF({ ...f, logo_radius: Math.max(0, Math.min(16, Number(e.target.value) || 0)) })}
+                    />
+                    px
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                    Outline
+                    <input
+                      type="number" min={0} max={4} style={{ width: 56 }}
+                      value={f.logo_border_width}
+                      onChange={(e) => setF({ ...f, logo_border_width: Math.max(0, Math.min(4, Number(e.target.value) || 0)) })}
+                    />
+                    px
+                    <input
+                      type="color" className="swatch" value={f.logo_border_color}
+                      onChange={(e) => setF({ ...f, logo_border_color: e.target.value })}
+                    />
+                  </label>
+                </div>
+                <div className="muted" style={{ fontSize: 12 }}>
+                  Inset also sets the breathing room around the logo inside the
+                  circular launcher button — the accent ring.
+                </div>
+              </>
+            )}
+          </div>
+        </details>
+        <details className="bub-sec">
+          <summary>Capabilities</summary>
+          <div className="bub-sec-body">
+            <BubSwitch
+              label="Proactive teaser"
+              hint="nudges first-time visitors after a delay"
+              checked={f.proactive}
+              onChange={(v) => setF({ ...f, proactive: v })}
+            />
+            {f.proactive && (
+              <>
+                <BubField label="Shows after">
+                  <div className="row" style={{ gap: 6 }}>
+                    <input
+                      type="number"
+                      min={0}
+                      max={300}
+                      style={{ width: 64 }}
+                      value={f.proactive_delay}
+                      onChange={(e) => setF({ ...f, proactive_delay: Math.max(0, Math.min(300, Number(e.target.value) || 0)) })}
+                    />
+                    <span className="muted">seconds</span>
+                  </div>
+                </BubField>
+                <BubField label="Teaser text" hint="Defaults to the greeting">
+                  <input
+                    placeholder="Need a hand?"
+                    value={f.teaser_text}
+                    onChange={(e) => setF({ ...f, teaser_text: e.target.value })}
+                  />
+                </BubField>
+              </>
+            )}
+            <BubSwitch
+              label="Reply sound"
+              hint="chime on a new reply while the panel is closed"
+              checked={f.sound}
+              onChange={(v) => setF({ ...f, sound: v })}
+            />
+            <BubSwitch
+              label="Help link"
+              hint={
+                externalHelp
+                  ? "links to the agent's external help centre"
+                  : hasHelp
+                    ? "links to the agent's published help articles"
+                    : "appears once an article is published — or set an external help link on the agent's Help page"
+              }
+              checked={f.show_help_link}
+              onChange={(v) => setF({ ...f, show_help_link: v })}
+            />
+            <BubSwitch
+              label="Microphone dictation"
+              hint="visitors can dictate — free via the browser (Chrome/Edge)"
+              checked={f.dictation}
+              onChange={(v) => setF({ ...f, dictation: v })}
+            />
+            {f.dictation && (
+              <div style={{ paddingLeft: 4 }}>
+                <BubSwitch
+                  label="Advanced speech recognition"
+                  hint="transcribes on Janis's keys — also works on Safari and Firefox, metered per minute"
+                  checked={f.dictation_advanced}
+                  onChange={(v) => setF({ ...f, dictation_advanced: v })}
+                />
+              </div>
+            )}
+            <BubSwitch
+              label='Remove "Powered by Janis"'
+              hint={freePlan ? 'paid plans only' : undefined}
+              checked={f.hide_powered_by}
+              disabled={freePlan}
+              onChange={(v) => setF({ ...f, hide_powered_by: v })}
+            />
+          </div>
+        </details>
       </div>
-      <div className="row">
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          Accent{' '}
-          <input
-            type="color"
-            className="swatch"
-            value={f.accent}
-            onChange={(e) => setF({ ...f, accent: e.target.value })}
+      <div className="bub-stage">
+        <div className="bub-canvas">
+          <WidgetPreview
+            accent={normHex(f.accent)}
+            title={f.title || channel.name}
+            subtitle={f.subtitle || `${channel.agent_name} · replies in seconds`}
+            greeting={f.greeting}
+            logo_url={f.logo_url}
+            logo_padding={f.logo_padding}
+            logo_radius={f.logo_radius}
+            logo_border_width={f.logo_border_width}
+            logo_border_color={f.logo_border_color}
+            quick_replies={parseReplies(f.quick_replies)}
+            position={f.position}
+            radius={f.radius}
+            theme={f.theme}
+            hidePoweredBy={f.hide_powered_by && !freePlan}
+            agentName={channel.agent_name}
+            hasHelp={showHelp}
           />
-          <span className="mono muted">{f.accent}</span>
-        </label>
-        <label className="grow" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          Position
-          <select value={f.position} onChange={(e) => setF({ ...f, position: e.target.value as 'left' | 'right' })}>
-            <option value="right">Bottom right</option>
-            <option value="left">Bottom left</option>
-          </select>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          Theme
-          <select
-            value={f.theme}
-            onChange={(e) => setF({ ...f, theme: e.target.value as 'light' | 'dark' | 'auto' })}
-          >
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-            <option value="auto">Match visitor's OS</option>
-          </select>
-        </label>
+        </div>
+        <span className="bub-stage-note muted">Live preview</span>
       </div>
-      <input
-        placeholder="Header title (defaults to bubble name)"
-        value={f.title}
-        onChange={(e) => setF({ ...f, title: e.target.value })}
-      />
-      <input
-        placeholder="Subtitle (defaults to agent name)"
-        value={f.subtitle}
-        onChange={(e) => setF({ ...f, subtitle: e.target.value })}
-      />
-      <input
-        placeholder="Greeting — overrides the agent's greeting (optional)"
-        value={f.greeting}
-        onChange={(e) => setF({ ...f, greeting: e.target.value })}
-      />
-      <div className="row">
-        <input
-          className="grow"
-          placeholder="Logo image URL — header + bubble icon (optional)"
-          value={f.logo_url}
-          onChange={(e) => setF({ ...f, logo_url: e.target.value })}
-        />
-        <label className="btn" style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}>
-          Upload image
-          <input
-            type="file"
-            accept="image/*"
-            hidden
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void uploadLogo(file);
-              e.target.value = '';
+      {dirty && (
+        <div className="bub-savebar">
+          <span className="grow">You have unsaved changes</span>
+          {msg && <span className="muted">{msg}</span>}
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setF(saved);
+              setMsg('');
             }}
-          />
-        </label>
-      </div>
-      {f.logo_url && (
-        <>
-          <div className="row">
-            <img
-              src={f.logo_url}
-              alt="logo preview"
-              style={{
-                width: 32, height: 32, objectFit: 'contain',
-                background: '#fff',
-                padding: f.logo_padding,
-                borderRadius: f.logo_radius,
-                border: f.logo_border_width ? `${f.logo_border_width}px solid ${f.logo_border_color}` : '1px solid var(--border, #ddd)',
-              }}
-            />
-            <button type="button" className="btn" onClick={() => setF({ ...f, logo_url: '' })}>
-              Remove logo
-            </button>
-          </div>
-          <div className="row wrap" style={{ gap: 12 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-              Inset
-              <input
-                type="number" min={0} max={16} style={{ width: 56 }}
-                value={f.logo_padding}
-                onChange={(e) => setF({ ...f, logo_padding: Math.max(0, Math.min(16, Number(e.target.value) || 0)) })}
-              />
-              px
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-              Corners
-              <input
-                type="number" min={0} max={16} style={{ width: 56 }}
-                value={f.logo_radius}
-                onChange={(e) => setF({ ...f, logo_radius: Math.max(0, Math.min(16, Number(e.target.value) || 0)) })}
-              />
-              px
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-              Outline
-              <input
-                type="number" min={0} max={4} style={{ width: 56 }}
-                value={f.logo_border_width}
-                onChange={(e) => setF({ ...f, logo_border_width: Math.max(0, Math.min(4, Number(e.target.value) || 0)) })}
-              />
-              px
-              <input
-                type="color" className="swatch" value={f.logo_border_color}
-                onChange={(e) => setF({ ...f, logo_border_color: e.target.value })}
-              />
-            </label>
-          </div>
-          <div className="muted" style={{ fontSize: 12 }}>
-            Inset also sets the breathing room around the logo inside the
-            circular launcher button — the accent ring.
-          </div>
-        </>
-      )}
-      <input
-        placeholder="Quick replies — comma-separated (optional, e.g. Pricing, Support, Book demo)"
-        value={f.quick_replies}
-        onChange={(e) => setF({ ...f, quick_replies: e.target.value })}
-      />
-      <div className="row">
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={f.proactive}
-            onChange={(e) => setF({ ...f, proactive: e.target.checked })}
-          />
-          Proactive teaser
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          after
-          <input
-            type="number"
-            min={0}
-            max={300}
-            style={{ width: 64 }}
-            value={f.proactive_delay}
-            onChange={(e) => setF({ ...f, proactive_delay: Math.max(0, Math.min(300, Number(e.target.value) || 0)) })}
-          />
-          s
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={f.sound}
-            onChange={(e) => setF({ ...f, sound: e.target.checked })}
-          />
-          Reply sound
-        </label>
-      </div>
-      <div className="row">
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: freePlan ? 0.55 : 1 }}>
-          <input
-            type="checkbox"
-            checked={f.hide_powered_by}
-            disabled={freePlan}
-            onChange={(e) => setF({ ...f, hide_powered_by: e.target.checked })}
-          />
-          Remove "Powered by Janis"
-        </label>
-        {freePlan && (
-          <span className="muted" style={{ fontSize: 12 }}>paid plans only</span>
-        )}
-      </div>
-      <div className="row">
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={f.show_help_link}
-            onChange={(e) => setF({ ...f, show_help_link: e.target.checked })}
-          />
-          Show help link
-        </label>
-        <span className="muted" style={{ fontSize: 12 }}>
-          {externalHelp
-            ? 'links to the agent\'s external help centre'
-            : hasHelp
-              ? 'links to the agent\'s published help articles'
-              : 'appears once an article is published — or set an external help link on the agent\'s Help page'}
-        </span>
-      </div>
-      {f.proactive && (
-        <input
-          placeholder="Teaser text (optional — defaults to the greeting)"
-          value={f.teaser_text}
-          onChange={(e) => setF({ ...f, teaser_text: e.target.value })}
-        />
-      )}
-      <div className="row">
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={f.dictation}
-            onChange={(e) => setF({ ...f, dictation: e.target.checked })}
-          />
-          Microphone dictation
-        </label>
-        <span className="muted" style={{ fontSize: 12 }}>
-          adds a mic so visitors can dictate — free via the browser's speech
-          recognition (Chrome/Edge)
-        </span>
-      </div>
-      {f.dictation && (
-        <div className="row" style={{ paddingLeft: 22 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input
-              type="checkbox"
-              checked={f.dictation_advanced}
-              onChange={(e) => setF({ ...f, dictation_advanced: e.target.checked })}
-            />
-            Advanced speech recognition (uses LLM tokens)
-          </label>
-          <span className="muted" style={{ fontSize: 12 }}>
-            transcribes on Janis's keys so the mic also works on Safari and
-            Firefox — metered per minute of audio on your plan, even when the
-            agent's own LLM is BYOK
-          </span>
+          >
+            Discard
+          </button>
+          <button className="btn save" disabled={save.isPending}>
+            {save.isPending ? 'Saving…' : 'Save changes'}
+          </button>
         </div>
       )}
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        {msg && <span className="muted">{msg}</span>}
-        <button className="btn save" disabled={save.isPending}>Save appearance</button>
-      </div>
-      <WidgetPreview
-        accent={f.accent}
-        title={f.title || channel.name}
-        subtitle={f.subtitle || `${channel.agent_name} · replies in seconds`}
-        greeting={f.greeting}
-        logo_url={f.logo_url}
-        logo_padding={f.logo_padding}
-        logo_radius={f.logo_radius}
-        logo_border_width={f.logo_border_width}
-        logo_border_color={f.logo_border_color}
-        quick_replies={parseReplies(f.quick_replies)}
-        position={f.position}
-        theme={f.theme}
-        hidePoweredBy={f.hide_powered_by && !freePlan}
-        agentName={channel.agent_name}
-        hasHelp={showHelp}
-      />
+      {!dirty && msg && <div className="bub-msg muted">{msg}</div>}
     </form>
   );
 }
@@ -947,6 +1084,7 @@ function WidgetPreview({
   logo_border_color,
   quick_replies,
   position,
+  radius,
   theme,
   hidePoweredBy,
   agentName,
@@ -963,6 +1101,7 @@ function WidgetPreview({
   logo_border_color: string;
   quick_replies: string[];
   position: 'left' | 'right';
+  radius: number;
   theme: 'light' | 'dark' | 'auto';
   hidePoweredBy: boolean;
   agentName: string;
@@ -986,7 +1125,7 @@ function WidgetPreview({
   };
   return (
     <div className="wp-stage">
-      <div className="widget-preview" style={{ background: pal.panel, color: pal.text }}>
+      <div className="widget-preview" style={{ background: pal.panel, color: pal.text, borderRadius: radius }}>
         <div className="wp-head" style={{ background: accent }}>
           {logo_url && <img src={logo_url} alt="" className="wp-logo" style={tileStyle} />}
           <div className="grow">

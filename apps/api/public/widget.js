@@ -221,7 +221,7 @@
     'border:none;cursor:pointer;z-index:999998;display:flex;align-items:center;justify-content:center;' +
     'box-shadow:0 4px 16px rgba(0,0,0,.3);font-size:24px;color:#fff}' +
     '#janis-panel{position:fixed;right:20px;bottom:88px;width:340px;max-width:calc(100vw - 40px);' +
-    'height:480px;max-height:calc(100vh - 120px);background:#fff;border-radius:14px;overflow:hidden;' +
+    'height:480px;max-height:calc(100vh - 120px);background:#fff;border-radius:var(--janis-radius,14px);overflow:hidden;' +
     'box-shadow:0 8px 32px rgba(0,0,0,.25);z-index:999999;display:none;flex-direction:column;' +
     'font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1f2937;' +
     'transition:width .15s ease,height .15s ease}' +
@@ -360,7 +360,7 @@
     'padding:0 6px;box-sizing:border-box;display:none;box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:none}' +
     '@keyframes janis-pop{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}' +
     '#janis-teaser{position:fixed;bottom:88px;right:20px;z-index:999998;max-width:250px;background:#fff;' +
-    'border-radius:14px;padding:11px 32px 11px 14px;box-shadow:0 6px 24px rgba(0,0,0,.2);font-size:13.5px;' +
+    'border-radius:var(--janis-radius,14px);padding:11px 32px 11px 14px;box-shadow:0 6px 24px rgba(0,0,0,.2);font-size:13.5px;' +
     'line-height:1.45;color:#1f2937;cursor:pointer;animation:janis-pop .25s ease;' +
     'font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}' +
     '#janis-teaser.janis-left{left:20px;right:auto}' +
@@ -1807,6 +1807,9 @@
       document.documentElement.style.setProperty('--janis-accent', accent);
       panel.querySelector('#janis-head').style.background = accent;
     }
+    // Corner radius — panel + teaser share the --janis-radius var.
+    if (cfg.radius != null)
+      document.documentElement.style.setProperty('--janis-radius', cfg.radius + 'px');
     panel.querySelector('#janis-title').textContent = cfg.title || cfg.name || 'Chat';
     panel.querySelector('#janis-sub').textContent =
       cfg.subtitle !== null && cfg.subtitle !== undefined
