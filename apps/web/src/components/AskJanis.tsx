@@ -22,6 +22,7 @@ interface ChatConfig {
   quick_replies: string[];
   logo_url: string | null;
   dictation?: boolean;
+  dictation_engine?: 'llm' | 'browser';
   greeting_widgets?: ChatWidget[];
 }
 
@@ -39,9 +40,10 @@ interface SpeechRecognitionLike {
 
 type SttEngine = 'auto' | 'gemini' | 'openai' | 'webspeech';
 
-function initialSttEngine(): SttEngine {
+/** ?stt=gemini|openai|webspeech — debug escape hatch, absent normally. */
+function sttOverride(): SttEngine | null {
   const q = new URLSearchParams(window.location.search).get('stt');
-  return q === 'gemini' || q === 'openai' || q === 'webspeech' ? q : 'auto';
+  return q === 'gemini' || q === 'openai' || q === 'webspeech' ? q : null;
 }
 
 interface PendingFile {
@@ -511,11 +513,11 @@ export function AskJanis({
         return undefined;
       }
     })();
-  // Internal debug select — sttEngine picks the dictation backend: auto
-  // (Gemini→OpenAI fallback), gemini, openai, or webspeech (client-side Web
-  // Speech API — free, never hits /transcribe). Customer widgets get this
-  // from the channel's dictation_engine setting instead.
-  const [sttEngine, setSttEngine] = useState<SttEngine>(initialSttEngine);
+  // Engine comes from the channel's dictation_engine setting, same as the
+  // public widget — 'browser' → client-side Web Speech, anything else →
+  // MediaRecorder → /transcribe (Gemini→OpenAI fallback). ?stt= overrides.
+  const sttEngine: SttEngine =
+    sttOverride() ?? (cfg?.dictation_engine === 'browser' ? 'webspeech' : 'auto');
   const speechRef = useRef<SpeechRecognitionLike | null>(null);
   const SpeechRecognitionCtor = (
     window as unknown as {
@@ -1073,20 +1075,6 @@ export function AskJanis({
             }}
           />
           <span className="grow" />
-          {cfg?.dictation === true && (
-            <select
-              className="btn"
-              style={{ fontSize: 11, padding: '0 4px', maxWidth: 92 }}
-              title="Dictation engine (debug override) — webspeech is free/client-side"
-              value={sttEngine}
-              onChange={(e) => setSttEngine(e.target.value as SttEngine)}
-            >
-              <option value="auto">stt: auto</option>
-              <option value="gemini">gemini</option>
-              <option value="openai">openai</option>
-              <option value="webspeech">webspeech·free</option>
-            </select>
-          )}
           {canDictate && (
             <button
               className="btn"
