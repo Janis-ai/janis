@@ -152,6 +152,9 @@ export function conversationRoutes(db: Db) {
   app.get('/attention-count', async (c) => {
     const workspaceId = c.get('workspaceId');
     const scope = agentVis(workspaceId, c.get('agentScope'));
+    // ?agent_id= scopes the badge for the agent-context inbox
+    const agentId = c.req.query('agent_id');
+    const agentCond = agentId ? [eq(conversations.agentId, agentId)] : [];
     const [[{ count }], [{ count: unread }]] = await Promise.all([
       db
         .select({ count: sql<number>`count(*)::int` })
@@ -160,6 +163,7 @@ export function conversationRoutes(db: Db) {
         .where(
           and(
             ...scope,
+            ...agentCond,
             inArray(conversations.state, ['needs_human', 'human']),
             // snoozed = out of sight until it wakes
             sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
@@ -172,6 +176,7 @@ export function conversationRoutes(db: Db) {
         .where(
           and(
             ...scope,
+            ...agentCond,
             eq(conversations.isUnread, true),
             sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
           ),

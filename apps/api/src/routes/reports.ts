@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, asc, desc, eq, gte, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import {
@@ -814,9 +814,22 @@ export function reportRoutes(db: Db) {
   // stored messages vs includedMessages, LLM token/cost burn, voice seconds.
   app.get('/usage', async (c) => {
     const ws = c.get('workspaceId');
+    // Agent-scoped usage view — same rollups, narrowed to one agent. The
+    // scope filter intersects agent grants so a scoped member can only see
+    // usage on agents they hold.
+    const agentQ = c.req.query('agent_id');
+    const agentId = agentQ && UUID.test(agentQ) ? agentQ : undefined;
+    const scope = c.get('agentScope');
+    const agentCond: SQL[] = [
+      ...(agentId ? [eq(usageEvents.agentId, agentId)] : []),
+      // Grant-scoped members only see usage on their agents; hidden rows
+      // are denied even for full members.
+      ...(scope?.grants ? [inArray(usageEvents.agentId, Object.keys(scope.grants))] : []),
+      ...(scope?.hidden.length ? [notInArray(usageEvents.agentId, scope.hidden)] : []),
+    ];
     const [planKey, used] = await Promise.all([
       effectivePlanKey(db, ws),
-      messagesInPeriod(db, ws),
+      messagesInPeriod(db, ws, undefined, agentId),
     ]);
     const plan = planFor(planKey);
     const period = currentPeriod();
@@ -836,7 +849,7 @@ export function reportRoutes(db: Db) {
         micros: sql<number>`coalesce(sum(${usageEvents.costMicros}), 0)::int`,
       })
       .from(usageEvents)
-      .where(and(eq(usageEvents.workspaceId, ws), inArray(usageEvents.period, [period, prevPeriod])))
+      .where(and(eq(usageEvents.workspaceId, ws), inArray(usageEvents.period, [period, prevPeriod]), ...agentCond))
       .groupBy(usageEvents.period, usageEvents.kind);
 
     const shape = (p: string) => {

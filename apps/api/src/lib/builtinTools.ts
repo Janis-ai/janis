@@ -173,6 +173,41 @@ async function visitorWorkspace(
   };
 }
 
+/** Resolve which agent of a workspace a concierge tool should act on.
+ * Order: explicit `agent` name hint → the agent selected in the console
+ * (the context pack's current_agent trait) → a "which agent?" error listing
+ * the options. */
+async function visitorAgent(
+  ctx: BuiltinCtx,
+  ws: WorkspaceRow,
+  hint: string | undefined,
+): Promise<{ agent: typeof agents.$inferSelect } | { error: string }> {
+  const wsAgents = await ctx.db.select().from(agents).where(eq(agents.workspaceId, ws.id));
+  const needle = hint?.trim().toLowerCase();
+  if (needle) {
+    const agent =
+      wsAgents.find((a) => a.name.toLowerCase() === needle) ??
+      wsAgents.find((a) => a.name.toLowerCase().includes(needle));
+    if (agent) return { agent };
+    return {
+      error: `which agent? "${hint}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
+    };
+  }
+  const [conv] = await ctx.db
+    .select({ userProfile: conversations.userProfile })
+    .from(conversations)
+    .where(eq(conversations.id, ctx.convId))
+    .limit(1);
+  const meta = (conv?.userProfile as UserProfile | undefined)?.metadata ?? {};
+  const cur = String(meta.current_agent ?? '').toLowerCase();
+  const curHit = cur ? wsAgents.find((a) => a.name.toLowerCase() === cur) : undefined;
+  if (curHit) return { agent: curHit };
+  if (wsAgents.length === 1) return { agent: wsAgents[0] };
+  return {
+    error: `which agent? ${ws.name} has: ${wsAgents.map((a) => a.name).join(', ')}`,
+  };
+}
+
 /** Accepted members of a workspace, for name → id resolution in rules. */
 async function workspaceMembers(db: Db, wsId: string) {
   return db
@@ -384,7 +419,7 @@ async function applyKnowledgeEntries(
     added,
     agent: agent.name,
     knowledge_count: knowledge.length,
-    gaps_url: `${env.webOrigin}/agents/${agent.id}?tab=behavior`,
+    gaps_url: `${env.webOrigin}/agents/${agent.id}/knowledge`,
     summary: `Added to ${agent.name}'s knowledge: ${added.map((a) => `"${a.slice(0, 80)}"`).join(', ')}.`,
   });
 }
@@ -1137,7 +1172,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         if (!gaps.length) continue;
         out.push({
           agent: agent.name,
-          gaps_url: `${env.webOrigin}/agents/${agent.id}?tab=behavior`,
+          gaps_url: `${env.webOrigin}/agents/${agent.id}/knowledge`,
           gaps: gaps.slice(0, 5).map((g) => ({
             theme: g.questions[0] ?? g.key,
             times_failed: g.count,
@@ -1250,20 +1285,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if ('error' in resolved) return JSON.stringify(resolved);
       const ws = resolved.ws;
 
-      const hint = args.agent?.trim().toLowerCase();
-      const wsAgents = await ctx.db
-        .select()
-        .from(agents)
-        .where(eq(agents.workspaceId, ws.id));
-      const agent = hint
-        ? wsAgents.find((a) => a.name.toLowerCase() === hint) ??
-          wsAgents.find((a) => a.name.toLowerCase().includes(hint))
-        : undefined;
-      if (!agent) {
-        return JSON.stringify({
-          error: `which agent? "${args.agent ?? ''}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
-        });
-      }
+      const picked = await visitorAgent(ctx, ws, args.agent);
+      if ('error' in picked) return JSON.stringify(picked);
+      const agent = picked.agent;
       const entry = String(args.entry ?? '').trim();
       if (!entry) return JSON.stringify({ error: 'entry text is required' });
       if (!agent.hosted) {
@@ -1362,17 +1386,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if ('error' in resolved) return JSON.stringify(resolved);
       const ws = resolved.ws;
 
-      const hint = args.agent?.trim().toLowerCase();
-      const wsAgents = await ctx.db.select().from(agents).where(eq(agents.workspaceId, ws.id));
-      const agent = hint
-        ? wsAgents.find((a) => a.name.toLowerCase() === hint) ??
-          wsAgents.find((a) => a.name.toLowerCase().includes(hint))
-        : undefined;
-      if (!agent) {
-        return JSON.stringify({
-          error: `which agent? "${args.agent ?? ''}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
-        });
-      }
+      const picked = await visitorAgent(ctx, ws, args.agent);
+      if ('error' in picked) return JSON.stringify(picked);
+      const agent = picked.agent;
       const kind = String(args.kind ?? '').trim();
       if (!['keyword', 'inactivity', 'auto_assign', 'failure', 'handoff_request', 'custom_alert'].includes(kind)) {
         return JSON.stringify({ error: `unknown kind "${kind}" — keyword, inactivity, auto_assign, failure, handoff_request or custom_alert` });
@@ -1790,17 +1806,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if ('error' in resolved) return JSON.stringify(resolved);
       const ws = resolved.ws;
 
-      const hint = args.agent?.trim().toLowerCase();
-      const wsAgents = await ctx.db.select().from(agents).where(eq(agents.workspaceId, ws.id));
-      const agent = hint
-        ? wsAgents.find((a) => a.name.toLowerCase() === hint) ??
-          wsAgents.find((a) => a.name.toLowerCase().includes(hint))
-        : undefined;
-      if (!agent) {
-        return JSON.stringify({
-          error: `which agent? "${args.agent ?? ''}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
-        });
-      }
+      const picked = await visitorAgent(ctx, ws, args.agent);
+      if ('error' in picked) return JSON.stringify(picked);
+      const agent = picked.agent;
 
       // Flat params → nested config patch. Only these keys ever reach the
       // card — the executor re-validates with the shared schema anyway.
@@ -2063,17 +2071,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if ('error' in resolved) return JSON.stringify(resolved);
       const ws = resolved.ws;
 
-      const hint = args.agent?.trim().toLowerCase();
-      const wsAgents = await ctx.db.select().from(agents).where(eq(agents.workspaceId, ws.id));
-      const agent = hint
-        ? wsAgents.find((a) => a.name.toLowerCase() === hint) ??
-          wsAgents.find((a) => a.name.toLowerCase().includes(hint))
-        : undefined;
-      if (!agent) {
-        return JSON.stringify({
-          error: `which agent? "${args.agent ?? ''}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
-        });
-      }
+      const picked = await visitorAgent(ctx, ws, args.agent);
+      if ('error' in picked) return JSON.stringify(picked);
+      const agent = picked.agent;
       const name = normWidgetRef(String(args.name ?? '')).slice(0, 60);
       if (!name) return JSON.stringify({ error: 'name cannot be blank' });
       let rawSpec: unknown;

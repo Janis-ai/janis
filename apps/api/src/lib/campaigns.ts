@@ -25,6 +25,10 @@ export interface CampaignSegment {
   tags?: string[];
   /** Contact has an identity on this channel. */
   channel_id?: string;
+  /** Contact belongs to this agent — any conversation with it, or an
+   *  identity on one of its channels. Powers the agent-scoped contacts
+   *  view and "this agent's audience" campaign segments. */
+  agent_id?: string;
   /** Require a reachable email/phone on the contact record. */
   has_email?: boolean;
   has_phone?: boolean;
@@ -92,6 +96,16 @@ export async function segmentConditions(
   if (seg.channel_id) {
     conds.push(
       sql`exists (select 1 from ${contactIdentities} ci where ci.contact_id = ${contacts.id} and ci.channel_id = ${seg.channel_id})`,
+    );
+  }
+  if (seg.agent_id) {
+    conds.push(
+      sql`(
+        exists (select 1 from ${conversations} cv where cv.contact_id = ${contacts.id} and cv.agent_id = ${seg.agent_id})
+        or exists (select 1 from ${contactIdentities} ci
+                   join ${channels} ch on ch.id = ci.channel_id
+                   where ci.contact_id = ${contacts.id} and ch.agent_id = ${seg.agent_id})
+      )`,
     );
   }
   if (seg.has_email) {

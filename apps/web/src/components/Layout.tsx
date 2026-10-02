@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { useMe } from '../api/hooks';
+import { useAgents, useMe } from '../api/hooks';
 import { useStream, type StreamAlert } from '../lib/useStream';
+import { useAgentContext } from '../lib/agentContext';
 import { trackOnce } from '../lib/analytics';
 import { playAlertSound } from '../lib/alertSound';
 import { setTabBadge } from '../lib/tabBadge';
@@ -11,7 +12,11 @@ import PushBanner from './PushBanner';
 import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
-import { BarChart3, BookOpen, Bot, Bug, CreditCard, Inbox, Megaphone, Settings, Sparkles, Users, X } from 'lucide-react';
+import {
+  BarChart3, BookOpen, Bot, Bug, Check, ChevronRight, ChevronsUpDown,
+  CreditCard, FlaskConical, Gauge, Inbox, LayoutGrid, LibraryBig, Megaphone,
+  Plug, Radio, Settings, SlidersHorizontal, Sparkles, Users, X,
+} from 'lucide-react';
 import { usePrompt } from './Prompt';
 import { CommandPalette } from './CommandPalette';
 
@@ -78,6 +83,173 @@ function PlanMeter() {
   );
 }
 
+interface MeData {
+  workspace: { id: string; name: string } | null;
+  workspaces: { id: string; name: string; role: string }[];
+  invites: { id: string; workspace_name: string }[];
+  agent_invites: { workspace_id: string; workspace_name: string; agents: string[] }[];
+}
+
+/** Top-left context switcher: the workspace block on top (usage, settings,
+ *  switch/create/join), the workspace's agents below. Selecting the
+ *  workspace header switches the whole app to workspace context; picking an
+ *  agent switches to that agent's context. */
+function ContextSwitcher({
+  data,
+  agents,
+  currentAgentId,
+  planName,
+  onGo,
+  onSwitchWorkspace,
+  onCreateWorkspace,
+  onAnswerInvite,
+  onAddAgent,
+}: {
+  data: MeData | undefined;
+  agents: { id: string; name: string }[];
+  currentAgentId: string | undefined;
+  planName: string | undefined;
+  onGo: (path: string) => void;
+  onSwitchWorkspace: (id: string) => void;
+  onCreateWorkspace: () => void;
+  onAnswerInvite: (id: string, action: 'accept' | 'decline') => void;
+  onAddAgent: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [wsList, setWsList] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', down);
+    document.addEventListener('keydown', key);
+    return () => {
+      document.removeEventListener('mousedown', down);
+      document.removeEventListener('keydown', key);
+    };
+  }, [open]);
+  const go = (path: string) => {
+    setOpen(false);
+    onGo(path);
+  };
+  const ws = data?.workspace;
+  const currentAgent = agents.find((a) => a.id === currentAgentId);
+  const initial = (currentAgent?.name ?? ws?.name ?? '?').slice(0, 1).toUpperCase();
+  return (
+    <div className="ctx-switch" ref={ref}>
+      <button
+        type="button"
+        className="ctx-btn"
+        aria-expanded={open}
+        aria-label="Switch workspace or agent"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="ctx-avatar">{initial}</span>
+        <span className="ctx-stack">
+          <span className="ctx-top">{ws?.name ?? 'No workspace'}</span>
+          <span className="ctx-cur">{currentAgent?.name ?? 'Workspace'}</span>
+        </span>
+        <ChevronsUpDown size={14} className="icon" />
+      </button>
+      {open && (
+        <div className="ctx-pop" role="menu">
+          {ws && (
+            <>
+              <button
+                type="button"
+                className="ctx-item ctx-ws"
+                onClick={() => go('/conversations')}
+              >
+                <span className="ctx-avatar">{(ws.name || '?').slice(0, 1).toUpperCase()}</span>
+                <span className="grow ctx-ws-name">{ws.name}</span>
+                {planName && <span className="ctx-plan">{planName}</span>}
+                {!currentAgentId && <Check size={14} />}
+              </button>
+              <button type="button" className="ctx-item ctx-sub" onClick={() => go('/usage')}>
+                Usage
+              </button>
+              <button type="button" className="ctx-item ctx-sub" onClick={() => go('/settings')}>
+                Workspace settings
+              </button>
+              <button
+                type="button"
+                className="ctx-item ctx-sub"
+                aria-expanded={wsList}
+                onClick={() => setWsList((o) => !o)}
+              >
+                <span className="grow">Switch workspace</span>
+                <ChevronRight size={14} className={wsList ? 'ctx-open' : ''} />
+              </button>
+              {wsList && (
+                <div className="ctx-sublist">
+                  {data!.workspaces
+                    .filter((w) => w.id !== ws.id)
+                    .map((w) => (
+                      <button
+                        key={w.id}
+                        type="button"
+                        className="ctx-item"
+                        onClick={() => onSwitchWorkspace(w.id)}
+                      >
+                        {w.name}
+                      </button>
+                    ))}
+                  <button type="button" className="ctx-item" onClick={onCreateWorkspace}>
+                    ＋ Create workspace
+                  </button>
+                  {data!.invites.map((inv) => (
+                    <div key={inv.id} className="ctx-item ctx-invite">
+                      <span className="grow">Invited to {inv.workspace_name}</span>
+                      <button type="button" className="btn sm" onClick={() => onAnswerInvite(inv.id, 'accept')}>
+                        Join
+                      </button>
+                      <button type="button" className="btn sm" onClick={() => onAnswerInvite(inv.id, 'decline')}>
+                        Decline
+                      </button>
+                    </div>
+                  ))}
+                  {data!.agent_invites.map((ai) => (
+                    <button
+                      key={ai.workspace_id}
+                      type="button"
+                      className="ctx-item ctx-invite"
+                      onClick={() => onSwitchWorkspace(ai.workspace_id)}
+                    >
+                      Join {ai.workspace_name} (agent access)
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="ctx-sep" />
+            </>
+          )}
+          <div className="ctx-label">Agents</div>
+          {agents.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              className="ctx-item"
+              onClick={() => go(`/agents/${a.id}/inbox`)}
+            >
+              <Bot size={13} className="ctx-ic" />
+              <span className="grow">{a.name}</span>
+              {a.id === currentAgentId && <Check size={14} />}
+            </button>
+          ))}
+          <button type="button" className="ctx-item" onClick={onAddAgent}>
+            ＋ Add agent
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Layout() {
   const { data } = useMe();
   // GA4 sign_up — fires once per account, only for users created in the last
@@ -114,6 +286,13 @@ export default function Layout() {
   );
   const hasAsk = Boolean(data?.support_channel_id);
   const hasBoth = hasAsk && Boolean(testRail);
+
+  // Agent context is URL-driven (/agents/:id/*); the switcher and the nav
+  // lists flip on it, and the concierge rail forwards it so "this agent"
+  // resolves server-side.
+  const routeAgentId = useAgentContext();
+  const { data: agentsData } = useAgents();
+  const currentAgent = agentsData?.agents.find((a) => a.id === routeAgentId);
 
   // /ask — the concierge rail as a full page. The same mounted rail fills the
   // content column so drafts/scroll survive expand ↔ dock round-trips.
@@ -251,6 +430,22 @@ export default function Layout() {
     refetchInterval: 60_000,
     enabled: hasWorkspace,
   });
+  // Agent-context inbox gets its own scoped badge; the workspace query above
+  // stays unfiltered so the tab badge remains the whole-workspace count.
+  const { data: agentAttention } = useQuery({
+    queryKey: ['attention-count', routeAgentId],
+    queryFn: () =>
+      api<{ count: number; unread: number }>(
+        `/api/conversations/attention-count?agent_id=${routeAgentId}`,
+      ),
+    refetchInterval: 60_000,
+    enabled: hasWorkspace && Boolean(routeAgentId),
+  });
+  const { data: billingStatus } = useQuery({
+    queryKey: ['billing-status'],
+    queryFn: () => api<{ plan_name: string }>('/api/billing/status'),
+    enabled: hasWorkspace,
+  });
   // Unseen-conversation count on the tab strip — the chime covers "now",
   // this covers "came back to the tab later". SSE invalidates the query so
   // it stays live; the 60s poll is the fallback.
@@ -361,6 +556,19 @@ export default function Layout() {
     window.location.reload();
   };
 
+  const addAgent = async () => {
+    const name = await ask('Name the new agent:');
+    if (!name?.trim()) return;
+    // Hosted is the product's primary path — engine can be switched in the
+    // agent's Settings after creation.
+    const r = await api<{ agent: { id: string } }>('/api/agents', {
+      method: 'POST',
+      body: JSON.stringify({ name: name.trim(), hosted: true }),
+    });
+    void qc.invalidateQueries({ queryKey: ['agents'] });
+    navigate(`/agents/${r.agent.id}/channels`);
+  };
+
   const answerInvite = async (id: string, action: 'accept' | 'decline') => {
     await api(`/auth/invites/${id}/${action}`, { method: 'POST' });
     qc.clear();
@@ -390,22 +598,22 @@ export default function Layout() {
           <BrandImg className="brand-wide" alt="Janis" />
           <BrandImg className="brand-mark" mark alt="" />
         </Link>
-        <NavLink to="/conversations" end><span className="label">Conversations</span><span className="icon"><Inbox size={18} /></span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
-        <NavLink to="/contacts"><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
-        <NavLink to="/campaigns"><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
-        <NavLink to="/agents"><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>
-        {/* Workspace-wide sections vanish for agent-scoped users — they only
-            hold grants on specific agents, not the workspace itself. */}
-        {!data?.agent_scope && (
-          <>
-            <NavLink to="/reports"><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
-            {data?.operator && (
-              <NavLink to="/errors"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
-            )}
-            <NavLink to="/billing"><span className="label">Billing</span><span className="icon"><CreditCard size={18} /></span></NavLink>
-            <NavLink to="/settings"><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
-          </>
+        {data?.workspace && (
+          <ContextSwitcher
+            data={data}
+            agents={agentsData?.agents ?? []}
+            currentAgentId={routeAgentId}
+            planName={billingStatus?.plan_name}
+            onGo={(path) => navigate(path)}
+            onSwitchWorkspace={(id) => void switchWorkspace(id)}
+            onCreateWorkspace={() => void switchWorkspace('__new')}
+            onAnswerInvite={(id, action) => void answerInvite(id, action)}
+            onAddAgent={() => void addAgent()}
+          />
         )}
+        {/* Copilot rides the top of both contexts — the concierge rail is
+            always one click away, scoped to the selected agent when the URL
+            carries one. */}
         {data?.support_channel_id && (
           <button
             type="button"
@@ -421,8 +629,55 @@ export default function Layout() {
               }
             }}
           >
-            <span className="label">Ask Janis</span><span className="icon"><Sparkles size={18} /></span>
+            <span className="label">Copilot</span><span className="icon"><Sparkles size={18} /></span>
           </button>
+        )}
+        {routeAgentId ? (
+          <>
+            {/* Agent context — this agent's queue, build surface, and its
+                scoped view of the workspace's customer layer. */}
+            <NavLink to={`/agents/${routeAgentId}/inbox`}>
+              <span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>
+              {agentAttention?.count ? <span className="nav-badge">{agentAttention.count}</span> : null}
+            </NavLink>
+            <NavLink to={`/agents/${routeAgentId}/behavior`}><span className="label">Behavior</span><span className="icon"><SlidersHorizontal size={18} /></span></NavLink>
+            {currentAgent?.hosted && (
+              <>
+                <NavLink to={`/agents/${routeAgentId}/knowledge`}><span className="label">Knowledge base</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
+                <NavLink to={`/agents/${routeAgentId}/integrations`}><span className="label">Integrations</span><span className="icon"><Plug size={18} /></span></NavLink>
+                <NavLink to={`/agents/${routeAgentId}/components`}><span className="label">Chat components</span><span className="icon"><LayoutGrid size={18} /></span></NavLink>
+                <NavLink to={`/agents/${routeAgentId}/tests`}><span className="label">Tests</span><span className="icon"><FlaskConical size={18} /></span></NavLink>
+              </>
+            )}
+            <NavLink to={`/agents/${routeAgentId}/channels`}><span className="label">Channels</span><span className="icon"><Radio size={18} /></span></NavLink>
+            <NavLink to={`/agents/${routeAgentId}/contacts`}><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
+            <NavLink to={`/agents/${routeAgentId}/campaigns`}><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
+            <NavLink to={`/agents/${routeAgentId}/reports`}><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
+            <NavLink to={`/agents/${routeAgentId}/usage`}><span className="label">Usage</span><span className="icon"><Gauge size={18} /></span></NavLink>
+            <NavLink to={`/agents/${routeAgentId}/settings`}><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
+          </>
+        ) : (
+          <>
+            {/* Workspace context — the shared customer layer: one queue,
+                one identity graph, campaigns and roll-ups across agents. */}
+            <NavLink to="/conversations" end><span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
+            <NavLink to="/agents"><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>
+            <NavLink to="/contacts"><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
+            <NavLink to="/campaigns"><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
+            {/* Workspace-wide sections vanish for agent-scoped users — they only
+                hold grants on specific agents, not the workspace itself. */}
+            {!data?.agent_scope && (
+              <>
+                <NavLink to="/reports"><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
+                <NavLink to="/usage"><span className="label">Usage</span><span className="icon"><Gauge size={18} /></span></NavLink>
+                {data?.operator && (
+                  <NavLink to="/errors"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
+                )}
+                <NavLink to="/billing"><span className="label">Billing</span><span className="icon"><CreditCard size={18} /></span></NavLink>
+                <NavLink to="/settings"><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
+              </>
+            )}
+          </>
         )}
         <div className="spacer" />
         {/* Plan meter — cheap /billing/status poll; hidden for agent-scoped
@@ -432,22 +687,6 @@ export default function Layout() {
           <span className="label">Operator guide</span><span className="icon"><BookOpen size={16} /></span>
         </Link>
         <div className="user">
-          {data && data.workspaces.length > 1 ? (
-            <select
-              className="ws-switch"
-              value={data.workspace?.id ?? ''}
-              onChange={(e) => void switchWorkspace(e.target.value)}
-              title="Switch workspace"
-            >
-              {data.workspaces.map((w) => (
-                <option key={w.id} value={w.id}>{w.name}</option>
-              ))}
-              <option value="__new">＋ New workspace…</option>
-            </select>
-          ) : (
-            <span className="muted" style={{ fontSize: 12 }}>{data?.workspace?.name}</span>
-          )}
-          <br />
           {data?.user.name}
           {' · '}
           <a href="#" onClick={(e) => { e.preventDefault(); void logout(); }}>Sign out</a>
@@ -519,6 +758,7 @@ export default function Layout() {
             <div style={{ display: railTab === 'ask' ? 'contents' : 'none' }}>
               <AskJanis
                 channelId={data!.support_channel_id!}
+                agentId={routeAgentId}
                 seedMessage={askSeed ?? undefined}
                 expanded={isAskPage}
                 onToggleExpand={() => navigate(isAskPage ? lastNonAsk.current : '/ask')}

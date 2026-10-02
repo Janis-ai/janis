@@ -61,11 +61,13 @@ export async function effectivePlanKey(db: Db, workspaceId: string): Promise<str
   return ws?.plan ?? 'free';
 }
 
-/** Every stored message counts — user in, agent out, human replies. */
+/** Every stored message counts — user in, agent out, human replies.
+ *  `agentId` narrows the count for the agent-scoped usage view. */
 export async function messagesInPeriod(
   db: Db,
   workspaceId: string,
   period = currentPeriod(),
+  agentId?: string,
 ): Promise<number> {
   const start = new Date(`${period}-01T00:00:00Z`);
   const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
@@ -77,6 +79,7 @@ export async function messagesInPeriod(
     .where(
       and(
         eq(agents.workspaceId, workspaceId),
+        agentId ? eq(conversations.agentId, agentId) : undefined,
         gte(messages.createdAt, start),
         lt(messages.createdAt, end),
       ),

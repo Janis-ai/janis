@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useConfirm } from '../components/Prompt';
-import { useChannels } from '../api/hooks';
+import { useAgents, useChannels } from '../api/hooks';
 import { usePageTitle } from '../lib/title';
 
 const SENDABLE = ['sms', 'whatsapp', 'email', 'gmail', 'outlook'];
@@ -88,19 +88,24 @@ function statChips(sends: SendRow[], step: number) {
   return bits.join(' · ');
 }
 
-export default function Campaigns() {
+export default function Campaigns({ agentId }: { agentId?: string } = {}) {
   usePageTitle('Campaigns');
   const qc = useQueryClient();
   const { data: chans } = useChannels();
-  const channels = (chans?.channels ?? []).filter((c) => SENDABLE.includes(c.kind));
+  const { data: agents } = useAgents();
+  // Agent-scoped mount sends through that agent's channels only.
+  const channels = (chans?.channels ?? []).filter(
+    (c) => SENDABLE.includes(c.kind) && (!agentId || c.agent_id === agentId),
+  );
   const { data: listsData } = useQuery({
     queryKey: ['lists'],
     queryFn: () => api<{ lists: { id: string; name: string; members: number }[] }>('/api/lists'),
   });
   const lists = listsData?.lists ?? [];
   const { data } = useQuery({
-    queryKey: ['campaigns'],
-    queryFn: () => api<{ campaigns: CampaignRow[] }>('/api/campaigns'),
+    queryKey: ['campaigns', agentId ?? ''],
+    queryFn: () =>
+      api<{ campaigns: CampaignRow[] }>(`/api/campaigns${agentId ? `?agent_id=${agentId}` : ''}`),
     refetchInterval: 10_000,
   });
   const [openId, setOpenId] = useState('');
@@ -215,7 +220,14 @@ export default function Campaigns() {
   return (
     <div className="page-pad" style={{ maxWidth: 900 }}>
       {confirmEl}
-      <h1>Campaigns</h1>
+      <h1>
+        Campaigns
+        {agentId && (
+          <span className="chip" style={{ marginLeft: 8 }} title="Sent as this agent">
+            {agents?.agents.find((a) => a.id === agentId)?.name ?? 'This agent'}
+          </span>
+        )}
+      </h1>
       <p className="muted">
         Proactive sends to contacts on a channel. SMS, email, Outlook and Gmail open new
         threads; WhatsApp requires an approved template. Opted-out contacts are skipped

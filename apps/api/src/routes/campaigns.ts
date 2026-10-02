@@ -106,7 +106,14 @@ export function campaignRoutes(db: Db) {
       .from(campaigns)
       .innerJoin(channels, eq(campaigns.channelId, channels.id))
       .innerJoin(agents, eq(channels.agentId, agents.id))
-      .where(eq(campaigns.workspaceId, c.get('workspaceId')))
+      .where(
+        and(
+          eq(campaigns.workspaceId, c.get('workspaceId')),
+          // Agent-scoped view — campaigns send through a channel, and each
+          // channel is bound to exactly one agent.
+          c.req.query('agent_id') ? eq(channels.agentId, c.req.query('agent_id')!) : undefined,
+        ),
+      )
       .orderBy(desc(campaigns.createdAt))
       .limit(100);
     const withStats = await Promise.all(

@@ -669,13 +669,14 @@ drizzle-kit/workbox-build, nothing to drop directly).
 - Model-honesty backstop: see "Reply-claim verifier" under Reliability —
   same check applies to concierge card-claim phrasing.
 
-**App hierarchy redesign (agreed 2026-10-02, not yet built)** — Chatbase-style
+**App hierarchy redesign (built 2026-10-02)** — Chatbase-style
 context switcher, but the workspace stays a real surface (unlike Chatbase's
 admin-only workspace level; contacts merge cross-channel so agent-scoping
 the identity graph is wrong):
 - Top-left switcher popover: workspace block (avatar, name, plan badge,
   Usage, Workspace settings, Switch/Create-or-join workspace) + Agents
-  list (check on selected) + Add agent.
+  list (check on selected) + Add agent. (ContextSwitcher in Layout.tsx,
+  .ctx-* styles.)
 - Copilot (Ask Janis) is ever-present at the TOP of BOTH contexts; when an
   agent is selected the concierge is agent-scoped (its tools default to
   that agent, "this agent" resolves).
@@ -690,15 +691,26 @@ the identity graph is wrong):
   (renamed from Tools) · Chat components (own level, below Integrations) ·
   Tests · Contacts (filtered) · Campaigns (filtered) · Reports (filtered) ·
   Usage (filtered) · Settings (current Escalation tab contents).
-- Sub-sections are TABS inside the page (reuse ?tab= pattern), not
-  expandable sidebar groups.
+- Implementation: agent context is URL-driven (/agents/:id/* — every
+  section its own path: inbox/contacts/campaigns/reports/usage reuse the
+  workspace pages with an agentId prop; channels/:channelId is the
+  channel editor; behavior|knowledge|integrations|components|tests|
+  settings render AgentDetail with ?sub= tabs). lib/agentContext.ts
+  derives routeAgentId (last-visited agent persists to localStorage).
+  Legacy /agents/:id?tab=X redirects map to the new sections; bare
+  /agents/:id lands on the agent's inbox. API: ?agent_id= filters on
+  conversations/contacts/campaigns/reports/usage (CampaignSegment.agent_id
+  covers contact + smart-list + campaign audience filtering); the webchat
+  agent_id field stamps the current_agent trait (name) so concierge
+  built-ins default to the selected agent via visitorAgent() — explicit
+  tool args still win.
 - Saved replies: workspace-level AND agent-level — agent replies add to /
-  override the workspace set. (New: agent-scoped saved_replies + merge.)
+  override the workspace set. (TODO: agent-scoped saved_replies + merge —
+  the agent editor's Settings → Saved replies tab is ready.)
 - Deliberately NOT copying: Playground (redundant — channels are testable
   in place; TODO: agent preview surface in a later phase), Backstage name.
-- Default landing when an agent is selected: Copilot (the concierge was
-  Janis's original front door — legacy concierge lived in web+Slack before
-  Chatbase existed; wiring it into Slack/iMessage again is a revival TODO).
+- Default landing when an agent is selected: its Inbox (operator-first —
+  the concierge is one click away, ever-present).
 
 **In-conversation widgets — delivery taxonomy (added 2026-10-02)**
 - Four emission paths, resolved in order at reply time: tool-bound widgets

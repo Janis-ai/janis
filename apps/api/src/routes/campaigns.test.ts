@@ -80,6 +80,26 @@ beforeAll(async () => {
 const statusOf = async (id: string) =>
   (await db.select().from(campaigns).where(eq(campaigns.id, id)))[0]?.status;
 
+describe('campaign list scoping', () => {
+  it('?agent_id= returns only campaigns sent through that agent\'s channels', async () => {
+    const [agent2] = await db.insert(agents).values({ workspaceId: wsId, name: 'Bot2' }).returning();
+    const [ch2] = await db
+      .insert(channels)
+      .values({ workspaceId: wsId, agentId: agent2.id, kind: 'email', name: 'Mail2', credentials: {} })
+      .returning();
+    const marker = `ag-${Math.random().toString(36).slice(2, 8)}`;
+    await db.insert(campaigns).values([
+      { workspaceId: wsId, channelId, name: `${marker} a`, text: 'hi', status: 'draft' },
+      { workspaceId: wsId, channelId: ch2.id, name: `${marker} b`, text: 'hi', status: 'draft' },
+    ]);
+    const res = await call('GET', `?agent_id=${agent2.id}`, adminCookie);
+    const body = (await res.json()) as { campaigns: { name: string }[] };
+    const names = body.campaigns.map((c) => c.name);
+    expect(names).toContain(`${marker} b`);
+    expect(names).not.toContain(`${marker} a`);
+  });
+});
+
 describe('campaign status transitions', () => {
   it('pause sets paused — regression: the shared helper used to set sending', async () => {
     const c = await mkCampaign('scheduled', { scheduledAt: new Date(Date.now() + 86_400_000) });

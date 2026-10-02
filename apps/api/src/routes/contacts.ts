@@ -68,6 +68,7 @@ export function contactRoutes(db: Db) {
       q: c.req.query('q')?.trim() || undefined,
       list_id: c.req.query('list_id') || undefined,
       channel_id: c.req.query('channel_id') || undefined,
+      agent_id: c.req.query('agent_id') || undefined,
       tags: c.req.query('tag')?.split(',').map((t) => t.trim()).filter(Boolean),
       has_email: boolParam(c.req.query('has_email')),
       has_phone: boolParam(c.req.query('has_phone')),

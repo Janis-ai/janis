@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   Agent,
@@ -24,13 +24,53 @@ import { RefreshCw, Trash2, X } from 'lucide-react';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert', 'auto_assign'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
-type Tab = 'channels' | 'escalation' | 'tools' | 'tests' | 'help' | 'connection' | 'llm' | 'behavior';
+
+/** Agent config sections — one per sidebar entry. `hosted` sections are
+ *  hidden (and redirect) for external-webhook agents. */
+const SECTIONS = {
+  behavior: 'Behavior',
+  knowledge: 'Knowledge base',
+  channels: 'Channels',
+  integrations: 'Integrations',
+  components: 'Chat components',
+  tests: 'Tests',
+  settings: 'Settings',
+} as const;
+type Section = keyof typeof SECTIONS;
+const HOSTED_ONLY: Section[] = ['knowledge', 'integrations', 'components', 'tests'];
+
+const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: boolean }[]>> = {
+  behavior: [
+    { key: 'llm', label: 'Language model', hosted: true },
+    { key: 'greeting', label: 'Greeting' },
+    { key: 'prompt', label: 'System prompt', hosted: true },
+    { key: 'tone', label: 'Tone', hosted: true },
+    { key: 'satisfaction', label: 'Satisfaction survey' },
+  ],
+  knowledge: [
+    { key: 'text', label: 'Text' },
+    { key: 'files', label: 'Files' },
+    { key: 'websites', label: 'Websites' },
+    { key: 'gaps', label: 'Gaps' },
+    { key: 'help', label: 'Help center' },
+  ],
+  settings: [
+    { key: 'general', label: 'General' },
+    { key: 'escalation', label: 'Escalation' },
+    { key: 'team', label: 'Team' },
+    { key: 'replies', label: 'Saved replies' },
+  ],
+};
 
 export default function AgentDetail() {
-  const { id } = useParams<{ id: string }>();
+  const { id, section: rawSection } = useParams<{ id: string; section?: string }>();
   const { data } = useAgents();
   const agent = data?.agents.find((a) => a.id === id);
   usePageTitle(agent?.name ?? 'Agent');
+  const section = (rawSection && rawSection in SECTIONS ? rawSection : 'channels') as Section;
+  // Hosted-only sections make no sense for external-webhook agents — the
+  // sidebar hides them; direct hits bounce to Channels.
+  const hostedSection = agent && !agent.hosted && HOSTED_ONLY.includes(section);
 
   if (data && !agent) {
     return (
@@ -41,11 +81,12 @@ export default function AgentDetail() {
     );
   }
   if (!agent) return null;
+  if (hostedSection) return <Navigate to={`/agents/${agent.id}/channels`} replace />;
   // key remounts the editor (and its drafts) when navigating between agents
-  return <AgentEditor key={agent.id} agent={agent} />;
+  return <AgentEditor key={agent.id} agent={agent} section={section} />;
 }
 
-function AgentEditor({ agent }: { agent: Agent }) {
+function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
   const { data: me } = useMe();
   // Effective admin on THIS agent: workspace admin, the agent's owner, or an
   // agent-scoped user whose grant is admin (their workspace role is 'member').
@@ -59,27 +100,17 @@ function AgentEditor({ agent }: { agent: Agent }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
-  // Tab lives in the URL (?tab=…) so refresh/back/deep links keep position.
+  // Sub-tab lives in the URL (?sub=…) so refresh/back/deep links keep
+  // position — the section itself is the route path.
   const [params, setParams] = useSearchParams();
-  const tabParam = params.get('tab');
-  // 'integrations' was the pre-rename key for Channels — keep old links working.
-  const tab: Tab =
-    tabParam === 'integrations'
-      ? 'channels'
-      : tabParam && ['channels', 'escalation', 'tools', 'tests', 'help', 'connection', 'llm', 'behavior'].includes(tabParam)
-        ? (tabParam as Tab)
-        : 'connection';
-  const activeTab: Tab =
-    (tab === 'tools' || tab === 'tests' || tab === 'llm' || tab === 'help') && !agent.hosted
-      ? 'connection'
-      : tab;
-  // merge — the URL may carry breadcrumb state (?from/&scroll=) or the rail's
-  // ?rail= that a wholesale replace would wipe on every tab click
-  const setTab = (t: Tab) =>
+  const subs = (SUB_TABS[section] ?? []).filter((s) => agent.hosted || !s.hosted);
+  const subParam = params.get('sub');
+  const sub = subs.some((s) => s.key === subParam) ? subParam! : (subs[0]?.key ?? '');
+  const setSub = (s: string) =>
     setParams((prev) => {
       const p = new URLSearchParams(prev);
-      if (t === 'connection') p.delete('tab');
-      else p.set('tab', t);
+      if (s === subs[0]?.key) p.delete('sub');
+      else p.set('sub', s);
       return p;
     });
   // ?from=/conversations/<id>[?…]&scroll=<px> — set by the conversation's
@@ -213,20 +244,6 @@ function AgentEditor({ agent }: { agent: Agent }) {
 
   const rules = rulesData?.rules.filter((r) => r.agent_id === agent.id) ?? [];
   const channels = channelsData?.channels.filter((c) => c.agent_id === agent.id) ?? [];
-  const tabs: { key: Tab; label: string }[] = [
-    { key: 'connection', label: 'Engine' },
-    { key: 'behavior', label: 'Behavior' },
-    { key: 'channels', label: 'Channels' },
-    { key: 'escalation', label: 'Escalation' },
-    ...(agent.hosted
-      ? [
-          { key: 'tools' as Tab, label: 'Tools' },
-          { key: 'llm' as Tab, label: 'Language Model' },
-          { key: 'tests' as Tab, label: 'Tests' },
-          { key: 'help' as Tab, label: 'Help center' },
-        ]
-      : []),
-  ];
 
   const saveAll = () =>
     update.mutate({
@@ -278,77 +295,106 @@ function AgentEditor({ agent }: { agent: Agent }) {
           {agent.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
           {channels.length > 0 && ` · channels: ${channels.map((c) => c.name).join(', ')}`}
         </div>
-        <div className="tabs">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              className={`tab${activeTab === t.key ? ' active' : ''}`}
-              onClick={() => setTab(t.key)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        {subs.length > 0 && (
+          <div className="tabs">
+            {subs.map((t) => (
+              <button
+                key={t.key}
+                className={`tab${sub === t.key ? ' active' : ''}`}
+                onClick={() => setSub(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {confirmEl}
       {error && <div className="error">{error}</div>}
 
-      {activeTab === 'channels' && <AgentChannels agent={agent} />}
-      {activeTab === 'help' && <HelpCenter agent={agent} />}
-      {activeTab === 'escalation' && (
-        <EscalationTab
-          agent={agent}
-          cfg={cfg}
-          setCfg={setCfg}
-          autoResume={autoResume}
-          setAutoResume={setAutoResume}
-          rules={rules}
-          isAdmin={isAdmin}
-          onAddRule={(kind, config) => addRule.mutate({ kind, config })}
-          onDeleteRule={(rid) => deleteRule.mutate(rid)}
-        />
+      {section === 'channels' && <AgentChannels agent={agent} />}
+      {section === 'integrations' && agent.hosted && (
+        <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />
       )}
-      {activeTab === 'tools' && agent.hosted && (
+      {section === 'components' && agent.hosted && (
+        <SavedWidgets agentId={agent.id} isAdmin={isAdmin} tools={(cfg.tools ?? []).map((t) => t.name)} />
+      )}
+      {section === 'tests' && agent.hosted && <TestsTab agentId={agent.id} agent={agent} isAdmin={isAdmin} />}
+      {section === 'behavior' && (
         <>
-          <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />
-          <SavedWidgets agentId={agent.id} isAdmin={isAdmin} tools={(cfg.tools ?? []).map((t) => t.name)} />
+          {sub === 'llm' && agent.hosted && (
+            <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+          )}
+          {sub === 'greeting' && (
+            <GreetingSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+          )}
+          {sub === 'prompt' && agent.hosted && (
+            <PromptSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+          )}
+          {sub === 'tone' && agent.hosted && (
+            <ToneSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+          )}
+          {sub === 'satisfaction' && (
+            <SatisfactionSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+          )}
         </>
       )}
-      {activeTab === 'llm' && agent.hosted && (
-        <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+      {section === 'knowledge' && agent.hosted && (
+        <>
+          {sub === 'text' && (
+            <KnowledgeTextSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+          )}
+          {sub === 'files' && <KnowledgeFiles agentId={agent.id} variant="files" />}
+          {sub === 'websites' && <KnowledgeFiles agentId={agent.id} variant="websites" />}
+          {sub === 'gaps' && <KnowledgeGaps agentId={agent.id} config={agent.config ?? {}} />}
+          {sub === 'help' && <HelpCenter agent={agent} />}
+        </>
       )}
-      {activeTab === 'behavior' && (
-        <BehaviorSection
-          agent={agent}
-          cfg={cfg}
-          setCfg={setCfg}
-          isAdmin={isAdmin}
-          hosted={agent.hosted}
-        />
-      )}
-      {activeTab === 'tests' && agent.hosted && <TestsTab agentId={agent.id} agent={agent} isAdmin={isAdmin} />}
-      {activeTab === 'connection' && (
-        <ConnectionTab
-          agent={agent}
-          cfg={cfg}
-          setCfg={setCfg}
-          isAdmin={isAdmin}
-          webhookUrl={webhookUrl}
-          setWebhookUrl={setWebhookUrl}
-          onSaveHosted={(hosted) => update.mutate({ hosted })}
-          onTestWebhook={() => testWebhook.mutate()}
-          onRotateKey={() => rotateKey.mutate()}
-          onRotateSecret={() => rotateSecret.mutate()}
-          onRevealSecret={async () => {
-            const r = await api<{ webhook_secret: string }>(`/api/agents/${agent.id}/webhook-secret`);
-            setFreshSecret({ label: 'Webhook secret', value: r.webhook_secret });
-          }}
-          freshSecret={freshSecret}
-        />
+      {section === 'settings' && (
+        <>
+          {sub === 'general' && (
+            <ConnectionTab
+              agent={agent}
+              cfg={cfg}
+              setCfg={setCfg}
+              isAdmin={isAdmin}
+              webhookUrl={webhookUrl}
+              setWebhookUrl={setWebhookUrl}
+              onSaveHosted={(hosted) => update.mutate({ hosted })}
+              onTestWebhook={() => testWebhook.mutate()}
+              onRotateKey={() => rotateKey.mutate()}
+              onRotateSecret={() => rotateSecret.mutate()}
+              onRevealSecret={async () => {
+                const r = await api<{ webhook_secret: string }>(`/api/agents/${agent.id}/webhook-secret`);
+                setFreshSecret({ label: 'Webhook secret', value: r.webhook_secret });
+              }}
+              freshSecret={freshSecret}
+            />
+          )}
+          {sub === 'escalation' && (
+            <EscalationTab
+              agent={agent}
+              cfg={cfg}
+              setCfg={setCfg}
+              autoResume={autoResume}
+              setAutoResume={setAutoResume}
+              rules={rules}
+              isAdmin={isAdmin}
+              onAddRule={(kind, config) => addRule.mutate({ kind, config })}
+              onDeleteRule={(rid) => deleteRule.mutate(rid)}
+            />
+          )}
+          {sub === 'team' && <TeamSection agent={agent} isAdmin={isAdmin} />}
+          {sub === 'replies' && (
+            <ReadOnly off={!isAdmin}>
+              <AgentSavedRepliesCard agent={agent} />
+            </ReadOnly>
+          )}
+        </>
       )}
 
-      {isAdmin && (
+      {isAdmin && section === 'settings' && (
         <div className="row" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
           <button
             className="btn danger"
@@ -599,44 +645,40 @@ const ReadOnly = ({ children, off }: { children: React.ReactNode; off: boolean }
     <>{children}</>
   );
 
-function BehaviorSection({
-  agent,
+/** A textarea-backed cfg field that follows external writes (concierge
+ *  approvals, teammate saves via SSE refetch) unless the user has diverged
+ *  from the last server value — the in-progress edit wins. */
+function useSyncedText(
+  cfg: AgentConfig,
+  key: 'knowledge' | 'quick_replies',
+  join: (v: unknown) => string,
+): [string, (v: string) => void] {
+  const [text, setText] = useState(() => join(cfg[key]));
+  const base = join(cfg[key]);
+  const baseRef = useRef(base);
+  useEffect(() => {
+    if (base === baseRef.current) return;
+    setText((cur) => (cur === baseRef.current ? base : cur));
+    baseRef.current = base;
+  }, [base]);
+  return [text, setText];
+}
+const joinLines = (v: unknown) => (Array.isArray(v) ? (v as string[]).join('\n') : '');
+const joinCsv = (v: unknown) => (Array.isArray(v) ? (v as string[]).join(', ') : '');
+
+function GreetingSection({
   cfg,
   setCfg,
   isAdmin,
-  hosted,
 }: {
-  agent: Agent;
   cfg: AgentConfig;
   setCfg: (c: AgentConfig) => void;
   isAdmin: boolean;
-  hosted: boolean;
 }) {
-  const joinLines = (v: unknown) => (Array.isArray(v) ? (v as string[]).join('\n') : '');
-  const joinCsv = (v: unknown) => (Array.isArray(v) ? (v as string[]).join(', ') : '');
-  const [knowledgeText, setKnowledgeText] = useState(() => joinLines(cfg.knowledge));
-  const [repliesText, setRepliesText] = useState(() => joinCsv(cfg.quick_replies));
-  // Follow external writes into cfg (concierge approvals, teammate saves via
-  // SSE refetch) — unless the user has diverged from the last server value
-  // in this field, in which case the in-progress edit wins.
-  const knowledgeBase = joinLines(cfg.knowledge);
-  const knowledgeBaseRef = useRef(knowledgeBase);
-  useEffect(() => {
-    if (knowledgeBase === knowledgeBaseRef.current) return;
-    setKnowledgeText((cur) => (cur === knowledgeBaseRef.current ? knowledgeBase : cur));
-    knowledgeBaseRef.current = knowledgeBase;
-  }, [knowledgeBase]);
-  const repliesBase = joinCsv(cfg.quick_replies);
-  const repliesBaseRef = useRef(repliesBase);
-  useEffect(() => {
-    if (repliesBase === repliesBaseRef.current) return;
-    setRepliesText((cur) => (cur === repliesBaseRef.current ? repliesBase : cur));
-    repliesBaseRef.current = repliesBase;
-  }, [repliesBase]);
-
+  const [repliesText, setRepliesText] = useSyncedText(cfg, 'quick_replies', joinCsv);
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-      <strong>{hosted ? 'Behavior' : 'Greeting'}</strong>
+      <strong>Greeting</strong>
       <ReadOnly off={!isAdmin}>
       <label className="check-label">
         <input
@@ -674,140 +716,110 @@ function BehaviorSection({
           />
         </>
       )}
-      {hosted && (
-        <>
-          <label>System prompt</label>
-          <textarea
-            rows={4}
-            placeholder="You are the support agent for Acme Co. You help with orders, returns…"
-            value={cfg.system_prompt ?? ''}
-            onChange={(e) => setCfg({ ...cfg, system_prompt: e.target.value })}
-          />
-          <label>Knowledge base — one fact/snippet per line</label>
-          <textarea
-            rows={5}
-            placeholder={'Refunds are allowed within 30 days of purchase.\nSupport hours are 9-5 ET.\nOrder lookup requires the order number.'}
-            value={knowledgeText}
-            onChange={(e) => setKnowledgeText(e.target.value)}
-            onBlur={() => setCfg({ ...cfg, knowledge: knowledgeText.split('\n').filter(Boolean) })}
-          />
-          <label>Tone</label>
-          <textarea
-            rows={2}
-            placeholder="e.g. warm, concise, never apologetic"
-            value={cfg.tone ?? ''}
-            onChange={(e) => setCfg({ ...cfg, tone: e.target.value })}
-          />
-          <label className="check-label">
-            <input
-              type="checkbox"
-              checked={cfg.auto_archive === true}
-              onChange={(e) => setCfg({ ...cfg, auto_archive: e.target.checked || undefined })}
-            />
-            Auto-archive resolved chats — when the customer confirms they're done, the
-            agent signs off and archives the thread (fires the CSAT survey)
-          </label>
-          <label>Knowledge files — PDFs, docs, text, images; the agent answers from these</label>
-          <KnowledgeFiles agentId={agent.id} />
-          <KnowledgeGaps agentId={agent.id} config={agent.config ?? {}} />
-        </>
-      )}
       </ReadOnly>
     </div>
   );
 }
 
-function EscalationTab({
-  agent,
+function PromptSection({
   cfg,
   setCfg,
-  autoResume,
-  setAutoResume,
-  rules,
   isAdmin,
-  onAddRule,
-  onDeleteRule,
 }: {
-  agent: Agent;
   cfg: AgentConfig;
   setCfg: (c: AgentConfig) => void;
-  autoResume: string;
-  setAutoResume: (s: string) => void;
-  rules: AlertRule[];
   isAdmin: boolean;
-  onAddRule: (kind: string, config: Record<string, unknown>) => void;
-  onDeleteRule: (id: string) => void;
 }) {
-  const [kind, setKind] = useState<(typeof RULE_KINDS)[number]>('keyword');
-  const [keywords, setKeywords] = useState('');
-  const [intents, setIntents] = useState('');
-  const [minutes, setMinutes] = useState('15');
-  const [assignTo, setAssignTo] = useState('');
-  const [ruleTag, setRuleTag] = useState('');
-  const [pool, setPool] = useState<string[]>([]);
-  const { data: members } = useAgentMembers(agent.id);
-  const teammateName = (id: string) =>
-    members?.members.find((m) => m.user_id === id)?.name ?? 'a teammate';
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+      <strong>System prompt</strong>
+      <ReadOnly off={!isAdmin}>
+      <textarea
+        rows={8}
+        placeholder="You are the support agent for Acme Co. You help with orders, returns…"
+        value={cfg.system_prompt ?? ''}
+        onChange={(e) => setCfg({ ...cfg, system_prompt: e.target.value })}
+      />
+      </ReadOnly>
+    </div>
+  );
+}
 
+function ToneSection({
+  cfg,
+  setCfg,
+  isAdmin,
+}: {
+  cfg: AgentConfig;
+  setCfg: (c: AgentConfig) => void;
+  isAdmin: boolean;
+}) {
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+      <strong>Tone</strong>
+      <ReadOnly off={!isAdmin}>
+      <textarea
+        rows={3}
+        placeholder="e.g. warm, concise, never apologetic"
+        value={cfg.tone ?? ''}
+        onChange={(e) => setCfg({ ...cfg, tone: e.target.value })}
+      />
+      </ReadOnly>
+    </div>
+  );
+}
+
+/** Satisfaction survey + resolution flow — the csat override card plus the
+ *  auto-archive toggle that fires the survey when the customer confirms
+ *  they're done. */
+function SatisfactionSection({
+  cfg,
+  setCfg,
+  isAdmin,
+}: {
+  cfg: AgentConfig;
+  setCfg: (c: AgentConfig) => void;
+  isAdmin: boolean;
+}) {
   return (
     <>
-    {/* Team and the profile/notify overrides are self-service or gate
-        themselves on isAdmin, so they sit outside the admin read-only
-        wrapper. */}
-    <AgentTeamCard agent={agent} isAdmin={isAdmin} />
-    <AgentProfileOverride agent={agent} />
-    <AgentNotifyOverride agent={agent} />
-    <ReadOnly off={!isAdmin}>
-      <div className="card" style={{ marginTop: 12 }}>
-        <strong>Human takeover</strong>
-        <div className="form-field" style={{ marginTop: 8 }}>
-          <label>Auto-resume — release a takeover back to the agent after N minutes</label>
-          <div className="row">
-            <input
-              type="number"
-              min={1}
-              className="num-input"
-              placeholder="minutes"
-              value={autoResume}
-              onChange={(e) => setAutoResume(e.target.value)}
-            />
-            <span className="muted">blank = never auto-resume</span>
-          </div>
-        </div>
-        <div className="form-field">
-          <label>Escalation SLA — re-alert when a handoff stays unclaimed</label>
-          <div className="row">
-            <input
-              type="number"
-              min={1}
-              className="num-input"
-              placeholder="minutes"
-              value={cfg.sla_minutes ?? ''}
-              onChange={(e) =>
-                setCfg({ ...cfg, sla_minutes: e.target.value ? Number(e.target.value) : undefined })
-              }
-            />
-            <span className="muted">blank = off</span>
-          </div>
-        </div>
-        <div className="form-field">
-          <label className="check-label">
-            <input
-              type="checkbox"
-              checked={cfg.auto_assign ?? false}
-              onChange={(e) => setCfg({ ...cfg, auto_assign: e.target.checked })}
-            />
-            Auto-assign handoffs to the least-loaded teammate
-          </label>
-        </div>
-        <div className="muted">Repeat breaches escalate to the Slack alert channel.</div>
+      <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+        <strong>Resolution</strong>
+        <ReadOnly off={!isAdmin}>
+        <label className="check-label">
+          <input
+            type="checkbox"
+            checked={cfg.auto_archive === true}
+            onChange={(e) => setCfg({ ...cfg, auto_archive: e.target.checked || undefined })}
+          />
+          Auto-archive resolved chats — when the customer confirms they're done, the
+          agent signs off and archives the thread (fires the CSAT survey)
+        </label>
+        </ReadOnly>
       </div>
+      <SatisfactionCard cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+    </>
+  );
+}
 
+/** CSAT override card — shared between Settings/escalation history and the
+ *  Behavior → Satisfaction tab. */
+function SatisfactionCard({
+  cfg,
+  setCfg,
+  isAdmin,
+}: {
+  cfg: AgentConfig;
+  setCfg: (c: AgentConfig) => void;
+  isAdmin: boolean;
+}) {
+  return (
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Satisfaction survey</strong>
         <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
           Overrides the workspace survey for this agent — blank fields inherit.
         </div>
+        <ReadOnly off={!isAdmin}>
         <div className="form-field" style={{ marginTop: 8 }}>
           <label className="check-label">
             <input
@@ -858,13 +870,120 @@ function EscalationTab({
             value={cfg.csat?.thanks ?? ''}
             placeholder="Workspace default"
             onChange={(v) =>
-              setCfg({
-                ...cfg,
-                csat: { ...(cfg.csat ?? {}), thanks: v || undefined },
-              })
+              setCfg({ ...cfg, csat: { ...(cfg.csat ?? {}), thanks: v || undefined } })
             }
           />
         </div>
+        </ReadOnly>
+      </div>
+  );
+}
+
+function KnowledgeTextSection({
+  cfg,
+  setCfg,
+  isAdmin,
+}: {
+  cfg: AgentConfig;
+  setCfg: (c: AgentConfig) => void;
+  isAdmin: boolean;
+}) {
+  const [knowledgeText, setKnowledgeText] = useSyncedText(cfg, 'knowledge', joinLines);
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+      <strong>Knowledge text</strong>
+      <ReadOnly off={!isAdmin}>
+      <label>One fact/snippet per line — the agent quotes these verbatim in answers</label>
+      <textarea
+        rows={10}
+        placeholder={'Refunds are allowed within 30 days of purchase.\nSupport hours are 9-5 ET.\nOrder lookup requires the order number.'}
+        value={knowledgeText}
+        onChange={(e) => setKnowledgeText(e.target.value)}
+        onBlur={() => setCfg({ ...cfg, knowledge: knowledgeText.split('\n').filter(Boolean) })}
+      />
+      </ReadOnly>
+    </div>
+  );
+}
+
+function EscalationTab({
+  agent,
+  cfg,
+  setCfg,
+  autoResume,
+  setAutoResume,
+  rules,
+  isAdmin,
+  onAddRule,
+  onDeleteRule,
+}: {
+  agent: Agent;
+  cfg: AgentConfig;
+  setCfg: (c: AgentConfig) => void;
+  autoResume: string;
+  setAutoResume: (s: string) => void;
+  rules: AlertRule[];
+  isAdmin: boolean;
+  onAddRule: (kind: string, config: Record<string, unknown>) => void;
+  onDeleteRule: (id: string) => void;
+}) {
+  const [kind, setKind] = useState<(typeof RULE_KINDS)[number]>('keyword');
+  const [keywords, setKeywords] = useState('');
+  const [intents, setIntents] = useState('');
+  const [minutes, setMinutes] = useState('15');
+  const [assignTo, setAssignTo] = useState('');
+  const [ruleTag, setRuleTag] = useState('');
+  const [pool, setPool] = useState<string[]>([]);
+  const { data: members } = useAgentMembers(agent.id);
+  const teammateName = (id: string) =>
+    members?.members.find((m) => m.user_id === id)?.name ?? 'a teammate';
+
+  return (
+    <>
+    <ReadOnly off={!isAdmin}>
+      <div className="card" style={{ marginTop: 12 }}>
+        <strong>Human takeover</strong>
+        <div className="form-field" style={{ marginTop: 8 }}>
+          <label>Auto-resume — release a takeover back to the agent after N minutes</label>
+          <div className="row">
+            <input
+              type="number"
+              min={1}
+              className="num-input"
+              placeholder="minutes"
+              value={autoResume}
+              onChange={(e) => setAutoResume(e.target.value)}
+            />
+            <span className="muted">blank = never auto-resume</span>
+          </div>
+        </div>
+        <div className="form-field">
+          <label>Escalation SLA — re-alert when a handoff stays unclaimed</label>
+          <div className="row">
+            <input
+              type="number"
+              min={1}
+              className="num-input"
+              placeholder="minutes"
+              value={cfg.sla_minutes ?? ''}
+              onChange={(e) =>
+                setCfg({ ...cfg, sla_minutes: e.target.value ? Number(e.target.value) : undefined })
+              }
+            />
+            <span className="muted">blank = off</span>
+          </div>
+        </div>
+        <div className="form-field">
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={cfg.auto_assign ?? false}
+              onChange={(e) => setCfg({ ...cfg, auto_assign: e.target.checked })}
+            />
+            Auto-assign handoffs to the least-loaded teammate
+          </label>
+        </div>
+        <div className="muted">Repeat breaches escalate to the Slack alert channel.</div>
       </div>
 
       <div className="card" style={{ marginTop: 12 }}>
@@ -1002,9 +1121,19 @@ function EscalationTab({
       </div>
 
       <SlackAlerts agent={agent} isAdmin={isAdmin} />
-
-      <AgentSavedRepliesCard agent={agent} />
     </ReadOnly>
+    </>
+  );
+}
+
+/** Settings → Team: per-agent membership + each operator's own identity
+ *  overrides. Self-service pieces gate themselves, so no ReadOnly wrap. */
+function TeamSection({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
+  return (
+    <>
+      <AgentTeamCard agent={agent} isAdmin={isAdmin} />
+      <AgentProfileOverride agent={agent} />
+      <AgentNotifyOverride agent={agent} />
     </>
   );
 }
@@ -2057,7 +2186,7 @@ interface KnowledgeFile {
   created_at: string;
 }
 
-function KnowledgeFiles({ agentId }: { agentId: string }) {
+function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string; variant?: 'files' | 'websites' }) {
   const qc = useQueryClient();
   const { data } = useQuery({
     queryKey: ['knowledge', agentId],
@@ -2137,9 +2266,11 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['knowledge', agentId] }),
   });
 
+  const showWebsites = variant === 'websites';
+  const rows = (data?.files ?? []).filter((f) => (showWebsites ? Boolean(f.source_url) : !f.source_url));
   return (
     <div>
-      {(data?.files ?? []).map((f) => (
+      {rows.map((f) => (
         <div key={f.id} className="row muted" style={{ marginTop: 6 }}>
           <span className="grow">
             {f.source_url ? '🔗' : '📄'} {f.name}
@@ -2168,21 +2299,25 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
           <button className="btn danger" onClick={() => remove.mutate(f.id)} aria-label="Delete file"><Trash2 size={14} /></button>
         </div>
       ))}
-      <div className="row" style={{ marginTop: 8 }}>
-        <input
-          type="file"
-          multiple
-          disabled={uploading}
-          accept=".pdf,.docx,.txt,.md,.csv,.json,.xml,.html,.log,.yaml,.yml,.png,.jpg,.jpeg,.webp,.gif"
-          onChange={(e) => {
-            void upload(e.target.files);
-            e.target.value = '';
-          }}
-        />
-        {uploading && <span className="muted">extracting…</span>}
-      </div>
+      {!showWebsites && (
+        <div className="row" style={{ marginTop: 8 }}>
+          <input
+            type="file"
+            multiple
+            disabled={uploading}
+            accept=".pdf,.docx,.txt,.md,.csv,.json,.xml,.html,.log,.yaml,.yml,.png,.jpg,.jpeg,.webp,.gif"
+            onChange={(e) => {
+              void upload(e.target.files);
+              e.target.value = '';
+            }}
+          />
+          {uploading && <span className="muted">extracting…</span>}
+        </div>
+      )}
+      {showWebsites && (
+      <>
       <div className="muted" style={{ marginTop: 12, fontSize: 13 }}>
-        Or keep a live web source — re-crawled on the schedule you pick:
+        Keep a live web source — re-crawled on the schedule you pick:
       </div>
       <div className="row" style={{ marginTop: 6 }}>
         <input
@@ -2225,6 +2360,8 @@ function KnowledgeFiles({ agentId }: { agentId: string }) {
           ? 'Fetches this one page now and re-crawls it on the cadence — good for a pricing or FAQ page that changes.'
           : 'Imports every article it finds: Zendesk help centres use their API directly; any other site is discovered via its sitemap. Each article becomes its own re-crawled source.'}
       </div>
+      </>
+      )}
       {importMsg && <div className="muted" style={{ marginTop: 4 }}>{importMsg}</div>}
       {error && <div className="error">{error}</div>}
     </div>
@@ -2993,7 +3130,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
             Paste a candidate system prompt and/or model id — the whole suite replays
             against it and reports pass/fail per test. Nothing changes until you copy
-            the winner into the Engine / Language Model tab.
+            the winner into the Behavior section.
           </div>
           <textarea
             rows={6}

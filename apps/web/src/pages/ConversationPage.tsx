@@ -58,7 +58,8 @@ interface OutEntry {
 }
 
 export default function ConversationPage() {
-  const { id = '' } = useParams();
+  const params = useParams();
+  const id = params.cid ?? params.id ?? '';
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -725,7 +726,7 @@ export default function ConversationPage() {
                 <div className="row" style={{ marginTop: 4 }}>
                   <Link
                     className="btn primary sm"
-                    to={`/agents/${c.agent_id}?tab=tests`}
+                    to={`/agents/${c.agent_id}/tests`}
                   >
                     Open Tests tab →
                   </Link>
@@ -1222,7 +1223,7 @@ export default function ConversationPage() {
               Agent:{' '}
               {agent ? (
                 <Link
-                  to={`/agents/${c.agent_id}`}
+                  to={`/agents/${c.agent_id}/channels`}
                   style={{ color: 'var(--accent)' }}
                   onClick={(e) => {
                     // carry a return path + transcript offset so the agent
@@ -1231,7 +1232,7 @@ export default function ConversationPage() {
                     const from = `${location.pathname}${location.search}`;
                     const sp = Math.round(transcriptRef.current?.scrollTop ?? 0);
                     navigate(
-                      `/agents/${c.agent_id}?from=${encodeURIComponent(from)}${sp ? `&scroll=${sp}` : ''}`,
+                      `/agents/${c.agent_id}/channels?from=${encodeURIComponent(from)}${sp ? `&scroll=${sp}` : ''}`,
                     );
                   }}
                 >

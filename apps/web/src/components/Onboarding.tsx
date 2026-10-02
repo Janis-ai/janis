@@ -45,7 +45,7 @@ export default function Onboarding() {
 
   // Channel steps land on the first agent's Channels tab (management is per-agent now).
   const channelsLink = agents?.agents[0]
-    ? `/agents/${agents.agents[0].id}?tab=channels`
+    ? `/agents/${agents.agents[0].id}/channels`
     : '/agents';
   const STEP_LINKS: Record<string, string> = {
     create_agent: '/agents',

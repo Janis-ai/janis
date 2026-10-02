@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { timeAgo } from '../components/bits';
 import { useConfirm } from '../components/Prompt';
-import { useChannels, useMe } from '../api/hooks';
+import { useAgents, useChannels, useMe } from '../api/hooks';
 import { usePageTitle } from '../lib/title';
 
 /** Filter state for the People tab — mirrors the segment rules the API
@@ -87,7 +87,7 @@ type ContactDetail = {
 const displayName = (c: { name: string | null; email: string | null; phone: string | null }) =>
   c.name ?? c.email ?? c.phone ?? 'Unknown';
 
-export function Contacts() {
+export function Contacts({ agentId }: { agentId?: string } = {}) {
   usePageTitle('Contacts');
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<ContactFilter>(EMPTY_FILTER);
@@ -96,10 +96,14 @@ export function Contacts() {
   const [tab, setTab] = useState<'contacts' | 'lists'>('contacts');
   const { data: me } = useMe();
   const isAdmin = me?.user.role === 'admin';
+  const { data: agents } = useAgents();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [importMsg, setImportMsg] = useState('');
-  const params = filterParams(q, filter);
+  const baseParams = filterParams(q, filter);
+  // Agent-scoped mount (/agents/:id/contacts) pins the identity graph to
+  // contacts this agent has actually seen.
+  const params = agentId ? `${baseParams}${baseParams ? '&' : ''}agent_id=${agentId}` : baseParams;
   const filtered = JSON.stringify(filter) !== JSON.stringify(EMPTY_FILTER);
   const { data } = useQuery({
     queryKey: ['contacts', params],
@@ -134,6 +138,11 @@ export function Contacts() {
     <>
       <div className="page-head">
         <h1>Contacts</h1>
+        {agentId && (
+          <span className="chip" title="Scoped to this agent">
+            {agents?.agents.find((a) => a.id === agentId)?.name ?? 'This agent'}
+          </span>
+        )}
         <div className="row" style={{ gap: 0 }}>
           <button
             className={`btn ${tab === 'contacts' ? 'primary' : 'ghost'}`}
@@ -201,14 +210,14 @@ export function Contacts() {
           onClose={() => setSaveOpen(false)}
         />
       )}
-      {tab === 'lists' && <ListsPanel isAdmin={isAdmin} />}
+      {tab === 'lists' && <ListsPanel isAdmin={isAdmin} agentScope={agentId} />}
       {tab === 'contacts' && (
       <div className="card">
         {data?.contacts.length === 0 && (
           <div className="muted">No contacts yet — they appear as conversations arrive.</div>
         )}
         {data?.contacts.map((c) => (
-          <Link key={c.id} to={`/contacts/${c.id}`} className="row" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)', color: 'inherit', textDecoration: 'none' }}>
+          <Link key={c.id} to={agentId ? `/agents/${agentId}/contacts/${c.id}` : `/contacts/${c.id}`} className="row" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)', color: 'inherit', textDecoration: 'none' }}>
             <strong className="grow">{displayName(c)}</strong>
             {!!c.tags?.length && (
               <span>{c.tags.slice(0, 4).map((t) => <span key={t} className="chip" style={{ marginRight: 4 }}>{t}</span>)}</span>
@@ -351,7 +360,7 @@ type MemberRow = { id: string; name: string | null; email: string | null; phone:
 
 /** Static audiences — create/rename/delete lists, view + edit membership.
  *  Membership feeds campaign segments (list_id) and CSV imports. */
-function ListsPanel({ isAdmin }: { isAdmin: boolean }) {
+function ListsPanel({ isAdmin, agentScope }: { isAdmin: boolean; agentScope?: string }) {
   const [confirmEl, confirm] = useConfirm();
   const qc = useQueryClient();
   const [newName, setNewName] = useState('');
@@ -417,14 +426,14 @@ function ListsPanel({ isAdmin }: { isAdmin: boolean }) {
               {summariseFilter(l.filter as ReturnType<typeof filterObject>)} — membership updates itself
             </div>
           )}
-          {openId === l.id && <ListMembers listId={l.id} isAdmin={isAdmin && !l.smart} />}
+          {openId === l.id && <ListMembers listId={l.id} isAdmin={isAdmin && !l.smart} agentScope={agentScope} />}
         </div>
       ))}
     </div>
   );
 }
 
-function ListMembers({ listId, isAdmin }: { listId: string; isAdmin: boolean }) {
+function ListMembers({ listId, isAdmin, agentScope }: { listId: string; isAdmin: boolean; agentScope?: string }) {
   const qc = useQueryClient();
   const [addQ, setAddQ] = useState('');
   const { data } = useQuery({
@@ -473,7 +482,7 @@ function ListMembers({ listId, isAdmin }: { listId: string; isAdmin: boolean }) 
       )}
       {(data?.members ?? []).map((m) => (
         <div key={m.id} className="row" style={{ padding: '4px 0' }}>
-          <Link to={`/contacts/${m.id}`} className="grow" style={{ color: 'inherit', textDecoration: 'none' }}>
+          <Link to={agentScope ? `/agents/${agentScope}/contacts/${m.id}` : `/contacts/${m.id}`} className="grow" style={{ color: 'inherit', textDecoration: 'none' }}>
             {displayName(m)} <span className="muted">{[m.email, m.phone].filter(Boolean).join(' · ')}</span>
           </Link>
           {isAdmin && (
@@ -491,7 +500,11 @@ function ListMembers({ listId, isAdmin }: { listId: string; isAdmin: boolean }) 
 }
 
 export function ContactDetail() {
-  const { id } = useParams();
+  // /agents/:agentId/contacts/:cid nests under agent context — :id is the
+  // agent there; the flat /contacts/:id route carries the contact in :id.
+  const params = useParams();
+  const id = params.cid ?? params.id;
+  const agentScope = params.cid ? params.id : undefined;
   const qc = useQueryClient();
   const { data: me } = useMe();
   const isAdmin = me?.user.role === 'admin';
@@ -615,7 +628,7 @@ export function ContactDetail() {
         <strong>Channel identities</strong>
         {data.identities.length === 0 && <div className="muted" style={{ marginTop: 8 }}>None linked.</div>}
         {data.identities.map((i) => (
-          <IdentityRow key={i.id} identity={i} contactId={id!} />
+          <IdentityRow key={i.id} identity={i} contactId={id!} agentScope={agentScope} />
         ))}
       </div>
 
@@ -648,7 +661,7 @@ export function ContactDetail() {
         <strong>Conversations</strong>
         {data.conversations.length === 0 && <div className="muted" style={{ marginTop: 8 }}>None yet.</div>}
         {data.conversations.map((v) => (
-          <Link key={v.id} to={`/conversations/${v.id}`} className="row" style={{ padding: '6px 0', color: 'inherit', textDecoration: 'none' }}>
+          <Link key={v.id} to={agentScope ? `/agents/${agentScope}/inbox/${v.id}` : `/conversations/${v.id}`} className="row" style={{ padding: '6px 0', color: 'inherit', textDecoration: 'none' }}>
             <span className={`badge ${v.state}`}>{v.state}</span>
             <span className="grow">{v.agent_name} — {v.last_message_preview ?? ''}</span>
             <span className="muted">{v.last_message_at ? timeAgo(v.last_message_at) : ''}</span>
@@ -664,9 +677,13 @@ export function ContactDetail() {
 function IdentityRow({
   identity: i,
   contactId,
+  agentScope,
 }: {
   identity: { id: string; platform_user_id: string; channel_id: string; channel_kind: string; channel_name: string };
   contactId: string;
+  /** Agent context the page is nested under — outbound sends land back in
+   *  that agent's inbox rather than dropping to the workspace queue. */
+  agentScope?: string;
 }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -691,7 +708,7 @@ function IdentityRow({
       if (r.error) { setErr(r.error); return; }
       setOpen(false);
       void qc.invalidateQueries({ queryKey: ['contact', contactId] });
-      if (r.conversation_id) navigate(`/conversations/${r.conversation_id}`);
+      if (r.conversation_id) navigate(agentScope ? `/agents/${agentScope}/inbox/${r.conversation_id}` : `/conversations/${r.conversation_id}`);
     },
     onError: (e) => setErr(e instanceof Error ? e.message : 'send failed'),
   });

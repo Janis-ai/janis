@@ -1,5 +1,5 @@
 import { Component, type ReactElement, type ReactNode, useEffect } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api, ApiError } from './api/client';
 import type { Channel } from '@janis/shared';
@@ -14,6 +14,7 @@ import ConversationPage from './pages/ConversationPage';
 import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
 import Reports from './pages/Reports';
+import Usage from './pages/Usage';
 import Errors from './pages/Errors';
 import Billing from './pages/Billing';
 import Settings from './pages/Settings';
@@ -102,6 +103,54 @@ function ChannelRedirect() {
   );
 }
 
+/** Old /agents/:id?tab=X links resolve to the new section paths. */
+const LEGACY_TAB_SECTION: Record<string, string> = {
+  connection: 'settings',
+  behavior: 'behavior',
+  channels: 'channels',
+  escalation: 'settings',
+  tools: 'integrations',
+  tests: 'tests',
+  help: 'knowledge',
+  llm: 'behavior',
+};
+
+/** /agents/:id lands on the agent's inbox — operators open an agent to work
+ *  its queue, not to configure it. */
+function AgentRedirect() {
+  const { id } = useParams();
+  const [params] = useSearchParams();
+  const tab = params.get('tab');
+  const legacySub: Record<string, string> = { llm: 'llm', help: 'help', escalation: 'escalation', connection: 'general' };
+  const to = tab && LEGACY_TAB_SECTION[tab]
+    ? `/agents/${id}/${LEGACY_TAB_SECTION[tab]}${legacySub[tab] ? `?sub=${legacySub[tab]}` : ''}`
+    : `/agents/${id}/inbox`;
+  return <Navigate to={to} replace />;
+}
+
+/** Thin wrappers — the same page components serve the workspace context
+ *  unscoped and the agent context pinned to that agent. */
+function AgentInbox() {
+  const { id } = useParams();
+  return <Conversations key={id} agentId={id} />;
+}
+function AgentContacts() {
+  const { id } = useParams();
+  return <Contacts key={id} agentId={id} />;
+}
+function AgentCampaigns() {
+  const { id } = useParams();
+  return <Campaigns key={id} agentId={id} />;
+}
+function AgentReports() {
+  const { id } = useParams();
+  return <Reports key={id} agentId={id} />;
+}
+function AgentUsage() {
+  const { id } = useParams();
+  return <Usage key={id} agentId={id} />;
+}
+
 /** OpenRouter OAuth landing: exchange ?code, stash the key, bounce back to
  * the agent page that started the flow (stored in sessionStorage). */
 function LlmCallback() {
@@ -155,9 +204,20 @@ export default function App() {
           <Route path="/contacts/:id" element={<ContactDetail />} />
           <Route path="/campaigns" element={<Campaigns />} />
           <Route path="/agents" element={<Agents />} />
-          <Route path="/agents/:id" element={<AgentDetail />} />
+          <Route path="/agents/:id" element={<AgentRedirect />} />
+          {/* Agent context — every section is its own path so the sidebar
+              can flip the whole nav between workspace and agent. */}
+          <Route path="/agents/:id/inbox" element={<AgentInbox />} />
+          <Route path="/agents/:agentId/inbox/:id" element={<ConversationPage />} />
+          <Route path="/agents/:id/contacts" element={<AgentContacts />} />
+          <Route path="/agents/:id/contacts/:cid" element={<ContactDetail />} />
+          <Route path="/agents/:id/campaigns" element={<AgentCampaigns />} />
+          <Route path="/agents/:id/reports" element={<AgentReports />} />
+          <Route path="/agents/:id/usage" element={<AgentUsage />} />
           <Route path="/agents/:id/channels/:channelId" element={<ChannelPage />} />
+          <Route path="/agents/:id/:section" element={<AgentDetail />} />
           <Route path="/reports" element={<Reports />} />
+          <Route path="/usage" element={<Usage />} />
           <Route path="/errors" element={<Errors />} />
           <Route path="/integrations" element={<Navigate to="/agents" replace />} />
           <Route path="/integrations/:channelId" element={<ChannelRedirect />} />

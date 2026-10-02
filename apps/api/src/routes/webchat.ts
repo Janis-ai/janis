@@ -147,6 +147,9 @@ const postMessage = z
     // Console page the sender was on (Ask Janis rail sends location.pathname) —
     // context for the concierge, surfaced as the `page` trait for session users.
     page: z.string().max(500).optional(),
+    // Agent selected in the console when the concierge message was sent —
+    // surfaced as the `current_agent` trait so "this agent" resolves.
+    agent_id: z.string().max(80).optional(),
     attachments: z.array(attachment).max(5).optional(),
     // Client-generated send id — a retried POST (timeout, "failed to send"
     // that actually landed) carries the same id and is deduped server-side
@@ -203,6 +206,7 @@ async function resolveIdentity(
   channel: ChannelRow,
   claim: Claim | undefined,
   page?: string,
+  contextAgentId?: string,
 ): Promise<InboundMessage['user']> {
   const token = getCookie(c, SESSION_COOKIE);
   if (token) {
@@ -244,6 +248,13 @@ async function resolveIdentity(
             .select({ id: agents.id, name: agents.name })
             .from(agents)
             .where(eq(agents.workspaceId, curWs.id));
+          // The agent the console was scoped to when the message was sent —
+          // so "this agent" / "my greeting" resolve without the operator
+          // having to name it. Only trusted inside the workspace. Stamped on
+          // every concierge post (empty clears it): the trait dict merges
+          // per-message, so an unstamped key would outlive the selection.
+          const sel = agentRows.find((a) => a.id === contextAgentId);
+          traits.current_agent = sel?.name ?? '';
           if (agentRows.length) {
             const chans = await db
               .select({ agentId: channels.agentId, kind: channels.kind })
@@ -434,9 +445,9 @@ export function webchatRoutes(db: Db) {
   app.post('/:token/messages', zValidator('json', postMessage), async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
-    const { visitor_id, text, name, user, page, attachments, client_id, tap, tap_of } =
+    const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of } =
       c.req.valid('json');
-    const resolved = await resolveIdentity(c, db, channel, user, page);
+    const resolved = await resolveIdentity(c, db, channel, user, page, agent_id);
     // Retry idempotency — the client resends with the same client_id after a
     // failed-looking POST (timeout, lost response). The write may have
     // landed already; if a stored inbound carries this id, acknowledge and

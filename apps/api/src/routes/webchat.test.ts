@@ -989,6 +989,41 @@ describe('webchat authenticated identity', () => {
     expect(meta2.page).toBeUndefined();
   });
 
+  it('includes the selected agent in the concierge context pack', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [ws] = await db.select().from(workspaces).limit(1);
+    const [u] = await db.select().from(users).where(eq(users.email, 'owner@janis.test'));
+    const [a] = await db.select().from(agents).limit(1);
+    const [internalChannel] = await db.insert(channels).values({
+      workspaceId: ws.id, agentId: a.id, kind: 'webchat', name: 'Ask Janis',
+      credentials: { internal: true },
+    }).returning();
+    const post = (agent_id?: string) =>
+      app.request(`/chat/${internalChannel.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', cookie: 'janis_session=tok-abc' },
+        body: JSON.stringify({ visitor_id: 'vis_ctxagent00001', text: 'hi', agent_id }),
+      });
+    expect((await post(a.id)).status).toBe(200);
+    const [conv] = await db.select().from(conversations)
+      .where(eq(conversations.externalId, `webchat:test:${internalChannel.id}:u:${u.id}`)).limit(1);
+    const meta = ((conv?.userProfile as Record<string, unknown>)?.metadata ?? {}) as Record<string, unknown>;
+    expect(meta.current_agent).toBe(a.name);
+    // leaving the agent context clears the trait — traits merge per message,
+    // so an unstamped key would otherwise outlive the selection
+    expect((await post()).status).toBe(200);
+    const [conv2] = await db.select().from(conversations)
+      .where(eq(conversations.id, conv.id)).limit(1);
+    const meta2 = ((conv2?.userProfile as Record<string, unknown>)?.metadata ?? {}) as Record<string, unknown>;
+    expect(meta2.current_agent).toBeFalsy();
+    // an id outside the workspace never lands in the pack
+    expect((await post('00000000-0000-0000-0000-000000000000')).status).toBe(200);
+    const [conv3] = await db.select().from(conversations)
+      .where(eq(conversations.id, conv.id)).limit(1);
+    const meta3 = ((conv3?.userProfile as Record<string, unknown>)?.metadata ?? {}) as Record<string, unknown>;
+    expect(meta3.current_agent).toBeFalsy();
+  });
+
   it('gives the context pack on the support channel (Ask Janis rail)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     const [ws] = await db.select().from(workspaces).limit(1);

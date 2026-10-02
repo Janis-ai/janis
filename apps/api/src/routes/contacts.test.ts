@@ -348,4 +348,43 @@ describe('contacts', () => {
     // active_within_days needs a recent conversation → neither qualifies.
     expect(await get_(`q=${marker}&active_within_days=30`)).toEqual([]);
   });
+
+  it('agent_id narrows to the agent\'s contacts — conversation or identity', async () => {
+    const marker = 'ag-' + Math.random().toString(36).slice(2, 8);
+    const [agent2] = await db
+      .insert(agents)
+      .values({ workspaceId, name: 'other bot' })
+      .returning();
+    const [ch2] = await db
+      .insert(channels)
+      .values({ workspaceId, agentId: agent2.id, kind: 'sms', name: 'SMS2', credentials: {} })
+      .returning();
+    // one contact reached via a conversation with agent2…
+    const [viaConv] = await db
+      .insert(contacts)
+      .values({ workspaceId, name: `${marker} conv` })
+      .returning();
+    await db.insert(conversations).values({
+      agentId: agent2.id, externalId: `x:${marker}`, contactId: viaConv.id,
+    });
+    // …and one that only carries an identity on agent2's channel.
+    const [viaIdentity] = await db
+      .insert(contacts)
+      .values({ workspaceId, name: `${marker} id` })
+      .returning();
+    await db.insert(contactIdentities).values({
+      contactId: viaIdentity.id, channelId: ch2.id, platformUserId: `ag:${marker}`,
+    });
+    const res = await api.request(`/api/contacts?q=${marker}&agent_id=${agent2.id}`, {
+      headers: { cookie },
+    });
+    const { contacts: list } = (await res.json()) as { contacts: { id: string }[] };
+    expect(list.map((c) => c.id).sort()).toEqual([viaConv.id, viaIdentity.id].sort());
+    // the workspace's first agent sees neither
+    const [agent1] = await db.select().from(agents).where(eq(agents.name, 'bot')).limit(1);
+    const res1 = await api.request(`/api/contacts?q=${marker}&agent_id=${agent1.id}`, {
+      headers: { cookie },
+    });
+    expect(((await res1.json()) as { contacts: unknown[] }).contacts).toEqual([]);
+  });
 });

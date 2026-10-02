@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAgents, useChannels, useDigests } from '../api/hooks';
 import { Empty, channelLabel } from '../components/bits';
+import { UsageCard } from '../components/UsageCard';
 import { usePageTitle } from '../lib/title';
 
 interface HandoffMetrics {
@@ -99,12 +100,14 @@ interface CampaignStats {
 const today = () => new Date().toISOString().slice(0, 10);
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 
-/** Daily digests + handoff/escalation metrics. */
-export default function Reports() {
+/** Daily digests + handoff/escalation metrics. `scopedAgentId` pins the
+ *  whole page to one agent (mounted at /agents/:id/reports). */
+export default function Reports({ agentId: scopedAgentId }: { agentId?: string }) {
   usePageTitle('Reports');
   const { data } = useDigests();
   // Drill-down: overall → per agent → per channel of that agent.
-  const [agentId, setAgentId] = useState('');
+  const [pickedAgent, setAgentId] = useState('');
+  const agentId = scopedAgentId ?? pickedAgent;
   const [channelId, setChannelId] = useState('');
   // Range: preset days or a custom from/to window ('custom' uses the inputs).
   const [preset, setPreset] = useState('30');
@@ -185,17 +188,7 @@ export default function Reports() {
         `/api/reports/campaigns?${qs}`,
       ),
   });
-  const usage = useQuery({
-    queryKey: ['usage-metrics'],
-    queryFn: () =>
-      api<{
-        plan: { key: string; name: string; included_messages: number; base_cents: number; overage_per_1k_cents: number | null };
-        messages_used: number;
-        messages_remaining: number;
-        current: { period: string; llm_prompt_tokens: number; llm_completion_tokens: number; llm_cost_usd: number; voice_seconds: number };
-        previous: { period: string; llm_prompt_tokens: number; llm_completion_tokens: number; llm_cost_usd: number; voice_seconds: number };
-      }>('/api/reports/usage'),
-  });
+
   const qc = useQueryClient();
 
   const generate = useMutation({
@@ -245,20 +238,26 @@ export default function Reports() {
             />
           </>
         )}
-        <select
-          value={agentId}
-          onChange={(e) => {
-            setAgentId(e.target.value);
-            // a channel from another agent would silently zero the results
-            if (channelId && !chans?.channels.some((ch) => ch.id === channelId && ch.agent_id === e.target.value))
-              setChannelId('');
-          }}
-        >
-          <option value="">All agents</option>
-          {agents?.agents.map((a) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </select>
+        {/* Agent-scoped mount (/agents/:id/reports) pins the drill-down —
+            the sidebar switcher is how you change agents, not this picker. */}
+        {scopedAgentId ? (
+          <span className="chip">{agents?.agents.find((a) => a.id === scopedAgentId)?.name ?? 'This agent'}</span>
+        ) : (
+          <select
+            value={agentId}
+            onChange={(e) => {
+              setAgentId(e.target.value);
+              // a channel from another agent would silently zero the results
+              if (channelId && !chans?.channels.some((ch) => ch.id === channelId && ch.agent_id === e.target.value))
+                setChannelId('');
+            }}
+          >
+            <option value="">All agents</option>
+            {agents?.agents.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        )}
         <select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
           <option value="">All channels</option>
           {(chans?.channels ?? [])
@@ -389,41 +388,7 @@ export default function Reports() {
       })()}
 
       {/* Usage — this billing period against the plan */}
-      {(() => {
-        const u = usage.data;
-        if (!u) return null;
-        const capped = u.plan.included_messages >= Number.MAX_SAFE_INTEGER;
-        const pct = capped ? 0 : Math.min(100, Math.round((u.messages_used / u.plan.included_messages) * 100));
-        const fmtUsd = (n: number) => `$${n.toFixed(2)}`;
-        const fmtSec = (s: number) => (s >= 3600 ? `${(s / 3600).toFixed(1)}h` : s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`);
-        return (
-          <div className="card">
-            <div className="row">
-              <strong className="grow">Usage — {u.current.period} · {u.plan.name} plan</strong>
-            </div>
-            <div className="metric-grid" style={{ marginTop: 10 }}>
-              <div className="metric">
-                <div className="metric-num">
-                  {u.messages_used.toLocaleString()}
-                  {!capped && <span className="muted" style={{ fontSize: 14 }}> / {u.plan.included_messages.toLocaleString()}</span>}
-                </div>
-                <div className="muted">messages this period{capped ? ' (uncapped plan)' : ''}</div>
-              </div>
-              <div className="metric"><div className="metric-num">{fmtUsd(u.current.llm_cost_usd)}</div><div className="muted">LLM cost (prev {fmtUsd(u.previous.llm_cost_usd)})</div></div>
-              <div className="metric"><div className="metric-num">{((u.current.llm_prompt_tokens + u.current.llm_completion_tokens) / 1000).toFixed(0)}k</div><div className="muted">LLM tokens</div></div>
-              <div className="metric"><div className="metric-num">{fmtSec(u.current.voice_seconds)}</div><div className="muted">voice (prev {fmtSec(u.previous.voice_seconds)})</div></div>
-            </div>
-            {!capped && (
-              <div style={{ marginTop: 10, background: 'var(--panel-2)', borderRadius: 3, height: 8 }}>
-                <div style={{
-                  width: `${pct}%`, height: '100%', borderRadius: 3,
-                  background: pct > 90 ? 'var(--danger, #e5534b)' : 'var(--accent)',
-                }} />
-              </div>
-            )}
-          </div>
-        );
-      })()}
+      <UsageCard agentId={agentId || undefined} />
 
       {/* CSAT — post-resolution customer ratings */}
       {(() => {

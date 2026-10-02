@@ -37,7 +37,7 @@ export default function Agents() {
     onSuccess: (r) => {
       setNewName('');
       refresh();
-      navigate(`/agents/${r.agent.id}`);
+      navigate(`/agents/${r.agent.id}/channels`);
     },
     onError: (e) => setError(e.message),
   });

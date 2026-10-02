@@ -84,12 +84,16 @@ function ConvRow({
   selected,
   onToggle,
   focused,
+  base,
 }: {
   c: Conversation;
   agentName?: string;
   selected?: boolean;
   onToggle?: (id: string) => void;
   focused?: boolean;
+  /** Inbox base path — agent-scoped mounts link to /agents/:id/inbox/:conv
+   *  so the sidebar keeps the agent context open on the detail page. */
+  base: string;
 }) {
   const snoozed = c.snoozed_until && new Date(c.snoozed_until) > new Date();
   const rowRef = useRef<HTMLAnchorElement>(null);
@@ -97,7 +101,7 @@ function ConvRow({
     if (focused) rowRef.current?.scrollIntoView({ block: 'nearest' });
   }, [focused]);
   return (
-    <Link to={`/conversations/${c.id}`} className={`conv-row${focused ? ' kbd-focus' : ''}`} ref={rowRef}>
+    <Link to={`${base}/${c.id}`} className={`conv-row${focused ? ' kbd-focus' : ''}`} ref={rowRef}>
       {onToggle && (
         <input
           type="checkbox"
@@ -141,9 +145,11 @@ function ConvRow({
   );
 }
 
-/** Conversations: triage (needs attention) + search/browse of everything. */
-export default function Conversations() {
-  usePageTitle('Conversations');
+/** Conversations: triage (needs attention) + search/browse of everything.
+ *  `scopeAgent` pins the list to one agent — the /agents/:id/inbox mount —
+ *  and turns the agent picker into a whole-context switcher. */
+export default function Conversations({ agentId: scopeAgent }: { agentId?: string } = {}) {
+  usePageTitle(scopeAgent ? 'Agent inbox' : 'Conversations');
   const [tab, setTab] = useSticky<'attention' | 'all'>('conv.tab', 'all');
   const [state, setState] = useSticky('conv.state', '');
   const [activeView, setActiveView] = useSticky('conv.view', '');
@@ -157,7 +163,10 @@ export default function Conversations() {
     setParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [agentId, setAgentId] = useSticky('conv.agent', '');
+  const [pickedAgent, setAgentId] = useSticky('conv.agent', '');
+  // Scoped mounts pin the filter; the workspace view keeps its sticky pick.
+  const agentId = scopeAgent ?? pickedAgent;
+  const inboxBase = scopeAgent ? `/agents/${scopeAgent}/inbox` : '/conversations';
   // Deep link: /conversations?agent=<id> seeds the sticky agent filter once,
   // then strips itself so the URL doesn't fight later filter changes.
   useEffect(() => {
@@ -293,7 +302,7 @@ export default function Conversations() {
       };
       if (e.key === 'j') setFocusIdx((i) => Math.min(i + 1, (list?.length ?? 1) - 1));
       else if (e.key === 'k') setFocusIdx((i) => Math.max(i - 1, 0));
-      else if (e.key === 'Enter' && cur) navigate(`/conversations/${cur.id}`);
+      else if (e.key === 'Enter' && cur) navigate(`${inboxBase}/${cur.id}`);
       else if (e.key === 'e' && cur) void one(cur.state === 'archived' ? 'unarchive' : 'archive');
       else if (e.key === 's' && cur) void patch({ is_starred: !cur.is_starred });
       else if (e.key === 'u' && cur) void patch({ is_unread: !cur.is_unread });
@@ -392,7 +401,9 @@ export default function Conversations() {
           </div>
         </div>
       )}
-      <h1 className="page-title">Conversations</h1>
+      <h1 className="page-title">
+        {scopeAgent ? `${agents?.agents.find((a) => a.id === scopeAgent)?.name ?? 'Agent'} inbox` : 'Inbox'}
+      </h1>
       <DiscoveryCards />
       <Onboarding />
       {drill && (
@@ -461,8 +472,22 @@ export default function Conversations() {
             </optgroup>
           ))}
         </select>
-        <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-          <option value="">All agents</option>
+        {/* In the agent context this picker switches the whole app's agent,
+            not just the list — matches the sidebar switcher. */}
+        <select
+          value={agentId}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (!scopeAgent) {
+              setAgentId(v);
+            } else if (!v) {
+              navigate('/conversations');
+            } else if (v !== scopeAgent) {
+              navigate(`/agents/${v}/inbox`);
+            }
+          }}
+        >
+          <option value="">{scopeAgent ? 'All agents (workspace)' : 'All agents'}</option>
           {[...(agents?.agents ?? [])]
             .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
             .map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
@@ -522,14 +547,14 @@ export default function Conversations() {
         <>
           {hits && hits.conversations.length === 0 && <Empty>No matches.</Empty>}
           {hits?.conversations.map((c, i) => (
-            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} />
+            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} base={inboxBase} />
           ))}
           {hits && hits.messages.length > 0 && (
             <div className="card" style={{ marginTop: 16 }}>
               <strong>Message hits</strong>
               {hits.messages.slice(0, 20).map((m) => (
                 <div key={m.id} className="muted" style={{ marginTop: 6 }}>
-                  <Link to={`/conversations/${m.conversation_id}?msg=${m.id}`}>
+                  <Link to={`${inboxBase}/${m.conversation_id}?msg=${m.id}`}>
                     {(() => {
                       const HitIcon =
                         m.flags.help_requested || m.flags.failure || m.flags.custom_alert || m.flags.handoff_offer || m.flags.handoff_cancelled
@@ -570,7 +595,7 @@ export default function Conversations() {
             </div>
           )}
           {convList?.map((c, i) => (
-            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} />
+            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} base={inboxBase} />
           ))}
           {hasNextPage && (
             <div style={{ textAlign: 'center', marginTop: 12 }}>

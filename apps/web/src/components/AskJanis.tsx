@@ -274,6 +274,7 @@ export function AskJanis({
   onToggleExpand,
   expanded,
   seedMessage,
+  agentId,
 }: {
   channelId: string;
   badge?: string;
@@ -283,6 +284,9 @@ export function AskJanis({
   expanded?: boolean;
   // Auto-sent once on load — discovery cards / ?rail=ask&q= deeplinks.
   seedMessage?: string;
+  /** Agent the console is scoped to — sent as context so the concierge
+   *  knows which agent "this agent" means. */
+  agentId?: string;
 }) {
   const navigate = useNavigate();
   const visitor = useRef(visitorId()).current;
@@ -784,6 +788,9 @@ export function AskJanis({
           // which console page the sender was on — the concierge sees this as
           // the `page` trait ("the user was on /reports when they asked")
           page: location.pathname + location.search,
+          // the agent selected in the console — the `current_agent` trait,
+          // so concierge tools default to it instead of asking which agent
+          ...(agentId ? { agent_id: agentId } : {}),
           // widget/chip taps arrive marked — a pick with context, not a
           // typed instruction
           ...(tap ? { tap: true, ...(tap.of ? { tap_of: tap.of } : {}) } : {}),

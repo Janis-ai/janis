@@ -121,6 +121,19 @@ describe('GET /api/reports/usage', () => {
     expect(body.current.llm_prompt_tokens).toBe(500);
     expect(body.current.llm_cost_usd).toBe(2.5);
   });
+
+  it('?agent_id= narrows messages and rollups to that agent', async () => {
+    const res = await app.request(`/api/reports/usage?agent_id=${agentId}`, { headers: { Cookie: cookie } });
+    const body = (await res.json()) as { messages_used: number; current: { llm_prompt_tokens: number } };
+    expect(body.messages_used).toBe(2);
+    expect(body.current.llm_prompt_tokens).toBe(500);
+    // a different agent reports zero — the filter intersects, it doesn't error
+    const [other] = await db.insert(agents).values({ workspaceId: wsId, name: 'Other' }).returning();
+    const res2 = await app.request(`/api/reports/usage?agent_id=${other.id}`, { headers: { Cookie: cookie } });
+    const body2 = (await res2.json()) as { messages_used: number; current: { llm_prompt_tokens: number } };
+    expect(body2.messages_used).toBe(0);
+    expect(body2.current.llm_prompt_tokens).toBe(0);
+  });
 });
 
 describe('GET /api/reports/export', () => {
