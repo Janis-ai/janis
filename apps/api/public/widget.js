@@ -795,7 +795,7 @@
         if (item.select_label) {
           var b = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
           wtext(b, item.select_label);
-          b.onclick = function () { sendText(item.select_label); };
+          b.onclick = function () { sendText(item.select_label, { of: item.title }); };
           btns.appendChild(b);
         }
         card.appendChild(btns);
@@ -847,7 +847,7 @@
       b.onclick = function () {
         list.classList.add('janis-wdone');
         b.classList.add('janis-wsel');
-        sendText(item.label);
+        sendText(item.label, { of: w.title });
       };
       list.appendChild(b);
     });
@@ -901,7 +901,7 @@
       var done = el('div', {}, { class: 'janis-wsent' });
       wtext(done, 'Sent ✓');
       box.appendChild(done);
-      sendText(text);
+      sendText(text, { of: w.title || 'form' });
     };
     form.appendChild(submit);
     box.appendChild(form);
@@ -1097,8 +1097,16 @@
     if (state.qrsEl) { state.qrsEl.remove(); state.qrsEl = null; }
   }
 
-  function sendText(text) {
-    var entry = addPending({ visitor_id: visitor, text: text, user: state.user || undefined, attachments: [] }, []);
+  // `tap` marks component-originated sends (card button, option pick, chip,
+  // form submit) — the agent sees them as picks with context, not typed
+  // commands. `tap.of` names the card/widget it came from.
+  function sendText(text, tap) {
+    var body = { visitor_id: visitor, text: text, user: state.user || undefined, attachments: [] };
+    if (tap) {
+      body.tap = true;
+      if (tap.of) body.tap_of = tap.of;
+    }
+    var entry = addPending(body, []);
     sendPayload(entry);
   }
 
@@ -1139,7 +1147,7 @@
       b.type = 'button';
       b.className = 'janis-qr';
       b.textContent = q;
-      b.onclick = function () { clearChips(); sendText(q); };
+      b.onclick = function () { clearChips(); sendText(q, {}); };
       row.appendChild(b);
     });
     msgs.appendChild(row);

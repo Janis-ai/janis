@@ -540,13 +540,17 @@ drizzle-kit/workbox-build, nothing to drop directly).
   notice). BYOK rows cost 0 — never trip.
   Remaining: CAPTCHA on widget after N messages, blocklisting repeat
   offenders, per-plan cap tiers.
-- Reply-claim verifier (TODO): prompt rules only reduce unfounded claims —
-  a model can say "here are the cards/plans" when no tool ran and no widget
-  was emitted. Fix: post-gen check detecting card/picker/action-claim
-  phrasing in any hosted reply where toolCalls is empty and
-  payload.widgets absent → strip or rewrite the claim. Triggered by real
-  incidents (concierge describing cards it never rendered; agent-only
-  WIDGET replies previously escalated).
+- Reply-claim verifier: DONE for action claims — hostedAgent checks each
+  reply for "I've set your plan…" / "your refund was processed" / "will
+  take effect" phrasing; with zero backed tool calls the draft regenerates
+  once with feedback, and a surviving claim gets its sentences stripped
+  (inspector flags claim_guard). Tap markers (payload.tap/tap_of via the
+  janis:sel: postback/list-id marker and webchat tap fields) annotate taps
+  in the transcript so a pick can't read as a typed command — the incident
+  that prompted this: a "Choose Free" card tap produced a fabricated
+  plan switch + invented workspace name. Remaining scope: claims of
+  *seeing* things ("here are the cards") when payload.widgets is empty,
+  and concierge phrasing (see Model-honesty backstop below).
 - Load test: scripts/load-test.js (k6) — staged 10→150 RPS on health +
   session-auth'd reads, p95<800ms / <1% errors thresholds; run against a
   preview revision, never prod at 150rps without warning. Read-only by

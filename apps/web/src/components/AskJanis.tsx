@@ -726,7 +726,7 @@ export function AskJanis({
     }
   };
 
-  const send = async (body: string, atts: Attachment[], retryOf?: OutEntry) => {
+  const send = async (body: string, atts: Attachment[], retryOf?: OutEntry, tap?: { of?: string }) => {
     const t = body.trim();
     if ((!t && !atts.length) || sending || !loaded) return;
     setSending(true);
@@ -764,6 +764,9 @@ export function AskJanis({
           // which console page the sender was on — the concierge sees this as
           // the `page` trait ("the user was on /reports when they asked")
           page: location.pathname + location.search,
+          // widget/chip taps arrive marked — a pick with context, not a
+          // typed instruction
+          ...(tap ? { tap: true, ...(tap.of ? { tap_of: tap.of } : {}) } : {}),
         }),
       });
       showTyping();
@@ -869,7 +872,7 @@ export function AskJanis({
             )}
             {cfg.greeting ? richText(cfg.greeting, navigate) : null}
             {cfg.greeting_widgets?.length ? (
-              <Widgets widgets={cfg.greeting_widgets} onSend={(t) => void send(t, [])} />
+              <Widgets widgets={cfg.greeting_widgets} onSend={(t, tap) => void send(t, [], undefined, tap)} />
             ) : null}
           </div>
         )}
@@ -910,7 +913,7 @@ export function AskJanis({
                 {!(item.m.action && item.m.text === item.m.action.label) &&
                   richText(item.m.text, navigate)}
                 {item.m.widgets?.length ? (
-                  <Widgets widgets={item.m.widgets} onSend={(t) => void send(t, [])} />
+                  <Widgets widgets={item.m.widgets} onSend={(t, tap) => void send(t, [], undefined, tap)} />
                 ) : null}
                 {item.m.action && (
                   <div className="action-card">
@@ -982,7 +985,7 @@ export function AskJanis({
           <div className="ask-qrs">
             {(chips ?? cfg?.quick_replies ?? []).map((q, i) =>
               typeof q === 'string' ? (
-                <button key={q} className="btn" onClick={() => void send(q, [])}>{q}</button>
+                <button key={q} className="btn" onClick={() => void send(q, [], undefined, {})}>{q}</button>
               ) : (
                 <AskField
                   key={i}

@@ -255,6 +255,34 @@ describe('webchat widget endpoints', () => {
     expect(inRows[0].client_id).toBe('c-123');
   });
 
+  it('stores widget-tap context on the message payload', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const VISITOR = 'vis_tapcontext00001';
+    const res = await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        visitor_id: VISITOR,
+        text: 'Choose Free',
+        tap: true,
+        tap_of: 'Free',
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, `webchat:${VISITOR}`));
+    const convMsgs = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    const stored = convMsgs.find((m) => m.direction === 'in' && m.text === 'Choose Free')!;
+    expect((stored.payload as { tap?: boolean; tap_of?: string }).tap).toBe(true);
+    expect((stored.payload as { tap?: boolean; tap_of?: string }).tap_of).toBe('Free');
+  });
+
   it('isolates transcripts by visitor id', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     await post('a secret', VISITOR_B);

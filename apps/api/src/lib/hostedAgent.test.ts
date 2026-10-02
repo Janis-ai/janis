@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, conversations, messages, uploads, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripEscalationClaims, stripTranscriptNotes, transcriptFor } from './hostedAgent.js';
+import { blessedUrlsFor, claimsAction, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, transcriptFor } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 
 let db: Db;
@@ -103,6 +103,22 @@ describe('transcriptFor file analysis', () => {
     const history = await transcriptFor(db, convId, true);
     const last = history.at(-1)!;
     expect(last.content as string).toContain('[attachments: gone.pdf]');
+  });
+
+  it('annotates widget taps with the card they came from', async () => {
+    // prod incident: "Choose Free" tapped on a plan card arrived as bare text
+    // and the model treated it as an instruction to change the plan.
+    await db.insert(messages).values({
+      conversationId: convId,
+      direction: 'in',
+      text: 'Choose Free',
+      payload: { tap: true, tap_of: 'Free' },
+      createdAt: new Date(),
+    });
+    const history = await transcriptFor(db, convId, true);
+    const last = history.at(-1)!;
+    expect(last.role).toBe('user');
+    expect(last.content as string).toBe('Choose Free [tapped "Free"]');
   });
 });
 
@@ -306,6 +322,48 @@ describe('stripEscalationClaims', () => {
     ]) {
       expect(stripEscalationClaims(s).stripped).toBe(0);
     }
+  });
+});
+
+describe('claimsAction / stripActionClaims', () => {
+  it('catches the confabulated plan-change phrasings', () => {
+    // prod incident: a "Choose Free" card tap on Messenger produced
+    // "I've set your plan to Free" with zero tool calls.
+    for (const s of [
+      "I've set your plan to Free.",
+      'I have updated the email on your account.',
+      'Your subscription has been cancelled.',
+      'The refund was processed — allow 5 days.',
+      'Your plan is now on the Free tier.',
+      'That change will take effect on your next billing cycle.',
+      "I've gone ahead and switched you to the Free plan.",
+    ]) {
+      expect(claimsAction(s), s).toBe(true);
+    }
+  });
+
+  it('leaves offers, questions and negations alone', () => {
+    for (const s of [
+      'I can help you change your plan from your billing page.',
+      'Would you like me to walk you through cancelling?',
+      "I haven't changed anything on your account.",
+      'I cannot update your plan from here.',
+      'To switch plans, head to Settings → Billing.',
+      'The Pro plan includes unlimited seats.',
+      'Your workspace might have several agents.',
+    ]) {
+      expect(claimsAction(s), s).toBe(false);
+    }
+  });
+
+  it('strips only the claiming sentences', () => {
+    const stripped = stripActionClaims(
+      "I've set your plan to Free. If you'd like to move to a different " +
+        'workspace, let me know which one.',
+    );
+    expect(stripped).toBe(
+      "If you'd like to move to a different workspace, let me know which one.",
+    );
   });
 });
 

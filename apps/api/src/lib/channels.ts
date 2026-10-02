@@ -153,6 +153,29 @@ export interface AttachmentRef {
   size: number;
 }
 
+/** Widget-tap marker — a card/options/button tap carries a machine-readable
+ *  payload so ingress stores it as a tap (not typed intent) and the model
+ *  sees "[tapped]"-annotated history. `l` = the full label (postback titles
+ *  truncate at 20 chars), `of` = which card/widget it sat on. */
+const SELECT_MARKER = 'janis:sel:';
+export function selectMarker(label: string, of?: string): string {
+  return (
+    SELECT_MARKER +
+    JSON.stringify({ l: label.slice(0, 200), ...(of ? { of: of.slice(0, 80) } : {}) })
+  );
+}
+export function parseSelectMarker(
+  raw: string | undefined | null,
+): { l?: string; of?: string } | null {
+  if (!raw?.startsWith(SELECT_MARKER)) return null;
+  try {
+    const p = JSON.parse(raw.slice(SELECT_MARKER.length)) as { l?: string; of?: string };
+    return typeof p === 'object' && p ? p : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface InboundMessage {
   /** page_id (messenger/ig) or phone_number_id (whatsapp) — identifies the channel */
   objectId: string;
@@ -269,12 +292,18 @@ export function parseMetaWebhook(body: unknown): InboundMessage[] {
         | { title?: string; payload?: string; mid?: string }
         | undefined;
       if (postback) {
+        const sel = parseSelectMarker(postback.payload);
         out.push({
           objectId,
           senderId: sender,
-          text: postback.title ?? postback.payload ?? 'Get Started',
+          // Marker payloads carry the full label — postback.title is the
+          // 20-char-truncated button caption Meta echoes back.
+          text: sel?.l ?? postback.title ?? postback.payload ?? 'Get Started',
           messageId: postback.mid,
           postback: true,
+          // A postback is by definition a button tap — the marker adds which
+          // card it sat on so the model sees a pick, not a typed command.
+          payload: { tap: true, ...(sel?.of ? { tap_of: sel.of } : {}) },
           ...(standby ? { standby } : {}),
         });
         continue;
@@ -285,6 +314,7 @@ export function parseMetaWebhook(body: unknown): InboundMessage[] {
             text?: string;
             is_echo?: boolean;
             mid?: string;
+            quick_reply?: { payload?: string };
             attachments?: { type?: string; payload?: { url?: string } }[];
           }
         | undefined;
@@ -298,11 +328,15 @@ export function parseMetaWebhook(body: unknown): InboundMessage[] {
           size: 0,
         }));
       if (!msg.text && attachments.length === 0) continue;
+      const qrSel = parseSelectMarker(msg.quick_reply?.payload);
       out.push({
         objectId,
         senderId: sender,
-        text: msg.text ?? '',
+        text: qrSel?.l ?? msg.text ?? '',
         messageId: msg.mid,
+        ...(msg.quick_reply || qrSel
+          ? { payload: { tap: true, ...(qrSel?.of ? { tap_of: qrSel.of } : {}) } }
+          : {}),
         ...(standby ? { standby } : {}),
         ...(attachments.length ? { attachments } : {}),
       });
@@ -344,13 +378,25 @@ export function parseMetaWebhook(body: unknown): InboundMessage[] {
           out.push({ ...base, text: wm.text.body });
           continue;
         }
-        // Interactive reply buttons/lists — a tap returns the button title.
+        // Interactive reply buttons/lists — a tap returns the button title
+        // plus the id we set, which carries the janis:sel: marker for
+        // widget-originated options.
         if (wm.type === 'interactive') {
           const r = wm.interactive as
-            | { button_reply?: { title?: string }; list_reply?: { title?: string } }
+            | {
+                button_reply?: { id?: string; title?: string };
+                list_reply?: { id?: string; title?: string };
+              }
             | undefined;
-          const text = r?.button_reply?.title ?? r?.list_reply?.title;
-          if (text) out.push({ ...base, text });
+          const reply = r?.button_reply ?? r?.list_reply;
+          const sel = parseSelectMarker(reply?.id);
+          const text = sel?.l ?? reply?.title;
+          if (text)
+            out.push({
+              ...base,
+              text,
+              payload: { tap: true, ...(sel?.of ? { tap_of: sel.of } : {}) },
+            });
           continue;
         }
         if (!WA_MEDIA.has(wm.type)) continue;
@@ -707,8 +753,10 @@ export async function sendChannelMessage(
               button: 'See options',
               sections: [
                 {
-                  rows: w.items.slice(0, 10).map((it, i) => ({
-                    id: `wopt_${i}`,
+                  rows: w.items.slice(0, 10).map((it) => ({
+                    // Marker id — the tap round-trips with widget context.
+                    // WhatsApp caps row ids at 256 chars.
+                    id: selectMarker(it.label, w.title).slice(0, 256),
                     title: [...it.label].slice(0, 24).join(''),
                     ...(it.description
                       ? { description: [...it.description].slice(0, 72).join('') }
@@ -870,7 +918,9 @@ export async function sendChannelMessage(
           buttons.push({
             type: 'postback',
             title: it.select_label.slice(0, 20),
-            payload: it.select_label.slice(0, 1000),
+            // Marker payload — the tap round-trips with card context instead
+            // of arriving as bare text the model could misread as a command.
+            payload: selectMarker(it.select_label, it.title).slice(0, 1000),
           });
         }
         return {
@@ -900,7 +950,8 @@ export async function sendChannelMessage(
         quick_replies: w.items.slice(0, 13).map((it) => ({
           content_type: 'text',
           title: [...it.label].slice(0, 20).join(''),
-          payload: it.label.slice(0, 1000),
+          // quick_reply payloads echo back on the tap — same marker as cards
+          payload: selectMarker(it.label, w.title).slice(0, 1000),
         })),
       };
     }

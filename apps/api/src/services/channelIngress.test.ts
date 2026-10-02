@@ -577,6 +577,64 @@ describe('hosted handoff offers', () => {
     expect(after.state).not.toBe('needs_human');
   });
 
+  it('an unbacked action claim regenerates instead of shipping the lie', async () => {
+    // Prod incident: a "Choose Free" card tap produced "I've set your plan
+    // to Free" with zero tool calls — the claim guard must catch it.
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          llmResponse("Done — I've set your plan to Free. It will take effect on your next billing cycle."),
+        ),
+      )
+      .mockImplementation(() =>
+        Promise.resolve(
+          llmResponse("I can't change plans from this chat — you can switch under Settings → Billing, or I can flag this for the team."),
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'ClaimBot',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-claim-1' })
+      .returning();
+    await db.insert(messages).values({
+      conversationId: conv.id,
+      direction: 'in',
+      text: 'Choose Free',
+      payload: { tap: true, tap_of: 'Free' },
+    });
+
+    await runHostedEvent(db, hosted, {
+      type: 'message.user',
+      conversation_id: 'ext-claim-1',
+      janis_conversation_id: conv.id,
+      text: 'Choose Free',
+    } as Parameters<typeof runHostedEvent>[2]);
+
+    // the claim draft triggered a second completion
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const out = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id))
+      .then((rows) => rows.filter((m) => m.direction === 'out').at(-1));
+    expect(out?.text).toContain("can't change plans");
+    expect(out?.text).not.toContain('set your plan');
+  });
+
   it('a WIDGET_REF line resolves to the saved component verbatim', async () => {
     // Predictability: the model picks the moment, the saved spec is the
     // content — "show me your plans" renders the same carousel every time.

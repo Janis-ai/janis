@@ -47,7 +47,7 @@ export function Widgets({
   onSend,
 }: {
   widgets: ChatWidget[];
-  onSend: (text: string) => void;
+  onSend: (text: string, tap?: { of?: string }) => void;
 }) {
   return (
     <>
@@ -58,7 +58,7 @@ export function Widgets({
   );
 }
 
-function Widget({ w, onSend }: { w: ChatWidget; onSend: (t: string) => void }) {
+function Widget({ w, onSend }: { w: ChatWidget; onSend: (t: string, tap?: { of?: string }) => void }) {
   return (
     <div className={`wgt wgt-${w.type}`}>
       {w.type === 'cards' && <Cards w={w} onSend={onSend} />}
@@ -70,7 +70,7 @@ function Widget({ w, onSend }: { w: ChatWidget; onSend: (t: string) => void }) {
   );
 }
 
-function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSend: (t: string) => void }) {
+function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
   const rowRef = useRef<HTMLDivElement>(null);
   // null = unmeasured. Until a real measurement lands, a multi-card row
   // assumes it overflows — a measurement that never fires (mounted while
@@ -126,7 +126,7 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
                 <button
                   type="button"
                   className="wgt-btn wgt-btn-primary"
-                  onClick={() => onSend(item.select_label!)}
+                  onClick={() => onSend(item.select_label!, { of: item.title })}
                 >
                   {item.select_label}
                 </button>
@@ -162,7 +162,7 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
   );
 }
 
-function Options({ w, onSend }: { w: Extract<ChatWidget, { type: 'options' }>; onSend: (t: string) => void }) {
+function Options({ w, onSend }: { w: Extract<ChatWidget, { type: 'options' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
   const [picked, setPicked] = useState<number | null>(null);
   return (
     <>
@@ -176,7 +176,7 @@ function Options({ w, onSend }: { w: Extract<ChatWidget, { type: 'options' }>; o
             onClick={() => {
               if (picked !== null) return;
               setPicked(i);
-              onSend(item.label);
+              onSend(item.label, { of: w.title });
             }}
           >
             {item.label}
@@ -188,7 +188,7 @@ function Options({ w, onSend }: { w: Extract<ChatWidget, { type: 'options' }>; o
   );
 }
 
-function WForm({ w, onSend }: { w: Extract<ChatWidget, { type: 'form' }>; onSend: (t: string) => void }) {
+function WForm({ w, onSend }: { w: Extract<ChatWidget, { type: 'form' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
   const [sent, setSent] = useState(false);
   const [vals, setVals] = useState<Record<string, string>>({});
   if (sent) return <div className="wgt-sent">Sent ✓</div>;
@@ -202,7 +202,7 @@ function WForm({ w, onSend }: { w: Extract<ChatWidget, { type: 'form' }>; onSend
     }
     if (!pairs.length) return;
     setSent(true);
-    onSend(`${w.title ? `Form "${w.title}"` : 'Form'} — ${pairs.join(' · ')}`);
+    onSend(`${w.title ? `Form "${w.title}"` : 'Form'} — ${pairs.join(' · ')}`, { of: w.title || 'form' });
   };
   return (
     <>

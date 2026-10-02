@@ -325,6 +325,14 @@ export function systemPrompt(
     parts.push(
       '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, or mild pushback, and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.',
     );
+    parts.push(
+      // Real incident: the model read a plan-card tap ("Choose Free") as a
+      // command, then claimed "I've set your plan to Free" with zero tool
+      // calls, invented a workspace name, and contradicted itself.
+      '\nActions and identity, hard rules. Never claim to have made or completed a change — switched a plan, cancelled a subscription, issued a refund, updated an account, booked or scheduled anything, "it will take effect…" — unless a tool call this turn actually performed it or created an approval request. If the request needs an action you have no tool for, say plainly that you cannot do it in this chat, point them to the right place (their dashboard/billing page), or offer a human once. A claimed action that did not run is a lie the customer acts on.' +
+        " You cannot see the customer's account, workspace, plan, email or sign-in state unless the context or a tool result provides it — never assume or invent an account or workspace name; if which account they mean matters, ask." +
+        ' A customer message ending in a [tapped …] note is a pick from a button or card you showed — treat it as them selecting that option, not as an instruction to change their account; confirm what they picked and clarify what they want next.',
+    );
     if (cfg.auto_archive) {
       parts.push(
         '\nEnding a conversation. When the matter is clearly settled — the customer says thanks/goodbye, or confirms there is nothing else after you ask "anything else I can help with?" — give a brief friendly sign-off and end with [END_CHAT] on its own line. That archives the conversation, so only use it once the customer has confirmed they are done — never just because you answered, never mid-exchange. When you ask whether they need anything else, offer "BUTTON: All done" and "BUTTON: I need something else" so the answer is one tap.',
@@ -554,6 +562,56 @@ export function extractButtons(text: string): {
     .join('\n');
   return { text: out.trim(), buttons };
 }
+
+// ── Unbacked action claims ───────────────────────────────────────────────
+// The model asserting it changed something when no tool ran ("I've set your
+// plan to Free", "your refund has been processed", "it will take effect on
+// the next cycle"). Checked per sentence; negations don't count ("I haven't
+// changed anything"). A hit without a backed tool call regenerates once,
+// then strips the claiming sentences rather than shipping the lie.
+const CLAIM_VERB =
+  '(?:set|chang\\w+|updat\\w*|switch\\w*|appl\\w*|cancell?ed|refund\\w*|credit\\w*|book\\w*|schedul\\w*|upgrad\\w*|downgrad\\w*|activat\\w*|deactivat\\w*|process\\w*|delet\\w*|remov\\w+|creat\\w*|adjust\\w*|transferr?\\w*|enroll\\w*|reschedul\\w*|confirm\\w*|modif\\w+|renew\\w*|paus\\w*|resum\\w*|mov\\w+|add\\w+)';
+const ACCOUNT_NOUN =
+  '(?:plan|subscription|account|refund|payment|order|booking|appointment|reservation|profile|settings|workspace|email|address|password|tier|seat|invoice|billing|charge|discount|credit|membership|delivery|shipping|request)';
+const CLAIM_RES = [
+  // "I've set your plan…", "I have updated the email"
+  new RegExp(
+    `\\bi(?:'?ve| have)\\b[^.!?\\n]{0,90}?\\b${CLAIM_VERB}\\b[^.!?\\n]{0,50}?\\b(?:your|the|a|an|to|it|that)\\b`,
+    'i',
+  ),
+  // "your plan has been updated", "the refund was processed"
+  new RegExp(
+    `\\b(?:your|the|this|that)\\s+${ACCOUNT_NOUN}\\b[^.!?\\n]{0,60}?\\b(?:has been|have been|was|were|is now|'s been|got)\\b`,
+    'i',
+  ),
+  // "…will take effect (on your next billing cycle)"
+  /\b(?:will|takes?|took|taking)\s+effect\b/i,
+];
+// `n't` can't carry a leading \b — in "haven't" the n follows a word char.
+const NEGATION = /n't\b|\b(?:not|never)\b/i;
+
+function sentencesOf(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+function isClaim(s: string): boolean {
+  return !NEGATION.test(s) && CLAIM_RES.some((p) => p.test(s));
+}
+export function claimsAction(text: string): boolean {
+  return sentencesOf(text).some(isClaim);
+}
+export function stripActionClaims(text: string): string {
+  return sentencesOf(text)
+    .filter((s) => !isClaim(s))
+    .join(' ');
+}
+
+const CLAIM_GUARD_RETRY =
+  'Your previous draft claimed to have completed a change (plan, account, refund, booking, "will take effect"…) but no tool ran. ' +
+  'Rewrite it: describe what you can and cannot do in this chat — never claim an action that did not happen. ' +
+  'If the request needs an account change you have no tool for, say so and point them to the right place or offer a human.';
 
 const LINK_GUARD_RETRY =
   'Your previous draft included links that do not work — they were removed, so the reply now points at nothing. ' +
@@ -1049,7 +1107,11 @@ function summaryLine(m: {
     return '(a status update was sent to the customer)';
   }
   if (m.direction === 'human') return `human operator: ${m.text}`;
-  return (m.direction === 'in' ? `customer: ${m.text}` : `agent: ${m.text}`) + attachmentNote(m.payload);
+  // Same tap annotation as transcriptFor — a summarized "Choose Free" must
+  // keep reading as a pick, not a typed instruction.
+  const tap = m.direction === 'in' ? (m.payload as { tap?: boolean; tap_of?: string } | undefined) : undefined;
+  const tapNote = tap?.tap === true ? ` [tapped${tap.tap_of ? ` "${tap.tap_of.slice(0, 60)}"` : ''}]` : '';
+  return (m.direction === 'in' ? `customer: ${m.text}` : `agent: ${m.text}`) + tapNote + attachmentNote(m.payload);
 }
 
 function attachmentsOf(payload: unknown): AttachmentRef[] {
@@ -1303,10 +1365,19 @@ export async function transcriptFor(
       );
       continue;
     }
+    // Widget/button taps carry payload.tap — annotate so the model reads a
+    // pick ("Choose Free" tapped on the "Free" card), not a typed command
+    // it might act on. tap_of names the card/widget it came from.
+    const tap =
+      m.direction === 'in'
+        ? ((m.payload ?? null) as { tap?: boolean; tap_of?: string } | null)
+        : null;
+    const tapNote = tap?.tap === true ? ` [tapped${tap.tap_of ? ` "${tap.tap_of.slice(0, 60)}"` : ''}]` : '';
     out.push({
       role: m.direction === 'in' ? 'user' : 'assistant',
       content:
         (m.direction === 'human' ? `(human operator) ${m.text}` : m.text!) +
+        tapNote +
         attachmentNote(m.payload),
     });
   }
@@ -1715,7 +1786,7 @@ async function replyAsHostedAgent(
       const spec = WidgetComponent.safeParse(w.spec);
       if (spec.success) refSpecs.set(normWidgetRef(w.name), spec.data);
     }
-    const prompt =
+    let prompt =
       systemPrompt(agent, docs, conv, {
         pendingOffer: openEsc.some((a) => a.type === 'handoff_offer'),
         offerMade: offeredBefore,
@@ -1779,8 +1850,35 @@ async function replyAsHostedAgent(
       widgets = w;
       buttons = b;
       learns = l;
+      // Unbacked action claim — "I've set your plan to Free" with zero tool
+      // calls. Regenerate once with explicit feedback before stripping.
+      if (
+        attempt === 0 &&
+        reply &&
+        claimsAction(reply) &&
+        !gen.toolCalls.some((t) => t.outcome !== 'failed')
+      ) {
+        console.warn(`[hosted] unbacked action claim conv=${convId} — regenerating`);
+        prompt += '\n\n' + CLAIM_GUARD_RETRY;
+        continue;
+      }
       if (reply || widgets.length || toolWidgets.length || attempt === 1) break;
       console.warn(`[hosted] empty completion conv=${convId} — retrying once`);
+    }
+    // Belt-and-braces: a claim that survived the regen gets its claiming
+    // sentences stripped rather than shipped to the customer as fact.
+    let actionClaimStripped = false;
+    if (
+      reply &&
+      claimsAction(reply) &&
+      !gen.toolCalls.some((t) => t.outcome !== 'failed')
+    ) {
+      const stripped = stripActionClaims(reply).trim();
+      console.error(`[hosted] stripped unbacked action claim conv=${convId}`);
+      actionClaimStripped = true;
+      reply =
+        stripped ||
+        "I'm not able to make that change directly in this chat — I can flag it for a teammate, or point you to where you can do it yourself.";
     }
     // Data-bound components from widget-bound tools lead the reply; the
     // model's own WIDGET: lines trail, capped at 3 total.
@@ -1810,6 +1908,7 @@ async function replyAsHostedAgent(
         knowledge: (Array.isArray(acfg.knowledge) ? acfg.knowledge : []).slice(0, 20),
         prompt: acfg.system_prompt ? 'custom' : 'default',
         tools: gen.toolCalls,
+        ...(actionClaimStripped ? { claim_guard: 'stripped' } : {}),
       },
     };
     if (promptTokens || completionTokens) {
@@ -1868,7 +1967,10 @@ async function replyAsHostedAgent(
     const lastCustomerText = contentText(
       [...history].reverse().find((m) => m.role === 'user')?.content ?? null,
     )
-      ?.trim()
+      // Widget taps carry a `[tapped …]` annotation — strip it before the
+      // exact-match check so a tapped "No thanks" still de-escalates.
+      ?.replace(/\s*\[tapped[^\]]*\]$/i, '')
+      .trim()
       .toLowerCase();
     const declineTapped = lastCustomerText === 'no thanks' && pendingEscalation;
     const tag = controlTag(reply);

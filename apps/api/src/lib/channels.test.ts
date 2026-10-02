@@ -4,6 +4,7 @@ import {
   fetchPlatformProfile,
   formatForChannel,
   parseMetaWebhook,
+  selectMarker,
   sendChannelMessage,
   verifyMetaSignature,
 } from './channels.js';
@@ -55,8 +56,72 @@ describe('parseMetaWebhook', () => {
       ],
     };
     expect(parseMetaWebhook(body)).toEqual([
-      { objectId: 'PAGE123', senderId: 'PSID1', text: 'Get Started', messageId: 'mid.pb', postback: true },
-      { objectId: 'PAGE123', senderId: 'PSID2', text: 'MENU_ITEM', messageId: undefined, postback: true },
+      {
+        objectId: 'PAGE123',
+        senderId: 'PSID1',
+        text: 'Get Started',
+        messageId: 'mid.pb',
+        postback: true,
+        payload: { tap: true },
+      },
+      {
+        objectId: 'PAGE123',
+        senderId: 'PSID2',
+        text: 'MENU_ITEM',
+        messageId: undefined,
+        postback: true,
+        payload: { tap: true },
+      },
+    ]);
+  });
+
+  it('round-trips widget tap context through the select marker', () => {
+    const body = {
+      entry: [
+        {
+          id: 'PAGE123',
+          messaging: [
+            {
+              sender: { id: 'PSID1' },
+              recipient: { id: 'PAGE123' },
+              // What a tapped card button echoes back — the postback title is
+              // Meta's truncated caption, the marker payload carries the full
+              // select_label and the card it sat on.
+              postback: {
+                title: 'Choose Free',
+                payload: selectMarker('Choose Free — forever plan', 'Free'),
+                mid: 'mid.sel',
+              },
+            },
+            {
+              sender: { id: 'PSID1' },
+              recipient: { id: 'PAGE123' },
+              message: {
+                mid: 'mid.qr',
+                text: 'No thanks',
+                quick_reply: { payload: selectMarker('No thanks') },
+              },
+            },
+          ],
+        },
+      ],
+    };
+    expect(parseMetaWebhook(body)).toEqual([
+      {
+        objectId: 'PAGE123',
+        senderId: 'PSID1',
+        text: 'Choose Free — forever plan',
+        messageId: 'mid.sel',
+        postback: true,
+        payload: { tap: true, tap_of: 'Free' },
+      },
+      {
+        objectId: 'PAGE123',
+        senderId: 'PSID1',
+        text: 'No thanks',
+        messageId: 'mid.qr',
+        payload: { tap: true },
+      },
     ]);
   });
 
@@ -232,8 +297,22 @@ describe('parseMetaWebhook', () => {
       ],
     };
     expect(parseMetaWebhook(body)).toEqual([
-      { objectId: 'PHONE1', senderId: '1555', text: 'Pricing', messageId: 'wamid.9', name: 'Jane' },
-      { objectId: 'PHONE1', senderId: '1555', text: 'Support', messageId: 'wamid.10', name: 'Jane' },
+      {
+        objectId: 'PHONE1',
+        senderId: '1555',
+        text: 'Pricing',
+        messageId: 'wamid.9',
+        name: 'Jane',
+        payload: { tap: true },
+      },
+      {
+        objectId: 'PHONE1',
+        senderId: '1555',
+        text: 'Support',
+        messageId: 'wamid.10',
+        name: 'Jane',
+        payload: { tap: true },
+      },
     ]);
   });
 
@@ -493,13 +572,15 @@ describe('sendChannelMessage quick replies', () => {
       default_action: { type: 'web_url', url: 'https://x.com/pro' },
       buttons: [
         { type: 'web_url', url: 'https://x.com/pro', title: 'Details' },
-        { type: 'postback', title: 'Choose Pro', payload: 'Choose Pro' },
+        // select taps carry the janis:sel: marker — the tap comes back with
+        // the full label + card context instead of bare text
+        { type: 'postback', title: 'Choose Pro', payload: selectMarker('Choose Pro', 'Pro plan') },
       ],
     });
     // relative image urls are dropped — Meta needs absolute
     expect(tpl.elements[1]).toEqual({
       title: 'Starter',
-      buttons: [{ type: 'postback', title: 'Choose Starter', payload: 'Choose Starter' }],
+      buttons: [{ type: 'postback', title: 'Choose Starter', payload: selectMarker('Choose Starter', 'Starter') }],
     });
   });
 
@@ -518,8 +599,8 @@ describe('sendChannelMessage quick replies', () => {
     const { message } = lastBody(fetchMock);
     expect(message.text).toBe('Pick a slot');
     expect(message.quick_replies).toEqual([
-      { content_type: 'text', title: 'Tue 3pm', payload: 'Tue 3pm' },
-      { content_type: 'text', title: 'Wed 10am', payload: 'Wed 10am' },
+      { content_type: 'text', title: 'Tue 3pm', payload: selectMarker('Tue 3pm', 'Pick a slot') },
+      { content_type: 'text', title: 'Wed 10am', payload: selectMarker('Wed 10am', 'Pick a slot') },
     ]);
   });
 
@@ -543,8 +624,12 @@ describe('sendChannelMessage quick replies', () => {
     expect(body.interactive.type).toBe('list');
     expect(body.interactive.body.text).toBe('Pick a slot');
     expect(body.interactive.action.sections[0].rows).toEqual([
-      { id: 'wopt_0', title: 'Tuesday 3pm', description: 'with Dr. Lee' },
-      { id: 'wopt_1', title: 'Wednesday 10am' },
+      {
+        id: selectMarker('Tuesday 3pm', 'Pick a slot'),
+        title: 'Tuesday 3pm',
+        description: 'with Dr. Lee',
+      },
+      { id: selectMarker('Wednesday 10am', 'Pick a slot'), title: 'Wednesday 10am' },
     ]);
   });
 

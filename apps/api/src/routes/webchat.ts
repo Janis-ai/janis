@@ -151,6 +151,10 @@ const postMessage = z
     // that actually landed) carries the same id and is deduped server-side
     // so the retry can't double-store the message.
     client_id: z.string().max(80).optional(),
+    // Widget/chip taps — the message is a pick from a component, not typed
+    // intent. tap_of names the card/widget it came from.
+    tap: z.boolean().optional(),
+    tap_of: z.string().max(300).optional(),
   })
   .refine((d) => d.text.trim().length > 0 || (d.attachments?.length ?? 0) > 0, {
     message: 'text or attachments required',
@@ -424,7 +428,8 @@ export function webchatRoutes(db: Db) {
   app.post('/:token/messages', zValidator('json', postMessage), async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
-    const { visitor_id, text, name, user, page, attachments, client_id } = c.req.valid('json');
+    const { visitor_id, text, name, user, page, attachments, client_id, tap, tap_of } =
+      c.req.valid('json');
     const resolved = await resolveIdentity(c, db, channel, user, page);
     // Retry idempotency — the client resends with the same client_id after a
     // failed-looking POST (timeout, lost response). The write may have
@@ -454,7 +459,10 @@ export function webchatRoutes(db: Db) {
       name: resolved?.name ?? name,
       user: resolved,
       attachments,
-      payload: client_id ? { client_id } : undefined,
+      payload: {
+        ...(client_id ? { client_id } : {}),
+        ...(tap ? { tap: true, ...(tap_of ? { tap_of } : {}) } : {}),
+      },
     });
     return c.json({ ok: true });
   });
