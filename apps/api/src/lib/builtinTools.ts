@@ -3,6 +3,7 @@ import type { Db } from '../db/client.js';
 import {
   agents,
   agentMembers,
+  agentWidgets,
   alerts,
   alertRules,
   channelBindings,
@@ -34,6 +35,7 @@ import {
   inviteWorkspaceMembers,
   sanitizeChannelName,
 } from './slack.js';
+import { normWidgetRef, WidgetComponent } from './widgets.js';
 
 /** Context a builtin can reach — matches AgentRunContext in hostedAgent. */
 export interface BuiltinCtx {
@@ -195,6 +197,21 @@ async function findVisitorConversation(
 /** Stable stringify for flat exec-args — jsonb sorts keys on read. */
 const canonArgs = (o: Record<string, unknown>) =>
   JSON.stringify(Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b))));
+
+/** Deep-canonical form — nested objects sort keys recursively so a jsonb
+ *  round-trip (Postgres reorders keys) compares equal. */
+const canonDeep = (v: unknown): unknown =>
+  Array.isArray(v)
+    ? v.map(canonDeep)
+    : v && typeof v === 'object'
+      ? Object.fromEntries(
+          Object.entries(v as Record<string, unknown>)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([k, i]) => [k, canonDeep(i)]),
+        )
+      : v;
+const canonDeepEq = (a: unknown, b: unknown) =>
+  JSON.stringify(canonDeep(a)) === JSON.stringify(canonDeep(b));
 
 /** Park a concierge action as an approval card in the rail. Unlike
  *  requestToolApproval (customer-facing gated tools) this pages nobody — the
@@ -1703,7 +1720,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'update_agent',
     description:
-      "Propose an agent settings change in the visitor's workspace — rename, greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes, auto-assign, widget accent colour, or email alerts. Posts an approval card — nothing changes until the visitor approves. Admin-only.",
+      "Propose an agent settings change in the visitor's workspace — rename, greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes, auto-assign, widget accent colour, or email alerts. Posts an approval card — nothing changes until the visitor approves. For chat components/widgets the agent shows in conversation, use save_widget instead. Admin-only.",
     params: {
       agent: 'agent name (required)',
       name: 'new agent name — renames the agent',
@@ -1973,6 +1990,161 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           applied.length === 1 && applied[0] === 'name'
             ? `Renamed ${agent.name} to ${newName}.`
             : `Updated ${newName}: ${applied.join(', ')}.`,
+      });
+    },
+  },
+  {
+    name: 'save_widget',
+    description:
+      "Propose saving a chat component on an agent in the visitor's workspace — the same cards/options/form/status/receipt blocks the console's Chat components composer manages. The saved component renders verbatim when the agent emits WIDGET_REF, or pins to the webchat greeting with auto_greet. Use this when the visitor asks to add a widget/component to an agent — NOT update_agent (that's settings: greeting, chips, CSAT). Posts an approval card — nothing is saved until the visitor approves. Admin-only.",
+    params: {
+      agent: 'agent name (required)',
+      name: 'component handle the agent will reference, e.g. pricing-table (required)',
+      spec:
+        'the component definition as JSON (required) — e.g. {"type":"cards","items":[{"title":"Pro","price":"$99/mo","select_label":"Choose Pro"}]}, {"type":"options","title":"…","items":[{"label":"…"}]}, {"type":"form","title":"…","items":[{"label":"Name"},{"label":"Email"}]}, {"type":"status","title":"…","steps":[{"label":"…","state":"done|current|todo"}]}, {"type":"receipt","title":"…","rows":[{"label":"…","value":"…"}]}',
+      auto_greet: 'true/false — also pin this component under the webchat greeting',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+
+      const hint = args.agent?.trim().toLowerCase();
+      const wsAgents = await ctx.db.select().from(agents).where(eq(agents.workspaceId, ws.id));
+      const agent = hint
+        ? wsAgents.find((a) => a.name.toLowerCase() === hint) ??
+          wsAgents.find((a) => a.name.toLowerCase().includes(hint))
+        : undefined;
+      if (!agent) {
+        return JSON.stringify({
+          error: `which agent? "${args.agent ?? ''}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
+        });
+      }
+      const name = normWidgetRef(String(args.name ?? '')).slice(0, 60);
+      if (!name) return JSON.stringify({ error: 'name cannot be blank' });
+      let rawSpec: unknown;
+      try {
+        rawSpec = JSON.parse(String(args.spec ?? ''));
+      } catch {
+        return JSON.stringify({ error: 'spec must be valid JSON — pass the component definition as a JSON string' });
+      }
+      const spec = WidgetComponent.safeParse(rawSpec);
+      if (!spec.success) {
+        return JSON.stringify({
+          error: `invalid spec — ${spec.error.issues[0]?.message ?? 'check the schema'}`,
+          issues: spec.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`),
+        });
+      }
+      const autoGreet = ['true', 'yes', 'on', '1'].includes(String(args.auto_greet).toLowerCase());
+      // Same name + identical spec already saved → nothing to propose.
+      const [existing] = await ctx.db
+        .select()
+        .from(agentWidgets)
+        .where(and(eq(agentWidgets.agentId, agent.id), eq(agentWidgets.name, name)))
+        .limit(1);
+      if (
+        existing &&
+        canonDeepEq(existing.spec, spec.data) &&
+        existing.autoGreet === autoGreet
+      ) {
+        return `already_saved: ${agent.name} already has this exact component saved as "${name}" — tell the visitor it's live`;
+      }
+      const items =
+        'items' in spec.data && Array.isArray(spec.data.items)
+          ? spec.data.items.length
+          : 'rows' in spec.data && Array.isArray(spec.data.rows)
+            ? spec.data.rows.length
+            : ('steps' in spec.data && Array.isArray(spec.data.steps) ? spec.data.steps.length : 0);
+      return parkConciergeAction(
+        ctx,
+        'apply_save_widget',
+        {
+          workspace_id: ws.id,
+          agent_id: agent.id,
+          name,
+          spec: spec.data,
+          auto_greet: String(autoGreet),
+        },
+        `${existing ? 'Update' : 'Save'} component "${name}" → ${agent.name}`,
+        {
+          agent: agent.name,
+          component: name,
+          type: spec.data.type,
+          ...(items ? { items } : {}),
+          ...(autoGreet ? { on_open: 'pinned to greeting' } : {}),
+        },
+      );
+    },
+  },
+  {
+    // Executor for approved save_widget cards — hidden from the model.
+    name: 'apply_save_widget',
+    description: 'internal — executes an approved save_widget action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      // Re-verify at decide time — the approver must still administer the
+      // target workspace.
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+            eq(memberships.role, 'admin'),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs admin rights on the target workspace';
+      const [agent] = await ctx.db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, String(args.agent_id ?? '')), eq(agents.workspaceId, wsId)))
+        .limit(1);
+      if (!agent) return 'error: agent not found';
+      // Re-validate the parked spec — an approved card must never write a
+      // shape the composer wouldn't accept.
+      const spec = WidgetComponent.safeParse(args.spec);
+      if (!spec.success) return `error: invalid spec — ${spec.error.issues[0]?.message}`;
+      const name = normWidgetRef(String(args.name ?? '')).slice(0, 60);
+      if (!name) return 'error: component name cannot be blank';
+      const autoGreet = args.auto_greet === 'true';
+      await ctx.db
+        .insert(agentWidgets)
+        .values({ agentId: agent.id, name, spec: spec.data, autoGreet })
+        .onConflictDoUpdate({
+          target: [agentWidgets.agentId, agentWidgets.name],
+          set: { spec: spec.data, autoGreet, updatedAt: new Date() },
+        });
+      await audit(ctx.db, {
+        workspaceId: wsId,
+        userId: user.id,
+        userName: user.name,
+        action: 'agent.widget.save',
+        targetType: 'agent',
+        targetId: agent.id,
+        meta: { via: 'concierge', widget: name },
+      });
+      bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
+      return JSON.stringify({
+        ok: true,
+        agent: agent.name,
+        component: name,
+        summary:
+          `Saved "${name}" on ${agent.name} — it can show it any time with WIDGET_REF: ${name}` +
+          (autoGreet ? ', and it now opens under the webchat greeting.' : '.'),
       });
     },
   },

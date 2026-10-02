@@ -7,6 +7,7 @@ import { BUILTIN_TOOLS, enabledBuiltins } from '../lib/builtinTools.js';
 import { decidePendingAction } from '../lib/approvals.js';
 import {
   agents,
+  agentWidgets,
   channelBindings,
   alertRules,
   channels,
@@ -830,6 +831,93 @@ describe('update_agent builtin', () => {
       { db, convId: CONV2, workspaceId: WS },
     );
     expect(raw).toContain('disallowed');
+  });
+});
+
+describe('save_widget builtin', () => {
+  const save = () => BUILTIN_TOOLS.find((b) => b.name === 'save_widget')!;
+  const applyW = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_save_widget')!;
+  const spec = JSON.stringify({
+    type: 'cards',
+    items: [
+      { title: 'Free', price: '$0/mo', select_label: 'Choose Free' },
+      { title: 'Pro', price: '$99/mo', select_label: 'Choose Pro' },
+    ],
+  });
+
+  it('parks a component card; approving writes agent_widgets', async () => {
+    const out = await save().run(
+      { workspace: 'free', agent: 'bot2', name: 'Pricing Table', spec },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_save_widget' && p.status === 'pending');
+    expect(pa).toBeTruthy();
+    // the card display names the target agent + component
+    const args = pa!.args as { name: string; spec: { type: string }; auto_greet: string };
+    expect(args.name).toBe('pricing-table'); // canonicalised
+    expect(args.spec.type).toBe('cards');
+
+    const applied = JSON.parse(
+      await applyW().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(applied.ok).toBe(true);
+    const [w] = await db
+      .select()
+      .from(agentWidgets)
+      .where(eq(agentWidgets.name, 'pricing-table'));
+    expect((w.spec as { items: unknown[] }).items).toHaveLength(2);
+    expect(w.autoGreet).toBe(false);
+  });
+
+  it('rejects an invalid spec before parking — model gets the schema issue', async () => {
+    const bad = JSON.parse(
+      await save().run(
+        { workspace: 'free', agent: 'bot2', name: 'broken', spec: '{"type":"cards"}' },
+        cctx(CONV2),
+      ),
+    );
+    expect(bad.error).toContain('invalid spec');
+  });
+
+  it('already_saved when name+spec match — no duplicate card', async () => {
+    const again = await save().run(
+      { workspace: 'free', agent: 'bot2', name: 'pricing-table', spec },
+      cctx(CONV2),
+    );
+    expect(again).toContain('already_saved');
+  });
+
+  it('auto_greet pins the component to the greeting', async () => {
+    const out = await save().run(
+      { workspace: 'free', agent: 'bot2', name: 'hours', spec: '{"type":"options","title":"Hours","items":[{"label":"Weekdays"}]}', auto_greet: 'true' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_save_widget' && p.status === 'pending');
+    await applyW().run(pa!.args as Record<string, unknown>, {
+      db,
+      convId: CONV2,
+      workspaceId: WS,
+    });
+    const [w] = await db.select().from(agentWidgets).where(eq(agentWidgets.name, 'hours'));
+    expect(w.autoGreet).toBe(true);
   });
 });
 

@@ -670,7 +670,10 @@ drizzle-kit/workbox-build, nothing to drop directly).
 - Authoring: agent page → Tools → "Saved components" composer
   (WidgetComposer.tsx) — cards/options/form/status/receipt editors + live
   preview; auto_greet pins a component under the webchat greeting
-  (bootstrap greeting_widgets → widget.js + Ask Janis rail).
+  (bootstrap greeting_widgets → widget.js + Ask Janis rail). The concierge
+  reaches the same table via the save_widget builtin (approval card →
+  apply_save_widget executor re-validates the spec, upserts agent+name) —
+  "add this widget to X" must land there, not update_agent (settings).
 - Delivery: payload.widgets on the stored message → webchat/Ask Janis
   render the real components (ChatWidgets.tsx mirrors widget.js); Meta
   channels translate — Messenger generic-template carousel (default_action
