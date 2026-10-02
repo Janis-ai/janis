@@ -880,6 +880,72 @@ describe('save_widget builtin', () => {
     expect(w.autoGreet).toBe(false);
   });
 
+  it('approve via decidePendingAction persists the widget — structured spec survives parked args', async () => {
+    // Regression: the builtin dispatch used to String()-coerce every arg,
+    // so spec arrived as "[object Object]" and approval always failed.
+    const out = await save().run(
+      {
+        workspace: 'free',
+        agent: 'bot2',
+        name: 'decide-card',
+        spec: '{"type":"options","title":"Sizes","items":[{"label":"Small"},{"label":"Big"}]}',
+      },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const [pa] = await db
+      .select()
+      .from(pendingActions)
+      .where(
+        and(
+          eq(pendingActions.conversationId, CONV2),
+          eq(pendingActions.toolName, 'apply_save_widget'),
+          eq(pendingActions.status, 'pending'),
+        ),
+      )
+      .orderBy(desc(pendingActions.createdAt))
+      .limit(1);
+    const decided = await decidePendingAction(db, pa.id, { id: USER2, name: 'Ann' }, true);
+    expect(decided).not.toBeNull();
+    const [w] = await db
+      .select()
+      .from(agentWidgets)
+      .where(eq(agentWidgets.name, 'decide-card'));
+    expect((w.spec as { type: string }).type).toBe('options');
+    expect((w.spec as { items: unknown[] }).items).toHaveLength(2);
+    const [card] = await db.select().from(messages).where(eq(messages.id, pa.messageId!));
+    const act = (card.payload as { action: { status: string; result: string } }).action;
+    expect(act.status).toBe('approved');
+    expect(act.result).not.toContain('invalid spec');
+  });
+
+  it('apply tolerates a JSON-string spec — older parked rows stored args as text', async () => {
+    // bot2 was renamed by the update_agent tests — resolve it via the
+    // widget row the first test persisted.
+    const [pw] = await db
+      .select()
+      .from(agentWidgets)
+      .where(eq(agentWidgets.name, 'pricing-table'));
+    const applied = JSON.parse(
+      await applyW().run(
+        {
+          workspace_id: WS2,
+          agent_id: pw.agentId,
+          name: 'string-spec',
+          spec: '{"type":"status","title":"Order","steps":[{"label":"Packed","state":"done"},{"label":"Shipped","state":"current"}]}',
+          auto_greet: 'false',
+        },
+        { db, convId: CONV2, workspaceId: WS },
+      ),
+    );
+    expect(applied.ok).toBe(true);
+    const [w] = await db
+      .select()
+      .from(agentWidgets)
+      .where(eq(agentWidgets.name, 'string-spec'));
+    expect((w.spec as { steps: unknown[] }).steps).toHaveLength(2);
+  });
+
   it('rejects an invalid spec before parking — model gets the schema issue', async () => {
     const bad = JSON.parse(
       await save().run(

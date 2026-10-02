@@ -622,10 +622,54 @@ export function stripActionClaims(text: string): string {
     .join(' ');
 }
 
+// Widget-truth claims — "here are the cards" with nothing emitted, or "the
+// buttons didn't render" when they did. Component nouns only: plain "options"
+// or "list" also means choices written as text, which would over-trigger.
+const WIDGET_NOUN = '(?:cards?|buttons?|picker|forms?|tracker|receipt|components?|widgets?|carousel)';
+const CLAIM_WIDGET_RES = [
+  new RegExp(`\\bhere\\s+(?:are|is)\\b[^.!?\\n]{0,40}?\\b${WIDGET_NOUN}\\b`, 'i'),
+  new RegExp(
+    `\\b(?:i've|i\\s+have|i)\\s+(?:shown|displayed|rendered|added|attached|sent|built)\\b[^.!?\\n]{0,40}?\\b${WIDGET_NOUN}\\b`,
+    'i',
+  ),
+  new RegExp(`\\bthe\\s+${WIDGET_NOUN}\\b[^.!?\\n]{0,40}?\\b(?:above|below|appear|shown)\\b`, 'i'),
+];
+const DENY_WIDGET_RES = [
+  new RegExp(
+    `\\b(?:didn't|did\\s+not|doesn't|does\\s+not|couldn't|could\\s+not|can't|cannot|won't|unable\\s+to|wasn't\\s+able\\s+to)\\b[^.!?\\n]{0,60}?\\b(?:render|show|display|appear|load|come\\s+through|show\\s+up)\\b`,
+    'i',
+  ),
+  new RegExp(
+    `\\b${WIDGET_NOUN}\\b[^.!?\\n]{0,60}?\\b(?:didn't|did\\s+not|doesn't|does\\s+not|won't|failed\\s+to)\\s+(?:render|show|display|appear|load|come\\s+through)\\b`,
+    'i',
+  ),
+];
+function isWidgetClaim(s: string): boolean {
+  return !NEGATION.test(s) && CLAIM_WIDGET_RES.some((p) => p.test(s));
+}
+function isWidgetDeny(s: string): boolean {
+  return DENY_WIDGET_RES.some((p) => p.test(s));
+}
+export function claimsWidgetShown(text: string): boolean {
+  return sentencesOf(text).some(isWidgetClaim);
+}
+export function deniesWidgetShown(text: string): boolean {
+  return sentencesOf(text).some(isWidgetDeny);
+}
+export function stripWidgetClaims(text: string): string {
+  return sentencesOf(text)
+    .filter((s) => !isWidgetClaim(s) && !isWidgetDeny(s))
+    .join(' ');
+}
+
 const CLAIM_GUARD_RETRY =
   'Your previous draft claimed to have completed a change (plan, account, refund, booking, "will take effect"…) but no tool ran. ' +
   'Rewrite it: describe what you can and cannot do in this chat — never claim an action that did not happen. ' +
   'If the request needs an account change you have no tool for, say so and point them to the right place or offer a human.';
+
+const WIDGET_GUARD_RETRY =
+  'Your previous draft mis-described the components in this reply: never say "here are the cards/buttons" unless you emitted a WIDGET: or button line this turn, ' +
+  'and never apologise that a component failed to render — if you emitted one, it rendered. Rewrite without the false claim.';
 
 const LINK_GUARD_RETRY =
   'Your previous draft included links that do not work — they were removed, so the reply now points at nothing. ' +
@@ -1993,6 +2037,19 @@ async function replyAsHostedAgent(
         prompt += '\n\n' + CLAIM_GUARD_RETRY;
         continue;
       }
+      // Widget-truth mismatch — claiming components that didn't render this
+      // turn, or apologising that ones which did didn't show up.
+      const rendered = widgets.length + toolWidgets.length + buttons.length;
+      if (
+        attempt === 0 &&
+        reply &&
+        ((rendered === 0 && claimsWidgetShown(reply)) ||
+          (rendered > 0 && deniesWidgetShown(reply)))
+      ) {
+        console.warn(`[hosted] widget-claim mismatch conv=${convId} — regenerating`);
+        prompt += '\n\n' + WIDGET_GUARD_RETRY;
+        continue;
+      }
       if (reply || widgets.length || toolWidgets.length || attempt === 1) break;
       console.warn(`[hosted] empty completion conv=${convId} — retrying once`);
     }
@@ -2010,6 +2067,22 @@ async function replyAsHostedAgent(
       reply =
         stripped ||
         "I'm not able to make that change directly in this chat — I can flag it for a teammate, or point you to where you can do it yourself.";
+    }
+    // Same belt-and-braces for widget-truth claims that survived the regen.
+    let widgetClaimStripped = false;
+    if (reply) {
+      const renderedCount = widgets.length + toolWidgets.length + buttons.length;
+      const mismatch =
+        (renderedCount === 0 && claimsWidgetShown(reply)) ||
+        (renderedCount > 0 && deniesWidgetShown(reply));
+      if (mismatch) {
+        const stripped = stripWidgetClaims(reply).trim();
+        if (stripped && stripped !== reply) {
+          console.error(`[hosted] stripped widget-claim mismatch conv=${convId}`);
+          reply = stripped;
+          widgetClaimStripped = true;
+        }
+      }
     }
     // Data-bound components from widget-bound tools lead the reply; the
     // model's own WIDGET: lines trail, capped at 3 total.
@@ -2040,6 +2113,7 @@ async function replyAsHostedAgent(
         prompt: acfg.system_prompt ? 'custom' : 'default',
         tools: gen.toolCalls,
         ...(actionClaimStripped ? { claim_guard: 'stripped' } : {}),
+        ...(widgetClaimStripped ? { widget_guard: 'stripped' } : {}),
       },
     };
     if (promptTokens || completionTokens) {

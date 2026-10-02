@@ -10,7 +10,7 @@ import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { typingBus, presenceBus } from '../lib/typingBus';
-import { splitEmphasis } from '../lib/richText';
+import { splitBlocks, splitEmphasis } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { Paperclip, RefreshCw, Star, X } from 'lucide-react';
 
@@ -19,6 +19,27 @@ const WHO: Record<Message['direction'], string> = {
   out: 'Agent',
   human: 'Operator',
 };
+
+/** Canonical agent text is markdown-ish — **bold**, *italic*, ~~strike~~ and
+ *  `code` (lists are handled one level up by splitBlocks). */
+function mdSpans(text: string, keyBase = 0) {
+  return splitEmphasis(text).map((seg, i) => {
+    if (seg.kind === 'text') return seg.text;
+    const Tag =
+      seg.kind === 'bold'
+        ? 'b'
+        : seg.kind === 'italic'
+          ? 'em'
+          : seg.kind === 'strike'
+            ? 's'
+            : 'code';
+    return (
+      <Tag key={keyBase * 1000 + i} className={seg.kind === 'code' ? 'md-code' : undefined}>
+        {seg.text}
+      </Tag>
+    );
+  });
+}
 
 // Optimistic outbound entries — render immediately, reconcile against the
 // server's echoed row once the post-send refetch lands (same model the
@@ -876,19 +897,14 @@ export default function ConversationPage() {
                   </span>
                 </div>
               )}
-              {splitEmphasis(m.text ?? '').map((seg, i) => {
-                if (seg.kind === 'text') return seg.text;
-                const Tag =
-                  seg.kind === 'bold'
-                    ? 'b'
-                    : seg.kind === 'italic'
-                      ? 'em'
-                      : seg.kind === 'strike'
-                        ? 's'
-                        : 'code';
+              {splitBlocks(m.text ?? '').map((blk, bi) => {
+                if (blk.kind !== 'list') return mdSpans(blk.text ?? '', bi);
+                const Tag = blk.ordered ? 'ol' : 'ul';
                 return (
-                  <Tag key={i} className={seg.kind === 'code' ? 'md-code' : undefined}>
-                    {seg.text}
+                  <Tag key={bi} className="md-list">
+                    {(blk.items ?? []).map((item, ii) => (
+                      <li key={ii}>{mdSpans(item)}</li>
+                    ))}
                   </Tag>
                 );
               })}

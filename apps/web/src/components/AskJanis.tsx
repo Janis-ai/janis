@@ -13,7 +13,7 @@ import { Loader2, Maximize2, Mic, MicOff, Minimize2, Paperclip, Smile, X } from 
 import { EmojiPicker } from './EmojiPicker';
 import { ArgsRows } from './bits';
 import { Widgets, type ChatWidget } from './ChatWidgets';
-import { splitEmphasis } from '../lib/richText';
+import { splitBlocks, splitEmphasis } from '../lib/richText';
 
 interface ChatConfig {
   agent_name: string;
@@ -155,6 +155,24 @@ function richText(text: string, onNav: (to: string) => void) {
         {inner}
       </Tag>,
     ];
+  });
+}
+
+/** Block-level render — model bullet output ("* item" lines or inline
+ *  "* **A** … * **B** …" runs) becomes real lists; everything else stays a
+ *  richText paragraph. */
+function richBlocks(text: string, onNav: (to: string) => void) {
+  return splitBlocks(text).map((b, bi) => {
+    if (b.kind !== 'list')
+      return <Fragment key={bi}>{richText(b.text ?? '', onNav)}</Fragment>;
+    const Tag = b.ordered ? 'ol' : 'ul';
+    return (
+      <Tag key={bi} className="md-list">
+        {(b.items ?? []).map((item, ii) => (
+          <li key={ii}>{richText(item, onNav)}</li>
+        ))}
+      </Tag>
+    );
   });
 }
 
@@ -872,7 +890,7 @@ export function AskJanis({
                 {cfg.agent_name}
               </div>
             )}
-            {cfg.greeting ? richText(cfg.greeting, navigate) : null}
+            {cfg.greeting ? richBlocks(cfg.greeting, navigate) : null}
             {cfg.greeting_widgets?.length ? (
               <Widgets widgets={cfg.greeting_widgets} onSend={(t, tap) => void send(t, [], undefined, tap)} />
             ) : null}
@@ -913,7 +931,7 @@ export function AskJanis({
                 {/* A card row's text IS its label ("Teach Acme Returns") —
                     rendering both doubles the title. */}
                 {!(item.m.action && item.m.text === item.m.action.label) &&
-                  richText(item.m.text, navigate)}
+                  richBlocks(item.m.text, navigate)}
                 {item.m.widgets?.length ? (
                   <Widgets widgets={item.m.widgets} onSend={(t, tap) => void send(t, [], undefined, tap)} />
                 ) : null}
@@ -962,7 +980,7 @@ export function AskJanis({
                   className={`ask-msg me ${item.o.status === 'pending' ? 'pending' : ''} ${item.o.status === 'failed' ? 'failed' : ''}`}
                   onClick={item.o.status === 'failed' ? () => void send(item.o.text, item.o.attachments, item.o) : undefined}
                 >
-                  {richText(item.o.text, navigate)}
+                  {richBlocks(item.o.text, navigate)}
                   <AttachmentNodes atts={item.o.attachments} />
                 </div>
                 {item.o.status === 'delivered' && deliveredEntry === item.o && <div className="ask-status">Delivered</div>}

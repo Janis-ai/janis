@@ -556,9 +556,11 @@ drizzle-kit/workbox-build, nothing to drop directly).
   janis:sel: postback/list-id marker and webchat tap fields) annotate taps
   in the transcript so a pick can't read as a typed command — the incident
   that prompted this: a "Choose Free" card tap produced a fabricated
-  plan switch + invented workspace name. Remaining scope: claims of
-  *seeing* things ("here are the cards") when payload.widgets is empty,
-  and concierge phrasing (see Model-honesty backstop below).
+  plan switch + invented workspace name. DONE for component claims too —
+  claimsWidgetShown ("here are the cards…") with zero emitted widgets and
+  deniesWidgetShown ("the buttons didn't render") with emitted ones both
+  regen once then strip (inspector flags widget_guard). Component nouns
+  only — bare "options"/"list" also mean text choices.
 - Load test: scripts/load-test.js (k6) — staged 10→150 RPS on health +
   session-auth'd reads, p95<800ms / <1% errors thresholds; run against a
   preview revision, never prod at 150rps without warning. Read-only by

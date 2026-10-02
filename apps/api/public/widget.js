@@ -124,6 +124,62 @@
     if (last < text.length) linkify(span, text.slice(last));
   }
 
+  // Models emit bullets two ways — one per line ("* item") or an inline run
+  // on a single line ("options: * **A** … * **B** …"). Split blocks so lists
+  // render as lists. The inline marker requires `* ` followed by ** so
+  // "5 * 3 = 15" and emphasis never split.
+  var BULLET_LEAD = /^(?:[-*•])\s+/;
+  var NUM_LEAD = /^\d+[.)]\s+/;
+  var INLINE_BULLET = / \* (?=\*\*)/g;
+  function appendBlocks(bubble, text) {
+    var list = null;
+    var ordered = false;
+    function flush() {
+      list = null;
+      ordered = false;
+    }
+    text.split('\n').forEach(function (raw) {
+      var t = raw.trim();
+      if (!t) { flush(); return; }
+      if (BULLET_LEAD.test(t) || NUM_LEAD.test(t)) {
+        var isOrdered = NUM_LEAD.test(t);
+        if (!list || isOrdered !== ordered) {
+          ordered = isOrdered;
+          list = el(isOrdered ? 'ol' : 'ul', {}, { class: 'janis-wlist' });
+          bubble.appendChild(list);
+        }
+        t.replace(BULLET_LEAD, '').replace(NUM_LEAD, '').split(INLINE_BULLET).forEach(function (item) {
+          var li = el('li');
+          appendRich(li, item);
+          list.appendChild(li);
+        });
+        return;
+      }
+      var inline = (t.match(INLINE_BULLET) || []).length;
+      if (inline >= 2) {
+        var parts = t.split(INLINE_BULLET);
+        var lead = parts[0].trim();
+        if (lead) {
+          var p = el('span');
+          appendRich(p, lead);
+          bubble.appendChild(p);
+        }
+        list = el('ul', {}, { class: 'janis-wlist' });
+        bubble.appendChild(list);
+        parts.slice(1).forEach(function (item) {
+          var li = el('li');
+          appendRich(li, item);
+          list.appendChild(li);
+        });
+        return;
+      }
+      flush();
+      var span = el('span');
+      appendRich(span, t);
+      bubble.appendChild(span);
+    });
+  }
+
   // Sentence punctuation glued to a URL — "see https://x.com/a." should link
   // the URL, not the period. Closers are only stripped when unbalanced, so
   // https://x.com/f_(b) keeps its parens while "(see https://x.com)" doesn't
@@ -271,6 +327,8 @@
     'border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit}' +
     '.janis-wbtn.janis-wbtn-primary{background:var(--janis-accent);color:#fff}' +
     '.janis-wtitle{font-weight:600;margin-bottom:6px;color:#374151}' +
+    '.janis-wlist{margin:4px 0;padding-left:18px;display:block}' +
+    '.janis-wlist li{margin:2px 0}' +
     '.janis-wopts{display:flex;flex-direction:column;gap:5px}' +
     '.janis-wopt{display:block;text-align:left;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#1f2937;' +
     'padding:7px 10px;font-size:13px;cursor:pointer;font-family:inherit}' +
@@ -737,9 +795,7 @@
       d.appendChild(who);
     }
     if (m.text) {
-      var span = document.createElement('span');
-      appendRich(span, m.text);
-      d.appendChild(span);
+      appendBlocks(d, m.text);
     }
     (m.attachments || []).forEach(function (a) { addAttachmentNode(d, a); });
     if (m.direction === 'out' && m.widgets && m.widgets.length) renderWidgets(d, m.widgets);

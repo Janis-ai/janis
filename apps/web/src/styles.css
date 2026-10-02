@@ -331,6 +331,8 @@ button, input, select, textarea { font: inherit; }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em;
   background: rgba(127, 127, 127, 0.16); padding: 0 4px; border-radius: 4px;
 }
+.md-list { display: block; margin: 4px 0; padding-left: 20px; }
+.md-list li { margin: 2px 0; }
 .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
 .msg .who .who-avatar { width: 14px; height: 14px; border-radius: 50%; object-fit: cover; margin-right: 4px; vertical-align: -2px; }
 .msg .who .time { margin-left: 6px; }

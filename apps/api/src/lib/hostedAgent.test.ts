@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, claimsAction, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, systemPrompt, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
+import { blessedUrlsFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, stripWidgetClaims, systemPrompt, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 
 let db: Db;
@@ -365,6 +365,52 @@ describe('claimsAction / stripActionClaims', () => {
     expect(stripped).toBe(
       "If you'd like to move to a different workspace, let me know which one.",
     );
+  });
+});
+
+describe('claimsWidgetShown / deniesWidgetShown', () => {
+  it('catches claims of components that were never emitted', () => {
+    for (const s of [
+      'Here are the cards for each plan.',
+      'Here is the picker I built for you.',
+      "I've added a form below for your details.",
+      'The buttons above let you pick a plan.',
+    ]) {
+      expect(claimsWidgetShown(s), s).toBe(true);
+      expect(deniesWidgetShown(s), s).toBe(false);
+    }
+  });
+
+  it('catches apologies for components that did render', () => {
+    for (const s of [
+      "It looks like the buttons didn't render — sorry about that.",
+      "The card doesn't seem to show up in this chat.",
+      "I couldn't display the form here.",
+      'The widget failed to render just now.',
+    ]) {
+      expect(deniesWidgetShown(s), s).toBe(true);
+      expect(claimsWidgetShown(s), s).toBe(false);
+    }
+  });
+
+  it('leaves ordinary text and text-choices alone', () => {
+    for (const s of [
+      'Here are your options: 1) refund 2) exchange.',
+      'You can pick either plan — both work.',
+      'The list above shows your orders.',
+      'I can show you pricing if you like.',
+    ]) {
+      expect(claimsWidgetShown(s), s).toBe(false);
+      expect(deniesWidgetShown(s), s).toBe(false);
+    }
+  });
+
+  it('strips only the offending sentences', () => {
+    expect(
+      stripWidgetClaims(
+        "Here are the cards for each plan. The Free tier covers 1 agent. Let me know if you'd like details.",
+      ),
+    ).toBe("The Free tier covers 1 agent. Let me know if you'd like details.");
   });
 });
 

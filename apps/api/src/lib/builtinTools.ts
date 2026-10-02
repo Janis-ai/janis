@@ -83,6 +83,22 @@ async function signedInUser(ctx: BuiltinCtx) {
 type WorkspaceRow = typeof workspaces.$inferSelect;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Executor args arrive as jsonb — object-typed params should already be
+ *  objects, but tolerate a JSON string (older rows, manual rows). */
+function argObject(v: unknown): Record<string, unknown> {
+  if (typeof v === 'string') {
+    try {
+      const p = JSON.parse(v) as unknown;
+      return p && typeof p === 'object' && !Array.isArray(p)
+        ? (p as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return (v ?? {}) as Record<string, unknown>;
+}
+
 /** Resolve which of the visitor's workspaces a concierge tool should act on.
  * Order: explicit `workspace` name hint → the workspace they're currently
  * viewing (the context pack's current_workspace trait) → their only
@@ -1454,7 +1470,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         .limit(1);
       if (!agent) return 'error: agent not found';
       const kind = String(args.kind ?? '');
-      const config = (args.config ?? {}) as unknown as Record<string, unknown>;
+      const config = argObject(args.config);
       const [row] = await ctx.db
         .insert(alertRules)
         .values({ agentId: agent.id, kind: kind as never, config })
@@ -1906,7 +1922,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         'sla_minutes',
         'auto_assign',
       ];
-      const patch = (args.patch ?? {}) as unknown as Record<string, unknown>;
+      const patch = argObject(args.patch);
       const clean = Object.fromEntries(
         Object.entries(patch).filter(([k]) => ALLOWED.includes(k)),
       );
@@ -2035,10 +2051,14 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const name = normWidgetRef(String(args.name ?? '')).slice(0, 60);
       if (!name) return JSON.stringify({ error: 'name cannot be blank' });
       let rawSpec: unknown;
-      try {
-        rawSpec = JSON.parse(String(args.spec ?? ''));
-      } catch {
-        return JSON.stringify({ error: 'spec must be valid JSON — pass the component definition as a JSON string' });
+      if (args.spec && typeof args.spec === 'object') {
+        rawSpec = args.spec;
+      } else {
+        try {
+          rawSpec = JSON.parse(String(args.spec ?? ''));
+        } catch {
+          return JSON.stringify({ error: 'spec must be valid JSON — pass the component definition as a JSON string' });
+        }
       }
       const spec = WidgetComponent.safeParse(rawSpec);
       if (!spec.success) {
@@ -2121,7 +2141,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if (!agent) return 'error: agent not found';
       // Re-validate the parked spec — an approved card must never write a
       // shape the composer wouldn't accept.
-      const spec = WidgetComponent.safeParse(args.spec);
+      const spec = WidgetComponent.safeParse(argObject(args.spec));
       if (!spec.success) return `error: invalid spec — ${spec.error.issues[0]?.message}`;
       const name = normWidgetRef(String(args.name ?? '')).slice(0, 60);
       if (!name) return 'error: component name cannot be blank';

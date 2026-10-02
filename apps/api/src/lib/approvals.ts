@@ -183,17 +183,17 @@ export async function decidePendingAction(
     if (builtinName) {
       const { BUILTIN_TOOLS } = await import('./builtinTools.js');
       const b = BUILTIN_TOOLS.find((x) => x.name === builtinName);
+      // Parked args pass through verbatim — String()-coercing turns object
+      // args (apply_save_widget's spec, apply_agent_config's patch,
+      // apply_routing_rule's config) into "[object Object]". Executors
+      // already String() scalar fields they read.
       result = b
         ? await b
-            .run(
-              Object.fromEntries(
-                Object.entries(action.args as Record<string, unknown>).map(([k, v]) => [
-                  k,
-                  String(v),
-                ]),
-              ),
-              { db, convId: conv.id, workspaceId: action.workspaceId },
-            )
+            .run(action.args as Record<string, string>, {
+              db,
+              convId: conv.id,
+              workspaceId: action.workspaceId,
+            })
             .catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`)
         : `error: unknown builtin ${builtinName}`;
     } else {

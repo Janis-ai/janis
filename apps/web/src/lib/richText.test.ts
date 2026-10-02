@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { splitEmphasis } from './richText';
+import { splitBlocks, splitEmphasis } from './richText';
 
 describe('splitEmphasis', () => {
   it('passes plain text through as a single segment', () => {
@@ -34,6 +34,60 @@ describe('splitEmphasis', () => {
       { kind: 'bold', text: 'bold' },
       { kind: 'text', text: ' ' },
       { kind: 'italic', text: 'ital' },
+    ]);
+  });
+});
+
+describe('splitBlocks', () => {
+  it('passes a plain paragraph through', () => {
+    expect(splitBlocks('just some text')).toEqual([{ kind: 'para', text: 'just some text' }]);
+  });
+
+  it('collects one-bullet-per-line lists', () => {
+    expect(splitBlocks('Pick one:\n* Small\n* Big\n* Huge')).toEqual([
+      { kind: 'para', text: 'Pick one:' },
+      { kind: 'list', items: ['Small', 'Big', 'Huge'], ordered: false },
+    ]);
+  });
+
+  it('collects inline bullet runs on a single line', () => {
+    // The concierge incident: "* **A:** … * **B:** …" emitted as one line.
+    expect(
+      splitBlocks('I can help: * **Manage Agents:** edit settings * **Train:** teach it answers'),
+    ).toEqual([
+      { kind: 'para', text: 'I can help:' },
+      {
+        kind: 'list',
+        items: ['**Manage Agents:** edit settings', '**Train:** teach it answers'],
+        ordered: false,
+      },
+    ]);
+  });
+
+  it('splits a bullet line that carries more inline bullets', () => {
+    expect(splitBlocks('* **A** first * **B** second')).toEqual([
+      { kind: 'list', items: ['**A** first', '**B** second'], ordered: false },
+    ]);
+  });
+
+  it('numbered lines become ordered lists', () => {
+    expect(splitBlocks('Steps:\n1. one\n2. two')).toEqual([
+      { kind: 'para', text: 'Steps:' },
+      { kind: 'list', items: ['one', 'two'], ordered: true },
+    ]);
+  });
+
+  it('keeps arithmetic and single inline asterisks as paragraphs', () => {
+    expect(splitBlocks('5 * 3 = 15')).toEqual([{ kind: 'para', text: '5 * 3 = 15' }]);
+    expect(splitBlocks('pick * **one** option below')).toEqual([
+      { kind: 'para', text: 'pick * **one** option below' },
+    ]);
+  });
+
+  it('blank lines separate paragraphs', () => {
+    expect(splitBlocks('first\n\nsecond')).toEqual([
+      { kind: 'para', text: 'first' },
+      { kind: 'para', text: 'second' },
     ]);
   });
 });
