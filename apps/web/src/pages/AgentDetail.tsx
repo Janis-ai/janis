@@ -254,7 +254,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     });
 
   return (
-    <>
+    <div className="agent-editor">
       <div className="agent-head">
         <div className="row" style={{ alignItems: 'center' }}>
           <Link to="/agents" className="muted">← Agents</Link>
@@ -409,7 +409,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
           </button>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -890,12 +890,13 @@ function KnowledgeTextSection({
 }) {
   const [knowledgeText, setKnowledgeText] = useSyncedText(cfg, 'knowledge', joinLines);
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, flex: 1 }}>
       <strong>Knowledge text</strong>
       <ReadOnly off={!isAdmin}>
       <label>One fact/snippet per line — the agent quotes these verbatim in answers</label>
       <textarea
         rows={10}
+        style={{ flex: 1, resize: 'none' }}
         placeholder={'Refunds are allowed within 30 days of purchase.\nSupport hours are 9-5 ET.\nOrder lookup requires the order number.'}
         value={knowledgeText}
         onChange={(e) => setKnowledgeText(e.target.value)}

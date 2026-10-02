@@ -300,6 +300,10 @@ button, input, select, textarea { font: inherit; }
 .agent-card.alt { background: var(--panel-alt); }
 
 /* agent detail — sticky name/save header + tabs */
+/* min-height fills .main's viewport so flex:1 children (e.g. the knowledge
+   textarea card) can stretch; grows past it when content overflows, which
+   keeps the sticky .agent-head working. */
+.agent-editor { display: flex; flex-direction: column; min-height: 100%; }
 .agent-head {
   position: sticky; top: -24px; z-index: 5;
   background: var(--bg); margin: -24px -24px 0; padding: 16px 24px 0;
