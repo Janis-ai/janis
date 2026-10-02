@@ -76,6 +76,15 @@ export function ChannelCard({
   });
   const [bubTab, setBubTab] = useState<'preview' | 'deploy'>('preview');
   const [confirmEl, confirmRemove] = useConfirm();
+  const doRemove = async () => {
+    if (
+      await confirmRemove(
+        `Remove ${ch.name}? Its conversations stay in the inbox, but inbound messages stop arriving and the bubble/integration stops working.`,
+        [{ key: 'ok', label: 'Remove channel', danger: true }],
+      )
+    )
+      remove.mutate();
+  };
   const remove = useMutation({
     mutationFn: () => api(`/api/channels/${ch.id}`, { method: 'DELETE' }),
     onSuccess: () => {
@@ -125,18 +134,15 @@ export function ChannelCard({
         <button
           className="btn danger"
           disabled={remove.isPending}
-          onClick={async () => {
-            if (
-              await confirmRemove(
-                `Remove ${ch.name}? Its conversations stay in the inbox, but inbound messages stop arriving and the bubble/integration stops working.`,
-                [{ key: 'ok', label: 'Remove channel', danger: true }],
-              )
-            )
-              remove.mutate();
-          }}
+          onClick={() => void doRemove()}
         >
           {remove.isPending ? 'Removing…' : 'Remove'}
         </button>
+        {ch.kind === 'webchat' && (
+          <button className="btn save" type="submit" form={`bub-form-${ch.id}`}>
+            Save changes
+          </button>
+        )}
       </div>
       <div className="muted" style={{ marginTop: 6 }}>
         Answered by{' '}
@@ -204,11 +210,26 @@ export function ChannelCard({
           </div>
         );
         return (
-          <WebchatBranding
-            channel={ch}
-            tabs={bubTabs}
-            stage={bubTab === 'deploy' ? deployEl : undefined}
-          />
+          <>
+            <WebchatBranding
+              channel={ch}
+              tabs={bubTabs}
+              stage={bubTab === 'deploy' ? deployEl : undefined}
+            />
+            <div className="row" style={{ justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
+              <button
+                type="button"
+                className="btn danger"
+                disabled={remove.isPending}
+                onClick={() => void doRemove()}
+              >
+                {remove.isPending ? 'Removing…' : 'Remove'}
+              </button>
+              <button className="btn save" type="submit" form={`bub-form-${ch.id}`}>
+                Save changes
+              </button>
+            </div>
+          </>
         );
       })()}
       {ch.kind === 'email' && ch.meta.inbound_address && (
@@ -768,6 +789,7 @@ function WebchatBranding({
   const accentValid = f.accent === '' || /^#[0-9a-fA-F]{6}$/.test(f.accent);
   return (
     <form
+      id={`bub-form-${channel.id}`}
       className="bub-editor"
       onSubmit={(e) => {
         e.preventDefault();
