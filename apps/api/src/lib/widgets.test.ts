@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { widgetFromToolResult } from './widgets.js';
 
 const products = JSON.stringify({
@@ -106,7 +106,19 @@ describe('extractWidgets', () => {
       'Here are our plans:\nWIDGET_REF: plans\nWIDGET_REF: Pricing Table\nanything else?',
     );
     expect(out.text).toBe('Here are our plans:\nanything else?');
-    expect(out.refs).toEqual(['plans', 'pricing-table']);
+    expect(out.refs).toEqual([{ name: 'plans' }, { name: 'pricing-table' }]);
+  });
+
+  it('captures a WIDGET_REF data object for props/tool args', async () => {
+    const { extractWidgets } = await import('./widgets.js');
+    const out = extractWidgets(
+      'status:\nWIDGET_REF: order-status {"order_id":"#1932","state":"in_transit"}\nWIDGET: {"type":"options","items":[{"label":"Yes"}]}',
+    );
+    expect(out.text).toBe('status:');
+    expect(out.refs).toEqual([
+      { name: 'order-status', data: { order_id: '#1932', state: 'in_transit' } },
+    ]);
+    expect(out.widgets).toHaveLength(1);
   });
 
   it('still parses WIDGET: JSON alongside refs', async () => {
@@ -116,6 +128,130 @@ describe('extractWidgets', () => {
     );
     expect(out.widgets).toHaveLength(1);
     expect(out.widgets[0].type).toBe('options');
-    expect(out.refs).toEqual(['plans']);
+    expect(out.refs).toEqual([{ name: 'plans' }]);
+  });
+});
+
+describe('specProps / interpolateSpec / stripEmptyStrings', () => {
+  it('derives prop names from {placeholders} and fills them', async () => {
+    const { specProps, interpolateSpec, stripEmptyStrings } = await import('./widgets.js');
+    const spec = {
+      type: 'status',
+      title: 'Return {exchange_id}',
+      steps: [
+        { label: 'Received', state: 'done', note: '{received_note}' },
+        { label: 'Refunded', state: 'todo' },
+      ],
+    };
+    expect(specProps(spec)).toEqual(['exchange_id', 'received_note']);
+    const filled = stripEmptyStrings(
+      interpolateSpec(spec, { exchange_id: '#1932' }),
+    ) as typeof spec;
+    expect(filled.title).toBe('Return #1932');
+    // missing prop → '' → stripped → optional field absent
+    expect(filled.steps[0]).toEqual({ label: 'Received', state: 'done' });
+  });
+});
+
+describe('resolveWidgetRef', () => {
+  const ctx = { db: null, convId: 'c1', workspaceId: 'w1' } as never;
+
+  it('fills placeholders from inline ref data', async () => {
+    const { resolveWidgetRef } = await import('./hostedAgent.js');
+    const spec = await resolveWidgetRef(
+      {
+        spec: {
+          type: 'receipt',
+          title: 'Order {order_id}',
+          rows: [{ label: 'Status', value: '{status}' }],
+          total: { label: 'Total', value: '{total}' },
+        },
+      },
+      { order_id: '#1932', status: 'Refunded', total: '$29.00' },
+      [],
+      {},
+      ctx,
+      new Set(),
+    );
+    expect(spec).toMatchObject({
+      type: 'receipt',
+      title: 'Order #1932',
+      rows: [{ label: 'Status', value: 'Refunded' }],
+      total: { label: 'Total', value: '$29.00' },
+    });
+  });
+
+  it('selects a named state variant and drops on missing required props', async () => {
+    const { resolveWidgetRef } = await import('./hostedAgent.js');
+    const def = {
+      spec: {
+        type: 'status',
+        title: 'Static',
+        steps: [{ label: 'Ordered', state: 'todo' }],
+      },
+      states: [
+        {
+          name: 'in-transit',
+          spec: {
+            type: 'status',
+            title: 'On the way',
+            steps: [
+              { label: 'Ordered', state: 'done' },
+              { label: 'Shipped', state: 'current' },
+            ],
+          },
+        },
+      ],
+    } as never;
+    const picked = await resolveWidgetRef(def, { state: 'In Transit' }, [], {}, ctx, new Set());
+    expect(picked).toMatchObject({ title: 'On the way' });
+    // a required {prop} that never fills → the whole ref drops
+    const missing = await resolveWidgetRef(
+      { spec: { type: 'options', items: [{ label: '{label}' }] } },
+      {},
+      [],
+      {},
+      ctx,
+      new Set(),
+    );
+    expect(missing).toBeNull();
+  });
+
+  it('runs a bound tool, maps result props, and honours identity blocking', async () => {
+    const { resolveWidgetRef } = await import('./hostedAgent.js');
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ order: { id: '#1932', state: 'in transit' } }), { status: 200 }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const tool = {
+      name: 'get_order',
+      method: 'GET',
+      url: 'http://localhost/orders/{order_id}',
+      params: { order_id: 'order id' },
+    } as never;
+    const def = {
+      spec: {
+        type: 'status',
+        title: 'Order {order_id} — {state}',
+        steps: [{ label: 'Ordered', state: 'done' }],
+      },
+      tool: { name: 'get_order', props: { state: 'order.state', order_id: 'order.id' } },
+    } as never;
+    const spec = await resolveWidgetRef(def, { order_id: '#1932' }, [tool], {}, ctx, new Set());
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(spec).toMatchObject({ title: 'Order #1932 — in transit' });
+    // a second resolution: tool props fill, inline data overrides them
+    const spec2 = await resolveWidgetRef(
+      def,
+      { order_id: '#1932', state: 'delivered' },
+      [tool],
+      {},
+      ctx,
+      new Set(),
+    );
+    expect(spec2).toMatchObject({ title: 'Order #1932 — delivered' });
+    vi.unstubAllGlobals();
   });
 });

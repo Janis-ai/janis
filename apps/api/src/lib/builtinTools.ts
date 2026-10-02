@@ -1,4 +1,5 @@
 import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -35,7 +36,8 @@ import {
   inviteWorkspaceMembers,
   sanitizeChannelName,
 } from './slack.js';
-import { normWidgetRef, WidgetComponent } from './widgets.js';
+import { normWidgetRef, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { toolsFor } from './toolExec.js';
 
 /** Context a builtin can reach — matches AgentRunContext in hostedAgent. */
 export interface BuiltinCtx {
@@ -97,6 +99,26 @@ function argObject(v: unknown): Record<string, unknown> {
     }
   }
   return (v ?? {}) as Record<string, unknown>;
+}
+
+/** argObject variants for nullable + array args — blank/'null' → null. */
+function argObjectOrNull(v: unknown): Record<string, unknown> | null {
+  if (v == null || v === '' || v === 'null' || v === 'undefined') return null;
+  const o = argObject(v);
+  return Object.keys(o).length ? o : null;
+}
+
+function argObjectArray(v: unknown): unknown[] | undefined {
+  if (v == null || v === '') return undefined;
+  if (typeof v === 'string') {
+    try {
+      const p: unknown = JSON.parse(v);
+      return Array.isArray(p) ? p : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return Array.isArray(v) ? v : undefined;
 }
 
 /** Resolve which of the visitor's workspaces a concierge tool should act on.
@@ -2022,7 +2044,11 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       agent: 'agent name (required)',
       name: 'component handle the agent will reference, e.g. pricing-table (required)',
       spec:
-        'the component definition as JSON (required) — e.g. {"type":"cards","items":[{"title":"Pro","price":"$99/mo","select_label":"Choose Pro"}]}, {"type":"options","title":"…","items":[{"label":"…"}]}, {"type":"form","title":"…","items":[{"label":"Name"},{"label":"Email"}]}, {"type":"status","title":"…","steps":[{"label":"…","state":"done|current|todo"}]}, {"type":"receipt","title":"…","rows":[{"label":"…","value":"…"}]}',
+        'the component definition as JSON (required) — e.g. {"type":"cards","items":[{"title":"Pro","price":"$99/mo","select_label":"Choose Pro"}]}. String fields may carry {prop} placeholders the ref data fills — {"type":"status","steps":[{"label":"Received","state":"{received_state}"}]}… — or leave fields static for a fixed component.',
+      states:
+        'optional JSON array of named spec variants — [{"name":"in_transit","spec":{…full spec…}},{"name":"not_found","spec":{…}}]. The model picks one with {"state":"<name>"} in the ref data.',
+      tool:
+        'optional JSON object binding the component to one of the agent\'s READ tools — {"name":"<tool>","args":{"<prop>":"<tool param>"},"props":{"<prop>":"<dotpath into result>"},"items":"<dotpath to rows array>","item_map":{"<item field>":"<row dotpath>"}}. When the agent emits WIDGET_REF: name {"arg":…}, the tool runs and its result fills the component. Only non-approval tools can bind.',
       auto_greet: 'true/false — also pin this component under the webchat greeting',
       workspace: 'workspace name — only needed when ambiguous',
     },
@@ -2067,6 +2093,24 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           issues: spec.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`),
         });
       }
+      // Optional data bindings — states are named full-spec variants; a
+      // bound tool must exist on the agent and not be approval-gated.
+      const states = argObjectArray(args.states);
+      const statesParsed = z.array(WidgetState).max(12).safeParse(states ?? undefined);
+      if (states && !statesParsed.success) {
+        return JSON.stringify({ error: `invalid states — ${statesParsed.error.issues[0]?.message}` });
+      }
+      const toolParsed = WidgetToolBinding.nullable().safeParse(argObjectOrNull(args.tool));
+      if (toolParsed.success === false) {
+        return JSON.stringify({ error: `invalid tool binding — ${toolParsed.error.issues[0]?.message}` });
+      }
+      const toolBind = toolParsed.success ? toolParsed.data : null;
+      if (toolBind) {
+        const def = toolsFor(agent).find((t) => t.name === toolBind.name);
+        if (!def) return JSON.stringify({ error: `no tool named "${toolBind.name}" on ${agent.name}` });
+        if (def.approval)
+          return JSON.stringify({ error: `"${toolBind.name}" is approval-gated — a component can only bind a read tool` });
+      }
       const autoGreet = ['true', 'yes', 'on', '1'].includes(String(args.auto_greet).toLowerCase());
       // Same name + identical spec already saved → nothing to propose.
       const [existing] = await ctx.db
@@ -2077,6 +2121,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if (
         existing &&
         canonDeepEq(existing.spec, spec.data) &&
+        canonDeepEq(existing.states ?? null, statesParsed.data ?? null) &&
+        canonDeepEq(existing.tool ?? null, toolBind) &&
         existing.autoGreet === autoGreet
       ) {
         return `already_saved: ${agent.name} already has this exact component saved as "${name}" — tell the visitor it's live`;
@@ -2095,6 +2141,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           agent_id: agent.id,
           name,
           spec: spec.data,
+          ...(statesParsed.data?.length ? { states: statesParsed.data } : {}),
+          ...(toolBind ? { tool: toolBind } : {}),
           auto_greet: String(autoGreet),
         },
         `${existing ? 'Update' : 'Save'} component "${name}" → ${agent.name}`,
@@ -2103,6 +2151,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           component: name,
           type: spec.data.type,
           ...(items ? { items } : {}),
+          ...(statesParsed.data?.length ? { states: statesParsed.data.map((s) => s.name).join(', ') } : {}),
+          ...(toolBind ? { tool: toolBind.name } : {}),
           ...(autoGreet ? { on_open: 'pinned to greeting' } : {}),
         },
       );
@@ -2143,15 +2193,26 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       // shape the composer wouldn't accept.
       const spec = WidgetComponent.safeParse(argObject(args.spec));
       if (!spec.success) return `error: invalid spec — ${spec.error.issues[0]?.message}`;
+      const statesParsed = z.array(WidgetState).max(12).safeParse(argObjectArray(args.states));
+      const states = statesParsed.success ? statesParsed.data : null;
+      const toolParsed = WidgetToolBinding.nullable().safeParse(argObjectOrNull(args.tool));
+      const tool = toolParsed.success ? toolParsed.data : null;
+      if (tool) {
+        // Re-verify at decide time — the bound tool must still exist and be
+        // a plain read on the target agent.
+        const def = toolsFor(agent).find((t) => t.name === tool.name);
+        if (!def || def.approval)
+          return `error: bound tool "${tool.name}" is missing or approval-gated on ${agent.name}`;
+      }
       const name = normWidgetRef(String(args.name ?? '')).slice(0, 60);
       if (!name) return 'error: component name cannot be blank';
       const autoGreet = args.auto_greet === 'true';
       await ctx.db
         .insert(agentWidgets)
-        .values({ agentId: agent.id, name, spec: spec.data, autoGreet })
+        .values({ agentId: agent.id, name, spec: spec.data, states, tool, autoGreet })
         .onConflictDoUpdate({
           target: [agentWidgets.agentId, agentWidgets.name],
-          set: { spec: spec.data, autoGreet, updatedAt: new Date() },
+          set: { spec: spec.data, states, tool, autoGreet, updatedAt: new Date() },
         });
       await audit(ctx.db, {
         workspaceId: wsId,

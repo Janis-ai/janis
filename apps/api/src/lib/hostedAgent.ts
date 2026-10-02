@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, isNotNull, lte } from 'drizzle-orm';
+import { z } from 'zod';
 import type { OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, agentWidgets, alerts, channelBindings, channels, contactIdentities, conversations, helpArticles, knowledgeFiles, memberships, messages, users, workspaces } from '../db/schema.js';
@@ -15,7 +16,7 @@ import { getUpload } from './uploads.js';
 import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
-import { extractWidgets, normWidgetRef, widgetFromToolResult, WidgetComponent } from './widgets.js';
+import { extractWidgets, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -224,14 +225,112 @@ export function conversationContext(
 
 /** One-line digest for the saved-components catalog — enough for the model
  *  to recognise which component a request maps to without shipping the spec. */
-function widgetDigest(w: { name: string; spec: WidgetComponent }): string {
+/** A saved component row resolved for prompting + refs — the spec plus its
+ *  named state variants and optional tool binding. */
+export interface SavedWidgetDef {
+  spec: WidgetComponent;
+  states?: WidgetState[];
+  tool?: WidgetToolBinding;
+}
+
+function widgetDigest(w: SavedWidgetDef & { name: string }): string {
   const s = w.spec;
   let detail = '';
   if (s.type === 'cards') detail = s.items.map((i) => i.title).join(', ');
   else if (s.type === 'options') detail = [s.title, ...s.items.map((i) => i.label)].filter(Boolean).join(' — ');
   else if (s.type === 'form') detail = [s.title, ...s.fields.map((f) => f.label)].filter(Boolean).join(' — ');
   else detail = s.title ?? '';
-  return `- ${w.name} (${s.type}${detail ? `: ${detail}` : ''})`;
+  const props = specProps(s).filter((p) => p !== 'state');
+  const meta = [
+    w.tool
+      ? `bound to tool ${w.tool.name} — pass its args in the ref data`
+      : props.length
+        ? `props: ${props.join(', ')}`
+        : '',
+    w.states?.length ? `states: ${w.states.map((x) => x.name).join(' | ')}` : '',
+  ]
+    .filter(Boolean)
+    .join('; ');
+  return `- ${w.name} (${s.type}${detail ? `: ${detail}` : ''}${meta ? ` — ${meta}` : ''})`;
+}
+
+/** Resolve a WIDGET_REF to a renderable component:
+ *  1. a "state" key (inline or tool-derived) picks a named variant spec
+ *  2. a tool binding calls the tool with the ref data as args — the same
+ *     identity check the tool loop applies, gated tools can't feed a
+ *     display component — and maps the JSON result into scalar props and
+ *     list items
+ *  3. the ref's inline data overrides tool-derived props
+ *  4. {prop} placeholders interpolate; the result must still validate. */
+export async function resolveWidgetRef(
+  def: SavedWidgetDef,
+  data: Record<string, unknown> | undefined,
+  tools: ToolDef[],
+  secrets: Record<string, string>,
+  ctx: AgentRunContext,
+  producedIds: Set<string>,
+): Promise<WidgetComponent | null> {
+  const props: Record<string, unknown> = {};
+  let items: Record<string, unknown>[] | null = null;
+  if (def.tool) {
+    const tool = tools.find((t) => t.name === def.tool!.name);
+    if (!tool || tool.approval) {
+      console.warn(`[widgets] bound tool unavailable or gated: ${def.tool.name}`);
+    } else if (!ctx.testRun) {
+      const { state: _state, ...rest } = data ?? {};
+      const args = Object.fromEntries(
+        Object.entries(rest).map(([k, v]) => [def.tool!.args?.[k] ?? k, v]),
+      );
+      const denied =
+        tool.identity && !ctx.identity?.operator
+          ? identityBlockReason(args, ctx.identity?.emails ?? new Set(), producedIds)
+          : null;
+      if (denied) {
+        console.warn(`[widgets] bound tool ${tool.name} identity-blocked: ${denied}`);
+      } else {
+        const result = await callTool(tool, args, secrets);
+        if (result.startsWith('error')) {
+          console.warn(`[widgets] bound tool ${tool.name} failed: ${result.slice(0, 160)}`);
+        } else {
+          try {
+            const json: unknown = JSON.parse(result);
+            Object.assign(props, propsFromResult(def.tool.props, json, secrets));
+            items = itemsFromResult(def.tool, json, secrets);
+          } catch {
+            // non-JSON tool result — nothing to bind
+          }
+        }
+      }
+    }
+  }
+  // Inline ref data overrides tool-derived props.
+  for (const [k, v] of Object.entries(data ?? {})) props[k] = v;
+  // A "state" prop — inline or tool-derived — also selects a named variant
+  // spec when one matches. It stays available as a {state} placeholder too.
+  let spec: unknown = def.spec;
+  const stateName = typeof props.state === 'string' ? props.state : null;
+  if (stateName && def.states?.length) {
+    const st = def.states.find((s) => normWidgetRef(s.name) === normWidgetRef(stateName));
+    if (st) spec = st.spec;
+  }
+  let filled = interpolateSpec(spec, props) as Record<string, unknown>;
+  // Tool-derived rows replace the template's items — list content is data,
+  // not layout. Each row interpolates against itself so a template value
+  // like "Track {title}" resolves per-row.
+  if (items && Array.isArray(filled.items)) {
+    filled = {
+      ...filled,
+      items: items
+        .map((r) => stripEmptyStrings(interpolateSpec(r, { ...props, ...r })))
+        .filter((it) => it && typeof it === 'object' && ('title' in it || 'label' in it)),
+    };
+  }
+  const parsed = WidgetComponent.safeParse(stripEmptyStrings(filled));
+  if (!parsed.success) {
+    console.warn(`[widgets] ref spec failed validation after binding`);
+    return null;
+  }
+  return parsed.data;
 }
 
 export function systemPrompt(
@@ -242,7 +341,7 @@ export function systemPrompt(
     forSuggestion?: boolean;
     pendingOffer?: boolean;
     offerMade?: boolean;
-    savedWidgets?: { name: string; spec: WidgetComponent }[];
+    savedWidgets?: (SavedWidgetDef & { name: string })[];
     /** Signed-in teammate on this agent's workspace — the Ask Janis
      *  copilot context. No customer escalation ladder exists for them. */
     operator?: boolean;
@@ -329,7 +428,7 @@ export function systemPrompt(
           '\nWhen the customer asks to see products, plans or options that carry data (price, image, description), prefer a "cards" or "options" widget over a BUTTON: list — and when a tool call returns list data (search results, products, availability), render it as a widget rather than retelling it as text. Always pair a widget with a one-line lead-in ("Here are our plans:") — never emit a WIDGET: line alone.' +
           metaOnly +
           (opts.savedWidgets?.length
-            ? '\nSaved components (built by your team — content is fixed and always renders identically). When a request matches one, emit a line "WIDGET_REF: <name>" instead of building the same thing with WIDGET: — prefer the ref whenever it fits:\n' +
+            ? '\nSaved components (built by your team). When a request matches one, emit a line "WIDGET_REF: <name>" instead of building the same thing with WIDGET: — prefer the ref whenever it fits. When the digest lists props, args or states, add a JSON object on the same line — "WIDGET_REF: order-status {\"order_id\":\"1234\"}" supplies a bound tool its args or fills {prop} placeholders (only values you actually have — never invent them), and {"state":"<name>"} selects one of its named states:\n' +
               opts.savedWidgets.map(widgetDigest).join('\n')
             : ''),
       );
@@ -725,15 +824,15 @@ export async function generateReply(
   ctx: AgentRunContext | undefined,
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
-): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[] }> {
+): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[]; producedIds: Set<string> }> {
   const first = await complete(llm, prompt, msgs, tools, secrets, ctx, builtins, onStall);
   const draft = first.text;
   if (!draft) {
-    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, fixed: [], stripped: [], verified: [], unverified: [] };
+    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, fixed: [], stripped: [], verified: [], unverified: [] };
   }
   const guard = await guardReplyLinks(draft, blessedUrls);
   if (!guard.stripped.length) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, ...guard };
   }
   const retry = await complete(
     llm,
@@ -749,7 +848,7 @@ export async function generateReply(
     builtins,
   ).catch(() => null);
   if (!retry?.text) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, ...guard };
   }
   const g2 = await guardReplyLinks(retry.text, blessedUrls);
   return {
@@ -758,6 +857,7 @@ export async function generateReply(
     model: retry.model,
     toolCalls: [...first.toolCalls, ...retry.toolCalls],
     widgets: [...first.widgets, ...retry.widgets],
+    producedIds: new Set([...first.producedIds, ...retry.producedIds]),
     ...g2,
   };
 }
@@ -922,6 +1022,9 @@ interface Completion {
   /** Widgets built from widget-bound tool results (live data binding) —
    *  merged into the reply's payload.widgets by the caller. */
   widgets: WidgetComponent[];
+  /** Provider ids tool results produced this run — WIDGET_REF-bound tools
+   *  may chain args off these (same anchor rule as the tool loop). */
+  producedIds: Set<string>;
 }
 
 /** OpenAI-compat multimodal content part — Gemini accepts image_url parts. */
@@ -987,7 +1090,7 @@ export async function complete(
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
 ): Promise<Completion> {
-  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[] };
+  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[], producedIds: new Set<string>() };
   if (!llm.apiKey) return empty;
 
   const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
@@ -1192,7 +1295,7 @@ export async function complete(
     if (!calls.length) {
       const text = msg?.content?.trim() ?? null;
       completionTokens += json.usage?.completion_tokens ?? (text ? Math.ceil(text.length / 4) : 0);
-      return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets };
+      return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds };
     }
 
     completionTokens += json.usage?.completion_tokens ?? 0;
@@ -1260,7 +1363,7 @@ export async function complete(
       msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
     }
   }
-  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets };
+  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds };
 }
 
 const RECENT_WINDOW = 20;
@@ -1987,19 +2090,31 @@ async function replyAsHostedAgent(
     // Saved components — the prompt catalog teaches WIDGET_REF: emission and
     // the map resolves refs back to their fixed specs below.
     const savedWidgets = await db
-      .select({ name: agentWidgets.name, spec: agentWidgets.spec })
+      .select({
+        name: agentWidgets.name,
+        spec: agentWidgets.spec,
+        states: agentWidgets.states,
+        tool: agentWidgets.tool,
+      })
       .from(agentWidgets)
       .where(eq(agentWidgets.agentId, agent.id));
-    const refSpecs = new Map<string, WidgetComponent>();
+    const refSpecs = new Map<string, SavedWidgetDef>();
     for (const w of savedWidgets) {
       const spec = WidgetComponent.safeParse(w.spec);
-      if (spec.success) refSpecs.set(normWidgetRef(w.name), spec.data);
+      if (!spec.success) continue;
+      const states = z.array(WidgetState).safeParse(w.states ?? []);
+      const tool = w.tool ? WidgetToolBinding.safeParse(w.tool) : null;
+      refSpecs.set(normWidgetRef(w.name), {
+        spec: spec.data,
+        states: states.success ? states.data : undefined,
+        tool: tool?.success ? tool.data : undefined,
+      });
     }
     let prompt =
       systemPrompt(agent, docs, conv, {
         pendingOffer: openEsc.some((a) => a.type === 'handoff_offer'),
         offerMade: offeredBefore,
-        savedWidgets: [...refSpecs.entries()].map(([name, spec]) => ({ name, spec })),
+        savedWidgets: [...refSpecs.entries()].map(([name, def]) => ({ name, ...def })),
         operator: ctx.identity?.operator,
       }) + ((await campaignContextFor(db, convId)) ?? '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
@@ -2036,13 +2151,14 @@ async function replyAsHostedAgent(
     const toolWidgets: WidgetComponent[] = [];
     let promptTokens = 0;
     let completionTokens = 0;
+    const agentToolDefs = toolsFor(agent);
     for (let attempt = 0; attempt < 2; attempt++) {
       gen = await generateReply(
         llm,
         prompt,
         history,
         blessedUrls,
-        toolsFor(agent),
+        agentToolDefs,
         secrets,
         ctx,
         builtins,
@@ -2053,10 +2169,13 @@ async function replyAsHostedAgent(
       toolWidgets.push(...gen.widgets);
       const { text: noLearns, learns: l } = extractLearns(stripTranscriptNotes(gen.text));
       const { text: noWidgets, widgets: w, refs } = extractWidgets(noLearns);
-      // Saved components resolve verbatim — a ref the model names renders
-      // exactly the spec the team built, no transcription variance.
-      for (const name of refs) {
-        const spec = refSpecs.get(name);
+      // Saved components resolve through their defs: a state key picks a
+      // variant, a tool binding fetches live props/items, inline data fills
+      // {prop} placeholders — a static spec when it carries none of those.
+      for (const ref of refs) {
+        const def = refSpecs.get(ref.name);
+        if (!def) continue;
+        const spec = await resolveWidgetRef(def, ref.data, agentToolDefs, secrets, ctx, gen.producedIds);
         if (spec) w.push(spec);
       }
       const { text: r, buttons: b } = extractButtons(noWidgets);

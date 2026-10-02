@@ -5,7 +5,8 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { AgentConfig, friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
-import { WidgetComponent } from '../lib/widgets.js';
+import { WidgetComponent, WidgetState, WidgetToolBinding } from '../lib/widgets.js';
+import { toolsFor } from '../lib/toolExec.js';
 import {
   adminOnly,
   agentAdminOnly,
@@ -1004,8 +1005,21 @@ export function agentRoutes(db: Db) {
   const widgetBody = z.object({
     name: widgetName,
     spec: z.unknown(),
+    states: z.array(WidgetState).max(12).optional(),
+    tool: WidgetToolBinding.optional().nullable(),
     auto_greet: z.boolean().optional(),
   });
+
+  // A bound tool must exist on this agent and be a plain read — gated tools
+  // can't feed a display component (approval cards can't render mid-reply).
+  const validToolBind = (agent: typeof agents.$inferSelect, tool: WidgetToolBinding | null | undefined) => {
+    if (!tool) return { ok: true as const };
+    const def = toolsFor(agent).find((t) => t.name === tool.name);
+    if (!def) return { ok: false as const, error: `no tool named "${tool.name}" on this agent` };
+    if (def.approval)
+      return { ok: false as const, error: `"${tool.name}" is approval-gated — bind a read tool` };
+    return { ok: true as const };
+  };
 
   app.get('/:id/widgets', agentMember, async (c) => {
     const agent = await ownedAgent(c);
@@ -1024,12 +1038,27 @@ export function agentRoutes(db: Db) {
     const body = c.req.valid('json');
     const spec = WidgetComponent.safeParse(body.spec);
     if (!spec.success) return c.json({ error: 'invalid spec', issues: spec.error.issues }, 400);
+    const toolCheck = validToolBind(agent, body.tool);
+    if (!toolCheck.ok) return c.json({ error: toolCheck.error }, 400);
     const [row] = await db
       .insert(agentWidgets)
-      .values({ agentId: agent.id, name: body.name, spec: spec.data, autoGreet: !!body.auto_greet })
+      .values({
+        agentId: agent.id,
+        name: body.name,
+        spec: spec.data,
+        states: body.states ?? null,
+        tool: body.tool ?? null,
+        autoGreet: !!body.auto_greet,
+      })
       .onConflictDoUpdate({
         target: [agentWidgets.agentId, agentWidgets.name],
-        set: { spec: spec.data, autoGreet: !!body.auto_greet, updatedAt: new Date() },
+        set: {
+          spec: spec.data,
+          states: body.states ?? null,
+          tool: body.tool ?? null,
+          autoGreet: !!body.auto_greet,
+          updatedAt: new Date(),
+        },
       })
       .returning();
     bus.publish(agent.workspaceId, { type: 'agent', data: { id: agent.id } });
@@ -1050,6 +1079,12 @@ export function agentRoutes(db: Db) {
         const spec = WidgetComponent.safeParse(body.spec);
         if (!spec.success) return c.json({ error: 'invalid spec', issues: spec.error.issues }, 400);
         patch.spec = spec.data;
+      }
+      if (body.states !== undefined) patch.states = body.states;
+      if (body.tool !== undefined) {
+        const toolCheck = validToolBind(agent, body.tool);
+        if (!toolCheck.ok) return c.json({ error: toolCheck.error }, 400);
+        patch.tool = body.tool;
       }
       if (body.auto_greet !== undefined) patch.autoGreet = body.auto_greet;
       const [row] = await db

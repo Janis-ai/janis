@@ -13,6 +13,7 @@ import { sha256 } from '../lib/crypto.js';
 import type { QuickReply } from '@janis/shared';
 import type { ChannelCredentials, InboundMessage } from '../lib/channels.js';
 import { resolveGreeting } from '../lib/greeting.js';
+import { interpolateSpec, stripEmptyStrings, WidgetComponent } from '../lib/widgets.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { recordSttUsage } from '../lib/usage.js';
 import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
@@ -420,7 +421,12 @@ export function webchatRoutes(db: Db) {
       dictation_engine: creds.dictation_engine === 'browser' ? 'browser' : 'llm',
       // Saved components pinned to the greeting — rendered under the greeting
       // text on an empty thread (widget.js) and in the Ask Janis rail.
-      greeting_widgets: greetingWidgets.map((w) => w.spec),
+      // Greeting pins are static — interpolate with empty props and re-validate
+      // so a data-bound template never renders literal "{prop}" placeholders.
+      greeting_widgets: greetingWidgets
+        .map((w) => WidgetComponent.safeParse(stripEmptyStrings(interpolateSpec(w.spec, {}))))
+        .filter((r) => r.success)
+        .map((r) => r.data),
     });
   });
 

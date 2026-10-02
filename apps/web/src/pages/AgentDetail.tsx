@@ -312,7 +312,7 @@ function AgentEditor({ agent }: { agent: Agent }) {
       {activeTab === 'tools' && agent.hosted && (
         <>
           <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />
-          <SavedWidgets agentId={agent.id} isAdmin={isAdmin} />
+          <SavedWidgets agentId={agent.id} isAdmin={isAdmin} tools={(cfg.tools ?? []).map((t) => t.name)} />
         </>
       )}
       {activeTab === 'llm' && agent.hosted && (

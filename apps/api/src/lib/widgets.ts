@@ -10,7 +10,9 @@ const s = (max: number) => z.string().min(1).max(max);
 const url = z
   .string()
   .max(500)
-  .refine((u) => /^https?:\/\//.test(u) || u.startsWith('/'), 'not a url');
+  // A bare {prop} is legal at template-save time — interpolation either fills
+  // it with a real URL or empties it, and the field is optional so it drops.
+  .refine((u) => /^https?:\/\//.test(u) || u.startsWith('/') || /^\{[a-z][a-z0-9_]*\}$/.test(u), 'not a url');
 
 export const WidgetComponent = z.discriminatedUnion('type', [
   // Product/recommendation carousel — image, title, price, a link and/or a
@@ -84,13 +86,134 @@ export const WidgetComponent = z.discriminatedUnion('type', [
 ]);
 export type WidgetComponent = z.infer<typeof WidgetComponent>;
 
+/** A named variant of a component — a complete alternative spec the model
+ *  selects with "state" in the WIDGET_REF data (WIDGET_REF: tracker
+ *  {"state":"in_transit"}). States are how a component renders differently
+ *  per outcome — a "not found" state can carry different steps, items or
+ *  no buttons. */
+export const WidgetState = z.object({ name: s(40), spec: WidgetComponent });
+export type WidgetState = z.infer<typeof WidgetState>;
+
+/** Tool binding — a widget that fetches live data when referenced. The
+ *  model supplies `args` in the WIDGET_REF data (prop → tool-param via
+ *  `args`, identity-mapped by default); `props`/`items`/`item_map` map the
+ *  JSON result into {prop} placeholders / a list's item rows. */
+export const WidgetToolBinding = z.object({
+  name: s(64),
+  args: z.record(z.string(), s(80)).optional(),
+  props: z.record(z.string(), s(160)).optional(),
+  items: s(120).optional(),
+  item_map: z.record(z.string(), s(160)).optional(),
+});
+export type WidgetToolBinding = z.infer<typeof WidgetToolBinding>;
+
+/** {prop} placeholder inside a spec string — the data-binding syntax. */
+const PROP_RE = /\{([a-z][a-z0-9_]{0,39})\}/g;
+
+/** Prop names a spec binds — every `{prop}` placeholder in its strings. */
+export function specProps(spec: unknown): string[] {
+  const found = new Set<string>();
+  const walk = (v: unknown) => {
+    if (typeof v === 'string') {
+      for (const m of v.matchAll(PROP_RE)) found.add(m[1]);
+    } else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+  };
+  walk(spec);
+  return [...found];
+}
+
+/** Fill a spec's {prop} placeholders with bound values. Missing props render
+ *  empty — an unset image/link/select_label field simply disappears (the
+ *  field is optional in the schema), which is also how a state "hides" a
+ *  button. Values are stringified, trimmed and length-capped; the result is
+ *  re-validated against WidgetComponent by the caller. */
+export function interpolateSpec(spec: unknown, props: Record<string, unknown>): unknown {
+  if (typeof spec === 'string') {
+    if (!spec.includes('{')) return spec;
+    const out = spec.replace(PROP_RE, (_, p: string) => {
+      const v = props[p];
+      return v == null ? '' : String(v).trim().slice(0, 300);
+    });
+    return out.trim();
+  }
+  if (Array.isArray(spec)) return spec.map((v) => interpolateSpec(v, props));
+  if (spec && typeof spec === 'object') {
+    return Object.fromEntries(
+      Object.entries(spec as Record<string, unknown>).map(([k, v]) => [
+        k,
+        interpolateSpec(v, props),
+      ]),
+    );
+  }
+  return spec;
+}
+
+/** Scalar props from a bound tool's JSON result — prop ← dotpath/template
+ *  via the same mapValue syntax ToolWidgetConfig uses. */
+export function propsFromResult(
+  map: Record<string, string> | undefined,
+  data: unknown,
+  secrets: Record<string, string> = {},
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [prop, expr] of Object.entries(map ?? {})) {
+    const v = mapValue(data, expr, secrets);
+    if (v != null && v !== '') out[prop] = str(v);
+  }
+  return out;
+}
+
+/** List items from a bound tool's JSON result — for cards/options the rows
+ *  replace spec.items outright (a template item is just the field shape). */
+export function itemsFromResult(
+  tool: WidgetToolBinding,
+  data: unknown,
+  secrets: Record<string, string> = {},
+): Record<string, unknown>[] | null {
+  let rows: unknown =
+    tool.items != null ? digPath(data, tool.items) : Array.isArray(data) ? data : undefined;
+  if (!Array.isArray(rows) && data && typeof data === 'object') {
+    rows = Object.values(data as Record<string, unknown>).find(Array.isArray);
+  }
+  if (!Array.isArray(rows) || !rows.length) return null;
+  const map = tool.item_map ?? {};
+  return rows
+    .slice(0, 12)
+    .map((r) =>
+      Object.fromEntries(
+        Object.entries(map).flatMap(([field, expr]) => {
+          const v = str(mapValue(r, expr, secrets));
+          return v ? [[field, v]] : [];
+        }),
+      ),
+    )
+    .filter((it) => Object.keys(it).length > 0);
+}
+
+/** Remove '' values recursively — an unfilled {prop} renders empty, which
+ *  should mean "field absent" for optional fields (required empties still
+ *  fail validation, which is the intended data-required behaviour). */
+export function stripEmptyStrings(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(stripEmptyStrings);
+  if (v && typeof v === 'object') {
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>)
+        .filter(([, val]) => val !== '')
+        .map(([k, val]) => [k, stripEmptyStrings(val)]),
+    );
+  }
+  return v;
+}
+
 const MAX_WIDGETS = 3;
 const WIDGET_LINE = /^WIDGET:\s*(.*)$/i;
-// Saved components — "WIDGET_REF: plans" resolves to the agent_widgets row's
-// spec verbatim. Deterministic content; the model only chooses the moment.
-// The model writes display-form names too ("WIDGET_REF: Pricing Table"), so
-// the capture tolerates spaces; lookup normalizes. See normWidgetRef.
-const WIDGET_REF_LINE = /^WIDGET_REF:\s*([a-z][a-z0-9_ -]{0,39})\s*$/i;
+// Saved components — "WIDGET_REF: plans" resolves the agent_widgets row's
+// spec; "WIDGET_REF: tracker {"order_id":"#1932"}" also passes data that
+// fills {prop} placeholders / feeds a bound tool's args. The model writes
+// display-form names too ("WIDGET_REF: Pricing Table"), so the capture
+// tolerates spaces; lookup normalizes. See normWidgetRef.
+const WIDGET_REF_LINE = /^WIDGET_REF:\s*([a-z][a-z0-9_ -]{0,39}?)\s*(\{[\s\S]*\})?\s*$/i;
 
 /** Lowercase + runs of space/dash/underscore collapse to one dash — "Pricing
  *  Table", "pricing_table" and "pricing-table" all name the same widget. */
@@ -213,23 +336,41 @@ export function widgetFromToolResult(
 }
 
 
+/** A WIDGET_REF capture — the normalised name plus the model's optional
+ *  inline data object (props for placeholders, args for a bound tool, or a
+ *  "state" key selecting a named variant). */
+export interface WidgetRef {
+  name: string;
+  data?: Record<string, unknown>;
+}
+
 /** Strip "WIDGET: {json}" lines from a reply; valid components return for
  *  payload.widgets. Malformed lines are still removed — a broken widget is
  *  better than model markup leaking to the customer. */
 export function extractWidgets(text: string): {
   text: string;
   widgets: WidgetComponent[];
-  refs: string[];
+  refs: WidgetRef[];
 } {
   const widgets: WidgetComponent[] = [];
-  const refs: string[] = [];
+  const refs: WidgetRef[] = [];
   const out = text
     .split('\n')
     .filter((line) => {
       const t = line.trim();
       const ref = t.match(WIDGET_REF_LINE);
       if (ref) {
-        refs.push(normWidgetRef(ref[1]));
+        let data: Record<string, unknown> | undefined;
+        if (ref[2]) {
+          try {
+            const parsed: unknown = JSON.parse(ref[2]);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+              data = parsed as Record<string, unknown>;
+          } catch {
+            // malformed data object — still resolves the name with no props
+          }
+        }
+        refs.push({ name: normWidgetRef(ref[1]), data });
         return false;
       }
       const m = t.match(WIDGET_LINE);

@@ -837,6 +837,11 @@ export const agentWidgets = pgTable(
       .references(() => agents.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     spec: jsonb('spec').notNull(),
+    // [{name, spec}] — variant specs picked by a "state" key in the ref data
+    states: jsonb('states'),
+    // {name, args?, props?, items?, item_map?} — bound tool; the ref's data
+    // feeds its args and the result fills the spec's {prop} placeholders
+    tool: jsonb('tool'),
     autoGreet: boolean('auto_greet').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

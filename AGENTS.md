@@ -693,6 +693,17 @@ drizzle-kit/workbox-build, nothing to drop directly).
 - Predictability rule of thumb: content the business owns → saved component
   or tool-bound widget; content the conversation owns → WIDGET:. The model
   should never hand-transcribe tool results into WIDGET: JSON.
+- Data-bound components (Chatbase-style, added 2026-10-02): agent_widgets
+  rows carry `states` ([{name, spec}] — full variant specs the ref data's
+  "state" key selects) and `tool` ({name, args, props, items, item_map} —
+  the ref's data feeds the tool's args, its JSON result maps into {prop}
+  placeholders and list items). Ref syntax: WIDGET_REF: name {"order_id":
+  "#1932"} — args → bound tool (identity-checked like the tool loop, gated
+  tools rejected), props → {placeholder} strings in the spec, state →
+  variant spec. resolveWidgetRef() in hostedAgent.ts orchestrates;
+  interpolateSpec/specProps/stripEmptyStrings in widgets.ts. Greeting pins
+  interpolate empty — a placeholder spec fails validation and drops rather
+  than leaking "{status}" to visitors.
 
 **Done so far** (don't rebuild): voice (BYO + hosted via Twilio subaccounts),
 CSAT on archive, Shopify/HubSpot/Zendesk/Stripe/Cal.com/iTunes/webhook tool
