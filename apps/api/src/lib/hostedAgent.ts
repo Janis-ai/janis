@@ -233,6 +233,9 @@ export function systemPrompt(
     pendingOffer?: boolean;
     offerMade?: boolean;
     savedWidgets?: { name: string; spec: WidgetComponent }[];
+    /** Signed-in teammate on this agent's workspace — the Ask Janis
+     *  copilot context. No customer escalation ladder exists for them. */
+    operator?: boolean;
   } = {},
 ): string {
   const cfg = (agent.config ?? {}) as {
@@ -244,7 +247,7 @@ export function systemPrompt(
   const parts = [
     cfg.system_prompt ||
       `You are ${agent.name}, a helpful assistant. Answer concisely and accurately. You don't represent a company or brand — if asked who you are, give your name.${
-        opts.forSuggestion
+        opts.forSuggestion || opts.operator
           ? ''
           : ' If the customer explicitly asks for a human, reply with [HANDOFF]. If they seem stuck or frustrated and you genuinely cannot help further, offer a human once with [OFFER_HUMAN] — otherwise just ask a clarifying question. If they decline a human, reply with [CANCEL_HANDOFF].'
       }`,
@@ -327,13 +330,19 @@ export function systemPrompt(
     );
   } else {
     parts.push(
-      '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, or mild pushback, and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.',
+      opts.operator
+        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. There is no human tier above you: never emit [HANDOFF], [OFFER_HUMAN] or [CANCEL_HANDOFF] and never offer to fetch a teammate — if something genuinely needs a human, say plainly what needs doing. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand."
+        : '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, or mild pushback, and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.',
     );
     parts.push(
       // Real incident: the model read a plan-card tap ("Choose Free") as a
       // command, then claimed "I've set your plan to Free" with zero tool
       // calls, invented a workspace name, and contradicted itself.
-      '\nActions and identity, hard rules. Never claim to have made or completed a change — switched a plan, cancelled a subscription, issued a refund, updated an account, booked or scheduled anything, "it will take effect…" — unless a tool call this turn actually performed it or created an approval request. If the request needs an action you have no tool for, say plainly that you cannot do it in this chat, point them to the right place (their dashboard/billing page), or offer a human once. A claimed action that did not run is a lie the customer acts on.' +
+      '\nActions and identity, hard rules. Never claim to have made or completed a change — switched a plan, cancelled a subscription, issued a refund, updated an account, booked or scheduled anything, "it will take effect…" — unless a tool call this turn actually performed it or created an approval request. ' +
+        (opts.operator
+          ? 'If the request needs an action you have no tool for, say plainly that you cannot do it in this chat and what would be needed instead.'
+          : 'If the request needs an action you have no tool for, say plainly that you cannot do it in this chat, point them to the right place (their dashboard/billing page), or offer a human once.') +
+        ' A claimed action that did not run is a lie the customer acts on.' +
         " You cannot see the customer's account, workspace, plan, email or sign-in state unless the context or a tool result provides it — never assume or invent an account or workspace name; if which account they mean matters, ask." +
         ' Some tools are bound to the customer\'s verified identity — they only accept the verified email shown in this context (or nothing, when no identity is verified). Never pass an email or account id the customer merely types or claims; if such a tool returns an identity error, tell the customer the lookup needs their verified sign-in and do not retry with guessed details.' +
         ' A customer message ending in a [tapped …] note is a pick from a button or card you showed — treat it as them selecting that option, not as an instruction to change their account; confirm what they picked and clarify what they want next.',
@@ -1558,7 +1567,7 @@ export async function runHostedEvent(
       identity: await verifiedIdentityFor(db, conv, agent.workspaceId),
     };
     const prompt =
-      systemPrompt(agent, docs, conv, { forSuggestion: true }) +
+      systemPrompt(agent, docs, conv, { forSuggestion: true, operator: ctx.identity?.operator }) +
       ((await campaignContextFor(db, convId)) ?? '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     const result = await generateReply(
@@ -1912,6 +1921,7 @@ async function replyAsHostedAgent(
         pendingOffer: openEsc.some((a) => a.type === 'handoff_offer'),
         offerMade: offeredBefore,
         savedWidgets: [...refSpecs.entries()].map(([name, spec]) => ({ name, spec })),
+        operator: ctx.identity?.operator,
       }) + ((await campaignContextFor(db, convId)) ?? '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;

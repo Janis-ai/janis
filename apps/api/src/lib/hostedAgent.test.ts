@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, claimsAction, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
+import { blessedUrlsFor, claimsAction, complete, controlTag, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, systemPrompt, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 
 let db: Db;
@@ -878,5 +878,18 @@ describe('verifiedIdentityFor', () => {
     const foreign = await verifiedIdentityFor(db, foreignConv, otherWs.id);
     expect(foreign.operator).toBe(false);
     expect(foreign.emails.has('op@janis.ai')).toBe(true); // still their own verified email
+  });
+});
+
+describe('operator copilot prompt', () => {
+  it('drops the customer handoff ladder for a signed-in teammate', () => {
+    const fakeAgent = { name: 'Janis', config: {} } as never;
+    const op = systemPrompt(fakeAgent, [], undefined, { operator: true });
+    expect(op).toContain("operator's copilot");
+    expect(op).not.toContain('Escalation, two levels');
+    expect(op).not.toContain('offer a human once');
+    const cust = systemPrompt(fakeAgent, [], undefined, {});
+    expect(cust).toContain('Escalation, two levels');
+    expect(cust).toContain('offer a human once');
   });
 });

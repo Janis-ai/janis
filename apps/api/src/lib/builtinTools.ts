@@ -51,6 +51,11 @@ export interface BuiltinCtx {
  * config.builtin_tools; each entry is only offered to the model when its
  * `available()` check passes (e.g. the required platform env key is set, or
  * the agent lives in the operator workspace for account_status).
+ *
+ * DRIFT WARNING: builtin_tools is an allowlist in agent config — shipping a
+ * new concierge builtin does NOT enable it on the Ask Janis agent. After
+ * adding an operator-workspace builtin, append its name to the concierge
+ * agent's config.builtin_tools in prod, or it silently doesn't exist.
  */
 export interface BuiltinTool {
   name: string;
@@ -1190,7 +1195,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'teach_agent',
     description:
-      "Propose a knowledge entry for an agent in the visitor's workspace — the fix for a recurring gap, so the agent answers it next time. Draft the entry (a factual line the agent can quote, e.g. \"Refunds under $50 are auto-approved within 24h\") and call this as soon as the proposal is reasonable — it posts an approval card in the chat, no verbal confirmation needed. Admin-only.",
+      "Propose a knowledge entry for an agent in the visitor's workspace — the fix for a recurring gap, so the agent answers it next time. Draft the entry (a factual line the agent can quote, e.g. \"Refunds under $50 are auto-approved within 24h\") and call this as soon as the proposal is reasonable — it posts an approval card in the chat, no verbal confirmation needed. For chat components/widgets the agent renders in conversation, use save_widget — a knowledge entry is text facts, not a component. Admin-only.",
     params: {
       agent: 'agent name (required)',
       entry: 'the confirmed knowledge entry text — one line per fact',
