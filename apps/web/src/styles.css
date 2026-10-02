@@ -116,18 +116,23 @@ button, input, select, textarea { font: inherit; }
 .ctx-cur { font-size: 13px; font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ctx-btn .icon { color: var(--muted); flex-shrink: 0; }
 .ctx-pop {
-  position: absolute; top: calc(100% + 4px); left: 0; z-index: 120;
-  min-width: 220px; max-height: 70vh; overflow-y: auto;
+  /* fixed + top/left from the button rect — escapes the sidebar's scroll
+     clip and stacks above .main (toasts 100, modals 200 sit above still) */
+  position: fixed; z-index: 150;
+  width: 280px; max-height: 70vh; overflow-y: auto;
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: 0 8px 28px rgb(0 0 0 / 0.28); padding: 6px;
 }
 .ctx-item {
-  display: flex; align-items: center; gap: 8px; width: 100%;
+  display: flex; align-items: flex-start; gap: 8px; width: 100%;
   padding: 7px 9px; border: none; border-radius: 6px; background: none;
   color: var(--text); font-size: 13px; text-align: left; cursor: pointer;
 }
 .ctx-item:hover { background: var(--panel-2); }
-.ctx-item .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Names wrap to the menu width instead of truncating */
+.ctx-item .grow { flex: 1; min-width: 0; white-space: normal; overflow-wrap: break-word; }
+.ctx-item > :last-child { margin-top: 2px; }
+.ctx-item > :first-child { margin-top: 2px; }
 .ctx-item .ctx-ic { color: var(--muted); flex-shrink: 0; }
 .ctx-ws .ctx-ws-name { font-weight: 600; }
 .ctx-plan {

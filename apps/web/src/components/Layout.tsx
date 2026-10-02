@@ -118,6 +118,11 @@ function ContextSwitcher({
   const [open, setOpen] = useState(false);
   const [wsList, setWsList] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  // The popover is position:fixed — the sidebar's overflow-y:auto would clip
+  // an absolutely-positioned menu, and .main paints after the sidebar in DOM
+  // order. Fixed escapes both; anchored to the button's rect on open.
+  const [popPos, setPopPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   useEffect(() => {
     if (!open) return;
     const down = (e: MouseEvent) => {
@@ -133,6 +138,13 @@ function ContextSwitcher({
       document.removeEventListener('keydown', key);
     };
   }, [open]);
+  const toggle = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPopPos({ top: r.bottom + 4, left: r.left });
+    }
+    setOpen((o) => !o);
+  };
   const go = (path: string) => {
     setOpen(false);
     onGo(path);
@@ -144,10 +156,11 @@ function ContextSwitcher({
     <div className="ctx-switch" ref={ref}>
       <button
         type="button"
+        ref={btnRef}
         className="ctx-btn"
         aria-expanded={open}
         aria-label="Switch workspace or agent"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
       >
         <span className="ctx-avatar">{initial}</span>
         <span className="ctx-stack">
@@ -157,7 +170,7 @@ function ContextSwitcher({
         <ChevronsUpDown size={14} className="icon" />
       </button>
       {open && (
-        <div className="ctx-pop" role="menu">
+        <div className="ctx-pop" role="menu" style={{ top: popPos.top, left: popPos.left }}>
           {ws && (
             <>
               <button
