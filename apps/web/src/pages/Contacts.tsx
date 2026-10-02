@@ -11,6 +11,7 @@ import { usePageTitle } from '../lib/title';
  *  (and a smart list's saved `filter`) understands. */
 type ContactFilter = {
   tag: string;
+  agent_id: string;
   channel_id: string;
   list_id: string;
   has_email: boolean;
@@ -20,6 +21,7 @@ type ContactFilter = {
 };
 const EMPTY_FILTER: ContactFilter = {
   tag: '',
+  agent_id: '',
   channel_id: '',
   list_id: '',
   has_email: false,
@@ -32,6 +34,7 @@ function filterParams(q: string, f: ContactFilter): string {
   const p = new URLSearchParams();
   if (q.trim()) p.set('q', q.trim());
   if (f.tag.trim()) p.set('tag', f.tag.trim());
+  if (f.agent_id) p.set('agent_id', f.agent_id);
   if (f.channel_id) p.set('channel_id', f.channel_id);
   if (f.list_id) p.set('list_id', f.list_id);
   if (f.has_email) p.set('has_email', '1');
@@ -42,10 +45,11 @@ function filterParams(q: string, f: ContactFilter): string {
 }
 
 /** Same state as a saved-filter object for POST /api/lists. */
-function filterObject(q: string, f: ContactFilter) {
+function filterObject(q: string, f: ContactFilter, agentScope?: string) {
   return {
     q: q.trim() || undefined,
     tags: f.tag.trim() ? f.tag.split(',').map((t) => t.trim()).filter(Boolean) : undefined,
+    agent_id: agentScope || f.agent_id || undefined,
     channel_id: f.channel_id || undefined,
     list_id: f.list_id || undefined,
     has_email: f.has_email || undefined,
@@ -200,13 +204,13 @@ export function Contacts({ agentId }: { agentId?: string } = {}) {
       </div>
       {importMsg && <div className="muted" style={{ marginBottom: 8 }}>{importMsg}</div>}
       {tab === 'contacts' && showFilters && (
-        <FilterBar filter={filter} onChange={setFilter} onClear={() => setFilter(EMPTY_FILTER)} />
+        <FilterBar filter={filter} onChange={setFilter} onClear={() => setFilter(EMPTY_FILTER)} agentScope={agentId} />
       )}
       {tab === 'contacts' && saveOpen && (
         <SaveListPanel
-          filter={filterObject(q, filter)}
+          filter={filterObject(q, filter, agentId)}
           isPending={saveList.isPending}
-          onSave={(name, snapshot) => saveList.mutate({ name, filter: filterObject(q, filter), snapshot })}
+          onSave={(name, snapshot) => saveList.mutate({ name, filter: filterObject(q, filter, agentId), snapshot })}
           onClose={() => setSaveOpen(false)}
         />
       )}
@@ -242,17 +246,25 @@ function FilterBar({
   filter: f,
   onChange,
   onClear,
+  agentScope,
 }: {
   filter: ContactFilter;
   onChange: (f: ContactFilter) => void;
   onClear: () => void;
+  /** Set when the page is already pinned to an agent (/agents/:id/contacts)
+   *  — the picker is redundant there, so only channels narrow further. */
+  agentScope?: string;
 }) {
   const { data: chans } = useChannels();
+  const { data: agents } = useAgents();
   const { data: listsData } = useQuery({
     queryKey: ['lists'],
     queryFn: () => api<{ lists: ListRow[] }>('/api/lists'),
   });
   const set = (patch: Partial<ContactFilter>) => onChange({ ...f, ...patch });
+  const channelOptions = (chans?.channels ?? []).filter(
+    (ch) => !(agentScope || f.agent_id) || ch.agent_id === (agentScope || f.agent_id),
+  );
   return (
     <div className="card row" style={{ marginBottom: 12, flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
       <input
@@ -261,9 +273,17 @@ function FilterBar({
         value={f.tag}
         onChange={(e) => set({ tag: e.target.value })}
       />
+      {!agentScope && (
+        <select className="input" value={f.agent_id} onChange={(e) => set({ agent_id: e.target.value, channel_id: '' })}>
+          <option value="">Any agent</option>
+          {(agents?.agents ?? []).map((a) => (
+            <option key={a.id} value={a.id}>{a.name}</option>
+          ))}
+        </select>
+      )}
       <select className="input" value={f.channel_id} onChange={(e) => set({ channel_id: e.target.value })}>
         <option value="">Any channel</option>
-        {(chans?.channels ?? []).map((ch) => (
+        {channelOptions.map((ch) => (
           <option key={ch.id} value={ch.id}>{ch.name}</option>
         ))}
       </select>
@@ -346,6 +366,7 @@ function summariseFilter(f: ReturnType<typeof filterObject>): string {
   const bits: string[] = [];
   if (f.q) bits.push(`matching "${f.q}"`);
   if (f.tags?.length) bits.push(`tagged ${f.tags.join(' or ')}`);
+  if (f.agent_id) bits.push('belongs to an agent');
   if (f.channel_id) bits.push('on the chosen channel');
   if (f.list_id) bits.push('in the chosen list');
   if (f.has_email) bits.push('has email');
