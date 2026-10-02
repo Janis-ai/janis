@@ -1723,7 +1723,9 @@
   };
 
   // ---- bootstrap ----------------------------------------------------------
-  fetch(API + '/chat/' + TOKEN).then(function (r) { return r.ok ? r.json() : null; }).then(function (cfg) {
+  // no-store: branding edits apply on the next page load, not whenever a
+  // heuristic cache decides to expire.
+  fetch(API + '/chat/' + TOKEN, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (cfg) {
     if (!cfg) return;
     state.config = cfg;
     // Dictation is opt-in per channel (it's metered on Janis's keys) — the

@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
 import { useAgents } from '../api/hooks';
 import { CodeBlock } from './bits';
+import { useConfirm } from './Prompt';
 import { friendlyError } from '../lib/friendlyError';
 
 export interface PendingAssets {
@@ -32,9 +33,13 @@ export function parseReplies(text: string): string[] {
 export function ChannelCard({
   ch,
   agents,
+  onRemoved,
 }: {
   ch: Channel;
   agents: Agent[];
+  /** Detail-page hook: the card is the whole page, so deleting navigates
+   *  away instead of leaving a dead panel on screen. */
+  onRemoved?: () => void;
 }) {
   const qc = useQueryClient();
   const apiOrigin =
@@ -60,12 +65,18 @@ export function ChannelCard({
       void qc.invalidateQueries({ queryKey: ['channels'] });
     },
   });
+  const [confirmEl, confirmRemove] = useConfirm();
   const remove = useMutation({
     mutationFn: () => api(`/api/channels/${ch.id}`, { method: 'DELETE' }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', ch.id] });
+      onRemoved?.();
+    },
   });
   return (
     <div id={`ch-${ch.id}`} className="card channel-card">
+      {confirmEl}
       <div className="row">
         {editingName ? (
           <input
@@ -101,7 +112,21 @@ export function ChannelCard({
           </strong>
         )}
         <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
-        <button className="btn danger" onClick={() => remove.mutate()}>Remove</button>
+        <button
+          className="btn danger"
+          disabled={remove.isPending}
+          onClick={async () => {
+            if (
+              await confirmRemove(
+                `Remove ${ch.name}? Its conversations stay in the inbox, but inbound messages stop arriving and the widget/integration stops working.`,
+                [{ key: 'ok', label: 'Remove channel', danger: true }],
+              )
+            )
+              remove.mutate();
+          }}
+        >
+          {remove.isPending ? 'Removing…' : 'Remove'}
+        </button>
       </div>
       <div className="muted" style={{ marginTop: 6 }}>
         Answered by{' '}
@@ -624,6 +649,10 @@ function WebchatBranding({ channel }: { channel: Channel }) {
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+      // Ask Janis caches the bootstrap 5min — drop it so the rail reflects
+      // the new branding immediately rather than looking broken.
+      void qc.invalidateQueries({ queryKey: ['ask-janis-config', channel.id] });
       setMsg('Saved — the widget picks it up on the next page load.');
     },
     onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),

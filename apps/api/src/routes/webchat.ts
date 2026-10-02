@@ -334,6 +334,9 @@ export function webchatRoutes(db: Db) {
   app.get('/:token', async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
+    // Branding edits must reach the widget on next load — heuristic caching
+    // of this response makes "save appearance" look like it did nothing.
+    c.header('cache-control', 'no-store');
     const [agent] = await db.select().from(agents).where(eq(agents.id, channel.agentId)).limit(1);
     const creds = channel.credentials as ChannelCredentials;
     const agentCfg = (agent?.config ?? {}) as { quick_replies?: string[] };

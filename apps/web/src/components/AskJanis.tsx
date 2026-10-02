@@ -835,7 +835,7 @@ export function AskJanis({
   return (
     <div className="ask-pane">
       <div className="ask-head">
-        <strong className="grow">{cfg?.agent_name ?? 'Ask Janis'}</strong>
+        <strong className="grow">{cfg?.title || cfg?.agent_name || 'Ask Janis'}</strong>
         {badge && <span className="badge">{badge}</span>}
         {onToggleExpand && (
           <button

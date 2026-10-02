@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAgents, useChannel } from '../api/hooks';
 import { ChannelCard, KIND_LABEL } from '../components/Channels';
@@ -13,6 +13,7 @@ export default function ChannelPage() {
   const { id: agentId, channelId } = useParams<{ id: string; channelId: string }>();
   const { data, isLoading } = useChannel(channelId);
   const { data: agentsData } = useAgents();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   // Cloudflare OAuth lands back here with ?cf_connect= / ?cf_error= —
@@ -65,7 +66,14 @@ export default function ChannelPage() {
           <a href="#" onClick={(e) => { e.preventDefault(); dropCfParams(); }} className="muted">dismiss</a>
         </div>
       )}
-      <ChannelCard key={ch.id} ch={ch} agents={agents} />
+      <ChannelCard
+        key={ch.id}
+        ch={ch}
+        agents={agents}
+        onRemoved={() =>
+          navigate(agent ? `/agents/${agent.id}?tab=channels` : '/agents')
+        }
+      />
     </>
   );
 }
