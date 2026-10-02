@@ -730,6 +730,14 @@ textarea:disabled { opacity: .55; }
   .layout.ask-open:has(.conv-layout) .sidebar a.nav-indent { padding-left: 0; }
   .layout.ask-open:has(.conv-layout) .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
   .layout.ask-open:has(.conv-layout) .sidebar .nav-sec span { display: none; }
+  /* badge overlays the icon's top-right so the icon itself stays centred
+     and aligned with the rows below */
+  .layout.ask-open:has(.conv-layout) .sidebar a { position: relative; }
+  .layout.ask-open:has(.conv-layout) .sidebar a .nav-badge {
+    position: absolute; top: 1px; left: 50%; margin: 0 0 0 7px;
+    font-size: 9px; line-height: 13px; min-width: 13px; padding: 0 3px;
+    border-radius: 8px;
+  }
   .layout.ask-open:has(.conv-layout) .sidebar .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; }
   .layout.ask-open .conv-layout { flex-direction: column; height: auto; }
   .layout.ask-open .conv-side { width: 100%; }
@@ -847,6 +855,14 @@ details summary:hover { color: var(--text); }
   .sidebar a.nav-indent { padding-left: 0; }
   .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
   .sidebar .nav-sec span { display: none; }
+  /* badge overlays the icon's top-right so the icon itself stays centred
+     and aligned with the rows below */
+  .sidebar a { position: relative; }
+  .sidebar a .nav-badge {
+    position: absolute; top: 1px; left: 50%; margin: 0 0 0 7px;
+    font-size: 9px; line-height: 13px; min-width: 13px; padding: 0 3px;
+    border-radius: 8px;
+  }
   /* the rail goes full-screen on mobile rather than squeezing the main column */
   .ask-rail { position: fixed; left: 60px; right: 0; top: 0; bottom: 0; width: auto; z-index: 85; }
   .main { padding: 14px; overflow-x: hidden; }
