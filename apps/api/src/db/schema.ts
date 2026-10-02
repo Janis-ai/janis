@@ -824,6 +824,26 @@ export const agentTests = pgTable(
   (t) => [index('agent_tests_agent').on(t.agentId)],
 );
 
+// Hand-built in-conversation components (the composer in the console).
+// spec is a validated WidgetComponent; the model emits "WIDGET_REF: <name>"
+// to show it verbatim — deterministic content, agent chooses the moment.
+// auto_greet pins it to the webchat greeting on an empty thread.
+export const agentWidgets = pgTable(
+  'agent_widgets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    spec: jsonb('spec').notNull(),
+    autoGreet: boolean('auto_greet').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('agent_widgets_agent_name').on(t.agentId, t.name)],
+);
+
 // Every regression-suite execution — manual, A/B candidate, or scheduled —
 // lands here grouped by batch_id. test_id is NOT a FK: a deleted test's
 // history stays readable (test_name snapshots the label).

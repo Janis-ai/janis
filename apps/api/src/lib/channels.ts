@@ -879,6 +879,10 @@ export async function sendChannelMessage(
             ? { subtitle: [it.subtitle, it.price].filter(Boolean).join(' · ').slice(0, 80) }
             : {}),
           ...(it.image && /^https?:\/\//.test(it.image) ? { image_url: it.image } : {}),
+          // tap-anywhere on the card body opens the link, not just the button
+          ...(it.link && /^https?:\/\//.test(it.link)
+            ? { default_action: { type: 'web_url', url: it.link } }
+            : {}),
           ...(buttons.length ? { buttons } : {}),
         };
       });

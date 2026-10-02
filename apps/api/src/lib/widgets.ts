@@ -86,6 +86,17 @@ export type WidgetComponent = z.infer<typeof WidgetComponent>;
 
 const MAX_WIDGETS = 3;
 const WIDGET_LINE = /^WIDGET:\s*(.*)$/i;
+// Saved components — "WIDGET_REF: plans" resolves to the agent_widgets row's
+// spec verbatim. Deterministic content; the model only chooses the moment.
+// The model writes display-form names too ("WIDGET_REF: Pricing Table"), so
+// the capture tolerates spaces; lookup normalizes. See normWidgetRef.
+const WIDGET_REF_LINE = /^WIDGET_REF:\s*([a-z][a-z0-9_ -]{0,39})\s*$/i;
+
+/** Lowercase + runs of space/dash/underscore collapse to one dash — "Pricing
+ *  Table", "pricing_table" and "pricing-table" all name the same widget. */
+export function normWidgetRef(name: string): string {
+  return name.trim().toLowerCase().replace(/[\s_-]+/g, '-');
+}
 
 /**
  * Tool → widget binding (Chatbase-style live data): a custom tool declares
@@ -205,12 +216,23 @@ export function widgetFromToolResult(
 /** Strip "WIDGET: {json}" lines from a reply; valid components return for
  *  payload.widgets. Malformed lines are still removed — a broken widget is
  *  better than model markup leaking to the customer. */
-export function extractWidgets(text: string): { text: string; widgets: WidgetComponent[] } {
+export function extractWidgets(text: string): {
+  text: string;
+  widgets: WidgetComponent[];
+  refs: string[];
+} {
   const widgets: WidgetComponent[] = [];
+  const refs: string[] = [];
   const out = text
     .split('\n')
     .filter((line) => {
-      const m = line.trim().match(WIDGET_LINE);
+      const t = line.trim();
+      const ref = t.match(WIDGET_REF_LINE);
+      if (ref) {
+        refs.push(normWidgetRef(ref[1]));
+        return false;
+      }
+      const m = t.match(WIDGET_LINE);
       if (!m) return true;
       if (widgets.length < MAX_WIDGETS) {
         try {
@@ -223,5 +245,5 @@ export function extractWidgets(text: string): { text: string; widgets: WidgetCom
       return false;
     })
     .join('\n');
-  return { text: out.trim(), widgets };
+  return { text: out.trim(), widgets, refs };
 }

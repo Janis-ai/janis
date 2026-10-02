@@ -16,6 +16,7 @@ import { HelpCenter } from '../components/HelpCenter';
 import { AutosizeText, timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
+import { SavedWidgets } from '../components/WidgetComposer';
 import { railBus } from '../lib/railBus';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
@@ -308,7 +309,12 @@ function AgentEditor({ agent }: { agent: Agent }) {
           onDeleteRule={(rid) => deleteRule.mutate(rid)}
         />
       )}
-      {activeTab === 'tools' && agent.hosted && <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />}
+      {activeTab === 'tools' && agent.hosted && (
+        <>
+          <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />
+          <SavedWidgets agentId={agent.id} isAdmin={isAdmin} />
+        </>
+      )}
       {activeTab === 'llm' && agent.hosted && (
         <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
       )}

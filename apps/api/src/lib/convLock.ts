@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import type { Db } from '../db/client.js';
+import type { Db, ReservedSql } from '../db/client.js';
+import { lockClient } from '../db/client.js';
 import { env } from '../env.js';
 import { messages } from '../db/schema.js';
 
@@ -23,22 +24,25 @@ import { messages } from '../db/schema.js';
 // 'janis' as a fixed namespace so our keys never collide with advisory locks
 // taken for other purposes (sweeper, migrations).
 const LOCK_NS = 0x6a616e69; // 'jani'
-const WAIT_BUDGET_MS = 90_000; // LLM runs can take ~30s; waiting beats a double reply
+// With real session semantics (direct endpoint) a run's hold is a handful of
+// seconds; >20s means the holder is wedged and the wait only delays the
+// customer's reply — the unlocked path below replies anyway.
+const WAIT_BUDGET_MS = 20_000;
 const POLL_MS = 250;
-
-type ReservedSql = {
-  (strings: TemplateStringsArray, ...values: unknown[]): Promise<Record<string, unknown>[]>;
-  release(): void;
-};
 
 export async function acquireConvLock(
   db: Db,
   convId: string,
 ): Promise<(() => Promise<void>) | null> {
   if (!env.databaseUrl) return null; // PGlite — single instance, Map suffices
-  // postgres-js driver exposes the raw Sql as $client; reserve() pins a
-  // dedicated connection for the lock's lifetime.
-  const client = (db as unknown as { $client: { reserve(): Promise<ReservedSql> } }).$client;
+  // Dedicated direct-endpoint client — through the -pooler host a "session"
+  // advisory lock attaches to a pooled backend the unlock statement may never
+  // see, leaking the lock until that backend dies. (Neon transaction pooling
+  // re-binds backends per statement; reserve() pins the client↔pooler TCP
+  // conn, not the backend.) On a direct conn, reserve() pins the backend and
+  // a crash really does drop the lock.
+  const client = lockClient();
+  if (!client) return null;
   const conn = await client.reserve();
   const started = Date.now();
   const deadline = started + WAIT_BUDGET_MS;
@@ -51,7 +55,7 @@ export async function acquireConvLock(
           console.warn(`[convLock] ${convId}: acquired after ${waited}ms wait`);
         return async () => {
           try {
-            await conn`select pg_advisory_unlock_all()`; // belt & suspenders before pooling
+            await conn`select pg_advisory_unlock(${LOCK_NS}, hashtext(${convId}))`;
           } finally {
             conn.release();
           }

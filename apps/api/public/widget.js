@@ -1235,7 +1235,13 @@
           state.greeted = true;
           if (!d.messages.length && !state.outbox.length) {
             if (state.config && state.config.greeting) {
-              addMsg({ direction: 'out', text: state.config.greeting, created_at: null });
+              addMsg({
+                direction: 'out',
+                text: state.config.greeting,
+                created_at: null,
+                // Components pinned "show when the chat opens" in the composer
+                widgets: state.config.greeting_widgets || undefined,
+              });
             }
             if (state.config && state.config.quick_replies && state.config.quick_replies.length) {
               renderChips(state.config.quick_replies);

@@ -7,7 +7,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channelBindings, channels, conversations, helpArticles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
+import { agents, agentWidgets, channelBindings, channels, conversations, helpArticles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
 import type { QuickReply } from '@janis/shared';
@@ -370,6 +370,13 @@ export function webchatRoutes(db: Db) {
     // show_help_link toggle gates the button entirely.
     const externalHelp =
       ((agent?.config ?? {}) as { help_url?: string }).help_url ?? null;
+    // Components pinned with "show when the chat opens" in the composer.
+    const greetingWidgets = agent
+      ? await db
+          .select({ spec: agentWidgets.spec })
+          .from(agentWidgets)
+          .where(and(eq(agentWidgets.agentId, agent.id), eq(agentWidgets.autoGreet, true)))
+      : [];
     const helpUrl =
       creds.show_help_link === false
         ? null
@@ -404,6 +411,9 @@ export function webchatRoutes(db: Db) {
       // Web Speech. Absent resolves to 'llm' — channels that opted into
       // dictation before the engine switch keep their coverage.
       dictation_engine: creds.dictation_engine === 'browser' ? 'browser' : 'llm',
+      // Saved components pinned to the greeting — rendered under the greeting
+      // text on an empty thread (widget.js) and in the Ask Janis rail.
+      greeting_widgets: greetingWidgets.map((w) => w.spec),
     });
   });
 

@@ -655,6 +655,28 @@ drizzle-kit/workbox-build, nothing to drop directly).
 - Model-honesty backstop: see "Reply-claim verifier" under Reliability —
   same check applies to concierge card-claim phrasing.
 
+**In-conversation widgets — delivery taxonomy (added 2026-10-02)**
+- Four emission paths, resolved in order at reply time: tool-bound widgets
+  (ToolDef.widget maps a tool result to a spec — most deterministic, model
+  never transcribes data) → WIDGET_REF: <name> (resolves an agent_widgets
+  row verbatim — team-built content, model only picks the moment;
+  refs normalize space/underscore/case so "Pricing Table" hits
+  "pricing-table") → WIDGET: {json} (model freehand — least predictable)
+  → BUTTON:/quick_replies. All cap at 3 per reply; tool-bound lead.
+- Authoring: agent page → Tools → "Saved components" composer
+  (WidgetComposer.tsx) — cards/options/form/status/receipt editors + live
+  preview; auto_greet pins a component under the webchat greeting
+  (bootstrap greeting_widgets → widget.js + Ask Janis rail).
+- Delivery: payload.widgets on the stored message → webchat/Ask Janis
+  render the real components (ChatWidgets.tsx mirrors widget.js); Meta
+  channels translate — Messenger generic-template carousel (default_action
+  opens card links), WhatsApp interactive lists; SMS/email flatten to text.
+- API: GET/POST /api/agents/:id/widgets, PATCH/DELETE /:wid — spec is a
+  validated WidgetComponent; unique per agent+name (upsert on POST).
+- Predictability rule of thumb: content the business owns → saved component
+  or tool-bound widget; content the conversation owns → WIDGET:. The model
+  should never hand-transcribe tool results into WIDGET: JSON.
+
 **Done so far** (don't rebuild): voice (BYO + hosted via Twilio subaccounts),
 CSAT on archive, Shopify/HubSpot/Zendesk/Stripe/Cal.com/iTunes/webhook tool
 templates, operator metrics report, routing automations (keyword/inactivity/

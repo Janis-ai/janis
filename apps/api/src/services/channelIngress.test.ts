@@ -19,7 +19,7 @@ import { handleChannelMessage } from './channelIngress.js';
 import { refreshConversationSummary, runHostedEvent } from '../lib/hostedAgent.js';
 import { systemPrompt } from '../lib/hostedAgent.js';
 import { enrichHandoff } from '../lib/handoff.js';
-import { alerts } from '../db/schema.js';
+import { agentWidgets, alerts } from '../db/schema.js';
 
 const llm = { apiKey: 'k', baseUrl: 'https://llm.test', model: 'test-model' };
 const llmResponse = (text: string) =>
@@ -575,5 +575,67 @@ describe('hosted handoff offers', () => {
       .from(conversations)
       .where(eq(conversations.id, conv.id));
     expect(after.state).not.toBe('needs_human');
+  });
+
+  it('a WIDGET_REF line resolves to the saved component verbatim', async () => {
+    // Predictability: the model picks the moment, the saved spec is the
+    // content — "show me your plans" renders the same carousel every time.
+    const plansSpec = {
+      type: 'cards' as const,
+      items: [
+        { title: 'Free', price: '$0/mo', select_label: 'Choose Free' },
+        { title: 'Pro', price: '$99/mo', select_label: 'Choose Pro' },
+      ],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(llmResponse('Here are our plans!\nWIDGET_REF: Pricing Table')),
+      ),
+    );
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'RefBot',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    await db.insert(agentWidgets).values({
+      agentId: hosted.id,
+      name: 'pricing-table',
+      spec: plansSpec,
+    });
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-widget-ref' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'show me your plans' });
+
+    await runHostedEvent(db, hosted, {
+      type: 'message.user',
+      conversation_id: 'ext-widget-ref',
+      janis_conversation_id: conv.id,
+      text: 'show me your plans',
+    } as Parameters<typeof runHostedEvent>[2]);
+
+    const out = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id))
+      .then((rows) => rows.filter((m) => m.direction === 'out'));
+    const widgetMsg = out.find(
+      (m) => ((m.payload as { widgets?: unknown[] })?.widgets?.length ?? 0) > 0,
+    );
+    expect(widgetMsg?.text).toBe('Here are our plans!');
+    expect(
+      (widgetMsg?.payload as { widgets?: unknown[] }).widgets[0],
+    ).toMatchObject(plansSpec);
   });
 });

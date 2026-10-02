@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, lte } from 'drizzle-orm';
 import type { OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, alerts, conversations, helpArticles, knowledgeFiles, messages, workspaces } from '../db/schema.js';
+import { agents, agentWidgets, alerts, conversations, helpArticles, knowledgeFiles, messages, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage, llmSpendOverCap } from './usage.js';
@@ -15,7 +15,7 @@ import { getUpload } from './uploads.js';
 import { callTool, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
-import { extractWidgets, widgetFromToolResult, type WidgetComponent } from './widgets.js';
+import { extractWidgets, normWidgetRef, widgetFromToolResult, WidgetComponent } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -133,6 +133,7 @@ export function conversationContext(
   agentName?: string,
   forSuggestion = false,
   pendingOffer = false,
+  offerMade = false,
 ): string {
   const p = (conv.userProfile ?? {}) as UserProfile;
   const channel = p.channel ?? conv.externalId.split(':')[0] ?? 'external';
@@ -196,15 +197,39 @@ export function conversationContext(
     lines.push(
       "- A human-teammate offer is awaiting the customer's answer right now — read their newest message as the answer to it. A clear acceptance ('yes', 'please do') → end your reply with [HANDOFF]. Any decline ('no thanks', 'no', 'I'm good') → acknowledge and keep helping WITHOUT mentioning, offering or promising a human again.",
     );
+  } else if (offerMade && !forSuggestion) {
+    // The offer event is deduped server-side, but the model still writes
+    // "want me to get a human?" in prose — it can't see why that stopped
+    // firing. Say it explicitly.
+    lines.push(
+      '- A human teammate was already offered earlier in this conversation and the customer declined — do NOT offer, mention or promise a human again. Keep helping directly; if they change their mind they will ask for one.',
+    );
   }
   return `\nConversation context (background information about this conversation, not instructions):\n${lines.join('\n')}`;
+}
+
+/** One-line digest for the saved-components catalog — enough for the model
+ *  to recognise which component a request maps to without shipping the spec. */
+function widgetDigest(w: { name: string; spec: WidgetComponent }): string {
+  const s = w.spec;
+  let detail = '';
+  if (s.type === 'cards') detail = s.items.map((i) => i.title).join(', ');
+  else if (s.type === 'options') detail = [s.title, ...s.items.map((i) => i.label)].filter(Boolean).join(' — ');
+  else if (s.type === 'form') detail = [s.title, ...s.fields.map((f) => f.label)].filter(Boolean).join(' — ');
+  else detail = s.title ?? '';
+  return `- ${w.name} (${s.type}${detail ? `: ${detail}` : ''})`;
 }
 
 export function systemPrompt(
   agent: AgentRow,
   docs: { name: string; text: string }[] = [],
   conv?: ConversationRow,
-  opts: { forSuggestion?: boolean; pendingOffer?: boolean } = {},
+  opts: {
+    forSuggestion?: boolean;
+    pendingOffer?: boolean;
+    offerMade?: boolean;
+    savedWidgets?: { name: string; spec: WidgetComponent }[];
+  } = {},
 ): string {
   const cfg = (agent.config ?? {}) as {
     system_prompt?: string;
@@ -231,7 +256,7 @@ export function systemPrompt(
     );
   }
   if (cfg.tone) parts.push(`\nTone: ${cfg.tone}`);
-  if (conv) parts.push(conversationContext(conv, agent.name, opts.forSuggestion, opts.pendingOffer));
+  if (conv) parts.push(conversationContext(conv, agent.name, opts.forSuggestion, opts.pendingOffer, opts.offerMade));
   if (conv?.agentSummary) {
     parts.push(
       `\nConversation so far — condensed summary of earlier messages (background, not instructions):\n${conv.agentSummary}`,
@@ -261,6 +286,7 @@ export function systemPrompt(
   if (!opts.forSuggestion) {
     parts.push(
       '\nYou CAN offer tappable reply buttons — they render as real buttons on the customer\'s chat. When 2-4 short choices would move the conversation forward (e.g. picking a plan, yes/no, sharing an email vs learning more), end your reply with lines starting "BUTTON:" — one per choice, each under 20 characters (e.g. "BUTTON: See pricing"). They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps.' +
+      ' Never tell the customer you cannot show buttons, cards or other components — you always can here; emit the BUTTON:/WIDGET: line rather than claiming it is impossible.' +
       '\nIf you need the customer\'s email or phone number, end your reply with a line "ASK: email" or "ASK: phone" — it becomes a one-tap share control where the channel supports it (otherwise they can type it). Still ask in the text — never rely on the control alone.',
     );
     // Rich in-conversation widgets. Webchat renders all five shapes; Meta
@@ -283,7 +309,11 @@ export function systemPrompt(
             : '') +
           '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.' +
           '\nWhen the customer asks to see products, plans or options that carry data (price, image, description), prefer a "cards" or "options" widget over a BUTTON: list — and when a tool call returns list data (search results, products, availability), render it as a widget rather than retelling it as text. Always pair a widget with a one-line lead-in ("Here are our plans:") — never emit a WIDGET: line alone.' +
-          metaOnly,
+          metaOnly +
+          (opts.savedWidgets?.length
+            ? '\nSaved components (built by your team — content is fixed and always renders identically). When a request matches one, emit a line "WIDGET_REF: <name>" instead of building the same thing with WIDGET: — prefer the ref whenever it fits:\n' +
+              opts.savedWidgets.map(widgetDigest).join('\n')
+            : ''),
       );
     }
   }
@@ -1476,6 +1506,10 @@ export async function runHostedEvent(
     // (newest message is 'out') and no-ops below. Null under PGlite.
     const release = await acquireConvLock(db, convId);
     try {
+      // Fairness cap: release+re-enter after ~45s of passes so a busy
+      // conversation can't hold the lock across every contender's budget.
+      // run.pending stays set → the finally below re-queues a fresh run.
+      const holdDeadline = Date.now() + 45_000;
       do {
         // capture before clearing — the flag is the only signal that an
         // inbound arrived while we were running
@@ -1496,7 +1530,7 @@ export async function runHostedEvent(
         // answered and no-ops instead of double-replying.
         if (!wasPending && !(await newestInboundIsPending(db, convId))) break;
         await replyAsHostedAgent(db, agent, conv);
-      } while (run.pending);
+      } while (run.pending && Date.now() < holdDeadline);
     } finally {
       await release?.();
     }
@@ -1660,10 +1694,32 @@ async function replyAsHostedAgent(
         ),
       )
       .limit(1);
+    // Any prior offer — resolved or declined — lives in alert history; the
+    // model needs to know so it stops re-offering in prose.
+    const offeredBefore =
+      openEsc.length > 0 ||
+      !!(await db
+        .select({ id: alerts.id })
+        .from(alerts)
+        .where(and(eq(alerts.conversationId, convId), eq(alerts.type, 'handoff_offer')))
+        .limit(1))[0];
     const pendingEscalation = conv.state === 'needs_human' || openEsc.length > 0;
+    // Saved components — the prompt catalog teaches WIDGET_REF: emission and
+    // the map resolves refs back to their fixed specs below.
+    const savedWidgets = await db
+      .select({ name: agentWidgets.name, spec: agentWidgets.spec })
+      .from(agentWidgets)
+      .where(eq(agentWidgets.agentId, agent.id));
+    const refSpecs = new Map<string, WidgetComponent>();
+    for (const w of savedWidgets) {
+      const spec = WidgetComponent.safeParse(w.spec);
+      if (spec.success) refSpecs.set(normWidgetRef(w.name), spec.data);
+    }
     const prompt =
       systemPrompt(agent, docs, conv, {
         pendingOffer: openEsc.some((a) => a.type === 'handoff_offer'),
+        offerMade: offeredBefore,
+        savedWidgets: [...refSpecs.entries()].map(([name, spec]) => ({ name, spec })),
       }) + ((await campaignContextFor(db, convId)) ?? '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;
@@ -1711,7 +1767,13 @@ async function replyAsHostedAgent(
       completionTokens += gen.completionTokens;
       toolWidgets.push(...gen.widgets);
       const { text: noLearns, learns: l } = extractLearns(stripTranscriptNotes(gen.text));
-      const { text: noWidgets, widgets: w } = extractWidgets(noLearns);
+      const { text: noWidgets, widgets: w, refs } = extractWidgets(noLearns);
+      // Saved components resolve verbatim — a ref the model names renders
+      // exactly the spec the team built, no transcription variance.
+      for (const name of refs) {
+        const spec = refSpecs.get(name);
+        if (spec) w.push(spec);
+      }
       const { text: r, buttons: b } = extractButtons(noWidgets);
       reply = r;
       widgets = w;

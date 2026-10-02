@@ -489,6 +489,8 @@ describe('sendChannelMessage quick replies', () => {
       title: 'Pro plan',
       subtitle: 'For growing teams · $99/mo',
       image_url: 'https://x.com/pro.png',
+      // tapping the card body opens the link too, not just the button
+      default_action: { type: 'web_url', url: 'https://x.com/pro' },
       buttons: [
         { type: 'web_url', url: 'https://x.com/pro', title: 'Details' },
         { type: 'postback', title: 'Choose Pro', payload: 'Choose Pro' },

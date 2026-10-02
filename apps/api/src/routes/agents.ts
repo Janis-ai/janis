@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { AgentConfig, friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, alertRules, alerts, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { WidgetComponent } from '../lib/widgets.js';
 import {
   adminOnly,
   agentAdminOnly,
@@ -987,6 +988,87 @@ export function agentRoutes(db: Db) {
       .where(eq(agents.id, agent.id))
       .returning();
     return c.json({ agent: toAgent(updated) });
+  });
+
+  // Saved in-conversation components — hand-built widgets the agent emits by
+  // name ("WIDGET_REF: plans") so the content is deterministic, or pins to
+  // the chat greeting (auto_greet). spec is a validated WidgetComponent.
+  const widgetName = z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(1)
+    .max(40)
+    .regex(/^[a-z][a-z0-9_-]*$/, 'start with a letter; letters, numbers, - and _ only');
+  const widgetBody = z.object({
+    name: widgetName,
+    spec: z.unknown(),
+    auto_greet: z.boolean().optional(),
+  });
+
+  app.get('/:id/widgets', agentMember, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const rows = await db
+      .select()
+      .from(agentWidgets)
+      .where(eq(agentWidgets.agentId, agent.id))
+      .orderBy(asc(agentWidgets.name));
+    return c.json({ widgets: rows });
+  });
+
+  app.post('/:id/widgets', agentAdmin, zValidator('json', widgetBody), async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const body = c.req.valid('json');
+    const spec = WidgetComponent.safeParse(body.spec);
+    if (!spec.success) return c.json({ error: 'invalid spec', issues: spec.error.issues }, 400);
+    const [row] = await db
+      .insert(agentWidgets)
+      .values({ agentId: agent.id, name: body.name, spec: spec.data, autoGreet: !!body.auto_greet })
+      .onConflictDoUpdate({
+        target: [agentWidgets.agentId, agentWidgets.name],
+        set: { spec: spec.data, autoGreet: !!body.auto_greet, updatedAt: new Date() },
+      })
+      .returning();
+    return c.json({ widget: row }, 201);
+  });
+
+  app.patch(
+    '/:id/widgets/:wid',
+    agentAdmin,
+    zValidator('json', widgetBody.partial()),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const body = c.req.valid('json');
+      const patch: Record<string, unknown> = { updatedAt: new Date() };
+      if (body.name !== undefined) patch.name = body.name;
+      if (body.spec !== undefined) {
+        const spec = WidgetComponent.safeParse(body.spec);
+        if (!spec.success) return c.json({ error: 'invalid spec', issues: spec.error.issues }, 400);
+        patch.spec = spec.data;
+      }
+      if (body.auto_greet !== undefined) patch.autoGreet = body.auto_greet;
+      const [row] = await db
+        .update(agentWidgets)
+        .set(patch)
+        .where(and(eq(agentWidgets.id, c.req.param('wid')), eq(agentWidgets.agentId, agent.id)))
+        .returning();
+      if (!row) return c.json({ error: 'not found' }, 404);
+      return c.json({ widget: row });
+    },
+  );
+
+  app.delete('/:id/widgets/:wid', agentAdmin, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const [row] = await db
+      .delete(agentWidgets)
+      .where(and(eq(agentWidgets.id, c.req.param('wid')), eq(agentWidgets.agentId, agent.id)))
+      .returning();
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({ ok: true });
   });
 
   app.delete('/:id/knowledge/:fileId', agentAdmin, async (c) => {

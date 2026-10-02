@@ -98,3 +98,24 @@ describe('widgetFromToolResult', () => {
     expect(w.items).toHaveLength(1);
   });
 });
+
+describe('extractWidgets', () => {
+  it('strips WIDGET_REF lines and returns the names for resolution', async () => {
+    const { extractWidgets } = await import('./widgets.js');
+    const out = extractWidgets(
+      'Here are our plans:\nWIDGET_REF: plans\nWIDGET_REF: Pricing Table\nanything else?',
+    );
+    expect(out.text).toBe('Here are our plans:\nanything else?');
+    expect(out.refs).toEqual(['plans', 'pricing-table']);
+  });
+
+  it('still parses WIDGET: JSON alongside refs', async () => {
+    const { extractWidgets } = await import('./widgets.js');
+    const out = extractWidgets(
+      'WIDGET: {"type":"options","items":[{"label":"Yes"},{"label":"No"}]}\nWIDGET_REF: plans',
+    );
+    expect(out.widgets).toHaveLength(1);
+    expect(out.widgets[0].type).toBe('options');
+    expect(out.refs).toEqual(['plans']);
+  });
+});

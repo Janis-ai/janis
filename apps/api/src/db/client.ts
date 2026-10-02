@@ -12,13 +12,21 @@ const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 // affects query-result plumbing; row types come from the table definitions.
 export type Db = PgDatabase<any, any>;
 
-// Raw postgres-js client, kept for the advisory lock that serializes
-// migrations across concurrent Cloud Run instance boots.
-let sqlClient: { reserve(): Promise<ReservedSql> } | null = null;
-type ReservedSql = {
-  (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
+// Session-level advisory locks are broken through Neon's transaction-mode
+// pooler: a pooled connection re-binds to a different backend per statement,
+// so pg_try_advisory_lock lands on backend A while pg_advisory_unlock_all
+// runs on backend B — the lock leaks until the pooled backend dies (it
+// doesn't; the pooler keeps it warm and reissues it). Lock traffic goes to
+// the direct endpoint where a reserved connection is a real session.
+let lockSqlClient: { reserve(): Promise<ReservedSql> } | null = null;
+export type ReservedSql = {
+  (strings: TemplateStringsArray, ...values: unknown[]): Promise<Record<string, unknown>[]>;
   release(): void;
 };
+
+export function lockClient() {
+  return lockSqlClient;
+}
 
 export async function createDb(): Promise<Db> {
   if (env.databaseUrl) {
@@ -29,7 +37,12 @@ export async function createDb(): Promise<Db> {
       idle_timeout: 20,
       connect_timeout: 10,
     });
-    sqlClient = sql as never;
+    const directUrl = env.databaseUrl.replace(/-pooler\./, '.');
+    lockSqlClient = (
+      directUrl === env.databaseUrl
+        ? sql
+        : postgres(directUrl, { max: 4, idle_timeout: 20, connect_timeout: 10 })
+    ) as never;
     return drizzle(sql, { schema }) as unknown as Db;
   }
   const { PGlite } = await import('@electric-sql/pglite');
@@ -103,12 +116,14 @@ export async function migrateDb(db: Db) {
     // --max-instances > 1: several instances boot + migrate at once and the
     // loser hits "column already exists". A session-level advisory lock (held
     // on a reserved connection — the pool would scatter it) makes waiters
-    // re-check after the winner finishes and find nothing pending.
-    if (!sqlClient) {
+    // re-check after the winner finishes and find nothing pending. Runs on
+    // lockSqlClient — the pooler reissues backends per statement, which both
+    // leaks the lock and makes the application_name marker lie.
+    if (!lockSqlClient) {
       await migrate(db as never, { migrationsFolder: MIGRATIONS });
       return;
     }
-    const conn = await sqlClient.reserve();
+    const conn = await lockSqlClient.reserve();
     try {
       // Identity marker: only migrator sessions may hold this lock. An orphan
       // that the pooler reissued to app traffic shows the app's name, not ours.

@@ -12,7 +12,7 @@ import {
 import { Loader2, Maximize2, Mic, MicOff, Minimize2, Paperclip, Smile, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 import { ArgsRows } from './bits';
-import { Widgets } from './ChatWidgets';
+import { Widgets, type ChatWidget } from './ChatWidgets';
 import { splitEmphasis } from '../lib/richText';
 
 interface ChatConfig {
@@ -22,6 +22,7 @@ interface ChatConfig {
   quick_replies: string[];
   logo_url: string | null;
   dictation?: boolean;
+  greeting_widgets?: ChatWidget[];
 }
 
 /** Minimal Web Speech surface — TS's dom lib omits SpeechRecognition. */
@@ -858,7 +859,7 @@ export function AskJanis({
             first poll after sending (same text: bootstrap resolves it
             synchronously to warm the cache), so this swaps seamlessly rather
             than vanishing when the outbox fills. */}
-        {loaded && cfg?.greeting && !msgs.length && (
+        {loaded && (cfg?.greeting || cfg?.greeting_widgets?.length) && !msgs.length && (
           <div className="ask-msg them">
             {cfg.agent_name && (
               <div className="ask-author">
@@ -866,7 +867,10 @@ export function AskJanis({
                 {cfg.agent_name}
               </div>
             )}
-            {richText(cfg.greeting, navigate)}
+            {cfg.greeting ? richText(cfg.greeting, navigate) : null}
+            {cfg.greeting_widgets?.length ? (
+              <Widgets widgets={cfg.greeting_widgets} onSend={(t) => void send(t, [])} />
+            ) : null}
           </div>
         )}
         {timelineItems(msgs, outbox)
