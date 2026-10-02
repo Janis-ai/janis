@@ -70,50 +70,63 @@ export function SavedWidgets({ agentId, isAdmin }: { agentId: string; isAdmin: b
         the component always renders exactly as built. "Show on open" pins one under the chat
         greeting.
       </label>
-      {widgets.map((w) => (
-        <div key={w.id} className="card" style={{ background: 'var(--panel-2)', padding: 10 }}>
-          <div className="row">
-            <span className="mono grow" style={{ fontSize: 13 }}>{w.name}</span>
-            <span className="badge">{w.spec.type}</span>
-            {isAdmin && (
-              <>
-                <button
-                  className="btn sm"
-                  title={w.autoGreet ? 'Shows under the chat greeting' : 'Show under the chat greeting'}
-                  style={w.autoGreet ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}}
-                  onClick={() => toggleGreet.mutate(w)}
-                >
-                  on open
-                </button>
-                <button className="btn sm" onClick={() => setEditing(w)}>edit</button>
-                <button
-                  className="btn sm"
-                  title="Delete component"
-                  onClick={() => del.mutate(w.id)}
-                  aria-label={`Delete component ${w.name}`}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </>
-            )}
+      {widgets.map((w) =>
+        // Editing swaps the row for the composer in place — the form sits
+        // where the component lives instead of jumping to the page bottom.
+        editing !== 'new' && editing?.id === w.id ? (
+          <Composer
+            key={w.id}
+            initial={w}
+            saving={save.isPending}
+            error={save.error instanceof Error ? save.error.message : save.isError ? 'save failed' : ''}
+            onCancel={() => setEditing(null)}
+            onSave={(v) => save.mutate(v)}
+          />
+        ) : (
+          <div key={w.id} className="card" style={{ background: 'var(--panel-2)', padding: 10 }}>
+            <div className="row">
+              <span className="mono grow" style={{ fontSize: 13 }}>{w.name}</span>
+              <span className="badge">{w.spec.type}</span>
+              {isAdmin && (
+                <>
+                  <button
+                    className="btn sm"
+                    title={w.autoGreet ? 'Shows under the chat greeting' : 'Show under the chat greeting'}
+                    style={w.autoGreet ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}}
+                    onClick={() => toggleGreet.mutate(w)}
+                  >
+                    on open
+                  </button>
+                  <button className="btn sm" onClick={() => setEditing(w)}>edit</button>
+                  <button
+                    className="btn sm"
+                    title="Delete component"
+                    onClick={() => del.mutate(w.id)}
+                    aria-label={`Delete component ${w.name}`}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </>
+              )}
+            </div>
+            <div style={{ marginTop: 6, pointerEvents: 'none' }}>
+              <Widgets widgets={[w.spec]} onSend={() => {}} />
+            </div>
           </div>
-          <div style={{ marginTop: 6, pointerEvents: 'none' }}>
-            <Widgets widgets={[w.spec]} onSend={() => {}} />
-          </div>
-        </div>
-      ))}
+        ),
+      )}
       {isAdmin && editing === null && (
         <button className="btn" style={{ alignSelf: 'flex-start' }} onClick={() => setEditing('new')}>
           <Plus size={14} /> New component
         </button>
       )}
-      {editing !== null && (
+      {editing === 'new' && (
         <Composer
-          initial={editing === 'new' ? null : editing}
+          initial={null}
           saving={save.isPending}
           error={save.error instanceof Error ? save.error.message : save.isError ? 'save failed' : ''}
           onCancel={() => setEditing(null)}
-          onSave={(w) => save.mutate(w)}
+          onSave={(v) => save.mutate(v)}
         />
       )}
     </div>
