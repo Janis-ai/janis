@@ -1219,6 +1219,8 @@ input.bub-switch:disabled { cursor: default; }
  * canvas, not at the card margin. */
 .bub-stage .bub-tabs { margin-top: 0; align-self: flex-start; }
 .bub-deploy { margin-top: 14px; max-width: 640px; display: flex; flex-direction: column; gap: 12px; }
+/* Deploy replaces the canvas inside the stage column — stretch, no offset. */
+.bub-stage .bub-deploy { align-self: stretch; margin-top: 0; }
 .bub-color { display: flex; align-items: center; gap: 8px; }
 .bub-hex { width: 88px; font-size: 12.5px; }
 .bub-radius { display: flex; gap: 8px; }

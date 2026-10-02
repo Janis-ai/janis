@@ -187,26 +187,28 @@ export function ChannelCard({
             </button>
           </div>
         );
-        return bubTab === 'preview' ? (
-          <WebchatBranding channel={ch} tabs={bubTabs} />
-        ) : (
-          <>
-            {bubTabs}
-            <div className="bub-deploy">
-              <div>
-                <strong style={{ fontSize: 13 }}>Install the bubble</strong>
-                <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
-                  Paste the snippet on every page where the bubble should appear — the saved
-                  appearance applies automatically.
-                </div>
+        const deployEl = (
+          <div className="bub-deploy">
+            <div>
+              <strong style={{ fontSize: 13 }}>Install the bubble</strong>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+                Paste the snippet on every page where the bubble should appear — the saved
+                appearance applies automatically.
               </div>
-              <CodeBlock
-                title="Embed — paste before </body> on your site"
-                code={`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
-              />
-              <WebchatIdentity channel={ch} />
             </div>
-          </>
+            <CodeBlock
+              title="Embed — paste before </body> on your site"
+              code={`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
+            />
+            <WebchatIdentity channel={ch} />
+          </div>
+        );
+        return (
+          <WebchatBranding
+            channel={ch}
+            tabs={bubTabs}
+            stage={bubTab === 'deploy' ? deployEl : undefined}
+          />
         );
       })()}
       {ch.kind === 'email' && ch.meta.inbound_address && (
@@ -649,7 +651,16 @@ function BubSwitch({
 /** Webchat bubble appearance editor — PATCHes display config on the channel.
  *  Chatbase-inspired: sectioned controls left, live preview right, sticky
  *  unsaved-changes bar. */
-function WebchatBranding({ channel, tabs }: { channel: Channel; tabs?: ReactNode }) {
+function WebchatBranding({
+  channel,
+  tabs,
+  stage,
+}: {
+  channel: Channel;
+  tabs?: ReactNode;
+  /** Replaces the live-preview canvas (the Deploy tab's content). */
+  stage?: ReactNode;
+}) {
   const qc = useQueryClient();
   const b = channel.meta.branding ?? {};
   const initial = {
@@ -1042,6 +1053,8 @@ function WebchatBranding({ channel, tabs }: { channel: Channel; tabs?: ReactNode
       </div>
       <div className="bub-stage">
         {tabs}
+        {stage ?? (
+          <>
         <div className="bub-canvas">
           <WidgetPreview
             accent={normHex(f.accent)}
@@ -1063,6 +1076,8 @@ function WebchatBranding({ channel, tabs }: { channel: Channel; tabs?: ReactNode
           />
         </div>
         <span className="bub-stage-note muted">Live preview</span>
+          </>
+        )}
       </div>
       {dirty && (
         <div className="bub-savebar">
