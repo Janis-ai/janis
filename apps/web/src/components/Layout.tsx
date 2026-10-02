@@ -13,7 +13,7 @@ import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
 import {
-  BarChart3, BookOpen, Bot, Bug, Check, ChevronRight, ChevronsUpDown,
+  BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
   CreditCard, FlaskConical, Gauge, Inbox, LayoutGrid, LibraryBig, Megaphone,
   Plug, Radio, Settings, SlidersHorizontal, Sparkles, Users, X,
 } from 'lucide-react';
@@ -209,7 +209,8 @@ function ContextSwitcher({
                         className="ctx-item"
                         onClick={() => onSwitchWorkspace(w.id)}
                       >
-                        {w.name}
+                        <Building2 size={13} className="ctx-ic" />
+                        <span className="grow">{w.name}</span>
                       </button>
                     ))}
                   <button type="button" className="ctx-item" onClick={onCreateWorkspace}>
@@ -217,6 +218,7 @@ function ContextSwitcher({
                   </button>
                   {data!.invites.map((inv) => (
                     <div key={inv.id} className="ctx-item ctx-invite">
+                      <Building2 size={13} className="ctx-ic" />
                       <span className="grow">Invited to {inv.workspace_name}</span>
                       <button type="button" className="btn sm" onClick={() => onAnswerInvite(inv.id, 'accept')}>
                         Join
@@ -233,7 +235,8 @@ function ContextSwitcher({
                       className="ctx-item ctx-invite"
                       onClick={() => onSwitchWorkspace(ai.workspace_id)}
                     >
-                      Join {ai.workspace_name} (agent access)
+                      <Building2 size={13} className="ctx-ic" />
+                      <span className="grow">Join {ai.workspace_name} (agent access)</span>
                     </button>
                   ))}
                 </div>
