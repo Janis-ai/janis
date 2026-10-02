@@ -96,12 +96,12 @@ button, input, select, textarea { font: inherit; }
 }
 .sidebar .nav-sec {
   padding: 10px 20px 2px;
-  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.5px; color: var(--muted);
   display: flex; align-items: center; gap: 6px;
   overflow-wrap: break-word;
 }
-.sidebar a.nav-indent { padding-left: 32px; }
+.sidebar a.nav-indent { padding-left: 40px; }
 /* "Ask Janis" toggle — looks like a nav link but toggles the docked rail */
 .sidebar .ask-toggle {
   display: block; width: 100%; padding: 9px 20px; border: none; background: none;
@@ -725,6 +725,11 @@ textarea:disabled { opacity: .55; }
   .layout.ask-open:has(.conv-layout) .sidebar .brand .brand-mark { display: block; margin: 0 auto; }
   .layout.ask-open:has(.conv-layout) .sidebar a .label, .layout.ask-open:has(.conv-layout) .sidebar .user, .layout.ask-open:has(.conv-layout) .sidebar .ask-toggle .label { display: none; }
   .layout.ask-open:has(.conv-layout) .sidebar a .icon, .layout.ask-open:has(.conv-layout) .sidebar .ask-toggle .icon { display: inline; }
+  /* icon rail: no indent — icons centre like every other row; the agent
+     label collapses to its bot glyph */
+  .layout.ask-open:has(.conv-layout) .sidebar a.nav-indent { padding-left: 0; }
+  .layout.ask-open:has(.conv-layout) .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
+  .layout.ask-open:has(.conv-layout) .sidebar .nav-sec span { display: none; }
   .layout.ask-open:has(.conv-layout) .sidebar .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; }
   .layout.ask-open .conv-layout { flex-direction: column; height: auto; }
   .layout.ask-open .conv-side { width: 100%; }
@@ -837,6 +842,11 @@ details summary:hover { color: var(--text); }
   .sidebar a .label, .sidebar .user, .sidebar .ask-toggle .label { display: none; }
   .sidebar a .icon, .sidebar .ask-toggle .icon { display: inline; }
   .sidebar .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; }
+  /* icon rail on mobile: agent rows drop the indent, the name row collapses
+     to its bot glyph */
+  .sidebar a.nav-indent { padding-left: 0; }
+  .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
+  .sidebar .nav-sec span { display: none; }
   /* the rail goes full-screen on mobile rather than squeezing the main column */
   .ask-rail { position: fixed; left: 60px; right: 0; top: 0; bottom: 0; width: auto; z-index: 85; }
   .main { padding: 14px; overflow-x: hidden; }
