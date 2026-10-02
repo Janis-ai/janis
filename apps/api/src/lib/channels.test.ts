@@ -457,8 +457,16 @@ describe('sendChannelMessage quick replies', () => {
     expect(recipient).toEqual({ id: 'PSID1' });
     expect(message.text).toBe('Welcome!');
     expect(message.quick_replies).toEqual([
-      { content_type: 'text', title: 'Pricing questions', payload: 'Pricing questions' },
-      { content_type: 'text', title: 'Talk to a human', payload: 'Talk to a human' },
+      {
+        content_type: 'text',
+        title: 'Pricing questions',
+        payload: selectMarker('Pricing questions'),
+      },
+      {
+        content_type: 'text',
+        title: 'Talk to a human',
+        payload: selectMarker('Talk to a human'),
+      },
     ]);
   });
 
@@ -471,7 +479,7 @@ describe('sendChannelMessage quick replies', () => {
     const { message } = lastBody(fetchMock);
     expect(message.quick_replies).toEqual([
       { content_type: 'user_email' },
-      { content_type: 'text', title: 'No thanks', payload: 'No thanks' },
+      { content_type: 'text', title: 'No thanks', payload: selectMarker('No thanks') },
     ]);
 
     fetchMock.mockClear();
@@ -481,7 +489,7 @@ describe('sendChannelMessage quick replies', () => {
     const ig = lastBody(fetchMock);
     // IG quick replies are text-only — the ask is dropped, the label remains
     expect(ig.message.quick_replies).toEqual([
-      { content_type: 'text', title: 'No thanks', payload: 'No thanks' },
+      { content_type: 'text', title: 'No thanks', payload: selectMarker('No thanks') },
     ]);
   });
 
@@ -494,10 +502,18 @@ describe('sendChannelMessage quick replies', () => {
     const body = lastBody(fetchMock);
     expect(body.type).toBe('interactive');
     expect(body.interactive.body.text).toBe('Hi!');
+    // Titles display-truncate at Meta's 20-char cap; the marker id carries
+    // the full label so the tap resolves it whole.
     expect(body.interactive.action.buttons).toEqual([
-      { type: 'reply', reply: { id: 'qr_0', title: 'A very long reply ti' } },
-      { type: 'reply', reply: { id: 'qr_1', title: 'B' } },
-      { type: 'reply', reply: { id: 'qr_2', title: 'C' } },
+      {
+        type: 'reply',
+        reply: {
+          id: selectMarker('A very long reply title that gets cut').slice(0, 256),
+          title: 'A very long reply ti',
+        },
+      },
+      { type: 'reply', reply: { id: selectMarker('B'), title: 'B' } },
+      { type: 'reply', reply: { id: selectMarker('C'), title: 'C' } },
     ]);
   });
 

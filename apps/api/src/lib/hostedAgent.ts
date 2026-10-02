@@ -568,13 +568,26 @@ export function extractButtons(text: string): {
       }
       const m = line.trim().match(/^BUTTONS?:\s*(.+)$/i);
       if (m && buttons.length < 4) {
-        const label = [...m[1].trim()].slice(0, 20).join('');
+        const label = clampButtonLabel(m[1].trim());
         if (label) buttons.push(label);
       }
       return !ask && !m;
     })
     .join('\n');
   return { text: out.trim(), buttons };
+}
+
+/** Meta display-caps button titles at 20 chars, but that truncation belongs
+ * in the channel adapters — a label sliced here was also mangled in webchat
+ * and Ask Janis, and Meta taps echoed the cut text. Keep the full label so
+ * taps resolve it whole; 60 chars is a sanity bound, trimmed at a word
+ * boundary so overflow never ends mid-word. */
+function clampButtonLabel(label: string): string {
+  const chars = [...label];
+  if (chars.length <= 60) return label;
+  const win = chars.slice(0, 60).join('');
+  const cut = win.lastIndexOf(' ');
+  return (cut > 0 ? win.slice(0, cut) : win).trimEnd();
 }
 
 // ── Unbacked action claims ───────────────────────────────────────────────

@@ -158,6 +158,11 @@ export interface AttachmentRef {
  *  sees "[tapped]"-annotated history. `l` = the full label (postback titles
  *  truncate at 20 chars), `of` = which card/widget it sat on. */
 const SELECT_MARKER = 'janis:sel:';
+/** Meta/WhatsApp hard-cap button titles at 20 CHARACTERS — slice by code
+ * point so an emoji never gets cut mid-surrogate-pair into mojibake.
+ * Display-only: payloads/ids carry the full label so taps resolve whole. */
+export const qrTitle = (t: string) => [...t].slice(0, 20).join('');
+
 export function selectMarker(label: string, of?: string): string {
   return (
     SELECT_MARKER +
@@ -608,12 +613,10 @@ export async function sendChannelMessage(
         ? `*${opts.senderName}:* ${text}`
         : `${opts.senderName}: ${text}`
       : text;
-  // Meta/whatsApp title cap is 20 CHARACTERS — slice by code point so an
-  // emoji never gets cut mid-surrogate-pair into mojibake
+  // Keep full labels — Meta/WhatsApp titles get display-truncated at the
+  // send sites below while the payload/id carries the whole label back.
   const qrs = (opts?.quickReplies ?? [])
-    .map((t): QuickReply | null =>
-      typeof t === 'string' ? [...t.trim()].slice(0, 20).join('') || null : t,
-    )
+    .map((t): QuickReply | null => (typeof t === 'string' ? t.trim() || null : t))
     .filter((t): t is QuickReply => t !== null);
   if (channel.kind === 'whatsapp') {
     const send = async (body: unknown): Promise<SendResult> => {
@@ -676,9 +679,11 @@ export async function sendChannelMessage(
       let buttons = qrs
         .filter((q): q is string => typeof q === 'string')
         .slice(0, 3)
-        .map((title, i) => ({
+        .map((title) => ({
           type: 'reply',
-          reply: { id: `qr_${i}`, title },
+          // selectMarker in the id so the tap echoes the FULL label —
+          // the 20-char title is display-only.
+          reply: { id: selectMarker(title).slice(0, 256), title: qrTitle(title) },
         }));
       // Interactive-button bodies cap at 1024 chars (plain text gets 4096).
       // A longer reply splits at the last newline — head goes out as plain
@@ -840,12 +845,16 @@ export async function sendChannelMessage(
       channel.kind === 'messenger'
         ? qrs.map((q) =>
             typeof q === 'string'
-              ? { content_type: 'text', title: q, payload: q }
+              ? { content_type: 'text', title: qrTitle(q), payload: selectMarker(q).slice(0, 1000) }
               : { content_type: q.type === 'email' ? 'user_email' : 'user_phone_number' },
           )
         : qrs
             .filter((q): q is string => typeof q === 'string')
-            .map((title) => ({ content_type: 'text', title, payload: title }));
+            .map((title) => ({
+              content_type: 'text',
+              title: qrTitle(title),
+              payload: selectMarker(title).slice(0, 1000),
+            }));
     return mapped.length
       ? { text: body, quick_replies: mapped.slice(0, 13) }
       : { text: body };

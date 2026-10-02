@@ -491,12 +491,18 @@ describe('extractButtons', () => {
     expect(r.buttons).toEqual(['Sure, take it', 'Not now']);
   });
 
-  it('caps at 4 buttons and 20-char labels', () => {
+  it('caps at 4 buttons and keeps labels intact past 20 chars', () => {
     const r = extractButtons(
-      'pick one\nBUTTON: a\nBUTTON: a very long button label here\nBUTTON: c\nBUTTON: d\nBUTTON: e',
+      'pick one\nBUTTON: a\nBUTTON: No, try something else\nBUTTON: c\nBUTTON: d\nBUTTON: e',
     );
-    expect(r.buttons).toEqual(['a', 'a very long button l', 'c', 'd']);
+    expect(r.buttons).toEqual(['a', 'No, try something else', 'c', 'd']);
     expect(r.text).toBe('pick one');
+  });
+
+  it('word-boundary-trims pathological labels past 60 chars', () => {
+    const long = 'this button label is far too long to ever fit on a chat chip anywhere';
+    const r = extractButtons(`x\nBUTTON: ${long}`);
+    expect(r.buttons).toEqual(['this button label is far too long to ever fit on a chat']);
   });
 
   it('turns ASK lines into contact-field quick replies', () => {
