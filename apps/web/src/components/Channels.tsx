@@ -169,15 +169,17 @@ export function ChannelCard({
       )}
       {ch.kind === 'webchat' && (
         <>
-          <CodeBlock
-            title="Embed — paste before </body> on your site"
-            code={`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
-          />
           <details className="webhook-details" style={{ marginTop: 8 }}>
             <summary>
               <span className="details-title">Developer</span>
-              <span className="details-sub">signed visitor identity — only needed if your site verifies logged-in users</span>
+              <span className="details-sub">embed snippet + signed visitor identity</span>
             </summary>
+            <div style={{ marginTop: 10 }}>
+              <CodeBlock
+                title="Embed — paste before </body> on your site"
+                code={`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
+              />
+            </div>
             <WebchatIdentity channel={ch} />
           </details>
           <details className="webhook-details appearance-details" open style={{ marginTop: 8 }}>
