@@ -20,7 +20,7 @@ import { SavedWidgets } from '../components/WidgetComposer';
 import { railBus } from '../lib/railBus';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { RefreshCw, Trash2, X } from 'lucide-react';
+import { RefreshCw, Trash2, Upload, X } from 'lucide-react';
 
 const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert', 'auto_assign'] as const;
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
@@ -2194,6 +2194,7 @@ function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string; varia
     queryFn: () => api<{ files: KnowledgeFile[] }>(`/api/agents/${agentId}/knowledge`),
   });
   const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [error, setError] = useState('');
 
   const upload = async (list: FileList | null) => {
@@ -2301,10 +2302,33 @@ function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string; varia
         </div>
       ))}
       {!showWebsites && (
-        <div className="row" style={{ marginTop: 8 }}>
+        <label
+          className={`drop-zone${dragging ? ' over' : ''}${uploading ? ' busy' : ''}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (!uploading) setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            if (!uploading) void upload(e.dataTransfer.files);
+          }}
+        >
+          <Upload size={18} />
+          <span>
+            <strong>{uploading ? 'Extracting…' : 'Drop files here or click to upload'}</strong>
+            <span className="muted drop-zone-hint">
+              The agent answers from their contents — docs, FAQs, price lists, policies.
+            </span>
+            <span className="muted drop-zone-types">
+              PDF · DOCX · TXT · MD · CSV · JSON · XML · HTML · YAML · PNG · JPG · WEBP · GIF
+            </span>
+          </span>
           <input
             type="file"
             multiple
+            hidden
             disabled={uploading}
             accept=".pdf,.docx,.txt,.md,.csv,.json,.xml,.html,.log,.yaml,.yml,.png,.jpg,.jpeg,.webp,.gif"
             onChange={(e) => {
@@ -2312,8 +2336,7 @@ function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string; varia
               e.target.value = '';
             }}
           />
-          {uploading && <span className="muted">extracting…</span>}
-        </div>
+        </label>
       )}
       {showWebsites && (
       <>

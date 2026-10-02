@@ -1205,3 +1205,16 @@ input[type=color].swatch::-moz-color-swatch { border: none; border-radius: 5px; 
 }
 .scope-picker select:focus { outline: none; }
 .scope-picker:focus-within { border-color: var(--accent); }
+
+/* Knowledge-file drop zone — replaces the bare file input with guidance
+   and click/drag-drop affordance. */
+.drop-zone {
+  display: flex; align-items: center; gap: 12px; margin-top: 12px;
+  border: 1.5px dashed var(--border); border-radius: 10px;
+  padding: 14px 16px; cursor: pointer; color: var(--muted);
+  transition: border-color 0.15s, background 0.15s;
+}
+.drop-zone:hover, .drop-zone.over { border-color: var(--accent); background: var(--panel-2); color: var(--accent); }
+.drop-zone.busy { cursor: progress; }
+.drop-zone .drop-zone-hint { display: block; font-size: 12.5px; margin-top: 1px; }
+.drop-zone .drop-zone-types { display: block; font-size: 11px; margin-top: 3px; letter-spacing: 0.2px; }
