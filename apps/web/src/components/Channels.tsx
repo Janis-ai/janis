@@ -215,8 +215,6 @@ export function ChannelCard({
               channel={ch}
               tabs={bubTabs}
               stage={bubTab === 'deploy' ? deployEl : undefined}
-              onRemove={() => void doRemove()}
-              removePending={remove.isPending}
             />
           </>
         );
@@ -665,15 +663,11 @@ function WebchatBranding({
   channel,
   tabs,
   stage,
-  onRemove,
-  removePending,
 }: {
   channel: Channel;
   tabs?: ReactNode;
   /** Replaces the live-preview canvas (the Deploy tab's content). */
   stage?: ReactNode;
-  onRemove?: () => void;
-  removePending?: boolean;
 }) {
   const qc = useQueryClient();
   const b = channel.meta.branding ?? {};
@@ -1124,21 +1118,6 @@ function WebchatBranding({
         </div>
       )}
       {!dirty && msg && <div className="bub-msg muted">{msg}</div>}
-      {onRemove && (
-        <div className="row" style={{ justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
-          <button
-            type="button"
-            className="btn danger"
-            disabled={removePending}
-            onClick={onRemove}
-          >
-            {removePending ? 'Removing…' : 'Remove'}
-          </button>
-          {/* The savebar above already offers Save when dirty — only show a
-              persistent one while clean. */}
-          {!dirty && <button className="btn save" type="submit">Save changes</button>}
-        </div>
-      )}
     </form>
   );
 }
