@@ -30,11 +30,38 @@ export default function Composer({
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [repliesOpen, setRepliesOpen] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const { data: savedReplies } = useSavedReplies(agentId);
+
+  // Dismiss the emoji/replies popovers on Escape or a click outside the
+  // composer — re-clicking the trigger button is not the obvious close path.
+  useEffect(() => {
+    if (!emojiOpen && !repliesOpen) return;
+    const close = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) {
+        setEmojiOpen(false);
+        setRepliesOpen(false);
+      }
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setEmojiOpen(false);
+        setRepliesOpen(false);
+      }
+    };
+    // Capture phase: the emoji picker's keydown handler stops propagation
+    // (to shield the composer's Enter-to-send) — capture still sees Escape.
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', esc, true);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', esc, true);
+    };
+  }, [emojiOpen, repliesOpen]);
 
   // autosize: grow with content up to ~8 lines; no scrollbar until it overflows
   useEffect(() => {
@@ -105,7 +132,7 @@ export default function Composer({
   };
 
   return (
-    <div className="composer-box">
+    <div className="composer-box" ref={boxRef}>
       {attachments.length > 0 && (
         <div className="attach-list">
           {attachments.map((a, i) => (
@@ -189,6 +216,17 @@ export default function Composer({
       {emojiOpen && <EmojiPicker onPick={insertEmoji} />}
       {repliesOpen && (
         <div className="emoji-pop reply-pop">
+          <div className="row" style={{ padding: '4px 8px 0', alignItems: 'center' }}>
+            <span className="muted grow" style={{ fontSize: 11.5 }}>Saved replies</span>
+            <button
+              type="button"
+              className="btn icon sm"
+              aria-label="Close saved replies"
+              onClick={() => setRepliesOpen(false)}
+            >
+              <X size={13} />
+            </button>
+          </div>
           {savedReplies?.saved_replies.map((r) => (
             <button key={r.id} type="button" className="reply-item" onClick={() => insertText(r.body)}>
               <strong>{r.title}</strong>

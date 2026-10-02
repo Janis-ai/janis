@@ -669,6 +669,37 @@ drizzle-kit/workbox-build, nothing to drop directly).
 - Model-honesty backstop: see "Reply-claim verifier" under Reliability —
   same check applies to concierge card-claim phrasing.
 
+**App hierarchy redesign (agreed 2026-10-02, not yet built)** — Chatbase-style
+context switcher, but the workspace stays a real surface (unlike Chatbase's
+admin-only workspace level; contacts merge cross-channel so agent-scoping
+the identity graph is wrong):
+- Top-left switcher popover: workspace block (avatar, name, plan badge,
+  Usage, Workspace settings, Switch/Create-or-join workspace) + Agents
+  list (check on selected) + Add agent.
+- Copilot (Ask Janis) is ever-present at the TOP of BOTH contexts; when an
+  agent is selected the concierge is agent-scoped (its tools default to
+  that agent, "this agent" resolves).
+- WORKSPACE context nav: Agents · Inbox (all agents — the triage queue) ·
+  Contacts (full identity graph) · Campaigns · Reports · Usage ·
+  Workspace settings (General/Members/Plans/Billing/API keys/Audit).
+- AGENT context nav: Copilot · Inbox (filtered to agent; toggling to
+  another agent there switches whole app context) · Behavior (tabs: LLM,
+  Greeting + greeting quick-replies/cards, System prompt, Tone,
+  Satisfaction survey incl. auto-archive toggle) · Knowledge base (tabs:
+  Text, Files, Websites, Gaps, Help center) · Channels · Integrations
+  (renamed from Tools) · Chat components (own level, below Integrations) ·
+  Tests · Contacts (filtered) · Campaigns (filtered) · Reports (filtered) ·
+  Usage (filtered) · Settings (current Escalation tab contents).
+- Sub-sections are TABS inside the page (reuse ?tab= pattern), not
+  expandable sidebar groups.
+- Saved replies: workspace-level AND agent-level — agent replies add to /
+  override the workspace set. (New: agent-scoped saved_replies + merge.)
+- Deliberately NOT copying: Playground (redundant — channels are testable
+  in place; TODO: agent preview surface in a later phase), Backstage name.
+- Default landing when an agent is selected: Copilot (the concierge was
+  Janis's original front door — legacy concierge lived in web+Slack before
+  Chatbase existed; wiring it into Slack/iMessage again is a revival TODO).
+
 **In-conversation widgets — delivery taxonomy (added 2026-10-02)**
 - Four emission paths, resolved in order at reply time: tool-bound widgets
   (ToolDef.widget maps a tool result to a spec — most deterministic, model
@@ -704,6 +735,14 @@ drizzle-kit/workbox-build, nothing to drop directly).
   interpolateSpec/specProps/stripEmptyStrings in widgets.ts. Greeting pins
   interpolate empty — a placeholder spec fails validation and drops rather
   than leaking "{status}" to visitors.
+  TODO (owner feedback: current binding UX is unintuitive): convention-first
+  simplify — {path} placeholders dig straight into the tool's JSON result
+  (drop tool.props/item_map); cards/options take a single "rows" path with
+  per-row template interpolation (or auto-detect first array); ref data keys
+  pass through as tool args by name (drop the args rename map, digest lists
+  the tool's declared params so the model writes them correctly — identity
+  params like email still auto-fill); composer shows the tool's params and a
+  sample-data preview instead of the raw mapping JSON.
 
 **Done so far** (don't rebuild): voice (BYO + hosted via Twilio subaccounts),
 CSAT on archive, Shopify/HubSpot/Zendesk/Stripe/Cal.com/iTunes/webhook tool
