@@ -9,7 +9,12 @@ import type { Context } from 'hono';
 export function reportError(err: unknown, c?: Context) {
   const entry: Record<string, unknown> = {
     severity: 'ERROR',
+    // drizzle wraps driver failures ("Failed query: …") with the real
+    // PostgresError on .cause — the wrapper alone hides the actual code.
     message: err instanceof Error ? (err.stack ?? err.message) : String(err),
+    ...(err instanceof Error && err.cause instanceof Error
+      ? { cause: err.cause.stack ?? err.cause.message }
+      : {}),
   };
   if (c) {
     entry.context = {

@@ -3,13 +3,13 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
-import { eq } from 'drizzle-orm';
+import { desc, eq, like } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { errorReports, memberships, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken, hashPassword } from '../lib/crypto.js';
 import { env } from '../env.js';
-import { errorReportIngest, errorReportRoutes } from './errorReports.js';
+import { errorReportIngest, errorReportRoutes, recordApiError } from './errorReports.js';
 
 let db: Db;
 let api: Hono;
@@ -113,6 +113,26 @@ describe('error reports', () => {
     const { report } = await detail.json();
     expect(report.payload.console_tail).toEqual(['error: kaboom']);
     expect(report.payload.failed_requests[0].status).toBe(500);
+  });
+
+  it('api errors fold in err.cause — drizzle wraps the real Postgres error', async () => {
+    const cause = new Error('prepared statement "timeline_42" does not exist');
+    const err = new Error('Failed query: select ... from "conversations"', { cause });
+    // recordApiError is intentionally fire-and-forget — poll for the row.
+    recordApiError(db, err, { req: { url: 'https://x.test/api/t', header: () => 't' } } as never);
+    let row;
+    for (let i = 0; i < 50 && !row; i++) {
+      [row] = await db
+        .select()
+        .from(errorReports)
+        .where(like(errorReports.message, 'Failed query%'))
+        .orderBy(desc(errorReports.createdAt))
+        .limit(1);
+      if (!row?.message.includes('prepared statement')) row = undefined;
+      if (!row) await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(row?.message).toContain('prepared statement "timeline_42" does not exist');
+    expect(row?.stack).toContain('Caused by:');
   });
 
   it('denies every read to non-operator workspaces', async () => {

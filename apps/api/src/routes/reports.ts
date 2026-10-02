@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, asc, desc, eq, gte, inArray, lt, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import {
@@ -676,7 +676,12 @@ export function reportRoutes(db: Db) {
       .where(
         and(
           ...scope,
-          sql`((${conversations.createdAt} >= ${cutoff} and ${conversations.createdAt} < ${end}) or (${conversations.archivedAt} >= ${cutoff} and ${conversations.archivedAt} < ${end}))`,
+          // Raw sql`` fragments can't serialize Date params (postgres-js
+          // throws ERR_INVALID_ARG_TYPE) — typed comparators can.
+          or(
+            and(gte(conversations.createdAt, cutoff), lt(conversations.createdAt, end)),
+            and(gte(conversations.archivedAt, cutoff), lt(conversations.archivedAt, end)),
+          ),
           ...drillFilters(c),
         ),
       );

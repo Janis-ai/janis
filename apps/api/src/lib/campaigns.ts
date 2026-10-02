@@ -107,7 +107,9 @@ export async function segmentConditions(
   if (seg.active_within_days) {
     const cutoff = new Date(Date.now() - seg.active_within_days * 86_400_000);
     conds.push(
-      sql`exists (select 1 from ${conversations} cv where cv.contact_id = ${contacts.id} and cv.last_message_at > ${cutoff})`,
+      // ISO string, not the Date — postgres-js can't serialize Date params
+      // inside raw sql`` fragments (ERR_INVALID_ARG_TYPE).
+      sql`exists (select 1 from ${conversations} cv where cv.contact_id = ${contacts.id} and cv.last_message_at > ${cutoff.toISOString()})`,
     );
   }
   if (seg.never_replied) {

@@ -166,8 +166,16 @@ export function errorReportIngest(db: Db) {
  *  500 lands in the same report list the client errors do. Never throws;
  *  a DB that can't take the insert must not break the error response. */
 export function recordApiError(db: Db, err: unknown, c: Parameters<typeof getCookie>[0]) {
-  const message = err instanceof Error ? err.message : String(err);
-  const stack = err instanceof Error ? err.stack : undefined;
+  let message = err instanceof Error ? err.message : String(err);
+  let stack = err instanceof Error ? err.stack : undefined;
+  // drizzle wraps driver failures in "Failed query: …" with the real
+  // PostgresError on .cause — fold it in or the report is undiagnosable.
+  const cause = err instanceof Error ? err.cause : undefined;
+  if (cause instanceof Error) {
+    const cMsg = `${cause.name}: ${cause.message}`;
+    if (!message.includes(cause.message)) message = `${message}\ncause: ${cMsg}`;
+    stack = `${stack ?? ''}\nCaused by: ${cause.stack ?? cMsg}`;
+  }
   const url = (c as { req?: { url?: string } }).req?.url;
   void sessionFor(db, c)
     .catch(() => null)
