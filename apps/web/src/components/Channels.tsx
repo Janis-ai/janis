@@ -168,9 +168,9 @@ export function ChannelCard({
           </a>
         </div>
       )}
-      {ch.kind === 'webchat' && (
-        <>
-          <div className="bub-seg bub-tabs">
+      {ch.kind === 'webchat' && (() => {
+        const bubTabs = (
+          <div className="bub-seg bub-tabs" role="tablist">
             <button
               type="button"
               className={bubTab === 'preview' ? 'on' : ''}
@@ -186,9 +186,12 @@ export function ChannelCard({
               Deploy
             </button>
           </div>
-          {bubTab === 'preview' ? (
-            <WebchatBranding channel={ch} />
-          ) : (
+        );
+        return bubTab === 'preview' ? (
+          <WebchatBranding channel={ch} tabs={bubTabs} />
+        ) : (
+          <>
+            {bubTabs}
             <div className="bub-deploy">
               <div>
                 <strong style={{ fontSize: 13 }}>Install the bubble</strong>
@@ -203,9 +206,9 @@ export function ChannelCard({
               />
               <WebchatIdentity channel={ch} />
             </div>
-          )}
-        </>
-      )}
+          </>
+        );
+      })()}
       {ch.kind === 'email' && ch.meta.inbound_address && (
         <details className="webhook-details" open style={{ marginTop: 8 }}>
           <summary>
@@ -646,7 +649,7 @@ function BubSwitch({
 /** Webchat bubble appearance editor — PATCHes display config on the channel.
  *  Chatbase-inspired: sectioned controls left, live preview right, sticky
  *  unsaved-changes bar. */
-function WebchatBranding({ channel }: { channel: Channel }) {
+function WebchatBranding({ channel, tabs }: { channel: Channel; tabs?: ReactNode }) {
   const qc = useQueryClient();
   const b = channel.meta.branding ?? {};
   const initial = {
@@ -1038,6 +1041,7 @@ function WebchatBranding({ channel }: { channel: Channel }) {
         </details>
       </div>
       <div className="bub-stage">
+        {tabs}
         <div className="bub-canvas">
           <WidgetPreview
             accent={normHex(f.accent)}
