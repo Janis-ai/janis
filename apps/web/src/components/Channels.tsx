@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Sun, Moon, Monitor } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -730,7 +730,6 @@ function WebchatBranding({
   // published articles — the preview should reflect that.
   const { data: agents } = useAgents();
   const externalHelp = agents?.agents.find((a) => a.id === channel.agent_id)?.config?.help_url;
-  const showHelp = f.show_help_link && (hasHelp || !!externalHelp);
   const [msg, setMsg] = useState('');
   const uploadLogo = async (file: File) => {
     setMsg('Uploading…');
@@ -1078,26 +1077,37 @@ function WebchatBranding({
         {stage ?? (
           <>
         <div className="bub-canvas">
-          <WidgetPreview
-            accent={normHex(f.accent)}
-            title={f.title || channel.name}
-            subtitle={f.subtitle || `${channel.agent_name} · replies in seconds`}
-            greeting={f.greeting}
-            logo_url={f.logo_url}
-            logo_padding={f.logo_padding}
-            logo_radius={f.logo_radius}
-            logo_border_width={f.logo_border_width}
-            logo_border_color={f.logo_border_color}
-            quick_replies={parseReplies(f.quick_replies)}
-            position={f.position}
-            radius={f.radius}
-            theme={f.theme}
-            hidePoweredBy={f.hide_powered_by && !freePlan}
-            agentName={channel.agent_name}
-            hasHelp={showHelp}
+          <LiveBubble
+            channel={channel}
+            branding={{
+              title: f.title,
+              subtitle: f.subtitle === '' ? null : f.subtitle,
+              ...( /^#[0-9a-fA-F]{6}$/.test(f.accent) ? { accent: f.accent } : {} ),
+              position: f.position,
+              radius: f.radius,
+              logo_url: f.logo_url,
+              logo_padding: f.logo_padding,
+              logo_radius: f.logo_radius,
+              logo_border_width: f.logo_border_width,
+              logo_border_color: f.logo_border_color,
+              quick_replies: parseReplies(f.quick_replies),
+              theme: f.theme,
+              hide_powered_by: f.hide_powered_by && !freePlan,
+              proactive: f.proactive,
+              proactive_delay: f.proactive_delay,
+              teaser_text: f.teaser_text,
+              sound: f.sound,
+              dictation: f.dictation,
+              dictation_engine: f.dictation_advanced ? 'llm' : 'browser',
+              // '' means "use the agent's greeting" — omit so the bootstrap
+              // value survives; the field only overrides when non-empty.
+              ...(f.greeting ? { greeting: f.greeting } : {}),
+              // help_url is computed server-side — the toggle can only hide it.
+              ...(f.show_help_link ? {} : { help_url: null }),
+            }}
           />
         </div>
-        <span className="bub-stage-note muted">Live preview</span>
+        <span className="bub-stage-note muted">Live preview — a working chat against this agent</span>
           </>
         )}
       </div>
@@ -1125,127 +1135,46 @@ function WebchatBranding({
   );
 }
 
-/** Static mock of the embedded widget — mirrors public/widget.js 1:1 so the
- *  operator sees exactly what ships: header (logo only when set), greeting
- *  with author label, quick replies, composer with attach/emoji/Send, the
- *  help-center link when articles exist, the powered-by footer, and the
- *  launcher bubble below the panel on the configured side. */
-function WidgetPreview({
-  accent,
-  title,
-  subtitle,
-  greeting,
-  logo_url,
-  logo_padding,
-  logo_radius,
-  logo_border_width,
-  logo_border_color,
-  quick_replies,
-  position,
-  radius,
-  theme,
-  hidePoweredBy,
-  agentName,
-  hasHelp,
+/** Live bubble preview — the real widget.js running in an API-hosted
+ *  iframe page (/chat/:token/page). Draft branding streams in over postMessage
+ *  ('janis:preview') so unsaved editor changes restyle it live; visitor
+ *  messages hit the real channel pipeline, so preview chats land in the
+ *  inbox as a normal visitor conversation (stable preview visitor id). */
+function LiveBubble({
+  channel,
+  branding,
 }: {
-  accent: string;
-  title: string;
-  subtitle: string;
-  greeting: string;
-  logo_url: string;
-  logo_padding: number;
-  logo_radius: number;
-  logo_border_width: number;
-  logo_border_color: string;
-  quick_replies: string[];
-  position: 'left' | 'right';
-  radius: number;
-  theme: 'light' | 'dark' | 'auto';
-  hidePoweredBy: boolean;
-  agentName: string;
-  hasHelp: boolean;
+  channel: Channel;
+  branding: Record<string, unknown>;
 }) {
-  // Neutral palette — mirrors the hardcoded values in public/widget.js.
-  const dark =
-    theme === 'dark' ||
-    (theme === 'auto' && window.matchMedia?.('(prefers-color-scheme: dark)').matches);
-  const pal = dark
-    ? { panel: '#1f2937', msgs: '#111827', out: '#374151', text: '#f3f4f6', muted: '#6b7280', border: '#374151', help: '#60a5fa', author: '#93c5fd' }
-    : { panel: '#fff', msgs: '#f9fafb', out: '#e5e7eb', text: '#1f2937', muted: '#9ca3af', border: '#e5e7eb', help: '#2563eb', author: '#1e40af' };
-  const tileStyle: CSSProperties = {
-    borderRadius: logo_radius,
-    padding: logo_padding,
-    // Inset logos float on the header colour — the white matte only backs
-    // edge-to-edge letterboxing (mirrors widget.js).
-    background: logo_padding > 0 ? 'transparent' : '#fff',
-    objectFit: 'contain',
-    border: logo_border_width ? `${logo_border_width}px solid ${logo_border_color}` : undefined,
+  const frame = useRef<HTMLIFrameElement>(null);
+  const apiOrigin =
+    window.location.hostname === 'localhost' ? 'http://localhost:8787' : window.location.origin;
+  const json = JSON.stringify(branding);
+  const push = () => {
+    frame.current?.contentWindow?.postMessage(
+      { type: 'janis:preview', branding: JSON.parse(json) },
+      apiOrigin,
+    );
   };
+  useEffect(() => {
+    const t = setTimeout(push, 300);
+    return () => clearTimeout(t);
+  }, [json, apiOrigin]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="wp-stage">
-      <div className="widget-preview" style={{ background: pal.panel, color: pal.text, borderRadius: radius }}>
-        <div className="wp-head" style={{ background: accent }}>
-          {logo_url && <img src={logo_url} alt="" className="wp-logo" style={tileStyle} />}
-          <div className="grow">
-            <div className="wp-title">{title}</div>
-            {subtitle && <div className="wp-sub">{subtitle}</div>}
-          </div>
-          <span className="wp-expand" title="Expand">⤢</span>
-        </div>
-        <div className="wp-body" style={{ background: pal.msgs }}>
-          {greeting && (
-            <div className="wp-msg-wrap">
-              <div className="wp-author" style={{ color: pal.author }}>{agentName}</div>
-              <div className="wp-msg wp-msg-out" style={{ background: pal.out, color: pal.text }}>
-                {greeting}
-              </div>
-            </div>
-          )}
-          <div className="wp-msg wp-msg-in" style={{ background: accent }}>
-            Hi — how much is the pro plan?
-          </div>
-          {quick_replies.length > 0 && (
-            <div className="wp-qr">
-              {quick_replies.map((q) => (
-                <span key={q} className="wp-qr-btn" style={{ borderColor: accent, color: accent }}>
-                  {q}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="wp-foot" style={{ background: pal.panel, borderTopColor: pal.border }}>
-          <span className="wp-ico" style={{ color: pal.muted }}>📎</span>
-          <span className="wp-ico" style={{ color: pal.muted }}>😊</span>
-          <span className="wp-input" style={{ color: pal.muted }}>Type a message…</span>
-          <span className="wp-ico" style={{ color: pal.muted, display: 'flex' }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-          </span>
-          <span className="wp-send" style={{ background: accent }}>Send</span>
-        </div>
-        {hasHelp && (
-          <div className="wp-help" style={{ background: pal.panel, borderTopColor: pal.border, color: pal.help }}>
-            Browse help articles
-          </div>
-        )}
-        {!hidePoweredBy && (
-          <div className="wp-power" style={{ background: pal.panel, color: pal.muted }}>
-            Powered by Janis
-          </div>
-        )}
-      </div>
-      <div className="wp-launcher" style={{ justifyContent: position === 'left' ? 'flex-start' : 'flex-end' }}>
-        <div className="wp-bubble" style={{ background: accent }}>
-          {logo_url ? (
-            <img
-              src={logo_url}
-              alt=""
-              style={logo_padding > 0 ? { width: `calc(100% - ${logo_padding * 2}px)`, height: `calc(100% - ${logo_padding * 2}px)` } : undefined}
-            />
-          ) : '💬'}
-        </div>
-      </div>
-    </div>
+    <iframe
+      ref={frame}
+      className="bub-live"
+      src={`${apiOrigin}/chat/${channel.id}/page`}
+      title="Live bubble preview"
+      // The widget only listens for preview config after its bootstrap fetch
+      // resolves — retry a few times so the first draft lands regardless.
+      onLoad={() => {
+        push();
+        setTimeout(push, 600);
+        setTimeout(push, 1500);
+      }}
+    />
   );
 }
 

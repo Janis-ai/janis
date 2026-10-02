@@ -442,6 +442,21 @@ export function webchatRoutes(db: Db) {
     });
   });
 
+  // Console preview host page — a bare document embedding this channel's
+  // widget. The Bubble editor iframes it so the live preview runs the real
+  // widget against the real pipeline, not a mock.
+  app.get('/:token/page', async (c) => {
+    const channel = await findChannel(db, c.req.param('token'));
+    if (!channel || channel.kind !== 'webchat') return c.json({ error: 'not found' }, 404);
+    c.header('cache-control', 'no-store');
+    return c.html(
+      `<!doctype html><html><head><meta charset="utf-8">` +
+        `<style>html,body{margin:0;background:transparent}</style></head><body>` +
+        `<script src="/widget.js" data-janis-token="${channel.id}" data-janis-preview="1" async><\/script>` +
+        `</body></html>`,
+    );
+  });
+
   // Send a visitor message — runs through the same ingest/agent pipeline.
   app.post('/:token/messages', zValidator('json', postMessage), async (c) => {
     const channel = await findChannel(db, c.req.param('token'));

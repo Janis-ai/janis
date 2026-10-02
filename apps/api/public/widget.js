@@ -14,11 +14,24 @@
   var LS_EXPANDED = 'janis_expanded_' + TOKEN;
   var LS_SEEN = 'janis_seen_' + TOKEN;   // read watermark for the unread badge
   var SS_TEASER = 'janis_teaser_' + TOKEN; // teaser dismissed this session
+  // Console live-preview (the Bubble editor's iframe): auto-opens the panel,
+  // chats as a stable preview visitor, and restyles live on postMessage.
+  var PREVIEW = script.getAttribute('data-janis-preview') === '1';
   var visitor = localStorage.getItem(LS_VISITOR);
   if (!visitor) {
     visitor = (crypto.randomUUID ? crypto.randomUUID() :
       'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 18)).replace(/-/g, '');
     localStorage.setItem(LS_VISITOR, visitor);
+  }
+  if (PREVIEW) {
+    // Stable preview visitor per browser+channel — test chats share one
+    // thread instead of spawning a fresh conversation per editor load.
+    visitor = localStorage.getItem('janis_preview_' + TOKEN);
+    if (!visitor) {
+      visitor = ('preview' + (crypto.randomUUID ? crypto.randomUUID() :
+        'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 18))).replace(/-/g, '').slice(0, 64);
+      localStorage.setItem('janis_preview_' + TOKEN, visitor);
+    }
   }
 
   var state = {
@@ -1299,7 +1312,7 @@
           state.greeted = true;
           if (!d.messages.length && !state.outbox.length) {
             if (state.config && state.config.greeting) {
-              addMsg({
+              state.greetEl = addMsg({
                 direction: 'out',
                 text: state.config.greeting,
                 created_at: null,
@@ -1792,68 +1805,6 @@
   fetch(API + '/chat/' + TOKEN, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (cfg) {
     if (!cfg) return;
     state.config = cfg;
-    // Dictation is opt-in per channel (it's metered on Janis's keys) — the
-    // mic shows only when bootstrap says the channel enabled it.
-    // Browser-engine dictation needs Web Speech (absent on Firefox, patchy
-    // on Safari); server dictation needs MediaRecorder capture.
-    if (micBtn && cfg.dictation === true && (dictEngine() === 'webspeech' ? hasSpeechRec : canDictate))
-      micBtn.style.display = '';
-    if (cfg.accent) {
-      accent = cfg.accent;
-      bubble.style.background = accent;
-      document.documentElement.style.setProperty('--janis-accent', accent);
-      panel.querySelector('#janis-head').style.background = accent;
-    } else {
-      document.documentElement.style.setProperty('--janis-accent', accent);
-      panel.querySelector('#janis-head').style.background = accent;
-    }
-    // Corner radius — panel + teaser share the --janis-radius var.
-    if (cfg.radius != null)
-      document.documentElement.style.setProperty('--janis-radius', cfg.radius + 'px');
-    panel.querySelector('#janis-title').textContent = cfg.title || cfg.name || 'Chat';
-    panel.querySelector('#janis-sub').textContent =
-      cfg.subtitle !== null && cfg.subtitle !== undefined
-        ? cfg.subtitle
-        : cfg.agent_name
-          ? cfg.agent_name + ' · replies in seconds'
-          : '';
-    if (cfg.logo_url) {
-      // Uploaded logos are /uploads/… paths on the API origin, not the host page's.
-      var logoSrc = /^https?:\/\//.test(cfg.logo_url) ? cfg.logo_url : API + cfg.logo_url;
-      // Logo tile: padding/corner-radius/outline are branding-configurable.
-      var logoPad = cfg.logo_padding != null ? cfg.logo_padding : 2;
-      var logo = document.createElement('img');
-      logo.className = 'janis-logo';
-      logo.src = logoSrc;
-      logo.alt = '';
-      if (cfg.logo_radius != null) logo.style.borderRadius = cfg.logo_radius + 'px';
-      logo.style.padding = logoPad + 'px';
-      // With an inset the logo floats on the header colour — a white matte
-      // would turn the padding into a visible tile. Keep the matte only for
-      // edge-to-edge logos (it backs object-fit:contain letterboxing).
-      logo.style.background = logoPad > 0 ? 'transparent' : '#fff';
-      if (cfg.logo_border_width) {
-        logo.style.border = cfg.logo_border_width + 'px solid ' + (cfg.logo_border_color || 'rgba(0,0,0,.2)');
-      }
-      panel.querySelector('#janis-head').insertBefore(logo, panel.querySelector('#janis-head').firstChild);
-      var bub = document.createElement('img');
-      bub.src = logoSrc;
-      bub.alt = '';
-      if (logoPad > 0) {
-        // inset the logo inside the accent circle — the accent ring is the pad
-        bub.style.width = bub.style.height = 'calc(100% - ' + logoPad * 2 + 'px)';
-      }
-      bubble.textContent = '';
-      bubble.appendChild(bub);
-      bubble.appendChild(badgeEl); // textContent='' wiped it — re-attach
-    }
-    if (cfg.help_url) {
-      var helpLink = panel.querySelector('#janis-help');
-      helpLink.href = cfg.help_url;
-      helpLink.style.display = '';
-    }
-    // Branding the API chose to send: theme applies to panel + teaser;
-    // hide_powered_by only reaches here for paid workspaces.
     var darkQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
     var applyTheme = function () {
       var dark = cfg.theme === 'dark' || (cfg.theme === 'auto' && darkQ && darkQ.matches);
@@ -1861,17 +1812,99 @@
       var t = document.getElementById('janis-teaser');
       if (t) t.classList.toggle('janis-dark', dark);
     };
-    applyTheme();
-    if (cfg.theme === 'auto' && darkQ && darkQ.addEventListener) {
-      darkQ.addEventListener('change', applyTheme);
-    }
-    if (cfg.hide_powered_by) {
+    // Branding application — idempotent so the console preview can re-run it
+    // live when the operator edits appearance (postMessage 'janis:preview').
+    var applyCfg = function () {
+      // Dictation is opt-in per channel (it's metered on Janis's keys) — the
+      // mic shows only when bootstrap says the channel enabled it.
+      // Browser-engine dictation needs Web Speech (absent on Firefox, patchy
+      // on Safari); server dictation needs MediaRecorder capture.
+      if (micBtn)
+        micBtn.style.display =
+          cfg.dictation === true && (dictEngine() === 'webspeech' ? hasSpeechRec : canDictate)
+            ? ''
+            : 'none';
+      if (cfg.accent) accent = cfg.accent;
+      bubble.style.background = accent;
+      document.documentElement.style.setProperty('--janis-accent', accent);
+      panel.querySelector('#janis-head').style.background = accent;
+      // Corner radius — panel + teaser share the --janis-radius var.
+      if (cfg.radius != null)
+        document.documentElement.style.setProperty('--janis-radius', cfg.radius + 'px');
+      panel.querySelector('#janis-title').textContent = cfg.title || cfg.name || 'Chat';
+      panel.querySelector('#janis-sub').textContent =
+        cfg.subtitle !== null && cfg.subtitle !== undefined
+          ? cfg.subtitle
+          : cfg.agent_name
+            ? cfg.agent_name + ' · replies in seconds'
+            : '';
+      // Logo tile — clear the old one first so re-applying doesn't stack.
+      var oldLogo = panel.querySelector('#janis-head .janis-logo');
+      if (oldLogo) oldLogo.remove();
+      var oldBub = bubble.querySelector('img');
+      if (oldBub) oldBub.remove();
+      if (cfg.logo_url) {
+        // Uploaded logos are /uploads/… paths on the API origin, not the host page's.
+        var logoSrc = /^https?:\/\//.test(cfg.logo_url) ? cfg.logo_url : API + cfg.logo_url;
+        // Logo tile: padding/corner-radius/outline are branding-configurable.
+        var logoPad = cfg.logo_padding != null ? cfg.logo_padding : 2;
+        var logo = document.createElement('img');
+        logo.className = 'janis-logo';
+        logo.src = logoSrc;
+        logo.alt = '';
+        if (cfg.logo_radius != null) logo.style.borderRadius = cfg.logo_radius + 'px';
+        logo.style.padding = logoPad + 'px';
+        // With an inset the logo floats on the header colour — a white matte
+        // would turn the padding into a visible tile. Keep the matte only for
+        // edge-to-edge logos (it backs object-fit:contain letterboxing).
+        logo.style.background = logoPad > 0 ? 'transparent' : '#fff';
+        if (cfg.logo_border_width) {
+          logo.style.border = cfg.logo_border_width + 'px solid ' + (cfg.logo_border_color || 'rgba(0,0,0,.2)');
+        }
+        panel.querySelector('#janis-head').insertBefore(logo, panel.querySelector('#janis-head').firstChild);
+        var bub = document.createElement('img');
+        bub.src = logoSrc;
+        bub.alt = '';
+        if (logoPad > 0) {
+          // inset the logo inside the accent circle — the accent ring is the pad
+          bub.style.width = bub.style.height = 'calc(100% - ' + logoPad * 2 + 'px)';
+        }
+        bubble.textContent = '';
+        bubble.appendChild(bub);
+        bubble.appendChild(badgeEl); // textContent='' wiped it — re-attach
+      } else {
+        // No logo — default glyph (textContent wipes badgeEl; re-attach).
+        bubble.textContent = '💬';
+        bubble.appendChild(badgeEl);
+      }
+      var helpLink = panel.querySelector('#janis-help');
+      helpLink.href = cfg.help_url || '#';
+      helpLink.style.display = cfg.help_url ? '' : 'none';
+      applyTheme();
       var pw = panel.querySelector('#janis-power');
-      if (pw) pw.style.display = 'none';
-    }
-    if (cfg.position === 'left') {
-      bubble.classList.add('janis-left');
-      panel.classList.add('janis-left');
+      if (pw) pw.style.display = cfg.hide_powered_by ? 'none' : '';
+      var left = cfg.position === 'left';
+      bubble.classList.toggle('janis-left', left);
+      panel.classList.toggle('janis-left', left);
+      // Draft greeting edits re-render the synthetic greeting bubble in
+      // place (only exists while the thread is still empty).
+      if (state.greetEl && state.greetEl.parentNode && cfg.greeting) {
+        var keep = state.greetEl.querySelector('.janis-author');
+        state.greetEl.textContent = '';
+        if (keep) state.greetEl.appendChild(keep);
+        appendBlocks(state.greetEl, cfg.greeting);
+        if (cfg.greeting_widgets) renderWidgets(state.greetEl, cfg.greeting_widgets);
+      }
+      // Quick-reply chips re-render while the thread is still empty — they
+      // retire permanently once the visitor sends.
+      if (state.greeted && !msgs.querySelector('[data-real]')) {
+        if (cfg.quick_replies && cfg.quick_replies.length) renderChips(cfg.quick_replies);
+        else clearChips();
+      }
+    };
+    applyCfg();
+    if (darkQ && darkQ.addEventListener) {
+      darkQ.addEventListener('change', applyTheme);
     }
     // Closed-state poll keeps the unread badge live and pre-warms the
     // transcript so opening renders instantly. 20s is cheap for the host
@@ -1884,6 +1917,17 @@
     // visitors; skipped when a thread or unread already exists.
     if (cfg.proactive !== false) {
       setTimeout(maybeTeaser, Math.max(0, cfg.proactive_delay == null ? 20 : cfg.proactive_delay) * 1000);
+    }
+    if (PREVIEW) {
+      // Console preview: open by default and accept live branding edits
+      // from the editor via postMessage.
+      setOpen(true);
+      window.addEventListener('message', function (e) {
+        var d = e && e.data;
+        if (!d || d.type !== 'janis:preview' || !d.branding || typeof d.branding !== 'object') return;
+        Object.assign(cfg, d.branding);
+        applyCfg();
+      });
     }
     if (state.open) setOpen(true);
   }).catch(function () {});
