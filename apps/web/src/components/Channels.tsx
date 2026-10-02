@@ -169,6 +169,7 @@ export function ChannelCard({
       )}
       {ch.kind === 'webchat' && (
         <>
+          <WebchatBranding channel={ch} />
           <details className="webhook-details" style={{ marginTop: 8 }}>
             <summary>
               <span className="details-title">Developer</span>
@@ -182,7 +183,6 @@ export function ChannelCard({
             </div>
             <WebchatIdentity channel={ch} />
           </details>
-          <WebchatBranding channel={ch} />
         </>
       )}
       {ch.kind === 'email' && ch.meta.inbound_address && (
