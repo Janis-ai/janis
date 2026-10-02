@@ -333,6 +333,13 @@ button, input, select, textarea { font: inherit; }
 }
 .md-list { display: block; margin: 4px 0; padding-left: 20px; }
 .md-list li { margin: 2px 0; }
+/* Suggested replies mirrored in the transcript — dashed/muted so they read
+   as "shown to the customer", never tappable here. */
+.transcript-qrs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.transcript-qr {
+  display: inline-block; border: 1px dashed var(--border); border-radius: 999px;
+  padding: 3px 10px; font-size: 12px; color: var(--muted); white-space: nowrap;
+}
 .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
 .msg .who .who-avatar { width: 14px; height: 14px; border-radius: 50%; object-fit: cover; margin-right: 4px; vertical-align: -2px; }
 .msg .who .time { margin-left: 6px; }

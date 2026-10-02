@@ -984,6 +984,17 @@ export default function ConversationPage() {
                   </div>
                 </div>
               )}
+              {/* Suggested replies the customer was shown — inert chips so the
+                  operator sees what was offered without being able to tap it. */}
+              {!!(m.payload.quick_replies as (string | { type: 'email' | 'phone' })[] | undefined)?.length && (
+                <div className="transcript-qrs">
+                  {(m.payload.quick_replies as (string | { type: 'email' | 'phone' })[]).map((q, i) => (
+                    <span key={i} className="transcript-qr">
+                      {typeof q === 'string' ? q : q.type === 'email' ? 'share email' : 'share phone'}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
             {m.direction === 'out' && m.payload.inspector && (
               <div className="inspector-wrap">
