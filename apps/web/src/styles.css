@@ -1213,6 +1213,9 @@ input.bub-switch:disabled { cursor: default; }
 .bub-seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; gap: 2px; align-self: flex-start; }
 .bub-seg button { display: inline-flex; align-items: center; gap: 5px; border: none; background: transparent; color: var(--muted); padding: 5px 10px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
 .bub-seg button.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.14); }
+.bub-tabs { margin-top: 12px; }
+.bub-tabs button { padding: 6px 14px; }
+.bub-deploy { margin-top: 14px; max-width: 640px; display: flex; flex-direction: column; gap: 12px; }
 .bub-color { display: flex; align-items: center; gap: 8px; }
 .bub-hex { width: 88px; font-size: 12.5px; }
 .bub-radius { display: flex; gap: 8px; }

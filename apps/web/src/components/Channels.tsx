@@ -74,6 +74,7 @@ export function ChannelCard({
       void qc.invalidateQueries({ queryKey: ['channel', ch.id] });
     },
   });
+  const [bubTab, setBubTab] = useState<'preview' | 'deploy'>('preview');
   const [confirmEl, confirmRemove] = useConfirm();
   const remove = useMutation({
     mutationFn: () => api(`/api/channels/${ch.id}`, { method: 'DELETE' }),
@@ -169,20 +170,40 @@ export function ChannelCard({
       )}
       {ch.kind === 'webchat' && (
         <>
-          <WebchatBranding channel={ch} />
-          <details className="webhook-details" style={{ marginTop: 8 }}>
-            <summary>
-              <span className="details-title">Developer</span>
-              <span className="details-sub">embed snippet + signed visitor identity</span>
-            </summary>
-            <div style={{ marginTop: 10 }}>
+          <div className="bub-seg bub-tabs">
+            <button
+              type="button"
+              className={bubTab === 'preview' ? 'on' : ''}
+              onClick={() => setBubTab('preview')}
+            >
+              Preview
+            </button>
+            <button
+              type="button"
+              className={bubTab === 'deploy' ? 'on' : ''}
+              onClick={() => setBubTab('deploy')}
+            >
+              Deploy
+            </button>
+          </div>
+          {bubTab === 'preview' ? (
+            <WebchatBranding channel={ch} />
+          ) : (
+            <div className="bub-deploy">
+              <div>
+                <strong style={{ fontSize: 13 }}>Install the bubble</strong>
+                <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+                  Paste the snippet on every page where the bubble should appear — the saved
+                  appearance applies automatically.
+                </div>
+              </div>
               <CodeBlock
                 title="Embed — paste before </body> on your site"
                 code={`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
               />
+              <WebchatIdentity channel={ch} />
             </div>
-            <WebchatIdentity channel={ch} />
-          </details>
+          )}
         </>
       )}
       {ch.kind === 'email' && ch.meta.inbound_address && (
