@@ -43,9 +43,17 @@ export async function acquireConvLock(
   // a crash really does drop the lock.
   const client = lockClient();
   if (!client) return null;
-  const conn = await client.reserve();
   const started = Date.now();
   const deadline = started + WAIT_BUDGET_MS;
+  let conn: ReservedSql;
+  try {
+    conn = await client.reserve();
+  } catch (err) {
+    // Direct endpoint unreachable (Neon conn ceiling, transient network) —
+    // fail open like the wait timeout: an unlocked reply beats none.
+    console.warn(`[convLock] ${convId}: lock conn failed — replying unlocked`, err);
+    return null;
+  }
   try {
     while (true) {
       const [{ ok }] = await conn`select pg_try_advisory_lock(${LOCK_NS}, hashtext(${convId})) as ok`;
@@ -72,7 +80,8 @@ export async function acquireConvLock(
     }
   } catch (err) {
     conn.release();
-    throw err;
+    console.warn(`[convLock] ${convId}: lock query failed — replying unlocked`, err);
+    return null;
   }
 }
 
