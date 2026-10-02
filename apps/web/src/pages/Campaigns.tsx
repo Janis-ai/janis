@@ -4,7 +4,9 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useConfirm } from '../components/Prompt';
-import { useAgents, useChannels } from '../api/hooks';
+import { AgentScopePicker } from '../components/AgentScopePicker';
+import { useChannels } from '../api/hooks';
+import { useContextAgent } from '../lib/agentContext';
 import { usePageTitle } from '../lib/title';
 
 const SENDABLE = ['sms', 'whatsapp', 'email', 'gmail', 'outlook'];
@@ -88,12 +90,14 @@ function statChips(sends: SendRow[], step: number) {
   return bits.join(' · ');
 }
 
-export default function Campaigns({ agentId }: { agentId?: string } = {}) {
+export default function Campaigns({ agentId: routeAgent }: { agentId?: string } = {}) {
   usePageTitle('Campaigns');
   const qc = useQueryClient();
   const { data: chans } = useChannels();
-  const { data: agents } = useAgents();
-  // Agent-scoped mount sends through that agent's channels only.
+  // Agent scoping is app context (URL agent or the persisted pick); the
+  // scoped view sends through that agent's channels only.
+  const ctxAgent = useContextAgent();
+  const agentId = routeAgent ?? ctxAgent ?? undefined;
   const channels = (chans?.channels ?? []).filter(
     (c) => SENDABLE.includes(c.kind) && (!agentId || c.agent_id === agentId),
   );
@@ -222,11 +226,9 @@ export default function Campaigns({ agentId }: { agentId?: string } = {}) {
       {confirmEl}
       <h1>
         Campaigns
-        {agentId && (
-          <span className="chip" style={{ marginLeft: 8 }} title="Sent as this agent">
-            {agents?.agents.find((a) => a.id === agentId)?.name ?? 'This agent'}
-          </span>
-        )}
+        <span style={{ marginLeft: 8 }}>
+          <AgentScopePicker slug="campaigns" value={agentId} />
+        </span>
       </h1>
       <p className="muted">
         Proactive sends to contacts on a channel. SMS, email, Outlook and Gmail open new

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAgents, useMe } from '../api/hooks';
 import { useStream, type StreamAlert } from '../lib/useStream';
-import { useAgentContext } from '../lib/agentContext';
+import { clearLastAgent, useContextAgent } from '../lib/agentContext';
 import { trackOnce } from '../lib/analytics';
 import { playAlertSound } from '../lib/alertSound';
 import { setTabBadge } from '../lib/tabBadge';
@@ -300,12 +300,12 @@ export default function Layout() {
   const hasAsk = Boolean(data?.support_channel_id);
   const hasBoth = hasAsk && Boolean(testRail);
 
-  // Agent context is URL-driven (/agents/:id/*); the switcher and the nav
-  // lists flip on it, and the concierge rail forwards it so "this agent"
-  // resolves server-side.
-  const routeAgentId = useAgentContext();
+  // Agent context: explicit on /agents/:id/* URLs, persisted elsewhere so
+  // the shared pages keep defaulting to the selected agent. The sidebar's
+  // agent subsection, the concierge rail and the inbox badge all key off it.
+  const ctxAgent = useContextAgent();
   const { data: agentsData } = useAgents();
-  const currentAgent = agentsData?.agents.find((a) => a.id === routeAgentId);
+  const currentAgent = agentsData?.agents.find((a) => a.id === ctxAgent);
 
   // /ask — the concierge rail as a full page. The same mounted rail fills the
   // content column so drafts/scroll survive expand ↔ dock round-trips.
@@ -443,16 +443,17 @@ export default function Layout() {
     refetchInterval: 60_000,
     enabled: hasWorkspace,
   });
-  // Agent-context inbox gets its own scoped badge; the workspace query above
-  // stays unfiltered so the tab badge remains the whole-workspace count.
+  // The nav badge previews what Inbox will show — scoped to the context
+  // agent when one is selected. The unfiltered query above still feeds the
+  // tab badge, which always counts the whole workspace.
   const { data: agentAttention } = useQuery({
-    queryKey: ['attention-count', routeAgentId],
+    queryKey: ['attention-count', ctxAgent],
     queryFn: () =>
       api<{ count: number; unread: number }>(
-        `/api/conversations/attention-count?agent_id=${routeAgentId}`,
+        `/api/conversations/attention-count?agent_id=${ctxAgent}`,
       ),
     refetchInterval: 60_000,
-    enabled: hasWorkspace && Boolean(routeAgentId),
+    enabled: hasWorkspace && Boolean(ctxAgent),
   });
   const { data: billingStatus } = useQuery({
     queryKey: ['billing-status'],
@@ -615,9 +616,14 @@ export default function Layout() {
           <ContextSwitcher
             data={data}
             agents={agentsData?.agents ?? []}
-            currentAgentId={routeAgentId}
+            currentAgentId={ctxAgent ?? undefined}
             planName={billingStatus?.plan_name}
-            onGo={(path) => navigate(path)}
+            onGo={(path) => {
+              // The switcher's workspace-header button goes to /conversations —
+              // choosing the workspace means leaving the agent's context.
+              if (path === '/conversations') clearLastAgent();
+              navigate(path);
+            }}
             onSwitchWorkspace={(id) => void switchWorkspace(id)}
             onCreateWorkspace={() => void switchWorkspace('__new')}
             onAnswerInvite={(id, action) => void answerInvite(id, action)}
@@ -645,49 +651,53 @@ export default function Layout() {
             <span className="label">Copilot</span><span className="icon"><Sparkles size={18} /></span>
           </button>
         )}
-        {routeAgentId ? (
+        {/* One stable nav: the shared customer layer always sits in the same
+            spots. The four scoped-able pages default to the context agent;
+            their on-page picker is the context control. */}
+        <NavLink to="/conversations" end>
+          <span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>
+          {(ctxAgent ? agentAttention : attention)?.count ? (
+            <span className="nav-badge">{(ctxAgent ? agentAttention : attention)!.count}</span>
+          ) : null}
+        </NavLink>
+        <NavLink to="/agents"><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>
+        <NavLink to="/contacts"><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
+        <NavLink to="/campaigns"><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
+        {/* Workspace-wide sections vanish for agent-scoped users — they only
+            hold grants on specific agents, not the workspace itself. */}
+        {!data?.agent_scope && (
+          <NavLink to="/reports"><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
+        )}
+        {/* Agent subsection — this agent's build surface, present only while
+            an agent is in context. */}
+        {currentAgent && (
           <>
-            {/* Agent context — this agent's queue, build surface, and its
-                scoped view of the workspace's customer layer. */}
-            <NavLink to={`/agents/${routeAgentId}/inbox`}>
-              <span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>
-              {agentAttention?.count ? <span className="nav-badge">{agentAttention.count}</span> : null}
-            </NavLink>
-            <NavLink to={`/agents/${routeAgentId}/behavior`}><span className="label">Behavior</span><span className="icon"><SlidersHorizontal size={18} /></span></NavLink>
-            {currentAgent?.hosted && (
+            <div className="nav-sec">
+              <Bot size={13} />
+              <span>{currentAgent.name}</span>
+            </div>
+            <NavLink to={`/agents/${ctxAgent}/behavior`}><span className="label">Behavior</span><span className="icon"><SlidersHorizontal size={18} /></span></NavLink>
+            {currentAgent.hosted && (
+              <NavLink to={`/agents/${ctxAgent}/knowledge`}><span className="label">Knowledge base</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
+            )}
+            <NavLink to={`/agents/${ctxAgent}/channels`}><span className="label">Channels</span><span className="icon"><Radio size={18} /></span></NavLink>
+            {currentAgent.hosted && (
               <>
-                <NavLink to={`/agents/${routeAgentId}/knowledge`}><span className="label">Knowledge base</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
-                <NavLink to={`/agents/${routeAgentId}/integrations`}><span className="label">Integrations</span><span className="icon"><Plug size={18} /></span></NavLink>
-                <NavLink to={`/agents/${routeAgentId}/components`}><span className="label">Chat components</span><span className="icon"><LayoutGrid size={18} /></span></NavLink>
-                <NavLink to={`/agents/${routeAgentId}/tests`}><span className="label">Tests</span><span className="icon"><FlaskConical size={18} /></span></NavLink>
+                <NavLink to={`/agents/${ctxAgent}/integrations`}><span className="label">Integrations</span><span className="icon"><Plug size={18} /></span></NavLink>
+                <NavLink to={`/agents/${ctxAgent}/components`}><span className="label">Chat components</span><span className="icon"><LayoutGrid size={18} /></span></NavLink>
+                <NavLink to={`/agents/${ctxAgent}/tests`}><span className="label">Tests</span><span className="icon"><FlaskConical size={18} /></span></NavLink>
               </>
             )}
-            <NavLink to={`/agents/${routeAgentId}/channels`}><span className="label">Channels</span><span className="icon"><Radio size={18} /></span></NavLink>
-            <NavLink to={`/agents/${routeAgentId}/contacts`}><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
-            <NavLink to={`/agents/${routeAgentId}/campaigns`}><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
-            <NavLink to={`/agents/${routeAgentId}/reports`}><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
-            <NavLink to={`/agents/${routeAgentId}/settings`}><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
+            <NavLink to={`/agents/${ctxAgent}/settings`}><span className="label">Agent settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </>
-        ) : (
+        )}
+        {!data?.agent_scope && (
           <>
-            {/* Workspace context — the shared customer layer: one queue,
-                one identity graph, campaigns and roll-ups across agents. */}
-            <NavLink to="/conversations" end><span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>{attention?.count ? <span className="nav-badge">{attention.count}</span> : null}</NavLink>
-            <NavLink to="/agents"><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>
-            <NavLink to="/contacts"><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
-            <NavLink to="/campaigns"><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
-            {/* Workspace-wide sections vanish for agent-scoped users — they only
-                hold grants on specific agents, not the workspace itself. */}
-            {!data?.agent_scope && (
-              <>
-                <NavLink to="/reports"><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
-                {data?.operator && (
-                  <NavLink to="/errors"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
-                )}
-                <NavLink to="/billing"><span className="label">Billing</span><span className="icon"><CreditCard size={18} /></span></NavLink>
-                <NavLink to="/settings"><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
-              </>
+            {data?.operator && (
+              <NavLink to="/errors"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
             )}
+            <NavLink to="/billing"><span className="label">Billing</span><span className="icon"><CreditCard size={18} /></span></NavLink>
+            <NavLink to="/settings"><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </>
         )}
         <div className="spacer" />
@@ -769,7 +779,7 @@ export default function Layout() {
             <div style={{ display: railTab === 'ask' ? 'contents' : 'none' }}>
               <AskJanis
                 channelId={data!.support_channel_id!}
-                agentId={routeAgentId}
+                agentId={ctxAgent ?? undefined}
                 seedMessage={askSeed ?? undefined}
                 expanded={isAskPage}
                 onToggleExpand={() => navigate(isAskPage ? lastNonAsk.current : '/ask')}

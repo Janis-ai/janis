@@ -677,27 +677,30 @@ the identity graph is wrong):
   Workspace settings, Switch/Create-or-join workspace) + Agents
   list (check on selected) + Add agent. (ContextSwitcher in Layout.tsx,
   .ctx-* styles.)
-- Copilot (Ask Janis) is ever-present at the TOP of BOTH contexts; when an
-  agent is selected the concierge is agent-scoped (its tools default to
-  that agent, "this agent" resolves).
-- WORKSPACE context nav: Agents · Inbox (all agents — the triage queue) ·
-  Contacts (full identity graph) · Campaigns · Reports ·
-  Workspace settings (General/Members/Plans/Billing/API keys/Audit).
-- AGENT context nav: Copilot · Inbox (filtered to agent; toggling to
-  another agent there switches whole app context) · Behavior (tabs: LLM,
-  Greeting + greeting quick-replies/cards, System prompt, Tone,
-  Satisfaction survey incl. auto-archive toggle) · Knowledge base (tabs:
-  Text, Files, Websites, Gaps, Help center) · Channels · Integrations
-  (renamed from Tools) · Chat components (own level, below Integrations) ·
-  Tests · Contacts (filtered) · Campaigns (filtered) · Reports (filtered —
-  incl. usage meter, UsageCard) · Settings (current Escalation contents).
-  There is no standalone Usage page; /usage redirects to Reports.
-- Implementation: agent context is URL-driven (/agents/:id/* — every
-  section its own path: inbox/contacts/campaigns/reports reuse the
-  workspace pages with an agentId prop; channels/:channelId is the
-  channel editor; behavior|knowledge|integrations|components|tests|
-  settings render AgentDetail with ?sub= tabs). lib/agentContext.ts
-  derives routeAgentId (last-visited agent persists to localStorage).
+- Copilot (Ask Janis) is ever-present at the TOP; when an agent is in
+  context the concierge is agent-scoped (its tools default to that agent,
+  "this agent" resolves).
+- ONE stable nav — no panel swap. Shared items always in place: Inbox ·
+  Agents · Contacts · Campaigns · Reports; tail: Errors · Billing ·
+  Settings (agent_scope users keep seeing Inbox/Agents/Contacts/Campaigns).
+  When an agent is in context an agent subsection appears below: label
+  row with the agent's name, then Behavior (tabs: LLM, Greeting +
+  quick-replies/cards, System prompt, Tone, Satisfaction survey incl.
+  auto-archive toggle) · Knowledge base (tabs: Text, Files, Websites,
+  Gaps, Help center) · Channels · Integrations · Chat components · Tests ·
+  Agent settings.
+- Agent context is a single app-wide notion (lib/agentContext.ts):
+  explicit on /agents/:id/* URLs, persisted to localStorage elsewhere so
+  the shared pages still default to it. The AgentScopePicker pill on
+  Inbox/Contacts/Campaigns/Reports IS the context control — picking an
+  agent moves the whole app into that agent, "All agents" clears context
+  (as does the switcher's workspace header). Saved views' agent dimension
+  sets/clears context too; /conversations?agent=<id> deep links redirect
+  to the scoped inbox URL.
+- Implementation: /agents/:id/{inbox,contacts,campaigns,reports} routes
+  still exist (deep links + picker targets) but the nav always links the
+  workspace paths; the four pages read useContextAgent() (route id ??
+  lastAgent). There is no standalone Usage page; /usage → /reports.
   Legacy /agents/:id?tab=X redirects map to the new sections; bare
   /agents/:id lands on the agent's inbox. API: ?agent_id= filters on
   conversations/contacts/campaigns/reports/usage (CampaignSegment.agent_id

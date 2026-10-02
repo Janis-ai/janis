@@ -88,6 +88,15 @@ button, input, select, textarea { font: inherit; }
   text-align: center;
 }
 .sidebar .spacer { flex: 1; }
+/* Agent subsection label — names the agent whose items follow; only
+   rendered while an agent is in context. */
+.sidebar .nav-sec {
+  padding: 12px 20px 2px; margin-top: 8px; border-top: 1px solid var(--border);
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--muted);
+  display: flex; align-items: center; gap: 6px;
+  overflow-wrap: break-word;
+}
 /* "Ask Janis" toggle — looks like a nav link but toggles the docked rail */
 .sidebar .ask-toggle {
   display: block; width: 100%; padding: 9px 20px; border: none; background: none;
@@ -1149,3 +1158,19 @@ input[type=color].swatch::-moz-color-swatch { border: none; border-radius: 5px; 
 .wp-launcher { display: flex; margin-top: 8px; }
 .wp-bubble { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 19px; box-shadow: 0 4px 16px rgba(0,0,0,.3); }
 .wp-bubble img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+
+/* Agent-scope picker — the context control on the shared pages (Inbox,
+   Contacts, Campaigns, Reports). Pill-styled so it reads as "which agent
+   am I inside", not a buried list filter. */
+.scope-picker {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 2px 10px 2px 8px; background: var(--panel);
+  color: var(--muted); font-size: 13px;
+}
+.scope-picker select {
+  border: none; background: none; color: var(--text);
+  font-size: 13px; padding: 0; cursor: pointer; max-width: 190px;
+}
+.scope-picker select:focus { outline: none; }
+.scope-picker:focus-within { border-color: var(--accent); }

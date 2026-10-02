@@ -9,6 +9,8 @@ import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
 import { Bot, Cog, Headset, Moon, Save, Star, User, X } from 'lucide-react';
 import { usePrompt } from '../components/Prompt';
+import { AgentScopePicker } from '../components/AgentScopePicker';
+import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
 import { isEditableTarget } from '../lib/keys';
 import { usePageTitle } from '../lib/title';
 
@@ -155,25 +157,33 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const [activeView, setActiveView] = useSticky('conv.view', '');
   // Deep links seed the filter (e.g. Reports' "N overdue" badge → ?state=overdue)
   const [params, setParams] = useSearchParams();
+  // The agent dimension IS app context, not a local filter: on a scoped
+  // route it's the URL agent; on /conversations it's the persisted context.
+  const ctxAgent = useContextAgent();
+  const agentId = scopeAgent ?? ctxAgent ?? '';
+  const inboxBase = agentId ? `/agents/${agentId}/inbox` : '/conversations';
+  // Deep link: /conversations?agent=<id> means "inside that agent" —
+  // redirect to the scoped inbox carrying the remaining params. Runs first
+  // so state/intent params survive the remount instead of being stripped.
+  useEffect(() => {
+    const a = params.get('agent');
+    if (!a) return;
+    if (scopeAgent) {
+      params.delete('agent');
+      setParams(params, { replace: true });
+      return;
+    }
+    const rest = new URLSearchParams(params);
+    rest.delete('agent');
+    setLastAgent(a);
+    navigate(`/agents/${a}/inbox${rest.size ? `?${rest}` : ''}`, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     const s = params.get('state');
     if (!s) return;
     setState(s);
     params.delete('state');
-    setParams(params, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const [pickedAgent, setAgentId] = useSticky('conv.agent', '');
-  // Scoped mounts pin the filter; the workspace view keeps its sticky pick.
-  const agentId = scopeAgent ?? pickedAgent;
-  const inboxBase = scopeAgent ? `/agents/${scopeAgent}/inbox` : '/conversations';
-  // Deep link: /conversations?agent=<id> seeds the sticky agent filter once,
-  // then strips itself so the URL doesn't fight later filter changes.
-  useEffect(() => {
-    const a = params.get('agent');
-    if (!a) return;
-    setAgentId(a);
-    params.delete('agent');
     setParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -226,7 +236,15 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     const f = v.filters;
     setTab((f.tab as 'attention' | 'all') ?? 'all');
     setState(f.state ?? '');
-    setAgentId(f.agent_id ?? '');
+    // A view's agent dimension is context, not a filter: one that names an
+    // agent moves into it, one that doesn't is workspace-wide.
+    if (f.agent_id) {
+      setLastAgent(f.agent_id);
+      if (scopeAgent !== f.agent_id) navigate(`/agents/${f.agent_id}/inbox`);
+    } else {
+      clearLastAgent();
+      if (scopeAgent) navigate('/conversations');
+    }
     setMine(f.assignee === 'me');
     setQuery(f.query ?? '');
     setActiveView(v.id);
@@ -472,26 +490,10 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             </optgroup>
           ))}
         </select>
-        {/* In the agent context this picker switches the whole app's agent,
-            not just the list — matches the sidebar switcher. */}
-        <select
-          value={agentId}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (!scopeAgent) {
-              setAgentId(v);
-            } else if (!v) {
-              navigate('/conversations');
-            } else if (v !== scopeAgent) {
-              navigate(`/agents/${v}/inbox`);
-            }
-          }}
-        >
-          <option value="">{scopeAgent ? 'All agents (workspace)' : 'All agents'}</option>
-          {[...(agents?.agents ?? [])]
-            .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-            .map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
+        {/* The agent dimension is whole-app context — this picker switches
+            it everywhere (nav subsection, Copilot, the other shared pages),
+            and "All agents" leaves context entirely. */}
+        <AgentScopePicker slug="inbox" value={agentId || undefined} />
         <label className="check">
           <input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} />
           Assigned to me

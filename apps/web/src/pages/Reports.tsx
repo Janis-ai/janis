@@ -2,9 +2,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
-import { useAgents, useChannels, useDigests } from '../api/hooks';
+import { useChannels, useDigests } from '../api/hooks';
 import { Empty, channelLabel } from '../components/bits';
+import { AgentScopePicker } from '../components/AgentScopePicker';
 import { UsageCard } from '../components/UsageCard';
+import { useContextAgent } from '../lib/agentContext';
 import { usePageTitle } from '../lib/title';
 
 interface HandoffMetrics {
@@ -105,15 +107,15 @@ const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString
 export default function Reports({ agentId: scopedAgentId }: { agentId?: string }) {
   usePageTitle('Reports');
   const { data } = useDigests();
-  // Drill-down: overall → per agent → per channel of that agent.
-  const [pickedAgent, setAgentId] = useState('');
-  const agentId = scopedAgentId ?? pickedAgent;
+  // Drill-down: overall → per agent → per channel of that agent. The agent
+  // dimension is app context — the picker sets it globally, not per page.
+  const ctxAgent = useContextAgent();
+  const agentId = scopedAgentId ?? ctxAgent ?? '';
   const [channelId, setChannelId] = useState('');
   // Range: preset days or a custom from/to window ('custom' uses the inputs).
   const [preset, setPreset] = useState('30');
   const [customFrom, setCustomFrom] = useState(daysAgo(30));
   const [customTo, setCustomTo] = useState(today());
-  const { data: agents } = useAgents();
   const { data: chans } = useChannels();
   const custom = preset === 'custom' && customFrom && customTo;
   const rangeQs = custom ? `from=${customFrom}&to=${customTo}` : `days=${preset}`;
@@ -123,10 +125,12 @@ export default function Reports({ agentId: scopedAgentId }: { agentId?: string }
   const drillFrom = custom ? customFrom : daysAgo(Number(preset));
   const drillTo = custom ? customTo : '';
   const drillQs = (extra: Record<string, string>) =>
-    Object.entries({ from: drillFrom, to: drillTo, agent: agentId, ...extra })
+    Object.entries({ from: drillFrom, to: drillTo, ...extra })
       .filter(([, v]) => v)
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
       .join('&');
+  // Drill links land inside the agent's scoped inbox when one is in context.
+  const convBase = agentId ? `/agents/${agentId}/inbox` : '/conversations';
   const metrics = useQuery({
     queryKey: ['handoff-metrics', qs],
     queryFn: () => api<HandoffMetrics>(`/api/reports/handoffs?${qs}`),
@@ -238,26 +242,9 @@ export default function Reports({ agentId: scopedAgentId }: { agentId?: string }
             />
           </>
         )}
-        {/* Agent-scoped mount (/agents/:id/reports) pins the drill-down —
-            the sidebar switcher is how you change agents, not this picker. */}
-        {scopedAgentId ? (
-          <span className="chip">{agents?.agents.find((a) => a.id === scopedAgentId)?.name ?? 'This agent'}</span>
-        ) : (
-          <select
-            value={agentId}
-            onChange={(e) => {
-              setAgentId(e.target.value);
-              // a channel from another agent would silently zero the results
-              if (channelId && !chans?.channels.some((ch) => ch.id === channelId && ch.agent_id === e.target.value))
-                setChannelId('');
-            }}
-          >
-            <option value="">All agents</option>
-            {agents?.agents.map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-        )}
+        {/* Context control — same picker as the other shared pages; picking
+            an agent moves the whole app into that agent's context. */}
+        <AgentScopePicker slug="reports" value={agentId || undefined} />
         <select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
           <option value="">All channels</option>
           {(chans?.channels ?? [])
@@ -468,7 +455,7 @@ export default function Reports({ agentId: scopedAgentId }: { agentId?: string }
             {top.map((i) => (
               <Link
                 key={i.intent}
-                to={`/conversations?${drillQs({ intent: i.intent })}`}
+                to={`${convBase}?${drillQs({ intent: i.intent })}`}
                 className="row"
                 style={{ marginTop: 8, gap: 10, textDecoration: 'none', color: 'inherit' }}
               >
@@ -586,7 +573,7 @@ export default function Reports({ agentId: scopedAgentId }: { agentId?: string }
         <div className="row">
           <strong className="grow">Handoffs — last {m?.days ?? 30} days</strong>
           {m && m.overdue > 0 && (
-            <Link to="/conversations?state=overdue" className="badge needs_human">
+            <Link to={`${convBase}?state=overdue`} className="badge needs_human">
               {m.overdue} overdue
             </Link>
           )}

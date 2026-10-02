@@ -4,7 +4,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { timeAgo } from '../components/bits';
 import { useConfirm } from '../components/Prompt';
-import { useAgents, useChannels, useMe } from '../api/hooks';
+import { AgentScopePicker } from '../components/AgentScopePicker';
+import { useChannels, useMe } from '../api/hooks';
+import { useContextAgent } from '../lib/agentContext';
 import { usePageTitle } from '../lib/title';
 
 /** Filter state for the People tab — mirrors the segment rules the API
@@ -91,8 +93,12 @@ type ContactDetail = {
 const displayName = (c: { name: string | null; email: string | null; phone: string | null }) =>
   c.name ?? c.email ?? c.phone ?? 'Unknown';
 
-export function Contacts({ agentId }: { agentId?: string } = {}) {
+export function Contacts({ agentId: routeAgent }: { agentId?: string } = {}) {
   usePageTitle('Contacts');
+  // Agent scoping comes from app context (URL agent or the persisted pick),
+  // not a local filter — the picker in the header is the context control.
+  const ctxAgent = useContextAgent();
+  const agentId = routeAgent ?? ctxAgent ?? undefined;
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<ContactFilter>(EMPTY_FILTER);
   const [showFilters, setShowFilters] = useState(false);
@@ -100,13 +106,12 @@ export function Contacts({ agentId }: { agentId?: string } = {}) {
   const [tab, setTab] = useState<'contacts' | 'lists'>('contacts');
   const { data: me } = useMe();
   const isAdmin = me?.user.role === 'admin';
-  const { data: agents } = useAgents();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [importMsg, setImportMsg] = useState('');
   const baseParams = filterParams(q, filter);
-  // Agent-scoped mount (/agents/:id/contacts) pins the identity graph to
-  // contacts this agent has actually seen.
+  // Context scoping pins the identity graph to contacts this agent has
+  // actually seen (scoped route or persisted context agent).
   const params = agentId ? `${baseParams}${baseParams ? '&' : ''}agent_id=${agentId}` : baseParams;
   const filtered = JSON.stringify(filter) !== JSON.stringify(EMPTY_FILTER);
   const { data } = useQuery({
@@ -142,11 +147,7 @@ export function Contacts({ agentId }: { agentId?: string } = {}) {
     <>
       <div className="page-head">
         <h1>Contacts</h1>
-        {agentId && (
-          <span className="chip" title="Scoped to this agent">
-            {agents?.agents.find((a) => a.id === agentId)?.name ?? 'This agent'}
-          </span>
-        )}
+        <AgentScopePicker slug="contacts" value={agentId} />
         <div className="row" style={{ gap: 0 }}>
           <button
             className={`btn ${tab === 'contacts' ? 'primary' : 'ghost'}`}
@@ -256,7 +257,6 @@ function FilterBar({
   agentScope?: string;
 }) {
   const { data: chans } = useChannels();
-  const { data: agents } = useAgents();
   const { data: listsData } = useQuery({
     queryKey: ['lists'],
     queryFn: () => api<{ lists: ListRow[] }>('/api/lists'),
@@ -273,14 +273,6 @@ function FilterBar({
         value={f.tag}
         onChange={(e) => set({ tag: e.target.value })}
       />
-      {!agentScope && (
-        <select className="input" value={f.agent_id} onChange={(e) => set({ agent_id: e.target.value, channel_id: '' })}>
-          <option value="">Any agent</option>
-          {(agents?.agents ?? []).map((a) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </select>
-      )}
       <select className="input" value={f.channel_id} onChange={(e) => set({ channel_id: e.target.value })}>
         <option value="">Any channel</option>
         {channelOptions.map((ch) => (
