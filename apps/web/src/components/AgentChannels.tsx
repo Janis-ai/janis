@@ -432,13 +432,17 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                 <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
                 <div className="grow" style={{ minWidth: 0 }}>
                   <strong>{ch.name}</strong>{' '}
-                  <span className="muted" style={{ fontSize: 12 }}>
-                    {ch.meta.inbound_address ??
-                      ch.meta.email_address ??
-                      ch.meta.phone_number ??
-                      (ch.meta.chat_url ? 'website widget' : '')}
-                    {overrides(ch) && ` · ${overrides(ch)}`}
-                  </span>
+                  {/* Subtitle only where it adds info — an email channel's
+                      inbound address, an SMS/voice number. Meta channels,
+                      bubbles, and Gmail/Outlook just repeat the name. */}
+                  {(() => {
+                    const detail =
+                      ch.kind === 'email' ? ch.meta.inbound_address
+                      : ch.kind === 'sms' || ch.kind === 'voice' ? ch.meta.phone_number
+                      : undefined;
+                    const sub = [detail, overrides(ch)].filter(Boolean).join(' · ');
+                    return sub ? <span className="muted" style={{ fontSize: 12 }}>{sub}</span> : null;
+                  })()}
                 </div>
                 {launchUrl(ch) && (
                   <a
