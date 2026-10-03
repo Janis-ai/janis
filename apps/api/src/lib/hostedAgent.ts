@@ -732,10 +732,27 @@ export function unwrapInlineLists(text: string): string {
       // Numbered runs keep their numbers — "step 2" means something.
       const firstMark = leadM?.[0] ?? rest.match(INLINE_ITEM_RE)?.[0] ?? '';
       const marker = /\d/.test(firstMark) ? (n: number) => `${n + 1}. ` : () => '- ';
-      if (leadM) return [lead, ...items].map((i, n) => `${marker(n)}${i.trim()}`);
+      // Trailing prose after the last marker glues onto the final item
+      // ("- **API:** build X. All channels share… today?"). When every
+      // earlier item is one sentence, extras on the last are post-list
+      // prose — break them out as a following paragraph.
+      let tail = '';
+      if (items.length >= 2) {
+        const lastSents = sentencesOf(items[items.length - 1] ?? '');
+        if (lastSents.length >= 2 && items.slice(0, -1).every((i) => sentencesOf(i).length <= 1)) {
+          tail = lastSents.slice(1).join(' ');
+          items[items.length - 1] = lastSents[0] ?? '';
+        }
+      }
+      // For a bullet-lead line the lead is already item 0; otherwise lead
+      // is the paragraph the list ran onto.
+      const itemLines = (leadM ? [lead, ...items] : items).map(
+        (i, n) => `${marker(n)}${i.trim()}`,
+      );
       return [
-        ...(lead.trimEnd() ? [lead.trimEnd()] : []),
-        ...items.map((i, n) => `${marker(n)}${i.trim()}`),
+        ...(!leadM && lead.trimEnd() ? [lead.trimEnd()] : []),
+        ...itemLines,
+        ...(tail ? [tail] : []),
       ];
     })
     .join('\n');

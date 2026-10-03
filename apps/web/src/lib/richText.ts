@@ -44,12 +44,31 @@ const INLINE_BULLET = / (?:(?:[*-])|(?:\d+[.)])) (?=\*\*)/g;
  *  ways — one per line ("* item"), or an inline run on a single line
  *  ("options: * **A** … * **B** …"). Both render as a list; anything else is
  *  a paragraph. */
+/** Trailing prose glues onto the last item of a stored list ("- **API:** …
+ *  HTTP. All channels share… today?"). When every earlier item is a single
+ *  sentence, extras on the last are post-list prose — return them so the
+ *  caller can emit a following paragraph. Mutates items. */
+function detachTail(items: string[]): string | null {
+  if (items.length < 2) return null;
+  const sents = (s: string) =>
+    s.split(/(?<=[.!?])\s+/).map((t) => t.trim()).filter(Boolean);
+  const last = sents(items[items.length - 1] ?? '');
+  if (last.length < 2) return null;
+  if (!items.slice(0, -1).every((i) => sents(i).length <= 1)) return null;
+  items[items.length - 1] = last[0] ?? '';
+  return last.slice(1).join(' ');
+}
+
 export function splitBlocks(text: string): RichBlock[] {
   const out: RichBlock[] = [];
   let items: string[] = [];
   let ordered = false;
   const flush = () => {
-    if (items.length) out.push({ kind: 'list', items, ordered });
+    if (items.length) {
+      const tail = detachTail(items);
+      out.push({ kind: 'list', items, ordered });
+      if (tail) out.push({ kind: 'para', text: tail });
+    }
     items = [];
     ordered = false;
   };

@@ -113,6 +113,26 @@ describe('splitBlocks', () => {
     ]);
   });
 
+  it('detaches prose glued onto the last list item', () => {
+    expect(
+      splitBlocks(
+        'Options: - **Web Chat:** script-tag widget. - **Email:** Gmail OAuth. - **API:** SDK or raw HTTP. All share one inbox. Want to set one up?',
+      ),
+    ).toEqual([
+      { kind: 'para', text: 'Options:' },
+      {
+        kind: 'list',
+        items: [
+          '**Web Chat:** script-tag widget.',
+          '**Email:** Gmail OAuth.',
+          '**API:** SDK or raw HTTP.',
+        ],
+        ordered: false,
+      },
+      { kind: 'para', text: 'All share one inbox. Want to set one up?' },
+    ]);
+  });
+
   it('keeps arithmetic and single inline asterisks as paragraphs', () => {
     expect(splitBlocks('5 * 3 = 15')).toEqual([{ kind: 'para', text: '5 * 3 = 15' }]);
     expect(splitBlocks('pick * **one** option below')).toEqual([

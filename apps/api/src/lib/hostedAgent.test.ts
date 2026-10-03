@@ -1003,4 +1003,21 @@ describe('unwrapInlineLists', () => {
       unwrapInlineLists('Three ways: 1. **Gaps:** review them 2. **Forms:** finalize 3. **Stats:** pull them'),
     ).toBe('Three ways:\n1. **Gaps:** review them\n2. **Forms:** finalize\n3. **Stats:** pull them');
   });
+
+  it('detaches trailing prose glued onto the last item', () => {
+    // Real concierge reply: the closing question rode inside the last li.
+    expect(
+      unwrapInlineLists(
+        'Options: - **Web Chat:** script-tag widget. - **Email:** Gmail OAuth. - **API:** SDK or raw HTTP. All share one inbox. Want to set one up?',
+      ),
+    ).toBe(
+      'Options:\n- **Web Chat:** script-tag widget.\n- **Email:** Gmail OAuth.\n- **API:** SDK or raw HTTP.\nAll share one inbox. Want to set one up?',
+    );
+  });
+
+  it('keeps multi-sentence tails when earlier items are also multi-sentence', () => {
+    expect(
+      unwrapInlineLists('Try: - **A** do this. Carefully. - **B** do that. Then rest.'),
+    ).toBe('Try:\n- **A** do this. Carefully.\n- **B** do that. Then rest.');
+  });
 });

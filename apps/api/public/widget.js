@@ -163,10 +163,42 @@
   var NUM_LEAD = /^\d+[.)]\s+/;
   var INLINE_BULLET = / (?:(?:[*-])|(?:\d+[.)])) (?=\*\*)/g;
   function appendBlocks(bubble, text) {
-    var list = null;
+    // Items collect until flush so prose glued onto the last item can
+    // detach into a following paragraph ("…HTTP. Are you looking to …?").
+    var listItems = null;
     var ordered = false;
+    function sents(s) {
+      // No lookbehind — this file must still parse on older engines.
+      var m = s.match(/[^.!?]+[.!?]+\s*|[^.!?]+$/g);
+      return m ? m.map(function (x) { return x.trim(); }).filter(Boolean) : [];
+    }
     function flush() {
-      list = null;
+      if (listItems && listItems.length) {
+        var tail = null;
+        if (listItems.length >= 2) {
+          var last = sents(listItems[listItems.length - 1]);
+          var allSingle = listItems.slice(0, -1).every(function (i) {
+            return sents(i).length <= 1;
+          });
+          if (last.length >= 2 && allSingle) {
+            tail = last.slice(1).join(' ');
+            listItems[listItems.length - 1] = last[0];
+          }
+        }
+        var l = el(ordered ? 'ol' : 'ul', {}, { class: 'janis-wlist' });
+        listItems.forEach(function (item) {
+          var li = el('li');
+          appendRich(li, item);
+          l.appendChild(li);
+        });
+        bubble.appendChild(l);
+        if (tail) {
+          var p = el('span', {}, { class: 'janis-line' });
+          appendRich(p, tail);
+          bubble.appendChild(p);
+        }
+      }
+      listItems = null;
       ordered = false;
     }
     text.split('\n').forEach(function (raw) {
@@ -181,20 +213,17 @@
       }
       if (BULLET_LEAD.test(t) || NUM_LEAD.test(t)) {
         var isOrdered = NUM_LEAD.test(t);
-        if (!list || isOrdered !== ordered) {
-          ordered = isOrdered;
-          list = el(isOrdered ? 'ol' : 'ul', {}, { class: 'janis-wlist' });
-          bubble.appendChild(list);
-        }
+        if (listItems && isOrdered !== ordered) flush();
+        ordered = isOrdered;
+        if (!listItems) listItems = [];
         t.replace(BULLET_LEAD, '').replace(NUM_LEAD, '').split(INLINE_BULLET).forEach(function (item) {
-          var li = el('li');
-          appendRich(li, item);
-          list.appendChild(li);
+          listItems.push(item);
         });
         return;
       }
       var marks = t.match(INLINE_BULLET) || [];
       if (marks.length >= 2) {
+        flush();
         var parts = t.split(INLINE_BULLET);
         var lead = parts[0].trim();
         if (lead) {
@@ -202,13 +231,8 @@
           appendRich(p, lead);
           bubble.appendChild(p);
         }
-        list = el(/\d/.test(marks[0]) ? 'ol' : 'ul', {}, { class: 'janis-wlist' });
-        bubble.appendChild(list);
-        parts.slice(1).forEach(function (item) {
-          var li = el('li');
-          appendRich(li, item);
-          list.appendChild(li);
-        });
+        ordered = /\d/.test(marks[0]);
+        listItems = parts.slice(1);
         return;
       }
       flush();
@@ -216,6 +240,7 @@
       appendRich(span, t);
       bubble.appendChild(span);
     });
+    flush();
   }
 
   // Sentence punctuation glued to a URL — "see https://x.com/a." should link
