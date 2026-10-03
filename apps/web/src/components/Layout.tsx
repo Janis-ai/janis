@@ -38,51 +38,6 @@ const ALERT_LABELS: Record<string, string> = {
   approval_request: 'Approval requested',
 };
 
-interface BillingStatus {
-  plan_key: string;
-  plan_name: string;
-  used: number;
-  included: number;
-  pct: number;
-  capped: boolean;
-}
-
-/** Slim plan + usage meter pinned above the workspace switcher. Free shows
- *  the cap; internal (included = MAX_SAFE_INTEGER) shows used only. */
-function PlanMeter() {
-  const { data } = useQuery({
-    queryKey: ['billing-status'],
-    queryFn: () => api<BillingStatus>('/api/billing/status'),
-    refetchInterval: 60_000,
-  });
-  if (!data) return null;
-  const internal = data.plan_key === 'internal' || data.included >= Number.MAX_SAFE_INTEGER;
-  return (
-    <Link to="/billing" className="plan-meter" title="Billing">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span style={{ fontWeight: 600 }}>{data.plan_name}</span>
-        {data.capped && <span style={{ color: 'var(--warn)' }}>cap</span>}
-      </div>
-      <div className="muted" style={{ fontSize: 11 }}>
-        {internal
-          ? `${data.used.toLocaleString()} messages this month`
-          : `${data.used.toLocaleString()} of ${data.included.toLocaleString()} messages`}
-      </div>
-      {!internal && (
-        <div className="plan-meter-bar">
-          <div
-            className="plan-meter-fill"
-            style={{
-              width: `${data.pct}%`,
-              background: data.pct >= 100 ? 'var(--danger)' : 'var(--accent)',
-            }}
-          />
-        </div>
-      )}
-    </Link>
-  );
-}
-
 interface MeData {
   workspace: { id: string; name: string } | null;
   workspaces: { id: string; name: string; role: string }[];
@@ -709,9 +664,6 @@ export default function Layout() {
           </>
         )}
         <div className="spacer" />
-        {/* Plan meter — cheap /billing/status poll; hidden for agent-scoped
-            members and workspaces on the uncapped internal plan. */}
-        {!data?.agent_scope && <PlanMeter />}
         <Link to="/docs?guide=operator" className="docs-link" style={{ fontSize: 12, opacity: 0.75 }}>
           <span className="label">Operator guide</span><span className="icon"><BookOpen size={16} /></span>
         </Link>
