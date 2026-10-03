@@ -70,8 +70,8 @@ export function ChannelCard({
   const doRemove = async () => {
     if (
       await confirmRemove(
-        `Remove ${ch.name}? Its conversations stay in the inbox, but inbound messages stop arriving and the bubble/integration stops working.`,
-        [{ key: 'ok', label: 'Remove channel', danger: true }],
+        `Disconnect ${ch.name}? Its conversations stay in the inbox, but inbound messages stop arriving and the bubble/integration stops working.`,
+        [{ key: 'ok', label: 'Disconnect channel', danger: true }],
       )
     )
       remove.mutate();
@@ -159,7 +159,7 @@ export function ChannelCard({
           disabled={remove.isPending}
           onClick={() => void doRemove()}
         >
-          {remove.isPending ? 'Removing…' : 'Remove'}
+          {remove.isPending ? 'Disconnecting…' : 'Disconnect'}
         </button>
         {ch.kind === 'webchat' && (
           <button className="btn save" type="submit" form={`bub-form-${ch.id}`}>
