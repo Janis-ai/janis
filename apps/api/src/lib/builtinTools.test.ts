@@ -1222,7 +1222,7 @@ describe('create_channel builtin', () => {
     expect(applied.url).toContain(`/agents/${bot2.id}/channels/`);
     const [chan] = await db.select().from(channels).where(eq(channels.id, applied.channel_id));
     expect(chan.kind).toBe('webchat');
-    expect(chan.name).toBe('Bubble');
+    expect(chan.name).toBe(bot2.name);
     expect(chan.agentId).toBe(bot2.id);
   });
 

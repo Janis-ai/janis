@@ -145,7 +145,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         method: 'POST',
         body: JSON.stringify({
           kind: 'webchat',
-          name: `${agent.name} web chat`,
+          name: agent.name,
           agent_id: agentId,
         }),
       }),

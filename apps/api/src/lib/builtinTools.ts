@@ -721,7 +721,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           workspaceId: ws.id,
           agentId: row.id,
           kind: 'webchat',
-          name: 'Bubble',
+          name: row.name,
           credentials: {},
         })
         .returning();
@@ -2380,7 +2380,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       "Propose adding a Bubble (webchat) channel to an existing agent in a workspace the visitor administers — posts an approval card; nothing is created until they approve. Use when the visitor wants web chat / a site widget for an agent — DO NOT describe manual steps when this card can do it. Other kinds (Messenger, email, SMS, WhatsApp) need credential/OAuth setup on the agent's Channels page — link that page instead. Admin-only.",
     params: {
       agent: 'agent name — the agent to put the Bubble on (required)',
-      name: 'optional channel label — defaults to "Bubble"',
+      name: "optional channel label — defaults to the agent's name",
       workspace: 'workspace name — only needed when ambiguous',
     },
     available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
@@ -2396,7 +2396,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const target = await visitorAgent(ctx, ws, args.agent);
       if ('error' in target) return JSON.stringify(target);
       const agent = target.agent;
-      const name = (args.name ?? '').trim().slice(0, 80) || 'Bubble';
+      const name = (args.name ?? '').trim().slice(0, 80) || agent.name;
       const wsChannels = await ctx.db
         .select({ id: channels.id, name: channels.name, credentials: channels.credentials })
         .from(channels)
@@ -2450,7 +2450,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         .where(and(eq(agents.id, String(args.agent_id ?? '')), eq(agents.workspaceId, wsId)))
         .limit(1);
       if (!agent) return 'error: agent not found';
-      const name = String(args.name ?? '').trim().slice(0, 80) || 'Bubble';
+      const name = String(args.name ?? '').trim().slice(0, 80) || agent.name;
       const [chan] = await ctx.db
         .insert(channels)
         .values({ workspaceId: wsId, agentId: agent.id, kind: 'webchat', name, credentials: {} })
