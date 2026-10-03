@@ -353,6 +353,13 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           ? `https://m.me/${ch.meta.page_id}`
           : undefined;
 
+  /** Does the channel page carry anything beyond the row's own actions?
+   *  OAuth Meta channels have no channel-specific settings (their webhook
+   *  details only exist for manual Meta apps) — for those the row is just
+   *  Open + Disconnect. */
+  const hasConfigPage = (ch: Channel) =>
+    !['messenger', 'instagram', 'whatsapp'].includes(ch.kind) || ch.meta.via !== 'oauth';
+
   const overrides = (ch: Channel) => {
     const bits: string[] = [];
     if (ch.meta.branding?.greeting) bits.push('custom greeting');
@@ -434,13 +441,21 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                   </span>
                 </div>
                 {launchUrl(ch) && (
-                  <a href={launchUrl(ch)} target="_blank" rel="noreferrer" className="muted" style={{ fontSize: 12 }}>
+                  <a
+                    href={launchUrl(ch)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={hasConfigPage(ch) ? 'muted' : 'btn'}
+                    style={hasConfigPage(ch) ? { fontSize: 12 } : undefined}
+                  >
                     Open ↗
                   </a>
                 )}
-                <Link className="btn" to={`/agents/${agentId}/channels/${ch.id}`}>
-                  Configure
-                </Link>
+                {hasConfigPage(ch) && (
+                  <Link className="btn" to={`/agents/${agentId}/channels/${ch.id}`}>
+                    Configure
+                  </Link>
+                )}
                 <button
                   className="btn danger"
                   disabled={removeChannel.isPending}
