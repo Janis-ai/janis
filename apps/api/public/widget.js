@@ -818,6 +818,7 @@
     state.deliveredEl = null;
     hideTyping();
     if (state.qrsEl) { state.qrsEl.remove(); state.qrsEl = null; }
+    state.greetEl = null;
     state.greeted = false; // let the fresh poll decide whether the greeting belongs
   }
 
@@ -1389,6 +1390,21 @@
         var wantPing = false;
         var firstPoll = !state.seenInit;
         d.messages.forEach(function (m) {
+          // The stored greeting row replaces the synthetic bootstrap
+          // greeting — same text, but the real record keeps history
+          // consistent on reopen instead of vanishing.
+          if (m.greeting) {
+            if (m.created_at && (!state.lastTs || m.created_at > state.lastTs)) {
+              state.lastTs = m.created_at;
+            }
+            if (state.greetEl && m.id) {
+              state.seen[m.id] = 1;
+              state.greetEl.setAttribute('data-real', '1');
+            } else {
+              addMsg(m);
+            }
+            return;
+          }
           // Exact idempotency-key match first — text matching misfires when
           // the same message is sent twice.
           var i = m.direction === 'in' ? state.outbox.findIndex(function (o) {

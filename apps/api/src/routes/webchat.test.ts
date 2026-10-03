@@ -229,11 +229,14 @@ describe('webchat widget endpoints', () => {
     const poll = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR_A}`);
     const body = await poll.json();
     expect(body.state).toBe('active');
-    expect(body.messages).toHaveLength(1);
-    expect(body.messages[0].text).toBe('hello from the website');
-    expect(body.messages[0].direction).toBe('in');
+    // greeting row first, then the inbound echo — the widget dedupes the
+    // greeting against its bootstrap render via the `greeting` flag
+    expect(body.messages).toHaveLength(2);
+    expect(body.messages[0].greeting).toBe(true);
+    expect(body.messages[1].text).toBe('hello from the website');
+    expect(body.messages[1].direction).toBe('in');
     // internal payloads must never leak to the widget
-    expect(body.messages[0].payload).toBeUndefined();
+    expect(body.messages[1].payload).toBeUndefined();
   });
 
   it('dedupes a retried POST by client_id — one stored message, echo carries the key', async () => {
@@ -288,11 +291,12 @@ describe('webchat widget endpoints', () => {
     await post('a secret', VISITOR_B);
     const poll = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR_B}`);
     const body = await poll.json();
-    expect(body.messages.map((m: { text: string }) => m.text)).toEqual(['a secret']);
+    expect(body.messages.map((m: { text: string }) => m.text)).toEqual(['Hey there!', 'a secret']);
 
     // visitor A can't see B's transcript and vice versa
     const a = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR_A}`);
     expect((await a.json()).messages.map((m: { text: string }) => m.text)).toEqual([
+      'Hey there!',
       'hello from the website',
     ]);
   });
@@ -402,11 +406,11 @@ describe('webchat widget endpoints', () => {
       `/chat/${channelId}/messages?visitor_id=${VISITOR}&before=${encodeURIComponent(before)}`,
     );
     const page2 = await second.json();
-    // 21 older rows: m0..m19 + the original 'first' post
-    expect(page2.messages).toHaveLength(21);
+    // 22 older rows: the greeting + m0..m19 + the original 'first' post
+    expect(page2.messages).toHaveLength(22);
     expect(page2.has_more).toBe(false);
     expect(page2.messages.at(-1).text).toBe('m19');
-    expect(page2.messages[0].text).toBe('first');
+    expect(page2.messages[0].text).toBe('Hey there!');
   });
 
   it('exposes operator typing state on the poll', async () => {
@@ -655,6 +659,25 @@ describe('webchat widget endpoints', () => {
     expect(msgs[0].text).toBeTruthy(); // the greeting
     expect(msgs[1].direction).toBe('in');
     expect(msgs[1].text).toBe('who are you?');
+  });
+
+  // Regression: the poll filtered via:'greeting' rows on public channels and
+  // the widget only drew its synthetic greeting on an empty transcript — a
+  // reopened widget lost the greeting entirely.
+  it('returns the stored greeting row flagged on public channels', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const visitor = 'vis_greeting_public';
+    await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: visitor, text: 'hey' }),
+    });
+    const res = await app.request(`/chat/${channelId}/messages?visitor_id=${visitor}`);
+    const msgs = (await res.json()).messages;
+    expect(msgs[0].direction).toBe('out');
+    expect(msgs[0].text).toBe('Hey there!');
+    expect(msgs[0].greeting).toBe(true);
+    expect(msgs[1].text).toBe('hey');
   });
 
   it('rejects uploads with a bad visitor id and foreign attachment urls', async () => {

@@ -814,8 +814,6 @@ export function webchatRoutes(db: Db) {
             handoff_cancelled?: boolean;
             resolved?: boolean;
           };
-          // via:'greeting' rows are real transcript messages, but the widget
-          // renders its own greeting from the bootstrap — don't double it.
           // payload.internal covers operator-only rows (takeover/resume/notes)
           // — they carry the author's real name and must never reach visitors.
           const p = m.payload as
@@ -828,7 +826,6 @@ export function webchatRoutes(db: Db) {
             !f.handoff_offer &&
             !f.handoff_cancelled &&
             !f.resolved &&
-            (internal || p?.via !== 'greeting') &&
             // Approval cards reach the internal test rail (Ask Janis) so an
             // operator can exercise a gated tool end-to-end; every other
             // internal row stays operator-side.
@@ -843,6 +840,13 @@ export function webchatRoutes(db: Db) {
         // sender's own idempotency key — lets the client reconcile its
         // optimistic outbox entry exactly, even after a lost response
         client_id: (m.payload as { client_id?: string } | undefined)?.client_id,
+        // via:'greeting' rows are real transcript messages — the stored
+        // record, so history loads show exactly what the visitor saw. The
+        // widget's bootstrap renders a synthetic greeting on first open; it
+        // dedupes on this flag instead of drawing the message twice.
+        ...((m.payload as { via?: string } | undefined)?.via === 'greeting'
+          ? { greeting: true }
+          : {}),
         attachments: (m.payload as { attachments?: unknown[] } | undefined)?.attachments,
         quick_replies: (m.payload as { quick_replies?: QuickReply[] } | undefined)?.quick_replies,
         // interactive components (cards, pickers, forms) — validated on
