@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { widgetFromToolResult } from './widgets.js';
+import { dedupeToolWidgets, widgetFromToolResult } from './widgets.js';
 
 const products = JSON.stringify({
   products: [
@@ -264,5 +264,42 @@ describe('resolveWidgetRef', () => {
     );
     expect(spec2).toMatchObject({ title: 'Order #1932 — delivered' });
     vi.unstubAllGlobals();
+  });
+});
+
+describe('dedupeToolWidgets', () => {
+  const toolCards = {
+    type: 'cards' as const,
+    items: [
+      { title: 'Tenth Stair', link: 'https://music.apple.com/a' },
+      { title: 'Dress Renee', link: 'https://music.apple.com/b' },
+      { title: 'Chasing the Lights', link: 'https://music.apple.com/c' },
+    ],
+  };
+
+  it('drops a model cards row that restates the tool-bound render', () => {
+    const modelCards = {
+      type: 'cards' as const,
+      items: [
+        { title: 'Tenth Stair', link: 'https://music.apple.com/a' },
+        { title: 'Dress Renee', link: 'https://music.apple.com/b' },
+        { title: 'Chasing the Lights', link: 'https://music.apple.com/c' },
+      ],
+    };
+    expect(dedupeToolWidgets([toolCards], [modelCards])).toEqual([]);
+  });
+
+  it('keeps components with genuinely different items', () => {
+    const other = {
+      type: 'cards' as const,
+      items: [{ title: 'Something Else', link: 'https://music.apple.com/z' }],
+    };
+    expect(dedupeToolWidgets([toolCards], [other])).toEqual([other]);
+  });
+
+  it('passes through when there is nothing to dedupe against', () => {
+    const w = { type: 'cards' as const, items: [{ title: 'x' }] };
+    expect(dedupeToolWidgets([], [w])).toEqual([w]);
+    expect(dedupeToolWidgets([toolCards], [])).toEqual([]);
   });
 });

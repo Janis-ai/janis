@@ -397,3 +397,39 @@ export function extractWidgets(text: string): {
     .join('\n');
   return { text: out.trim(), widgets, refs, dropped };
 }
+
+/** Per-item identity — what the component actually shows the customer. */
+function widgetItemKeys(w: WidgetComponent): string[] {
+  const items: Record<string, unknown>[] =
+    w.type === 'cards' || w.type === 'options'
+      ? w.items
+      : w.type === 'form'
+        ? w.fields
+        : w.type === 'status'
+          ? w.steps
+          : w.rows;
+  return items.map((i) => `${i.title ?? i.label ?? i.name ?? ''}|${i.link ?? ''}`);
+}
+
+/**
+ * A widget-bound tool already renders its result deterministically — a
+ * model that *also* emits a WIDGET: line for the same data produces two
+ * identical card rows. Drop a model component when most of its items
+ * duplicate a tool-rendered component's (model transcription can truncate,
+ * so ≥60% overlap counts, not an exact-set match).
+ */
+export function dedupeToolWidgets(
+  toolWidgets: WidgetComponent[],
+  modelWidgets: WidgetComponent[],
+): WidgetComponent[] {
+  if (!toolWidgets.length || !modelWidgets.length) return modelWidgets;
+  const toolKeys = toolWidgets.map((t) => ({ type: t.type, keys: new Set(widgetItemKeys(t)) }));
+  return modelWidgets.filter((m) => {
+    const mine = widgetItemKeys(m);
+    return !toolKeys.some(
+      (t) =>
+        t.type === m.type &&
+        mine.filter((k) => t.keys.has(k)).length >= Math.ceil(mine.length * 0.6),
+    );
+  });
+}

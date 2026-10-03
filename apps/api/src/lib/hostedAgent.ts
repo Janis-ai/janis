@@ -17,7 +17,7 @@ import { getUpload } from './uploads.js';
 import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
-import { extractWidgets, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { dedupeToolWidgets, extractWidgets, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -2548,8 +2548,9 @@ async function replyAsHostedAgent(
     if (runIssues.length)
       void fireErrorAlert(db, agent, convId, runIssues.join('; ')).catch(() => {});
     // Data-bound components from widget-bound tools lead the reply; the
-    // model's own WIDGET: lines trail, capped at 3 total.
-    widgets = [...toolWidgets, ...widgets].slice(0, 3);
+    // model's own WIDGET: lines trail — minus any that restate what a tool
+    // binding already rendered (a duplicate cards row reads as a bug).
+    widgets = [...toolWidgets, ...dedupeToolWidgets(toolWidgets, widgets)].slice(0, 3);
     const genMs = Date.now() - tGen;
     if (genMs > 10_000)
       console.warn(`[hosted] slow generateReply conv=${convId} ${genMs}ms`);
