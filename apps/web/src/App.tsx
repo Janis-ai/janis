@@ -1,5 +1,5 @@
 import { Component, type ReactElement, type ReactNode, useEffect } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api, ApiError } from './api/client';
 import type { Channel } from '@janis/shared';
@@ -13,6 +13,7 @@ import Conversations from './pages/Conversations';
 import ConversationPage from './pages/ConversationPage';
 import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
+import AgentOverview from './pages/AgentOverview';
 import Reports from './pages/Reports';
 import Errors from './pages/Errors';
 import Billing from './pages/Billing';
@@ -102,30 +103,7 @@ function ChannelRedirect() {
   );
 }
 
-/** Old /agents/:id?tab=X links resolve to the new section paths. */
-const LEGACY_TAB_SECTION: Record<string, string> = {
-  connection: 'settings',
-  behavior: 'behavior',
-  channels: 'channels',
-  escalation: 'settings',
-  tools: 'integrations',
-  tests: 'tests',
-  help: 'knowledge',
-  llm: 'behavior',
-};
 
-/** /agents/:id lands on the agent's inbox — operators open an agent to work
- *  its queue, not to configure it. */
-function AgentRedirect() {
-  const { id } = useParams();
-  const [params] = useSearchParams();
-  const tab = params.get('tab');
-  const legacySub: Record<string, string> = { llm: 'llm', help: 'help', escalation: 'escalation', connection: 'general' };
-  const to = tab && LEGACY_TAB_SECTION[tab]
-    ? `/agents/${id}/${LEGACY_TAB_SECTION[tab]}${legacySub[tab] ? `?sub=${legacySub[tab]}` : ''}`
-    : `/agents/${id}/inbox`;
-  return <Navigate to={to} replace />;
-}
 
 /** Thin wrappers — the same page components serve the workspace context
  *  unscoped and the agent context pinned to that agent. */
@@ -203,7 +181,7 @@ export default function App() {
           <Route path="/contacts/:id" element={<ContactDetail />} />
           <Route path="/campaigns" element={<Campaigns />} />
           <Route path="/agents" element={<Agents />} />
-          <Route path="/agents/:id" element={<AgentRedirect />} />
+          <Route path="/agents/:id" element={<AgentOverview />} />
           {/* Agent context — every section is its own path so the sidebar
               can flip the whole nav between workspace and agent. */}
           <Route path="/agents/:id/inbox" element={<AgentInbox />} />

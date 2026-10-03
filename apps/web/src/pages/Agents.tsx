@@ -90,8 +90,7 @@ export default function Agents() {
             <div
               key={agent.id}
               className="card row agent-row"
-              style={{ alignItems: 'center', cursor: 'pointer' }}
-              onClick={() => navigate(`/agents/${agent.id}`)}
+              style={{ alignItems: 'center' }}
             >
               <div className="grow" style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 700 }}>{agent.name}</div>
@@ -112,27 +111,20 @@ export default function Agents() {
               </span>
               <button
                 className="btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigate(`/conversations?agent=${agent.id}`);
-                }}
+                onClick={() => navigate(`/agents/${agent.id}/inbox`)}
               >
-                View
+                Inbox
               </button>
               <button
                 className="btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigate(`/agents/${agent.id}`);
-                }}
+                onClick={() => navigate(`/agents/${agent.id}`)}
               >
                 Manage
               </button>
               {isAdmin && (
                 <button
                   className="btn danger"
-                  onClick={async (e) => {
-                    e.stopPropagation();
+                  onClick={async () => {
                     if (await confirm(`Delete agent "${agent.name}"? Its channels, conversations, and settings are removed.`, [{ key: 'ok', label: 'Delete', danger: true }])) removeAgent.mutate(agent.id);
                   }}
                 >

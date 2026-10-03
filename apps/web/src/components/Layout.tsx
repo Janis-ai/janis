@@ -14,7 +14,7 @@ import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
-  CreditCard, FlaskConical, Inbox, LayoutGrid, LibraryBig, Megaphone,
+  CreditCard, FlaskConical, Gauge, Inbox, LayoutGrid, LibraryBig, Megaphone,
   Plug, Radio, Settings, SlidersHorizontal, Sparkles, Users, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
@@ -309,6 +309,14 @@ export default function Layout() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const isAskPage = location.pathname === '/ask';
+  // A shared page's scoped URL is still that page — /agents/:id/inbox lights
+  // Inbox, not Agents (Agents itself is `end`-matched, list page only).
+  const scopedActive =
+    (name: string) =>
+    ({ isActive }: { isActive: boolean }) =>
+      isActive || new RegExp(`^/agents/[^/]+/${name}(/|$)`).test(location.pathname)
+        ? 'active'
+        : '';
   const lastNonAsk = useRef('/conversations');
   useEffect(() => {
     if (!isAskPage) lastNonAsk.current = location.pathname + location.search;
@@ -658,6 +666,7 @@ export default function Layout() {
               <Bot size={13} />
               <span>{currentAgent.name}</span>
             </div>
+            <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Overview</span><span className="icon"><Gauge size={18} /></span></NavLink>
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/behavior`}><span className="label">Behavior</span><span className="icon"><SlidersHorizontal size={18} /></span></NavLink>
             {currentAgent.hosted && (
               <NavLink className="nav-indent" to={`/agents/${ctxAgent}/knowledge`}><span className="label">Knowledge base</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
@@ -675,21 +684,23 @@ export default function Layout() {
         )}
         {/* The shared customer layer — always the same spots. The four
             scoped-able pages default to the context agent; their on-page
-            picker is the context control. */}
-        <NavLink to="/conversations" end>
+            picker is the context control. scopedActive lights the workspace
+            item for the scoped URL too — /agents/:id/inbox is still Inbox,
+            not Agents. */}
+        <NavLink to="/conversations" className={scopedActive('inbox')}>
           <span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>
           {(ctxAgent ? agentAttention : attention)?.count ? (
             <span className="nav-badge">{(ctxAgent ? agentAttention : attention)!.count}</span>
           ) : null}
         </NavLink>
-        <NavLink to="/agents"><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>
-        <NavLink to="/contacts"><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
-        <NavLink to="/campaigns"><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
+        <NavLink to="/agents" end><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>
+        <NavLink to="/contacts" className={scopedActive('contacts')}><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
+        <NavLink to="/campaigns" className={scopedActive('campaigns')}><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
         {/* Workspace-wide sections vanish for agent-scoped users — they only
             hold grants on specific agents, not the workspace itself. */}
         {!data?.agent_scope && (
           <>
-            <NavLink to="/reports"><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
+            <NavLink to="/reports" className={scopedActive('reports')}><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
             {data?.operator && (
               <NavLink to="/errors"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
             )}
