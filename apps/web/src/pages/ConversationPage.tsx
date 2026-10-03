@@ -1210,7 +1210,9 @@ export default function ConversationPage() {
           <div className="muted" style={{ marginTop: 8 }}>
             {(p.channel || p.channel_name) && (
               <div>
-                <strong>Channel:</strong> {channelLabel(p.channel)}
+                <strong>Channel:</strong>{' '}
+                <span className="badge active">{channelLabel(p.channel)}</span>
+                {p.channel_name ? ` ${p.channel_name}` : ''}
               </div>
             )}
             <div>
@@ -1236,22 +1238,19 @@ export default function ConversationPage() {
                 '—'
               )}
             </div>
+            {p.email && (
+              <div>
+                <strong>Email:</strong> {p.email}
+              </div>
+            )}
+            {p.phone && (
+              <div>
+                <strong>Phone:</strong> {p.phone}
+              </div>
+            )}
             <details style={{ marginTop: 4 }}>
               <summary>Context</summary>
               <div style={{ marginTop: 4 }}>
-                {p.channel_name && (
-                  <div>
-                    <strong>Channel name:</strong> {p.channel_name}
-                  </div>
-                )}
-                <div>
-                  <strong>Email:</strong> {p.email ?? '—'}
-                </div>
-                {p.phone && (
-                  <div>
-                    <strong>Phone:</strong> {p.phone}
-                  </div>
-                )}
                 <div style={{ overflowWrap: 'anywhere' }}>
                   <strong>User id:</strong> {p.id ?? c.external_id}
                 </div>
