@@ -71,7 +71,6 @@
     unread: 0,
     fails: 0,        // consecutive poll failures — drives the reconnect strip
     pinBottom: true, // visitor is scrolled to the latest — keep following new msgs
-    reveals: [],   // in-flight streamed-reply timers — fast-forward on the next msg
     jumpEl: null,    // "new messages" pill shown when not pinned and replies land
     audioCtx: null,
     closedTimer: null, // closed-state poll — feeds the unread badge
@@ -99,8 +98,6 @@
     if (state.timer) { clearInterval(state.timer); state.timer = null; }
     if (state.closedTimer) { clearInterval(state.closedTimer); state.closedTimer = null; }
     if (state.typingTimer) { clearTimeout(state.typingTimer); state.typingTimer = null; }
-    state.reveals.forEach(function (r) { clearInterval(r.timer); });
-    state.reveals = [];
     var els = document.querySelectorAll('[id^="janis-"]');
     for (var i = 0; i < els.length; i++) els[i].remove();
   };
@@ -215,54 +212,6 @@
       appendRich(span, t);
       bubble.appendChild(span);
     });
-  }
-
-  // Streamed replies — not a real token stream (poll delivers whole messages),
-  // but the reveal reads the same: the full block structure builds up-front so
-  // markdown never renders half-open, then text nodes fill in progressively.
-  // Widgets wait for the text to finish, matching how the reply was written.
-  function revealText(container, text, done) {
-    var build = el('div');
-    appendBlocks(build, text);
-    var tw = document.createTreeWalker(build, 4 /* SHOW_TEXT */);
-    var nodes = [];
-    var n;
-    while ((n = tw.nextNode())) nodes.push({ node: n, full: n.nodeValue });
-    nodes.forEach(function (o) { o.node.nodeValue = ''; });
-    while (build.firstChild) container.appendChild(build.firstChild);
-    var total = nodes.reduce(function (s, o) { return s + o.full.length; }, 0);
-    if (!total) { if (done) done(); return; }
-    var perTick = Math.max(1, Math.ceil(total / 85)); // ~1.4s regardless of length
-    var i = 0;
-    var budget = 0;
-    var rec = { nodes: nodes, done: done, timer: null };
-    rec.timer = setInterval(function () {
-      budget += perTick;
-      while (i < nodes.length && budget > 0) {
-        var o = nodes[i];
-        var left = o.full.length - o.node.nodeValue.length;
-        if (budget >= left) { o.node.nodeValue = o.full; budget -= left; i++; }
-        else { o.node.nodeValue = o.full.slice(0, o.node.nodeValue.length + budget); budget = 0; }
-      }
-      if (state.pinBottom) scrollBottom();
-      if (i >= nodes.length) {
-        clearInterval(rec.timer);
-        state.reveals = state.reveals.filter(function (r) { return r !== rec; });
-        if (done) done();
-      }
-    }, 16);
-    state.reveals.push(rec);
-  }
-
-  // A new message arriving mid-reveal snaps any in-flight reveal to full —
-  // two competing streams would interleave out of order.
-  function finishReveals() {
-    state.reveals.forEach(function (r) {
-      clearInterval(r.timer);
-      r.nodes.forEach(function (o) { o.node.nodeValue = o.full; });
-      if (r.done) r.done();
-    });
-    state.reveals = [];
   }
 
   // Sentence punctuation glued to a URL — "see https://x.com/a." should link
@@ -823,7 +772,6 @@
   // after-cursor all belong to the old thread — reset and fetch it fresh.
   function resetTranscript() {
     msgs.innerHTML = '';
-    finishReveals(); // stray reveal timers would render into detached nodes
     state.seen = {};
     state.lastTs = null;
     state.lastAuthor = null;
@@ -840,7 +788,7 @@
   // Bubble construction shared by append (new messages) and prepend
   // (scroll-up history back-fill). Stamps data-author so a prepended page
   // can dedupe the author label at the seam with existing messages.
-  function buildMsgEl(m, reveal) {
+  function buildMsgEl(m) {
     var d = el('div', {}, { class: 'janis-msg ' + m.direction });
     d.className = 'janis-msg ' + (m.direction === 'in' ? 'in' : m.direction === 'human' ? 'human' : 'out');
     // Operator identity on human replies — the label shows once per run of
@@ -884,18 +832,9 @@
       }
       d.appendChild(who);
     }
-    if (m.text) {
-      if (reveal) {
-        // The bubble reveals progressively; widgets land when the text finishes.
-        revealText(d, m.text, function () {
-          if (m.direction === 'out' && m.widgets && m.widgets.length) renderWidgets(d, m.widgets);
-        });
-      } else {
-        appendBlocks(d, m.text);
-      }
-    }
+    if (m.text) appendBlocks(d, m.text);
     (m.attachments || []).forEach(function (a) { addAttachmentNode(d, a); });
-    if (!reveal && m.direction === 'out' && m.widgets && m.widgets.length) renderWidgets(d, m.widgets);
+    if (m.direction === 'out' && m.widgets && m.widgets.length) renderWidgets(d, m.widgets);
     return d;
   }
 
@@ -1124,14 +1063,13 @@
     });
   }
 
-  function addMsg(m, reveal) {
+  function addMsg(m) {
     if (m.id) {
       if (state.seen[m.id]) return;
       state.seen[m.id] = 1;
     }
     if (m.direction !== 'in') hideTyping();
-    finishReveals(); // two competing streams would interleave
-    var d = buildMsgEl(m, reveal);
+    var d = buildMsgEl(m);
     msgs.appendChild(d);
     // Chips belong to the message that offered them — a visitor send or any
     // newer message without its own quick replies retires the offer.
@@ -1413,7 +1351,6 @@
         }
         var gotReply = false;
         var wantPing = false;
-        // First poll renders history — streamed reveal is only for live replies.
         var firstPoll = !state.seenInit;
         d.messages.forEach(function (m) {
           // Exact idempotency-key match first — text matching misfires when
@@ -1457,7 +1394,7 @@
             else { state.lastSeen = m.created_at; saveSeen(); }
           }
           if (m.direction !== 'in') gotReply = true;
-          addMsg(m, !firstPoll && m.direction === 'out');
+          addMsg(m);
         });
         // First poll seeds the read watermark ONLY for brand-new visitors —
         // a stored lastSeen means messages newer than it are real backlog
