@@ -590,27 +590,6 @@ export default function Layout() {
             onAddAgent={() => void addAgent()}
           />
         )}
-        {/* Copilot rides the top of both contexts — the concierge rail is
-            always one click away, scoped to the selected agent when the URL
-            carries one. */}
-        {data?.support_channel_id && (
-          <button
-            type="button"
-            className={`ask-toggle${(railVisible && railTab === 'ask') || isAskPage ? ' active' : ''}`}
-            onClick={() => {
-              if (isAskPage) {
-                closeRail();
-              } else if (railOpen && railTab === 'ask') {
-                setRailOpen(false);
-              } else {
-                setRailTab('ask');
-                setRailOpen(true);
-              }
-            }}
-          >
-            <span className="label">Copilot</span><span className="icon"><Sparkles size={18} /></span>
-          </button>
-        )}
         {/* Agent subsection first — the agent's build surface, present only
             while an agent is in context. Items indent under the name row;
             .agent-nav's bottom border separates them from the workspace
@@ -661,6 +640,30 @@ export default function Layout() {
             )}
             <NavLink to="/billing"><span className="label">Billing</span><span className="icon"><CreditCard size={18} /></span></NavLink>
             <NavLink to="/settings"><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
+          </>
+        )}
+        {/* Copilot closes the nav, divided off from the workspace layer —
+            the concierge rail is always one click away, scoped to the
+            selected agent when the URL carries one. */}
+        {data?.support_channel_id && (
+          <>
+            {!data?.agent_scope && <div className="nav-divider" />}
+            <button
+              type="button"
+              className={`ask-toggle${(railVisible && railTab === 'ask') || isAskPage ? ' active' : ''}`}
+              onClick={() => {
+                if (isAskPage) {
+                  closeRail();
+                } else if (railOpen && railTab === 'ask') {
+                  setRailOpen(false);
+                } else {
+                  setRailTab('ask');
+                  setRailOpen(true);
+                }
+              }}
+            >
+              <span className="label">Copilot</span><span className="icon"><Sparkles size={18} /></span>
+            </button>
           </>
         )}
         <div className="spacer" />

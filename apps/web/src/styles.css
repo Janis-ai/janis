@@ -102,6 +102,8 @@ button, input, select, textarea { font: inherit; }
   overflow-wrap: break-word;
 }
 .sidebar a.nav-indent { padding-left: 40px; }
+/* Rule separating the workspace layer from the Copilot toggle below it. */
+.sidebar .nav-divider { border-top: 1px solid var(--border); margin: 6px 0; }
 /* "Ask Janis" toggle — looks like a nav link but toggles the docked rail */
 .sidebar .ask-toggle {
   display: block; width: 100%; padding: 9px 20px; border: none; background: none;
