@@ -33,7 +33,7 @@ def read_env(path):
             line = line.strip()
             if line and not line.startswith('#') and '=' in line:
                 k, v = line.split('=', 1)
-                envs[k.strip()] = v.strip()
+                envs[k.strip()] = v.strip().strip('"').strip("'")
     except FileNotFoundError:
         pass
     return envs

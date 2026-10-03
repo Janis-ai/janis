@@ -12,6 +12,19 @@ npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod)
 - Login: `admin@janis.local` / `janis-admin` (env-overridable seed)
 - Demo agent: `npm run demo-agent -w apps/api` (needs built packages/shared + sdk)
 
+## End-of-task summary ritual
+
+After finishing a task, send Mike the summary:
+```
+cd apps/api
+export DATABASE_URL="$(grep '^DATABASE_URL=' .env.production | cut -d= -f2-)"
+export RESEND_API_KEY="$(grep '^RESEND_API_KEY=' .env.production | cut -d= -f2-)"
+npx tsx scripts/task-summary.ts "Title" "Body"
+```
+Emails michael.nathanson@gmail.com from janis@inbound.janis.ai and fires a
+'custom' alert on the concierge rail conversation (lands in the Janis Inbox,
+as a push notification, and on the workspace Slack alert channel).
+
 ## Verify after every change
 
 1. `npm run typecheck` (root — all workspaces)
