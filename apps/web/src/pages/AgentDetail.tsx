@@ -256,12 +256,13 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
 
   // Sections whose edits live in the shared draft — the bottom Save button
   // renders there. Behavior is all-cfg; in Knowledge only the Text sub is a
-  // draft (files/gaps/help self-save); Settings drafts live in General
-  // (webhook URL) and Escalation (auto-resume).
+  // draft (files/gaps/help self-save); Settings shows it on every sub — its
+  // drafts span General (name, webhook URL) and Escalation (auto-resume), and
+  // Team/Saved-replies cards self-save but the shared save still applies.
   const hasDrafts =
     section === 'behavior' ||
     (section === 'knowledge' && sub === 'text') ||
-    (section === 'settings' && (sub === 'general' || sub === 'escalation'));
+    section === 'settings';
 
   return (
     <div className="agent-editor">
