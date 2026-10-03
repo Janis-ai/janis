@@ -415,31 +415,31 @@ export default function Layout() {
   // Reflect rail state back into the URL — refresh or a copied link reopens
   // the same panel. replace: keeps tab flips out of history.
   useEffect(() => {
-    setSearchParams(
-      (prev) => {
-        // While workspace detail is loading, hasAsk is unknown — stripping a
-        // deeplinked ?rail=ask here would strand the consumer's retry.
-        if (data === undefined) return prev;
-        const p = new URLSearchParams(prev);
-        if (isAskPage) {
-          // The path itself carries the state — ?rail= would fight it.
-          p.delete('rail');
-          p.delete('agent');
-        } else if (railOpen && railTab === 'ask' && hasAsk) {
-          p.set('rail', 'ask');
-          p.delete('agent');
-        } else if (railOpen && railTab === 'test' && testRail?.agentId) {
-          p.set('rail', 'test');
-          p.set('agent', testRail.agentId);
-        } else {
-          p.delete('rail');
-          p.delete('agent');
-        }
-        return p;
-      },
-      { replace: true },
-    );
-  }, [railOpen, railTab, hasAsk, testRail, isAskPage, setSearchParams, data]);
+    // While workspace detail is loading, hasAsk is unknown — stripping a
+    // deeplinked ?rail=ask here would strand the consumer's retry.
+    if (data === undefined) return;
+    const p = new URLSearchParams(searchParams);
+    if (isAskPage) {
+      // The path itself carries the state — ?rail= would fight it.
+      p.delete('rail');
+      p.delete('agent');
+    } else if (railOpen && railTab === 'ask' && hasAsk) {
+      p.set('rail', 'ask');
+      p.delete('agent');
+    } else if (railOpen && railTab === 'test' && testRail?.agentId) {
+      p.set('rail', 'test');
+      p.set('agent', testRail.agentId);
+    } else {
+      p.delete('rail');
+      p.delete('agent');
+    }
+    // setSearchParams navigates through the render-time route match even
+    // when called unconditionally from an effect — under a racing redirect
+    // (legacy ?tab= → /:section) the stale match navigates back to the old
+    // path, ping-ponging forever. Only write when the params differ.
+    if (p.toString() === searchParams.toString()) return;
+    setSearchParams(p, { replace: true });
+  }, [railOpen, railTab, hasAsk, testRail, isAskPage, searchParams, setSearchParams, data]);
   // No active workspace → skip workspace-scoped queries (they'd 401 no_workspace)
   const hasWorkspace = Boolean(data?.workspace);
   const { data: attention } = useQuery({

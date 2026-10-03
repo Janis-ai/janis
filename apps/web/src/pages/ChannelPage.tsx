@@ -41,7 +41,7 @@ export default function ChannelPage() {
     return (
       <>
         <h1 className="page-title">Channel not found</h1>
-        <Link to={agent ? `/agents/${agent.id}?tab=channels` : '/agents'} className="muted">
+        <Link to={agent ? `/agents/${agent.id}/channels` : '/agents'} className="muted">
           ← Back to channels
         </Link>
       </>
@@ -50,7 +50,7 @@ export default function ChannelPage() {
   return (
     <>
       <div className="muted" style={{ marginBottom: 10, fontSize: 13 }}>
-        <Link to={agent ? `/agents/${agent.id}?tab=channels` : '/agents'}>
+        <Link to={agent ? `/agents/${agent.id}/channels` : '/agents'}>
           ← {agent?.name ?? 'Agent'} · Channels
         </Link>
       </div>
@@ -71,7 +71,7 @@ export default function ChannelPage() {
         ch={ch}
         agents={agents}
         onRemoved={() =>
-          navigate(agent ? `/agents/${agent.id}?tab=channels` : '/agents')
+          navigate(agent ? `/agents/${agent.id}/channels` : '/agents')
         }
       />
     </>
