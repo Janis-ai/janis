@@ -6,6 +6,7 @@ import type {
   Channel,
   Conversation,
   Digest,
+  MemberGroup,
   Message,
   SavedReply,
   SavedView,
@@ -110,6 +111,13 @@ export function useAlertRules() {
   return useQuery({
     queryKey: ['rules'],
     queryFn: () => api<{ rules: AlertRule[] }>('/api/rules'),
+  });
+}
+
+export function useGroups() {
+  return useQuery({
+    queryKey: ['groups'],
+    queryFn: () => api<{ groups: MemberGroup[] }>('/api/groups'),
   });
 }
 

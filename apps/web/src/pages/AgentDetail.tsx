@@ -9,8 +9,9 @@ import type {
   Channel,
   ToolTemplateInfo,
 } from '@janis/shared';
+import { DEFAULT_INTENTS } from '@janis/shared';
 import { api } from '../api/client';
-import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
+import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useGroups, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
 import { AgentChannels } from '../components/AgentChannels';
 import { HelpCenter } from '../components/HelpCenter';
 import { AutosizeText, timeAgo } from '../components/bits';
@@ -22,7 +23,20 @@ import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
 import { RefreshCw, Trash2, Upload, X } from 'lucide-react';
 
-const RULE_KINDS = ['failure', 'handoff_request', 'keyword', 'inactivity', 'custom_alert', 'auto_assign'] as const;
+type RuleKind = AlertRule['kind'];
+const RULE_KINDS: { key: RuleKind; label: string; hint: string }[] = [
+  { key: 'handoff_request', label: 'Handoff request', hint: 'the agent asks for a human' },
+  { key: 'sentiment', label: 'Negative sentiment', hint: 'a customer message reads frustrated or angry' },
+  { key: 'intent', label: 'Topic match', hint: 'the classifier tags the conversation with a topic' },
+  { key: 'keyword', label: 'Keyword', hint: 'an inbound message contains the text' },
+  { key: 'error', label: 'Agent error', hint: 'a tool call fails, output drops, or the run throws' },
+  { key: 'csat', label: 'Low CSAT', hint: 'a survey score lands at or below the threshold' },
+  { key: 'inactivity', label: 'Inactivity', hint: 'the customer waits N minutes with no reply' },
+  { key: 'failure', label: 'Agent failure', hint: 'the agent reports it could not handle the message' },
+  { key: 'custom_alert', label: 'Custom alert', hint: 'the agent raises its own alert type' },
+  { key: 'auto_assign', label: 'Auto-assign', hint: 'every new conversation goes to the next pool member' },
+];
+const kindMeta = (k: RuleKind) => RULE_KINDS.find((x) => x.key === k);
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
 
 /** Agent config sections — one per sidebar entry. `hosted` sections are
@@ -244,6 +258,13 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     onSuccess: refresh,
   });
 
+  const updateRule = useMutation({
+    mutationFn: (body: { id: string; config: Record<string, unknown> }) =>
+      api(`/api/rules/${body.id}`, { method: 'PATCH', body: JSON.stringify({ config: body.config }) }),
+    onSuccess: refresh,
+    onError: (e) => setError(e.message),
+  });
+
   const rules = rulesData?.rules.filter((r) => r.agent_id === agent.id) ?? [];
   const channels = channelsData?.channels.filter((c) => c.agent_id === agent.id) ?? [];
 
@@ -381,6 +402,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
               rules={rules}
               isAdmin={isAdmin}
               onAddRule={(kind, config) => addRule.mutate({ kind, config })}
+              onUpdateRule={(id, config) => updateRule.mutate({ id, config })}
               onDeleteRule={(rid) => deleteRule.mutate(rid)}
             />
           )}
@@ -909,6 +931,7 @@ function EscalationTab({
   rules,
   isAdmin,
   onAddRule,
+  onUpdateRule,
   onDeleteRule,
 }: {
   agent: Agent;
@@ -919,18 +942,83 @@ function EscalationTab({
   rules: AlertRule[];
   isAdmin: boolean;
   onAddRule: (kind: string, config: Record<string, unknown>) => void;
+  onUpdateRule: (id: string, config: Record<string, unknown>) => void;
   onDeleteRule: (id: string) => void;
 }) {
-  const [kind, setKind] = useState<(typeof RULE_KINDS)[number]>('keyword');
+  const [kind, setKind] = useState<RuleKind>('handoff_request');
   const [keywords, setKeywords] = useState('');
-  const [intents, setIntents] = useState('');
+  const [intents, setIntents] = useState<string[]>([]);
   const [minutes, setMinutes] = useState('15');
+  const [maxScore, setMaxScore] = useState('3');
+  const [route, setRoute] = useState<'none' | 'member' | 'pool'>('none');
   const [assignTo, setAssignTo] = useState('');
   const [ruleTag, setRuleTag] = useState('');
   const [pool, setPool] = useState<string[]>([]);
+  const [groupIds, setGroupIds] = useState<string[]>([]);
   const { data: members } = useAgentMembers(agent.id);
+  const { data: groupsData } = useGroups();
+  const { data: users } = useUsers();
+  const groups = groupsData?.groups ?? [];
   const teammateName = (id: string) =>
-    members?.members.find((m) => m.user_id === id)?.name ?? 'a teammate';
+    members?.members.find((m) => m.user_id === id)?.name ??
+    users?.users.find((u) => u.id === id)?.name ??
+    'a teammate';
+  const groupName = (id: string) => groups.find((g) => g.id === id)?.name ?? 'a group';
+  const topicLabels = cfg.intents?.length ? cfg.intents : [...DEFAULT_INTENTS];
+
+  const describeRule = (r: AlertRule) => {
+    const c = r.config;
+    const when =
+      r.kind === 'auto_assign'
+        ? 'every new conversation'
+        : r.kind === 'keyword'
+          ? `message contains ${(c.keywords ?? []).map((k) => `"${k}"`).join(' or ')}`
+          : r.kind === 'intent'
+            ? `topic is ${(c.intents ?? []).join(' or ')}`
+            : r.kind === 'inactivity'
+              ? `no agent reply for ${c.inactivity_minutes ?? 15}m`
+              : r.kind === 'csat'
+                ? `CSAT score ≤ ${c.max_score ?? 3}`
+                : (kindMeta(r.kind)?.hint ?? r.kind);
+    const roster = [
+      ...(c.assignees ?? []).map(teammateName),
+      ...(c.group_ids ?? []).map((g) => `${groupName(g)} (group)`),
+    ];
+    const then = [
+      c.assign_to ? `assign ${teammateName(c.assign_to)}` : null,
+      roster.length ? `rotate ${roster.join(', ')}` : null,
+      c.tag ? `tag "${c.tag}"` : null,
+    ].filter(Boolean);
+    return `${when}${then.length ? ` → ${then.join(' + ')}` : ''}`;
+  };
+
+  const toggleRule = (r: AlertRule) =>
+    onUpdateRule(r.id, { ...r.config, enabled: r.config.enabled === false });
+
+  const toggle = (list: string[], id: string, set: (v: string[]) => void) =>
+    set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
+
+  const canAdd =
+    (kind !== 'keyword' || keywords.trim().length > 0) &&
+    (kind !== 'intent' || intents.length > 0) &&
+    (route !== 'member' || assignTo.length > 0) &&
+    (route !== 'pool' || pool.length + groupIds.length > 0);
+
+  const addRule = () =>
+    onAddRule(kind, {
+      enabled: true,
+      ...(kind === 'keyword'
+        ? { keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean) }
+        : {}),
+      ...(kind === 'intent' ? { intents } : {}),
+      ...(kind === 'inactivity' ? { inactivity_minutes: Number(minutes) || 15 } : {}),
+      ...(kind === 'csat' ? { max_score: Number(maxScore) } : {}),
+      ...(route === 'member' ? { assign_to: assignTo } : {}),
+      ...(route === 'pool'
+        ? { assignees: pool, group_ids: groupIds, next: 0 }
+        : {}),
+      ...(ruleTag.trim() ? { tag: ruleTag.trim() } : {}),
+    });
 
   return (
     <>
@@ -982,115 +1070,151 @@ function EscalationTab({
 
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Alert &amp; routing rules</strong>
+        <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+          When a trigger fires, the alert pages the routed teammate (or the whole workspace
+          when nobody is routed). Routing fills an unassigned thread — it never steals.
+        </div>
         {rules.map((r) => (
-          <div key={r.id} className="row muted" style={{ marginTop: 6 }}>
-            <span className="grow">
-              {r.kind === 'auto_assign' ? 'auto-assign new conversations' : r.kind}
-              {r.config.keywords?.length ? `: ${r.config.keywords.join(', ')}` : ''}
-              {(r.config.intents?.length ?? 0) > 0 && ` · intent: ${(r.config.intents ?? []).join(', ')}`}
-              {r.config.inactivity_minutes ? ` (${r.config.inactivity_minutes}m)` : ''}
-              {r.config.assign_to ? ` → ${teammateName(r.config.assign_to)}` : ''}
-              {r.config.assignees?.length
-                ? ` → ${r.config.assignees.map(teammateName).join(', ')} (round robin)`
-                : ''}
-              {r.config.tag ? ` +tag:${r.config.tag}` : ''}
+          <div key={r.id} className="row" style={{ marginTop: 8 }}>
+            <label className="check-label" title={r.config.enabled === false ? 'disabled' : 'enabled'}>
+              <input
+                type="checkbox"
+                checked={r.config.enabled !== false}
+                onChange={() => toggleRule(r)}
+              />
+            </label>
+            <span className={`grow${r.config.enabled === false ? ' muted' : ''}`}>
+              <strong>{kindMeta(r.kind)?.label ?? r.kind}</strong>
+              <span className="muted"> — {describeRule(r)}</span>
             </span>
             <button className="btn danger" onClick={() => onDeleteRule(r.id)} aria-label="Delete rule"><Trash2 size={14} /></button>
           </div>
         ))}
-        <div className="row" style={{ marginTop: 8 }}>
-          <select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
-            {RULE_KINDS.map((k) => (
-              <option key={k} value={k}>
-                {k === 'auto_assign' ? 'auto-assign' : k}
-              </option>
-            ))}
-          </select>
+        {rules.length === 0 && (
+          <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+            No rules yet — handoffs, failures, and custom alerts still page the workspace by
+            default.
+          </div>
+        )}
+
+        <div style={{ borderTop: '1px solid var(--line)', marginTop: 12, paddingTop: 10 }}>
+          <div className="row">
+            <label className="muted" style={{ fontSize: 12 }}>When</label>
+            <select value={kind} onChange={(e) => setKind(e.target.value as RuleKind)}>
+              {RULE_KINDS.map((k) => (
+                <option key={k.key} value={k.key}>{k.label}</option>
+              ))}
+            </select>
+            <span className="muted" style={{ fontSize: 12 }}>{kindMeta(kind)?.hint}</span>
+          </div>
+
           {kind === 'keyword' && (
-            <>
+            <div className="row" style={{ marginTop: 8 }}>
               <input
                 className="grow"
-                placeholder="keywords, comma separated"
+                placeholder="keywords, comma separated — e.g. refund, cancel, lawyer"
                 value={keywords}
                 onChange={(e) => setKeywords(e.target.value)}
               />
-              <input
-                style={{ width: 150 }}
-                placeholder="or intent: billing, …"
-                value={intents}
-                onChange={(e) => setIntents(e.target.value)}
-              />
-            </>
+            </div>
+          )}
+          {kind === 'intent' && (
+            <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+              {topicLabels.map((label) => (
+                <label key={label} className="check-label" style={{ marginRight: 10 }}>
+                  <input
+                    type="checkbox"
+                    checked={intents.includes(label)}
+                    onChange={() => toggle(intents, label, setIntents)}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
           )}
           {kind === 'inactivity' && (
-            <input
-              type="number"
-              min={1}
-              style={{ width: 90 }}
-              value={minutes}
-              onChange={(e) => setMinutes(e.target.value)}
-            />
+            <div className="row" style={{ marginTop: 8 }}>
+              <input
+                type="number"
+                min={1}
+                className="num-input"
+                value={minutes}
+                onChange={(e) => setMinutes(e.target.value)}
+              />
+              <span className="muted" style={{ fontSize: 12 }}>minutes without an agent reply</span>
+            </div>
           )}
-          {(kind === 'keyword' || kind === 'inactivity') && (
-            <>
+          {kind === 'csat' && (
+            <div className="row" style={{ marginTop: 8 }}>
+              <span className="muted" style={{ fontSize: 12 }}>alert when a rating is</span>
+              <select value={maxScore} onChange={(e) => setMaxScore(e.target.value)}>
+                {[1, 2, 3, 4].map((n) => (
+                  <option key={n} value={n}>≤ {n}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="row" style={{ marginTop: 8 }}>
+            <label className="muted" style={{ fontSize: 12 }}>Then</label>
+            <select value={route} onChange={(e) => setRoute(e.target.value as typeof route)}>
+              <option value="none">just alert</option>
+              <option value="member">assign to a teammate</option>
+              <option value="pool">rotate a pool</option>
+            </select>
+            {route === 'member' && (
               <select value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
-                <option value="">no assignee</option>
+                <option value="">choose teammate…</option>
                 {(members?.members ?? []).map((m) => (
                   <option key={m.user_id} value={m.user_id}>{m.name}</option>
                 ))}
               </select>
-              <input
-                style={{ width: 110 }}
-                placeholder="+ tag"
-                value={ruleTag}
-                onChange={(e) => setRuleTag(e.target.value)}
-              />
-            </>
-          )}
-          {kind === 'auto_assign' && (
-            <span className="muted" style={{ fontSize: 12 }}>
+            )}
+            <input
+              style={{ width: 130 }}
+              placeholder="+ tag (optional)"
+              value={ruleTag}
+              onChange={(e) => setRuleTag(e.target.value)}
+            />
+          </div>
+          {route === 'pool' && (
+            <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
               {(members?.members ?? []).map((m) => (
-                <label key={m.user_id} className="check-label" style={{ marginRight: 8 }}>
+                <label key={m.user_id} className="check-label" style={{ marginRight: 10 }}>
                   <input
                     type="checkbox"
                     checked={pool.includes(m.user_id)}
-                    onChange={(e) =>
-                      setPool(
-                        e.target.checked
-                          ? [...pool, m.user_id]
-                          : pool.filter((id) => id !== m.user_id),
-                      )
-                    }
+                    onChange={() => toggle(pool, m.user_id, setPool)}
                   />
                   {m.name}
                 </label>
               ))}
-            </span>
+              {groups.map((g) => (
+                <label key={g.id} className="check-label" style={{ marginRight: 10 }}>
+                  <input
+                    type="checkbox"
+                    checked={groupIds.includes(g.id)}
+                    onChange={() => toggle(groupIds, g.id, setGroupIds)}
+                  />
+                  {g.name} <span className="muted">({g.member_ids.length})</span>
+                </label>
+              ))}
+              {groups.length === 0 && (members?.members.length ?? 0) === 0 && (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  No teammates or groups yet — invite people in Settings → Team.
+                </span>
+              )}
+            </div>
           )}
-          <button
-            className="btn"
-            disabled={kind === 'auto_assign' && pool.length === 0}
-            onClick={() =>
-              onAddRule(kind, {
-                enabled: true,
-                ...(kind === 'keyword'
-                  ? {
-                      keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean),
-                      intents: intents.split(',').map((k) => k.trim()).filter(Boolean),
-                    }
-                  : {}),
-                ...(kind === 'inactivity' ? { inactivity_minutes: Number(minutes) } : {}),
-                ...(assignTo ? { assign_to: assignTo } : {}),
-                ...(ruleTag.trim() ? { tag: ruleTag.trim() } : {}),
-                ...(kind === 'auto_assign' ? { assignees: pool, next: 0 } : {}),
-              })
-            }
-          >
-            Add rule
-          </button>
+          <div className="row" style={{ marginTop: 10 }}>
+            <button className="btn" disabled={!canAdd} onClick={addRule}>
+              Add rule
+            </button>
+          </div>
         </div>
-        <div className="form-field" style={{ marginTop: 10 }}>
-          <label>Intent labels — topics the classifier tags each new conversation with</label>
+
+        <div className="form-field" style={{ marginTop: 12 }}>
+          <label>Topic labels — what the classifier tags each conversation with</label>
           <input
             defaultValue={(cfg.intents ?? []).join(', ')}
             placeholder="billing, shipping, technical issue, sales, other (blank = default topics)"
@@ -1105,12 +1229,8 @@ function EscalationTab({
             }
           />
           <span className="muted" style={{ fontSize: 12 }}>
-            Rules above can fire on these intents — classify once, route automatically.
+            Topic-match rules fire on these labels — the same ones Reports → Topics tallies.
           </span>
-        </div>
-        <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-          auto-assign hands every new conversation to the next teammate in the pool; keyword and
-          inactivity rules can also assign the thread and tag it when they fire.
         </div>
       </div>
 

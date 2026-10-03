@@ -26,6 +26,7 @@ import { openAlertOnce } from '../lib/alerts.js';
 import { captureCsat } from '../lib/csat.js';
 import { queueCrmActivity } from '../lib/crm.js';
 import { pickAutoAssignee } from '../lib/rules.js';
+import { groupsForRules } from '../lib/ruleAlerts.js';
 import { env } from '../env.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { processEvents } from './ingest.js';
@@ -463,7 +464,10 @@ export async function handleChannelMessage(
       .select()
       .from(alertRules)
       .where(and(eq(alertRules.agentId, agent.id), eq(alertRules.kind, 'auto_assign')));
-    const pick = pickAutoAssignee(assignRules);
+    const pick = pickAutoAssignee(
+      assignRules,
+      await groupsForRules(db, agent.workspaceId, assignRules),
+    );
     if (pick) {
       await db
         .update(conversations)

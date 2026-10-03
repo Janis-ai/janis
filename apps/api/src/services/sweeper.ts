@@ -5,7 +5,8 @@ import { bus, INSTANCE_ID } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { opsAlert } from '../lib/opsAlert.js';
-import { inactivityActions, inactivityThresholds } from '../lib/rules.js';
+import { inactivityActions, inactivityThresholds, type RuleConfig } from '../lib/rules.js';
+import { groupsForRules } from '../lib/ruleAlerts.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
@@ -275,8 +276,25 @@ export async function sweep(db: Db): Promise<number> {
       });
       if (!created) continue;
       // Automation on the escalation: the rule can route the stale thread to
-      // a teammate and tag it — "unanswered 15m → assign to on-call".
-      const actions = inactivityActions(rules.filter((r) => r.agentId === agentId));
+      // a teammate and tag it — "unanswered 15m → assign to on-call". Pools
+      // resolve through groups; rotation cursors persist per rule.
+      const agentRules = rules.filter((r) => r.agentId === agentId);
+      const actions = inactivityActions(
+        agentRules,
+        await groupsForRules(db, agent.workspaceId, agentRules),
+      );
+      for (const a of actions) {
+        if (a.ruleId === undefined || a.next === undefined) continue;
+        const rule = agentRules.find((r) => r.id === a.ruleId);
+        if (!rule) continue;
+        // persist + advance the in-memory copy — several stale convs in one
+        // sweep each rotate to the next pool member
+        rule.config = { ...(rule.config as RuleConfig), next: a.next };
+        await db
+          .update(alertRules)
+          .set({ config: rule.config })
+          .where(eq(alertRules.id, a.ruleId));
+      }
       const assignTo = actions.find((a) => a.assignTo)?.assignTo;
       const tags = actions.some((a) => a.tag)
         ? [
@@ -290,7 +308,8 @@ export async function sweep(db: Db): Promise<number> {
         .update(conversations)
         .set({
           state: 'needs_human',
-          ...(assignTo ? { assigneeId: assignTo } : {}),
+          // non-stealing like keyword/intent routing — only fills the slot
+          ...(assignTo && !conversation.assigneeId ? { assigneeId: assignTo } : {}),
           ...(tags.length !== conversation.tags.length ? { tags } : {}),
         })
         .where(eq(conversations.id, conversation.id));

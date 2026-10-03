@@ -1,9 +1,11 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, conversations, messages, workspaces } from '../db/schema.js';
+import { agents, alertRules, conversations, messages, workspaces } from '../db/schema.js';
 import { bus } from './bus.js';
 import { deliverToChannel } from './channels.js';
 import { toMessage } from './serializers.js';
+import { fireRuleAlert } from './ruleAlerts.js';
+import { ruleEnabled, type RuleConfig } from './rules.js';
 
 const PROMPT =
   "How was your experience? Reply with a rating from 1 (poor) to 5 (great).";
@@ -100,6 +102,30 @@ export async function captureCsat(db: Db, conv: Conv, text: string): Promise<boo
     .set({ csatPending: false, ...(score !== null ? { csatScore: score } : {}) })
     .where(and(eq(conversations.id, conv.id), eq(conversations.csatPending, true)));
   if (score === null) return false;
+  // Low-score rules — a bad rating pages whoever the rule routes to while
+  // the thread is still warm. Opt-in; no rule, no alert, no extra queries.
+  const [agentRow] = await db
+    .select()
+    .from(agents)
+    .where(eq(agents.id, conv.agentId))
+    .limit(1);
+  if (agentRow) {
+    const fired = (
+      await db.select().from(alertRules).where(eq(alertRules.agentId, conv.agentId))
+    ).filter(
+      (r) =>
+        r.kind === 'csat' &&
+        ruleEnabled(r) &&
+        score <= ((r.config as RuleConfig).max_score ?? 3),
+    );
+    if (fired.length) {
+      await fireRuleAlert(db, agentRow, { ...conv, csatScore: score }, {
+        type: 'csat',
+        detail: `customer rated the conversation ${score}/5`,
+        rules: fired,
+      }).catch((err) => console.error('[csat] low-score alert failed:', err));
+    }
+  }
   const settings = await csatSettings(db, conv.agentId);
   const [note] = await db
     .insert(messages)

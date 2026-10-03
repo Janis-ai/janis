@@ -7,6 +7,7 @@ import type {
   Conversation,
   Digest,
   HelpArticle,
+  MemberGroup,
   Message,
   SavedReply,
   Suggestion,
@@ -20,6 +21,7 @@ import type {
   conversations,
   digests,
   helpArticles,
+  memberGroups,
   messages,
   savedReplies,
   suggestions,
@@ -143,10 +145,13 @@ export function toAlert(row: Row<typeof alerts>): Alert {
 export function toAlertRule(row: Row<typeof alertRules>): AlertRule {
   const config = (row.config ?? {}) as {
     keywords?: string[];
+    intents?: string[];
     inactivity_minutes?: number;
+    max_score?: number;
     enabled?: boolean;
     assign_to?: string;
     assignees?: string[];
+    group_ids?: string[];
     tag?: string;
   };
   return {
@@ -155,12 +160,24 @@ export function toAlertRule(row: Row<typeof alertRules>): AlertRule {
     kind: row.kind,
     config: {
       keywords: config.keywords,
+      intents: config.intents,
       inactivity_minutes: config.inactivity_minutes,
+      max_score: config.max_score,
       assign_to: config.assign_to,
       assignees: config.assignees,
+      group_ids: config.group_ids,
       tag: config.tag,
       enabled: config.enabled !== false,
     },
+    created_at: iso(row.createdAt)!,
+  };
+}
+
+export function toMemberGroup(row: Row<typeof memberGroups>): MemberGroup {
+  return {
+    id: row.id,
+    name: row.name,
+    member_ids: (row.memberIds ?? []) as string[],
     created_at: iso(row.createdAt)!,
   };
 }

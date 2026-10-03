@@ -13,7 +13,8 @@ import { bus } from '../lib/bus.js';
 import { openAlertOnce } from '../lib/alerts.js';
 import { enrichHandoff } from '../lib/handoff.js';
 import { alertNotification, eventForAlertType, notifyWorkspace, type NotifyEvent } from '../lib/notify.js';
-import { evaluateActions, evaluateEvent } from '../lib/rules.js';
+import { evaluateActions, evaluateEvent, type RuleConfig } from '../lib/rules.js';
+import { groupsForRules } from '../lib/ruleAlerts.js';
 import { classifyAndRoute, recheckIntent } from '../lib/intent.js';
 import { fireEventWebhook } from '../lib/eventWebhook.js';
 import { emitHookEvent } from '../lib/hooks.js';
@@ -44,6 +45,8 @@ export async function processEvents(
   events: IngestEvent[],
 ): Promise<IngestResult[]> {
   const rules = await db.select().from(alertRules).where(eq(alertRules.agentId, agent.id));
+  // Rule pools resolve through group rosters — fetched once per batch.
+  const ruleGroups = await groupsForRules(db, agent.workspaceId, rules);
   const results: IngestResult[] = [];
   await db.update(agents).set({ lastSeenAt: new Date() }).where(eq(agents.id, agent.id));
 
@@ -283,9 +286,22 @@ export async function processEvents(
 
     // Automation: keyword rules can route the thread alongside their alert —
     // assign to a teammate (only when unassigned, so a routed thread doesn't
-    // steal someone's queue) and/or tag it.
-    const actions = evaluateActions(event, rules);
+    // steal someone's queue) and/or tag it. Pools resolve through groups and
+    // persist their rotation cursor back onto the rule.
+    const actions = evaluateActions(event, rules, ruleGroups);
     const assignTo = actions.find((a) => a.assignTo)?.assignTo;
+    for (const a of actions) {
+      if (a.ruleId === undefined || a.next === undefined) continue;
+      const rule = rules.find((r) => r.id === a.ruleId);
+      if (!rule) continue;
+      // persist + advance the in-memory copy too — a second event in this
+      // batch must pick the following member, not the same one again
+      rule.config = { ...(rule.config as RuleConfig), next: a.next };
+      await db
+        .update(alertRules)
+        .set({ config: rule.config })
+        .where(eq(alertRules.id, a.ruleId));
+    }
     const mergedTags = actions.some((a) => a.tag)
       ? [...new Set([...conv.tags, ...actions.map((a) => a.tag).filter((t): t is string => !!t)])]
       : conv.tags;

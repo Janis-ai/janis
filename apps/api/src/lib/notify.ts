@@ -40,6 +40,8 @@ interface NotifyPrefs {
 export function eventForAlertType(type: string): NotifyEvent {
   if (type === 'keyword') return 'keyword';
   if (type === 'approval_request') return 'approval';
+  // run-degradation signals page the ops bucket, not the handoff queue
+  if (type === 'error') return 'ops';
   return 'handoff';
 }
 
@@ -53,6 +55,10 @@ const ALERT_TITLES: Record<string, string> = {
   keyword: 'Keyword match',
   sla: 'SLA breach — still unclaimed',
   approval_request: 'Approval requested',
+  sentiment: 'Negative sentiment',
+  intent: 'Topic match',
+  error: 'Agent run error',
+  csat: 'Low satisfaction score',
 };
 
 const CHANNEL_LABELS: Record<string, string> = {

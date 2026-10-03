@@ -110,6 +110,19 @@ export const memberships = pgTable(
   (t) => [uniqueIndex('memberships_user_workspace').on(t.userId, t.workspaceId)],
 );
 
+/** Named teammate rosters for routing rules — "Support Tier 1", "Weekend
+ *  crew". Workspace-level so one group can feed rules on every agent;
+ *  member_ids stays inline (a roster is tens of ids, read whole each time). */
+export const memberGroups = pgTable('member_groups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
+  name: text('name').notNull(),
+  memberIds: jsonb('member_ids').notNull().default([]).$type<string[]>(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const sessions = pgTable('sessions', {
   id: text('id').primaryKey(), // sha256 of the bearer token
   userId: uuid('user_id')
@@ -393,6 +406,10 @@ export const alerts = pgTable(
         'keyword',
         'sla',
         'approval_request',
+        'sentiment',
+        'intent',
+        'error',
+        'csat',
       ],
     }).notNull(),
     detail: text('detail'),
@@ -456,7 +473,18 @@ export const alertRules = pgTable('alert_rules', {
     .notNull()
     .references(() => agents.id),
   kind: text('kind', {
-    enum: ['keyword', 'failure', 'handoff_request', 'inactivity', 'custom_alert', 'auto_assign'],
+    enum: [
+      'keyword',
+      'intent',
+      'failure',
+      'handoff_request',
+      'inactivity',
+      'custom_alert',
+      'auto_assign',
+      'sentiment',
+      'error',
+      'csat',
+    ],
   }).notNull(),
   config: jsonb('config').notNull().default({ enabled: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

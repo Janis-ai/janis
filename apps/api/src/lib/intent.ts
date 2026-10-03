@@ -3,6 +3,8 @@ import type { Db } from '../db/client.js';
 import { agents, alertRules, conversations, messages } from '../db/schema.js';
 import { bus } from './bus.js';
 import { llmFor, type LlmSettings } from './llm.js';
+import { fireRuleAlert } from './ruleAlerts.js';
+import { intentMatches, ruleEnabled, type RuleConfig } from './rules.js';
 
 import { DEFAULT_INTENTS } from '@janis/shared';
 
@@ -50,6 +52,72 @@ export async function classifyIntent(
   return loose ?? 'other';
 }
 
+/** One cheap chat completion — read the customer's tone. Only runs when a
+ *  sentiment rule exists, so agents without one pay nothing. */
+export async function classifySentiment(
+  llm: LlmSettings,
+  text: string,
+): Promise<'positive' | 'neutral' | 'negative' | null> {
+  if (!llm.apiKey || !text.trim()) return null;
+  const res = await fetch(`${llm.baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${llm.apiKey}`,
+      ...(llm.headers ?? {}),
+    },
+    body: JSON.stringify({
+      model: llm.model,
+      max_tokens: 8,
+      temperature: 0,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Read the customer message and classify their sentiment as exactly one of: positive, neutral, negative. ' +
+            'Negative means frustrated, angry, or upset — not merely asking for help. ' +
+            'Reply with the label only — no punctuation, no explanation.',
+        },
+        { role: 'user', content: text.slice(0, 2000) },
+      ],
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) return null;
+  const body = (await res.json()) as {
+    choices?: { message?: { content?: string } }[];
+  };
+  const raw = (body.choices?.[0]?.message?.content ?? '').trim().toLowerCase();
+  if (raw === 'positive' || raw === 'neutral' || raw === 'negative') return raw;
+  return null;
+}
+
+/** Sentiment rules enabled on this agent — the gate for classifySentiment. */
+function sentimentRules(rules: (typeof alertRules.$inferSelect)[]) {
+  return rules.filter((r) => r.kind === 'sentiment' && ruleEnabled(r));
+}
+
+/** Fire sentiment rules on a negative read — shared by the opener
+ *  classification and the drift re-check. */
+async function checkSentiment(
+  db: Db,
+  agent: typeof agents.$inferSelect,
+  conv: typeof conversations.$inferSelect,
+  llm: LlmSettings,
+  rules: (typeof alertRules.$inferSelect)[],
+  text: string,
+): Promise<void> {
+  const fired = sentimentRules(rules);
+  if (!fired.length) return;
+  const s = await classifySentiment(llm, text).catch(() => null);
+  if (s !== 'negative') return;
+  await fireRuleAlert(db, agent, conv, {
+    type: 'sentiment',
+    detail: 'customer sentiment classified negative',
+    rules: fired,
+  }).catch((err) => console.error('[intent] sentiment alert failed:', err));
+}
+
 /**
  * Classify a conversation's opener and apply intent-matched routing rules.
  * Runs off the ingest hot path (callers `void` it) — a slow LLM must never
@@ -63,32 +131,42 @@ export async function classifyAndRoute(
   /** BYO agents may pass payload.intent — trusted verbatim, no LLM call. */
   knownIntent?: string | null,
 ): Promise<void> {
-  let intent = knownIntent?.slice(0, 60) ?? null;
-  if (!intent) {
-    const cfg = (agent.config ?? {}) as { intents?: string[] };
-    const labels = cfg.intents?.length ? cfg.intents : DEFAULT_INTENTS;
-    let llm: LlmSettings;
-    try {
-      llm = await llmFor(db, agent);
-    } catch {
-      return; // unpriced/no LLM — leave unclassified, don't block the pipeline
-    }
-    intent = await classifyIntent(llm, text, labels).catch(() => null);
-  }
-  if (!intent) return;
-
+  // Rules come first — enabled sentiment rules gate a second classification
+  // call on the same opener, so they're needed before the LLM is fetched.
   const rules = await db
     .select()
     .from(alertRules)
     .where(eq(alertRules.agentId, agent.id));
 
+  let intent = knownIntent?.slice(0, 60) ?? null;
+  let llm: LlmSettings | null = null;
+  if (!intent || sentimentRules(rules).length) {
+    try {
+      llm = await llmFor(db, agent);
+    } catch {
+      llm = null; // unpriced/no LLM — classification silently skipped
+    }
+  }
+  if (!intent) {
+    if (!llm) return; // no LLM and nothing BYO'd — leave unclassified
+    const cfg = (agent.config ?? {}) as { intents?: string[] };
+    const labels = cfg.intents?.length ? cfg.intents : DEFAULT_INTENTS;
+    intent = await classifyIntent(llm, text, labels).catch(() => null);
+  }
+  if (!intent) return;
+
+  // Sentiment read on the opener — the same "does a human need to see this"
+  // signal a topic match is, fired only when a rule asked for it.
+  if (llm) await checkSentiment(db, agent, conv, llm, rules, text);
+
   // Intent routing — rules whose intents list names this label. Non-stealing
-  // like keyword routing: only fills an unassigned thread.
-  const actions = rules
-    .map((r) => ({ r, c: r.config as { intents?: string[]; assign_to?: string; tag?: string; enabled?: boolean } }))
-    .filter(({ c }) => c.enabled !== false && (c.intents ?? []).some((i) => i.toLowerCase() === intent.toLowerCase()));
-  const assignTo = actions.map((a) => a.c.assign_to).find(Boolean);
-  const tags = actions.map((a) => a.c.tag).filter((t): t is string => !!t);
+  // like keyword routing: only fills an unassigned thread. intent-kind rules
+  // route through their alert fire instead, so their pools rotate there.
+  const silent = intentMatches(rules, intent).filter((r) => r.kind !== 'intent');
+  const alerting = intentMatches(rules, intent, 'intent');
+  const actions = silent.map((r) => r.config as RuleConfig);
+  const assignTo = actions.map((a) => a.assign_to).find(Boolean);
+  const tags = actions.map((a) => a.tag).filter((t): t is string => !!t);
 
   const [updated] = await db
     .update(conversations)
@@ -105,6 +183,17 @@ export async function classifyAndRoute(
     type: 'conversation',
     data: { id: updated.id, state: updated.state },
   });
+
+  // Topic alert — "paging you because this looks like billing" is the same
+  // signal Reports → Topics tallies. Routing resolves inside the fire so a
+  // group/pool target still picks a member.
+  if (alerting.length) {
+    await fireRuleAlert(db, agent, updated, {
+      type: 'intent',
+      detail: `topic: ${intent}`,
+      rules: alerting,
+    }).catch((err) => console.error('[intent] topic alert failed:', err));
+  }
 }
 
 /** Drift re-check — a conversation that opened as "billing" can turn into
@@ -147,19 +236,24 @@ export async function recheckIntent(
   } catch {
     return;
   }
+  const rules = await db
+    .select()
+    .from(alertRules)
+    .where(eq(alertRules.agentId, agent.id));
+
+  // Tone can drift too — a conversation that opened calm and turned
+  // hostile mid-thread is exactly what a sentiment rule exists for.
+  await checkSentiment(db, agent, conv, llm, rules, text);
+
   const next = await classifyIntent(llm, text, labels).catch(() => null);
   if (!next || next === conv.intent || next === 'other') return;
 
   // Re-fire the new intent's rule tags; assignment still only fills an
   // empty slot so a mid-conversation drift can't steal someone's queue.
-  const rules = await db
-    .select()
-    .from(alertRules)
-    .where(eq(alertRules.agentId, agent.id));
-  const tags = rules
-    .map((r) => r.config as { intents?: string[]; tag?: string; enabled?: boolean })
-    .filter((c) => c.enabled !== false && (c.intents ?? []).some((i) => i.toLowerCase() === next.toLowerCase()))
-    .map((c) => c.tag)
+  const silent = intentMatches(rules, next).filter((r) => r.kind !== 'intent');
+  const alerting = intentMatches(rules, next, 'intent');
+  const tags = silent
+    .map((r) => (r.config as RuleConfig).tag)
     .filter((t): t is string => !!t);
 
   const [updated] = await db
@@ -174,4 +268,12 @@ export async function recheckIntent(
     type: 'conversation',
     data: { id: updated.id, state: updated.state },
   });
+
+  if (alerting.length) {
+    await fireRuleAlert(db, agent, updated, {
+      type: 'intent',
+      detail: `topic drifted to: ${next}`,
+      rules: alerting,
+    }).catch((err) => console.error('[intent] topic alert failed:', err));
+  }
 }

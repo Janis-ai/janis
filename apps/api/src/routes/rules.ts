@@ -11,20 +11,37 @@ import { toAlertRule } from '../lib/serializers.js';
 
 const ruleConfig = z.object({
   keywords: z.array(z.string()).optional(),
-  /** Semantic intent labels — fires when the classifier tags the conv. */
+  /** Topic labels — intent rules fire when the classifier lands on one. */
   intents: z.array(z.string().min(1).max(60)).max(20).optional(),
   inactivity_minutes: z.number().min(1).max(1440).optional(),
+  /** csat rules — alert when a survey score lands at or below this. */
+  max_score: z.number().int().min(1).max(5).optional(),
   enabled: z.boolean().default(true),
   // automation actions
   assign_to: z.string().uuid().optional(),
   assignees: z.array(z.string().uuid()).optional(),
+  /** member_groups rosters — their members join the rotation pool. */
+  group_ids: z.array(z.string().uuid()).optional(),
   tag: z.string().min(1).max(60).optional(),
   next: z.number().int().min(0).optional(),
 });
 
+const RULE_KINDS = [
+  'keyword',
+  'intent',
+  'failure',
+  'handoff_request',
+  'inactivity',
+  'custom_alert',
+  'auto_assign',
+  'sentiment',
+  'error',
+  'csat',
+] as const;
+
 const createRule = z.object({
   agent_id: z.string().uuid(),
-  kind: z.enum(['keyword', 'failure', 'handoff_request', 'inactivity', 'custom_alert', 'auto_assign']),
+  kind: z.enum(RULE_KINDS),
   config: ruleConfig,
 });
 

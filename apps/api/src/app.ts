@@ -24,6 +24,7 @@ import { campaignRoutes } from './routes/campaigns.js';
 import { actionRoutes } from './routes/actions.js';
 import { alertRoutes } from './routes/alerts.js';
 import { ruleRoutes } from './routes/rules.js';
+import { groupRoutes } from './routes/groups.js';
 import { streamRoutes } from './routes/stream.js';
 import { pushRoutes } from './routes/push.js';
 import { userRoutes } from './routes/users.js';
@@ -237,6 +238,7 @@ export function createApp(db: Db) {
   api.route('/actions', actionRoutes(db));
   api.route('/alerts', alertRoutes(db));
   api.route('/rules', ruleRoutes(db));
+  api.route('/groups', groupRoutes(db));
   api.route('/stream', streamRoutes(db));
   api.route('/push', pushRoutes(db));
   api.route('/users', userRoutes(db));

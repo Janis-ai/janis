@@ -4,6 +4,7 @@ import type { OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, agentWidgets, alerts, channelBindings, channels, contactIdentities, contacts, conversations, helpArticles, knowledgeFiles, memberships, messages, users, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
+import { fireErrorAlert } from './ruleAlerts.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage, llmSpendOverCap } from './usage.js';
 import { loadSecretsMap } from './secrets.js';
@@ -2414,6 +2415,9 @@ async function replyAsHostedAgent(
     const toolWidgets: WidgetComponent[] = [];
     let promptTokens = 0;
     let completionTokens = 0;
+    // component lines that rendered nothing on the surviving attempt —
+    // hoisted out of the retry loop so the error signal can report them
+    let lostComponents = 0;
     const agentToolDefs = toolsFor(agent);
     for (let attempt = 0; attempt < 2; attempt++) {
       gen = await generateReply(
@@ -2435,7 +2439,7 @@ async function replyAsHostedAgent(
       // Saved components resolve through their defs: a state key picks a
       // variant, a tool binding fetches live props/items, inline data fills
       // {prop} placeholders — a static spec when it carries none of those.
-      let lostComponents = dropped;
+      lostComponents = dropped;
       for (const ref of refs) {
         const def = refSpecs.get(ref.name);
         if (!def) {
@@ -2526,6 +2530,23 @@ async function replyAsHostedAgent(
         }
       }
     }
+    // Run-degradation report — tool failures and output loss that survived
+    // the regen guards are exactly what 'error' alert rules exist for
+    // (the iTunes dropped-widget case). Opt-in: no rule, no work.
+    const runIssues: string[] = [];
+    const failedTools = gen.toolCalls.filter((t) => t.outcome === 'failed');
+    if (failedTools.length)
+      runIssues.push(
+        `tool failed: ${[...new Set(failedTools.map((t) => t.name))].join(', ')}`,
+      );
+    if (lostComponents > 0)
+      runIssues.push(`${lostComponents} component line(s) rendered nothing`);
+    if (actionClaimStripped) runIssues.push('stripped an unbacked action claim');
+    if (widgetClaimStripped) runIssues.push('stripped a widget-claim mismatch');
+    if (gen.stripped.length)
+      runIssues.push(`link guard stripped ${gen.stripped.length} URL(s)`);
+    if (runIssues.length)
+      void fireErrorAlert(db, agent, convId, runIssues.join('; ')).catch(() => {});
     // Data-bound components from widget-bound tools lead the reply; the
     // model's own WIDGET: lines trail, capped at 3 total.
     widgets = [...toolWidgets, ...widgets].slice(0, 3);
@@ -2571,6 +2592,7 @@ async function replyAsHostedAgent(
       });
     }
     if (!reply && !widgets.length) {
+      void fireErrorAlert(db, agent, convId, 'no LLM configured or empty reply').catch(() => {});
       await emit([
         { type: 'handoff_request', conversation_id: externalId, reason: 'no LLM configured or empty reply' },
       ]);
@@ -2753,6 +2775,12 @@ async function replyAsHostedAgent(
     // Agent errored — alert operators (failure alert) and offer the customer a
     // human, but don't seize the conversation: it stays 'active' so the agent
     // answers the next message if the provider recovers.
+    void fireErrorAlert(
+      db,
+      agent,
+      convId,
+      `run threw: ${err instanceof Error ? err.message : 'generation failed'}`,
+    ).catch(() => {});
     await emit([
       { type: 'failure', conversation_id: externalId, reason: err instanceof Error ? err.message : 'generation failed' },
       {

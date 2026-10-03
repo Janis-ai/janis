@@ -1,16 +1,23 @@
 import type { AlertType, IngestEvent } from '@janis/shared';
-import type { alertRules } from '../db/schema.js';
+import type { alertRules, memberGroups } from '../db/schema.js';
 
-type RuleRow = typeof alertRules.$inferSelect;
-type RuleConfig = {
+export type RuleRow = typeof alertRules.$inferSelect;
+export type GroupRef = Pick<typeof memberGroups.$inferSelect, 'id' | 'memberIds'>;
+export type RuleConfig = {
   keywords?: string[];
+  /** intent rules: classifier topic labels that fire the rule */
+  intents?: string[];
   inactivity_minutes?: number;
+  /** csat rules: fire when a survey score lands at or below this (1–5) */
+  max_score?: number;
   enabled?: boolean;
   /** Actions — on a trigger, assign the conversation and/or tag it. */
   assign_to?: string;
   tag?: string;
-  /** auto_assign: round-robin pool + cursor */
+  /** Rotation pool — explicit member ids plus roster members from
+   *  group_ids; `next` is the round-robin cursor persisted on the rule. */
   assignees?: string[];
+  group_ids?: string[];
   next?: number;
 };
 
@@ -18,11 +25,55 @@ type RuleConfig = {
 export interface RuleAction {
   assignTo?: string;
   tag?: string;
+  /** Set when a rotation pool picked the assignee — caller persists the
+   *  cursor back onto the rule config. */
+  ruleId?: string;
+  next?: number;
 }
 
 export interface TriggeredAlert {
   type: AlertType;
   detail: string | null;
+}
+
+/** A rule's assignment pool — explicit member ids ∪ roster members. */
+export function rulePool(cfg: RuleConfig, groups: GroupRef[]): string[] {
+  const pool = [...(cfg.assignees ?? [])];
+  for (const gid of cfg.group_ids ?? []) {
+    const g = groups.find((x) => x.id === gid);
+    if (g) pool.push(...g.memberIds);
+  }
+  return [...new Set(pool.filter(Boolean))];
+}
+
+/** Who a fired rule assigns: a fixed owner wins; otherwise the rotation
+ *  pool (members + groups) advances its cursor, returned for the caller
+ *  to persist onto the rule config. */
+export function pickRuleAssignee(
+  rule: RuleRow,
+  groups: GroupRef[],
+): { userId: string; next?: number } | null {
+  const cfg = rule.config as RuleConfig;
+  if (cfg.assign_to) return { userId: cfg.assign_to };
+  const pool = rulePool(cfg, groups);
+  if (!pool.length) return null;
+  const at = (cfg.next ?? 0) % pool.length;
+  return { userId: pool[at], next: at + 1 };
+}
+
+/** Actions a fired rule carries, with any pool rotation resolved. */
+export function ruleAction(rule: RuleRow, groups: GroupRef[]): RuleAction {
+  const cfg = rule.config as RuleConfig;
+  const pick = pickRuleAssignee(rule, groups);
+  return {
+    assignTo: pick?.userId,
+    tag: cfg.tag,
+    ...(pick?.next !== undefined ? { ruleId: rule.id, next: pick.next } : {}),
+  };
+}
+
+export function ruleEnabled(rule: RuleRow): boolean {
+  return (rule.config as RuleConfig).enabled !== false;
 }
 
 /**
@@ -32,7 +83,7 @@ export interface TriggeredAlert {
  */
 export function evaluateEvent(event: IngestEvent, rules: RuleRow[]): TriggeredAlert[] {
   const triggered: TriggeredAlert[] = [];
-  const enabled = rules.filter((r) => (r.config as RuleConfig).enabled !== false);
+  const enabled = rules.filter(ruleEnabled);
 
   const ruleOn = (kind: RuleRow['kind']) => enabled.some((r) => r.kind === kind);
   const alwaysFire = rules.length === 0; // no rules configured → sensible defaults
@@ -81,7 +132,11 @@ export function evaluateEvent(event: IngestEvent, rules: RuleRow[]): TriggeredAl
  * can route the thread (assign/tag) alongside their alert. Inactivity
  * actions are applied by the sweeper, which owns that trigger.
  */
-export function evaluateActions(event: IngestEvent, rules: RuleRow[]): RuleAction[] {
+export function evaluateActions(
+  event: IngestEvent,
+  rules: RuleRow[],
+  groups: GroupRef[] = [],
+): RuleAction[] {
   if (event.type !== 'message_in') return [];
   const text = event.text.toLowerCase();
   const actions: RuleAction[] = [];
@@ -89,47 +144,58 @@ export function evaluateActions(event: IngestEvent, rules: RuleRow[]): RuleActio
     const cfg = r.config as RuleConfig;
     if (r.kind !== 'keyword' || cfg.enabled === false) continue;
     const hit = (cfg.keywords ?? []).some((k) => k.length > 0 && text.includes(k.toLowerCase()));
-    if (hit && (cfg.assign_to || cfg.tag)) {
-      actions.push({ assignTo: cfg.assign_to, tag: cfg.tag });
-    }
+    if (!hit) continue;
+    const action = ruleAction(r, groups);
+    if (action.assignTo || action.tag) actions.push(action);
   }
   return actions;
 }
 
 /**
  * auto_assign rule → who owns a brand-new conversation. `assign_to` is a
- * fixed owner; `assignees` is a round-robin pool whose cursor (`next`) the
- * caller persists back onto the rule config.
+ * fixed owner; the assignees/group_ids pool round-robins, its cursor
+ * (`next`) persisted back onto the rule config by the caller.
  */
 export function pickAutoAssignee(
   rules: RuleRow[],
+  groups: GroupRef[] = [],
 ): { userId: string; ruleId: string; next: number } | null {
-  const rule = rules.find(
-    (r) => r.kind === 'auto_assign' && (r.config as RuleConfig).enabled !== false,
-  );
+  const rule = rules.find((r) => r.kind === 'auto_assign' && ruleEnabled(r));
   if (!rule) return null;
   const cfg = rule.config as RuleConfig;
   if (cfg.assign_to) return { userId: cfg.assign_to, ruleId: rule.id, next: cfg.next ?? 0 };
-  const pool = (cfg.assignees ?? []).filter(Boolean);
+  const pool = rulePool(cfg, groups);
   if (!pool.length) return null;
   const at = (cfg.next ?? 0) % pool.length;
   return { userId: pool[at], ruleId: rule.id, next: at + 1 };
 }
 
 /** Side-effects of an agent's inactivity rules, applied when it fires. */
-export function inactivityActions(rules: RuleRow[]): RuleAction[] {
+export function inactivityActions(rules: RuleRow[], groups: GroupRef[] = []): RuleAction[] {
   return rules
-    .filter((r) => r.kind === 'inactivity' && (r.config as RuleConfig).enabled !== false)
-    .map((r) => {
-      const cfg = r.config as RuleConfig;
-      return { assignTo: cfg.assign_to, tag: cfg.tag };
-    })
+    .filter((r) => r.kind === 'inactivity' && ruleEnabled(r))
+    .map((r) => ruleAction(r, groups))
     .filter((a) => a.assignTo || a.tag);
 }
 
 /** Inactivity rules → minutes threshold. Evaluated by the sweeper. */
 export function inactivityThresholds(rules: RuleRow[]): number[] {
   return rules
-    .filter((r) => r.kind === 'inactivity' && (r.config as RuleConfig).enabled !== false)
+    .filter((r) => r.kind === 'inactivity' && ruleEnabled(r))
     .map((r) => (r.config as RuleConfig).inactivity_minutes ?? 15);
+}
+
+/** Rules that react to a classified topic label — intent-kind rules alert;
+ *  intents on other kinds stay silent routing (legacy behavior). */
+export function intentMatches(
+  rules: RuleRow[],
+  intent: string,
+  kind?: RuleRow['kind'],
+): RuleRow[] {
+  const label = intent.toLowerCase();
+  return rules.filter((r) => {
+    if (kind !== undefined && r.kind !== kind) return false;
+    if (!ruleEnabled(r)) return false;
+    return ((r.config as RuleConfig).intents ?? []).some((i) => i.toLowerCase() === label);
+  });
 }

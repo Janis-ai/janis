@@ -33,6 +33,10 @@ export const AlertType = z.enum([
   'inactivity', // conversation went quiet while awaiting agent
   'keyword', // a configured keyword/phrase was matched
   'approval_request', // a gated tool call is parked awaiting teammate approval
+  'sentiment', // an inbound message classified negative — configured rule
+  'intent', // the classifier's topic label matched a configured rule
+  'error', // the agent run itself hit a tool/output/model failure — configured rule
+  'csat', // a satisfaction score at/below a configured threshold
 ]);
 export type AlertType = z.infer<typeof AlertType>;
 
@@ -562,22 +566,44 @@ export type Suggestion = z.infer<typeof Suggestion>;
 export const AlertRule = z.object({
   id: z.string(),
   agent_id: z.string(),
-  kind: z.enum(['keyword', 'failure', 'handoff_request', 'inactivity', 'custom_alert', 'auto_assign']),
+  kind: z.enum([
+    'keyword',
+    'intent',
+    'failure',
+    'handoff_request',
+    'inactivity',
+    'custom_alert',
+    'auto_assign',
+    'sentiment',
+    'error',
+    'csat',
+  ]),
   config: z.object({
     keywords: z.array(z.string()).optional(),
     // semantic topic matches — classifier labels like 'billing', 'shipping'
-    intents: z.array(z.string()).optional(),
-    inactivity_minutes: z.number().optional(),
-    // automation actions — keyword matches / inactivity fires / new
-    // conversations can assign the thread or tag it
-    assign_to: z.string().optional(), // user id
-    assignees: z.array(z.string()).optional(), // auto_assign: round-robin pool
+    intents: z.array(z.string().min(1).max(60)).max(20).optional(),
+    inactivity_minutes: z.number().min(1).max(1440).optional(),
+    // csat: alert when a survey score lands at or below this (1–5)
+    max_score: z.number().int().min(1).max(5).optional(),
+    // automation actions — any trigger can route the thread
+    assign_to: z.string().optional(), // user id — fixed owner
+    assignees: z.array(z.string()).optional(), // rotation pool of user ids
+    group_ids: z.array(z.string()).optional(), // member_groups — roster members join the pool
     tag: z.string().optional(),
     enabled: z.boolean(),
   }),
   created_at: z.string(),
 });
 export type AlertRule = z.infer<typeof AlertRule>;
+
+/** A named teammate roster usable as a rule-assignment target. */
+export const MemberGroup = z.object({
+  id: z.string(),
+  name: z.string(),
+  member_ids: z.array(z.string()),
+  created_at: z.string(),
+});
+export type MemberGroup = z.infer<typeof MemberGroup>;
 
 /** Public help-center article — published rows are served unauthenticated
  *  and injected into the agent's knowledge context. */

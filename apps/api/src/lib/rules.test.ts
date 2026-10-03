@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { IngestEvent } from '@janis/shared';
-import { evaluateActions, evaluateEvent, inactivityThresholds, pickAutoAssignee } from './rules.js';
+import { evaluateActions, evaluateEvent, inactivityThresholds, intentMatches, pickAutoAssignee } from './rules.js';
 import type { alertRules } from '../db/schema.js';
 
 const rule = (
@@ -93,5 +93,59 @@ describe('pickAutoAssignee', () => {
     expect(pickAutoAssignee([rule('auto_assign', { enabled: false, assignees: ['u1'] })])).toBeNull();
     expect(pickAutoAssignee([rule('auto_assign', { enabled: true })])).toBeNull();
     expect(pickAutoAssignee([rule('keyword', { enabled: true, keywords: ['x'] })])).toBeNull();
+  });
+});
+
+describe('group-expanded pools', () => {
+  const groups = [{ id: 'g1', memberIds: ['u3', 'u4'] }];
+
+  it('expands group rosters into the rotation pool', () => {
+    const rules = [
+      rule('auto_assign', { enabled: true, assignees: ['u1'], group_ids: ['g1'], next: 0 }),
+    ];
+    expect(pickAutoAssignee(rules, groups)).toEqual({ userId: 'u1', ruleId: 'r1', next: 1 });
+    const advanced = [
+      rule('auto_assign', { enabled: true, assignees: ['u1'], group_ids: ['g1'], next: 1 }),
+    ];
+    expect(pickAutoAssignee(advanced, groups)).toEqual({ userId: 'u3', ruleId: 'r1', next: 2 });
+  });
+
+  it('ignores unknown group ids and dedupes overlapping rosters', () => {
+    const rules = [
+      rule('auto_assign', {
+        enabled: true,
+        assignees: ['u1', 'u3'],
+        group_ids: ['g1', 'g-missing'],
+        next: 0,
+      }),
+    ];
+    // pool: u1, u3(explicit), u3,u4(group) → deduped u1,u3,u4
+    expect(pickAutoAssignee(rules, groups)?.userId).toBe('u1');
+    const at2 = [
+      rule('auto_assign', { enabled: true, assignees: ['u1', 'u3'], group_ids: ['g1'], next: 2 }),
+    ];
+    expect(pickAutoAssignee(at2, groups)?.userId).toBe('u4');
+  });
+
+  it('rotates the pool on non-auto_assign rules via evaluateActions', () => {
+    const rules = [
+      rule('keyword', { enabled: true, keywords: ['refund'], assignees: ['u1'], group_ids: ['g1'] }),
+    ];
+    const actions = evaluateActions(evt({ type: 'message_in', text: 'refund please' }), rules, groups);
+    expect(actions).toEqual([{ assignTo: 'u1', tag: undefined, ruleId: 'r1', next: 1 }]);
+  });
+});
+
+describe('intentMatches', () => {
+  it('matches rules whose intents list names the label', () => {
+    const rules = [
+      rule('intent', { enabled: true, intents: ['billing', 'shipping'] }),
+      rule('intent', { enabled: true, intents: ['sales'] }),
+      rule('intent', { enabled: false, intents: ['billing'] }),
+      rule('keyword', { enabled: true, intents: ['billing'] }),
+    ];
+    expect(intentMatches(rules, 'Billing').map((r) => r.kind)).toEqual(['intent', 'keyword']);
+    expect(intentMatches(rules, 'billing', 'intent')).toHaveLength(1);
+    expect(intentMatches(rules, 'missing')).toHaveLength(0);
   });
 });

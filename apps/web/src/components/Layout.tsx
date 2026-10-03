@@ -36,6 +36,10 @@ const ALERT_LABELS: Record<string, string> = {
   keyword: 'Keyword match',
   sla: 'SLA breach — still unclaimed',
   approval_request: 'Approval requested',
+  sentiment: 'Negative sentiment',
+  intent: 'Topic match',
+  error: 'Agent run error',
+  csat: 'Low satisfaction score',
 };
 
 interface MeData {
