@@ -127,7 +127,9 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
   const [savedFlash, setSavedFlash] = useState(false);
   const [confirmEl, confirm] = useConfirm();
 
-  // draft state — one shared cfg, saved wholesale by the bottom Save button
+  // draft state — name lives in Settings → General; cfg is one shared draft
+  // saved wholesale by the bottom Save button
+  const [name, setName] = useState(agent.name);
   const [cfg, setCfg] = useState<AgentConfig>(agent.config ?? {});
   const [autoResume, setAutoResume] = useState(agent.auto_resume_minutes?.toString() ?? '');
   const [webhookUrl, setWebhookUrl] = useState(agent.webhook_url ?? '');
@@ -141,6 +143,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     const prev = prevAgent.current;
     if (prev === agent) return;
     prevAgent.current = agent;
+    setName((cur) => (cur === prev.name ? agent.name : cur));
     setAutoResume((cur) =>
       cur === (prev.auto_resume_minutes?.toString() ?? '')
         ? agent.auto_resume_minutes?.toString() ?? ''
@@ -245,6 +248,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
 
   const saveAll = () =>
     update.mutate({
+      ...(name.trim() && name.trim() !== agent.name ? { name: name.trim() } : {}),
       ...(agent.hosted ? {} : { webhook_url: webhookUrl || null }),
       auto_resume_minutes: autoResume ? Number(autoResume) : null,
       config: cfg,
@@ -353,6 +357,8 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
               cfg={cfg}
               setCfg={setCfg}
               isAdmin={isAdmin}
+              name={name}
+              setName={setName}
               webhookUrl={webhookUrl}
               setWebhookUrl={setWebhookUrl}
               onSaveHosted={(hosted) => update.mutate({ hosted })}
@@ -1941,6 +1947,8 @@ function ConnectionTab({
   cfg,
   setCfg,
   isAdmin,
+  name,
+  setName,
   webhookUrl,
   setWebhookUrl,
   onSaveHosted,
@@ -1954,6 +1962,8 @@ function ConnectionTab({
   cfg: AgentConfig;
   setCfg: (c: AgentConfig) => void;
   isAdmin: boolean;
+  name: string;
+  setName: (s: string) => void;
   webhookUrl: string;
   setWebhookUrl: (s: string) => void;
   onSaveHosted: (hosted: boolean) => void;
@@ -1984,6 +1994,16 @@ function ConnectionTab({
   return (
     <>
       <div className="card" style={{ marginTop: 12 }}>
+        <div className="row" style={{ marginBottom: 10 }}>
+          <label style={{ margin: 0 }}>Name</label>
+          <input
+            className="grow"
+            style={{ fontWeight: 600 }}
+            value={name}
+            disabled={!isAdmin}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
         <div className="row" style={{ marginBottom: 10 }}>
           <label style={{ margin: 0 }}>Runs</label>
           <select
