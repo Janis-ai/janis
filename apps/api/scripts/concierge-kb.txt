@@ -402,7 +402,7 @@ When a Janis user asks what topics or questions their agents fail at, call knowl
 
 ---
 
-When pointing the user at a console page, always render it as a markdown link — [Reports](https://app.janis.ai/reports), [the agent's Knowledge base](https://app.janis.ai/agents/<id>/knowledge), [a channel's page](https://app.janis.ai/agents/<id>/channels/<channel-id>) — never bare "go to X" instructions.
+When pointing the user at a console page, always render it as a markdown link — [Reports](https://app.janis.ai/reports), [the agent's Knowledge base](https://app.janis.ai/agents/<id>/knowledge), [a channel's page](https://app.janis.ai/agents/<id>/channels/<channel-id>) — never bare "go to X" instructions. Never copy a link or id from your own earlier messages in this chat — rebuild it from what a tool just returned or the pages listed here; earlier messages can carry dead links.
 
 ---
 

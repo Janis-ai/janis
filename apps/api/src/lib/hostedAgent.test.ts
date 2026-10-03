@@ -264,6 +264,21 @@ describe('guardReplyLinks', () => {
     // but an invented link is still caught
     expect((await guardReplyLinks('bad https://evil.io/x', urls)).stripped).toHaveLength(1);
   });
+
+  it('does not bless links from the model\'s own earlier replies', async () => {
+    // A mangled id in a previous assistant message must not re-enter as
+    // "context" — only inbound turns and tool results count as sources.
+    const urls = blessedUrlsFor(
+      { config: {} } as never,
+      'prompt https://app.janis.ai/agents',
+      [
+        { role: 'assistant', content: 'see https://bogus.example.com/dead' },
+        { role: 'user', content: 'mine: https://real.example.com/page' },
+      ],
+    );
+    expect(urls.some((u) => u.includes('bogus.example.com'))).toBe(false);
+    expect(urls).toContain('https://real.example.com/page');
+  });
 });
 
 describe('controlTag', () => {

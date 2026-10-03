@@ -501,7 +501,11 @@ function extractIds(text: string, into: Set<string>): void {
  * booking links) that never appear verbatim in context. */
 export function blessedUrlsFor(agent: AgentRow, prompt: string, history: ChatMsg[]): string[] {
   const urls = extractUrls(prompt);
-  for (const m of history) urls.push(...extractUrls(contentText(m.content)));
+  // Only inbound turns bless — the model's own past replies can't vouch for
+  // a link (a mangled URL would re-enter as "context" and self-bless).
+  for (const m of history) {
+    if (m.role !== 'assistant') urls.push(...extractUrls(contentText(m.content)));
+  }
   for (const t of toolsFor(agent)) urls.push(t.url);
   const cfg = (agent.config ?? {}) as { allowed_link_domains?: string[] };
   for (const d of cfg.allowed_link_domains ?? []) urls.push(`https://${d}/`);
@@ -953,7 +957,10 @@ export async function generateReply(
   // context urls + tool-returned urls; ids = every uuid the model saw.
   const ids = new Set<string>(first.contextIds);
   extractIds(prompt, ids);
-  for (const m of msgs) extractIds(contentText(m.content), ids);
+  // Same discipline as blessedUrls — our own earlier text isn't evidence.
+  for (const m of msgs) {
+    if (m.role !== 'assistant') extractIds(contentText(m.content), ids);
+  }
   for (const u of blessedUrls) extractIds(u, ids);
   const allBlessed = first.toolUrls.length ? [...blessedUrls, ...first.toolUrls] : blessedUrls;
   const guard = await guardReplyLinks(draft, allBlessed, ids);
