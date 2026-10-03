@@ -1,0 +1,429 @@
+Janis is AI and humans working together for customer service: the agent answers customers automatically, and humans step in the moment it is unsure, fails, or the customer asks for a person.
+
+---
+
+How it works: connect a channel — website chat widget, Facebook Messenger, Instagram DM, WhatsApp, email, Gmail, SMS, or a live phone number — attach an agent, and Janis routes every message: the agent answers when confident and flags for a human when not.
+
+---
+
+Getting started takes minutes: sign up, create an agent, connect a channel or paste the widget snippet — no repository cloning or npm required for hosted agents.
+
+---
+
+Janis is built for teams that want AI deflection with a human safety net — automation runs by default, and humans enter exactly where the operator chooses: on failure, on uncertainty, or on approval-gated actions.
+
+---
+
+You can test an agent without connecting any channel: the Test rail in the console chats with your agent end-to-end — including buttons and contact fields — exactly as a customer would see them.
+
+---
+
+Janis sign-in is OAuth only: Google or Slack at https://app.janis.ai/login — there is no password sign-in.
+
+---
+
+Janis remembers your last workspace — signing back in lands you where you left off.
+
+---
+
+The left sidebar's top-left switcher swaps workspaces or drops you into an agent's context — pick a workspace for the shared console, or an agent to scope the whole app to it (nav, inbox badge, settings).
+
+---
+
+Invite a teammate in Settings → Team (https://app.janis.ai/settings) by entering their email — they sign in with Google or Slack using that same email and accept the invite banner that appears.
+
+---
+
+Roles: workspace admins manage agents, channels, Slack, billing and teammates; members work the inbox, reply, leave notes and star/tag conversations.
+
+---
+
+Per-agent visibility: on an agent's page, admins can hide a member from that agent — hidden members stop seeing its conversations and stop being invited to its Slack channels.
+
+---
+
+Automation posture: Janis runs autonomously by default — agents answer customers and execute tools with no review. Humans are a backstop at two configurable seams, not a gate on the pipeline: escalation when the agent fails or is unsure, and per-tool approvals the operator opts into. The same agent can be fully autonomous or closely supervised depending on which tools are gated.
+
+---
+
+When an operator shares identity (Settings → Me), customers see their name and avatar — on Messenger via Meta's Personas API.
+
+---
+
+Agency workspaces: a workspace covered by an agency plan rides on the parent's subscription — agents, inbox and billing included — but adding more agents needs the parent's help or the child's own subscription.
+
+---
+
+The unified inbox is at https://app.janis.ai/conversations — all channels, states and filters in one place. While an agent is in context the Inbox, Contacts, Campaigns and Reports links default to that agent's slice (also at /agents/<id>/inbox etc.).
+
+---
+
+Conversation states: "Agent" means the AI is replying, "Needs human" is an escalation waiting for an operator, "Human" means an operator owns it, "Snoozed" hides it until a timer or a customer message wakes it, "Archived" is closed. Signal filters surface "Handoff offered", "Errors" and "Overdue"; flags cover Unread and Starred.
+
+---
+
+Triage built in: unread and starred filters, tags, teammate assignments, saved replies, attachments, full-text transcript search, snoozing, bulk actions on selected rows, saved views, and archiving.
+
+---
+
+Press ⌘K (Ctrl+K) anywhere for the command palette — jump to pages, agents or conversations without leaving the keyboard.
+
+---
+
+Inbox rows show the agent, the channel, and for Meta channels the Page name — the same customer messaging two connected Facebook Pages produces two separate conversations, because Messenger user IDs (PSIDs) are scoped per Page by Meta.
+
+---
+
+Anonymous visitors get a generated codename (like "Brave Wren"); it updates to their real name once they share it or are identified.
+
+---
+
+To reply as a person, open the conversation and click Take over — or use "Reply as the agent" to send one reply as the agent, "Internal note" for a private annotation, or "Teach agent" to add a fact to the agent's knowledge (admins only).
+
+---
+
+Internal notes never reach the customer — from the composer's Internal note mode or "note: <text>" in a Slack alert thread, they are stored on the transcript for teammates only.
+
+---
+
+Saved replies are shared canned responses — workspace-wide ones live in Settings → Me, agent-scoped ones in the agent's Settings → Saved replies — then insert one into a draft with the document icon in the composer; it fills the draft and you still hit send.
+
+---
+
+Janis drafts suggested replies for operators from recent transcript context — via the agent's own model when available, else a Janis-side LLM.
+
+---
+
+Typing indicators run both ways — customers see dots while the agent generates or a human composes, and the console shows when a visitor is typing.
+
+---
+
+Messages only show Delivered after the channel accepts them. Failed sends display the platform's actual error; transient failures (timeouts, rate limits) can be retried in place.
+
+---
+
+If a Messenger or Instagram thread has been quiet over 24 hours, Meta blocks new messages — Janis shows the exact platform error on the message instead of pretending it sent; the window reopens when the customer writes back. WhatsApp requires an approved template outside its window.
+
+---
+
+Human takeover: when a conversation is flagged, the team is alerted in-app, by push notification, email, and Slack; a human replies in the same thread and can hand it back to the agent manually or via auto-resume after N idle minutes.
+
+---
+
+"Needs human" only flags the conversation — the agent keeps replying until someone clicks Take over; only a human takeover pauses it.
+
+---
+
+Escalations do not have to be hard failures — the agent can offer a human and the customer accepts via a quick-reply button, which lands in the "Handoff offered" filter. The offer is only made when the customer is genuinely stuck, and never twice in one conversation.
+
+---
+
+Ignored handoffs re-alert after 5 minutes — a fresh channel post rather than a buried thread reply, so a stale escalation cannot go quiet.
+
+---
+
+Escalation and accountability: per-agent SLA re-alerts when a handoff sits unclaimed, auto-assign routes new handoffs to the least-loaded teammate, and Reports track handoff volume, response rate, and average/median time-to-first-human-response.
+
+---
+
+The agent's Settings → Escalation section holds its handoff settings: auto-resume minutes, SLA re-alert minutes, routing rules (keyword, inactivity, auto-assign) and Slack alert destinations.
+
+---
+
+Routing rules automate triage: keyword and inactivity rules can assign a conversation to a teammate, tag it, or escalate it; auto-assign round-robins new conversations across the team.
+
+---
+
+A daily digest summarizes new conversations, handoffs and response stats for each workspace — delivered as a notification and posted to Slack.
+
+---
+
+Reports at https://app.janis.ai/reports cover containment (AI vs human), resolution speed and deflection, message volume, CSAT ratings, topic drill-downs, campaign performance, per-operator stats and plan usage — with preset and custom date ranges plus CSV export.
+
+---
+
+Customers are asked to rate resolved conversations 1–5 when they're archived — ratings roll up in the Reports CSAT card with distribution and per-topic averages. The survey is customisable: Settings → Sending → "Satisfaction survey" sets the workspace-wide on/off, question text and thank-you reply; an agent's Behavior → Satisfaction survey overrides any field for that agent.
+
+---
+
+The agent's knowledge lives on its Knowledge base section across five sub-tabs: Text (one standalone fact per line), Files (uploaded documents), Websites (pages re-crawled on a schedule), Gaps (suggested learnings for approval) and Help center (published articles).
+
+---
+
+Keep each knowledge entry a one-line fact that makes sense alone — entries are injected line-by-line, so a line that only works under a heading above it loses its context.
+
+---
+
+Knowledge files: upload PDF, DOCX, TXT, MD, CSV, JSON, XML, HTML, LOG, YAML or image files — up to 50 per agent — under Knowledge base → Files, and the extracted text becomes part of the agent's context. Knowledge base → Websites adds live URL sources instead: give a page URL and its text is re-crawled on a refresh schedule so the agent stays current.
+
+---
+
+To make the agent unlearn something, remove it where it lives: a line in Knowledge base → Text, or a file in Knowledge base → Files. Both take effect immediately.
+
+---
+
+Knowledge gaps: Janis clusters recurring questions the agent could not answer, drafts suggested knowledge entries from how humans resolved them, and adds them to the agent only after a human approves — the agent gets smarter with every escalation.
+
+---
+
+Knowledge gaps live under Knowledge base → Gaps — Janis looks at the last 30 days of escalations and clusters questions that forced a handoff; a theme needs at least two occurrences to count as a gap.
+
+---
+
+Approving a gap entry appends its lines to the agent's knowledge entries — you can edit the draft first; dismissing hides a cluster you do not care about.
+
+---
+
+"Re-check resolved" re-tests the open clusters against current knowledge — entries you have added or approved can clear gaps without another escalation.
+
+---
+
+Gap detection is cached and refreshed roughly daily; the Refresh button recomputes on demand so the list does not reshuffle between page loads.
+
+---
+
+Hosted agents can self-report learnings — invisible to customers, they queue as drafts in Knowledge gaps for human approval.
+
+---
+
+You can also teach the agent directly: "Teach agent" in the conversation composer or "teach: <text>" in a Slack thread appends a knowledge entry — admins only.
+
+---
+
+Long conversations are summarized for the agent automatically, so old context is kept without re-reading the whole transcript.
+
+---
+
+Agents are managed at https://app.janis.ai/agents — each agent gets an Overview dashboard plus sections: Behavior, Knowledge base, Channels, Agent settings, and for hosted agents Integrations, Chat components and Tests. External webhook agents see Behavior, Channels and Agent settings.
+
+---
+
+Agents can be hosted inside Janis or external via webhook. Hosted agents pick an engine under Behavior → Language model: Janis metered (billed at cost + margin) or your own key for OpenAI, Anthropic, Gemini, OpenRouter, xAI, DeepSeek, Moonshot, Z.ai, NVIDIA, Groq, Mistral, or any custom OpenAI-compatible endpoint. OpenRouter can connect in one click via OAuth — one key unlocks every frontier model.
+
+---
+
+The Behavior section holds the agent's language model, greeting, system prompt, tone, and its per-agent satisfaction-survey override.
+
+---
+
+External agents set their webhook URL under the agent's Settings → General — they receive signed webhooks and reply through the ingest API; hosted agents need no URL.
+
+---
+
+The Tests section runs evals — hand-written or CSV-imported test conversations scored against the agent, A/B runs to compare models or prompts, and scheduled runs that alert on regressions. When a scheduled run flips a test red, Janis classifies the cause, drafts a fix — a knowledge entry, a prompt addition, or a corrected expectation — replays the suite against the candidate, and only surfaces it as an approvable suggestion when the target passes with no new failures.
+
+---
+
+Every hosted agent gets a public help center at /help/<agent-id> — articles are managed under Knowledge base → Help center, are searchable, feed the agent's knowledge automatically, and can live on a custom domain.
+
+---
+
+Agents can analyze attached images and documents in replies — a paid-plan feature; free plans see filenames only.
+
+---
+
+Agents can end a reply with tappable suggested replies for the customer — rendered as native buttons per channel (up to 3 on WhatsApp, 13 on Messenger, 20-character titles), and long texts are split so buttons always deliver within channel limits.
+
+---
+
+Agents can collect contact info natively: when a customer's email or phone is needed, the agent asks via Meta's one-tap share button on Messenger, an inline field on webchat, or plain text on Instagram and WhatsApp.
+
+---
+
+The Integrations section installs tools the agent can call mid-conversation — one-click templates for Shopify, HubSpot, Zendesk (API key or OAuth), Salesforce, Stripe, Cal.com, Brave Search and iTunes, or define your own HTTP endpoint with parameters.
+
+---
+
+Tool templates run real API calls the agent fills with arguments — look up a Shopify order, create a Zendesk ticket, check Cal.com availability — so replies carry real data and real links instead of invented ones.
+
+---
+
+A built-in web-search tool exists so an agent can look up current information mid-conversation — it's enabled per agent on request; ask a human to turn it on for yours.
+
+---
+
+Tool credentials go in the agent's Secrets — write-only values referenced as {{secrets.NAME}} in tool headers; they are never re-displayed or sent to browsers.
+
+---
+
+Approval gates are opt-in per tool: sensitive actions (refunds, plan changes) can be marked approval-required so a teammate must Approve before execution — everything else the agent runs autonomously. Gate the actions where a mistake is expensive; automate the rest.
+
+---
+
+Connecting Stripe (agent → Integrations → Stripe → Connect): create a restricted key in Stripe Dashboard → Developers → API keys → Create restricted key; grant Read on Customers, Charges, Products, Prices and Subscriptions, plus Write on Subscriptions and Refunds if the agent may propose plan changes or refunds. Read tools run automatically; write tools always wait for a teammate's approval. Test with an rk_test_… key first.
+
+---
+
+Channels are managed per agent in its Channels section — a catalog to add more and a page per connected channel with kind-specific setup (Messenger/Instagram via Meta OAuth, WhatsApp via embedded signup, Bubble widget snippet, email forwarding, Gmail OAuth, SMS and voice numbers via Twilio).
+
+---
+
+The Bubble channel is a single script tag; visitors get a chat bubble on your site, no account needed, and conversations land in the same inbox as every other channel.
+
+---
+
+The Bubble's editor lives on the channel's own page — a live working preview beside sectioned controls: header title and subtitle, accent color, position, logo, greeting, quick-reply chips, proactive teaser, reply sound, theme, and 'Powered by Janis' removal on paid plans.
+
+---
+
+Visitors can attach files in the widget (up to 5, 10MB each); image analysis in replies is a paid-plan feature.
+
+---
+
+Signed-in customers keep one thread across devices via Janis.identify() or an HMAC-signed claim from the host site; anonymous visitors get a browser-stored id.
+
+---
+
+Janis.identify() also accepts a traits object — Janis.identify({id, name, email, sig, traits: {plan: "pro", company: "Acme"}}) — so the host site can pass the agent background context like plan, role or account tier; the agent sees it labelled as host-provided context. Signed-in Janis users automatically get their workspace names as context.
+
+---
+
+A client's own backend can push authoritative user details server-to-server: PATCH /v1/conversations/:externalId/user with the agent's API key — {name?, email?, external_id?, traits?} — traits merge into the profile the agent sees, and external_id lands verified since the caller holds the key.
+
+---
+
+Email channels get an inbound address at inbound.janis.ai — forward or MX mail to it and replies send from the same address. Answer rules choose which mail the agent replies to (senders, recipients, subjects); a custom sending domain (DNS verification — Cloudflare-assisted or manual — with status that refreshes automatically once verified) lets replies come from your own domain; replies can also be mirrored to a real mailbox.
+
+---
+
+SMS and voice channels run on Twilio — bring your own credentials or let Janis host the number for you; voice calls are transcribed, answered by the agent live, and land in the inbox as conversations.
+
+---
+
+Contacts at https://app.janis.ai/contacts build one profile per customer across channels — identities merge on matching email or phone, and you can merge duplicates manually.
+
+---
+
+Campaigns at https://app.janis.ai/campaigns send outbound broadcasts to contact lists — scheduled or immediate, with drip steps, per-recipient results (sent, replied, converted, failed, skipped), opt-out suppression and quiet-hours rules.
+
+---
+
+Connect Slack in Settings → Integrations → Slack (admins only) — you can connect more than one Slack workspace. Alerts post to a channel with Take over / Resume buttons; replying in the alert thread talks to the customer.
+
+---
+
+Each agent's Slack destinations are a list set in its Settings → Escalation — add rows for any connected workspace + channel. An agent with custom routes no longer uses the workspace default; an explicitly empty list turns Slack alerts off for that agent.
+
+---
+
+The workspace default alert channel is chosen in Settings → Integrations → Slack — pick an existing channel or create a new one. New agents automatically get their own #janis-{name} channel when Slack is connected.
+
+---
+
+In a Slack alert thread: a plain reply is sent to the customer as a human (taking over automatically). "note: <text>" adds a private internal note the customer never sees. "agent: <text>" sends as the AI agent. "teach: <text>" adds to the agent's knowledge — admins only.
+
+---
+
+The Take over button in Slack hands the conversation to a human and Resume hands it back to the agent — "pause:" and "resume:" in a thread do the same. Slack blocks /slash commands in threads; at channel level /pause and /resume act on the channel's most recent conversation.
+
+---
+
+Only accepted members of the Janis workspace can act on Slack alerts. If a teammate's Slack reply or button click does nothing, their Slack identity is not linked — invite the email their Slack account uses; once they act once, the link is remembered.
+
+---
+
+A Slack member who is not a Janis operator gets a "🚫 isn't a member of this Janis workspace" reply — nothing they type in the thread reaches the customer.
+
+---
+
+Teammates are automatically invited to the Slack channels of the agents they can see, and removed when hidden — no manual channel invites needed.
+
+---
+
+Anyone who joins the alert channel can read the alerts — that is Slack visibility, not a Janis permission. Use a private channel if alert content should be restricted.
+
+---
+
+Pricing: Free $0/mo with 250 messages (hard cap — inbound messages past the cap are not accepted until the next month or an upgrade); Starter $29/mo with 2,000 messages then $8 per 1,000; Pro $99/mo with 20,000 then $5 per 1,000; Scale $299/mo with 100,000 then $3 per 1,000. LLM usage is metered at cost plus margin. Cancel anytime.
+
+---
+
+Plan, usage meters and the payment portal are at https://app.janis.ai/billing — a slim live usage meter also sits at the bottom of the sidebar; usage and activity reports are at https://app.janis.ai/reports (there is no separate Usage page).
+
+---
+
+Notifications work everywhere: the console is an installable PWA with browser push (including iOS when installed to the home screen), plus email alerts and Slack posts.
+
+---
+
+Security: channel credentials and LLM keys are stored server-side only and are write-only in the console — they are never re-displayed or sent to browsers. Every admin mutation is recorded in the workspace audit log (Settings → Workspace).
+
+---
+
+Outbound webhooks are signed (x-janis-signature) and retried; every delivery attempt is logged with its status and last error, and failed deliveries can be replayed from the agent page.
+
+---
+
+Janis integrates with Stripe for billing; privacy and subprocessor details (Meta, Slack, Google, Stripe) are at https://www.janis.ai/privacy.
+
+---
+
+The /docs page documents the full ingest API, webhook event types, signature verification, and the SDK for self-hosted agents; a public status page lives at /status.
+
+---
+
+Janis was originally built for the Dialogflow era and has been rebuilt from the ground up for LLM agents — same mission: bots handle the routine, humans handle the rest.
+
+---
+
+Questions outside this list — enterprise terms, self-hosting, custom SLAs, migration help — go to a human: flag the conversation or email support@janis.ai.
+
+---
+
+Refunds and billing credits: Janis can propose them — use your tools to propose the action and a teammate approves or denies before it executes. Never tell a customer a refund is impossible; propose it or offer a human.
+
+---
+
+Changing plans: you can change a signed-in visitor's plan yourself with the change_plan tool — ask which plan (free, starter, pro, scale) and which workspace if they administer several. Paid→paid switches apply immediately with proration; upgrades from free return a secure Stripe checkout link to add a card; 'free' cancels at period end. Offer to do it rather than sending people to the portal; the billing page stays available for cards and invoices.
+
+---
+
+You can create new hosted agents for signed-in Janis users with the create_agent tool. When a user asks for an agent, first confirm the agent's name and what it should do (draft a system prompt from their description), and which workspace if they administer more than one. Only then call create_agent — never claim an agent was created unless the tool returns created:true. Share the returned console URL. Creating an agent requires a verified sign-in and admin rights on the target workspace.
+
+---
+
+You can answer 'how is my workspace doing' with the workspace_stats tool — volume, containment, CSAT, open handoffs, per-agent breakdown for any workspace the signed-in user belongs to (defaults to the one they're viewing, last 30 days; pass days to change).
+
+---
+
+You can diagnose 'why didn't my agent reply?' with debug_conversation — pass the conversation id from the console URL (/conversations/<id>) or the customer's name/email. It reports the blocking reason: human takeover, escalation, plan/spend caps, missing channel binding, failing BYO webhook, or a pending approval. Never guess at causes — run the tool and relay its findings.
+
+---
+
+Bubble developer options on the channel's page: the embed snippet, visitor microphone dictation (off by default, with an enhanced engine option — metered as speech-to-text usage), and a custom domain — claim a host like chat.acme.com, point a CNAME at app.janis.ai, and Janis serves a full-page hosted messenger on it.
+
+---
+
+When a Janis user asks what topics or questions their agents fail at, call knowledge_gaps — summarise each cluster (theme, times_failed, sample questions, the human answer) and link [the agent's Behavior tab](gaps_url). Offer to draft a knowledge entry for the top gap; show the entry text and only call teach_agent after they confirm.
+
+---
+
+When pointing the user at a console page, always render it as a markdown link — [Reports](https://app.janis.ai/reports), [the agent's Knowledge base](https://app.janis.ai/agents/<id>/knowledge), [a channel's page](https://app.janis.ai/agents/<id>/channels/<channel-id>) — never bare "go to X" instructions.
+
+---
+
+You can change workspace configuration yourself with action cards: add_routing_rule (keyword/inactivity/auto_assign/alert rules), update_agent (greeting, quick replies, CSAT, handoff re-alert), teach_agent (knowledge entries). Always propose the card instead of describing manual console steps — the visitor clicks Approve.
+
+---
+
+Honesty rule: never tell the visitor a change is done, applied or live unless a tool result or an approved action card confirmed it. If the visitor says they cannot see a card, call the tool again — do NOT claim you made the change directly.
+
+---
+
+The agent's Overview page — the landing section at /agents/<id> — is a health dashboard: this week's conversations, AI-resolution rate, open handoffs and 30-day CSAT, plus recent conversations, channel status and a knowledge-gaps preview.
+
+---
+
+The Chat components section is the agent's saved component library — pickers, card carousels, forms and status trackers the agent renders inline in chat. Components can bind to tools for live data, interpolate {prop} placeholders, and pin under the webchat greeting; they edit in place on the page.
+
+---
+
+Every Bubble channel has a shareable full-page messenger — the 'open chat' link on the channel's page serves a standalone chat site, so you can link customers straight to a conversation with no embed or website needed.
+
+---
+
+Bubble custom domains: claim a host like chat.acme.com on the channel's page, point a CNAME at app.janis.ai — the status polls through pending → pointed → live, and once live the domain serves a full-page hosted messenger branded as yours.
+
+---
+
+Operators can summon the Janis concierge inside the console via the Copilot rail — the sparkle icon in the left nav — for product answers and workspace actions it proposes as approvable cards.

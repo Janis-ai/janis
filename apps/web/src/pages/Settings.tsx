@@ -980,8 +980,8 @@ function CsatCard() {
       <strong>Satisfaction survey</strong>
       <div className="muted" style={{ fontSize: 13 }}>
         Sent to the customer when a conversation is archived — they reply with a
-        1–5 rating, scored in Reports. Agents can override per-field on their
-        Escalation tab.
+        1–5 rating, scored in Reports. Agents can override per-field under
+        Behavior → Satisfaction survey.
       </div>
       <label className="row" style={{ gap: 8, fontSize: 13 }}>
         <input
