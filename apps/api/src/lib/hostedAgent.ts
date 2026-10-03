@@ -394,6 +394,7 @@ export function systemPrompt(
       (richFmt
         ? ' You may use **bold** on a key word or short phrase when it genuinely helps — it renders on this channel. No headings or other markup.'
         : ' Write plain text: no markup emphasis (no **bold**, *italics*, or headings) — this channel renders plain text only.') +
+      ' When an answer enumerates several items (plans, prices, steps, options), put each on its own line — optionally as "- item" bullets — rather than running them together in a paragraph; line breaks render on every channel.' +
       ' When your answer points the customer at a page and a URL for it appears in your knowledge base or context, include it rather than describing where to click — a bare https:// URL renders clickable on every channel.',
   );
   if (!opts.forSuggestion) {
