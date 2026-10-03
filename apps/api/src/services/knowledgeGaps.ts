@@ -384,6 +384,34 @@ export function gapsCacheFresh(cache: GapsCache | null): boolean {
   return !!cache && Date.now() - new Date(cache.at).getTime() < GAPS_CACHE_TTL_MS;
 }
 
+/** Operator-dismissed clusters stay hidden until the question escalates
+ * AGAIN after the dismissal — a new phrasing doesn't resurface it, a new
+ * occurrence does. Entries without a timestamp (pre-timestamp dismissals)
+ * stay hidden permanently. Single source so every surface (detail page,
+ * overview card, concierge) filters identically. */
+export function filterDismissedGaps(gaps: GapCluster[], config: unknown): GapCluster[] {
+  const cfg = (config ?? {}) as {
+    dismissed_gaps?: string[];
+    dismissed_gap_times?: Record<string, string>;
+  };
+  const dismissed = new Set(cfg.dismissed_gaps ?? []);
+  const times = cfg.dismissed_gap_times ?? {};
+  const qKey = (q: string) => q.toLowerCase().slice(0, 60);
+  return gaps.filter((g) => {
+    const covered =
+      dismissed.has(g.key) ||
+      (g.questions.length > 0 && g.questions.every((q) => dismissed.has(qKey(q))));
+    if (!covered) return true;
+    const ts = [g.key, ...g.questions.map(qKey)]
+      .map((k) => times[k])
+      .filter((t): t is string => !!t)
+      .map(Date.parse)
+      .filter(Number.isFinite);
+    if (!ts.length) return false; // legacy dismissal — never resurface
+    return Date.parse(g.last_seen) > Math.max(...ts);
+  });
+}
+
 /** Re-evaluate `added` on cached clusters after a knowledge entry is approved —
  * the gap set stays stable; only its resolved-flags move. */
 export function markGapsAdded(gaps: GapCluster[], knowledge: string[]): GapCluster[] {

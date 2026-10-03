@@ -1119,7 +1119,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
 
       // Lazy import — knowledgeGaps pulls llmFor from hostedAgent, which
       // imports this module; deferring avoids a load-time cycle.
-      const { detectKnowledgeGaps, readGapsCache, gapsCacheFresh } = await import(
+      const { detectKnowledgeGaps, filterDismissedGaps, readGapsCache, gapsCacheFresh } = await import(
         '../services/knowledgeGaps.js'
       );
 
@@ -1153,22 +1153,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         }
         // Same dismissal rules as the console — operator-covered clusters
         // stay hidden unless the question recurs after the dismissal.
-        const dismissed = new Set(cfg.dismissed_gaps ?? []);
-        const times = cfg.dismissed_gap_times ?? {};
-        const qKey = (q: string) => q.toLowerCase().slice(0, 60);
-        gaps = gaps.filter((g) => {
-          const covered =
-            dismissed.has(g.key) ||
-            (g.questions.length > 0 && g.questions.every((q) => dismissed.has(qKey(q))));
-          if (!covered) return true;
-          const ts = [g.key, ...g.questions.map(qKey)]
-            .map((k) => times[k])
-            .filter((t): t is string => !!t)
-            .map(Date.parse)
-            .filter(Number.isFinite);
-          if (!ts.length) return false; // legacy dismissal — never resurface
-          return Date.parse(g.last_seen) > Math.max(...ts);
-        });
+        gaps = filterDismissedGaps(gaps, cfg);
         if (!gaps.length) continue;
         out.push({
           agent: agent.name,

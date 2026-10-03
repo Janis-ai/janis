@@ -25,6 +25,7 @@ import {
   detectKnowledgeGaps,
   draftKnowledgeEntry,
   gapsCacheFresh,
+  filterDismissedGaps,
   listLearnNotes,
   markGapsAdded,
   readGapsCache,
@@ -701,7 +702,10 @@ export function agentRoutes(db: Db) {
     const cached = readGapsCache(agent.config);
     const cache = gapsCacheFresh(cached) ? cached! : await computeAndCacheGaps(agent);
     const learnings = await listLearnNotes(db, agent.id);
-    return c.json({ gaps: cache.gaps, learnings, computed_at: cache.at });
+    // Dismissed clusters are filtered server-side so every surface —
+    // detail page, overview card — sees the same set. (The detail page
+    // still filters client-side against its own config copy; same rules.)
+    return c.json({ gaps: filterDismissedGaps(cache.gaps, agent.config), learnings, computed_at: cache.at });
   });
 
   // Force a fresh detection run — the operator's "Refresh" button.
@@ -709,7 +713,7 @@ export function agentRoutes(db: Db) {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const cache = await computeAndCacheGaps(agent);
-    return c.json({ gaps: cache.gaps, computed_at: cache.at });
+    return c.json({ gaps: filterDismissedGaps(cache.gaps, agent.config), computed_at: cache.at });
   });
 
   app.post(
