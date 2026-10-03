@@ -5,7 +5,7 @@ import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
-import { ArgsRows, Avatar, channelLabel, displayName, fmtTime, StateBadge } from '../components/bits';
+import { ArgsRows, Avatar, channelLabel, displayName, fmtTime } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
@@ -692,7 +692,6 @@ export default function ConversationPage() {
     <div className="conv-layout">
       <div className="conv-main">
         <div className="row">
-          <h1 className="page-title grow">{name}</h1>
           <input
             className="conv-search"
             type="search"
@@ -776,7 +775,6 @@ export default function ConversationPage() {
               Save as test
             </button>
           )}
-          <StateBadge state={c.state} />
         </div>
 
         {convHits !== null && convQ.trim().length >= 2 && (
