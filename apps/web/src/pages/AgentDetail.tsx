@@ -21,7 +21,7 @@ import { SavedWidgets } from '../components/WidgetComposer';
 import { railBus } from '../lib/railBus';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { RefreshCw, Trash2, Upload, X } from 'lucide-react';
+import { Pencil, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 
 type RuleKind = AlertRule['kind'];
 const RULE_KINDS: { key: RuleKind; label: string; hint: string }[] = [
@@ -946,8 +946,11 @@ function EscalationTab({
   onDeleteRule: (id: string) => void;
 }) {
   const [kind, setKind] = useState<RuleKind>('handoff_request');
+  const [editing, setEditing] = useState<AlertRule | null>(null);
   const [keywords, setKeywords] = useState('');
   const [intents, setIntents] = useState<string[]>([]);
+  const [topicDraft, setTopicDraft] = useState('');
+  const [labelsDraft, setLabelsDraft] = useState('');
   const [minutes, setMinutes] = useState('15');
   const [maxScore, setMaxScore] = useState('3');
   const [route, setRoute] = useState<'none' | 'member' | 'pool'>('none');
@@ -1004,21 +1007,69 @@ function EscalationTab({
     (route !== 'member' || assignTo.length > 0) &&
     (route !== 'pool' || pool.length + groupIds.length > 0);
 
-  const addRule = () =>
-    onAddRule(kind, {
-      enabled: true,
-      ...(kind === 'keyword'
-        ? { keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean) }
-        : {}),
-      ...(kind === 'intent' ? { intents } : {}),
-      ...(kind === 'inactivity' ? { inactivity_minutes: Number(minutes) || 15 } : {}),
-      ...(kind === 'csat' ? { max_score: Number(maxScore) } : {}),
-      ...(route === 'member' ? { assign_to: assignTo } : {}),
-      ...(route === 'pool'
-        ? { assignees: pool, group_ids: groupIds, next: 0 }
-        : {}),
-      ...(ruleTag.trim() ? { tag: ruleTag.trim() } : {}),
-    });
+  const buildConfig = (enabled: boolean) => ({
+    enabled,
+    ...(kind === 'keyword'
+      ? { keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean) }
+      : {}),
+    ...(kind === 'intent' ? { intents } : {}),
+    ...(kind === 'inactivity' ? { inactivity_minutes: Number(minutes) || 15 } : {}),
+    ...(kind === 'csat' ? { max_score: Number(maxScore) } : {}),
+    ...(route === 'member' ? { assign_to: assignTo } : {}),
+    ...(route === 'pool'
+      ? { assignees: pool, group_ids: groupIds, next: editing ? ((editing.config as { next?: number }).next ?? 0) : 0 }
+      : {}),
+    ...(ruleTag.trim() ? { tag: ruleTag.trim() } : {}),
+  });
+
+  const resetBuilder = () => {
+    setEditing(null);
+    setKeywords('');
+    setIntents([]);
+    setTopicDraft('');
+    setRoute('none');
+    setAssignTo('');
+    setRuleTag('');
+    setPool([]);
+    setGroupIds([]);
+  };
+
+  const submitRule = () => {
+    if (editing) {
+      // PATCH only takes config — kind stays whatever the rule already is.
+      onUpdateRule(editing.id, buildConfig(editing.config.enabled !== false));
+    } else {
+      onAddRule(kind, buildConfig(true));
+    }
+    resetBuilder();
+  };
+
+  const editRule = (r: AlertRule) => {
+    const c = r.config;
+    setEditing(r);
+    setKind(r.kind);
+    setKeywords((c.keywords ?? []).join(', '));
+    setIntents(c.intents ?? []);
+    setMinutes(String(c.inactivity_minutes ?? 15));
+    setMaxScore(String(c.max_score ?? 3));
+    setRoute(c.assign_to ? 'member' : (c.assignees ?? []).length || (c.group_ids ?? []).length ? 'pool' : 'none');
+    setAssignTo(c.assign_to ?? '');
+    setRuleTag(c.tag ?? '');
+    setPool(c.assignees ?? []);
+    setGroupIds(c.group_ids ?? []);
+  };
+
+  // A custom topic typed into a rule only fires if the classifier can emit
+  // it — adding it joins the agent's label list alongside the rule pick.
+  const addCustomTopic = () => {
+    const label = topicDraft.trim().toLowerCase();
+    if (!label || intents.includes(label)) return;
+    setIntents([...intents, label]);
+    const base = cfg.intents?.length ? cfg.intents : [...DEFAULT_INTENTS];
+    if (!base.some((l) => l.toLowerCase() === label))
+      setCfg({ ...cfg, intents: [...base, label] });
+    setTopicDraft('');
+  };
 
   return (
     <>
@@ -1087,6 +1138,7 @@ function EscalationTab({
               <strong>{kindMeta(r.kind)?.label ?? r.kind}</strong>
               <span className="muted"> — {describeRule(r)}</span>
             </span>
+            <button className="btn" onClick={() => editRule(r)} aria-label="Edit rule"><Pencil size={14} /></button>
             <button className="btn danger" onClick={() => onDeleteRule(r.id)} aria-label="Delete rule"><Trash2 size={14} /></button>
           </div>
         ))}
@@ -1098,14 +1150,25 @@ function EscalationTab({
         )}
 
         <div style={{ borderTop: '1px solid var(--line)', marginTop: 12, paddingTop: 10 }}>
+          {editing && (
+            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+              Editing rule — <a href="#" onClick={(e) => { e.preventDefault(); resetBuilder(); }}>cancel</a>
+            </div>
+          )}
           <div className="row">
             <label className="muted" style={{ fontSize: 12 }}>When</label>
-            <select value={kind} onChange={(e) => setKind(e.target.value as RuleKind)}>
+            <select
+              value={kind}
+              disabled={!!editing}
+              onChange={(e) => setKind(e.target.value as RuleKind)}
+            >
               {RULE_KINDS.map((k) => (
                 <option key={k.key} value={k.key}>{k.label}</option>
               ))}
             </select>
-            <span className="muted" style={{ fontSize: 12 }}>{kindMeta(kind)?.hint}</span>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {editing ? 'kind is fixed once created' : kindMeta(kind)?.hint}
+            </span>
           </div>
 
           {kind === 'keyword' && (
@@ -1119,6 +1182,7 @@ function EscalationTab({
             </div>
           )}
           {kind === 'intent' && (
+            <>
             <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
               {topicLabels.map((label) => (
                 <label key={label} className="check-label" style={{ marginRight: 10 }}>
@@ -1130,7 +1194,28 @@ function EscalationTab({
                   {label}
                 </label>
               ))}
+              {intents.filter((i) => !topicLabels.some((l) => l.toLowerCase() === i.toLowerCase())).map((label) => (
+                <label key={label} className="check-label" style={{ marginRight: 10 }}>
+                  <input
+                    type="checkbox"
+                    checked
+                    onChange={() => toggle(intents, label, setIntents)}
+                  />
+                  {label}
+                </label>
+              ))}
             </div>
+            <div className="row" style={{ marginTop: 6 }}>
+              <input
+                style={{ width: 200 }}
+                placeholder="+ custom topic (adds to labels below)"
+                value={topicDraft}
+                onChange={(e) => setTopicDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomTopic(); } }}
+              />
+              <button className="btn" disabled={!topicDraft.trim()} onClick={addCustomTopic}>Add</button>
+            </div>
+            </>
           )}
           {kind === 'inactivity' && (
             <div className="row" style={{ marginTop: 8 }}>
@@ -1207,29 +1292,67 @@ function EscalationTab({
             </div>
           )}
           <div className="row" style={{ marginTop: 10 }}>
-            <button className="btn" disabled={!canAdd} onClick={addRule}>
-              Add rule
+            <button className="btn" disabled={!canAdd} onClick={submitRule}>
+              {editing ? 'Save changes' : 'Add rule'}
             </button>
+            {editing && (
+              <button className="btn" onClick={resetBuilder}>Cancel</button>
+            )}
           </div>
         </div>
 
         <div className="form-field" style={{ marginTop: 12 }}>
           <label>Topic labels — what the classifier tags each conversation with</label>
-          <input
-            defaultValue={(cfg.intents ?? []).join(', ')}
-            placeholder="billing, shipping, technical issue, sales, other (blank = default topics)"
-            onBlur={(e) =>
-              setCfg({
-                ...cfg,
-                intents: e.target.value
-                  .split(',')
-                  .map((s) => s.trim())
-                  .filter(Boolean),
-              })
-            }
-          />
+          {topicLabels.map((label, i) => (
+            <span key={label} className="badge" style={{ marginRight: 4 }}>
+              {label}
+              <button
+                className="btn ghost"
+                style={{ padding: '0 2px', marginLeft: 2 }}
+                aria-label={`Remove ${label}`}
+                onClick={() =>
+                  setCfg({ ...cfg, intents: topicLabels.filter((_, x) => x !== i) })
+                }
+              >
+                <X size={10} />
+              </button>
+            </span>
+          ))}
+          <div className="row" style={{ marginTop: 6 }}>
+            <input
+              style={{ width: 220 }}
+              placeholder="Add a topic — e.g. refunds, warranty"
+              value={labelsDraft}
+              onChange={(e) => setLabelsDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const label = labelsDraft.trim().toLowerCase();
+                  if (label && !topicLabels.some((l) => l.toLowerCase() === label))
+                    setCfg({ ...cfg, intents: [...topicLabels, label] });
+                  setLabelsDraft('');
+                }
+              }}
+            />
+            <button
+              className="btn"
+              disabled={!labelsDraft.trim()}
+              onClick={() => {
+                const label = labelsDraft.trim().toLowerCase();
+                if (label && !topicLabels.some((l) => l.toLowerCase() === label))
+                  setCfg({ ...cfg, intents: [...topicLabels, label] });
+                setLabelsDraft('');
+              }}
+            >
+              Add
+            </button>
+          </div>
           <span className="muted" style={{ fontSize: 12 }}>
-            Topic-match rules fire on these labels — the same ones Reports → Topics tallies.
+            {!cfg.intents?.length
+              ? 'Using the default topics — adding one makes the list explicit.'
+              : `${topicLabels.length} topic${topicLabels.length === 1 ? '' : 's'}.`}{' '}
+            Topic-match rules fire on these — the same labels Reports → Topics tallies.
+            Saves with the page's Save button.
           </span>
         </div>
       </div>
