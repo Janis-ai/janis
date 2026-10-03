@@ -6,7 +6,15 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channelBindings, channels, metaConnections } from '../db/schema.js';
+import {
+  agents,
+  campaigns,
+  campaignSends,
+  channelBindings,
+  channels,
+  contactIdentities,
+  metaConnections,
+} from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toChannel } from '../lib/serializers.js';
 import { setGetStartedButton, type ChannelCredentials } from '../lib/channels.js';
@@ -378,6 +386,12 @@ async function deleteMetaUserData(db: Db, metaUserId: string) {
     .where(and(eq(channels.workspaceId, conn.workspaceId), inArray(channels.kind, [...META_KINDS])));
   const ids = metaChannels.map((ch) => ch.id);
   if (ids.length) {
+    // Teardown — the channels are going away wholesale, so dependent rows go
+    // with them (identities are channel-scoped; campaigns on a dead channel
+    // can never send again). Order: deepest references first.
+    await db.delete(campaignSends).where(inArray(campaignSends.channelId, ids));
+    await db.delete(campaigns).where(inArray(campaigns.channelId, ids));
+    await db.delete(contactIdentities).where(inArray(contactIdentities.channelId, ids));
     await db.delete(channelBindings).where(inArray(channelBindings.channelId, ids));
     await db.delete(channels).where(inArray(channels.id, ids));
   }

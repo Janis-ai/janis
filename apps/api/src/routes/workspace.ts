@@ -13,8 +13,12 @@ import {
   agents,
   alertRules,
   alerts,
+  campaigns,
+  campaignSends,
   channelBindings,
   channels,
+  contactIdentities,
+  contacts,
   conversations,
   digests,
   knowledgeFiles,
@@ -342,6 +346,18 @@ export function workspaceRoutes(db: Db) {
       await db.delete(agentSecrets).where(inArray(agentSecrets.agentId, agentIds));
       await db.delete(webhookDeliveries).where(inArray(webhookDeliveries.agentId, agentIds));
     }
+    // Channel-scoped dependents — contact_identities, campaigns + their send
+    // rows, bindings — all reference channels without cascade. Contacts and
+    // campaigns are workspace-scoped too and must go before the workspace row.
+    const channelIds = (
+      await db.select({ id: channels.id }).from(channels).where(eq(channels.workspaceId, workspaceId))
+    ).map((r) => r.id);
+    await db.delete(campaignSends).where(eq(campaignSends.workspaceId, workspaceId));
+    await db.delete(campaigns).where(eq(campaigns.workspaceId, workspaceId));
+    if (channelIds.length) {
+      await db.delete(contactIdentities).where(inArray(contactIdentities.channelId, channelIds));
+    }
+    await db.delete(contacts).where(eq(contacts.workspaceId, workspaceId));
     await db.delete(channels).where(eq(channels.workspaceId, workspaceId));
     if (agentIds.length) {
       await db.delete(agents).where(inArray(agents.id, agentIds));

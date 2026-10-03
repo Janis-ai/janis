@@ -17,7 +17,15 @@ import { and, eq, ne, sql } from 'drizzle-orm';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channelBindings, channels, contacts, usageEvents } from '../db/schema.js';
+import {
+  agents,
+  campaigns,
+  channelBindings,
+  channels,
+  contactIdentities,
+  contacts,
+  usageEvents,
+} from '../db/schema.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
@@ -864,11 +872,26 @@ export function channelApiRoutes(db: Db) {
           ),
         );
       for (const sib of smsSiblings) {
+        await db.delete(contactIdentities).where(eq(contactIdentities.channelId, sib.id));
         await db.delete(channelBindings).where(eq(channelBindings.channelId, sib.id));
         await db.delete(channels).where(eq(channels.id, sib.id));
       }
     }
-    // Bindings reference channels without cascade — remove them first.
+    // Campaigns keep real send history — refuse to silently destroy them.
+    const [{ n: campaignCount }] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(campaigns)
+      .where(eq(campaigns.channelId, row.id));
+    if (campaignCount > 0) {
+      return c.json(
+        { error: `${campaignCount} campaign${campaignCount === 1 ? '' : 's'} send through this channel — delete them first` },
+        409,
+      );
+    }
+    // Bindings + contact identities reference channels without cascade —
+    // remove them first. Identity rows are channel-scoped routing data; the
+    // contacts they point at survive.
+    await db.delete(contactIdentities).where(eq(contactIdentities.channelId, row.id));
     await db.delete(channelBindings).where(eq(channelBindings.channelId, row.id));
     await db.delete(channels).where(eq(channels.id, row.id));
     invalidateChannelCache();
