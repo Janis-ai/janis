@@ -155,3 +155,13 @@ describe('domain-check', () => {
     expect((await res.json()).status).toBe('pending');
   });
 });
+
+describe('webchat branding round-trip', () => {
+  it('returns branding.radius after save — the editor reads it back', async () => {
+    const res = await patch(webchatId, { branding: { radius: 20, accent: '#5b21b6' } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { channel?: { meta?: { branding?: { radius?: number; accent?: string } } } };
+    expect(body.channel?.meta?.branding?.radius).toBe(20);
+    expect(body.channel?.meta?.branding?.accent).toBe('#5b21b6');
+  });
+});

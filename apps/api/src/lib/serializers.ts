@@ -183,6 +183,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     logo_radius?: number;
     logo_border_width?: number;
     logo_border_color?: string;
+    radius?: number;
     quick_replies?: string[];
     teaser_text?: string;
     proactive?: boolean;
@@ -278,6 +279,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
               logo_radius: creds.logo_radius,
               logo_border_width: creds.logo_border_width,
               logo_border_color: creds.logo_border_color,
+              radius: creds.radius,
               quick_replies: creds.quick_replies,
               teaser_text: creds.teaser_text,
               proactive: creds.proactive,
