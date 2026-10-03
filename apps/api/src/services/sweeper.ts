@@ -15,6 +15,7 @@ import { sweepWebhookRetries } from '../lib/webhooks.js';
 import { runJobs, enqueueJob } from '../lib/jobs.js';
 import { sweepCampaigns } from '../lib/campaigns.js';
 import { sweepEvals } from '../lib/evalRuns.js';
+import { sweepEmailDomainStatus } from '../lib/resendDomains.js';
 
 /**
  * Claim or renew a named singleton lock. Only the holder (or anyone, once the
@@ -87,6 +88,9 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
         .catch((err) => console.error('runJobs error:', err));
       void sweepCampaigns(db).catch((err) => console.error('sweepCampaigns error:', err));
       void sweepEvals(db).catch((err) => console.error('sweepEvals error:', err));
+      void sweepEmailDomainStatus(db).catch((err) =>
+        console.error('sweepEmailDomainStatus error:', err),
+      );
       void db
         .delete(busEvents)
         .where(lt(busEvents.createdAt, new Date(Date.now() - 10 * 60_000)))

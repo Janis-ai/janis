@@ -95,6 +95,7 @@ export interface ChannelCredentials {
   email_domain?: string;
   email_domain_id?: string;
   email_domain_status?: string;
+  email_domain_checked_at?: string;
   email_domain_records?: {
     record?: string;
     name: string;

@@ -1,4 +1,8 @@
+import { and, eq, sql } from 'drizzle-orm';
 import { env } from '../env.js';
+import type { Db } from '../db/client.js';
+import { channels } from '../db/schema.js';
+import { invalidateChannelCache, type ChannelCredentials } from './channels.js';
 
 /** Resend domain management — client-branded sending. A channel registers
  *  its sending domain (e.g. mail.acme.com), we surface the DNS records,
@@ -34,7 +38,11 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     signal: AbortSignal.timeout(15_000),
   });
   const body = (await res.json().catch(() => ({}))) as { message?: string; name?: string };
-  if (!res.ok) throw new Error(body.message ?? `resend ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(body.message ?? `resend ${res.status}`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
   return body as T;
 }
 
@@ -173,3 +181,65 @@ export const cfExchangeCode = (code: string, redirectUri: string) =>
   cfToken({ grant_type: 'authorization_code', code, redirect_uri: redirectUri });
 export const cfRefresh = (refreshToken: string) =>
   cfToken({ grant_type: 'refresh_token', refresh_token: refreshToken });
+
+/** Stored credential keys this manages — the sweep stamps checked_at so a
+ *  failing Resend call doesn't turn into a fetch-per-tick. */
+const EMAIL_DOMAIN_CHECK_MS = 10 * 60_000;
+const REFRESH_STATUSES = new Set(['not_started', 'pending', 'temporary_failure', 'failed']);
+
+/** Re-ask Resend for one channel's domain state and merge it into creds.
+ *  verify first — Resend only rescans DNS on demand — then the GET is the
+ *  source of truth for status + per-record state. A 404 means the domain
+ *  was deleted on Resend's side; the stored claim is dead → 'failed'. */
+export async function refreshEmailDomainStatus(
+  db: Db,
+  channel: { id: string; credentials: unknown },
+): Promise<boolean> {
+  const creds = (channel.credentials ?? {}) as ChannelCredentials;
+  if (!creds.email_domain_id) return false;
+  const next = { ...creds, email_domain_checked_at: new Date().toISOString() };
+  try {
+    await verifyResendDomain(creds.email_domain_id).catch(() => {});
+    const d = await getResendDomain(creds.email_domain_id);
+    next.email_domain_status = d.status ?? creds.email_domain_status;
+    if (d.records?.length) next.email_domain_records = d.records;
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) next.email_domain_status = 'failed';
+    // other errors: only checked_at moves — throttle, keep last known status
+  }
+  await db.update(channels).set({ credentials: next }).where(eq(channels.id, channel.id));
+  invalidateChannelCache();
+  return next.email_domain_status !== creds.email_domain_status;
+}
+
+/** Sweep entry — called under the leader lock each tick. Channels whose
+ *  stored domain status is non-terminal and hasn't been re-checked in
+ *  EMAIL_DOMAIN_CHECK_MS get refreshed; verified channels cost nothing
+ *  (no rows selected). Bounded at 10 per tick — domains are rare. */
+export async function sweepEmailDomainStatus(db: Db): Promise<number> {
+  if (!env.resendApiKey) return 0;
+  const rows = await db
+    .select({ id: channels.id, credentials: channels.credentials })
+    .from(channels)
+    .where(
+      and(
+        eq(channels.kind, 'email'),
+        sql`${channels.credentials}->>'email_domain_id' is not null`,
+        sql`${channels.credentials}->>'email_domain_status' <> 'verified'`,
+        sql`coalesce(${channels.credentials}->>'email_domain_checked_at', '1970-01-01')
+            < ${new Date(Date.now() - EMAIL_DOMAIN_CHECK_MS).toISOString()}`,
+      ),
+    )
+    .limit(10);
+  let changed = 0;
+  for (const row of rows) {
+    const creds = (row.credentials ?? {}) as ChannelCredentials;
+    if (!REFRESH_STATUSES.has(creds.email_domain_status ?? 'pending')) continue;
+    try {
+      if (await refreshEmailDomainStatus(db, row)) changed++;
+    } catch {
+      // a single bad row shouldn't stall the sweep
+    }
+  }
+  return changed;
+}

@@ -234,6 +234,77 @@ describe('custom email domain', () => {
     expect((await j(res)).mode).toBe('manual');
   });
 
+  it('sweep refreshes a stale pending domain to verified, then allows from_address', async () => {
+    stubResend('verified');
+    const src = (await db.select().from(channels).where(eq(channels.id, channelId)))[0];
+    const [ch] = await db
+      .insert(channels)
+      .values({
+        workspaceId: src.workspaceId,
+        agentId: src.agentId,
+        kind: 'email',
+        name: 'Stale',
+        credentials: {
+          email_domain: 'mail.acme.com',
+          email_domain_id: 'dom_1',
+          email_domain_status: 'pending',
+        },
+      })
+      .returning();
+    const { sweepEmailDomainStatus } = await import('../lib/resendDomains.js');
+    expect(await sweepEmailDomainStatus(db)).toBe(1);
+    const [after] = await db.select().from(channels).where(eq(channels.id, ch.id));
+    const creds = after.credentials as { email_domain_status?: string };
+    expect(creds.email_domain_status).toBe('verified');
+  });
+
+  it('sweep marks a Resend-deleted domain as failed', async () => {
+    vi.stubGlobal('fetch', async () => new Response('{"message":"Domain not found"}', { status: 404 }));
+    const src = (await db.select().from(channels).where(eq(channels.id, channelId)))[0];
+    const [ch] = await db
+      .insert(channels)
+      .values({
+        workspaceId: src.workspaceId,
+        agentId: src.agentId,
+        kind: 'email',
+        name: 'Gone',
+        credentials: {
+          email_domain: 'gone.acme.com',
+          email_domain_id: 'dom_gone',
+          email_domain_status: 'pending',
+        },
+      })
+      .returning();
+    const { sweepEmailDomainStatus } = await import('../lib/resendDomains.js');
+    await sweepEmailDomainStatus(db);
+    const [after] = await db.select().from(channels).where(eq(channels.id, ch.id));
+    expect((after.credentials as { email_domain_status?: string }).email_domain_status).toBe('failed');
+  });
+
+  it('sweep skips domains checked within the throttle window', async () => {
+    let calls = 0;
+    vi.stubGlobal('fetch', async () => {
+      calls++;
+      return new Response('{}', { status: 200 });
+    });
+    const src = (await db.select().from(channels).where(eq(channels.id, channelId)))[0];
+    await db.insert(channels).values({
+      workspaceId: src.workspaceId,
+      agentId: src.agentId,
+      kind: 'email',
+      name: 'Recent',
+      credentials: {
+        email_domain: 'recent.acme.com',
+        email_domain_id: 'dom_recent',
+        email_domain_status: 'pending',
+        email_domain_checked_at: new Date().toISOString(),
+      },
+    });
+    const { sweepEmailDomainStatus } = await import('../lib/resendDomains.js');
+    await sweepEmailDomainStatus(db);
+    expect(calls).toBe(0);
+  });
+
   it('delete clears domain creds and a dependent from_address', async () => {
     await patch({ from_address: 'support@mail.acme.com' });
     const res = await app.fetch(
