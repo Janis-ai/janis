@@ -210,7 +210,7 @@ export async function runScheduledEval(
       {
         title: `Eval regression · ${agent.name}`,
         body: regression.detail,
-        url: `/agents/${agent.id}?tab=tests`,
+        url: `/agents/${agent.id}/tests`,
       },
       { agentId: agent.id, event: 'eval' },
     );

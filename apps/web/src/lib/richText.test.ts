@@ -70,6 +70,28 @@ describe('splitBlocks', () => {
     ]);
   });
 
+  it('collects dash-marker inline runs — the "- **A:** … - **B:** …" shape', () => {
+    expect(
+      splitBlocks('Here is what I can do: - **Build:** create agents - **Analyze:** pull stats'),
+    ).toEqual([
+      { kind: 'para', text: 'Here is what I can do:' },
+      {
+        kind: 'list',
+        items: ['**Build:** create agents', '**Analyze:** pull stats'],
+        ordered: false,
+      },
+    ]);
+  });
+
+  it('never splits a prose dash or a single inline item', () => {
+    expect(splitBlocks('cost - billed monthly - honestly')).toEqual([
+      { kind: 'para', text: 'cost - billed monthly - honestly' },
+    ]);
+    expect(splitBlocks('try it - **once** and see')).toEqual([
+      { kind: 'para', text: 'try it - **once** and see' },
+    ]);
+  });
+
   it('numbered lines become ordered lists', () => {
     expect(splitBlocks('Steps:\n1. one\n2. two')).toEqual([
       { kind: 'para', text: 'Steps:' },

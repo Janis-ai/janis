@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, stripWidgetClaims, systemPrompt, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 
 let db: Db;
@@ -956,5 +956,30 @@ describe('operator copilot prompt', () => {
     const cust = systemPrompt(fakeAgent, [], undefined, {});
     expect(cust).toContain('Escalation, two levels');
     expect(cust).toContain('offer a human once');
+  });
+});
+
+describe('unwrapInlineLists', () => {
+  it('splits a "- **A:** … - **B:** …" run into real bullet lines', () => {
+    expect(unwrapInlineLists('I can do: - **Build:** agents - **Analyze:** stats')).toBe(
+      'I can do:\n- **Build:** agents\n- **Analyze:** stats',
+    );
+  });
+
+  it('normalizes a bullet line carrying an inline marker into clean items', () => {
+    expect(unwrapInlineLists('* **A** one * **B** two')).toBe('- **A** one\n- **B** two');
+  });
+
+  it('leaves prose dashes and single markers alone', () => {
+    expect(unwrapInlineLists('cost - billed monthly - honestly')).toBe(
+      'cost - billed monthly - honestly',
+    );
+    expect(unwrapInlineLists('try it - **once** and see')).toBe('try it - **once** and see');
+  });
+
+  it('leaves real multiline lists untouched', () => {
+    expect(unwrapInlineLists('Items:\n- **A** one\n- **B** two')).toBe(
+      'Items:\n- **A** one\n- **B** two',
+    );
   });
 });

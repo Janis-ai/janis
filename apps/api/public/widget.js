@@ -155,12 +155,13 @@
   }
 
   // Models emit bullets two ways — one per line ("* item") or an inline run
-  // on a single line ("options: * **A** … * **B** …"). Split blocks so lists
-  // render as lists. The inline marker requires `* ` followed by ** so
-  // "5 * 3 = 15" and emphasis never split.
+  // on a single line ("options: * **A** … * **B** …" or the "- **A**"
+  // variant). Split blocks so lists render as lists. The inline marker
+  // requires `* ` or `- ` followed by ** so "5 * 3 = 15", prose dashes and
+  // emphasis never split.
   var BULLET_LEAD = /^(?:[-*•])\s+/;
   var NUM_LEAD = /^\d+[.)]\s+/;
-  var INLINE_BULLET = / \* (?=\*\*)/g;
+  var INLINE_BULLET = / [*-] (?=\*\*)/g;
   function appendBlocks(bubble, text) {
     var list = null;
     var ordered = false;

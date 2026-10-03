@@ -34,10 +34,11 @@ export interface RichBlock {
 
 const BULLET_LEAD = /^(?:[-*•])\s+/;
 const NUM_LEAD = /^\d+[.)]\s+/;
-// A bullet marker mid-line: ` * ` followed by **bold**. Requiring the bold
-// opener keeps "5 * 3 = 15" and emphasis runs from splitting — models emit
-// labelled lists as `* **Title:** … * **Title2:** …` on a single line.
-const INLINE_BULLET = / \* (?=\*\*)/g;
+// A bullet marker mid-line: ` * ` or ` - ` followed by **bold**. Requiring
+// the bold opener keeps "5 * 3 = 15", prose dashes and emphasis runs from
+// splitting — models emit labelled lists as `* **Title:** … * **Title2:** …`
+// (or the `- **Title:**` variant) on a single line.
+const INLINE_BULLET = / [*-] (?=\*\*)/g;
 
 /** Split a message into paragraphs and bullet lists. Models emit bullets two
  *  ways — one per line ("* item"), or an inline run on a single line

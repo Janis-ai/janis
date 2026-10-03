@@ -710,6 +710,34 @@ function clampButtonLabel(label: string): string {
   return (cut > 0 ? win.slice(0, cut) : win).trimEnd();
 }
 
+/** Models occasionally emit a list run inside a paragraph —
+ *  "options: - **A** … - **B** …" — which renders as a run-on on every
+ *  channel. Require ≥2 markers per line and the `**` opener (the labelled-
+ *  item shape) so a prose dash like "cost - billed monthly" never splits.
+ *  Normalizing here means the stored text has real newlines and every
+ *  surface (console, widget, Meta, email, Slack) renders the list. */
+const INLINE_ITEM_RE = / (?:[*-]) (?=\*\*)/g;
+const BULLET_LEAD_RE = /^\s*(?:[-*•]|\d+[.)])\s+/;
+export function unwrapInlineLists(text: string): string {
+  return text
+    .split('\n')
+    .flatMap((line) => {
+      // A bullet-lead line only needs one further marker — the first item
+      // already led with a marker ("* **A** one * **B** two").
+      const leadM = line.match(BULLET_LEAD_RE);
+      const rest = leadM ? line.slice(leadM[0].length) : line;
+      const count = (rest.match(INLINE_ITEM_RE) ?? []).length;
+      if (count < (leadM ? 1 : 2)) return [line];
+      const [lead, ...items] = rest.split(INLINE_ITEM_RE);
+      if (leadM) return [lead, ...items].map((i) => `- ${i.trim()}`);
+      return [
+        ...(lead.trimEnd() ? [lead.trimEnd()] : []),
+        ...items.map((i) => `- ${i.trim()}`),
+      ];
+    })
+    .join('\n');
+}
+
 // ── Unbacked action claims ───────────────────────────────────────────────
 // The model asserting it changed something when no tool ran ("I've set your
 // plan to Free", "your refund has been processed", "it will take effect on
@@ -1797,7 +1825,9 @@ export async function runHostedEvent(
           '',
         ) ?? '',
       );
-      return clean ? extractButtons(extractLearns(clean).text).text || undefined : undefined;
+      return clean
+        ? unwrapInlineLists(extractButtons(extractLearns(clean).text).text) || undefined
+        : undefined;
     };
     let draft = stripLabel(result?.text);
     if (draft && CONTROL_TAG.test(draft)) draft = undefined;
@@ -2189,7 +2219,7 @@ async function replyAsHostedAgent(
         if (spec) w.push(spec);
       }
       const { text: r, buttons: b } = extractButtons(noWidgets);
-      reply = r;
+      reply = unwrapInlineLists(r);
       widgets = w;
       buttons = b;
       learns = l;
