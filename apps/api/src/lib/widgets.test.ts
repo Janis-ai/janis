@@ -129,6 +129,17 @@ describe('extractWidgets', () => {
     expect(out.widgets).toHaveLength(1);
     expect(out.widgets[0].type).toBe('options');
     expect(out.refs).toEqual([{ name: 'plans' }]);
+    expect(out.dropped).toBe(0);
+  });
+
+  it('counts WIDGET: lines that fail to parse — the caller can regenerate', async () => {
+    const { extractWidgets } = await import('./widgets.js');
+    const out = extractWidgets(
+      'Here are our tunes:\nWIDGET: {"type":"cards","items":[{"title":"Tenth Stair"\nWIDGET: cards',
+    );
+    expect(out.text).toBe('Here are our tunes:');
+    expect(out.widgets).toHaveLength(0);
+    expect(out.dropped).toBe(2);
   });
 });
 

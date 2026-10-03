@@ -1,7 +1,7 @@
 import type { Db } from '../db/client.js';
 import type { agents } from '../db/schema.js';
 import { interpolateSecrets } from './secrets.js';
-import { IDENTITY_TOOL_NAMES } from './toolTemplates.js';
+import { IDENTITY_TOOL_NAMES, TEMPLATE_WIDGETS } from './toolTemplates.js';
 import type { ToolWidgetConfig } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
@@ -37,9 +37,17 @@ export function toolsFor(agent: AgentRow): ToolDef[] {
   const cfg = (agent.config ?? {}) as { tools?: ToolDef[] };
   return (cfg.tools ?? [])
     .filter((t) => t.name && t.url)
-    // Retroactive identity marking — tools installed before the flag
+    // Retroactive catalog fields — tools installed before a flag/binding
     // existed serialize without it; the catalog is the source of truth.
-    .map((t) => (IDENTITY_TOOL_NAMES.has(t.name) ? { ...t, identity: true } : t));
+    .map((t) => {
+      const out = { ...t };
+      if (IDENTITY_TOOL_NAMES.has(t.name)) out.identity = true;
+      if (!out.widget) {
+        const w = TEMPLATE_WIDGETS.get(t.name);
+        if (w) out.widget = w;
+      }
+      return out;
+    });
 }
 
 /**

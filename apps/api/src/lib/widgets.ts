@@ -346,14 +346,18 @@ export interface WidgetRef {
 
 /** Strip "WIDGET: {json}" lines from a reply; valid components return for
  *  payload.widgets. Malformed lines are still removed — a broken widget is
- *  better than model markup leaking to the customer. */
+ *  better than model markup leaking to the customer — but they count in
+ *  `dropped` so the caller can regenerate: a vanished component line leaves
+ *  the customer staring at a bare "Here are the songs:" lead-in. */
 export function extractWidgets(text: string): {
   text: string;
   widgets: WidgetComponent[];
   refs: WidgetRef[];
+  dropped: number;
 } {
   const widgets: WidgetComponent[] = [];
   const refs: WidgetRef[] = [];
+  let dropped = 0;
   const out = text
     .split('\n')
     .filter((line) => {
@@ -375,16 +379,21 @@ export function extractWidgets(text: string): {
       }
       const m = t.match(WIDGET_LINE);
       if (!m) return true;
+      let ok = false;
       if (widgets.length < MAX_WIDGETS) {
         try {
           const parsed = WidgetComponent.safeParse(JSON.parse(m[1]));
-          if (parsed.success) widgets.push(parsed.data);
+          if (parsed.success) {
+            widgets.push(parsed.data);
+            ok = true;
+          }
         } catch {
           // malformed JSON — drop the line
         }
       }
+      if (!ok) dropped++;
       return false;
     })
     .join('\n');
-  return { text: out.trim(), widgets, refs };
+  return { text: out.trim(), widgets, refs, dropped };
 }

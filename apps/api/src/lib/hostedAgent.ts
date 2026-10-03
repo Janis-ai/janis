@@ -1001,6 +1001,11 @@ const WIDGET_GUARD_RETRY =
   'Your previous draft mis-described the components in this reply: never say "here are the cards/buttons" unless you emitted a WIDGET: or button line this turn, ' +
   'and never apologise that a component failed to render — if you emitted one, it rendered. Rewrite without the false claim.';
 
+const WIDGET_PARSE_RETRY =
+  'Your previous draft emitted a component line (WIDGET: or WIDGET_REF:) that produced nothing — the JSON was malformed or the component name unknown — ' +
+  'so the customer only saw the text around it. Rewrite the reply: emit the component as ONE line of valid JSON in a supported shape, ' +
+  'or give the answer as plain text. Never leave a lead-in ("Here are…") promising a component that did not render.';
+
 const BUTTON_LEN_GUARD_RETRY =
   'Your previous draft was not sent: a BUTTON: label was over 20 characters, which this channel cuts off. ' +
   'Rewrite it with every button label at 20 characters or fewer — count the characters including spaces ' +
@@ -2426,13 +2431,17 @@ async function replyAsHostedAgent(
       completionTokens += gen.completionTokens;
       toolWidgets.push(...gen.widgets);
       const { text: noLearns, learns: l } = extractLearns(stripTranscriptNotes(gen.text));
-      const { text: noWidgets, widgets: w, refs } = extractWidgets(noLearns);
+      const { text: noWidgets, widgets: w, refs, dropped } = extractWidgets(noLearns);
       // Saved components resolve through their defs: a state key picks a
       // variant, a tool binding fetches live props/items, inline data fills
       // {prop} placeholders — a static spec when it carries none of those.
+      let lostComponents = dropped;
       for (const ref of refs) {
         const def = refSpecs.get(ref.name);
-        if (!def) continue;
+        if (!def) {
+          lostComponents++; // ref to a component that doesn't exist — line vanished, nothing rendered
+          continue;
+        }
         const spec = await resolveWidgetRef(def, ref.data, agentToolDefs, secrets, ctx, gen.producedIds);
         if (spec) w.push(spec);
       }
@@ -2460,6 +2469,14 @@ async function replyAsHostedAgent(
       ) {
         console.warn(`[hosted] unbacked action claim conv=${convId} — regenerating`);
         prompt += '\n\n' + CLAIM_GUARD_RETRY;
+        continue;
+      }
+      // Component line that produced nothing (malformed WIDGET:, unknown
+      // WIDGET_REF) — silent content loss; the customer sees a dangling
+      // lead-in. Regenerate once with explicit feedback.
+      if (attempt === 0 && lostComponents > 0) {
+        console.warn(`[hosted] dropped component line conv=${convId} — regenerating`);
+        prompt += '\n\n' + WIDGET_PARSE_RETRY;
         continue;
       }
       // Widget-truth mismatch — claiming components that didn't render this

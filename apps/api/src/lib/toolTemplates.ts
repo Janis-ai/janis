@@ -631,6 +631,20 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         method: 'GET',
         url: 'https://itunes.apple.com/search?media=music&limit=3&term={term}',
         params: { term: 'search term — song, album or artist name' },
+        // Results auto-render as tappable cards — artwork, track, album, and
+        // a link out to Apple Music — so the model never has to retell the
+        // list (or hand-roll a WIDGET: line that can fail to parse).
+        widget: {
+          type: 'cards',
+          items: 'results',
+          map: {
+            title: 'trackName',
+            subtitle: 'collectionName',
+            image: 'artworkUrl100',
+            link: 'trackViewUrl',
+          },
+          link_label: 'Apple Music ↗',
+        },
       },
     ],
   },
@@ -672,4 +686,12 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
  *  covered too (stored config.tools can't carry a stale unflagged def). */
 export const IDENTITY_TOOL_NAMES = new Set(
   TOOL_TEMPLATES.flatMap((t) => t.tools.filter((x) => x.identity).map((x) => x.name)),
+);
+
+/** Catalog tool name → its widget binding — backfilled by toolsFor onto
+ *  installs that predate the binding (stored config.tools won't carry it). */
+export const TEMPLATE_WIDGETS = new Map<string, ToolWidgetConfig>(
+  TOOL_TEMPLATES.flatMap((t) =>
+    t.tools.filter((x) => x.widget).map((x) => [x.name, x.widget!] as const),
+  ),
 );

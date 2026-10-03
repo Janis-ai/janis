@@ -92,4 +92,30 @@ describe('toolsFor identity backfill', () => {
     );
     expect(t[0].identity).toBeUndefined();
   });
+
+  it('backfills the catalog widget binding onto installs that predate it', () => {
+    const t = toolsFor(
+      fakeAgent([
+        {
+          name: 'itunes_search',
+          description: 'd',
+          method: 'GET',
+          url: 'https://itunes.apple.com/search?term={term}',
+          // stored install predates the template's widget binding
+        },
+      ]),
+    );
+    expect(t[0].widget?.type).toBe('cards');
+    expect(t[0].widget?.items).toBe('results');
+  });
+
+  it('a stored widget config wins over the catalog backfill', () => {
+    const mine = { type: 'options' as const, map: { label: 'name' } };
+    const t = toolsFor(
+      fakeAgent([
+        { name: 'itunes_search', description: 'd', method: 'GET', url: 'https://x.example', widget: mine },
+      ]),
+    );
+    expect(t[0].widget).toBe(mine);
+  });
 });
