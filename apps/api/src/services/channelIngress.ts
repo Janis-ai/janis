@@ -112,14 +112,32 @@ export async function adoptVisitorConversation(
       )
       .limit(1);
 
-  let ub: { binding: typeof channelBindings.$inferSelect; conversation: ConversationRow } | undefined;
+  let uConv: ConversationRow | undefined;
   const adopt = async (participant: string) => {
     if (!participant || participant === userParticipant) return;
     const [vb] = await find(participant);
     if (!vb) return;
-    if (!ub) [ub] = await find(userParticipant);
+    if (!uConv) {
+      const [uRow] = await find(userParticipant);
+      if (uRow) uConv = uRow.conversation;
+      else {
+        // u: threads are shared across surfaces — the user's conversation
+        // may be bound to a sibling channel. Find it by externalId rather
+        // than re-keying the visitor conv into the unique constraint.
+        [uConv] = await db
+          .select()
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.agentId, channel.agentId),
+              eq(conversations.externalId, `${channel.kind}:${userParticipant}`),
+            ),
+          )
+          .limit(1);
+      }
+    }
 
-    if (!ub) {
+    if (!uConv) {
       await db
         .update(conversations)
         .set({ externalId: `${channel.kind}:${userParticipant}` })
@@ -128,12 +146,19 @@ export async function adoptVisitorConversation(
         .update(channelBindings)
         .set({ platformUserId: userParticipant })
         .where(eq(channelBindings.id, vb.binding.id));
-      [ub] = await find(userParticipant);
+      uConv = vb.conversation;
+      return;
+    }
+    if (uConv.id === vb.conversation.id) {
+      await db
+        .update(channelBindings)
+        .set({ platformUserId: userParticipant })
+        .where(eq(channelBindings.id, vb.binding.id));
       return;
     }
 
     const vId = vb.conversation.id;
-    const uId = ub.conversation.id;
+    const uId = uConv.id;
     for (const t of [messages, alerts, suggestions, usageEvents] as const) {
       await db.update(t).set({ conversationId: uId }).where(eq(t.conversationId, vId));
     }
@@ -149,7 +174,7 @@ export async function adoptVisitorConversation(
     // anonymous thread must survive the merge.
     if (
       (vb.conversation.state === 'human' || vb.conversation.state === 'needs_human') &&
-      ub.conversation.state === 'active'
+      uConv.state === 'active'
     ) {
       patch.state = vb.conversation.state;
       if (vb.conversation.state === 'human' && vb.conversation.humanSince) {
@@ -158,13 +183,13 @@ export async function adoptVisitorConversation(
     }
     if (vb.conversation.isUnread) patch.isUnread = true;
     if (vb.conversation.isStarred) patch.isStarred = true;
-    if (!ub.conversation.assigneeId && vb.conversation.assigneeId) {
+    if (!uConv.assigneeId && vb.conversation.assigneeId) {
       patch.assigneeId = vb.conversation.assigneeId;
     }
     if (
       vb.conversation.lastMessageAt &&
-      (!ub.conversation.lastMessageAt ||
-        vb.conversation.lastMessageAt > ub.conversation.lastMessageAt)
+      (!uConv.lastMessageAt ||
+        vb.conversation.lastMessageAt > uConv.lastMessageAt)
     ) {
       patch.lastMessageAt = vb.conversation.lastMessageAt;
       patch.lastMessagePreview = vb.conversation.lastMessagePreview;
@@ -172,7 +197,7 @@ export async function adoptVisitorConversation(
     }
     if (Object.keys(patch).length) {
       await db.update(conversations).set(patch).where(eq(conversations.id, uId));
-      ub = { ...ub, conversation: { ...ub.conversation, ...patch } };
+      uConv = { ...uConv, ...patch };
     }
   };
 
@@ -227,7 +252,7 @@ export async function handleChannelMessage(
   // test thread must not collide with their real visitor conversation on the
   // same agent (conversations_agent_external is unique), e.g. testing the
   // concierge that already answers their Ask Janis thread.
-  const externalId = creds.internal
+  let externalId = creds.internal
     ? `${channel.kind}:test:${channel.id}:${participantId}`
     : `${channel.kind}:${participantId}`;
 
@@ -271,11 +296,58 @@ export async function handleChannelMessage(
       )
       .limit(1);
     if (byExt) {
-      await db
-        .insert(channelBindings)
-        .values({ channelId: channel.id, conversationId: byExt.id, platformUserId: participantId })
-        .onConflictDoNothing();
-      conv = byExt;
+      // Whose thread is this? channelBindings.conversationId is unique — a
+      // conversation can only ever be bound to ONE channel, so "reattach"
+      // only happens when the match has no live binding. Collision shapes:
+      //   - a legacy internal test thread still carrying the plain
+      //     kind:participant externalId (pre-namespacing) — re-key it to its
+      //     test-scoped id so real channels stop shadowing on it
+      //   - a thread bound to another live channel — u: participants share
+      //     the thread across surfaces; anyone else would silently
+      //     cross-post into a thread this channel can't poll, so this
+      //     channel gets its own conversation under a channel-scoped
+      //     externalId
+      const [bound] = await db
+        .select({ channelId: channelBindings.channelId, credentials: channels.credentials })
+        .from(channelBindings)
+        .innerJoin(channels, eq(channelBindings.channelId, channels.id))
+        .where(eq(channelBindings.conversationId, byExt.id))
+        .limit(1);
+      if (bound && (bound.credentials as ChannelCredentials | null)?.internal === true) {
+        // A legacy internal test thread still carrying the plain
+        // kind:participant externalId (pre-namespacing) — re-key it to its
+        // test-scoped id so real channels stop shadowing on it.
+        const testExt = `${channel.kind}:test:${bound.channelId}:${participantId}`;
+        const [clash] = await db
+          .select({ id: conversations.id })
+          .from(conversations)
+          .where(
+            and(eq(conversations.agentId, channel.agentId), eq(conversations.externalId, testExt)),
+          )
+          .limit(1);
+        await db
+          .update(conversations)
+          .set({ externalId: clash ? `${testExt}#legacy` : testExt })
+          .where(eq(conversations.id, byExt.id));
+      } else if (bound && bound.channelId !== channel.id) {
+        if (participantId.startsWith('u:')) {
+          // Verified Janis users share one thread across surfaces by design
+          // — writes land in the canonical conversation; reads fall back
+          // through the externalId in webchat's findConversation.
+          conv = byExt;
+        } else {
+          // Anonymous/PSID threads belong to the channel that owns them —
+          // attaching would silently cross-post into a thread this channel
+          // can't poll. Channel-scoped externalId → own conversation.
+          externalId = `${externalId}#ch:${channel.id}`;
+        }
+      } else {
+        await db
+          .insert(channelBindings)
+          .values({ channelId: channel.id, conversationId: byExt.id, platformUserId: participantId })
+          .onConflictDoNothing();
+        conv = byExt;
+      }
     }
   }
 

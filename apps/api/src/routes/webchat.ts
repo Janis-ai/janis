@@ -345,20 +345,38 @@ function participantFor(resolved: InboundMessage['user'] | undefined, visitorId:
     : visitorId;
 }
 
-/** Conversation bound to this channel + visitor, if one exists. */
-async function findConversation(db: Db, channelId: string, visitorId: string) {
+/** Conversation for this channel + participant. Bound-conversation lookup
+ * first; for verified Janis users (u:) fall back to the kind:participant
+ * externalId — their thread is shared across surfaces by design and may be
+ * bound to a sibling channel (see ingress participantFor). */
+async function findConversation(db: Db, channel: ChannelRow, visitorId: string) {
   const [row] = await db
     .select({ conversation: conversations })
     .from(channelBindings)
     .innerJoin(conversations, eq(channelBindings.conversationId, conversations.id))
     .where(
       and(
-        eq(channelBindings.channelId, channelId),
+        eq(channelBindings.channelId, channel.id),
         eq(channelBindings.platformUserId, visitorId),
       ),
     )
     .limit(1);
-  return row?.conversation;
+  if (row) return row.conversation;
+  if (visitorId.startsWith('u:')) {
+    const internal = (channel.credentials as ChannelCredentials).internal === true;
+    const externalId = internal
+      ? `${channel.kind}:test:${channel.id}:${visitorId}`
+      : `${channel.kind}:${visitorId}`;
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(
+        and(eq(conversations.agentId, channel.agentId), eq(conversations.externalId, externalId)),
+      )
+      .limit(1);
+    return conv;
+  }
+  return undefined;
 }
 
 export function webchatRoutes(db: Db) {
@@ -520,7 +538,7 @@ export function webchatRoutes(db: Db) {
     // landed already; if a stored inbound carries this id, acknowledge and
     // skip rather than double-store.
     if (client_id) {
-      const conv = await findConversation(db, channel.id, participantFor(resolved, visitor_id));
+      const conv = await findConversation(db, channel, participantFor(resolved, visitor_id));
       if (conv) {
         const [dup] = await db
           .select({ id: messages.id })
@@ -561,7 +579,7 @@ export function webchatRoutes(db: Db) {
       if (!channel) return c.json({ error: 'not found' }, 404);
       const { visitor_id, user } = c.req.valid('json');
       const resolved = await resolveIdentity(c, db, channel, user);
-      const conv = await findConversation(db, channel.id, participantFor(resolved, visitor_id));
+      const conv = await findConversation(db, channel, participantFor(resolved, visitor_id));
       if (!resolved || !conv) return c.json({ ok: true }); // attaches on first message anyway
       const profile = (conv.userProfile ?? {}) as Record<string, unknown>;
       const patch = {
@@ -706,7 +724,7 @@ export function webchatRoutes(db: Db) {
     // Live transcript data must never be heuristically cached — a stale
     // response hides new messages and makes delivery look broken.
     c.header('cache-control', 'no-store');
-    const conv = await findConversation(db, channel.id, participantFor(resolved, visitorId));
+    const conv = await findConversation(db, channel, participantFor(resolved, visitorId));
     if (!conv) return c.json({ messages: [], state: 'new' });
 
     const after = c.req.query('after');
@@ -867,7 +885,7 @@ export function webchatRoutes(db: Db) {
       const { visitor_id } = c.req.valid('json');
       const resolved = await resolveIdentity(c, db, channel, undefined);
       const participant = participantFor(resolved, visitor_id);
-      const conv = await findConversation(db, channel.id, participant);
+      const conv = await findConversation(db, channel, participant);
       if (!conv) return c.json({ ok: true });
       const [agent] = await db
         .select({ workspaceId: agents.workspaceId })
@@ -910,7 +928,7 @@ export function webchatRoutes(db: Db) {
       const { visitor_id } = c.req.valid('json');
       const resolved = await resolveIdentity(c, db, channel, undefined);
       const participant = participantFor(resolved, visitor_id);
-      const conv = await findConversation(db, channel.id, participant);
+      const conv = await findConversation(db, channel, participant);
       if (!conv || conv.state === 'archived') return c.json({ ok: true, state: 'archived' });
       const [agent] = await db.select().from(agents).where(eq(agents.id, channel.agentId)).limit(1);
       if (!agent) return c.json({ error: 'not found' }, 404);
@@ -938,7 +956,7 @@ export function webchatRoutes(db: Db) {
       const { visitor_id } = c.req.valid('json');
       const resolved = await resolveIdentity(c, db, channel, undefined);
       const participant = participantFor(resolved, visitor_id);
-      const conv = await findConversation(db, channel.id, participant);
+      const conv = await findConversation(db, channel, participant);
       if (!conv) return c.json({ ok: true, state: 'new' });
       if (conv.state !== 'archived') return c.json({ ok: true, state: conv.state });
       const [created] = await db

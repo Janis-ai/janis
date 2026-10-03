@@ -15,7 +15,7 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { generateApiKey } from '../lib/crypto.js';
-import { handleChannelMessage } from './channelIngress.js';
+import { adoptVisitorConversation, handleChannelMessage } from './channelIngress.js';
 import { refreshConversationSummary, runHostedEvent } from '../lib/hostedAgent.js';
 import { systemPrompt } from '../lib/hostedAgent.js';
 import { enrichHandoff } from '../lib/handoff.js';
@@ -695,5 +695,235 @@ describe('hosted handoff offers', () => {
     expect(
       (widgetMsg?.payload as { widgets?: unknown[] }).widgets[0],
     ).toMatchObject(plansSpec);
+  });
+});
+
+describe('cross-channel externalId collisions', () => {
+  it('a legacy internal test thread does not shadow a real channel — it gets re-keyed', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [internalCh] = await db
+      .insert(channels)
+      .values({
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Test — Bot',
+        credentials: { internal: true },
+      })
+      .returning();
+    const [realCh] = await db
+      .insert(channels)
+      .values({
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Bubble',
+        credentials: {},
+      })
+      .returning();
+    // Pre-namespacing test thread: bound to the internal channel but
+    // carrying the plain kind:participant externalId.
+    const user = { id: 'u-real-1', verified: true, via: 'session' as const };
+    const [legacy] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'webchat:u:u-real-1', userProfile: {} })
+      .returning();
+    await db.insert(channelBindings).values({
+      channelId: internalCh.id,
+      conversationId: legacy.id,
+      platformUserId: 'u:u-real-1',
+    });
+
+    await handleChannelMessage(db, realCh, {
+      objectId: '',
+      senderId: 'previewvisitor1',
+      text: 'hi',
+      user,
+    });
+
+    // The legacy thread was re-keyed to its test-scoped externalId…
+    const [rekeyed] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, legacy.id));
+    expect(rekeyed.externalId).toBe(`webchat:test:${internalCh.id}:u:u-real-1`);
+
+    // …and the real channel got its own conversation + binding, so its
+    // poll sees the echo instead of reporting a false "not delivered".
+    const [fresh] = await db
+      .select({ binding: channelBindings, conversation: conversations })
+      .from(channelBindings)
+      .innerJoin(conversations, eq(channelBindings.conversationId, conversations.id))
+      .where(eq(channelBindings.channelId, realCh.id));
+    expect(fresh.conversation.externalId).toBe('webchat:u:u-real-1');
+    const stored = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, fresh.conversation.id));
+    expect(stored.some((m) => m.direction === 'in' && m.text === 'hi')).toBe(true);
+  });
+
+  it('a u: thread bound to a sibling channel stays unified — writes land in the shared conversation', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [chA] = await db
+      .insert(channels)
+      .values({
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Bubble A',
+        credentials: {},
+      })
+      .returning();
+    const [chB] = await db
+      .insert(channels)
+      .values({
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Bubble B',
+        credentials: {},
+      })
+      .returning();
+    const [convA] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'webchat:u:u-live-1', userProfile: {} })
+      .returning();
+    await db.insert(channelBindings).values({
+      channelId: chA.id,
+      conversationId: convA.id,
+      platformUserId: 'u:u-live-1',
+    });
+
+    await handleChannelMessage(db, chB, {
+      objectId: '',
+      senderId: 'visitor2',
+      text: 'hello from B',
+      user: { id: 'u-live-1', verified: true, via: 'session' as const },
+    });
+
+    // u: participants share one thread per agent+kind across surfaces — the
+    // write lands in A's conversation; B's poll resolves it via externalId.
+    const inA = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, convA.id));
+    expect(inA.some((m) => m.text === 'hello from B')).toBe(true);
+  });
+
+  it('gives an anonymous visitor their own thread when their id is bound to a sibling channel', async () => {
+    const [agent] = await db.select().from(agents).limit(1);
+    const [chA] = await db
+      .insert(channels)
+      .values({
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Bubble A',
+        credentials: {},
+      })
+      .returning();
+    const [chB] = await db
+      .insert(channels)
+      .values({
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Bubble B',
+        credentials: {},
+      })
+      .returning();
+    const [convA] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'webchat:vis_same', userProfile: {} })
+      .returning();
+    await db.insert(channelBindings).values({
+      channelId: chA.id,
+      conversationId: convA.id,
+      platformUserId: 'vis_same',
+    });
+
+    await handleChannelMessage(db, chB, {
+      objectId: '',
+      senderId: 'vis_same',
+      text: 'hello from B',
+    });
+
+    // Channel B must not write into A's thread — it gets its own conv under
+    // a channel-scoped externalId, with a binding its poll can find.
+    const inA = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, convA.id));
+    expect(inA.some((m) => m.text === 'hello from B')).toBe(false);
+    const [bBinding] = await db
+      .select({ conversation: conversations })
+      .from(channelBindings)
+      .innerJoin(conversations, eq(channelBindings.conversationId, conversations.id))
+      .where(eq(channelBindings.channelId, chB.id));
+    expect(bBinding.conversation.externalId).toBe(`webchat:vis_same#ch:${chB.id}`);
+    const inB = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, bBinding.conversation.id));
+    expect(inB.some((m) => m.text === 'hello from B')).toBe(true);
+  });
+
+  it('adopts a visitor thread into the u: conversation bound to a sibling channel', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [agent] = await db.select().from(agents).limit(1);
+    const [chA] = await db
+      .insert(channels)
+      .values({
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Bubble A',
+        credentials: {},
+      })
+      .returning();
+    const [chB] = await db
+      .insert(channels)
+      .values({
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Bubble B',
+        credentials: {},
+      })
+      .returning();
+    // The user's shared thread lives on channel A; their anonymous browser
+    // thread lives on B. Signing in on B must fold the visitor conv into
+    // the shared one — re-keying would violate the externalId constraint.
+    const [uConv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'webchat:u:u-adopt-1', userProfile: {} })
+      .returning();
+    await db.insert(channelBindings).values({
+      channelId: chA.id,
+      conversationId: uConv.id,
+      platformUserId: 'u:u-adopt-1',
+    });
+    const [vConv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'webchat:vis_adopt', userProfile: {} })
+      .returning();
+    await db.insert(channelBindings).values({
+      channelId: chB.id,
+      conversationId: vConv.id,
+      platformUserId: 'vis_adopt',
+    });
+    await db.insert(messages).values({
+      conversationId: vConv.id,
+      direction: 'in',
+      text: 'anon question on B',
+    });
+
+    await adoptVisitorConversation(db, chB, 'u:u-adopt-1', 'vis_adopt');
+
+    const folded = await db.select().from(messages).where(eq(messages.conversationId, uConv.id));
+    expect(folded.some((m) => m.text === 'anon question on B')).toBe(true);
+    const gone = await db.select().from(conversations).where(eq(conversations.id, vConv.id));
+    expect(gone).toHaveLength(0);
   });
 });

@@ -1051,6 +1051,16 @@ describe('webchat authenticated identity', () => {
     expect(meta.current_workspace).toBe('Test');
     expect(meta.page).toBe('/conversations');
     expect(String(meta.agents)).toContain('Support Bot');
+    // u: threads are shared across surfaces — a poll on the support channel
+    // resolves the conversation even though its binding lives on the
+    // channel that originally carried it.
+    const poll = await app.request(
+      `/chat/${SUPPORT_CHANNEL_ID}/messages?visitor_id=vis_support0000001`,
+      { headers: { cookie: 'janis_session=tok-abc' } },
+    );
+    expect(poll.status).toBe(200);
+    const body = (await poll.json()) as { messages: { text: string }[] };
+    expect(body.messages.some((m) => m.text === 'hi')).toBe(true);
   });
 
   it('merges cleanly when both threads have a Slack thread link', async () => {
