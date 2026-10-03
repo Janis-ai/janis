@@ -198,6 +198,38 @@ describe('guardReplyLinks', () => {
     expect(r.stripped).toEqual(['http://169.254.169.254/latest/meta']);
   });
 
+  it('strips console links to invented pages — no fetch needed', async () => {
+    const r = await guardReplyLinks(
+      'Review your [Approval Center](https://app.janis.ai/settings/approvals) here.',
+      blessed,
+    );
+    expect(r.text).toBe('Review your Approval Center here.');
+    expect(r.stripped).toEqual(['https://app.janis.ai/settings/approvals']);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('strips console links carrying an id the model never saw', async () => {
+    const ids = new Set(['1fb291f8c3f9422dbf3d09766829efb6']);
+    const r = await guardReplyLinks(
+      'open https://app.janis.ai/conversations/a630324e25c74ec88677356739906aa3 now',
+      blessed,
+      ids,
+    );
+    expect(r.text).toBe('open now');
+    expect(r.stripped).toEqual(['https://app.janis.ai/conversations/a630324e25c74ec88677356739906aa3']);
+  });
+
+  it('keeps console links built from context-known ids', async () => {
+    const ids = new Set(['1fb291f8c3f9422dbf3d09766829efb6', '586895f382854a95ae2db18f389d838d']);
+    const r = await guardReplyLinks(
+      'see [the channel](https://app.janis.ai/agents/586895f3-8285-4a95-ae2d-b18f389d838d/channels/1fb291f8-c3f9-422d-bf3d-09766829efb6) ok',
+      blessed,
+      ids,
+    );
+    expect(r.text).toContain('/channels/1fb291f8-c3f9-422d-bf3d-09766829efb6');
+    expect(r.stripped).toHaveLength(0);
+  });
+
   it('unwraps markdown links emptied by a strip', async () => {
     const r = await guardReplyLinks('see [this page](https://bogus.io/deep/path) now', blessed);
     expect(r.text).toBe('see this page now');

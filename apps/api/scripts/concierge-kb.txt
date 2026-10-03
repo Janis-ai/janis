@@ -410,7 +410,7 @@ You can change workspace configuration yourself with action cards: add_routing_r
 
 ---
 
-Pending approvals have no central page — each one lives as an action card inside the conversation that raised it. workspace_summary returns pending_approvals with the tool name, the agent, and a link to that conversation — list the items and link each conversation verbatim. Your own proposed cards live in this chat.
+Pending approvals have no central page — each one lives as an action card inside the conversation that raised it. workspace_summary returns pending_approvals with the tool name, the agent, the proposed args (describe the item from those, never guess), and a link to that conversation — list the items and link each conversation verbatim. Your own proposed cards live in this chat.
 
 ---
 

@@ -843,6 +843,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
                 convId: pendingActions.conversationId,
                 agentId: pendingActions.agentId,
                 tool: pendingActions.toolName,
+                args: pendingActions.args,
+                createdAt: pendingActions.createdAt,
               })
               .from(pendingActions)
               .where(
@@ -898,6 +900,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         pending_approvals: pendings.map((p) => ({
           tool: p.tool,
           agent: wsAgents.find((a) => a.id === p.agentId)?.name ?? null,
+          // The proposed call verbatim — describe it from this, never guess.
+          args: p.args,
           url: `${env.webOrigin}/conversations/${p.convId}`,
         })),
         csat_prompted: convs.filter((v) => v.csatAskedAt).length,

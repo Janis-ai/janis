@@ -485,6 +485,14 @@ function extractUrls(text: string): string[] {
   return (text.match(LINK_RE) ?? []).map((u) => u.replace(TRAIL_PUNCT, ''));
 }
 
+/** Uuid-ish token — canonical dashed form or the 32-hex dashless variant the
+ *  model sometimes emits. Normalized by lowercasing + dropping dashes. */
+const UUIDISH_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\b[0-9a-f]{32}\b/gi;
+const normId = (s: string) => s.toLowerCase().replace(/-/g, '');
+function extractIds(text: string, into: Set<string>): void {
+  for (const m of text.matchAll(UUIDISH_RE)) into.add(normId(m[0]));
+}
+
 /** Everything a reply may legitimately link to: URLs in the agent's prompt
  * context (system prompt, knowledge, docs) plus URLs that appeared in the
  * conversation itself — customer-shared links and tool outputs are valid to
@@ -568,7 +576,56 @@ export interface LinkGuardResult {
   unverified: string[];
 }
 
+/** Console top-level pages with no deeper routes — the mirror of App.tsx.
+ *  /settings/approvals and friends are invented paths, not real pages. */
+const CONSOLE_PAGES = new Set([
+  'login', 'privacy', 'terms', 'docs', 'status', 'reports', 'errors',
+  'billing', 'settings', 'inbox', 'channels', 'usage', 'integrations',
+  'campaigns', 'agents', 'conversations', 'contacts', 'ask',
+]);
+/** Agent sections a console URL may point at — /agents/<id>/<these>. */
+const AGENT_SUBS = new Set([
+  'behavior', 'knowledge', 'channels', 'integrations', 'components',
+  'tests', 'settings', 'inbox', 'contacts', 'campaigns', 'reports', 'usage',
+]);
+
+function consoleHosts(): Set<string> {
+  const hosts = new Set(['app.janis.ai']);
+  try {
+    hosts.add(new URL(env.webOrigin).host);
+  } catch { /* unset origin — app.janis.ai still counts */ }
+  return hosts;
+}
+
+/** A console URL is a lie unless its path is a real route and every uuid
+ *  segment is an id the model actually saw — fetch-checking can't judge an
+ *  SPA (every path returns the shell's 200). Skeleton mirrors App.tsx. */
+function consolePathOk(pathname: string, ids?: Set<string>): boolean {
+  const segs = pathname.split('/').filter(Boolean).map((s) => s.toLowerCase());
+  const isId = (s: string | undefined) =>
+    !!s && /^[0-9a-f-]{32,36}$/i.test(s) && s.replace(/-/g, '').length === 32;
+  if (ids && !segs.every((s) => !isId(s) || ids.has(normId(s)))) return false;
+  const [a, b, c, d] = segs;
+  if (!a) return true;
+  if (a === 'agents') {
+    if (b === undefined) return true;
+    if (!isId(b)) return false;
+    if (c === undefined) return true;
+    if (isId(c)) return false; // /agents/<id>/<id> is not a route
+    if (!AGENT_SUBS.has(c)) return false;
+    if (d === undefined) return true;
+    return segs.length === 4 && isId(d) && (c === 'inbox' || c === 'contacts' || c === 'channels');
+  }
+  if (a === 'conversations' || a === 'contacts' || a === 'integrations')
+    return b === undefined || (segs.length === 2 && isId(b));
+  if (a === 'help') return !!b && isId(b) && (segs.length === 2 || (segs.length === 3 && isId(c)));
+  if (a === 'llm') return b === 'callback' && segs.length === 2;
+  return CONSOLE_PAGES.has(a) && segs.length === 1;
+}
+
 /** Output guard for generated replies. Per emitted URL:
+ *  0. On the console origin → the path must be a real route and carry only
+ *     context-known ids; anything else is an invented link, strip it.
  *  1. On a blessed host (or subdomain) → pass.
  *  2. Unblessed host but the path matches a blessed URL → domain corruption;
  *     swap the origin (app.native.ai/x → app.janis.ai/x).
@@ -578,7 +635,9 @@ export interface LinkGuardResult {
 export async function guardReplyLinks(
   text: string,
   blessedUrls: string[],
+  contextIds?: Set<string>,
 ): Promise<LinkGuardResult> {
+  const consoles = consoleHosts();
   const blessed: { origin: string; host: string; path: string }[] = [];
   for (const raw of blessedUrls) {
     try {
@@ -604,7 +663,7 @@ export async function guardReplyLinks(
     const clean = m[0].replace(TRAIL_PUNCT, '');
     try {
       const u = new URL(clean);
-      if (!isBlessed(u) && !repairTarget(u)) toCheck.add(clean);
+      if (!consoles.has(u.host) && !isBlessed(u) && !repairTarget(u)) toCheck.add(clean);
     } catch {
       // unparseable — left as-is below
     }
@@ -627,6 +686,11 @@ export async function guardReplyLinks(
       u = new URL(clean);
     } catch {
       return match;
+    }
+    if (consoles.has(u.host)) {
+      if (consolePathOk(u.pathname, contextIds)) return match;
+      stripped.push(match);
+      return trail;
     }
     if (isBlessed(u)) return match;
     const target = repairTarget(u);
@@ -884,7 +948,15 @@ export async function generateReply(
   if (!draft) {
     return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, fixed: [], stripped: [], verified: [], unverified: [] };
   }
-  const guard = await guardReplyLinks(draft, blessedUrls);
+  // The linkable corpus grows inside the tool loop — results carry URLs and
+  // ids the model may cite (conversation links, channel pages). Blessed =
+  // context urls + tool-returned urls; ids = every uuid the model saw.
+  const ids = new Set<string>(first.contextIds);
+  extractIds(prompt, ids);
+  for (const m of msgs) extractIds(contentText(m.content), ids);
+  for (const u of blessedUrls) extractIds(u, ids);
+  const allBlessed = first.toolUrls.length ? [...blessedUrls, ...first.toolUrls] : blessedUrls;
+  const guard = await guardReplyLinks(draft, allBlessed, ids);
   if (!guard.stripped.length) {
     return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, ...guard };
   }
@@ -904,7 +976,9 @@ export async function generateReply(
   if (!retry?.text) {
     return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, ...guard };
   }
-  const g2 = await guardReplyLinks(retry.text, blessedUrls);
+  for (const id of retry.contextIds) ids.add(id);
+  const allBlessed2 = retry.toolUrls.length ? [...allBlessed, ...retry.toolUrls] : allBlessed;
+  const g2 = await guardReplyLinks(retry.text, allBlessed2, ids);
   return {
     promptTokens: first.promptTokens + retry.promptTokens,
     completionTokens: first.completionTokens + retry.completionTokens,
@@ -1079,6 +1153,12 @@ interface Completion {
   /** Provider ids tool results produced this run — WIDGET_REF-bound tools
    *  may chain args off these (same anchor rule as the tool loop). */
   producedIds: Set<string>;
+  /** URLs tool results returned this run — blessed for the link guard so a
+   *  tool-emitted deep link passes verbatim. */
+  toolUrls: string[];
+  /** Uuids (dash-normalized) that appeared in tool results — the id corpus
+   *  the link guard validates console links against. */
+  contextIds: Set<string>;
 }
 
 /** OpenAI-compat multimodal content part — Gemini accepts image_url parts. */
@@ -1144,7 +1224,7 @@ export async function complete(
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
 ): Promise<Completion> {
-  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[], producedIds: new Set<string>() };
+  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[], producedIds: new Set<string>(), toolUrls: [] as string[], contextIds: new Set<string>() };
   if (!llm.apiKey) return empty;
 
   const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
@@ -1221,6 +1301,8 @@ export async function complete(
   // Provider ids surfaced by tool results this run — the only ids
   // identity-scoped tools may accept (see identityBlockReason).
   const producedIds = new Set<string>();
+  const toolUrls: string[] = [];
+  const contextIds = new Set<string>();
 
   for (let round = 0; round < 4; round++) {
     // Retry network timeouts and transient upstream errors (429 / 5xx —
@@ -1349,7 +1431,7 @@ export async function complete(
     if (!calls.length) {
       const text = msg?.content?.trim() ?? null;
       completionTokens += json.usage?.completion_tokens ?? (text ? Math.ceil(text.length / 4) : 0);
-      return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds };
+      return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, contextIds };
     }
 
     completionTokens += json.usage?.completion_tokens ?? 0;
@@ -1407,6 +1489,10 @@ export async function complete(
       // Ids in a real result become the anchor for later identity-scoped
       // calls this run (find_customer → its cus_… feeds charges/subs).
       if (outcome === 'ran' || outcome === 'proposed') harvestProducedIds(result, producedIds);
+      // URLs/uuids a tool emitted are the model's linkable corpus — the
+      // reply guard blesses them and rejects id segments it never saw.
+      toolUrls.push(...extractUrls(result));
+      extractIds(result, contextIds);
       toolCalls.push({ name: call.function.name, gated, outcome });
       // Live data binding — a widget-bound tool's JSON result renders as a
       // component on the reply, no model transcription needed.
@@ -1417,7 +1503,7 @@ export async function complete(
       msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
     }
   }
-  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds };
+  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, contextIds };
 }
 
 const RECENT_WINDOW = 20;
