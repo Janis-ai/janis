@@ -569,7 +569,6 @@ export default function ConversationPage() {
   ]);
   const extraProfile = Object.entries(p).filter(([k]) => !KNOWN.has(k));
   const agent = agents?.agents.find((a) => a.id === c.agent_id);
-  const assignee = users?.users.find((u) => u.id === c.assignee_id);
   const openAlerts = alerts.filter((a) => a.status === 'open');
   const canSend = c.state === 'human' || sendAs === 'agent' || sendAs === 'note' || sendAs === 'teach';
   const canTeach = me?.user.role === 'admin';
@@ -1205,22 +1204,11 @@ export default function ConversationPage() {
           <div className="muted" style={{ marginTop: 8 }}>
             {(p.channel || p.channel_name) && (
               <div>
-                Channel: {channelLabel(p.channel)}
-                {p.channel_name ? ` · ${p.channel_name}` : ''}
+                <strong>Channel:</strong> {channelLabel(p.channel)}
               </div>
             )}
-            <div>Email: {p.email ?? '—'}</div>
-            {p.phone && <div>Phone: {p.phone}</div>}
-            <div>User id: {p.id ?? c.external_id}</div>
-            {Object.entries(p.metadata ?? {})
-              .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v) && String(v) !== '')
-              .map(([k, v]) => (
-                <div key={k} style={{ overflowWrap: 'anywhere' }}>
-                  {k}: {String(v)}
-                </div>
-              ))}
             <div>
-              Agent:{' '}
+              <strong>Agent:</strong>{' '}
               {agent ? (
                 <Link
                   to={`/agents/${c.agent_id}/channels`}
@@ -1242,14 +1230,49 @@ export default function ConversationPage() {
                 '—'
               )}
             </div>
-            {extraProfile.map(([k, v]) => (
-              <div key={k}>{k}: {String(v)}</div>
-            ))}
-            <div>Assigned: {assignee?.name ?? 'unassigned'}</div>
-            {c.human_since && <div>Human since: {new Date(c.human_since).toLocaleTimeString()}</div>}
-            {agent?.auto_resume_minutes && (
-              <div>Auto-resume after {agent.auto_resume_minutes}m</div>
-            )}
+            <details style={{ marginTop: 4 }}>
+              <summary>Context</summary>
+              <div style={{ marginTop: 4 }}>
+                {p.channel_name && (
+                  <div>
+                    <strong>Channel name:</strong> {p.channel_name}
+                  </div>
+                )}
+                <div>
+                  <strong>Email:</strong> {p.email ?? '—'}
+                </div>
+                {p.phone && (
+                  <div>
+                    <strong>Phone:</strong> {p.phone}
+                  </div>
+                )}
+                <div style={{ overflowWrap: 'anywhere' }}>
+                  <strong>User id:</strong> {p.id ?? c.external_id}
+                </div>
+                {Object.entries(p.metadata ?? {})
+                  .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v) && String(v) !== '')
+                  .map(([k, v]) => (
+                    <div key={k} style={{ overflowWrap: 'anywhere' }}>
+                      <strong>{k}:</strong> {String(v)}
+                    </div>
+                  ))}
+                {extraProfile.map(([k, v]) => (
+                  <div key={k} style={{ overflowWrap: 'anywhere' }}>
+                    <strong>{k}:</strong> {String(v)}
+                  </div>
+                ))}
+                {c.human_since && (
+                  <div>
+                    <strong>Human since:</strong> {new Date(c.human_since).toLocaleTimeString()}
+                  </div>
+                )}
+                {agent?.auto_resume_minutes && (
+                  <div>
+                    <strong>Auto-resume after:</strong> {agent.auto_resume_minutes}m
+                  </div>
+                )}
+              </div>
+            </details>
           </div>
         </div>
 
