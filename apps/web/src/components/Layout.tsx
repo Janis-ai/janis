@@ -244,7 +244,7 @@ function ContextSwitcher({
               key={a.id}
               type="button"
               className="ctx-item"
-              onClick={() => go(`/agents/${a.id}/inbox`)}
+              onClick={() => go(`/agents/${a.id}`)}
             >
               <Bot size={13} className="ctx-ic" />
               <span className="grow">{a.name}</span>
