@@ -47,15 +47,6 @@ export function ChannelCard({
     window.location.hostname === 'localhost' ? 'http://localhost:8787' : window.location.origin;
   const chAgent = agents.find((a) => a.id === ch.agent_id);
   const dead = chAgent && !chAgent.hosted && !chAgent.webhook_url;
-  const reassign = useMutation({
-    mutationFn: (agent_id: string) =>
-      api(`/api/channels/${ch.id}`, { method: 'PATCH', body: JSON.stringify({ agent_id }) }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['channels'] });
-      void qc.invalidateQueries({ queryKey: ['channel', ch.id] });
-      void qc.invalidateQueries({ queryKey: ['agents'] });
-    },
-  });
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(ch.name);
   const rename = useMutation({
@@ -177,18 +168,7 @@ export function ChannelCard({
         )}
       </div>
       <div className="muted" style={{ marginTop: 6 }}>
-        Answered by{' '}
-        <select
-          value={ch.agent_id}
-          onChange={(e) => reassign.mutate(e.target.value)}
-          disabled={reassign.isPending}
-        >
-          {[...agents]
-            .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-            .map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-        </select>
+        Answered by {ch.agent_name}
         {dead && <span className="badge warn" style={{ marginLeft: 6 }}>agent unreachable</span>}
         {ch.meta.page_id && <> · page {ch.meta.page_id}</>}
         {ch.meta.phone_number_id && <> · {ch.meta.phone_number_id}</>}

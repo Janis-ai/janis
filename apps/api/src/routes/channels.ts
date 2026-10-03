@@ -151,8 +151,6 @@ const patchChannel = z.object({
         .or(z.literal('')),
     )
     .optional(),
-  // reassign which agent answers this channel
-  agent_id: z.string().uuid().optional(),
 });
 
 /** Console endpoints mounted at /api/channels (session auth). */
@@ -423,13 +421,10 @@ export function channelApiRoutes(db: Db) {
       .where(and(eq(channels.id, c.req.param('id')), eq(channels.workspaceId, c.get('workspaceId'))))
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
-    // both the current and the target agent must be adminable
-    for (const aid of [row.agentId, ...(body.agent_id ? [body.agent_id] : [])]) {
-      const role = await agentRoleFor(
-        db, c.get('user').id, c.get('role'), c.get('agentScope'), aid, c.get('workspaceId'),
-      );
-      if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
-    }
+    const role = await agentRoleFor(
+      db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
+    );
+    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
     if (body.branding && row.kind !== 'webchat') {
       return c.json({ error: 'branding applies to webchat channels' }, 400);
     }
@@ -463,14 +458,6 @@ export function channelApiRoutes(db: Db) {
     }
     if (body.widget_domain !== undefined && row.kind !== 'webchat') {
       return c.json({ error: 'widget_domain applies to webchat channels' }, 400);
-    }
-    if (body.agent_id) {
-      const [target] = await db
-        .select({ id: agents.id })
-        .from(agents)
-        .where(and(eq(agents.id, body.agent_id), eq(agents.workspaceId, c.get('workspaceId'))))
-        .limit(1);
-      if (!target) return c.json({ error: 'agent not found' }, 404);
     }
 
     const creds = { ...(row.credentials as ChannelCredentials) };
@@ -594,7 +581,6 @@ export function channelApiRoutes(db: Db) {
       .set({
         name: body.name ?? row.name,
         credentials: creds,
-        ...(body.agent_id ? { agentId: body.agent_id } : {}),
       })
       .where(eq(channels.id, row.id))
       .returning();
