@@ -159,7 +159,7 @@ export default function AgentOverview() {
             <div className="metric-num">
               {containment.data?.containment_rate == null
                 ? '—'
-                : `${Math.round(containment.data.containment_rate * 100)}%`}
+                : `${containment.data.containment_rate}%`}
             </div>
             <div className="muted" style={{ fontSize: 12 }}>resolved by AI</div>
           </div>
