@@ -1214,32 +1214,6 @@ function EscalationTab({
               />
               <button className="btn" disabled={!topicDraft.trim()} onClick={addCustomTopic}>Add</button>
             </div>
-            <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-              Topic labels — what the classifier tags conversations with:
-            </div>
-            <div className="row" style={{ marginTop: 4, flexWrap: 'wrap' }}>
-              {topicLabels.map((label, i) => (
-                <span key={label} className="badge" style={{ marginRight: 4 }}>
-                  {label}
-                  <button
-                    className="btn ghost"
-                    style={{ padding: '0 2px', marginLeft: 2 }}
-                    aria-label={`Remove ${label}`}
-                    onClick={() =>
-                      setCfg({ ...cfg, intents: topicLabels.filter((_, x) => x !== i) })
-                    }
-                  >
-                    <X size={10} />
-                  </button>
-                </span>
-              ))}
-            </div>
-            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
-              {!cfg.intents?.length
-                ? 'Using the default topics — editing makes the list explicit. '
-                : ''}
-              The same labels Reports → Topics tallies; label edits save with the page's Save button.
-            </div>
             </>
           )}
           {kind === 'inactivity' && (
@@ -1324,6 +1298,36 @@ function EscalationTab({
               <button className="btn" onClick={resetBuilder}>Cancel</button>
             )}
           </div>
+          {kind === 'intent' && (
+            <>
+            <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+              Topic labels — what the classifier tags conversations with:
+            </div>
+            <div className="row" style={{ marginTop: 4, flexWrap: 'wrap' }}>
+              {topicLabels.map((label, i) => (
+                <span key={label} className="badge" style={{ marginRight: 4 }}>
+                  {label}
+                  <button
+                    className="btn ghost"
+                    style={{ padding: '0 2px', marginLeft: 2 }}
+                    aria-label={`Remove ${label}`}
+                    onClick={() =>
+                      setCfg({ ...cfg, intents: topicLabels.filter((_, x) => x !== i) })
+                    }
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              {!cfg.intents?.length
+                ? 'Using the default topics — editing makes the list explicit. '
+                : ''}
+              The same labels Reports → Topics tallies; label edits save with the page's Save button.
+            </div>
+            </>
+          )}
         </div>
 
       </div>
