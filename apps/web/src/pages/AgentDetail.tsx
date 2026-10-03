@@ -395,7 +395,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
         </>
       )}
 
-      {isAdmin && (hasDrafts || section === 'settings') && (
+      {isAdmin && hasDrafts && (
         <div className="row" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
           {section === 'settings' && (
             <button
