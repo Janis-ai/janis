@@ -1903,3 +1903,21 @@ describe('widget custom domain', () => {
     expect(html).not.toContain('data-janis-page');
   });
 });
+
+describe('inbound rate limiting', () => {
+  it('throttles a single visitor at 20/min and isolates other visitors', async () => {
+    const spammer = `spam_${Date.now().toString(36)}`;
+    const statuses: number[] = [];
+    for (let i = 0; i < 21; i++) {
+      const res = await app.request(`/chat/${channelId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visitor_id: spammer, text: `burst ${i}` }),
+      });
+      statuses.push(res.status);
+    }
+    expect(statuses.slice(0, 20).every((s) => s === 200)).toBe(true);
+    expect(statuses[20]).toBe(429);
+    expect((await post('still fine')).status).toBe(200);
+  });
+});

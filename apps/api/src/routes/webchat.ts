@@ -20,7 +20,7 @@ import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
 import { adoptVisitorConversation, handleChannelMessage } from '../services/channelIngress.js';
 import { processEvents } from '../services/ingest.js';
 import { bus } from '../lib/bus.js';
-import { rateLimit } from '../lib/rateLimit.js';
+import { rateLimit, takeDbAllowance } from '../lib/rateLimit.js';
 import { agentWorking, operatorTyping } from '../lib/typingState.js';
 
 /**
@@ -532,6 +532,28 @@ export function webchatRoutes(db: Db) {
     if (!channel) return c.json({ error: 'not found' }, 404);
     const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of } =
       c.req.valid('json');
+    // Inbound throttle — anonymous widgets are the spam/cost surface. Two
+    // Postgres-backed buckets (exact across instances): per-visitor stops a
+    // single scripted visitor; the channel ceiling bounds a many-visitor
+    // flood. Fails open on DB error like the other limiters.
+    const perVisitor = await takeDbAllowance(db, {
+      key: `chat-msg:${channel.id}:${visitor_id}`,
+      n: 1,
+      max: 20,
+      windowMs: 60_000,
+    });
+    const perChannel = perVisitor.ok
+      ? await takeDbAllowance(db, {
+          key: `chat-msg-ch:${channel.id}`,
+          n: 1,
+          max: 300,
+          windowMs: 60_000,
+        })
+      : { ok: false as const, retryAfter: perVisitor.retryAfter };
+    if (!perVisitor.ok || !perChannel.ok) {
+      c.header('Retry-After', String(perVisitor.retryAfter ?? perChannel.retryAfter ?? 60));
+      return c.json({ error: 'Too many messages — slow down and retry.' }, 429);
+    }
     const resolved = await resolveIdentity(c, db, channel, user, page, agent_id);
     // Retry idempotency — the client resends with the same client_id after a
     // failed-looking POST (timeout, lost response). The write may have
@@ -634,6 +656,16 @@ export function webchatRoutes(db: Db) {
     const body = await c.req.parseBody();
     const visitorId = typeof body['visitor_id'] === 'string' ? body['visitor_id'] : '';
     if (!VISITOR_RE.test(visitorId)) return c.json({ error: 'bad visitor_id' }, 400);
+    const allow = await takeDbAllowance(db, {
+      key: `chat-upload:${channel.id}:${visitorId}`,
+      n: 1,
+      max: 10,
+      windowMs: 60_000,
+    });
+    if (!allow.ok) {
+      c.header('Retry-After', String(allow.retryAfter ?? 60));
+      return c.json({ error: 'Too many uploads — slow down and retry.' }, 429);
+    }
     const file = body['file'];
     if (!(file instanceof File)) return c.json({ error: 'file field required' }, 400);
     if (file.size > MAX_UPLOAD_BYTES) return c.json({ error: 'file too large (max 10MB)' }, 413);

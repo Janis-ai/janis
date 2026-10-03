@@ -172,7 +172,9 @@ drizzle-kit/workbox-build, nothing to drop directly).
     closest-to-done differentiator.)
 28. Intent tail — sentiment, auto-topic clustering, confidence scores.
 29. Help center tail — version history, widget article embeds.
-30. Rate-limit tail — widget CAPTCHA after N, blocklist, per-plan tiers.
+30. Rate-limit tail — inbound webchat per-(channel,visitor) throttle DONE
+    (POST /chat/:token/messages, dbRateLimit); still open: widget CAPTCHA
+    after N, blocklist, per-plan tiers.
 31. Channels tail — shared-email multi-address fan-out (answer_rules
     PARTIAL), WhatsApp template manager UI + business verification,
     voicemail/IVR/recording consent/transcripts, Outlook (blocked on A6).
@@ -203,9 +205,23 @@ drizzle-kit/workbox-build, nothing to drop directly).
     export/delete DONE.)
 
 *Loose ends*
-42. `janis-zapier-logo.png` shows deleted in git — confirm intentional.
-43. Three `big-j*.png` untracked in apps/web/public/img/ — commit or gitignore?
-44. Optional: zapier-platform-core 19 bump before directory submission.
+42. Live-verification residue (2026-10-03 session):
+    - Prod: "Smoke Test Bot" agent + Bubble channel, ~30 test messages in
+      the concierge rail thread (1fb291f8), pending approval cards —
+      clean up after review.
+    - Regression tests saved on the concierge: "Live concierge tool
+      verification #1–#8" (old rescue checkpoints) + "Concierge live
+      battery — tools + link integrity" (explicit 60-turn capture).
+    - scripts/tmp/ holds the live-test harnesses (concierge-test,
+      adversarial, transcript peek) — untracked, reuse or delete.
+    - teach_from_conversation declined a vague ask ("save as regression
+      test") but ran when named — discoverability tuning, low pri.
+    - Notification email fixed: JANIS_EMAIL_FROM=alerts@inbound.janis.ai
+      (was unset → alerts@janis.ai unverified → all email 403'd).
+      Channel/workspace-delete FK cascade fixed (9e07ae2).
+43. `janis-zapier-logo.png` shows deleted in git — confirm intentional.
+44. Three `big-j*.png` untracked in apps/web/public/img/ — commit or gitignore?
+45. Optional: zapier-platform-core 19 bump before directory submission.
 
 **Infra / reliability**
 - Multi-instance: DONE — bus_events SSE relay, viewers + voice_queue tables,
