@@ -836,10 +836,18 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
               .select({ convId: alerts.conversationId, type: alerts.type })
               .from(alerts)
               .where(inArray(alerts.conversationId, convIds)),
+            // Workspace-wide, not windowed — a pending approval still needs
+            // review no matter how old its conversation is.
             ctx.db
-              .select({ convId: pendingActions.conversationId, status: pendingActions.status })
+              .select({
+                convId: pendingActions.conversationId,
+                agentId: pendingActions.agentId,
+                tool: pendingActions.toolName,
+              })
               .from(pendingActions)
-              .where(inArray(pendingActions.conversationId, convIds)),
+              .where(
+                and(eq(pendingActions.workspaceId, ws.id), eq(pendingActions.status, 'pending')),
+              ),
           ])
         : [[], [], []];
 
@@ -884,7 +892,14 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         no_reply: noReply,
         containment_rate: convs.length ? Math.round((contained / convs.length) * 100) : null,
         needs_human_now: openNow,
-        approvals_pending: pendings.filter((p) => p.status === 'pending').length,
+        approvals_pending: pendings.length,
+        // Approvals live on the conversation that raised them — hand the
+        // visitor these links verbatim; there is no central approvals page.
+        pending_approvals: pendings.map((p) => ({
+          tool: p.tool,
+          agent: wsAgents.find((a) => a.id === p.agentId)?.name ?? null,
+          url: `${env.webOrigin}/conversations/${p.convId}`,
+        })),
         csat_prompted: convs.filter((v) => v.csatAskedAt).length,
         csat_answered: scores.length,
         csat_avg: scores.length
