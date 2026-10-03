@@ -127,8 +127,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
   const [savedFlash, setSavedFlash] = useState(false);
   const [confirmEl, confirm] = useConfirm();
 
-  // draft state — one shared cfg, saved wholesale by the header Save button
-  const [name, setName] = useState(agent.name);
+  // draft state — one shared cfg, saved wholesale by the bottom Save button
   const [cfg, setCfg] = useState<AgentConfig>(agent.config ?? {});
   const [autoResume, setAutoResume] = useState(agent.auto_resume_minutes?.toString() ?? '');
   const [webhookUrl, setWebhookUrl] = useState(agent.webhook_url ?? '');
@@ -142,7 +141,6 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     const prev = prevAgent.current;
     if (prev === agent) return;
     prevAgent.current = agent;
-    setName((cur) => (cur === prev.name ? agent.name : cur));
     setAutoResume((cur) =>
       cur === (prev.auto_resume_minutes?.toString() ?? '')
         ? agent.auto_resume_minutes?.toString() ?? ''
@@ -247,17 +245,24 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
 
   const saveAll = () =>
     update.mutate({
-      ...(name.trim() && name.trim() !== agent.name ? { name: name.trim() } : {}),
       ...(agent.hosted ? {} : { webhook_url: webhookUrl || null }),
       auto_resume_minutes: autoResume ? Number(autoResume) : null,
       config: cfg,
     });
 
+  // Sections whose edits live in the shared draft — the bottom Save button
+  // renders there. Behavior is all-cfg; in Knowledge only the Text sub is a
+  // draft (files/gaps/help self-save); Settings drafts live in General
+  // (webhook URL) and Escalation (auto-resume).
+  const hasDrafts =
+    section === 'behavior' ||
+    (section === 'knowledge' && sub === 'text') ||
+    (section === 'settings' && (sub === 'general' || sub === 'escalation'));
+
   return (
     <div className="agent-editor">
       <div className="agent-head">
         <div className="row" style={{ alignItems: 'center' }}>
-          <Link to="/agents" className="muted">← Agents</Link>
           {backToConv && (
             <Link
               to={backToConv}
@@ -267,15 +272,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
               ← conversation
             </Link>
           )}
-          <input
-            className="grow"
-            style={{ fontWeight: 700, minWidth: 0 }}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onBlur={() =>
-              name.trim() && name.trim() !== agent.name && update.mutate({ name: name.trim() })
-            }
-          />
+          <h1 className="page-title grow" style={{ minWidth: 0 }}>{agent.name}</h1>
           <span className={`badge ${agent.hosted ? 'active' : agent.webhook_url ? '' : 'warn'}`}>
             {agent.hosted ? 'hosted' : agent.webhook_url ? 'external' : 'unreachable'}
           </span>
@@ -286,9 +283,6 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
             onClick={() => testChat.mutate()}
           >
             {testChat.isPending ? 'Opening…' : 'Test agent'}
-          </button>
-          <button className="btn primary" disabled={update.isPending} onClick={saveAll}>
-            {update.isPending ? 'Saving…' : savedFlash ? 'Saved ✓' : 'Save'}
           </button>
         </div>
         <div className="muted" style={{ marginTop: 10 }}>
@@ -394,19 +388,23 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
         </>
       )}
 
-      {isAdmin && section === 'settings' && (
+      {isAdmin && (hasDrafts || section === 'settings') && (
         <div className="row" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
-          <button
-            className="btn danger"
-            onClick={async () => {
-              if (await confirm(`Delete agent "${agent.name}"? Its channels, conversations, and settings are removed.`, [{ key: 'ok', label: 'Delete', danger: true }])) removeAgent.mutate();
-            }}
-          >
-            Delete agent
-          </button>
-          <button className="btn primary" disabled={update.isPending} onClick={saveAll}>
-            {update.isPending ? 'Saving…' : savedFlash ? 'Saved ✓' : 'Save'}
-          </button>
+          {section === 'settings' && (
+            <button
+              className="btn danger"
+              onClick={async () => {
+                if (await confirm(`Delete agent "${agent.name}"? Its channels, conversations, and settings are removed.`, [{ key: 'ok', label: 'Delete', danger: true }])) removeAgent.mutate();
+              }}
+            >
+              Delete agent
+            </button>
+          )}
+          {hasDrafts && (
+            <button className="btn primary" disabled={update.isPending} onClick={saveAll}>
+              {update.isPending ? 'Saving…' : savedFlash ? 'Saved ✓' : 'Save'}
+            </button>
+          )}
         </div>
       )}
     </div>
