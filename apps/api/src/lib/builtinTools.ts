@@ -2374,6 +2374,101 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       });
     },
   },
+  {
+    name: 'create_channel',
+    description:
+      "Propose adding a Bubble (webchat) channel to an existing agent in a workspace the visitor administers — posts an approval card; nothing is created until they approve. Use when the visitor wants web chat / a site widget for an agent — DO NOT describe manual steps when this card can do it. Other kinds (Messenger, email, SMS, WhatsApp) need credential/OAuth setup on the agent's Channels page — link that page instead. Admin-only.",
+    params: {
+      agent: 'agent name — the agent to put the Bubble on (required)',
+      name: 'optional channel label — defaults to "Bubble"',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const target = await visitorAgent(ctx, ws, args.agent);
+      if ('error' in target) return JSON.stringify(target);
+      const agent = target.agent;
+      const name = (args.name ?? '').trim().slice(0, 80) || 'Bubble';
+      const wsChannels = await ctx.db
+        .select({ id: channels.id, name: channels.name })
+        .from(channels)
+        .where(and(eq(channels.agentId, agent.id), eq(channels.kind, 'webchat')));
+      if (wsChannels.length) {
+        return JSON.stringify({
+          error: `${agent.name} already has a Bubble channel ("${wsChannels[0]?.name}") — rename or restyle it with update_channel, or link its page`,
+        });
+      }
+      return parkConciergeAction(
+        ctx,
+        'apply_create_channel',
+        { workspace_id: ws.id, agent_id: agent.id, name },
+        `Add a Bubble channel to "${agent.name}"`,
+        { agent: agent.name, channel: name, kind: 'webchat' },
+      );
+    },
+  },
+  {
+    // Executor for approved create_channel cards — hidden from the model.
+    name: 'apply_create_channel',
+    description: 'internal — executes an approved create_channel action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+            eq(memberships.role, 'admin'),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs admin rights on the target workspace';
+      const [agent] = await ctx.db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, String(args.agent_id ?? '')), eq(agents.workspaceId, wsId)))
+        .limit(1);
+      if (!agent) return 'error: agent not found';
+      const name = String(args.name ?? '').trim().slice(0, 80) || 'Bubble';
+      const [chan] = await ctx.db
+        .insert(channels)
+        .values({ workspaceId: wsId, agentId: agent.id, kind: 'webchat', name, credentials: {} })
+        .returning();
+      invalidateChannelCache();
+      await audit(ctx.db, {
+        workspaceId: wsId,
+        userId: user.id,
+        userName: user.name,
+        action: 'channel.create',
+        targetType: 'channel',
+        targetId: chan.id,
+        meta: { name, kind: 'webchat', via: 'concierge' },
+      });
+      bus.publish(wsId, { type: 'channel', data: { id: chan.id } });
+      const url = `${env.webOrigin}/agents/${agent.id}/channels/${chan.id}`;
+      return JSON.stringify({
+        ok: true,
+        channel_id: chan.id,
+        url,
+        summary: `Bubble channel created on "${agent.name}" — open it: ${url}`,
+      });
+    },
+  },
 ];
 
 /** Builtins enabled on this agent's config AND available in this environment. */

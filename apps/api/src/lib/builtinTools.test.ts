@@ -1185,3 +1185,52 @@ describe('update_channel builtin', () => {
     expect(missing.error).toContain("didn't match");
   });
 });
+
+describe('create_channel builtin', () => {
+  const createChan = () => BUILTIN_TOOLS.find((b) => b.name === 'create_channel')!;
+  const applyCreateChan = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_create_channel')!;
+
+  it('parks a card; approving creates a webchat channel on the named agent', async () => {
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    // clear any webchat channel an earlier test left on this agent
+    await db
+      .delete(channels)
+      .where(and(eq(channels.agentId, bot2.id), eq(channels.kind, 'webchat')));
+
+    const out = await createChan().run(
+      { workspace: 'free', agent: 'bot2' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_create_channel' && p.status === 'pending');
+    expect((pa!.args as { agent_id?: string }).agent_id).toBe(bot2.id);
+
+    const applied = JSON.parse(
+      await applyCreateChan().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(applied.ok).toBe(true);
+    expect(applied.url).toContain(`/agents/${bot2.id}/channels/`);
+    const [chan] = await db.select().from(channels).where(eq(channels.id, applied.channel_id));
+    expect(chan.kind).toBe('webchat');
+    expect(chan.name).toBe('Bubble');
+    expect(chan.agentId).toBe(bot2.id);
+  });
+
+  it('refuses a second Bubble channel and still honors update_channel instead', async () => {
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    const dup = JSON.parse(
+      await createChan().run({ workspace: 'free', agent: 'bot2' }, cctx(CONV2)),
+    );
+    expect(dup.error).toContain('already has a Bubble channel');
+  });
+});

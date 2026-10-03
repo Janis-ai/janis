@@ -255,6 +255,10 @@ async function resolveIdentity(
           // per-message, so an unstamped key would outlive the selection.
           const sel = agentRows.find((a) => a.id === contextAgentId);
           traits.current_agent = sel?.name ?? '';
+          // The id too — console links (/agents/<id>/…) can then be built
+          // verbatim instead of the model inventing a slug. Same merge rule:
+          // empty clears a stale selection.
+          traits.current_agent_id = sel?.id ?? '';
           if (agentRows.length) {
             const chans = await db
               .select({ agentId: channels.agentId, kind: channels.kind })

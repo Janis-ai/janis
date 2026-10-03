@@ -254,7 +254,11 @@ Connecting Stripe (agent → Integrations → Stripe → Connect): create a rest
 
 ---
 
-Channels are managed per agent in its Channels section — a catalog to add more and a page per connected channel with kind-specific setup (Messenger/Instagram via Meta OAuth, WhatsApp via embedded signup, Bubble widget snippet, email forwarding, Gmail OAuth, SMS and voice numbers via Twilio).
+The customer-facing channels a visitor can talk to an agent on: Bubble (Janis's website chat widget — the current name for what used to be called web chat), email (inbound address or Gmail), Facebook Messenger, Instagram DM, WhatsApp, SMS (via Twilio — yours or a Janis-hosted number), and a live voice phone number — plus the SDK/HTTP API for custom integrations. Slack is NOT a customer-facing channel: it mirrors alerts to the team and lets teammates reply — never list it as a way for customers to reach an agent.
+
+---
+
+Channels are managed per agent in its Channels section (https://app.janis.ai/agents — pick the agent, then Channels) — "Add channel" opens a catalog of the kinds above, and each connected channel gets its own page with kind-specific setup (Messenger/Instagram via Meta OAuth, WhatsApp via embedded signup, Bubble widget snippet, email forwarding, Gmail OAuth, SMS and voice numbers via Twilio).
 
 ---
 
