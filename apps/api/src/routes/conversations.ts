@@ -154,6 +154,10 @@ export function conversationRoutes(db: Db) {
     const scope = agentVis(workspaceId, c.get('agentScope'));
     // ?agent_id= scopes the badge for the agent-context inbox
     const agentId = c.req.query('agent_id');
+    // A slug/typo here would blow up the uuid cast below as a 500.
+    if (agentId && !z.string().uuid().safeParse(agentId).success) {
+      return c.json({ error: 'invalid agent_id' }, 400);
+    }
     const agentCond = agentId ? [eq(conversations.agentId, agentId)] : [];
     const [[{ count }], [{ count: unread }]] = await Promise.all([
       db

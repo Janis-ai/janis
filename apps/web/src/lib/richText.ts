@@ -38,7 +38,7 @@ const NUM_LEAD = /^\d+[.)]\s+/;
 // the bold opener keeps "5 * 3 = 15", prose dashes and emphasis runs from
 // splitting — models emit labelled lists as `* **Title:** … * **Title2:** …`
 // (or the `- **Title:**` variant) on a single line.
-const INLINE_BULLET = / [*-] (?=\*\*)/g;
+const INLINE_BULLET = / (?:(?:[*-])|(?:\d+[.)])) (?=\*\*)/g;
 
 /** Split a message into paragraphs and bullet lists. Models emit bullets two
  *  ways — one per line ("* item"), or an inline run on a single line
@@ -69,11 +69,12 @@ export function splitBlocks(text: string): RichBlock[] {
       items.push(...t.replace(BULLET_LEAD, '').replace(NUM_LEAD, '').split(INLINE_BULLET));
       continue;
     }
-    const inline = t.match(INLINE_BULLET)?.length ?? 0;
-    if (inline >= 2) {
+    const inlineMarks = t.match(INLINE_BULLET) ?? [];
+    if (inlineMarks.length >= 2) {
       const [lead, ...bullets] = t.split(INLINE_BULLET);
       flush();
       if (lead.trim()) out.push({ kind: 'para', text: lead.trim() });
+      ordered = /\d/.test(inlineMarks[0] ?? '');
       items.push(...bullets);
       continue;
     }

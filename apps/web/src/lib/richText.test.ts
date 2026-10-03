@@ -99,6 +99,20 @@ describe('splitBlocks', () => {
     ]);
   });
 
+  it('collects numbered inline runs as ordered lists', () => {
+    // Stored concierge reply: "three ways: 1. **A:** … 2. **B:** …" on one line.
+    expect(
+      splitBlocks('Three ways: 1. **Gaps:** review them 2. **Forms:** finalize 3. **Stats:** pull them'),
+    ).toEqual([
+      { kind: 'para', text: 'Three ways:' },
+      {
+        kind: 'list',
+        items: ['**Gaps:** review them', '**Forms:** finalize', '**Stats:** pull them'],
+        ordered: true,
+      },
+    ]);
+  });
+
   it('keeps arithmetic and single inline asterisks as paragraphs', () => {
     expect(splitBlocks('5 * 3 = 15')).toEqual([{ kind: 'para', text: '5 * 3 = 15' }]);
     expect(splitBlocks('pick * **one** option below')).toEqual([

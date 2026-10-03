@@ -412,7 +412,7 @@ export function systemPrompt(
       (chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp'
         ? ' This channel hard-cuts button labels at 20 characters — a longer label ships visibly truncated, so count them.'
         : '') +
-      ' They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps.' +
+      ' They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps, but a reply that ends by asking the customer to pick between a few likely answers ("want me to set one up?", "which plan?") should almost always offer those answers as buttons.' +
       ' Never tell the customer you cannot show buttons, cards or other components — you always can here; emit the BUTTON:/WIDGET: line rather than claiming it is impossible.' +
       '\nIf you need the customer\'s email or phone number, end your reply with a line "ASK: email" or "ASK: phone" — it becomes a one-tap share control where the channel supports it (otherwise they can type it). Still ask in the text — never rely on the control alone.',
     );
@@ -451,7 +451,7 @@ export function systemPrompt(
   } else {
     parts.push(
       opts.operator
-        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. There is no human tier above you: never emit [HANDOFF], [OFFER_HUMAN] or [CANCEL_HANDOFF] and never offer to fetch a teammate — if something genuinely needs a human, say plainly what needs doing. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand."
+        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. There is no human tier above you: never emit [HANDOFF], [OFFER_HUMAN] or [CANCEL_HANDOFF] and never offer to fetch a teammate — if something genuinely needs a human, say plainly what needs doing. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When you link to a console page, use a URL a tool returned or one from your context verbatim — agent pages live at /agents/<agent-id>/… with the full id, never a slug built from the agent's name."
         : '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, or mild pushback, and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.',
     );
     parts.push(
@@ -716,7 +716,7 @@ function clampButtonLabel(label: string): string {
  *  item shape) so a prose dash like "cost - billed monthly" never splits.
  *  Normalizing here means the stored text has real newlines and every
  *  surface (console, widget, Meta, email, Slack) renders the list. */
-const INLINE_ITEM_RE = / (?:[*-]) (?=\*\*)/g;
+const INLINE_ITEM_RE = / (?:(?:[*-])|(?:\d+[.)])) (?=\*\*)/g;
 const BULLET_LEAD_RE = /^\s*(?:[-*•]|\d+[.)])\s+/;
 export function unwrapInlineLists(text: string): string {
   return text
@@ -729,10 +729,13 @@ export function unwrapInlineLists(text: string): string {
       const count = (rest.match(INLINE_ITEM_RE) ?? []).length;
       if (count < (leadM ? 1 : 2)) return [line];
       const [lead, ...items] = rest.split(INLINE_ITEM_RE);
-      if (leadM) return [lead, ...items].map((i) => `- ${i.trim()}`);
+      // Numbered runs keep their numbers — "step 2" means something.
+      const firstMark = leadM?.[0] ?? rest.match(INLINE_ITEM_RE)?.[0] ?? '';
+      const marker = /\d/.test(firstMark) ? (n: number) => `${n + 1}. ` : () => '- ';
+      if (leadM) return [lead, ...items].map((i, n) => `${marker(n)}${i.trim()}`);
       return [
         ...(lead.trimEnd() ? [lead.trimEnd()] : []),
-        ...items.map((i) => `- ${i.trim()}`),
+        ...items.map((i, n) => `${marker(n)}${i.trim()}`),
       ];
     })
     .join('\n');
@@ -778,9 +781,7 @@ export function claimsAction(text: string): boolean {
   return sentencesOf(text).some(isClaim);
 }
 export function stripActionClaims(text: string): string {
-  return sentencesOf(text)
-    .filter((s) => !isClaim(s))
-    .join(' ');
+  return stripSentencesByLine(text, isClaim).text;
 }
 
 // Widget-truth claims — "here are the cards" with nothing emitted, or "the
@@ -818,9 +819,7 @@ export function deniesWidgetShown(text: string): boolean {
   return sentencesOf(text).some(isWidgetDeny);
 }
 export function stripWidgetClaims(text: string): string {
-  return sentencesOf(text)
-    .filter((s) => !isWidgetClaim(s) && !isWidgetDeny(s))
-    .join(' ');
+  return stripSentencesByLine(text, (s) => isWidgetClaim(s) || isWidgetDeny(s)).text;
 }
 
 const CLAIM_GUARD_RETRY =
@@ -2015,13 +2014,31 @@ const ESCALATION_CLAIMS = [
 
 /** Remove unbacked escalation promises from a reply the model didn't tag.
  *  Sentence-level: a claim sentence is dropped, its neighbours kept. */
+/** Sentence-level claim stripping that preserves line structure: each
+ *  newline-separated line is filtered independently and lines rejoin with
+ *  '\n'. The whole reply passes through even when nothing is stripped, so a
+ *  naive split-sentences/join-spaces here flattens every list the model (or
+ *  unwrapInlineLists) produced into a run-on paragraph. */
+function stripSentencesByLine(
+  text: string,
+  drop: (s: string) => boolean,
+): { text: string; stripped: number } {
+  let stripped = 0;
+  const lines = text.split('\n').flatMap((line) => {
+    const kept = sentencesOf(line)
+      .filter((s) => {
+        if (drop(s)) stripped++;
+        return !drop(s);
+      })
+      .join(' ');
+    // A line that carried only stripped claims disappears; a genuinely
+    // blank line stays blank (paragraph break).
+    return line.trim() && !kept ? [] : [kept];
+  });
+  return { text: lines.join('\n'), stripped };
+}
 export function stripEscalationClaims(text: string): { text: string; stripped: number } {
-  const sentences = text
-    .split(/(?<=[.!?])\s+|\n+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const kept = sentences.filter((s) => !ESCALATION_CLAIMS.some((re) => re.test(s)));
-  return { text: kept.join(' '), stripped: sentences.length - kept.length };
+  return stripSentencesByLine(text, (s) => ESCALATION_CLAIMS.some((re) => re.test(s)));
 }
 
 // The decline path strips a claim and can be left with nothing — the

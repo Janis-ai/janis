@@ -161,7 +161,7 @@
   // emphasis never split.
   var BULLET_LEAD = /^(?:[-*•])\s+/;
   var NUM_LEAD = /^\d+[.)]\s+/;
-  var INLINE_BULLET = / [*-] (?=\*\*)/g;
+  var INLINE_BULLET = / (?:(?:[*-])|(?:\d+[.)])) (?=\*\*)/g;
   function appendBlocks(bubble, text) {
     var list = null;
     var ordered = false;
@@ -193,8 +193,8 @@
         });
         return;
       }
-      var inline = (t.match(INLINE_BULLET) || []).length;
-      if (inline >= 2) {
+      var marks = t.match(INLINE_BULLET) || [];
+      if (marks.length >= 2) {
         var parts = t.split(INLINE_BULLET);
         var lead = parts[0].trim();
         if (lead) {
@@ -202,7 +202,7 @@
           appendRich(p, lead);
           bubble.appendChild(p);
         }
-        list = el('ul', {}, { class: 'janis-wlist' });
+        list = el(/\d/.test(marks[0]) ? 'ol' : 'ul', {}, { class: 'janis-wlist' });
         bubble.appendChild(list);
         parts.slice(1).forEach(function (item) {
           var li = el('li');

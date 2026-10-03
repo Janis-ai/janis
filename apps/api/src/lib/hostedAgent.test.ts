@@ -324,6 +324,21 @@ describe('stripEscalationClaims', () => {
       expect(stripEscalationClaims(s).stripped).toBe(0);
     }
   });
+
+  it('preserves line breaks when nothing is stripped', () => {
+    // Regression: the old join(' ') flattened every plain reply's newlines,
+    // undoing the model's lists AND unwrapInlineLists' output.
+    const list = 'Options:\n- **Free**: $0/mo\n- **Pro**: $99/mo\n\nPick one?';
+    expect(stripEscalationClaims(list)).toEqual({ text: list, stripped: 0 });
+  });
+
+  it('strips a claim on one line without flattening the rest', () => {
+    const r = stripEscalationClaims(
+      'Here are your plans:\n- Free\n- Pro\nI will connect you with a human teammate now.',
+    );
+    expect(r.stripped).toBe(1);
+    expect(r.text).toBe('Here are your plans:\n- Free\n- Pro');
+  });
 });
 
 describe('claimsAction / stripActionClaims', () => {
@@ -981,5 +996,11 @@ describe('unwrapInlineLists', () => {
     expect(unwrapInlineLists('Items:\n- **A** one\n- **B** two')).toBe(
       'Items:\n- **A** one\n- **B** two',
     );
+  });
+
+  it('unwraps an inline numbered run and keeps the numbering', () => {
+    expect(
+      unwrapInlineLists('Three ways: 1. **Gaps:** review them 2. **Forms:** finalize 3. **Stats:** pull them'),
+    ).toBe('Three ways:\n1. **Gaps:** review them\n2. **Forms:** finalize\n3. **Stats:** pull them');
   });
 });

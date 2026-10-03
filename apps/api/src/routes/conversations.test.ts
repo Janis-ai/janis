@@ -557,3 +557,12 @@ describe('reports drill-down filters', () => {
     expect(await ids('intent=shipping')).toContain(arc.id);
   });
 });
+
+describe('attention-count', () => {
+  it('rejects a non-uuid agent_id with 400, not a pg-cast 500', async () => {
+    const res = await app.request('/api/conversations/attention-count?agent_id=acme-returns', {
+      headers: { cookie: adminCookie },
+    });
+    expect(res.status).toBe(400);
+  });
+});
