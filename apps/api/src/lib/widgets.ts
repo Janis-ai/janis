@@ -413,23 +413,38 @@ function widgetItemKeys(w: WidgetComponent): string[] {
 
 /**
  * A widget-bound tool already renders its result deterministically — a
- * model that *also* emits a WIDGET: line for the same data produces two
- * identical card rows. Drop a model component when most of its items
- * duplicate a tool-rendered component's (model transcription can truncate,
- * so ≥60% overlap counts, not an exact-set match).
+ * model that *also* emits a WIDGET: line for the same data produces a
+ * second row repeating some or all of it. Dedupe per item: cards/options
+ * lose just the items a tool already rendered (the model's own additions
+ * still show); structured components (form/status/receipt) can't lose
+ * pieces without looking broken, so they drop whole when mostly repeated.
  */
 export function dedupeToolWidgets(
   toolWidgets: WidgetComponent[],
   modelWidgets: WidgetComponent[],
 ): WidgetComponent[] {
   if (!toolWidgets.length || !modelWidgets.length) return modelWidgets;
-  const toolKeys = toolWidgets.map((t) => ({ type: t.type, keys: new Set(widgetItemKeys(t)) }));
-  return modelWidgets.filter((m) => {
+  const toolKeysByType = new Map<string, Set<string>>();
+  for (const t of toolWidgets) {
+    const keys = toolKeysByType.get(t.type) ?? new Set<string>();
+    for (const k of widgetItemKeys(t)) keys.add(k);
+    toolKeysByType.set(t.type, keys);
+  }
+  const result: WidgetComponent[] = [];
+  for (const m of modelWidgets) {
+    const toolKeys = toolKeysByType.get(m.type);
+    if (!toolKeys) {
+      result.push(m);
+      continue;
+    }
     const mine = widgetItemKeys(m);
-    return !toolKeys.some(
-      (t) =>
-        t.type === m.type &&
-        mine.filter((k) => t.keys.has(k)).length >= Math.ceil(mine.length * 0.6),
-    );
-  });
+    if (m.type === 'cards' || m.type === 'options') {
+      const items = m.items.filter((_, i) => !toolKeys.has(mine[i]));
+      if (items.length) result.push({ ...m, items } as WidgetComponent);
+      continue; // fully restated — the tool row already says it
+    }
+    if (mine.filter((k) => toolKeys.has(k)).length < Math.ceil(mine.length * 0.6))
+      result.push(m);
+  }
+  return result;
 }

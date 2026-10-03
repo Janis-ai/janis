@@ -289,6 +289,22 @@ describe('dedupeToolWidgets', () => {
     expect(dedupeToolWidgets([toolCards], [modelCards])).toEqual([]);
   });
 
+  it('strips only the duplicate items from a partially-overlapping row', () => {
+    const mixed = {
+      type: 'cards' as const,
+      items: [
+        { title: 'Tenth Stair', link: 'https://music.apple.com/a' }, // dup
+        { title: 'A Different Song', link: 'https://music.apple.com/x' },
+      ],
+    };
+    expect(dedupeToolWidgets([toolCards], [mixed])).toEqual([
+      {
+        type: 'cards',
+        items: [{ title: 'A Different Song', link: 'https://music.apple.com/x' }],
+      },
+    ]);
+  });
+
   it('keeps components with genuinely different items', () => {
     const other = {
       type: 'cards' as const,
