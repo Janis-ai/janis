@@ -42,9 +42,8 @@ const HOSTED_ONLY: Section[] = ['knowledge', 'integrations', 'components', 'test
 const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: boolean }[]>> = {
   behavior: [
     { key: 'llm', label: 'Language model', hosted: true },
+    { key: 'instructions', label: 'Instructions', hosted: true },
     { key: 'greeting', label: 'Greeting' },
-    { key: 'prompt', label: 'System prompt', hosted: true },
-    { key: 'tone', label: 'Tone', hosted: true },
     { key: 'satisfaction', label: 'Satisfaction survey' },
   ],
   knowledge: [
@@ -105,7 +104,9 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
   const [params, setParams] = useSearchParams();
   const subs = (SUB_TABS[section] ?? []).filter((s) => agent.hosted || !s.hosted);
   const subParam = params.get('sub');
-  const sub = subs.some((s) => s.key === subParam) ? subParam! : (subs[0]?.key ?? '');
+  // Legacy deep-links: prompt/tone merged into Instructions.
+  const subKey = subParam === 'prompt' || subParam === 'tone' ? 'instructions' : subParam;
+  const sub = subs.some((s) => s.key === subKey) ? subKey! : (subs[0]?.key ?? '');
   const setSub = (s: string) =>
     setParams((prev) => {
       const p = new URLSearchParams(prev);
@@ -325,14 +326,11 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
           {sub === 'llm' && agent.hosted && (
             <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
+          {sub === 'instructions' && agent.hosted && (
+            <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+          )}
           {sub === 'greeting' && (
             <GreetingSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
-          )}
-          {sub === 'prompt' && agent.hosted && (
-            <PromptSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
-          )}
-          {sub === 'tone' && agent.hosted && (
-            <ToneSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
           {sub === 'satisfaction' && (
             <SatisfactionSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
@@ -726,7 +724,8 @@ function GreetingSection({
   );
 }
 
-function PromptSection({
+/** Instructions — the system prompt plus the tone override, one card. */
+function InstructionsSection({
   cfg,
   setCfg,
   isAdmin,
@@ -737,7 +736,7 @@ function PromptSection({
 }) {
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, flex: 1 }}>
-      <strong>System prompt</strong>
+      <strong>Instructions</strong>
       <ReadOnly off={!isAdmin}>
       <label>
         Who the agent is, what it covers, and the rules it follows — persona,
@@ -751,24 +750,7 @@ function PromptSection({
         value={cfg.system_prompt ?? ''}
         onChange={(e) => setCfg({ ...cfg, system_prompt: e.target.value })}
       />
-      </ReadOnly>
-    </div>
-  );
-}
-
-function ToneSection({
-  cfg,
-  setCfg,
-  isAdmin,
-}: {
-  cfg: AgentConfig;
-  setCfg: (c: AgentConfig) => void;
-  isAdmin: boolean;
-}) {
-  return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-      <strong>Tone</strong>
-      <ReadOnly off={!isAdmin}>
+      <label>Tone</label>
       <textarea
         rows={3}
         placeholder="e.g. warm, concise, never apologetic"
