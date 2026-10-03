@@ -214,6 +214,16 @@ export async function runScheduledEval(
       },
       { agentId: agent.id, event: 'eval' },
     );
+    // Triage runs on the jobs path — classify + verify is LLM work that
+    // doesn't belong inline in the eval job. Only flips get triaged (a pure
+    // rate drop or unrunnable suite has nothing mechanical to propose).
+    if (regression.flips.length) {
+      await enqueueJob(db, {
+        workspaceId: agent.workspaceId,
+        type: 'eval.triage',
+        payload: { agentId: agent.id, batchId },
+      });
+    }
   }
   bus.publish(agent.workspaceId, {
     type: 'eval',

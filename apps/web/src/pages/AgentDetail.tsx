@@ -2858,6 +2858,28 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
         }[];
       }>(`/api/agents/${agentId}/test-suggestions`),
   });
+  // Regression triage — after a scheduled suite regresses, the eval.triage
+  // job classifies each flip and drafts a fix; verified ones replayed the
+  // whole suite against the candidate and greened it without breakage.
+  const { data: evalSugData } = useQuery({
+    queryKey: ['eval-suggestions', agentId],
+    queryFn: () =>
+      api<{
+        suggestions: {
+          id: string;
+          test_id: string | null;
+          test_name: string | null;
+          kind: 'knowledge_gap' | 'prompt_drift' | 'test_stale' | 'hypothesis';
+          summary: string;
+          patch:
+            | { type: 'knowledge'; entry: string }
+            | { type: 'system_prompt'; append: string }
+            | { type: 'expectation'; test_id: string; expectation: string }
+            | null;
+          verified: { pass_rate: number | null; baseline_rate: number | null; broke: number } | null;
+        }[];
+      }>(`/api/agents/${agentId}/eval-suggestions`),
+  });
   const [running, setRunning] = useState<string | 'all' | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
@@ -3014,11 +3036,23 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     onError: (e) => setErr(e.message),
   });
 
+  const decideEvalSug = useMutation({
+    mutationFn: (b: { id: string; action: 'apply' | 'dismiss' }) =>
+      api(`/api/agents/${agentId}/eval-suggestions/${b.id}/${b.action}`, { method: 'POST' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['eval-suggestions', agentId] });
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
+    },
+    onError: (e) => setErr(e.message),
+  });
+
   const tests = data?.tests ?? [];
   const passed = tests.filter((t) => t.last_run?.passed === true).length;
   const failed = tests.filter((t) => t.last_run?.passed === false).length;
   const batches = runsData?.batches ?? [];
   const suggestions = suggestionsData?.suggestions ?? [];
+  const evalSuggestions = evalSugData?.suggestions ?? [];
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
@@ -3084,6 +3118,101 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           </span>
         )}
       </div>
+      {evalSuggestions.length > 0 && (
+        <div className="card" style={{ padding: '12px 16px' }}>
+          <div className="section-label" style={{ marginBottom: 4 }}>
+            Suggested fixes — drafted from the last regressed suite run
+          </div>
+          {evalSuggestions.map((s) => {
+            const KIND_LABEL: Record<string, string> = {
+              knowledge_gap: 'knowledge gap',
+              prompt_drift: 'prompt fix',
+              test_stale: 'stale test',
+              hypothesis: 'hypothesis',
+            };
+            const patchPreview =
+              s.patch?.type === 'knowledge'
+                ? `+ Knowledge: ${s.patch.entry}`
+                : s.patch?.type === 'system_prompt'
+                  ? `+ Prompt: ${s.patch.append}`
+                  : s.patch?.type === 'expectation'
+                    ? `Expectation → ${s.patch.expectation}`
+                    : null;
+            const pct = (v: number | null) =>
+              v === null ? '—' : `${Math.round(v * 100)}%`;
+            return (
+              <div
+                key={s.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '8px 0',
+                  borderBottom: '1px solid var(--border)',
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500 }}>
+                    <span
+                      className="muted"
+                      style={{
+                        fontSize: 11,
+                        textTransform: 'uppercase',
+                        letterSpacing: 0.4,
+                        marginRight: 6,
+                      }}
+                    >
+                      {KIND_LABEL[s.kind] ?? s.kind}
+                    </span>
+                    {s.test_name ? `${s.test_name} — ` : ''}
+                    {s.summary}
+                  </div>
+                  <div
+                    className="muted"
+                    style={{
+                      fontSize: 12,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {s.verified ? (
+                      <span style={{ color: 'var(--accent)' }}>
+                        {s.kind === 'test_stale'
+                          ? 'verified — the stored reply passes under this expectation'
+                          : `verified — suite passes ${pct(s.verified.pass_rate)} (was ${pct(s.verified.baseline_rate)}), no breakage`}
+                      </span>
+                    ) : s.patch ? (
+                      <span style={{ color: 'var(--danger)' }}>unverified — replayed but didn't hold</span>
+                    ) : (
+                      'hypothesis — needs a human look'
+                    )}
+                    {patchPreview ? ` · ${patchPreview}` : ''}
+                  </div>
+                </div>
+                <ReadOnly off={!isAdmin}>
+                  {s.patch && (
+                    <button
+                      className="btn sm"
+                      onClick={() => decideEvalSug.mutate({ id: s.id, action: 'apply' })}
+                      disabled={decideEvalSug.isPending}
+                    >
+                      {s.verified ? 'Apply fix' : 'Apply anyway'}
+                    </button>
+                  )}
+                  <button
+                    className="btn ghost sm"
+                    onClick={() => decideEvalSug.mutate({ id: s.id, action: 'dismiss' })}
+                    disabled={decideEvalSug.isPending}
+                  >
+                    dismiss
+                  </button>
+                </ReadOnly>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {suggestions.length > 0 && (
         <div className="card" style={{ padding: '12px 16px' }}>
           <div className="section-label" style={{ marginBottom: 4 }}>

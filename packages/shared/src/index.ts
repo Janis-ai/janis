@@ -799,9 +799,15 @@ export const StreamEvent = z.discriminatedUnion('type', [
   }),
   // An eval-suite batch completed — the tests tab refreshes its run history.
   // regressed means the workspace was also alerted (push/email + janis.alert log).
+  // triaged means the eval.triage job wrote suggestion rows to review.
   z.object({
     type: z.literal('eval'),
-    data: z.object({ agent_id: z.string(), batch_id: z.string(), regressed: z.boolean() }),
+    data: z.object({
+      agent_id: z.string(),
+      batch_id: z.string(),
+      regressed: z.boolean().optional(),
+      triaged: z.boolean().optional(),
+    }),
   }),
   // An agent's config changed out-of-band (concierge teach_agent/create_agent)
   // — open agent pages refetch so the KB and gap views aren't stale.

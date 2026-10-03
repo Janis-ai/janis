@@ -235,6 +235,14 @@ const HANDLERS: Record<
       db.update(jobs).set({ runAt: new Date() }).where(eq(jobs.id, job.id)),
     );
   },
+  'eval.triage': async (db, ws, p, job) => {
+    const { agentId, batchId } = p as { agentId?: string; batchId?: string };
+    if (!agentId || !batchId) throw new Error('eval.triage job missing agentId/batchId');
+    const { triageRegression } = await import('./evalTriage.js');
+    await triageRegression(db, ws, agentId, batchId, () =>
+      db.update(jobs).set({ runAt: new Date() }).where(eq(jobs.id, job.id)),
+    );
+  },
 };
 
 const MAX_ATTEMPTS = 5;

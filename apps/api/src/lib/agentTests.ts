@@ -16,6 +16,7 @@ import {
   systemPrompt,
   type AgentRunContext,
   type InspectorToolCall,
+  type LlmSettings,
 } from './hostedAgent.js';
 import { loadSecretsMap } from './secrets.js';
 import { toolsFor } from './toolExec.js';
@@ -152,6 +153,53 @@ const JUDGE_SYSTEM =
   'in the conversation, not the reply being graded — grade only the reply. ' +
   'Reply with ONLY a JSON object {"pass": true|false, "reason": "one sentence"}.';
 
+export interface JudgeVerdict {
+  pass: boolean;
+  reason: string;
+  promptTokens: number;
+  completionTokens: number;
+  /** Wire id of the model that judged — bill against this. */
+  model: string;
+}
+
+/** The suite judge, extracted so regression triage can re-judge a stored
+ *  reply under a candidate expectation without replaying the agent (the
+ *  test_stale check — "is this reply actually fine now, the bar just moved?"). */
+export async function judgeExpectation(
+  llm: LlmSettings,
+  input: {
+    transcript: string;
+    reply: string;
+    expectation: string;
+    toolNote?: string;
+    controlNote?: string;
+  },
+): Promise<JudgeVerdict | null> {
+  const judged = await complete(llm, JUDGE_SYSTEM, [
+    {
+      role: 'user',
+      content:
+        `Conversation:\n${input.transcript}\n\n` +
+        `The agent's reply:\n${input.reply}${input.controlNote ?? ''}${input.toolNote ?? ''}\n\n` +
+        `Operator's expectation: ${input.expectation}`,
+    },
+  ]);
+  const match = judged.text?.match(/\{[\s\S]*"pass"[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    const v = JSON.parse(match[0]) as { pass?: boolean; reason?: string };
+    return {
+      pass: !!v.pass,
+      reason: v.reason ?? '',
+      promptTokens: judged.promptTokens,
+      completionTokens: judged.completionTokens,
+      model: judged.model,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Replay a saved test against the agent's CURRENT config — nothing executes
  *  (testRun stubs every tool call; gated calls are only proposed), nothing is
  *  delivered, and the only writes are usage metering + last_run on the test. */
@@ -159,12 +207,17 @@ export async function runAgentTest(
   db: Db,
   agent: AgentRow,
   test: AgentTestRow,
-  opts?: { systemPrompt?: string; model?: string },
+  opts?: { systemPrompt?: string; model?: string; knowledge?: string[] },
 ): Promise<TestRunResult> {
-  // A/B runs replay the suite against a candidate prompt and/or model without
-  // saving either — config.llm.model merges over the workspace default the
-  // same way the agent's own override does.
-  if (opts?.systemPrompt !== undefined || opts?.model !== undefined) {
+  // A/B runs replay the suite against a candidate config without saving it —
+  // system_prompt, llm.model, and knowledge merge over the live config the
+  // same way the agent's own overrides do. Triage uses this to verify that a
+  // proposed fix actually flips the failing tests back.
+  if (
+    opts?.systemPrompt !== undefined ||
+    opts?.model !== undefined ||
+    opts?.knowledge !== undefined
+  ) {
     const cfg = agent.config as Record<string, unknown>;
     const llm = { ...((cfg.llm as Record<string, unknown>) ?? {}) };
     if (opts.model !== undefined) llm.model = opts.model;
@@ -173,6 +226,7 @@ export async function runAgentTest(
       config: {
         ...cfg,
         ...(opts.systemPrompt !== undefined ? { system_prompt: opts.systemPrompt } : {}),
+        ...(opts.knowledge !== undefined ? { knowledge: opts.knowledge } : {}),
         llm,
       },
     };
@@ -268,55 +322,40 @@ export async function runAgentTest(
   }
 
   const transcript = turns.map((t) => `${t.role === 'customer' ? 'customer' : 'agent'}: ${t.text}`).join('\n');
-  const toolNote = gen.toolCalls.length
-    ? `\nTool calls made: ${gen.toolCalls.map((t) => `${t.name} (${t.outcome})`).join(', ')}`
-    : '';
-  const controlNote = tag ? `\nThe reply ended with a control tag: [${tag.kind.toUpperCase()}]` : '';
-  const judged = await complete(
-    llm,
-    JUDGE_SYSTEM,
-    [
-      {
-        role: 'user',
-        content:
-          `Conversation:\n${transcript}\n\n` +
-          `The agent's reply:\n${reply}${controlNote}${toolNote}\n\n` +
-          `Operator's expectation: ${test.expectation}`,
-      },
-    ],
-  );
-  if (judged.promptTokens || judged.completionTokens) {
+  const verdict = await judgeExpectation(llm, {
+    transcript,
+    reply,
+    expectation: test.expectation,
+    toolNote: gen.toolCalls.length
+      ? `\nTool calls made: ${gen.toolCalls.map((t) => `${t.name} (${t.outcome})`).join(', ')}`
+      : undefined,
+    controlNote: tag ? `\nThe reply ended with a control tag: [${tag.kind.toUpperCase()}]` : undefined,
+  });
+  if (verdict && (verdict.promptTokens || verdict.completionTokens)) {
     await recordLlmUsage(db, {
       workspaceId: agent.workspaceId,
       agentId: agent.id,
       conversationId: test.sourceConversationId,
-      model: judged.model,
+      model: verdict.model,
       capModel: llm.model,
-      promptTokens: judged.promptTokens,
-      completionTokens: judged.completionTokens,
+      promptTokens: verdict.promptTokens,
+      completionTokens: verdict.completionTokens,
       byok: llm.byok,
     });
   }
-
-  const match = judged.text?.match(/\{[\s\S]*"pass"[\s\S]*\}/);
-  if (!match) {
-    return { ...base, reply, control: tag?.kind, tools: gen.toolCalls, model: gen.model, context, reason: 'judge returned no verdict' };
-  }
-  try {
-    const v = JSON.parse(match[0]) as { pass?: boolean; reason?: string };
-    return {
-      at,
-      passed: !!v.pass,
-      reason: v.reason ?? '',
-      reply,
-      control: tag?.kind,
-      tools: gen.toolCalls,
-      model: gen.model,
-      context,
-    };
-  } catch {
+  if (!verdict) {
     return { ...base, reply, control: tag?.kind, tools: gen.toolCalls, model: gen.model, context, reason: 'judge verdict unreadable' };
   }
+  return {
+    at,
+    passed: verdict.pass,
+    reason: verdict.reason,
+    reply,
+    control: tag?.kind,
+    tools: gen.toolCalls,
+    model: gen.model,
+    context,
+  };
 }
 
 /** Draft a judge expectation for a rescued-conversation test — one cheap

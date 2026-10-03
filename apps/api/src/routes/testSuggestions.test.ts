@@ -9,6 +9,7 @@ import * as schema from '../db/schema.js';
 import {
   agentTests,
   agents,
+  evalSuggestions,
   conversations,
   memberships,
   messages,
@@ -194,5 +195,75 @@ describe('POST /:id/tests from a rescued conversation', () => {
     const { test } = await patch.json();
     expect(test.expectation).toBe('Reviewed expectation');
     expect(test.expectation_draft).toBe(false);
+  });
+});
+
+describe('eval-suggestions routes', () => {
+  const wsId = async () =>
+    (await db.select({ wid: agents.workspaceId }).from(agents).where(eq(agents.id, agentId)))[0].wid;
+
+  const mkSuggestion = async (over: Partial<typeof evalSuggestions.$inferInsert> = {}) => {
+    const [s] = await db
+      .insert(evalSuggestions)
+      .values({
+        workspaceId: await wsId(),
+        agentId,
+        batchId: crypto.randomUUID(),
+        kind: 'knowledge_gap',
+        summary: 'reply lacked the new price',
+        patch: { type: 'knowledge', entry: 'The Starter plan is $29/mo.' },
+        verified: { pass_rate: 1, baseline_rate: 0.5, broke: 0 },
+        ...over,
+      })
+      .returning();
+    return s;
+  };
+
+  it('lists pending suggestions, applies a patch, and dismisses', async () => {
+    const s = await mkSuggestion();
+    const hyp = await mkSuggestion({ kind: 'hypothesis', patch: null, verified: null });
+
+    const res = await app.request(`/api/agents/${agentId}/eval-suggestions`, { headers: { cookie } });
+    expect(res.status).toBe(200);
+    const { suggestions } = await res.json();
+    const ids = suggestions.map((x: { id: string }) => x.id);
+    expect(ids).toContain(s.id);
+    expect(ids).toContain(hyp.id);
+    expect(suggestions.find((x: { id: string }) => x.id === s.id).kind).toBe('knowledge_gap');
+
+    // hypothesis has no patch — apply 400s
+    const badApply = await app.request(
+      `/api/agents/${agentId}/eval-suggestions/${hyp.id}/apply`,
+      { method: 'POST', headers: { cookie } },
+    );
+    expect(badApply.status).toBe(400);
+
+    // knowledge patch applies to config.knowledge
+    const apply = await app.request(
+      `/api/agents/${agentId}/eval-suggestions/${s.id}/apply`,
+      { method: 'POST', headers: { cookie } },
+    );
+    expect(apply.status).toBe(200);
+    const [a] = await db.select().from(agents).where(eq(agents.id, agentId));
+    expect((a.config as { knowledge?: string[] }).knowledge).toContain('The Starter plan is $29/mo.');
+
+    // decided rows leave the pending list; re-deciding 404s
+    const res2 = await app.request(`/api/agents/${agentId}/eval-suggestions`, { headers: { cookie } });
+    const ids2 = (await res2.json()).suggestions.map((x: { id: string }) => x.id);
+    expect(ids2).not.toContain(s.id);
+    expect(
+      (await app.request(`/api/agents/${agentId}/eval-suggestions/${s.id}/apply`, {
+        method: 'POST',
+        headers: { cookie },
+      })).status,
+    ).toBe(404);
+
+    const dis = await app.request(
+      `/api/agents/${agentId}/eval-suggestions/${hyp.id}/dismiss`,
+      { method: 'POST', headers: { cookie } },
+    );
+    expect(dis.status).toBe(200);
+    const [row] = await db.select().from(evalSuggestions).where(eq(evalSuggestions.id, hyp.id));
+    expect(row.status).toBe('dismissed');
   });
 });

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { AgentConfig, friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, channelBindings, channels, conversations, evalSuggestions, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import { WidgetComponent, WidgetState, WidgetToolBinding } from '../lib/widgets.js';
 import { toolsFor } from '../lib/toolExec.js';
 import {
@@ -34,6 +34,7 @@ import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
 import { checkpointIndices, draftExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
+import { applySuggestion, type SuggestionPatch } from '../lib/evalTriage.js';
 import { randomUUID } from 'node:crypto';
 import { effectiveMeteredModel } from '../lib/llm.js';
 import { llmModelsResult } from '../lib/llmModels.js';
@@ -1844,6 +1845,81 @@ export function agentRoutes(db: Db) {
     }
     return c.json({ batches: [...batches.values()].slice(0, 30) });
   });
+
+  // Regression-triage suggestions — eval.triage classified a regressed batch's
+  // flips, drafted fixes, and verified the applicable ones by replaying the
+  // suite. The Tests tab lists pending rows; apply writes the patch to the
+  // agent config (knowledge append / prompt append / expectation rewrite).
+  app.get('/:id/eval-suggestions', agentMember, async (c) => {
+    const rows = await db
+      .select()
+      .from(evalSuggestions)
+      .where(
+        and(
+          eq(evalSuggestions.agentId, c.req.param('id')),
+          eq(evalSuggestions.status, 'pending'),
+        ),
+      )
+      .orderBy(desc(evalSuggestions.createdAt))
+      .limit(20);
+    const testNames = new Map(
+      (
+        await db
+          .select({ id: agentTests.id, name: agentTests.name })
+          .from(agentTests)
+          .where(eq(agentTests.agentId, c.req.param('id')))
+      ).map((t) => [t.id, t.name]),
+    );
+    return c.json({
+      suggestions: rows.map((r) => ({
+        id: r.id,
+        batch_id: r.batchId,
+        test_id: r.testId,
+        test_name: r.testId ? (testNames.get(r.testId) ?? null) : null,
+        kind: r.kind,
+        summary: r.summary,
+        patch: r.patch,
+        verified: r.verified,
+        created_at: r.createdAt.toISOString(),
+      })),
+    });
+  });
+
+  const decideSuggestion = (status: 'applied' | 'dismissed') =>
+    app.post('/:id/eval-suggestions/:sid/' + (status === 'applied' ? 'apply' : 'dismiss'), agentAdmin, async (c) => {
+      const agentId = c.req.param('id')!;
+      const [suggestion] = await db
+        .select()
+        .from(evalSuggestions)
+        .where(
+          and(
+            eq(evalSuggestions.id, c.req.param('sid')!),
+            eq(evalSuggestions.agentId, agentId),
+            eq(evalSuggestions.workspaceId, c.get('workspaceId')),
+          ),
+        )
+        .limit(1);
+      if (!suggestion || suggestion.status !== 'pending')
+        return c.json({ error: 'not found' }, 404);
+      if (status === 'applied') {
+        const [agent] = await db
+          .select()
+          .from(agents)
+          .where(eq(agents.id, agentId))
+          .limit(1);
+        if (!agent) return c.json({ error: 'not found' }, 404);
+        if (!suggestion.patch) return c.json({ error: 'nothing to apply — hypothesis only' }, 400);
+        const ok = await applySuggestion(db, agent, suggestion.patch as SuggestionPatch);
+        if (!ok) return c.json({ error: 'patch target no longer exists' }, 409);
+      }
+      await db
+        .update(evalSuggestions)
+        .set({ status })
+        .where(eq(evalSuggestions.id, suggestion.id));
+      return c.json({ ok: true });
+    });
+  decideSuggestion('applied');
+  decideSuggestion('dismissed');
 
   return app;
 }

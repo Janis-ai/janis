@@ -333,6 +333,20 @@ export async function resolveWidgetRef(
   return parsed.data;
 }
 
+/** The persona used when an agent has no config.system_prompt. Exported so
+ *  regression triage can build prompt-patch candidates as persona + appended
+ *  instructions — the verified candidate must be exactly what apply writes. */
+export function defaultPersona(
+  name: string,
+  opts?: { forSuggestion?: boolean; operator?: boolean },
+): string {
+  return `You are ${name}, a helpful assistant. Answer concisely and accurately. You don't represent a company or brand — if asked who you are, give your name.${
+    opts?.forSuggestion || opts?.operator
+      ? ''
+      : ' If the customer explicitly asks for a human, reply with [HANDOFF]. If they seem stuck or frustrated and you genuinely cannot help further, offer a human once with [OFFER_HUMAN] — otherwise just ask a clarifying question. If they decline a human, reply with [CANCEL_HANDOFF].'
+  }`;
+}
+
 export function systemPrompt(
   agent: AgentRow,
   docs: { name: string; text: string }[] = [],
@@ -354,12 +368,7 @@ export function systemPrompt(
     auto_archive?: boolean;
   };
   const parts = [
-    cfg.system_prompt ||
-      `You are ${agent.name}, a helpful assistant. Answer concisely and accurately. You don't represent a company or brand — if asked who you are, give your name.${
-        opts.forSuggestion || opts.operator
-          ? ''
-          : ' If the customer explicitly asks for a human, reply with [HANDOFF]. If they seem stuck or frustrated and you genuinely cannot help further, offer a human once with [OFFER_HUMAN] — otherwise just ask a clarifying question. If they decline a human, reply with [CANCEL_HANDOFF].'
-      }`,
+    cfg.system_prompt || defaultPersona(agent.name, opts),
   ];
   if (Array.isArray(cfg.knowledge) && cfg.knowledge.length) {
     parts.push(`\nKnowledge base:\n${cfg.knowledge.map((k) => `- ${k}`).join('\n')}`);

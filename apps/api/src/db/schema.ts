@@ -880,6 +880,40 @@ export const agentTestRuns = pgTable(
   ],
 );
 
+// Regression triage output — when a scheduled eval flips tests red, the
+// eval.triage job classifies each flip, drafts a fix, and VERIFIES it by
+// replaying the suite against the candidate config. patch carries the
+// apply payload ({type:'knowledge'|'system_prompt'|'expectation', ...});
+// verified carries {pass_rate, baseline_rate} — null means the candidate
+// didn't survive verification and the row is a hypothesis, not a fix.
+export const evalSuggestions = pgTable(
+  'eval_suggestions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    /** The scheduled batch that regressed — groups one triage pass. */
+    batchId: uuid('batch_id').notNull(),
+    /** The flipped test this fixes; null for suite-level notes. */
+    testId: uuid('test_id').references(() => agentTests.id, { onDelete: 'set null' }),
+    kind: text('kind', {
+      enum: ['knowledge_gap', 'prompt_drift', 'test_stale', 'hypothesis'],
+    }).notNull(),
+    summary: text('summary').notNull(),
+    patch: jsonb('patch'),
+    verified: jsonb('verified'),
+    status: text('status', { enum: ['pending', 'applied', 'dismissed'] })
+      .notNull()
+      .default('pending'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('eval_suggestions_agent').on(t.agentId, t.status)],
+);
+
 // Per-agent secrets (API keys for tool calls) — AES-256-GCM encrypted at rest.
 // Write-only via the API: values are never returned after creation.
 export const agentSecrets = pgTable(
