@@ -2398,12 +2398,18 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const agent = target.agent;
       const name = (args.name ?? '').trim().slice(0, 80) || 'Bubble';
       const wsChannels = await ctx.db
-        .select({ id: channels.id, name: channels.name })
+        .select({ id: channels.id, name: channels.name, credentials: channels.credentials })
         .from(channels)
         .where(and(eq(channels.agentId, agent.id), eq(channels.kind, 'webchat')));
-      if (wsChannels.length) {
+      // Internal test-chat channels ("Test — …") aren't customer-facing —
+      // they must not block a real Bubble from being created.
+      const existing = wsChannels.filter(
+        (c) => !((c.credentials ?? {}) as Record<string, unknown>).internal,
+      );
+      if (existing.length) {
         return JSON.stringify({
-          error: `${agent.name} already has a Bubble channel ("${wsChannels[0]?.name}") — rename or restyle it with update_channel, or link its page`,
+          error: `${agent.name} already has a Bubble channel ("${existing[0]?.name}") — rename or restyle it with update_channel`,
+          url: `${env.webOrigin}/agents/${agent.id}/channels/${existing[0]?.id}`,
         });
       }
       return parkConciergeAction(

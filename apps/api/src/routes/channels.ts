@@ -1,4 +1,4 @@
-import { Hono, type Context } from 'hono';
+import { Hono, type Context, type Next } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
@@ -199,6 +199,19 @@ export function channelApiRoutes(db: Db) {
       return c.json({ error: e.message ?? 'number search failed' }, 400);
     }
   });
+
+  // A non-uuid :id ("/channels/bubble" from an invented console link) hits
+  // the uuid cast as a 500 — reject early. Registered after /voice-numbers
+  // so that static route isn't caught as an id; SKIP covers any added later.
+  const STATIC_SEG = new Set(['voice-numbers']);
+  const idGuard = async (c: Context<SessionEnv>, next: Next) => {
+    const id = c.req.param('id') ?? '';
+    if (!STATIC_SEG.has(id) && !z.string().uuid().safeParse(id).success)
+      return c.json({ error: 'invalid channel id' }, 400);
+    await next();
+  };
+  app.use('/:id', idGuard);
+  app.use('/:id/*', idGuard);
 
   app.get('/:id', async (c) => {
     const [row] = await db

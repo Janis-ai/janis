@@ -125,7 +125,10 @@ describe('domain-check', () => {
     await patch(webchat2Id, { widget_domain: '' });
     const res = await req('GET', `/${webchat2Id}/domain-check`);
     expect((await res.json()).status).toBe('pending');
-    expect((await req('GET', '/nope/domain-check')).status).toBe(404);
+    // A real uuid that doesn't exist → 404; a non-uuid → 400 (id guard).
+    expect(
+      (await req('GET', '/00000000-0000-0000-0000-000000000000/domain-check')).status,
+    ).toBe(404);
   });
 
   it('reports live when the domain serves our health signature', async () => {
@@ -163,5 +166,22 @@ describe('webchat branding round-trip', () => {
     const body = (await res.json()) as { channel?: { meta?: { branding?: { radius?: number; accent?: string } } } };
     expect(body.channel?.meta?.branding?.radius).toBe(20);
     expect(body.channel?.meta?.branding?.accent).toBe('#5b21b6');
+  });
+});
+
+describe('channel id guard', () => {
+  it('GET /:id with a non-uuid returns 400 instead of a pg cast 500', async () => {
+    const res = await req('GET', '/bubble');
+    expect(res.status).toBe(400);
+  });
+
+  it('PATCH /:id with a non-uuid returns 400', async () => {
+    const res = await patch('not-a-channel', { name: 'x' });
+    expect(res.status).toBe(400);
+  });
+
+  it('subroutes reject a non-uuid channel id', async () => {
+    const res = await req('GET', '/bubble/domain-check');
+    expect(res.status).toBe(400);
   });
 });

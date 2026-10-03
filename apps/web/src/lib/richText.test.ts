@@ -143,7 +143,28 @@ describe('splitBlocks', () => {
   it('blank lines separate paragraphs', () => {
     expect(splitBlocks('first\n\nsecond')).toEqual([
       { kind: 'para', text: 'first' },
+      { kind: 'para', text: 'second', breakBefore: true },
+    ]);
+  });
+
+  it('marks paragraph breaks so renderers show a gap — "one.\n\nTwo" must not merge', () => {
+    expect(splitBlocks('select **Web Chat**.\n\nYou will see a script tag')).toEqual([
+      { kind: 'para', text: 'select **Web Chat**.' },
+      { kind: 'para', text: 'You will see a script tag', breakBefore: true },
+    ]);
+  });
+
+  it('single newlines are line breaks, not paragraph gaps', () => {
+    expect(splitBlocks('first\nsecond')).toEqual([
+      { kind: 'para', text: 'first' },
       { kind: 'para', text: 'second' },
+    ]);
+  });
+
+  it('a list after a blank line carries the gap, not its items', () => {
+    expect(splitBlocks('pick:\n\n- one\n- two')).toEqual([
+      { kind: 'para', text: 'pick:' },
+      { kind: 'list', items: ['one', 'two'], ordered: false, breakBefore: true },
     ]);
   });
 });

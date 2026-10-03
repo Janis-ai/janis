@@ -898,10 +898,16 @@ export default function ConversationPage() {
                 </div>
               )}
               {splitBlocks(m.text ?? '').map((blk, bi) => {
-                if (blk.kind !== 'list') return mdSpans(blk.text ?? '', bi);
+                const cls = blk.breakBefore ? ' md-gap' : '';
+                if (blk.kind !== 'list')
+                  return (
+                    <div key={bi} className={`md-para${cls}`}>
+                      {mdSpans(blk.text ?? '', bi)}
+                    </div>
+                  );
                 const Tag = blk.ordered ? 'ol' : 'ul';
                 return (
-                  <Tag key={bi} className="md-list">
+                  <Tag key={bi} className={`md-list${cls}`}>
                     {(blk.items ?? []).map((item, ii) => (
                       <li key={ii}>{mdSpans(item)}</li>
                     ))}

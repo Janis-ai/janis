@@ -30,6 +30,9 @@ export interface RichBlock {
   /** list */
   items?: string[];
   ordered?: boolean;
+  /** A blank line precedes this block — render a paragraph gap, not a bare
+   *  line break. */
+  breakBefore?: boolean;
 }
 
 const BULLET_LEAD = /^(?:[-*•])\s+/;
@@ -63,19 +66,33 @@ export function splitBlocks(text: string): RichBlock[] {
   const out: RichBlock[] = [];
   let items: string[] = [];
   let ordered = false;
+  // Blank lines are paragraph breaks — remember them so renderers can show
+  // a real gap instead of concatenating blocks inline (".You'll").
+  let gapNext = false;
+  let listGap = false;
   const flush = () => {
     if (items.length) {
       const tail = detachTail(items);
-      out.push({ kind: 'list', items, ordered });
+      const list: RichBlock = { kind: 'list', items, ordered };
+      if (listGap) list.breakBefore = true;
+      out.push(list);
       if (tail) out.push({ kind: 'para', text: tail });
     }
     items = [];
     ordered = false;
+    listGap = false;
+  };
+  const pushPara = (t: string) => {
+    const b: RichBlock = { kind: 'para', text: t };
+    if (gapNext) b.breakBefore = true;
+    gapNext = false;
+    out.push(b);
   };
   for (const raw of text.split('\n')) {
     const t = raw.trim();
     if (!t) {
       flush();
+      if (out.length) gapNext = true;
       continue;
     }
     if (BULLET_LEAD.test(t) || NUM_LEAD.test(t)) {
@@ -83,6 +100,10 @@ export function splitBlocks(text: string): RichBlock[] {
       // new list — keep markers consistent within one <ul>/<ol>.
       const isOrdered = NUM_LEAD.test(t);
       if (items.length && isOrdered !== ordered) flush();
+      if (!items.length) {
+        listGap = gapNext;
+        gapNext = false;
+      }
       ordered = isOrdered;
       // A bullet line may itself carry more inline bullets after it.
       items.push(...t.replace(BULLET_LEAD, '').replace(NUM_LEAD, '').split(INLINE_BULLET));
@@ -92,13 +113,17 @@ export function splitBlocks(text: string): RichBlock[] {
     if (inlineMarks.length >= 2) {
       const [lead, ...bullets] = t.split(INLINE_BULLET);
       flush();
-      if (lead.trim()) out.push({ kind: 'para', text: lead.trim() });
+      if (lead.trim()) pushPara(lead.trim());
+      if (!items.length) {
+        listGap = gapNext;
+        gapNext = false;
+      }
       ordered = /\d/.test(inlineMarks[0] ?? '');
       items.push(...bullets);
       continue;
     }
     flush();
-    out.push({ kind: 'para', text: t });
+    pushPara(t);
   }
   flush();
   return out;

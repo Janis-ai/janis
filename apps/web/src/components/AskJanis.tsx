@@ -163,11 +163,16 @@ function richText(text: string, onNav: (to: string) => void) {
  *  richText paragraph. */
 function richBlocks(text: string, onNav: (to: string) => void) {
   return splitBlocks(text).map((b, bi) => {
+    const cls = b.breakBefore ? ' md-gap' : '';
     if (b.kind !== 'list')
-      return <Fragment key={bi}>{richText(b.text ?? '', onNav)}</Fragment>;
+      return (
+        <div key={bi} className={`md-para${cls}`}>
+          {richText(b.text ?? '', onNav)}
+        </div>
+      );
     const Tag = b.ordered ? 'ol' : 'ul';
     return (
-      <Tag key={bi} className="md-list">
+      <Tag key={bi} className={`md-list${cls}`}>
         {(b.items ?? []).map((item, ii) => (
           <li key={ii}>{richText(item, onNav)}</li>
         ))}

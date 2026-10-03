@@ -261,7 +261,12 @@ async function resolveIdentity(
           traits.current_agent_id = sel?.id ?? '';
           if (agentRows.length) {
             const chans = await db
-              .select({ agentId: channels.agentId, kind: channels.kind })
+              .select({
+                agentId: channels.agentId,
+                kind: channels.kind,
+                id: channels.id,
+                credentials: channels.credentials,
+              })
               .from(channels)
               .where(
                 inArray(
@@ -269,10 +274,19 @@ async function resolveIdentity(
                   agentRows.map((a) => a.id),
                 ),
               );
+            // Internal test-chat channels aren't customer-facing — counting
+            // them makes the copilot claim agents "already have a Bubble".
+            // Ids ride along so console links (/agents/<agent-id>/channels/
+            // <channel-id>) can be built verbatim, not invented.
+            const pub = chans.filter(
+              (ch) => !(ch.credentials as ChannelCredentials).internal,
+            );
             traits.agents = agentRows
               .map((a) => {
-                const kinds = chans.filter((ch) => ch.agentId === a.id).map((ch) => ch.kind);
-                return kinds.length ? `${a.name} (${kinds.join(', ')})` : a.name;
+                const kinds = pub
+                  .filter((ch) => ch.agentId === a.id)
+                  .map((ch) => `${ch.kind}:${ch.id}`);
+                return `${a.name} <${a.id}>${kinds.length ? ` (${kinds.join(', ')})` : ''}`;
               })
               .join('; ');
           }

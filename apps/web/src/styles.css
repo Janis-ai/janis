@@ -405,6 +405,8 @@ button, input, select, textarea { font: inherit; }
 }
 .md-list { display: block; margin: 4px 0; padding-left: 20px; }
 .md-list li { margin: 2px 0; }
+.md-para { display: block; }
+.md-gap { margin-top: 8px; }
 /* Suggested replies mirrored in the transcript — dashed/muted so they read
    as "shown to the customer", never tappable here. */
 .transcript-qrs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
