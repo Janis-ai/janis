@@ -17,6 +17,9 @@
   // Console live-preview (the Bubble editor's iframe): auto-opens the panel,
   // chats as a stable preview visitor, and restyles live on postMessage.
   var PREVIEW = script.getAttribute('data-janis-preview') === '1';
+  // Hosted chat page (a channel's custom widget domain): the panel IS the
+  // page — full-viewport, no launcher, no teaser, cannot be closed.
+  var PAGE = script.getAttribute('data-janis-page') === '1';
   // Set by Janis.destroy() — the host SPA tore the widget down; stray timers
   // and document listeners must become inert instead of re-adding DOM.
   var destroyed = false;
@@ -261,6 +264,8 @@
     'transition:width .15s ease,height .15s ease}' +
     '#janis-panel.open{display:flex}' +
     '#janis-panel.expanded{width:min(680px,calc(100vw - 24px));height:min(760px,calc(100vh - 100px));right:12px;bottom:76px}' +
+    '#janis-panel.janis-page,#janis-panel.janis-page.expanded{inset:0;width:auto;max-width:none;' +
+    'height:auto;max-height:none;left:0;right:0;bottom:0;border-radius:0}' +
     '#janis-bubble.janis-left{left:20px;right:auto}' +
     '#janis-panel.janis-left{left:20px;right:auto}' +
     '#janis-panel.janis-left.expanded{left:12px;right:auto}' +
@@ -444,6 +449,10 @@
   var badgeEl = el('span', {}, { id: 'janis-badge' });
   bubble.appendChild(badgeEl);
   var panel = el('div', {}, { id: 'janis-panel' });
+  if (PAGE) {
+    panel.classList.add('janis-page');
+    bubble.style.display = 'none';
+  }
   panel.innerHTML =
     '<div id="janis-head"><div><span id="janis-title">Chat</span><small id="janis-sub"></small></div>' +
     '<button id="janis-menu-btn" aria-label="Chat options" title="Options">⋯</button>' +
@@ -474,6 +483,7 @@
   var emojiGrid = panel.querySelector('#janis-emoji');
   var fileInput = panel.querySelector('#janis-file');
   var expandBtn = panel.querySelector('#janis-expand');
+  if (PAGE) expandBtn.style.display = 'none';
   var sendBtn = panel.querySelector('#janis-send');
   var clipBtn = panel.querySelector('#janis-clip');
   var smileBtn = panel.querySelector('#janis-smile');
@@ -641,7 +651,7 @@
   var teaserEl = null;
   function hideTeaser() { if (teaserEl) { teaserEl.remove(); teaserEl = null; } }
   function maybeTeaser() {
-    if (destroyed || !panel.isConnected || teaserEl || state.open || state.lastTs ||
+    if (PAGE || destroyed || !panel.isConnected || teaserEl || state.open || state.lastTs ||
         state.unread > 0 || !state.config || state.config.proactive === false) return;
     try { if (sessionStorage.getItem(SS_TEASER)) return; } catch (e) {}
     var txt = state.config.teaser_text || state.config.greeting || 'Questions? Chat with us.';
@@ -1432,6 +1442,7 @@
   }
 
   function setOpen(open) {
+    if (PAGE && !open) return; // the page-mode panel is the surface — always open
     state.open = open;
     panel.classList.toggle('open', open);
     localStorage.setItem(LS_OPEN, open ? '1' : '0');
@@ -1953,6 +1964,6 @@
         applyCfg();
       });
     }
-    if (state.open) setOpen(true);
+    if (PAGE || state.open) setOpen(true); // page mode always opens
   }).catch(function () {});
 })();

@@ -1800,3 +1800,73 @@ describe('dictation transcribe', () => {
     expect(legacy.dictation_engine).toBe('llm');
   });
 });
+
+describe('widget custom domain', () => {
+  it('resolves a claimed host to its channel (and is not shadowed by /:token)', async () => {
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    await db
+      .update(channels)
+      .set({ credentials: { ...(ch.credentials as object), widget_domain: 'chat.acme.test' } })
+      .where(eq(channels.id, channelId));
+    try {
+      const res = await app.request('/chat/by-domain?host=chat.acme.test');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({ token: channelId, channel_name: 'Acme website', agent_name: 'Support Bot' });
+    } finally {
+      await db
+        .update(channels)
+        .set({ credentials: ch.credentials as never })
+        .where(eq(channels.id, channelId));
+    }
+  });
+
+  it('normalizes case/ports on ?host= and falls back to the Host header', async () => {
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    await db
+      .update(channels)
+      .set({ credentials: { ...(ch.credentials as object), widget_domain: 'chat.acme.test' } })
+      .where(eq(channels.id, channelId));
+    try {
+      expect((await app.request('/chat/by-domain?host=CHAT.acme.TEST:443')).status).toBe(200);
+      const res = await app.request('/chat/by-domain', {
+        headers: { host: 'chat.acme.test' },
+      });
+      expect(res.status).toBe(200);
+      expect((await res.json()).token).toBe(channelId);
+    } finally {
+      await db
+        .update(channels)
+        .set({ credentials: ch.credentials as never })
+        .where(eq(channels.id, channelId));
+    }
+  });
+
+  it('404s for unclaimed hosts and non-webchat claims', async () => {
+    expect((await app.request('/chat/by-domain?host=nope.test')).status).toBe(404);
+    const [meta] = await db
+      .insert(channels)
+      .values({
+        workspaceId: wsId,
+        agentId: (await db.select({ id: agents.id }).from(agents))[0].id,
+        kind: 'messenger',
+        name: 'Page',
+        credentials: { page_id: 'p', access_token: 't', widget_domain: 'chat.meta.test' },
+      })
+      .returning();
+    try {
+      expect((await app.request('/chat/by-domain?host=chat.meta.test')).status).toBe(404);
+    } finally {
+      await db.delete(channels).where(eq(channels.id, meta.id));
+    }
+  });
+
+  it('serves page mode for ?mode=full and the floating bubble otherwise', async () => {
+    const full = await app.request(`/chat/${channelId}/page?mode=full`);
+    expect(await full.text()).toContain('data-janis-page="1"');
+    const normal = await app.request(`/chat/${channelId}/page`);
+    const html = await normal.text();
+    expect(html).toContain('data-janis-preview="1"');
+    expect(html).not.toContain('data-janis-page');
+  });
+});

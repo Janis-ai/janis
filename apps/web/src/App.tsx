@@ -19,6 +19,7 @@ import Errors from './pages/Errors';
 import Billing from './pages/Billing';
 import Settings from './pages/Settings';
 import { HelpCenter, HelpArticle, HelpDomain } from './pages/HelpCenter';
+import { ChatDomain } from './pages/ChatDomain';
 import { Status } from './pages/Status';
 import { Contacts, ContactDetail } from './pages/Contacts';
 import Campaigns from './pages/Campaigns';
@@ -157,7 +158,7 @@ export default function App() {
       <PushDeepLink />
       <ErrorBoundary>
       <Routes>
-        <Route path="/" element={isAppHost() ? <Landing /> : <HelpDomain />} />
+        <Route path="/" element={isAppHost() ? <Landing /> : <ChatDomain />} />
         <Route path="/login" element={<Login />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/terms" element={<Terms />} />

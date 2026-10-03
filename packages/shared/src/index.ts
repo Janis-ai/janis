@@ -427,6 +427,9 @@ export const Channel = z.object({
     cf_connected: z.boolean().optional(),
     // email: upstream mailbox BCC'd on replies (auto-detected forward origin)
     mirror_address: z.string().optional(),
+    // webchat: claimed custom domain (chat.acme.com) — serves the hosted chat
+    // page + widget.js on that host once it reaches this app
+    widget_domain: z.string().optional(),
     // webchat widget appearance — display config only, never secrets
     branding: z
       .object({

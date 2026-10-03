@@ -239,6 +239,7 @@ export function ChannelCard({
               code={`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
             />
             <WebchatIdentity channel={ch} />
+            <WidgetDomainField channel={ch} />
           </div>
         );
         return (
@@ -638,6 +639,104 @@ Janis.identify({ id: user.id, name: user.name, email: user.email, sig,
       {msg && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
       {channel.meta.identity_secret && secret !== channel.meta.identity_secret && (
         <div className="muted" style={{ fontSize: 12 }}>unsaved changes — the bubble still uses the stored secret</div>
+      )}
+    </div>
+  );
+}
+
+/** Custom domain — claim chat.yoursite.com for the bubble. The hosted chat
+ *  page and widget.js answer on that host once DNS/proxying reaches the app;
+ *  the status line tracks pending → pointed → live. */
+function WidgetDomainField({ channel }: { channel: Channel }) {
+  const qc = useQueryClient();
+  const current = channel.meta.widget_domain ?? '';
+  const [draft, setDraft] = useState(current);
+  const [msg, setMsg] = useState('');
+  useEffect(() => setDraft(current), [current]);
+  const appHost = window.location.host;
+  const check = useQuery({
+    queryKey: ['widget-domain', channel.id, current],
+    queryFn: () =>
+      api<{ status: 'live' | 'pointed' | 'pending' }>(
+        `/api/channels/${channel.id}/domain-check`,
+      ),
+    enabled: Boolean(current),
+    refetchInterval: 30_000,
+  });
+  const save = useMutation({
+    mutationFn: (v: string) =>
+      api(`/api/channels/${channel.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ widget_domain: v }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+      void qc.invalidateQueries({ queryKey: ['widget-domain', channel.id] });
+      setMsg('');
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),
+  });
+  const status = check.data?.status;
+  return (
+    <div style={{ marginTop: 14 }}>
+      <strong style={{ fontSize: 13 }}>Custom domain</strong>
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+        Serve the chat on your own domain — visitors open{' '}
+        <span className="mono">chat.yoursite.com</span> for a hosted page, and
+        the embed script loads from your domain too. Create a CNAME at{' '}
+        <span className="mono">{appHost}</span> first, then save the domain here.
+      </div>
+      <div className="row" style={{ marginTop: 8 }}>
+        <input
+          className="grow mono"
+          placeholder="chat.yoursite.com"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button
+          className="btn"
+          disabled={save.isPending || draft.trim().toLowerCase() === current}
+          onClick={() => save.mutate(draft.trim().toLowerCase())}
+        >
+          Save
+        </button>
+        {current && (
+          <button
+            className="btn"
+            disabled={save.isPending}
+            onClick={() => {
+              setDraft('');
+              save.mutate('');
+            }}
+          >
+            Remove
+          </button>
+        )}
+      </div>
+      {msg && <div className="error" style={{ fontSize: 12 }}>{msg}</div>}
+      {current && status === 'live' && (
+        <>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+            Live — <a href={`https://${current}`} target="_blank" rel="noreferrer">open https://{current} ↗</a>
+          </div>
+          <CodeBlock
+            title="Branded embed — served from your domain"
+            code={`<script src="https://${current}/widget.js" data-janis-token="${channel.id}" async></script>`}
+          />
+        </>
+      )}
+      {current && status === 'pointed' && (
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+          DNS points at us — the domain is being set up on our side (routing + certificate, usually minutes).
+        </div>
+      )}
+      {current && (!status || status === 'pending') && (
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+          Not pointed yet — create a CNAME <span className="mono">{current} → {appHost}</span> with
+          your DNS provider. A proxied record works too (e.g. Cloudflare orange-cloud) — TLS then
+          terminates on their edge, no extra setup on ours.
+        </div>
       )}
     </div>
   );

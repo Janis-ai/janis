@@ -71,6 +71,9 @@ export interface ChannelCredentials {
   // webchat: console test-chat channel — works through the real /chat
   // pipeline but is hidden from the Integrations channel list
   internal?: boolean;
+  // webchat: claimed custom domain (chat.acme.com) — the hosted chat page and
+  // widget.js answer on that host once DNS/proxying reaches this app
+  widget_domain?: string;
   // email: readable per-channel reply address on the inbound domain
   // (e.g. acme-support@inbound.janis.ai) — used as From AND Reply-To so the
   // address customers see is the address that routes their reply back.
@@ -1716,6 +1719,7 @@ export async function setGetStartedButton(
 /** URL where a customer can open a chat with this channel's identity. */
 export function channelChatUrl(channel: ChannelRow): string | undefined {
   const c = channel.credentials as ChannelCredentials;
+  if (channel.kind === 'webchat' && c.widget_domain) return `https://${c.widget_domain}`;
   if (channel.kind === 'messenger' && c.page_id) return `https://m.me/${c.page_id}`;
   if (channel.kind === 'instagram' && c.username) return `https://ig.me/m/${c.username}`;
   if (channel.kind === 'whatsapp' && c.phone_number) return `https://wa.me/${c.phone_number}`;

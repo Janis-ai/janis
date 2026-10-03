@@ -346,6 +346,34 @@ async function findConversation(db: Db, channelId: string, visitorId: string) {
 export function webchatRoutes(db: Db) {
   const app = new Hono();
 
+  // Custom-domain resolution — chat.acme.com CNAME'd at this app calls here to
+  // learn which channel claimed the host. The channel id doubles as the public
+  // widget token (it ships in every embed snippet), so nothing new is exposed.
+  // Registered before /:token — 'by-domain' isn't a UUID and would 404 there.
+  app.get('/by-domain', async (c) => {
+    const host = (c.req.query('host') ?? c.req.header('host') ?? '')
+      .toLowerCase()
+      .replace(/:\d+$/, '');
+    if (!host) return c.json({ error: 'not found' }, 404);
+    const [channel] = await db
+      .select({ id: channels.id, name: channels.name, agentId: channels.agentId })
+      .from(channels)
+      .where(
+        and(
+          eq(channels.kind, 'webchat'),
+          sql`${channels.credentials}->>'widget_domain' = ${host}`,
+        ),
+      )
+      .limit(1);
+    if (!channel) return c.json({ error: 'not found' }, 404);
+    const [agent] = await db
+      .select({ name: agents.name })
+      .from(agents)
+      .where(eq(agents.id, channel.agentId))
+      .limit(1);
+    return c.json({ token: channel.id, channel_name: channel.name, agent_name: agent?.name ?? '' });
+  });
+
   // Widget bootstrap — display config only; credentials never leave the API.
   app.get('/:token', async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
@@ -444,15 +472,20 @@ export function webchatRoutes(db: Db) {
 
   // Console preview host page — a bare document embedding this channel's
   // widget. The Bubble editor iframes it so the live preview runs the real
-  // widget against the real pipeline, not a mock.
+  // widget against the real pipeline, not a mock. ?mode=full swaps the
+  // floating bubble for a page-filling messenger — the shareable "open chat"
+  // link and what a claimed widget domain serves.
   app.get('/:token/page', async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel || channel.kind !== 'webchat') return c.json({ error: 'not found' }, 404);
     c.header('cache-control', 'no-store');
+    const mode = c.req.query('mode') === 'full'
+      ? 'data-janis-page="1"'
+      : 'data-janis-preview="1"';
     return c.html(
       `<!doctype html><html><head><meta charset="utf-8">` +
         `<style>html,body{margin:0;background:transparent}</style></head><body>` +
-        `<script src="/widget.js" data-janis-token="${channel.id}" data-janis-preview="1" async><\/script>` +
+        `<script src="/widget.js" data-janis-token="${channel.id}" ${mode} async><\/script>` +
         `</body></html>`,
     );
   });

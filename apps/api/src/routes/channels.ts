@@ -13,7 +13,7 @@ import {
   verifyResendDomain,
 } from '../lib/resendDomains.js';
 import { detectDnsSetup } from '../lib/dnsSetup.js';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
@@ -138,6 +138,19 @@ const patchChannel = z.object({
   // meta channels: mint a fresh webhook verify token (backfills channels
   // created before auto-generation)
   regenerate_verify_token: z.literal(true).optional(),
+  // webchat: claim a custom domain (chat.acme.com) — the hosted chat page +
+  // widget.js answer on that host once it reaches this app; '' clears
+  widget_domain: z
+    .string()
+    .max(253)
+    .transform((v) => v.trim().toLowerCase())
+    .pipe(
+      z
+        .string()
+        .regex(/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/, 'must be a domain like chat.acme.com')
+        .or(z.literal('')),
+    )
+    .optional(),
   // reassign which agent answers this channel
   agent_id: z.string().uuid().optional(),
 });
@@ -435,6 +448,9 @@ export function channelApiRoutes(db: Db) {
     ) {
       return c.json({ error: 'verify_token applies to meta channels' }, 400);
     }
+    if (body.widget_domain !== undefined && row.kind !== 'webchat') {
+      return c.json({ error: 'widget_domain applies to webchat channels' }, 400);
+    }
     if (body.agent_id) {
       const [target] = await db
         .select({ id: agents.id })
@@ -483,6 +499,26 @@ export function channelApiRoutes(db: Db) {
     }
     if (body.regenerate_verify_token) {
       creds.verify_token = randomBytes(16).toString('hex');
+    }
+    if (body.widget_domain !== undefined) {
+      const d = body.widget_domain; // schema already trims + lowercases
+      if (!d) delete creds.widget_domain;
+      else {
+        if (d === 'janis.ai' || d.endsWith('.janis.ai') || d.endsWith('.run.app'))
+          return c.json({ error: 'use your own domain — janis.ai hosts are reserved' }, 400);
+        const [clash] = await db
+          .select({ id: channels.id })
+          .from(channels)
+          .where(
+            and(
+              sql`${channels.credentials}->>'widget_domain' = ${d}`,
+              ne(channels.id, row.id),
+            ),
+          )
+          .limit(1);
+        if (clash) return c.json({ error: `${d} is claimed by another channel` }, 409);
+        creds.widget_domain = d;
+      }
     }
     if (body.email_filters !== undefined) {
       const f = body.email_filters;
@@ -554,6 +590,48 @@ export function channelApiRoutes(db: Db) {
     void setGetStartedButton(row.kind, creds).catch(() => {});
     const [agent] = await db.select({ name: agents.name }).from(agents).where(eq(agents.id, row.agentId)).limit(1);
     return c.json({ channel: toChannel(updated, agent?.name ?? '') });
+  });
+
+  // ── Custom domain (webchat Bubble) ──────────────────────────────────
+  // How far along the claim is:
+  //   live    — https://domain/health answers with this service's signature
+  //             (traffic actually reaches us — whatever route it took)
+  //   pointed — a CNAME exists aimed at a Janis/Google host, but the request
+  //             doesn't arrive yet (mapping/cert still pending, or propagating)
+  //   pending — nothing resolves to us
+  app.get('/:id/domain-check', async (c) => {
+    const id = c.req.param('id');
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return c.json({ error: 'not found' }, 404);
+    const [row] = await db
+      .select()
+      .from(channels)
+      .where(and(eq(channels.id, id), eq(channels.workspaceId, c.get('workspaceId'))))
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    const domain = (row.credentials as ChannelCredentials).widget_domain;
+    if (!domain) return c.json({ status: 'pending' });
+    try {
+      const res = await fetch(`https://${domain}/health`, { signal: AbortSignal.timeout(5000) });
+      const body = (await res.json().catch(() => null)) as { service?: string } | null;
+      if (res.ok && body?.service === 'janis-api') return c.json({ status: 'live' });
+    } catch {
+      // unreachable or wrong app — fall through to the DNS check
+    }
+    try {
+      const { resolveCname } = await import('node:dns/promises');
+      const targets = await resolveCname(domain);
+      const aimed = targets.some((t) => {
+        const h = t.toLowerCase().replace(/\.$/, '');
+        return (
+          h.endsWith('.janis.ai') || h === 'janis.ai' ||
+          h.endsWith('.run.app') || h.endsWith('.googlehosted.com')
+        );
+      });
+      if (aimed) return c.json({ status: 'pointed' });
+    } catch {
+      // no CNAME — proxied (A records only) or unconfigured
+    }
+    return c.json({ status: 'pending' });
   });
 
   // ── Custom sending domain (email channels, Resend-verified) ─────────
