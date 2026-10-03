@@ -337,6 +337,25 @@ export function conversationRoutes(db: Db) {
     const beforeDate = before && !Number.isNaN(Date.parse(before)) ? new Date(before) : null;
     const PAGE = 100;
 
+    // ?q=<text> — in-conversation search; matching rows newest-first so the
+    // console can offer jump-to hits via the ?msg=/around window below.
+    const q = (c.req.query('q') ?? '').trim();
+    if (q) {
+      const like = `%${q.replace(/[%_]/g, '')}%`;
+      const hits = await db
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, row.conversation.id),
+            sql`${messages.text} ilike ${like}`,
+          ),
+        )
+        .orderBy(desc(messages.createdAt))
+        .limit(50);
+      return c.json({ hits: hits.map(toMessage) });
+    }
+
     // Search-hit deep link — a window centered on a specific message so the
     // client can scroll straight to it instead of landing on the latest page.
     const around = c.req.query('around');

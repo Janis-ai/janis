@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_INTENTS } from '@janis/shared';
@@ -73,6 +73,8 @@ export default function ConversationPage() {
   const [draft, setDraft] = useState('');
   const [sendAs, setSendAs] = useState<'human' | 'agent' | 'note' | 'teach'>('human');
   const [error, setError] = useState('');
+  const [convQ, setConvQ] = useState('');
+  const [convHits, setConvHits] = useState<Message[] | null>(null);
   const qc = useQueryClient();
   const invalidate = useInvalidateConversations();
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -285,10 +287,19 @@ export default function ConversationPage() {
   // already in the loaded pages just scroll to it, otherwise fetch the
   // centered window and render that instead of the latest page.
   useEffect(() => {
-    if (!jumpMsg || !data) return;
+    if (!jumpMsg || !data) {
+      if (!jumpMsg) jumpedFor.current = '';
+      return;
+    }
     const key = `${id}:${jumpMsg}`;
     if (jumpedFor.current === key) return;
     jumpedFor.current = key;
+    // Consume the param immediately — jumping to the same message again (e.g.
+    // clicking the same search hit twice) needs the param absent so a fresh
+    // ?msg= re-triggers this effect.
+    const p = new URLSearchParams(searchParams);
+    p.delete('msg');
+    setSearchParams(p, { replace: true });
     if ([...older, ...data.messages].some((m) => m.id === jumpMsg)) {
       stickRef.current = false;
       setHighlight(jumpMsg);
@@ -306,6 +317,24 @@ export default function ConversationPage() {
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jumpMsg, data, id]);
+
+  // In-conversation search — server-side so unloaded transcript history hits
+  // too; results jump through the same ?msg=/around path as the global search.
+  useEffect(() => {
+    const q = convQ.trim();
+    if (q.length < 2) {
+      setConvHits(null);
+      return;
+    }
+    const t = setTimeout(() => {
+      void api<{ hits: Message[] }>(
+        `/api/conversations/${id}/messages?q=${encodeURIComponent(q)}`,
+      )
+        .then((d) => setConvHits(d.hits))
+        .catch(() => setConvHits([]));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [convQ, id]);
 
   // Center the target and flash it briefly once rendered.
   useLayoutEffect(() => {
@@ -634,11 +663,51 @@ export default function ConversationPage() {
     if (delivered) lastDeliveredIdx = i;
   });
 
+  const hitWho = (m: Message): string =>
+    m.direction === 'in'
+      ? c.user_profile.name ?? WHO.in
+      : m.direction === 'out'
+        ? agent?.name ?? WHO.out
+        : users?.users.find((u) => u.id === m.author)?.name ?? WHO.human;
+  const jumpToHit = (mid: string) => {
+    const p = new URLSearchParams(searchParams);
+    p.set('msg', mid);
+    setSearchParams(p, { replace: true });
+  };
+  const markHit = (text: string | null): ReactNode => {
+    const t = text ?? '';
+    const q = convQ.trim();
+    const idx = t.toLowerCase().indexOf(q.toLowerCase());
+    if (idx < 0) return t;
+    return (
+      <>
+        {t.slice(0, idx)}
+        <mark>{t.slice(idx, idx + q.length)}</mark>
+        {t.slice(idx + q.length)}
+      </>
+    );
+  };
+
   return (
     <div className="conv-layout">
       <div className="conv-main">
         <div className="row">
           <h1 className="page-title grow">{name}</h1>
+          <input
+            className="conv-search"
+            type="search"
+            placeholder="Search this conversation…"
+            aria-label="Search this conversation"
+            value={convQ}
+            onChange={(e) => setConvQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && convHits?.length) jumpToHit(convHits[0].id);
+              if (e.key === 'Escape') {
+                setConvQ('');
+                setConvHits(null);
+              }
+            }}
+          />
           {viewers.filter((v) => v.id !== me?.user.id).length > 0 && (
             <span
               className="muted"
@@ -709,6 +778,23 @@ export default function ConversationPage() {
           )}
           <StateBadge state={c.state} />
         </div>
+
+        {convHits !== null && convQ.trim().length >= 2 && (
+          <div className="card conv-search-results">
+            {convHits.length === 0 ? (
+              <div className="muted">No matches in this conversation.</div>
+            ) : (
+              convHits.map((h) => (
+                <button key={h.id} className="conv-search-hit" onClick={() => jumpToHit(h.id)}>
+                  <span className="conv-search-meta muted">
+                    {hitWho(h)} · {fmtTime(h.created_at)}
+                  </span>
+                  <span className="conv-search-text">{markHit(h.text)}</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
 
         {testSaveOpen && (
           <div className="card" style={{ marginTop: 8 }}>

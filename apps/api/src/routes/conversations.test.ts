@@ -270,6 +270,28 @@ describe('message windows', () => {
     expect(d.has_more).toBe(false);
   });
 
+  it('?q searches only this conversation, newest first', async () => {
+    const conv = await makeConversation('q-conv');
+    const other = await makeConversation('q-other');
+    const t0 = Date.now() - 10 * 60_000;
+    for (const [i, text] of ['plain', 'find me one', 'plain', 'find me two'].entries()) {
+      await db.insert(messages).values({
+        conversationId: conv.id,
+        direction: i % 2 ? 'out' : 'in',
+        text,
+        createdAt: new Date(t0 + i * 60_000),
+      });
+    }
+    await db
+      .insert(messages)
+      .values({ conversationId: other.id, direction: 'in', text: 'find me elsewhere' });
+
+    const res = await get(`/${conv.id}/messages?q=${encodeURIComponent('find me')}`);
+    expect(res.status).toBe(200);
+    const d = await res.json();
+    expect(d.hits.map((m: { text: string }) => m.text)).toEqual(['find me two', 'find me one']);
+  });
+
   it('?around 404s for a message in another conversation', async () => {
     const conv = await makeConversation('around-404');
     const [m] = await db
