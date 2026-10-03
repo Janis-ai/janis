@@ -213,7 +213,7 @@ describe('guardReplyLinks', () => {
     const r = await guardReplyLinks(
       'open https://app.janis.ai/conversations/a630324e25c74ec88677356739906aa3 now',
       blessed,
-      ids,
+      { ids },
     );
     expect(r.text).toBe('open now');
     expect(r.stripped).toEqual(['https://app.janis.ai/conversations/a630324e25c74ec88677356739906aa3']);
@@ -224,10 +224,36 @@ describe('guardReplyLinks', () => {
     const r = await guardReplyLinks(
       'see [the channel](https://app.janis.ai/agents/586895f3-8285-4a95-ae2d-b18f389d838d/channels/1fb291f8-c3f9-422d-bf3d-09766829efb6) ok',
       blessed,
-      ids,
+      { ids },
     );
     expect(r.text).toContain('/channels/1fb291f8-c3f9-422d-bf3d-09766829efb6');
     expect(r.stripped).toHaveLength(0);
+  });
+
+  it('strips a real-seeming id the resolver says is not a conversation', async () => {
+    // Prod incident: the concierge dropped the rail's visitor_id into a
+    // /conversations/ slot — a real uuid in context, but the wrong resource.
+    const exists = vi.fn(async (kind: string, id: string) =>
+      kind === 'conversation' ? false : true,
+    );
+    const r = await guardReplyLinks(
+      'see [the chat](https://app.janis.ai/conversations/a630324e-25c7-4ec8-8677-356739906aa3) ok',
+      blessed,
+      { exists },
+    );
+    expect(r.stripped).toEqual(['https://app.janis.ai/conversations/a630324e-25c7-4ec8-8677-356739906aa3']);
+    expect(exists).toHaveBeenCalledWith('conversation', 'a630324e-25c7-4ec8-8677-356739906aa3', undefined);
+  });
+
+  it('resolver keeps verified console links and checks the parent agent', async () => {
+    const exists = vi.fn(async () => true);
+    const r = await guardReplyLinks(
+      'open https://app.janis.ai/agents/586895f3-8285-4a95-ae2d-b18f389d838d/channels/1fb291f8-c3f9-422d-bf3d-09766829efb6',
+      blessed,
+      { exists },
+    );
+    expect(r.stripped).toHaveLength(0);
+    expect(exists).toHaveBeenCalledWith('channel', '1fb291f8-c3f9-422d-bf3d-09766829efb6', '586895f3-8285-4a95-ae2d-b18f389d838d');
   });
 
   it('unwraps markdown links emptied by a strip', async () => {

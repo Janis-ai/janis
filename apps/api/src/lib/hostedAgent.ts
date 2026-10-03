@@ -2,7 +2,7 @@ import { and, asc, desc, eq, gt, inArray, isNotNull, lte } from 'drizzle-orm';
 import { z } from 'zod';
 import type { OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentWidgets, alerts, channelBindings, channels, contactIdentities, conversations, helpArticles, knowledgeFiles, memberships, messages, users, workspaces } from '../db/schema.js';
+import { agents, agentWidgets, alerts, channelBindings, channels, contactIdentities, contacts, conversations, helpArticles, knowledgeFiles, memberships, messages, users, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage, llmSpendOverCap } from './usage.js';
@@ -601,30 +601,95 @@ function consoleHosts(): Set<string> {
   return hosts;
 }
 
-/** A console URL is a lie unless its path is a real route and every uuid
- *  segment is an id the model actually saw — fetch-checking can't judge an
- *  SPA (every path returns the shell's 200). Skeleton mirrors App.tsx. */
-function consolePathOk(pathname: string, ids?: Set<string>): boolean {
+type ConsoleSlot = { kind: 'conversation' | 'agent' | 'channel' | 'contact'; id: string; parent?: string };
+
+/** A console URL is a lie unless its path is a real route — fetch-checking
+ *  can't judge an SPA (every path returns the shell's 200). Returns the id
+ *  slots the path claims (to be verified), or null when the path matches no
+ *  route. Skeleton mirrors App.tsx. */
+function consoleSlots(pathname: string): ConsoleSlot[] | null {
   const segs = pathname.split('/').filter(Boolean).map((s) => s.toLowerCase());
   const isId = (s: string | undefined) =>
     !!s && /^[0-9a-f-]{32,36}$/i.test(s) && s.replace(/-/g, '').length === 32;
-  if (ids && !segs.every((s) => !isId(s) || ids.has(normId(s)))) return false;
   const [a, b, c, d] = segs;
-  if (!a) return true;
+  if (!a) return [];
   if (a === 'agents') {
-    if (b === undefined) return true;
-    if (!isId(b)) return false;
-    if (c === undefined) return true;
-    if (isId(c)) return false; // /agents/<id>/<id> is not a route
-    if (!AGENT_SUBS.has(c)) return false;
-    if (d === undefined) return true;
-    return segs.length === 4 && isId(d) && (c === 'inbox' || c === 'contacts' || c === 'channels');
+    if (b === undefined) return [];
+    if (!isId(b)) return null;
+    if (c === undefined) return [{ kind: 'agent', id: b }];
+    if (isId(c)) return null; // /agents/<id>/<id> is not a route
+    if (!AGENT_SUBS.has(c)) return null;
+    if (d === undefined) return [{ kind: 'agent', id: b }];
+    if (segs.length !== 4 || !isId(d)) return null;
+    const kind = c === 'inbox' ? 'conversation' : c === 'contacts' ? 'contact' : c === 'channels' ? 'channel' : null;
+    if (!kind) return null;
+    return [
+      { kind: 'agent', id: b },
+      { kind, id: d, parent: b },
+    ];
   }
-  if (a === 'conversations' || a === 'contacts' || a === 'integrations')
-    return b === undefined || (segs.length === 2 && isId(b));
-  if (a === 'help') return !!b && isId(b) && (segs.length === 2 || (segs.length === 3 && isId(c)));
-  if (a === 'llm') return b === 'callback' && segs.length === 2;
-  return CONSOLE_PAGES.has(a) && segs.length === 1;
+  if (a === 'conversations') return b !== undefined && segs.length === 2 && isId(b) ? [{ kind: 'conversation', id: b }] : b === undefined ? [] : null;
+  if (a === 'contacts') return b !== undefined && segs.length === 2 && isId(b) ? [{ kind: 'contact', id: b }] : b === undefined ? [] : null;
+  if (a === 'integrations') return b !== undefined && segs.length === 2 && isId(b) ? [{ kind: 'channel', id: b }] : b === undefined ? [] : null;
+  if (a === 'help') return b && isId(b) && (segs.length === 2 || (segs.length === 3 && isId(c))) ? [{ kind: 'agent', id: b }] : null;
+  if (a === 'llm') return b === 'callback' && segs.length === 2 ? [] : null;
+  return CONSOLE_PAGES.has(a) && segs.length === 1 ? [] : null;
+}
+
+/** DB-backed id verifier for console links — a uuid is only linkable in a
+ *  slot when a real row of that kind exists in the workspace (nested slots
+ *  must also belong to the claimed parent agent). */
+function consoleIdChecker(db: Db, workspaceId: string) {
+  return async (kind: ConsoleSlot['kind'], id: string, parent?: string): Promise<boolean> => {
+    try {
+      if (kind === 'agent') {
+        const r = await db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(and(eq(agents.id, id), eq(agents.workspaceId, workspaceId)))
+          .limit(1);
+        return r.length > 0;
+      }
+      if (kind === 'channel') {
+        const r = await db
+          .select({ id: channels.id })
+          .from(channels)
+          .where(
+            and(
+              eq(channels.id, id),
+              eq(channels.workspaceId, workspaceId),
+              ...(parent ? [eq(channels.agentId, parent)] : []),
+            ),
+          )
+          .limit(1);
+        return r.length > 0;
+      }
+      if (kind === 'contact') {
+        const r = await db
+          .select({ id: contacts.id })
+          .from(contacts)
+          .where(and(eq(contacts.id, id), eq(contacts.workspaceId, workspaceId)))
+          .limit(1);
+        return r.length > 0;
+      }
+      // conversation — workspace scope comes through its agent
+      const r = await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .innerJoin(agents, eq(conversations.agentId, agents.id))
+        .where(
+          and(
+            eq(conversations.id, id),
+            eq(agents.workspaceId, workspaceId),
+            ...(parent ? [eq(conversations.agentId, parent)] : []),
+          ),
+        )
+        .limit(1);
+      return r.length > 0;
+    } catch {
+      return false;
+    }
+  };
 }
 
 /** Output guard for generated replies. Per emitted URL:
@@ -639,7 +704,13 @@ function consolePathOk(pathname: string, ids?: Set<string>): boolean {
 export async function guardReplyLinks(
   text: string,
   blessedUrls: string[],
-  contextIds?: Set<string>,
+  check?: {
+    /** Ids (dash-normalized) the model saw in context — fallback verifier. */
+    ids?: Set<string>;
+    /** Authoritative verifier: does this id name a real row of this kind,
+     *  visible in the workspace (parent = owning agent for nested slots)? */
+    exists?: (kind: ConsoleSlot['kind'], id: string, parent?: string) => Promise<boolean>;
+  },
 ): Promise<LinkGuardResult> {
   const consoles = consoleHosts();
   const blessed: { origin: string; host: string; path: string }[] = [];
@@ -661,21 +732,35 @@ export async function guardReplyLinks(
   const repairTarget = (u: URL) =>
     blessed.find((b) => b.path === u.pathname) ?? (u.pathname === '/' ? blessed[0] : undefined);
 
-  // Pass 1: collect the unblessed, unrepairable URLs needing a fetch-check.
+  // Pass 1: console URLs get a structural verdict (route + real ids); the
+  // rest of the unblessed, unrepairable ones need a fetch-check.
   const toCheck = new Set<string>();
+  const consoleUrls = new Set<string>();
   for (const m of text.matchAll(LINK_RE)) {
     const clean = m[0].replace(TRAIL_PUNCT, '');
     try {
       const u = new URL(clean);
-      if (!consoles.has(u.host) && !isBlessed(u) && !repairTarget(u)) toCheck.add(clean);
+      if (consoles.has(u.host)) consoleUrls.add(clean);
+      else if (!isBlessed(u) && !repairTarget(u)) toCheck.add(clean);
     } catch {
       // unparseable — left as-is below
     }
   }
   const verdicts = new Map<string, LinkVerdict>();
-  await Promise.all(
-    [...toCheck].map(async (u) => verdicts.set(u, await checkUrl(u))),
-  );
+  await Promise.all([
+    ...[...toCheck].map(async (u) => verdicts.set(u, await checkUrl(u))),
+    ...[...consoleUrls].map(async (u) => {
+      const slots = consoleSlots(new URL(u).pathname);
+      let verdict: LinkVerdict = 'ok';
+      if (!slots) verdict = 'dead';
+      else if (check?.exists)
+        verdict = (await Promise.all(slots.map((s) => check.exists!(s.kind, s.id, s.parent)))).every(Boolean)
+          ? 'ok'
+          : 'dead';
+      else if (check?.ids) verdict = slots.every((s) => check.ids!.has(normId(s.id))) ? 'ok' : 'dead';
+      verdicts.set(u, verdict);
+    }),
+  ]);
 
   // Pass 2: rewrite.
   const fixed: string[] = [];
@@ -692,7 +777,7 @@ export async function guardReplyLinks(
       return match;
     }
     if (consoles.has(u.host)) {
-      if (consolePathOk(u.pathname, contextIds)) return match;
+      if (verdicts.get(clean) === 'ok') return match;
       stripped.push(match);
       return trail;
     }
@@ -963,7 +1048,11 @@ export async function generateReply(
   }
   for (const u of blessedUrls) extractIds(u, ids);
   const allBlessed = first.toolUrls.length ? [...blessedUrls, ...first.toolUrls] : blessedUrls;
-  const guard = await guardReplyLinks(draft, allBlessed, ids);
+  // Console links check the DB — a uuid the model saw in the wrong slot
+  // (a visitor id dropped into /conversations/) fails here where corpus
+  // membership alone would pass it.
+  const exists = ctx?.db && ctx.workspaceId ? consoleIdChecker(ctx.db, ctx.workspaceId) : undefined;
+  const guard = await guardReplyLinks(draft, allBlessed, { ids, exists });
   if (!guard.stripped.length) {
     return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, ...guard };
   }
@@ -985,7 +1074,7 @@ export async function generateReply(
   }
   for (const id of retry.contextIds) ids.add(id);
   const allBlessed2 = retry.toolUrls.length ? [...allBlessed, ...retry.toolUrls] : allBlessed;
-  const g2 = await guardReplyLinks(retry.text, allBlessed2, ids);
+  const g2 = await guardReplyLinks(retry.text, allBlessed2, { ids, exists });
   return {
     promptTokens: first.promptTokens + retry.promptTokens,
     completionTokens: first.completionTokens + retry.completionTokens,
@@ -1984,7 +2073,9 @@ export async function runHostedEvent(
     await storeSuggestion(
       db,
       convId,
-      extractLearns((await guardReplyLinks(text, blessedUrls)).text).text,
+      extractLearns(
+        (await guardReplyLinks(text, blessedUrls, { exists: consoleIdChecker(db, agent.workspaceId) })).text,
+      ).text,
       'agent',
     );
     return;

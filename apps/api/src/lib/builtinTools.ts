@@ -902,7 +902,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           agent: wsAgents.find((a) => a.id === p.agentId)?.name ?? null,
           // The proposed call verbatim — describe it from this, never guess.
           args: p.args,
-          url: `${env.webOrigin}/conversations/${p.convId}`,
+          // Cards on this very rail get pointed at in-chat, not linked.
+          ...(p.convId === ctx?.convId
+            ? { where: 'this conversation — the approval card is right here in the chat' }
+            : { url: `${env.webOrigin}/conversations/${p.convId}` }),
         })),
         csat_prompted: convs.filter((v) => v.csatAskedAt).length,
         csat_answered: scores.length,
