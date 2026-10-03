@@ -950,7 +950,6 @@ function EscalationTab({
   const [keywords, setKeywords] = useState('');
   const [intents, setIntents] = useState<string[]>([]);
   const [topicDraft, setTopicDraft] = useState('');
-  const [labelsDraft, setLabelsDraft] = useState('');
   const [minutes, setMinutes] = useState('15');
   const [maxScore, setMaxScore] = useState('3');
   const [route, setRoute] = useState<'none' | 'member' | 'pool'>('none');
@@ -1208,12 +1207,38 @@ function EscalationTab({
             <div className="row" style={{ marginTop: 6 }}>
               <input
                 style={{ width: 200 }}
-                placeholder="+ custom topic (adds to labels below)"
+                placeholder="+ custom topic"
                 value={topicDraft}
                 onChange={(e) => setTopicDraft(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomTopic(); } }}
               />
               <button className="btn" disabled={!topicDraft.trim()} onClick={addCustomTopic}>Add</button>
+            </div>
+            <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+              Topic labels — what the classifier tags conversations with:
+            </div>
+            <div className="row" style={{ marginTop: 4, flexWrap: 'wrap' }}>
+              {topicLabels.map((label, i) => (
+                <span key={label} className="badge" style={{ marginRight: 4 }}>
+                  {label}
+                  <button
+                    className="btn ghost"
+                    style={{ padding: '0 2px', marginLeft: 2 }}
+                    aria-label={`Remove ${label}`}
+                    onClick={() =>
+                      setCfg({ ...cfg, intents: topicLabels.filter((_, x) => x !== i) })
+                    }
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              {!cfg.intents?.length
+                ? 'Using the default topics — editing makes the list explicit. '
+                : ''}
+              The same labels Reports → Topics tallies; label edits save with the page's Save button.
             </div>
             </>
           )}
@@ -1301,60 +1326,6 @@ function EscalationTab({
           </div>
         </div>
 
-        <div className="form-field" style={{ marginTop: 12 }}>
-          <label>Topic labels — what the classifier tags each conversation with</label>
-          {topicLabels.map((label, i) => (
-            <span key={label} className="badge" style={{ marginRight: 4 }}>
-              {label}
-              <button
-                className="btn ghost"
-                style={{ padding: '0 2px', marginLeft: 2 }}
-                aria-label={`Remove ${label}`}
-                onClick={() =>
-                  setCfg({ ...cfg, intents: topicLabels.filter((_, x) => x !== i) })
-                }
-              >
-                <X size={10} />
-              </button>
-            </span>
-          ))}
-          <div className="row" style={{ marginTop: 6 }}>
-            <input
-              style={{ width: 220 }}
-              placeholder="Add a topic — e.g. refunds, warranty"
-              value={labelsDraft}
-              onChange={(e) => setLabelsDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  const label = labelsDraft.trim().toLowerCase();
-                  if (label && !topicLabels.some((l) => l.toLowerCase() === label))
-                    setCfg({ ...cfg, intents: [...topicLabels, label] });
-                  setLabelsDraft('');
-                }
-              }}
-            />
-            <button
-              className="btn"
-              disabled={!labelsDraft.trim()}
-              onClick={() => {
-                const label = labelsDraft.trim().toLowerCase();
-                if (label && !topicLabels.some((l) => l.toLowerCase() === label))
-                  setCfg({ ...cfg, intents: [...topicLabels, label] });
-                setLabelsDraft('');
-              }}
-            >
-              Add
-            </button>
-          </div>
-          <span className="muted" style={{ fontSize: 12 }}>
-            {!cfg.intents?.length
-              ? 'Using the default topics — adding one makes the list explicit.'
-              : `${topicLabels.length} topic${topicLabels.length === 1 ? '' : 's'}.`}{' '}
-            Topic-match rules fire on these — the same labels Reports → Topics tallies.
-            Saves with the page's Save button.
-          </span>
-        </div>
       </div>
 
       <SlackAlerts agent={agent} isAdmin={isAdmin} />
