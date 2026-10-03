@@ -958,3 +958,23 @@ describe('knowledge-import', () => {
     expect(await rows(id)).toHaveLength(0);
   });
 });
+
+describe('agent list ordering', () => {
+  it('returns agents alphabetically regardless of creation order', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Sort WS' }).returning();
+    const cookie = await cookieFor(ws.id, 'sort@x.test');
+    for (const [i, name] of ['zeta bot', 'Alpha bot', 'mango bot'].entries()) {
+      await db.insert(agents).values({
+        workspaceId: ws.id, name, apiKeyHash: `h${i}`, apiKeyPreview: 'p',
+      });
+    }
+    const list = await (
+      await app.request('/api/agents', { headers: { cookie } })
+    ).json();
+    expect(list.agents.map((a: { name: string }) => a.name)).toEqual([
+      'Alpha bot',
+      'mango bot',
+      'zeta bot',
+    ]);
+  });
+});

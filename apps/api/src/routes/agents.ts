@@ -97,7 +97,9 @@ export function agentRoutes(db: Db) {
       .select()
       .from(agents)
       .where(and(eq(agents.workspaceId, c.get('workspaceId')), ...(scope ? [scope] : [])))
-      .orderBy(desc(agents.createdAt));
+      // Alphabetical — every picker/nav surface expects a stable A–Z order
+      // (was createdAt-desc; onboarding still lands on a predictable first).
+      .orderBy(asc(sql`lower(${agents.name})`));
     return c.json({ agents: rows.map(toAgent) });
   });
 

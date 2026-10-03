@@ -98,7 +98,7 @@ migrateDb directly.
 After editing packages/shared/src, run `npm run build -w packages/shared`
 before typecheck/tests/dev.
 
-## Open work — competitive gap tracker (updated 2026-10-01)
+## Open work — competitive gap tracker (updated 2026-10-03)
 
 **Launch backlog — consolidated plan index (the canonical list; detailed
 implementation notes live in the sections below)**
@@ -131,16 +131,19 @@ full pass ✓, 17 dep cleanup — @esbuild-kit/glob are transitive via
 drizzle-kit/workbox-build, nothing to drop directly).
 
 *C. Medium features (~1 session each)*
-18. Discovery cards → Ask Janis — railBus.seed, ?rail=ask&q= deeplink,
-    concierge knowledge CTAs, card-click tracking (needs 22).
+18. DONE — Discovery cards → Ask Janis: DiscoveryCards.tsx, railBus,
+    ?rail=ask&q= deeplinks, card-click tracking via /api/track.
 19. Language Model tab — provider cards (platform/OpenAI/Gemini/custom),
-    BYOK base_url-without-key guard.
-20. Editor reorg remainder — Branding tab (agent-level webchat
-    meta.branding editor + mock preview), finish knowledge split.
+    BYOK base_url-without-key guard. (Language model lives at
+    Behavior → Language model; provider-card UI still open.)
+20. Editor reorg — knowledge split DONE (Knowledge base section: Text /
+    Files / Websites / Gaps / Help center). Branding-tab piece superseded
+    by the per-channel Bubble editor (channel page: live preview,
+    Appearance/Developer sections, custom domain).
 21. Webhook recipes in Docs — ManyChat/GHL HTTP-Request → POST /v1/events
     handoff recipe.
-22. `analytics_events` + POST /api/track — in-product activation events
-    (GA4 covers the funnel; this feeds 18's click tracking).
+22. DONE — `analytics_events` + POST /api/track + lib/analytics.ts
+    track() wired into landing/console events.
 23. DONE — in-process state audit closed (convLock advisory lock, voice
     queue table, Meta OAuth stateless; remaining Maps are caches).
 
@@ -151,14 +154,17 @@ drizzle-kit/workbox-build, nothing to drop directly).
 
 *E. Product depth tail (pull by customer demand)*
 27. Eval tail — missing: run-diff dashboards, multi-model compare.
-    (Scheduled runs, regression alerts, history, rescue→test suggestions
-    all DONE — closest-to-done differentiator.)
+    (Scheduled runs, regression alerts, regression→verified-fix
+    suggestions, history, rescue→test suggestions all DONE —
+    closest-to-done differentiator.)
 28. Intent tail — sentiment, auto-topic clustering, confidence scores.
 29. Help center tail — version history, widget article embeds.
 30. Rate-limit tail — widget CAPTCHA after N, blocklist, per-plan tiers.
 31. Channels tail — shared-email multi-address fan-out (answer_rules
     PARTIAL), WhatsApp template manager UI + business verification,
     voicemail/IVR/recording consent/transcripts, Outlook (blocked on A6).
+    (Bubble custom domains + full-page hosted messenger DONE — channel
+    claims widget_domain, CNAME→app.janis.ai, scripts/map-domain.sh.)
 32. Autonomous agent-led campaigns — rails exist (send policy, drip
     conditions, conversion attribution); last.
 
