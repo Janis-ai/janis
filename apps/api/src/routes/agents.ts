@@ -1437,7 +1437,7 @@ export function agentRoutes(db: Db) {
       .select()
       .from(agentTests)
       .where(eq(agentTests.agentId, c.req.param('id')))
-      .orderBy(asc(agentTests.createdAt));
+      .orderBy(desc(agentTests.createdAt));
     return c.json({ tests: rows.map(toTest) });
   });
 
