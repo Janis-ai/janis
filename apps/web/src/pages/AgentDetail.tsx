@@ -1008,6 +1008,33 @@ function EscalationTab({
   const toggleRule = (r: AlertRule) =>
     onUpdateRule(r.id, { ...r.config, enabled: r.config.enabled === false });
 
+  const { data: meData } = useMe();
+  const meId = meData?.user.id;
+  // Members can route a rule's alerts to themselves (or back out) without
+  // admin help — the API enforces that the diff touches only their own id.
+  const selfAssigned = (r: AlertRule) =>
+    !!meId && (r.config.assign_to === meId || (r.config.assignees ?? []).includes(meId));
+  const toggleSelfAssign = (r: AlertRule) => {
+    if (!meId) return;
+    const c = { ...r.config } as {
+      assign_to?: string;
+      assignees?: string[];
+      [k: string]: unknown;
+    };
+    if (selfAssigned(r)) {
+      if (c.assign_to === meId) delete c.assign_to;
+      const rest = (c.assignees ?? []).filter((id) => id !== meId);
+      if (rest.length) c.assignees = rest;
+      else delete c.assignees;
+    } else {
+      // Join the rotation — self-assigning a fixed-owner rule rotates with them.
+      const ids = [...new Set([c.assign_to, ...(c.assignees ?? []), meId].filter(Boolean))] as string[];
+      delete c.assign_to;
+      c.assignees = ids;
+    }
+    onUpdateRule(r.id, c);
+  };
+
   const toggle = (list: string[], id: string, set: (v: string[]) => void) =>
     set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
 
@@ -1126,6 +1153,7 @@ function EscalationTab({
         </div>
         <div className="muted">Repeat breaches escalate to the Slack alert channel.</div>
       </div>
+    </ReadOnly>
 
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Alert &amp; routing rules</strong>
@@ -1139,6 +1167,7 @@ function EscalationTab({
               <input
                 type="checkbox"
                 checked={r.config.enabled !== false}
+                disabled={!isAdmin}
                 onChange={() => toggleRule(r)}
               />
             </label>
@@ -1146,8 +1175,15 @@ function EscalationTab({
               <strong>{kindMeta(r.kind)?.label ?? r.kind}</strong>
               <span className="muted"> — {describeRule(r)}</span>
             </span>
-            <button className="btn" onClick={() => editRule(r)} aria-label="Edit rule"><Pencil size={14} /></button>
-            <button className="btn danger" onClick={() => onDeleteRule(r.id)} aria-label="Delete rule"><Trash2 size={14} /></button>
+            <button className="btn" onClick={() => toggleSelfAssign(r)} title={selfAssigned(r) ? 'Stop routing this alert to me' : 'Route this alert to me'}>
+              {selfAssigned(r) ? 'unassign me' : 'assign me'}
+            </button>
+            {isAdmin && (
+              <>
+                <button className="btn" onClick={() => editRule(r)} aria-label="Edit rule"><Pencil size={14} /></button>
+                <button className="btn danger" onClick={() => onDeleteRule(r.id)} aria-label="Delete rule"><Trash2 size={14} /></button>
+              </>
+            )}
           </div>
         ))}
         {rules.length === 0 && (
@@ -1156,7 +1192,13 @@ function EscalationTab({
             default.
           </div>
         )}
+        {!isAdmin && (
+          <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+            You can assign or unassign yourself on a rule; an admin manages everything else.
+          </div>
+        )}
 
+        {isAdmin && (
         <div style={{ borderTop: '1px solid var(--line)', marginTop: 12, paddingTop: 10 }}>
           {editing && (
             <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
@@ -1335,9 +1377,11 @@ function EscalationTab({
             </>
           )}
         </div>
+        )}
 
       </div>
 
+    <ReadOnly off={!isAdmin}>
       <SlackAlerts agent={agent} isAdmin={isAdmin} />
     </ReadOnly>
     </>

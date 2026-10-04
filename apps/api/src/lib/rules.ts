@@ -77,6 +77,39 @@ export function ruleEnabled(rule: RuleRow): boolean {
 }
 
 /**
+ * Non-admin members may edit a rule's routing ONLY to add/remove themselves.
+ * Returns true when prev→next is identical in every field except assign_to/
+ * assignees, and the set difference touches only userId. (joining a fixed
+ * owner's rule moves both into the rotation pool — assign_to → assignees —
+ * which is still a self-only diff.)
+ */
+export function selfAssignOnly(prev: RuleConfig, next: RuleConfig, userId: string): boolean {
+  // JSONB doesn't preserve object key order — canonicalize before comparing.
+  const canon = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(canon)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.entries(v as Record<string, unknown>)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([k, x]) => [k, canon(x)]),
+          )
+        : v;
+  const rest = (c: RuleConfig) => {
+    const { assign_to: _at, assignees: _as, ...r } = c;
+    return canon(r);
+  };
+  if (JSON.stringify(rest(prev)) !== JSON.stringify(rest(next))) return false;
+  const ids = (c: RuleConfig) =>
+    new Set([c.assign_to, ...(c.assignees ?? [])].filter((x): x is string => Boolean(x)));
+  const before = ids(prev);
+  const after = ids(next);
+  for (const id of before) if (!after.has(id) && id !== userId) return false;
+  for (const id of after) if (!before.has(id) && id !== userId) return false;
+  return true;
+}
+
+/**
  * Decide which alerts a single ingest event should fire for an agent.
  * Explicit event types (failure / handoff_request / custom_alert) fire by
  * default — they're the agent asking for help — and stay on until the

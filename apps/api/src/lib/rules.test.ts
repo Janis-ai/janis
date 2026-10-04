@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { IngestEvent } from '@janis/shared';
-import { evaluateActions, evaluateEvent, inactivityThresholds, intentMatches, pickAutoAssignee } from './rules.js';
+import { evaluateActions, evaluateEvent, inactivityThresholds, intentMatches, pickAutoAssignee, selfAssignOnly } from './rules.js';
 import type { alertRules } from '../db/schema.js';
 
 const rule = (
@@ -189,5 +189,29 @@ describe('intentMatches', () => {
     expect(intentMatches(rules, 'Billing').map((r) => r.kind)).toEqual(['intent', 'keyword']);
     expect(intentMatches(rules, 'billing', 'intent')).toHaveLength(1);
     expect(intentMatches(rules, 'missing')).toHaveLength(0);
+  });
+});
+
+describe('selfAssignOnly', () => {
+  it('allows adding self to an unrouted rule', () => {
+    expect(selfAssignOnly({ enabled: true, keywords: ['x'] }, { enabled: true, keywords: ['x'], assign_to: 'me' }, 'me')).toBe(true);
+  });
+  it('allows joining/leaving a rotation pool', () => {
+    const prev = { enabled: true, assignees: ['u1', 'u2'], next: 1 };
+    expect(selfAssignOnly(prev, { ...prev, assignees: ['u1', 'u2', 'me'] }, 'me')).toBe(true);
+    expect(selfAssignOnly({ ...prev, assignees: ['u1', 'me', 'u2'] }, prev, 'me')).toBe(true);
+  });
+  it('self-assigning a fixed-owner rule rotates with them', () => {
+    // assign_to: u1 → assignees: [u1, me] — self-only diff
+    expect(selfAssignOnly({ enabled: true, assign_to: 'u1' }, { enabled: true, assignees: ['u1', 'me'] }, 'me')).toBe(true);
+  });
+  it('rejects touching another member', () => {
+    expect(selfAssignOnly({ enabled: true, assign_to: 'u1' }, { enabled: true, assign_to: 'me' }, 'me')).toBe(false);
+    expect(selfAssignOnly({ enabled: true, assignees: ['u1', 'me'] }, { enabled: true, assignees: ['me'] }, 'me')).toBe(false);
+  });
+  it('rejects any non-assign field change', () => {
+    expect(selfAssignOnly({ enabled: true, keywords: ['x'] }, { enabled: false, keywords: ['x'], assign_to: 'me' }, 'me')).toBe(false);
+    expect(selfAssignOnly({ enabled: true, next: 1 }, { enabled: true, next: 2, assign_to: 'me' }, 'me')).toBe(false);
+    expect(selfAssignOnly({ enabled: true }, { enabled: true, group_ids: ['g1'], assign_to: 'me' }, 'me')).toBe(false);
   });
 });

@@ -7,6 +7,7 @@ import type { Db } from '../db/client.js';
 import { agents, alertRules } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
+import { selfAssignOnly, type RuleConfig } from '../lib/rules.js';
 import { toAlertRule } from '../lib/serializers.js';
 
 const ruleConfig = z.object({
@@ -114,10 +115,26 @@ export function ruleRoutes(db: Db) {
     const role = await agentRoleFor(
       db, c.get('user').id, c.get('role'), c.get('agentScope'), agentId, c.get('workspaceId'),
     );
-    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
+    const next = c.req.valid('json').config;
+    if (!isAdminRole(role)) {
+      // Members can only add/remove THEMSELVES from a rule's routing — every
+      // other field must round-trip unchanged.
+      const [existing] = await db
+        .select({ config: alertRules.config })
+        .from(alertRules)
+        .where(eq(alertRules.id, c.req.param('id')))
+        .limit(1);
+      if (
+        !role ||
+        !existing ||
+        !selfAssignOnly(existing.config as RuleConfig, next, c.get('user').id)
+      ) {
+        return c.json({ error: 'admin required' }, 403);
+      }
+    }
     const [row] = await db
       .update(alertRules)
-      .set({ config: c.req.valid('json').config })
+      .set({ config: next })
       .where(eq(alertRules.id, c.req.param('id')))
       .returning();
     return c.json({ rule: toAlertRule(row) });

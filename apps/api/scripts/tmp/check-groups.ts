@@ -1,0 +1,11 @@
+import { createDb } from '../../src/db/client.js';
+import { memberGroups, memberships, users } from '../../src/db/schema.js';
+import { eq } from 'drizzle-orm';
+const db = await createDb();
+const groups = await db.select().from(memberGroups);
+console.log('groups:', JSON.stringify(groups.map(g => ({ id: g.id, name: g.name, ws: g.workspaceId?.slice(0,8), members: (g.memberIds as string[] | null)?.length })), null, 1));
+const mems = await db.select({ uid: memberships.userId, ws: memberships.workspaceId, role: memberships.role, status: memberships.acceptedAt }).from(memberships);
+console.log('memberships:', mems.length);
+const us = await db.select({ id: users.id, email: users.email }).from(users);
+console.log('users:', us.map(u => u.email));
+process.exit(0);
