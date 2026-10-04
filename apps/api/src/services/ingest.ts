@@ -10,11 +10,11 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
-import { openAlertOnce } from '../lib/alerts.js';
+import { openAlertOnce, resolveOpenAlerts } from '../lib/alerts.js';
 import { enrichHandoff } from '../lib/handoff.js';
 import { alertNotification, eventForAlertType, notifyWorkspace, type NotifyEvent } from '../lib/notify.js';
-import { evaluateActions, evaluateEvent, type RuleConfig } from '../lib/rules.js';
-import { groupsForRules } from '../lib/ruleAlerts.js';
+import { evaluateActions, evaluateEvent } from '../lib/rules.js';
+import { advanceRuleCursor, groupsForRules } from '../lib/ruleAlerts.js';
 import { classifyAndRoute, checkInboundSentiment, recheckIntent } from '../lib/intent.js';
 import { fireEventWebhook } from '../lib/eventWebhook.js';
 import { emitHookEvent } from '../lib/hooks.js';
@@ -26,8 +26,8 @@ import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
 import { METER_MESSAGES, billingCustomerFor, reportMeter } from '../lib/stripe.js';
 import { messageCap } from '../lib/plans.js';
 import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
-import { sendCsatPrompt } from '../lib/csat.js';
-import { STATE_LABEL, systemNote, userNames } from '../lib/systemNote.js';
+import { noteRuleRouting, systemNote, userNames } from '../lib/systemNote.js';
+import { applyConvEffects } from '../lib/conversationOps.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -304,19 +304,7 @@ export async function processEvents(
     // they accepted, this same event fires handoff_request → help_request,
     // which opens its own alert and escalates — nothing real is hidden.
     if (event.type === 'message_in' && !newAlertTypes.includes('help_request')) {
-      const staleOffers = await db
-        .update(alerts)
-        .set({ status: 'resolved' })
-        .where(
-          and(
-            eq(alerts.conversationId, conv.id),
-            eq(alerts.type, 'handoff_offer'),
-            eq(alerts.status, 'open'),
-          ),
-        )
-        .returning();
-      for (const a of staleOffers)
-        bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(a) });
+      const staleOffers = await resolveOpenAlerts(db, agent.workspaceId, conv.id, 'handoff_offer');
       if (staleOffers.length) {
         await systemNote(
           db,
@@ -337,14 +325,7 @@ export async function processEvents(
     for (const a of actions) {
       if (a.ruleId === undefined || a.next === undefined) continue;
       const rule = rules.find((r) => r.id === a.ruleId);
-      if (!rule) continue;
-      // persist + advance the in-memory copy too — a second event in this
-      // batch must pick the following member, not the same one again
-      rule.config = { ...(rule.config as RuleConfig), next: a.next };
-      await db
-        .update(alertRules)
-        .set({ config: rule.config })
-        .where(eq(alertRules.id, a.ruleId));
+      if (rule) await advanceRuleCursor(db, rule, a.next);
     }
     const mergedTags = actions.some((a) => a.tag)
       ? [...new Set([...conv.tags, ...actions.map((a) => a.tag).filter((t): t is string => !!t)])]
@@ -376,72 +357,32 @@ export async function processEvents(
       .where(eq(conversations.id, conv.id))
       .returning();
 
+    // Transition side effects — the shared path the operator PATCH runs:
+    // conversation event, state-change audit line, escalated/resolved hooks,
+    // CSAT on archive, and the open-alert sweep (a resolved thread means its
+    // alerts are handled; handoff_cancelled→active closes the page too).
     if (updated.state !== conv.state) {
-      bus.publish(agent.workspaceId, {
-        type: 'conversation',
-        data: { id: updated.id, state: updated.state },
-      });
-      await systemNote(
-        db,
-        agent.workspaceId,
-        conv.id,
-        `Status: ${STATE_LABEL[conv.state]} → ${STATE_LABEL[updated.state]}`,
-        'state_change',
-      );
-      if (updated.state === 'needs_human')
-        emitHookEvent(db, agent.id, 'conversation_escalated', updated);
+      await applyConvEffects(db, agent.workspaceId, conv, updated, {
+        state: updated.state,
+      }, null);
     }
 
     // Rule-routing audit — every applied (or refused) effect is a line in the
     // transcript, independent of whether the alert itself was deduped or its
     // notifications were muted
-    if (actions.length) {
-      const names = await userNames(db, [
-        ...actions.map((a) => a.assignTo).filter((x): x is string => !!x),
-        ...(conv.assigneeId ? [conv.assigneeId] : []),
-      ]);
-      const addedTags = mergedTags.filter((t) => !conv.tags.includes(t));
-      for (const a of actions) {
-        const ruleName = a.kind ? `${a.kind} rule` : 'rule';
-        if (a.assignTo) {
-          const target = names.get(a.assignTo) ?? 'a teammate';
-          if (!conv.assigneeId) {
-            await systemNote(db, agent.workspaceId, conv.id,
-              `Assigned to ${target} (${ruleName})`, 'assign');
-          } else {
-            const owner = names.get(conv.assigneeId) ?? 'a teammate';
-            await systemNote(db, agent.workspaceId, conv.id,
-              `${ruleName} tried to assign ${target} — already owned by ${owner}`, 'assign');
-          }
-        }
-        if (a.tag && addedTags.includes(a.tag)) {
-          await systemNote(db, agent.workspaceId, conv.id,
-            `Tagged "${a.tag}" (${ruleName})`, 'tag');
-        }
-      }
+    for (const a of actions) {
+      await noteRuleRouting(
+        db,
+        agent.workspaceId,
+        conv,
+        { assigneeId: a.assignTo, tags: a.tag ? [a.tag] : [] },
+        a.kind ? `${a.kind} rule` : 'rule',
+      );
     }
 
-    // Resolution side effects — identical to an operator pressing archive:
-    // one-shot CSAT prompt (the customer's next reply lands as a rating) and
-    // the conversation_resolved webhook.
-    if (event.type === 'resolve' && conv.state !== 'archived' && updated.state === 'archived') {
-      await sendCsatPrompt(db, updated).catch(() => {});
-      emitHookEvent(db, agent.id, 'conversation_resolved', updated);
-    }
-
-    // A declined handoff also closes whatever was paging for it — same
-    // resolution sweep as an operator manually returning it to the agent. A
-    // resolved conversation's open alerts close too: resolved means handled.
-    if (event.type === 'handoff_cancelled' || (event.type === 'resolve' && updated.state === 'archived')) {
-      const resolved = await db
-        .update(alerts)
-        .set({ status: 'resolved' })
-        .where(and(eq(alerts.conversationId, conv.id), eq(alerts.status, 'open')))
-        .returning();
-      for (const a of resolved) {
-        bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(a) });
-      }
-    }
+    // Resolution side effects (CSAT prompt, conversation_resolved hook) and
+    // the open-alert sweep ran inside applyConvEffects above — same
+    // implementation an operator archive/active flip goes through.
 
     // Escalation routing: auto-assign fresh handoffs to the least-loaded
     // teammate when the agent opts in (config.auto_assign).

@@ -41,17 +41,61 @@ export async function systemNote(
   conversationId: string,
   text: string,
   event: string,
+  opts: {
+    /** Attribute the line to an operator — used for takeover/resume-style
+     *  notes so the who-label shows a name, not the agent. */
+    authorId?: string | null;
+    /** 'human' shows the operator as sender; 'out' (default) shows Janis. */
+    direction?: 'out' | 'human';
+  } = {},
 ): Promise<void> {
   const [note] = await db
     .insert(messages)
     .values({
       conversationId,
-      direction: 'out',
+      direction: opts.direction ?? 'out',
+      authorId: opts.authorId ?? null,
       text,
       payload: { internal: true, event },
     })
     .returning();
   bus.publish(workspaceId, { type: 'message', data: toMessage(note) });
+}
+
+/**
+ * Transcript lines for rule-driven routing — the one implementation shared by
+ * ingest, fireRuleAlert, and the sweeper so every path logs the same shape:
+ * applied assigns, refused assigns ("already owned"), and added tags.
+ * `conv` is the PRE-update row — routing is non-stealing, so an assigneeId
+ * that didn't stick shows up as the refusal line.
+ */
+export async function noteRuleRouting(
+  db: Db,
+  workspaceId: string,
+  conv: { id: string; assigneeId: string | null; tags: string[] },
+  routing: { assigneeId?: string | null; tags?: string[] },
+  ruleName: string,
+): Promise<void> {
+  const addedTags = (routing.tags ?? []).filter((t) => !conv.tags.includes(t));
+  if (!routing.assigneeId && !addedTags.length) return;
+  const names = await userNames(db, [
+    ...(routing.assigneeId ? [routing.assigneeId] : []),
+    ...(conv.assigneeId ? [conv.assigneeId] : []),
+  ]);
+  if (routing.assigneeId) {
+    const target = names.get(routing.assigneeId) ?? 'a teammate';
+    if (!conv.assigneeId) {
+      await systemNote(db, workspaceId, conv.id,
+        `Assigned to ${target} (${ruleName})`, 'assign');
+    } else {
+      const owner = names.get(conv.assigneeId) ?? 'a teammate';
+      await systemNote(db, workspaceId, conv.id,
+        `${ruleName} tried to assign ${target} — already owned by ${owner}`, 'assign');
+    }
+  }
+  for (const t of addedTags) {
+    await systemNote(db, workspaceId, conv.id, `Tagged "${t}" (${ruleName})`, 'tag');
+  }
 }
 
 /** id → display name for attribution lines; ids missing from the map should

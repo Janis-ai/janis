@@ -3,12 +3,10 @@ import type { AlertType } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, alertRules, conversations, memberGroups } from '../db/schema.js';
 import { bus } from './bus.js';
-import { openAlertOnce } from './alerts.js';
-import { alertNotification, eventForAlertType, notifyWorkspace } from './notify.js';
-import { postSlackAlert } from './slack.js';
-import { toAlert } from './serializers.js';
+import { dispatchAlert, openAlertOnce } from './alerts.js';
+import { eventForAlertType } from './notify.js';
 import { pickRuleAssignee, type GroupRef, type RuleConfig, type RuleRow } from './rules.js';
-import { ALERT_LABEL, systemNote, userNames } from './systemNote.js';
+import { ALERT_LABEL, noteRuleRouting, systemNote } from './systemNote.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConvRow = typeof conversations.$inferSelect;
@@ -28,6 +26,20 @@ export async function groupsForRules(
     .select()
     .from(memberGroups)
     .where(and(eq(memberGroups.workspaceId, workspaceId), inArray(memberGroups.id, ids)));
+}
+
+/** Persist a rotation pick back onto the rule — the next fire continues
+ *  where this one left off. Mutates rule.config in memory too, so repeat
+ *  fires in the same batch rotate forward instead of re-picking the
+ *  same member. */
+export async function advanceRuleCursor(
+  db: Db,
+  rule: RuleRow,
+  next: number,
+): Promise<void> {
+  const cfg = { ...(rule.config as RuleConfig), next };
+  rule.config = cfg;
+  await db.update(alertRules).set({ config: cfg }).where(eq(alertRules.id, rule.id));
 }
 
 /**
@@ -51,11 +63,7 @@ export async function resolveRuleRouting(
     const pick = pickRuleAssignee(rule, groups);
     if (!pick) continue;
     assigneeId = pick.userId;
-    if (pick.next !== undefined) {
-      const cfg = { ...(rule.config as RuleConfig), next: pick.next };
-      rule.config = cfg; // in-memory advance — repeat fires rotate forward
-      await db.update(alertRules).set({ config: cfg }).where(eq(alertRules.id, rule.id));
-    }
+    if (pick.next !== undefined) await advanceRuleCursor(db, rule, pick.next);
   }
   return { assigneeId, tags };
 }
@@ -89,26 +97,7 @@ export async function fireRuleAlert(
   const kinds = [...new Set(fired.map((r) => r.kind))];
   const ruleName =
     kinds.length === 1 ? `${kinds[0]} rule` : kinds.length > 1 ? 'rules' : 'rule';
-  if (assigneeId || tags.length) {
-    const names = await userNames(db, [
-      ...(assigneeId ? [assigneeId] : []),
-      ...(conv.assigneeId ? [conv.assigneeId] : []),
-    ]);
-    if (assigneeId) {
-      const target = names.get(assigneeId) ?? 'a teammate';
-      if (!conv.assigneeId) {
-        await systemNote(db, agent.workspaceId, conv.id,
-          `Assigned to ${target} (${ruleName})`, 'assign');
-      } else {
-        const owner = names.get(conv.assigneeId) ?? 'a teammate';
-        await systemNote(db, agent.workspaceId, conv.id,
-          `${ruleName} tried to assign ${target} — already owned by ${owner}`, 'assign');
-      }
-    }
-    for (const t of tags.filter((x) => !conv.tags.includes(x))) {
-      await systemNote(db, agent.workspaceId, conv.id, `Tagged "${t}" (${ruleName})`, 'tag');
-    }
-  }
+  await noteRuleRouting(db, agent.workspaceId, conv, { assigneeId, tags }, ruleName);
 
   if (changed) {
     const [row] = await db
@@ -141,14 +130,7 @@ export async function fireRuleAlert(
   );
   if (!created) return;
 
-  const n = await alertNotification(db, alert, updated, agent);
-  bus.publish(agent.workspaceId, {
-    type: 'alert',
-    data: { ...toAlert(alert), notification: n },
-  });
-  void postSlackAlert(db, agent.workspaceId, updated, agent, alert);
-  void notifyWorkspace(db, agent.workspaceId, n, {
-    agentId: agent.id,
+  await dispatchAlert(db, agent, updated, alert, {
     userIds: assigneeId ? [assigneeId] : undefined,
     event: eventForAlertType(alert.type),
   });

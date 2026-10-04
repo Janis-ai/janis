@@ -3,9 +3,9 @@ import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import { agents, alerts, conversations, messages, pendingActions } from '../db/schema.js';
 import { bus } from './bus.js';
-import { openAlertOnce } from './alerts.js';
-import { alertNotification, notifyWorkspace } from './notify.js';
-import { toAlert, toMessage } from './serializers.js';
+import { dispatchAlert, openAlertOnce, resolveOpenAlerts } from './alerts.js';
+import { transitionConversation } from './conversationOps.js';
+import { toMessage } from './serializers.js';
 import { loadSecretsMap } from './secrets.js';
 import { connectionSecrets } from './connections.js';
 import { callTool, type ToolDef } from './toolExec.js';
@@ -111,29 +111,19 @@ export async function requestToolApproval(
       if (!created) {
         if (alert) await db.update(alerts).set({ detail }).where(eq(alerts.id, alert.id));
       } else {
-        const notification = await alertNotification(db, alert, conv, agent);
-        bus.publish(agent.workspaceId, {
-          type: 'alert',
-          data: { ...toAlert(alert), notification },
+        await dispatchAlert(db, agent, conv, alert, {
+          userIds: conv.assigneeId ? [conv.assigneeId] : undefined,
+          event: 'approval',
         });
-        void notifyWorkspace(db, agent.workspaceId, notification, { agentId: agent.id,
-          userIds: conv.assigneeId ? [conv.assigneeId] : undefined, event: 'approval',
-        });
-        const { postSlackAlert } = await import('./slack.js');
-        void postSlackAlert(db, agent.workspaceId, conv, agent, alert).catch(() => {});
       }
     }
     // needs_human is an attention flag only — the agent still replies while
     // the action awaits a decision. Human-owned threads stay human-owned.
     if (conv.state === 'active' || conv.state === 'archived') {
-      await db
-        .update(conversations)
-        .set({ state: 'needs_human' })
-        .where(eq(conversations.id, convId));
-      bus.publish(agent.workspaceId, {
-        type: 'conversation',
-        data: { id: convId, state: 'needs_human' },
+      await transitionConversation(db, agent.workspaceId, conv, 'needs_human', {
+        cause: 'approval pending',
       });
+      conv.state = 'needs_human';
     }
     const { postSlackActionRequest } = await import('./slack.js');
     await postSlackActionRequest(db, conv, agent, action).catch(() => {});
@@ -315,20 +305,7 @@ export async function decidePendingAction(
     )
     .limit(1);
   if (!stillPending) {
-    const resolved = await db
-      .update(alerts)
-      .set({ status: 'resolved' })
-      .where(
-        and(
-          eq(alerts.conversationId, conv.id),
-          eq(alerts.type, 'approval_request'),
-          eq(alerts.status, 'open'),
-        ),
-      )
-      .returning();
-    for (const a of resolved) {
-      bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(a) });
-    }
+    await resolveOpenAlerts(db, agent.workspaceId, conv.id, 'approval_request');
     if (conv.state === 'needs_human') {
       const [otherOpen] = await db
         .select({ id: alerts.id })
@@ -336,15 +313,10 @@ export async function decidePendingAction(
         .where(and(eq(alerts.conversationId, conv.id), eq(alerts.status, 'open')))
         .limit(1);
       if (!otherOpen) {
-        await db
-          .update(conversations)
-          .set({ state: 'active' })
-          .where(eq(conversations.id, conv.id));
-        conv.state = 'active';
-        bus.publish(agent.workspaceId, {
-          type: 'conversation',
-          data: { id: conv.id, state: 'active' },
+        await transitionConversation(db, agent.workspaceId, conv, 'active', {
+          cause: 'all approvals decided',
         });
+        conv.state = 'active';
       }
     }
   }

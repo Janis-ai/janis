@@ -16,7 +16,7 @@ import {
 } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toAlert, toConversation, toMessage, toSuggestion } from '../lib/serializers.js';
-import { STATE_LABEL, systemNote, userNames } from '../lib/systemNote.js';
+import { applyConvEffects } from '../lib/conversationOps.js';
 import { convListConditions, convListQuery } from '../lib/convFilters.js';
 import { agentRoleFor, agentVis, conversationAgent, isAdminRole, operatorIdentity } from '../lib/access.js';
 import { bus } from '../lib/bus.js';
@@ -31,15 +31,12 @@ import {
   teachAgent,
 } from '../services/takeover.js';
 import { requestSuggestion } from '../services/suggestions.js';
-import { sendCsatPrompt } from '../lib/csat.js';
-import { emitHookEvent } from '../lib/hooks.js';
 import { fetchAvatar } from '../lib/avatar.js';
 import { markOperatorTyping, shouldRelayTyping } from '../lib/typingState.js';
 import { markViewing } from '../lib/presence.js';
 import {
   channelBindingFor,
   deliverToChannel,
-  releaseThreadControl,
   sendChannelTyping,
   takeThreadControl,
   type AttachmentRef,
@@ -238,65 +235,26 @@ export function conversationRoutes(db: Db) {
       }
     }
 
-    // Same side effects the single PATCH performs: Meta thread control is
-    // released when leaving 'human', and archiving fires the one-shot CSAT ask.
-    if (action === 'archive' || action === 'unarchive') {
-      for (const r of rows) {
-        const conv = r.conversations;
-        if (conv.state === 'human') {
-          void (async () => {
-            const b = await channelBindingFor(db, conv.id);
-            if (b) await releaseThreadControl(b.channel, b.platformUserId);
-          })();
-        }
-        if (action === 'archive' && conv.state !== 'archived') {
-          const archivedConv = { ...conv, archivedAt: now };
-          void sendCsatPrompt(db, archivedConv).catch(() => {});
-          emitHookEvent(db, conv.agentId, 'conversation_resolved', archivedConv);
-        }
-      }
-    }
-
-    // Transcript audit — one line per changed conversation, attributed to
-    // the operator running the bulk action
-    const noteText = (conv: typeof conversations.$inferSelect): string | null => {
-      switch (action) {
-        case 'archive':
-          return conv.state !== 'archived' ? `${user.name} archived the conversation` : null;
-        case 'unarchive':
-          return conv.state === 'archived' ? `${user.name} reopened the conversation` : null;
-        case 'assign_me':
-          return conv.assigneeId !== user.id ? `${user.name} assigned themselves` : null;
-        case 'unassign':
-          return conv.assigneeId
-            ? `${user.name} unassigned ${prevNames.get(conv.assigneeId) ?? 'a teammate'}`
-            : null;
-        case 'tag':
-          return !conv.tags?.includes(tag!) ? `${user.name} tagged "${tag}"` : null;
-        case 'untag':
-          return conv.tags?.includes(tag!) ? `${user.name} removed the tag "${tag}"` : null;
-        default:
-          return null;
-      }
-    };
-    const prevNames =
-      action === 'unassign'
-        ? await userNames(db, rows.map((r) => r.conversations.assigneeId).filter((x): x is string => !!x))
-        : new Map<string, string>();
+    // Side effects + audit notes — one implementation shared with PATCH
+    // (state transition lines, hooks, CSAT on archive, Meta thread release,
+    // open-alert sweep on active/archived, attributed assign/tag notes).
     for (const r of rows) {
-      const text = noteText(r.conversations);
-      if (text) await systemNote(db, workspaceId, r.conversations.id, text, 'bulk_action');
-    }
-
-    // one event per row so detail-page subscribers see the new state —
-    // the list invalidates on the first and ignores the rest
-    const nextState =
-      action === 'archive' ? 'archived' : action === 'unarchive' ? 'active' : null;
-    for (const r of rows) {
-      bus.publish(workspaceId, {
-        type: 'conversation',
-        data: { id: r.conversations.id, state: nextState ?? r.conversations.state },
-      });
+      const conv = r.conversations;
+      const requested =
+        action === 'archive' ? { state: 'archived' as const }
+        : action === 'unarchive' ? { state: 'active' as const }
+        : action === 'assign_me' ? { assigneeId: user.id }
+        : action === 'unassign' ? { assigneeId: null as string | null }
+        : action === 'tag' || action === 'untag'
+          ? {
+              tags:
+                action === 'tag'
+                  ? [...new Set([...(conv.tags ?? []), tag!])]
+                  : (conv.tags ?? []).filter((t) => t !== tag),
+            }
+          : {};
+      const after = { ...conv, ...(set ?? {}), ...(requested as object) };
+      await applyConvEffects(db, workspaceId, conv, after, requested, user);
     }
     return c.json({ updated: ownedIds.length });
   });
@@ -814,6 +772,7 @@ export function conversationRoutes(db: Db) {
     const [owned] = await db
       .select({
         id: conversations.id,
+        agentId: conversations.agentId,
         state: conversations.state,
         assigneeId: conversations.assigneeId,
         intent: conversations.intent,
@@ -850,98 +809,23 @@ export function conversationRoutes(db: Db) {
       .where(eq(conversations.id, owned.id))
       .returning();
 
-    // Meta handover protocol: releasing back to the agent returns the thread
-    // to the channel's configured secondary receiver (the bot platform's app).
-    // ('human' transitions go through the takeover service, already handled.)
-    if (body.state !== undefined && owned.state === 'human') {
-      void (async () => {
-        const b = await channelBindingFor(db, owned.id);
-        if (b) await releaseThreadControl(b.channel, b.platformUserId);
-      })();
-    }
-
-    // Archiving resolves the conversation — send the one-shot CSAT prompt so
-    // the customer's next reply lands as a rating, not another turn.
-    if (body.state === 'archived' && owned.state !== 'archived') {
-      void sendCsatPrompt(db, row).catch(() => {});
-      emitHookEvent(db, row.agentId, 'conversation_resolved', row);
-    }
-    if (body.state === 'needs_human' && owned.state !== 'needs_human') {
-      emitHookEvent(db, row.agentId, 'conversation_escalated', row);
-    }
-
-    // Manually un-flagging back to the agent resolves open alerts — same
-    // as takeover does, so future handoffs can re-alert
-    if (body.state === 'active') {
-      const resolved = await db
-        .update(alerts)
-        .set({ status: 'resolved' })
-        .where(and(eq(alerts.conversationId, owned.id), eq(alerts.status, 'open')))
-        .returning();
-      for (const a of resolved) {
-        bus.publish(workspaceId, { type: 'alert', data: toAlert(a) });
-      }
-      if (resolved.length) {
-        await systemNote(
-          db,
-          workspaceId,
-          owned.id,
-          `${user.name} resolved ${resolved.length} open alert${resolved.length === 1 ? '' : 's'}`,
-          'alert_status',
-        );
-      }
-    }
-
-    bus.publish(workspaceId, {
-      type: 'conversation',
-      data: { id: row.id, state: row.state },
-    });
-
-    // Operator audit trail — every manual change is a transcript line with
-    // the actor's name, independent of notification preferences
-    if (body.state !== undefined && body.state !== owned.state) {
-      await systemNote(db, workspaceId, owned.id,
-        `${user.name} set status to ${STATE_LABEL[body.state] ?? body.state}`,
-        'state_change');
-    }
-    if (body.assignee_id !== undefined && body.assignee_id !== owned.assigneeId) {
-      const names = await userNames(db, [
-        ...(body.assignee_id ? [body.assignee_id] : []),
-        ...(owned.assigneeId ? [owned.assigneeId] : []),
-      ]);
-      if (body.assignee_id === user.id) {
-        await systemNote(db, workspaceId, owned.id,
-          `${user.name} assigned themselves`, 'assign');
-      } else if (body.assignee_id) {
-        await systemNote(db, workspaceId, owned.id,
-          `${user.name} assigned the conversation to ${names.get(body.assignee_id) ?? 'a teammate'}`,
-          'assign');
-      } else {
-        const prev = owned.assigneeId === user.id
-          ? 'themselves'
-          : names.get(owned.assigneeId ?? '') ?? 'a teammate';
-        await systemNote(db, workspaceId, owned.id,
-          `${user.name} unassigned ${prev}`, 'assign');
-      }
-    }
-    if (body.intent !== undefined && body.intent !== owned.intent) {
-      await systemNote(db, workspaceId, owned.id,
-        body.intent
-          ? `${user.name} set the topic to "${body.intent}"`
-          : `${user.name} cleared the topic`,
-        'intent');
-    }
-    if (body.tags !== undefined) {
-      const nextTags = body.tags;
-      const added = nextTags.filter((t) => !(owned.tags ?? []).includes(t));
-      const removed = (owned.tags ?? []).filter((t) => !nextTags.includes(t));
-      for (const t of added) {
-        await systemNote(db, workspaceId, owned.id, `${user.name} tagged "${t}"`, 'tag');
-      }
-      for (const t of removed) {
-        await systemNote(db, workspaceId, owned.id, `${user.name} removed the tag "${t}"`, 'tag');
-      }
-    }
+    // Side effects + operator audit trail — the same implementation /bulk
+    // uses: transition line + hooks + CSAT on archive + Meta thread release
+    // leaving 'human' + open-alert sweep, and attributed notes for the
+    // assignee/topic/tag diffs.
+    await applyConvEffects(
+      db,
+      workspaceId,
+      owned,
+      row,
+      {
+        state: body.state,
+        assigneeId: body.assignee_id,
+        tags: body.tags,
+        intent: body.intent,
+      },
+      user,
+    );
     return c.json({ conversation: toConversation(row) });
   });
 

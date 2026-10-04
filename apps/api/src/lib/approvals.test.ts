@@ -133,13 +133,12 @@ describe('gated tool approvals', () => {
     expect(act.status).toBe('approved');
     expect(act.decided_by).toBe('Op');
 
-    const [note] = await db
+    const convMsgs = await db
       .select()
       .from(messages)
-      .where(eq(messages.conversationId, conv.id))
-      .orderBy(desc(messages.createdAt))
-      .limit(1);
-    expect((note.flags as { action_result?: boolean }).action_result).toBe(true);
+      .where(eq(messages.conversationId, conv.id));
+    const note = convMsgs.find((m) => (m.flags as { action_result?: boolean }).action_result);
+    expect(note).toBeDefined();
   });
 
   it('deny does not execute and marks the action denied', async () => {

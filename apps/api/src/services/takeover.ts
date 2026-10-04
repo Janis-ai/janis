@@ -1,13 +1,15 @@
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alerts, conversations, messages, users } from '../db/schema.js';
+import { agents, conversations, messages, users } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
 import { mirrorToSlack, setSlackThreadStatus, slackNotice, updateSlackAlert } from '../lib/slack.js';
 import { channelBindingFor, deliverToChannel, releaseThreadControl, takeThreadControl, type ChannelDelivery } from '../lib/channels.js';
 import { emitChannelUpdate } from '../lib/legacySocket.js';
 import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
 import { deliverWebhook } from '../lib/webhooks.js';
-import { toAlert, toMessage } from '../lib/serializers.js';
+import { toMessage } from '../lib/serializers.js';
+import { resolveOpenAlerts } from '../lib/alerts.js';
+import { systemNote } from '../lib/systemNote.js';
 import { agentVis, operatorIdentity, type AgentScope } from '../lib/access.js';
 import { queueCrmActivity } from '../lib/crm.js';
 
@@ -77,14 +79,7 @@ export async function takeover(
     .where(eq(conversations.id, conversationId))
     .returning();
 
-  const openAlerts = await db
-    .update(alerts)
-    .set({ status: 'resolved' })
-    .where(and(eq(alerts.conversationId, conversationId), eq(alerts.status, 'open')))
-    .returning();
-  for (const a of openAlerts) {
-    bus.publish(workspaceId, { type: 'alert', data: toAlert(a) });
-  }
+  await resolveOpenAlerts(db, workspaceId, conversationId);
 
   bus.publish(workspaceId, {
     type: 'conversation',
@@ -102,17 +97,10 @@ export async function takeover(
   // Status note in the transcript (internal — never sent to the customer)
   // and in Slack. slackNotice is awaited so a fresh thread row exists before
   // updateSlackAlert tries to restyle it.
-  const [note] = await db
-    .insert(messages)
-    .values({
-      conversationId,
-      direction: 'human',
-      authorId: user.id,
-      text: `${user.name} took over`,
-      payload: { internal: true, event: 'takeover' },
-    })
-    .returning();
-  bus.publish(workspaceId, { type: 'message', data: toMessage(note) });
+  await systemNote(db, workspaceId, conversationId, `${user.name} took over`, 'takeover', {
+    authorId: user.id,
+    direction: 'human',
+  });
   await slackNotice(db, workspaceId, updated, ':raising_hand:', `_${user.name} took over_`).catch(
     (e) => console.error('slack notice:', e),
   );
@@ -476,17 +464,14 @@ export async function resume(
     if (b) await releaseThreadControl(b.channel, b.platformUserId);
     if (b) await emitChannelUpdate(agent, b.platformUserId, false);
   })();
-  const [note] = await db
-    .insert(messages)
-    .values({
-      conversationId,
-      direction: 'human',
-      authorId: user?.id ?? null,
-      text: user ? `${user.name} resumed the agent` : 'auto-resumed to the agent',
-      payload: { internal: true, event: 'resume' },
-    })
-    .returning();
-  bus.publish(workspaceId, { type: 'message', data: toMessage(note) });
+  await systemNote(
+    db,
+    workspaceId,
+    conversationId,
+    user ? `${user.name} resumed the agent` : 'auto-resumed to the agent',
+    'resume',
+    { authorId: user?.id ?? null, direction: 'human' },
+  );
   await slackNotice(
     db,
     workspaceId,

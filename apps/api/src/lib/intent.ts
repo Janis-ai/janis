@@ -8,11 +8,14 @@ import { intentMatches, ruleEnabled, type RuleConfig } from './rules.js';
 
 import { DEFAULT_INTENTS } from '@janis/shared';
 
-/** One cheap chat completion — classify the opener into a taxonomy label. */
-export async function classifyIntent(
+/** Shared chat-completion call for the tiny classifiers — temperature 0,
+ *  8 tokens out, 10s cap, message truncated to 2k chars. Returns the raw
+ *  trimmed/lowercased answer; each caller validates against its own label
+ *  set. */
+async function llmClassify(
   llm: LlmSettings,
+  system: string,
   text: string,
-  labels: string[],
 ): Promise<string | null> {
   if (!llm.apiKey || !text.trim()) return null;
   const res = await fetch(`${llm.baseUrl}/chat/completions`, {
@@ -27,13 +30,7 @@ export async function classifyIntent(
       max_tokens: 8,
       temperature: 0,
       messages: [
-        {
-          role: 'system',
-          content:
-            'Classify the customer message into exactly one label from this list: ' +
-            labels.join(', ') +
-            '. Reply with the label only — no punctuation, no explanation.',
-        },
+        { role: 'system', content: system },
         { role: 'user', content: text.slice(0, 2000) },
       ],
     }),
@@ -43,7 +40,22 @@ export async function classifyIntent(
   const body = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
   };
-  const raw = (body.choices?.[0]?.message?.content ?? '').trim().toLowerCase();
+  return (body.choices?.[0]?.message?.content ?? '').trim().toLowerCase() || null;
+}
+
+/** One cheap chat completion — classify the opener into a taxonomy label. */
+export async function classifyIntent(
+  llm: LlmSettings,
+  text: string,
+  labels: string[],
+): Promise<string | null> {
+  const raw = await llmClassify(
+    llm,
+    'Classify the customer message into exactly one label from this list: ' +
+      labels.join(', ') +
+      '. Reply with the label only — no punctuation, no explanation.',
+    text,
+  );
   if (!raw) return null;
   // Exact match first, then a contains-match for labels the model decorated.
   const exact = labels.find((l) => l.toLowerCase() === raw);
@@ -52,42 +64,19 @@ export async function classifyIntent(
   return loose ?? 'other';
 }
 
-/** One cheap chat completion — read the customer's tone. Only runs when a
- *  sentiment rule exists, so agents without one pay nothing. */
+/** One cheap chat completion — read the customer's tone. Runs every inbound
+ *  turn when the agent has an LLM; sentiment rules gate only the alert. */
 export async function classifySentiment(
   llm: LlmSettings,
   text: string,
 ): Promise<'positive' | 'neutral' | 'negative' | null> {
-  if (!llm.apiKey || !text.trim()) return null;
-  const res = await fetch(`${llm.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${llm.apiKey}`,
-      ...(llm.headers ?? {}),
-    },
-    body: JSON.stringify({
-      model: llm.model,
-      max_tokens: 8,
-      temperature: 0,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Read the customer message and classify their sentiment as exactly one of: positive, neutral, negative. ' +
-            'Negative means frustrated, angry, or upset — not merely asking for help. ' +
-            'Reply with the label only — no punctuation, no explanation.',
-        },
-        { role: 'user', content: text.slice(0, 2000) },
-      ],
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) return null;
-  const body = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const raw = (body.choices?.[0]?.message?.content ?? '').trim().toLowerCase();
+  const raw = await llmClassify(
+    llm,
+    'Read the customer message and classify their sentiment as exactly one of: positive, neutral, negative. ' +
+      'Negative means frustrated, angry, or upset — not merely asking for help. ' +
+      'Reply with the label only — no punctuation, no explanation.',
+    text,
+  );
   if (raw === 'positive' || raw === 'neutral' || raw === 'negative') return raw;
   return null;
 }

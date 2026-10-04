@@ -7,10 +7,9 @@ import type { Db } from '../db/client.js';
 import { channels, conversations, hookSubscriptions } from '../db/schema.js';
 import { agentAuth, type AgentAuthEnv } from '../middleware/agentAuth.js';
 import { deliverWebhook } from '../lib/webhooks.js';
-import { bus } from '../lib/bus.js';
-import { sendCsatPrompt } from '../lib/csat.js';
 import { sendOutbound } from '../lib/outbound.js';
-import { emitHookEvent, HOOK_EVENTS } from '../lib/hooks.js';
+import { applyConvEffects } from '../lib/conversationOps.js';
+import { HOOK_EVENTS } from '../lib/hooks.js';
 import { toConversation } from '../lib/serializers.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
@@ -222,12 +221,8 @@ export function v1Routes(db: Db) {
       .set({ state: 'archived' })
       .where(eq(conversations.id, conv.id))
       .returning();
-    void sendCsatPrompt(db, row).catch(() => {});
-    bus.publish(agent.workspaceId, {
-      type: 'conversation',
-      data: { id: row.id, state: row.state },
-    });
-    emitHookEvent(db, agent.id, 'conversation_resolved', row);
+    // Same path as the console archive — CSAT, hook, audit line, alert sweep
+    await applyConvEffects(db, agent.workspaceId, conv, row, { state: 'archived' }, null);
     return c.json({ conversation_id: externalId, state: row.state });
   });
 

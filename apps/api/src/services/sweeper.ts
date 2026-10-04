@@ -1,14 +1,13 @@
 import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alertRules, alerts, busEvents, conversations, knowledgeFiles, messages, rateLimits, sweeperLocks, typingState, webhookDeliveries } from '../db/schema.js';
+import { agents, alertRules, alerts, busEvents, conversations, knowledgeFiles, rateLimits, sweeperLocks, typingState, webhookDeliveries } from '../db/schema.js';
 import { bus, INSTANCE_ID } from '../lib/bus.js';
-import { openAlertOnce } from '../lib/alerts.js';
-import { alertNotification, notifyWorkspace } from '../lib/notify.js';
+import { dispatchAlert, openAlertOnce } from '../lib/alerts.js';
 import { opsAlert } from '../lib/opsAlert.js';
-import { inactivityActions, inactivityThresholds, type RuleConfig } from '../lib/rules.js';
-import { groupsForRules } from '../lib/ruleAlerts.js';
-import { systemNote, userNames } from '../lib/systemNote.js';
-import { toAlert, toMessage } from '../lib/serializers.js';
+import { inactivityActions, inactivityThresholds } from '../lib/rules.js';
+import { advanceRuleCursor, groupsForRules } from '../lib/ruleAlerts.js';
+import { transitionConversation } from '../lib/conversationOps.js';
+import { noteRuleRouting, systemNote } from '../lib/systemNote.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
 import { renewGmailWatches, sweepGmail } from './gmailSweep.js';
@@ -219,16 +218,14 @@ export async function sweepAutoResume(db: Db): Promise<number> {
       );
       // Same warning in the Janis transcript — an internal event row like
       // takeover/resume notices, never sent to the customer.
-      const [note] = await db
-        .insert(messages)
-        .values({
-          conversationId: conv.id,
-          direction: 'human',
-          text: `takeover auto-resumes in ~${remainingMin}m — reply to keep control`,
-          payload: { internal: true, event: 'auto-resume warning' },
-        })
-        .returning();
-      bus.publish(agent.workspaceId, { type: 'message', data: toMessage(note) });
+      await systemNote(
+        db,
+        agent.workspaceId,
+        conv.id,
+        `takeover auto-resumes in ~${remainingMin}m — reply to keep control`,
+        'auto-resume warning',
+        { direction: 'human' },
+      );
       void mirrorToSlack(
         db,
         conv.id,
@@ -286,15 +283,9 @@ export async function sweep(db: Db): Promise<number> {
       );
       for (const a of actions) {
         if (a.ruleId === undefined || a.next === undefined) continue;
+        // several stale convs in one sweep each rotate to the next member
         const rule = agentRules.find((r) => r.id === a.ruleId);
-        if (!rule) continue;
-        // persist + advance the in-memory copy — several stale convs in one
-        // sweep each rotate to the next pool member
-        rule.config = { ...(rule.config as RuleConfig), next: a.next };
-        await db
-          .update(alertRules)
-          .set({ config: rule.config })
-          .where(eq(alertRules.id, a.ruleId));
+        if (rule) await advanceRuleCursor(db, rule, a.next);
       }
       const assignTo = actions.find((a) => a.assignTo)?.assignTo;
       const tags = actions.some((a) => a.tag)
@@ -305,52 +296,25 @@ export async function sweep(db: Db): Promise<number> {
             ]),
           ]
         : conversation.tags;
-      await db
-        .update(conversations)
-        .set({
-          state: 'needs_human',
+      // Transcript audit + conversation_escalated hook ride along with the
+      // transition — a stale-thread escalation looks exactly like a handoff's.
+      await transitionConversation(db, agent.workspaceId, conversation, 'needs_human', {
+        set: {
           // non-stealing like keyword/intent routing — only fills the slot
           ...(assignTo && !conversation.assigneeId ? { assigneeId: assignTo } : {}),
           ...(tags.length !== conversation.tags.length ? { tags } : {}),
-        })
-        .where(eq(conversations.id, conversation.id));
-      // Transcript audit — the escalation and its routing are recorded
-      // whether or not the notification lands with anyone
+        },
+      });
       await systemNote(db, agent.workspaceId, conversation.id,
         `Inactivity — no agent response for ${minutes}m`, 'rule_trigger');
-      await systemNote(db, agent.workspaceId, conversation.id,
-        'Status: agent → needs human', 'state_change');
-      if (assignTo || tags.length !== conversation.tags.length) {
-        const names = await userNames(db, [
-          ...(assignTo ? [assignTo] : []),
-          ...(conversation.assigneeId ? [conversation.assigneeId] : []),
-        ]);
-        if (assignTo) {
-          const target = names.get(assignTo) ?? 'a teammate';
-          if (!conversation.assigneeId) {
-            await systemNote(db, agent.workspaceId, conversation.id,
-              `Assigned to ${target} (inactivity rule)`, 'assign');
-          } else {
-            const owner = names.get(conversation.assigneeId) ?? 'a teammate';
-            await systemNote(db, agent.workspaceId, conversation.id,
-              `inactivity rule tried to assign ${target} — already owned by ${owner}`, 'assign');
-          }
-        }
-        for (const t of tags.filter((x) => !conversation.tags.includes(x))) {
-          await systemNote(db, agent.workspaceId, conversation.id,
-            `Tagged "${t}" (inactivity rule)`, 'tag');
-        }
-      }
-      const n = await alertNotification(db, alert, conversation, agent);
-      bus.publish(agent.workspaceId, {
-        type: 'alert',
-        data: { ...toAlert(alert), notification: n },
-      });
-      bus.publish(agent.workspaceId, {
-        type: 'conversation',
-        data: { id: conversation.id, state: 'needs_human' },
-      });
-      void notifyWorkspace(db, agent.workspaceId, n, { agentId: agent.id, event: 'inactivity' });
+      await noteRuleRouting(
+        db,
+        agent.workspaceId,
+        conversation,
+        { assigneeId: assignTo, tags },
+        'inactivity rule',
+      );
+      await dispatchAlert(db, agent, conversation, alert, { event: 'inactivity' });
       fired++;
     }
   }
@@ -418,14 +382,9 @@ export async function sweepSla(db: Db): Promise<number> {
         await systemNote(db, agent.workspaceId, conv.id,
           `SLA breach — unclaimed for ${ageMin}m (SLA ${slaMinutes}m)${escalated ? ' — escalated' : ''}`,
           'rule_trigger');
-        const n = await alertNotification(db, alert, conv, agent);
-        bus.publish(agent.workspaceId, {
-          type: 'alert',
-          data: { ...toAlert(alert), notification: n },
-        });
         // SLA breaches page the whole workspace even when assigned — the point
         // of the escalation is that the owner didn't respond
-        void notifyWorkspace(db, agent.workspaceId, n, { agentId: agent.id, event: 'sla' });
+        await dispatchAlert(db, agent, conv, alert, { event: 'sla' });
       }
       if (escalated && alert) {
         void postSlackAlert(db, agent.workspaceId, conv, agent, alert);
