@@ -219,9 +219,23 @@ drizzle-kit/workbox-build, nothing to drop directly).
     - Notification email fixed: JANIS_EMAIL_FROM=alerts@inbound.janis.ai
       (was unset → alerts@janis.ai unverified → all email 403'd).
       Channel/workspace-delete FK cascade fixed (9e07ae2).
-43. `janis-zapier-logo.png` shows deleted in git — confirm intentional.
-44. Three `big-j*.png` untracked in apps/web/public/img/ — commit or gitignore?
-45. Optional: zapier-platform-core 19 bump before directory submission.
+43. Alert-matrix verified live (2026-10-03): all 10 rule kinds + sla,
+    handoff_offer, approval_request fire end-to-end on the concierge.
+    Gotchas learned: ANY non-failure/handoff_offer alert escalates the
+    conv to needs_human (ingest.ts ~271); intent/sentiment classify the
+    OPENER only (mid-thread probes never re-classify unless drift
+    recheck trips); inactivity needs lastMessageDirection='in' AND
+    state='active'; alerts_one_open_per_type dedupes repeat fires —
+    resolve the open row before re-testing a type. Fresh convs:
+    44dccd1b (billing→intent+offer), f34b32c5 (angry→sentiment+offer),
+    b201fc51 (human→help_request), 621de2d8 (auto_assign).
+    Intent-quality: only miss was a mid-thread billing question where
+    the concierge claimed no Stripe access despite holding the tools —
+    saved as regression test "Alert battery — billing question must try
+    Stripe tools". Positive: "explicit human request escalates".
+44. `janis-zapier-logo.png` shows deleted in git — confirm intentional.
+45. Three `big-j*.png` untracked in apps/web/public/img/ — commit or gitignore?
+46. Optional: zapier-platform-core 19 bump before directory submission.
 
 **Infra / reliability**
 - Multi-instance: DONE — bus_events SSE relay, viewers + voice_queue tables,
