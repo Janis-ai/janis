@@ -1,6 +1,7 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
+  agents,
   campaigns,
   campaignSends,
   channels,
@@ -13,7 +14,7 @@ import { refreshKnowledgeSource } from './urlSource.js';
 import { dispatchCampaignStep, stepStragglersExist } from './campaigns.js';
 import { checkSendPolicy, policyFor } from './sendPolicy.js';
 import { queueCrmActivity, runCrmSyncJob, runCrmWritebackJob } from './crm.js';
-import { runScheduledEval } from './evalRuns.js';
+import { runScheduledEval, runTestSuite } from './evalRuns.js';
 
 /** Job payload for 'outbound.send' — one recipient's send, replayable. */
 export interface OutboundSendJob {
@@ -234,6 +235,29 @@ const HANDLERS: Record<
     await runScheduledEval(db, ws, agentId, () =>
       db.update(jobs).set({ runAt: new Date() }).where(eq(jobs.id, job.id)),
     );
+  },
+  // Interactive suite runs (Tests tab "Run all" / A/B prompt) — off the
+  // request path so N tests × LLM calls can't outlive the request timeout.
+  'eval.suite': async (db, ws, p, job) => {
+    const { agentId, batchId, kind, runOpts } = p as {
+      agentId?: string;
+      batchId?: string;
+      kind?: 'manual' | 'ab';
+      runOpts?: { systemPrompt?: string; model?: string };
+    };
+    if (!agentId || !batchId || !kind) throw new Error('eval.suite job missing fields');
+    const [agent] = await db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.id, agentId), eq(agents.workspaceId, ws)))
+      .limit(1);
+    if (!agent?.hosted) return;
+    await runTestSuite(db, agent, {
+      kind,
+      batchId,
+      runOpts,
+      heartbeat: () => db.update(jobs).set({ runAt: new Date() }).where(eq(jobs.id, job.id)),
+    });
   },
   'eval.triage': async (db, ws, p, job) => {
     const { agentId, batchId } = p as { agentId?: string; batchId?: string };

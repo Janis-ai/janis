@@ -3258,13 +3258,23 @@ interface EvalBatch {
 
 function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; isAdmin: boolean }) {
   const qc = useQueryClient();
+  const [batch, setBatch] = useState<{
+    batchId: string;
+    total: number;
+    kind: 'manual' | 'ab';
+    startedAt: number;
+  } | null>(null);
   const { data } = useQuery({
     queryKey: ['agent-tests', agentId],
     queryFn: () => api<{ tests: AgentTest[] }>(`/api/agents/${agentId}/tests`),
+    // While a suite runs, last_run lands per test — poll so checkmarks
+    // light up live instead of appearing all at once at the end.
+    refetchInterval: batch ? 3000 : false,
   });
   const { data: runsData } = useQuery({
     queryKey: ['agent-test-runs', agentId],
     queryFn: () => api<{ batches: EvalBatch[] }>(`/api/agents/${agentId}/test-runs`),
+    refetchInterval: batch ? 2500 : false,
   });
   // Rescued conversations with no saved test — the suggestion list turns
   // "a human had to step in" into the raw material for regression coverage.
@@ -3303,7 +3313,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
         }[];
       }>(`/api/agents/${agentId}/eval-suggestions`),
   });
-  const [running, setRunning] = useState<string | 'all' | null>(null);
+  const [running, setRunning] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [newName, setNewName] = useState('');
@@ -3320,11 +3330,38 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     onError: (e) => setErr(e.message),
     onSettled: () => setRunning(null),
   });
+  // Suites run on the jobs path — the POST returns a batch id immediately
+  // and rows land in /test-runs as each test completes. Poll for the batch
+  // and treat done===total as finished (unrunnable tests still record a row).
+  const activeBatch = batch ? runsData?.batches.find((b) => b.batch_id === batch.batchId) : undefined;
+  const batchDone = activeBatch?.results.length ?? 0;
+  useEffect(() => {
+    if (!batch) return;
+    const timedOut = Date.now() - batch.startedAt > 20 * 60_000;
+    if (batchDone < batch.total && !timedOut) return;
+    if (timedOut && batchDone < batch.total)
+      setErr('suite run timed out — partial results are saved');
+    if (batch.kind === 'ab' && activeBatch) {
+      setAbResult({
+        summary: {
+          passed: activeBatch.passed,
+          failed: activeBatch.failed,
+          unrunnable: activeBatch.unrunnable,
+        },
+        results: activeBatch.results.map((r) => ({ name: r.name, passed: r.passed, reason: r.reason })),
+      });
+    }
+    setBatch(null);
+    invalidate();
+    void qc.invalidateQueries({ queryKey: ['agent-test-runs', agentId] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batch, batchDone, activeBatch]);
+
   const runAll = useMutation({
-    mutationFn: () => api(`/api/agents/${agentId}/tests-run-all`, { method: 'POST' }),
-    onSuccess: invalidate,
+    mutationFn: () =>
+      api<{ batch_id: string; total: number }>(`/api/agents/${agentId}/tests-run-all`, { method: 'POST' }),
+    onSuccess: (d) => setBatch({ batchId: d.batch_id, total: d.total, kind: 'manual', startedAt: Date.now() }),
     onError: (e) => setErr(e.message),
-    onSettled: () => setRunning(null),
   });
   // Prompt A/B — replay the whole suite against a candidate system prompt.
   // Nothing saves back to the agent; the summary is compared to the baseline
@@ -3338,16 +3375,15 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   } | null>(null);
   const abRun = useMutation({
     mutationFn: () =>
-      api(`/api/agents/${agentId}/tests-run-all`, {
+      api<{ batch_id: string; total: number }>(`/api/agents/${agentId}/tests-run-all`, {
         method: 'POST',
         body: JSON.stringify({
           ...(candidatePrompt.trim() ? { system_prompt: candidatePrompt } : {}),
           ...(candidateModel.trim() ? { model: candidateModel.trim() } : {}),
         }),
       }),
-    onSuccess: (r) => setAbResult(r as typeof abResult),
+    onSuccess: (d) => setBatch({ batchId: d.batch_id, total: d.total, kind: 'ab', startedAt: Date.now() }),
     onError: (e) => setErr(e.message),
-    onSettled: () => setRunning(null),
   });
   const [importOpen, setImportOpen] = useState(false);
   const [csvText, setCsvText] = useState('');
@@ -3487,16 +3523,16 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
         {tests.length > 0 && (
           <button
             className="btn sm"
-            disabled={running !== null}
-            onClick={() => { setRunning('all'); runAll.mutate(); }}
+            disabled={running !== null || batch !== null}
+            onClick={() => runAll.mutate()}
           >
-            {running === 'all' ? 'Running…' : 'Run all'}
+            {batch ? `Running… ${batchDone}/${batch.total}` : 'Run all'}
           </button>
         )}
         {tests.length > 0 && (
           <button
             className="btn sm"
-            disabled={running !== null}
+            disabled={running !== null || batch !== null}
             onClick={() => { setAbOpen((v) => !v); }}
           >
             A/B prompt
@@ -3749,10 +3785,10 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           <div className="row" style={{ marginTop: 8 }}>
             <button
               className="btn primary sm"
-              disabled={(!candidatePrompt.trim() && !candidateModel.trim()) || running !== null}
-              onClick={() => { setRunning('all'); setAbResult(null); abRun.mutate(); }}
+              disabled={(!candidatePrompt.trim() && !candidateModel.trim()) || running !== null || batch !== null}
+              onClick={() => { setAbResult(null); abRun.mutate(); }}
             >
-              {running === 'all' ? 'Running…' : 'Run suite vs candidate'}
+              {batch ? `Running… ${batchDone}/${batch.total}` : 'Run suite vs candidate'}
             </button>
             <button className="btn sm" onClick={() => setAbOpen(false)}>Close</button>
           </div>
@@ -3824,7 +3860,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             <div className="row">
               <button
                 className="btn sm"
-                disabled={running !== null}
+                disabled={running !== null || batch !== null}
                 onClick={() => { setRunning(t.id); runOne.mutate(t.id); }}
               >
                 {running === t.id ? 'Running…' : '▶ Run'}

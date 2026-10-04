@@ -139,6 +139,48 @@ export function detectRegression(
   return { flips, prevRate, curRate, detail: parts.join(' — ') };
 }
 
+/** Replay the whole suite under a generated batch id — the engine behind the
+ *  interactive "Run all" / A/B experiment job (eval.suite). Runs on the jobs
+ *  path rather than in the request: a suite of N tests is N×(generate+judge)
+ *  LLM calls, far past the request timeout. last_run updates per test so the
+ *  UI polls progress as rows land; 'ab' runs never overwrite the baseline. */
+export async function runTestSuite(
+  db: Db,
+  agent: AgentRow,
+  run: {
+    kind: 'manual' | 'ab';
+    batchId: string;
+    runOpts?: { systemPrompt?: string; model?: string };
+    heartbeat?: () => Promise<unknown>;
+  },
+): Promise<void> {
+  const tests = await db
+    .select()
+    .from(agentTests)
+    .where(eq(agentTests.agentId, agent.id))
+    .orderBy(asc(agentTests.createdAt));
+  for (const test of tests) {
+    const result = await runAgentTest(db, agent, test, run.runOpts).catch((e) => ({
+      at: new Date().toISOString(),
+      passed: null,
+      reply: null,
+      tools: [],
+      model: run.runOpts?.model,
+      reason: e instanceof Error ? e.message : 'run failed',
+    })) satisfies TestRunResult;
+    await recordRun(db, { agent, test, result, batchId: run.batchId, kind: run.kind });
+    // Experiment runs are candidates — the baseline verdict stays put.
+    if (run.kind !== 'ab') {
+      await db.update(agentTests).set({ lastRun: result as never }).where(eq(agentTests.id, test.id));
+    }
+    await run.heartbeat?.();
+  }
+  bus.publish(agent.workspaceId, {
+    type: 'eval',
+    data: { agent_id: agent.id, batch_id: run.batchId },
+  });
+}
+
 /**
  * The eval.run job: replay the whole suite against the agent's current
  * config, record the batch, compare to the previous scheduled batch, and

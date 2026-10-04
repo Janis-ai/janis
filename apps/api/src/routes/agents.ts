@@ -35,6 +35,7 @@ import { encryptSecret } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
 import { checkpointIndices, draftExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
+import { enqueueJob, runJobs } from '../lib/jobs.js';
 import { applySuggestion, type SuggestionPatch } from '../lib/evalTriage.js';
 import { randomUUID } from 'node:crypto';
 import { effectiveMeteredModel } from '../lib/llm.js';
@@ -1671,47 +1672,32 @@ export function agentRoutes(db: Db) {
       .safeParse(raw);
     const candidate = parsed.success ? parsed.data.system_prompt : undefined;
     const candidateModel = parsed.success ? parsed.data.model : undefined;
-    const rows = await db
-      .select()
+    const [{ total }] = await db
+      .select({ total: sql<number>`count(*)::int` })
       .from(agentTests)
-      .where(eq(agentTests.agentId, agent.id))
-      .orderBy(asc(agentTests.createdAt));
+      .where(eq(agentTests.agentId, agent.id));
     const batchId = randomUUID();
-    const isExperiment = candidate !== undefined || candidateModel !== undefined;
-    const kind = isExperiment ? 'ab' : 'manual';
-    const results: { id: string; name: string; passed: boolean | null; reason: string }[] = [];
-    for (const test of rows) {
-      // An unrunnable candidate (bad model id, unpriced metered model, key
-      // failure) shouldn't kill the whole batch — mark the test unrunnable.
-      const run = await runAgentTest(db, agent, test, isExperiment
-        ? {
-            ...(candidate !== undefined ? { systemPrompt: candidate } : {}),
-            ...(candidateModel !== undefined ? { model: candidateModel } : {}),
-          }
-        : undefined
-      ).catch((e) => ({
-        at: new Date().toISOString(),
-        passed: null,
-        reply: null,
-        tools: [],
-        model: candidateModel,
-        reason: e instanceof Error ? e.message : 'run failed',
-      }));
-      await recordRun(db, { agent, test, result: run, batchId, kind });
-      // Candidate runs are experiments — don't overwrite the baseline's verdict.
-      if (!isExperiment) {
-        await db.update(agentTests).set({ lastRun: run as never }).where(eq(agentTests.id, test.id));
-      }
-      results.push({ id: test.id, name: test.name, passed: run.passed, reason: run.reason });
-    }
-    return c.json({
-      results,
-      summary: {
-        passed: results.filter((r) => r.passed === true).length,
-        failed: results.filter((r) => r.passed === false).length,
-        unrunnable: results.filter((r) => r.passed === null).length,
+    const kind = candidate !== undefined || candidateModel !== undefined ? 'ab' : 'manual';
+    // Suites run N×(generate+judge) LLM calls — far past the request timeout.
+    // Offload to the jobs path (same drain the scheduled evals use); the
+    // client polls /test-runs for batch rows as they land.
+    await enqueueJob(db, {
+      workspaceId: agent.workspaceId,
+      type: 'eval.suite',
+      payload: {
+        agentId: agent.id,
+        batchId,
+        kind,
+        runOpts: {
+          ...(candidate !== undefined ? { systemPrompt: candidate } : {}),
+          ...(candidateModel !== undefined ? { model: candidateModel } : {}),
+        },
       },
     });
+    // Kick the drain — the claim is SKIP LOCKED so an in-process pass racing
+    // the sweeper tick can't double-run it; this just removes tick latency.
+    void runJobs(db);
+    return c.json({ batch_id: batchId, total }, 202);
   });
 
   // Rescued-but-untested conversations: scan recent convs for human-rescue
