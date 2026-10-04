@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
 import { blessedUrlsFor, buttonLabelOverflow, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
+import { newestInboundIsPending } from './convLock.js';
 
 let db: Db;
 let convId: string;
@@ -120,6 +121,73 @@ describe('transcriptFor file analysis', () => {
     const last = history.at(-1)!;
     expect(last.role).toBe('user');
     expect(last.content as string).toBe('Choose Free [tapped "Free"]');
+  });
+
+  it('drops out-direction audit lines but keeps flagged markers and human whispers', async () => {
+    // prod incident: a rule_trigger systemNote ('out' + internal) landed after
+    // the inbound; transcriptFor fed it as an assistant turn and the reply
+    // run's tail check saw the conversation as answered — no reply.
+    const t = Date.now();
+    await db.insert(messages).values([
+      {
+        conversationId: convId,
+        direction: 'in',
+        text: 'still angry',
+        createdAt: new Date(t),
+      },
+      {
+        conversationId: convId,
+        direction: 'out',
+        text: 'Negative sentiment — customer sentiment classified negative',
+        payload: { internal: true, event: 'rule_trigger' },
+        createdAt: new Date(t + 1),
+      },
+      {
+        conversationId: convId,
+        direction: 'out',
+        text: 'this is going to a teammate',
+        flags: { help_requested: true },
+        createdAt: new Date(t + 2),
+      },
+      {
+        conversationId: convId,
+        direction: 'human',
+        text: 'whisper to the bot',
+        payload: { internal: true, via: 'web' },
+        createdAt: new Date(t + 3),
+      },
+    ]);
+    const history = await transcriptFor(db, convId, false);
+    expect(history.some((m) => String(m.content).includes('Negative sentiment'))).toBe(false);
+    expect(history.some((m) => String(m.content).includes('passed to a human teammate'))).toBe(true);
+    expect(history.at(-1)!.content as string).toBe('(human operator) whisper to the bot');
+  });
+});
+
+describe('newestInboundIsPending', () => {
+  it('internal notes never mark an inbound answered; real replies do', async () => {
+    const [base] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    const [c] = await db
+      .insert(conversations)
+      .values({ agentId: base.agentId, externalId: 'pending-test', state: 'active' })
+      .returning();
+    const t = Date.now();
+    const msg = (direction: string, text: string, offset: number, payload?: object) =>
+      db.insert(messages).values({
+        conversationId: c.id,
+        direction: direction as 'in' | 'out' | 'human',
+        text,
+        payload,
+        createdAt: new Date(t + offset),
+      });
+
+    await msg('in', 'are you there?', 0);
+    await msg('out', 'Negative sentiment — classified negative', 1, { internal: true, event: 'rule_trigger' });
+    await msg('human', 'internal whisper', 2, { internal: true, via: 'web' });
+    expect(await newestInboundIsPending(db, c.id)).toBe(true);
+
+    await msg('out', 'sorry about that — how can I help?', 3);
+    expect(await newestInboundIsPending(db, c.id)).toBe(false);
   });
 });
 

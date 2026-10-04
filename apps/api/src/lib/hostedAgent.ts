@@ -1829,7 +1829,17 @@ export async function transcriptFor(
     .orderBy(desc(messages.createdAt))
     .limit(RECENT_WINDOW))
     .reverse()
-    .filter((m) => m.text);
+    // System audit lines ('out' + payload.internal — rule triggers, state
+    // changes, alert resolutions) are operator-facing bookkeeping, not
+    // turns: fed verbatim they'd leak "Negative sentiment — …" as assistant
+    // prose and make a fresh inbound look answered to the tail check below.
+    // Flagged agent notes (failure/handoff markers) carry no internal flag
+    // and stay; 'human' internal rows are operator whispers the model
+    // should hear — they stay too.
+    .filter(
+      (m) =>
+        m.text && !(m.direction === 'out' && (m.payload as { internal?: boolean } | null)?.internal),
+    );
 
   // Vision budget: the most recent VISION_TURNS attachment-bearing customer
   // messages get real image parts; older ones keep name annotations.
@@ -2308,14 +2318,14 @@ async function replyAsHostedAgent(
     // Fold memory alongside the reply — the summary only matters for future
     // turns, so blocking on it adds a whole LLM call to every reply.
     void foldConversationMemory(db, agent, conv, llm);
+    // A pending-flag pass can fire on an already-answered conversation —
+    // the inbound landed mid-run and the reply it raced ahead of covered
+    // it. Bail quietly rather than 400 the provider and drop a failure
+    // line on the customer. Internal notes never count as answers.
+    if (!(await newestInboundIsPending(db, convId))) return;
     const fileAnalysis = await fileAnalysisAllowed(db, agent.workspaceId);
     console.log(`[files] conv=${convId} analysis=${fileAnalysis}`);
     const history = await transcriptFor(db, convId, fileAnalysis);
-    // A pending-flag pass can fire on an already-answered transcript — the
-    // inbound landed mid-run and the reply it raced ahead of covered it.
-    // Ending on our own turn means nothing is pending: bail quietly rather
-    // than 400 the provider and drop a failure line on the customer.
-    if (history[history.length - 1]?.role !== 'user') return;
     const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history, conv));
     const secrets = {
       ...(await loadSecretsMap(db, agent.id)),

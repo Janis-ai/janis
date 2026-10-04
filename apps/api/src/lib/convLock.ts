@@ -95,7 +95,12 @@ export async function newestInboundIsPending(db: Db, convId: string): Promise<bo
   const [row] = await db
     .select({
       lastIn: sql<Date | null>`max(case when ${messages.direction} = 'in' then ${messages.createdAt} end)`,
-      lastReply: sql<Date | null>`max(case when ${messages.direction} <> 'in' then ${messages.createdAt} end)`,
+      // Internal audit lines (payload.internal — rule fires, state changes,
+      // operator whispers) are 'out'-direction bookkeeping, not answers:
+      // counting them makes a fresh inbound look replied-to and the run
+      // silently skips. Flagged agent notes (failure/handoff) carry no
+      // internal marker — they're real turns and do count.
+      lastReply: sql<Date | null>`max(case when ${messages.direction} <> 'in' and coalesce(${messages.payload}->>'internal', 'false') <> 'true' then ${messages.createdAt} end)`,
     })
     .from(messages)
     .where(sql`${messages.conversationId} = ${convId}`);
