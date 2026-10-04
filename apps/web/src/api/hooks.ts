@@ -97,6 +97,9 @@ export function useConversation(id: string) {
         suggestions: Suggestion[];
       }>(`/api/conversations/${id}`),
     retry: (count, err) => !(err instanceof ApiError && err.status === 404) && count < 3,
+    // SSE invalidation is the fast path; this poll is the safety net for a
+    // dead/dropped stream — the thread must never look frozen mid-chat.
+    refetchInterval: 15_000,
   });
 }
 

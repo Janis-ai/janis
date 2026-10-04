@@ -1,0 +1,14 @@
+import '../../src/loadEnv.js';
+import { createDb } from '../../src/db/client.js';
+import { agents } from '../../src/db/schema.js';
+import { bus } from '../../src/lib/bus.js';
+import { processEvents } from '../../src/services/ingest.js';
+import { eq } from 'drizzle-orm';
+const db = await createDb();
+bus.attachDb(db);
+const [agent] = await db.select().from(agents).where(eq(agents.id, 'ddbe235f-cd30-441f-8daa-70f06aab0a2a')).limit(1);
+if (!agent) throw new Error('demo agent not found');
+await processEvents(db, agent, [{ type: 'message_in', conversation_id: `sse-test-${Date.now() % 1000}`, text: 'sse live-update test' }]);
+await new Promise((r) => setTimeout(r, 1500));
+console.log('fired on agent', agent.name, 'ws', agent.workspaceId);
+process.exit(0);

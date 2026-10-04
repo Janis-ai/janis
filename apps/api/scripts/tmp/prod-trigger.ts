@@ -1,0 +1,13 @@
+import '../../src/loadEnv.js';
+import { createDb } from '../../src/db/client.js';
+import { agents } from '../../src/db/schema.js';
+import { bus } from '../../src/lib/bus.js';
+import { processEvents } from '../../src/services/ingest.js';
+import { eq } from 'drizzle-orm';
+const db = await createDb();
+bus.attachDb(db);
+const [agent] = await db.select().from(agents).where(eq(agents.id, '13e45248-77e9-4006-b8a5-76c442e522bd')).limit(1);
+await processEvents(db, agent, [{ type: 'message_in', conversation_id: `sse-prod-${Date.now() % 10000}`, text: 'prod sse relay test' }]);
+await new Promise((r) => setTimeout(r, 2000));
+console.log('fired');
+process.exit(0);

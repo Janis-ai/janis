@@ -31,6 +31,9 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
       void qc.invalidateQueries({ queryKey: ['conversation'] });
       void qc.invalidateQueries({ queryKey: ['alerts'] });
       void qc.invalidateQueries({ queryKey: ['attention-count'] });
+      // an active text search reads ['search', q, filter] — without this the
+      // list freezes while a query is typed even though rows moved
+      void qc.invalidateQueries({ queryKey: ['search'] });
     };
     source.addEventListener('message', refresh);
     source.addEventListener('conversation', refresh);
