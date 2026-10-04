@@ -300,9 +300,9 @@ export async function recheckIntent(
     .from(alertRules)
     .where(eq(alertRules.agentId, agent.id));
 
-  // Tone can drift too — a conversation that opened calm and turned
-  // hostile mid-thread is exactly what a sentiment rule exists for.
-  await checkSentiment(db, agent, conv, llm, rules, text);
+  // No sentiment check here — checkInboundSentiment scores every turn as it
+  // arrives, so a window-level re-read would just double-classify (and
+  // double-note) the same mood.
 
   const next = await classifyIntent(llm, text, labels).catch(() => null);
   if (!next || next === conv.intent || next === 'other') return;
