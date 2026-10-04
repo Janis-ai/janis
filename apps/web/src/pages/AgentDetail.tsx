@@ -25,16 +25,19 @@ import { useConfirm } from '../components/Prompt';
 import { Pencil, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 
 type RuleKind = AlertRule['kind'];
-const RULE_KINDS: { key: RuleKind; label: string; hint: string }[] = [
-  { key: 'handoff_request', label: 'Handoff request', hint: 'the agent asks for a human' },
+/** `defaultOn` kinds page the workspace even with zero rules — a rule exists
+ *  to route or mute them, not to turn them on (mirrors evaluateEvent's
+ *  fires(): no rule of the kind = on). */
+const RULE_KINDS: { key: RuleKind; label: string; hint: string; defaultOn?: boolean }[] = [
+  { key: 'handoff_request', label: 'Handoff request', hint: 'the agent asks for a human', defaultOn: true },
   { key: 'sentiment', label: 'Negative sentiment', hint: 'a customer message reads frustrated or angry' },
   { key: 'intent', label: 'Topic match', hint: 'the classifier tags the conversation with a topic' },
   { key: 'keyword', label: 'Keyword', hint: 'an inbound message contains the text' },
   { key: 'error', label: 'Agent error', hint: 'a tool call fails, output drops, or the run throws' },
   { key: 'csat', label: 'Low CSAT', hint: 'a survey score lands at or below the threshold' },
   { key: 'inactivity', label: 'Inactivity', hint: 'the customer waits N minutes with no reply' },
-  { key: 'failure', label: 'Agent failure', hint: 'the agent reports it could not handle the message' },
-  { key: 'custom_alert', label: 'Custom alert', hint: 'the agent raises its own alert type' },
+  { key: 'failure', label: 'Agent failure', hint: 'the agent reports it could not handle the message', defaultOn: true },
+  { key: 'custom_alert', label: 'Custom alert', hint: 'the agent raises its own alert type', defaultOn: true },
   { key: 'auto_assign', label: 'Auto-assign', hint: 'every new conversation goes to the next pool member' },
 ];
 const kindMeta = (k: RuleKind) => RULE_KINDS.find((x) => x.key === k);
@@ -1217,7 +1220,13 @@ function EscalationTab({
               ))}
             </select>
             <span className="muted" style={{ fontSize: 12 }}>
-              {editing ? 'kind is fixed once created' : kindMeta(kind)?.hint}
+              {editing
+                ? 'kind is fixed once created'
+                : `${kindMeta(kind)?.hint ?? ''}${
+                    kindMeta(kind)?.defaultOn
+                      ? ' — already pages the workspace by default; a rule routes or mutes it'
+                      : ''
+                  }`}
             </span>
           </div>
 

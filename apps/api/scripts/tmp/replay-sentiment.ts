@@ -1,0 +1,16 @@
+import '../../src/loadEnv.js';
+import { createDb } from '../../src/db/client.js';
+import { agents, conversations, alerts, messages } from '../../src/db/schema.js';
+import { desc, eq } from 'drizzle-orm';
+import { checkInboundSentiment } from '../../src/lib/intent.js';
+const db = await createDb();
+const convId = '912ad5b2-e24b-4fe4-bda5-596f622bafec';
+const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+const [agent] = await db.select().from(agents).where(eq(agents.id, conv.agentId));
+console.log('before: sentiment =', conv.sentiment);
+await checkInboundSentiment(db, agent, conv, 'this makes me mad');
+const convAlerts = await db.select().from(alerts).where(eq(alerts.conversationId, convId));
+console.log('alerts:', convAlerts.map((a) => `${a.type}/${a.status}`).join(', ') || 'none');
+const [note] = await db.select().from(messages).where(eq(messages.conversationId, convId)).orderBy(desc(messages.createdAt)).limit(2);
+console.log('latest msg:', JSON.stringify(note?.payload).slice(0, 120), '|', note?.text?.slice(0, 80));
+process.exit(0);

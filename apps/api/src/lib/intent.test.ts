@@ -6,7 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agents, alertRules, alerts, conversations, messages, workspaces } from '../db/schema.js';
-import { checkInboundSentiment, recheckIntent } from './intent.js';
+import { backfillSentimentAlerts, checkInboundSentiment, recheckIntent } from './intent.js';
 
 let db: Db;
 let agent: typeof schema.agents.$inferSelect;
@@ -144,6 +144,37 @@ describe('checkInboundSentiment — per-message tone check', () => {
     expect((await intentOf()).sentiment).toBe('negative');
   });
 
+  const internalNotes = async () =>
+    (await db.select().from(messages).where(eq(messages.conversationId, conv.id))).filter(
+      (m) => (m.payload as { internal?: boolean } | null)?.internal,
+    );
+
+  it('leaves a transcript note on a rule-less negative flip', async () => {
+    llmAnswer('negative');
+    await checkInboundSentiment(db, agent, conv, 'this is outrageous');
+    const notes = await internalNotes();
+    expect(notes).toHaveLength(1);
+    expect(notes[0].text).toContain('Negative sentiment');
+    expect(await sentimentAlerts()).toHaveLength(0);
+  });
+
+  it('notes the transition once — a thread that stays negative does not re-note', async () => {
+    llmAnswer('negative');
+    await checkInboundSentiment(db, agent, conv, 'this is outrageous');
+    await checkInboundSentiment(db, agent, conv, 'still furious'); // conv.sentiment mutated in-memory
+    expect(await internalNotes()).toHaveLength(1);
+  });
+
+  it('re-notes when the mood recovers then turns negative again', async () => {
+    llmAnswer('negative');
+    await checkInboundSentiment(db, agent, conv, 'this is outrageous');
+    llmAnswer('neutral');
+    await checkInboundSentiment(db, agent, conv, 'ok that helps');
+    llmAnswer('negative');
+    await checkInboundSentiment(db, agent, conv, 'actually no, still broken');
+    expect(await internalNotes()).toHaveLength(2);
+  });
+
   it('updates the stored mood as turns change tone', async () => {
     llmAnswer('neutral');
     await checkInboundSentiment(db, agent, conv, 'quick question about billing');
@@ -173,6 +204,54 @@ describe('checkInboundSentiment — per-message tone check', () => {
     llmAnswer('neutral');
     await checkInboundSentiment(db, agent, conv, 'quick question about billing');
     expect(await sentimentAlerts()).toHaveLength(0);
+    await db.delete(alertRules);
+    await db.delete(alerts);
+  });
+});
+
+describe('backfillSentimentAlerts — enabling a rule surfaces existing negatives', () => {
+  const sentimentAlerts = () =>
+    db
+      .select()
+      .from(alerts)
+      .where(and(eq(alerts.conversationId, conv.id), eq(alerts.type, 'sentiment')));
+
+  const makeRule = () =>
+    db
+      .insert(alertRules)
+      .values({ agentId: agent.id, kind: 'sentiment', config: { enabled: true } })
+      .returning();
+
+  it('fires the new rule on an open conversation already scored negative', async () => {
+    await db
+      .update(conversations)
+      .set({ sentiment: 'negative' })
+      .where(eq(conversations.id, conv.id));
+    const [rule] = await makeRule();
+    await backfillSentimentAlerts(db, agent, rule);
+    expect(await sentimentAlerts()).toHaveLength(1);
+    await db.delete(alertRules);
+    await db.delete(alerts);
+  });
+
+  it('skips archived threads and conversations already holding an open alert', async () => {
+    const [rule] = await makeRule();
+    // archived — resolved anger isn't worth a page
+    await db
+      .update(conversations)
+      .set({ sentiment: 'negative', state: 'archived' })
+      .where(eq(conversations.id, conv.id));
+    await backfillSentimentAlerts(db, agent, rule);
+    expect(await sentimentAlerts()).toHaveLength(0);
+    // open alert already exists — a second enable must not duplicate
+    await db
+      .update(conversations)
+      .set({ state: 'active' })
+      .where(eq(conversations.id, conv.id));
+    await backfillSentimentAlerts(db, agent, rule);
+    expect(await sentimentAlerts()).toHaveLength(1);
+    await backfillSentimentAlerts(db, agent, rule);
+    expect(await sentimentAlerts()).toHaveLength(1);
     await db.delete(alertRules);
     await db.delete(alerts);
   });

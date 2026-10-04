@@ -1,10 +1,11 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alertRules, conversations, messages } from '../db/schema.js';
+import { agents, alertRules, alerts, conversations, messages } from '../db/schema.js';
 import { bus } from './bus.js';
 import { llmFor, type LlmSettings } from './llm.js';
 import { fireRuleAlert } from './ruleAlerts.js';
 import { intentMatches, ruleEnabled, type RuleConfig } from './rules.js';
+import { systemNote } from './systemNote.js';
 
 import { DEFAULT_INTENTS } from '@janis/shared';
 
@@ -112,6 +113,26 @@ async function scoreSentiment(
   return s;
 }
 
+/** Transcript trace for a negative read with no sentiment rule — the score
+ *  updates either way, but a rule-less agent would otherwise leave no record
+ *  of the flip. Transition-only: a thread that stays negative doesn't re-note
+ *  (when a rule fires, fireRuleAlert's own note covers the trace). */
+async function noteSentimentFlip(
+  db: Db,
+  agent: typeof agents.$inferSelect,
+  conv: typeof conversations.$inferSelect,
+  prev: string | null,
+): Promise<void> {
+  if (prev === 'negative') return;
+  await systemNote(
+    db,
+    agent.workspaceId,
+    conv.id,
+    'Negative sentiment — customer sentiment classified negative',
+    'sentiment',
+  );
+}
+
 /** Score tone and fire sentiment rules on a negative read — shared by the
  *  opener classification, the drift re-check, and the per-inbound check. */
 async function checkSentiment(
@@ -122,9 +143,14 @@ async function checkSentiment(
   rules: (typeof alertRules.$inferSelect)[],
   text: string,
 ): Promise<void> {
+  const prev = conv.sentiment;
   const s = await scoreSentiment(db, agent, conv, llm, text);
+  if (s !== 'negative') return;
   const fired = sentimentRules(rules);
-  if (s !== 'negative' || !fired.length) return;
+  if (!fired.length) {
+    await noteSentimentFlip(db, agent, conv, prev);
+    return;
+  }
   await fireRuleAlert(db, agent, conv, {
     type: 'sentiment',
     detail: 'customer sentiment classified negative',
@@ -230,18 +256,70 @@ export async function checkInboundSentiment(
   } catch {
     return;
   }
+  const prev = conv.sentiment;
   const s = await scoreSentiment(db, agent, conv, llm, text);
   if (s !== 'negative') return;
   const rules =
     knownRules ??
     (await db.select().from(alertRules).where(eq(alertRules.agentId, agent.id)));
   const fired = sentimentRules(rules);
-  if (!fired.length) return;
+  if (!fired.length) {
+    await noteSentimentFlip(db, agent, conv, prev);
+    return;
+  }
   await fireRuleAlert(db, agent, conv, {
     type: 'sentiment',
     detail: 'customer sentiment classified negative',
     rules: fired,
   }).catch((err) => console.error('[intent] sentiment alert failed:', err));
+}
+
+/** Enabling a sentiment rule surfaces threads ALREADY scored negative, not
+ *  just the next angry message — the score outlives the rule. Each conv goes
+ *  through the normal fire path (dedupe, routing, notes, dispatch); convs
+ *  already carrying an open sentiment alert are skipped so a re-enable
+ *  doesn't re-note. Capped at the 25 most recent open threads — a review
+ *  pass, not a notification storm. */
+export async function backfillSentimentAlerts(
+  db: Db,
+  agent: typeof agents.$inferSelect,
+  rule: typeof alertRules.$inferSelect,
+): Promise<void> {
+  const convs = await db
+    .select()
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.agentId, agent.id),
+        eq(conversations.sentiment, 'negative'),
+        ne(conversations.state, 'archived'),
+      ),
+    )
+    .orderBy(desc(conversations.lastMessageAt))
+    .limit(25);
+  if (!convs.length) return;
+  const alerted = new Set(
+    (
+      await db
+        .select({ conversationId: alerts.conversationId })
+        .from(alerts)
+        .where(
+          and(
+            inArray(alerts.conversationId, convs.map((x) => x.id)),
+            eq(alerts.type, 'sentiment'),
+            eq(alerts.status, 'open'),
+          ),
+        )
+    ).map((a) => a.conversationId),
+  );
+  for (const conv of convs) {
+    if (alerted.has(conv.id)) continue;
+    await fireRuleAlert(db, agent, conv, {
+      type: 'sentiment',
+      detail: 'customer sentiment classified negative',
+      rules: [rule],
+    }).catch((err) => console.error('[intent] sentiment backfill failed:', err));
+  }
 }
 
 /** Drift re-check — a conversation that opened as "billing" can turn into

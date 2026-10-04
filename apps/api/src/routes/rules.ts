@@ -8,6 +8,7 @@ import { agents, alertRules } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import { selfAssignOnly, type RuleConfig } from '../lib/rules.js';
+import { backfillSentimentAlerts } from '../lib/intent.js';
 import { toAlertRule } from '../lib/serializers.js';
 
 const ruleConfig = z.object({
@@ -106,6 +107,18 @@ export function ruleRoutes(db: Db) {
       .insert(alertRules)
       .values({ agentId: body.agent_id, kind: body.kind, config: body.config })
       .returning();
+    if (row.kind === 'sentiment' && (row.config as RuleConfig).enabled !== false) {
+      const [agent] = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, row.agentId))
+        .limit(1);
+      if (agent) {
+        void backfillSentimentAlerts(db, agent, row).catch((err) =>
+          console.error('[rules] sentiment backfill failed:', err),
+        );
+      }
+    }
     return c.json({ rule: toAlertRule(row) }, 201);
   });
 
@@ -116,19 +129,16 @@ export function ruleRoutes(db: Db) {
       db, c.get('user').id, c.get('role'), c.get('agentScope'), agentId, c.get('workspaceId'),
     );
     const next = c.req.valid('json').config;
+    const [existing] = await db
+      .select()
+      .from(alertRules)
+      .where(eq(alertRules.id, c.req.param('id')))
+      .limit(1);
+    if (!existing) return c.json({ error: 'not found' }, 404);
     if (!isAdminRole(role)) {
       // Members can only add/remove THEMSELVES from a rule's routing — every
       // other field must round-trip unchanged.
-      const [existing] = await db
-        .select({ config: alertRules.config })
-        .from(alertRules)
-        .where(eq(alertRules.id, c.req.param('id')))
-        .limit(1);
-      if (
-        !role ||
-        !existing ||
-        !selfAssignOnly(existing.config as RuleConfig, next, c.get('user').id)
-      ) {
+      if (!role || !selfAssignOnly(existing.config as RuleConfig, next, c.get('user').id)) {
         return c.json({ error: 'admin required' }, 403);
       }
     }
@@ -137,6 +147,22 @@ export function ruleRoutes(db: Db) {
       .set({ config: next })
       .where(eq(alertRules.id, c.req.param('id')))
       .returning();
+    // Re-enabling a sentiment rule is the same signal as creating one —
+    // surface the threads already scored negative.
+    const reEnabled =
+      (existing.config as RuleConfig).enabled === false && next.enabled !== false;
+    if (row && row.kind === 'sentiment' && reEnabled) {
+      const [agent] = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .limit(1);
+      if (agent) {
+        void backfillSentimentAlerts(db, agent, row).catch((err) =>
+          console.error('[rules] sentiment backfill failed:', err),
+        );
+      }
+    }
     return c.json({ rule: toAlertRule(row) });
   });
 

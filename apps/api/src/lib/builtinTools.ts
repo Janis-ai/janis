@@ -38,6 +38,7 @@ import {
 } from './slack.js';
 import { normWidgetRef, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 import { toolsFor } from './toolExec.js';
+import { backfillSentimentAlerts } from './intent.js';
 
 /** Context a builtin can reach — matches AgentRunContext in hostedAgent. */
 export interface BuiltinCtx {
@@ -1520,6 +1521,11 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         .insert(alertRules)
         .values({ agentId: agent.id, kind: kind as never, config })
         .returning();
+      if (row.kind === 'sentiment' && (row.config as { enabled?: boolean }).enabled !== false) {
+        void backfillSentimentAlerts(ctx.db, agent, row).catch((err) =>
+          console.error('[tools] sentiment backfill failed:', err),
+        );
+      }
       await audit(ctx.db, {
         workspaceId: wsId,
         userId: user.id,
