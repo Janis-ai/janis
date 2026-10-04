@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   Agent,
   AgentConfig,
+  AgentMember,
   AgentSecretMeta,
   AlertRule,
   Channel,
@@ -952,8 +953,7 @@ function EscalationTab({
   const [topicDraft, setTopicDraft] = useState('');
   const [minutes, setMinutes] = useState('15');
   const [maxScore, setMaxScore] = useState('3');
-  const [route, setRoute] = useState<'none' | 'member' | 'pool'>('none');
-  const [assignTo, setAssignTo] = useState('');
+  const [route, setRoute] = useState<'none' | 'route'>('none');
   const [ruleTag, setRuleTag] = useState('');
   const [pool, setPool] = useState<string[]>([]);
   const [groupIds, setGroupIds] = useState<string[]>([]);
@@ -961,6 +961,17 @@ function EscalationTab({
   const { data: groupsData } = useGroups();
   const { data: users } = useUsers();
   const groups = groupsData?.groups ?? [];
+  // Assignable teammates = every active workspace member plus agent-scoped
+  // users granted on this agent (agent_members rows alone miss the workspace
+  // roster, which is why the picker rendered empty).
+  const teammates = [
+    ...(users?.users ?? [])
+      .filter((u) => u.status === 'active')
+      .map((u) => ({ user_id: u.id, name: u.name })),
+    ...(members?.members ?? [])
+      .filter((m) => m.status === 'active' && !users?.users.some((u) => u.id === m.user_id))
+      .map((m) => ({ user_id: m.user_id, name: m.name })),
+  ];
   const teammateName = (id: string) =>
     members?.members.find((m) => m.user_id === id)?.name ??
     users?.users.find((u) => u.id === id)?.name ??
@@ -1003,8 +1014,7 @@ function EscalationTab({
   const canAdd =
     (kind !== 'keyword' || keywords.trim().length > 0) &&
     (kind !== 'intent' || intents.length > 0) &&
-    (route !== 'member' || assignTo.length > 0) &&
-    (route !== 'pool' || pool.length + groupIds.length > 0);
+    (route !== 'route' || pool.length + groupIds.length > 0);
 
   const buildConfig = (enabled: boolean) => ({
     enabled,
@@ -1014,9 +1024,10 @@ function EscalationTab({
     ...(kind === 'intent' ? { intents } : {}),
     ...(kind === 'inactivity' ? { inactivity_minutes: Number(minutes) || 15 } : {}),
     ...(kind === 'csat' ? { max_score: Number(maxScore) } : {}),
-    ...(route === 'member' ? { assign_to: assignTo } : {}),
-    ...(route === 'pool'
-      ? { assignees: pool, group_ids: groupIds, next: editing ? ((editing.config as { next?: number }).next ?? 0) : 0 }
+    ...(route === 'route'
+      ? pool.length === 1 && groupIds.length === 0
+        ? { assign_to: pool[0] }
+        : { assignees: pool, group_ids: groupIds, next: editing ? ((editing.config as { next?: number }).next ?? 0) : 0 }
       : {}),
     ...(ruleTag.trim() ? { tag: ruleTag.trim() } : {}),
   });
@@ -1027,7 +1038,6 @@ function EscalationTab({
     setIntents([]);
     setTopicDraft('');
     setRoute('none');
-    setAssignTo('');
     setRuleTag('');
     setPool([]);
     setGroupIds([]);
@@ -1051,10 +1061,9 @@ function EscalationTab({
     setIntents(c.intents ?? []);
     setMinutes(String(c.inactivity_minutes ?? 15));
     setMaxScore(String(c.max_score ?? 3));
-    setRoute(c.assign_to ? 'member' : (c.assignees ?? []).length || (c.group_ids ?? []).length ? 'pool' : 'none');
-    setAssignTo(c.assign_to ?? '');
+    setRoute(c.assign_to || (c.assignees ?? []).length || (c.group_ids ?? []).length ? 'route' : 'none');
     setRuleTag(c.tag ?? '');
-    setPool(c.assignees ?? []);
+    setPool([...(c.assignees ?? []), ...(c.assign_to ? [c.assign_to] : [])]);
     setGroupIds(c.group_ids ?? []);
   };
 
@@ -1243,17 +1252,8 @@ function EscalationTab({
             <label className="muted" style={{ fontSize: 12 }}>Then</label>
             <select value={route} onChange={(e) => setRoute(e.target.value as typeof route)}>
               <option value="none">just alert</option>
-              <option value="member">assign to a teammate</option>
-              <option value="pool">rotate a pool</option>
+              <option value="route">route to teammates…</option>
             </select>
-            {route === 'member' && (
-              <select value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
-                <option value="">choose teammate…</option>
-                {(members?.members ?? []).map((m) => (
-                  <option key={m.user_id} value={m.user_id}>{m.name}</option>
-                ))}
-              </select>
-            )}
             <input
               style={{ width: 130 }}
               placeholder="+ tag (optional)"
@@ -1261,9 +1261,10 @@ function EscalationTab({
               onChange={(e) => setRuleTag(e.target.value)}
             />
           </div>
-          {route === 'pool' && (
+          {route === 'route' && (
+            <>
             <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
-              {(members?.members ?? []).map((m) => (
+              {teammates.map((m) => (
                 <label key={m.user_id} className="check-label" style={{ marginRight: 10 }}>
                   <input
                     type="checkbox"
@@ -1283,12 +1284,17 @@ function EscalationTab({
                   {g.name} <span className="muted">({g.member_ids.length})</span>
                 </label>
               ))}
-              {groups.length === 0 && (members?.members.length ?? 0) === 0 && (
+              {groups.length === 0 && teammates.length === 0 && (
                 <span className="muted" style={{ fontSize: 12 }}>
                   No teammates or groups yet — invite people in Settings → Team.
                 </span>
               )}
             </div>
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              One teammate becomes the fixed owner; more than one rotates between them.
+              Groups join the rotation by roster.
+            </div>
+            </>
           )}
           <div className="row" style={{ marginTop: 10 }}>
             <button className="btn" disabled={!canAdd} onClick={submitRule}>
@@ -1475,8 +1481,30 @@ function AgentProfileOverride({ agent }: { agent: Agent }) {
   );
 }
 
-/** Notifications override — this user's push/email/sound for THIS agent's
- *  alerts, field-wise over their workspace prefs. */
+/** Event keys where a per-agent override can differ from workspace prefs —
+ *  same buckets as Settings → Notifications. */
+const NOTIFY_EVENT_LABELS: [string, string][] = [
+  ['handoff', 'Needs human'],
+  ['failure', 'Agent failures'],
+  ['ops', 'Agent errors'],
+  ['inactivity', 'Unanswered customers'],
+  ['sentiment', 'Negative sentiment'],
+  ['offer', 'Handoff offers'],
+  ['sla', 'SLA breaches'],
+  ['assigned', 'Assigned to me'],
+  ['keyword', 'Keyword matches'],
+  ['intent', 'Topic matches'],
+  ['csat', 'Low CSAT scores'],
+  ['custom', 'Custom alerts'],
+  ['approval', 'Approvals'],
+  ['mention', 'Mentions'],
+  ['digest', 'Digests'],
+  ['eval', 'Eval regressions'],
+];
+
+/** Notifications override — this user's push/email/sound/event prefs for THIS
+ *  agent, field-wise over their workspace prefs. Event keys are tri-state:
+ *  present true = always notify, false = mute, absent = inherit workspace. */
 function AgentNotifyOverride({ agent }: { agent: Agent }) {
   const { data: me } = useMe();
   const { data: members } = useAgentMembers(agent.id);
@@ -1484,6 +1512,7 @@ function AgentNotifyOverride({ agent }: { agent: Agent }) {
   const mine = members?.members.find((m) => m.user_id === me?.user.id);
   const [on, setOn] = useState<boolean | null>(null);
   const [prefs, setPrefs] = useState({ push: true, email: true, sound: true });
+  const [events, setEvents] = useState<Record<string, boolean>>({});
   const [msg, setMsg] = useState('');
 
   useEffect(() => {
@@ -1495,11 +1524,12 @@ function AgentNotifyOverride({ agent }: { agent: Agent }) {
       email: n.email ?? me?.user.notify?.email ?? true,
       sound: n.sound ?? me?.user.notify?.sound ?? true,
     });
+    setEvents((n as { events?: Record<string, boolean> }).events ?? {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [members]);
 
   const save = useMutation({
-    mutationFn: (notify: Record<string, boolean> | null) =>
+    mutationFn: (notify: Record<string, unknown> | null) =>
       api(`/api/agents/${agent.id}/members/${me?.user.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ notify }),
@@ -1510,6 +1540,17 @@ function AgentNotifyOverride({ agent }: { agent: Agent }) {
     },
     onError: (e) => setMsg(e instanceof Error ? e.message : 'failed'),
   });
+
+  const eventState = (key: string) =>
+    events[key] === true ? 'on' : events[key] === false ? 'off' : 'inherit';
+
+  const setEvent = (key: string, state: 'inherit' | 'on' | 'off') => {
+    const next = { ...events };
+    if (state === 'inherit') delete next[key];
+    else next[key] = state === 'on';
+    setEvents(next);
+    save.mutate({ ...prefs, events: next });
+  };
 
   return (
     <div className="card" style={{ marginTop: 12 }}>
@@ -1525,12 +1566,13 @@ function AgentNotifyOverride({ agent }: { agent: Agent }) {
           onChange={(e) => {
             const next = e.target.checked;
             setOn(next);
-            save.mutate(next ? prefs : null);
+            save.mutate(next ? { ...prefs, events } : null);
           }}
         />
         Custom notifications for this agent
       </label>
       {on && (
+        <>
         <div className="row" style={{ marginTop: 8 }}>
           {(['push', 'email', 'sound'] as const).map((k) => (
             <label key={k} className="check-label">
@@ -1540,7 +1582,7 @@ function AgentNotifyOverride({ agent }: { agent: Agent }) {
                 onChange={(e) => {
                   const next = { ...prefs, [k]: e.target.checked };
                   setPrefs(next);
-                  save.mutate(next);
+                  save.mutate({ ...next, events });
                 }}
               />
               {k === 'push' ? 'Web push' : k === 'email' ? 'Email' : 'Alert sounds'}
@@ -1548,7 +1590,110 @@ function AgentNotifyOverride({ agent }: { agent: Agent }) {
           ))}
           {msg && <span className="muted">{msg}</span>}
         </div>
+        <div className="muted" style={{ margin: '10px 0 6px', fontSize: 12 }}>
+          Event types — Inherit follows your workspace setting for that type.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '4px 12px', fontSize: 13 }}>
+          {NOTIFY_EVENT_LABELS.map(([key, label]) => (
+            <div key={key} className="row" style={{ justifyContent: 'space-between' }}>
+              <span>{label}</span>
+              <select
+                value={eventState(key)}
+                onChange={(e) => setEvent(key, e.target.value as 'inherit' | 'on' | 'off')}
+                disabled={save.isPending}
+              >
+                <option value="inherit">Inherit</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+            </div>
+          ))}
+        </div>
+        </>
       )}
+    </div>
+  );
+}
+
+/** Admin editor for ANOTHER member's per-agent notification override —
+ *  channel toggles plus tri-state per-event (inherit/on/off). */
+function MemberNotifyEditor({
+  agentId,
+  userId,
+  notify,
+  onSaved,
+}: {
+  agentId: string;
+  userId: string;
+  notify: AgentMember['notify'];
+  onSaved: () => void;
+}) {
+  const [prefs, setPrefs] = useState({
+    push: notify?.push ?? true,
+    email: notify?.email ?? true,
+    sound: notify?.sound ?? true,
+  });
+  const [events, setEvents] = useState<Record<string, boolean>>(notify?.events ?? {});
+  const [msg, setMsg] = useState('');
+
+  const save = useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      api(`/api/agents/${agentId}/members/${userId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ notify: body }),
+      }),
+    onSuccess: () => {
+      setMsg('Saved.');
+      onSaved();
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : 'failed'),
+  });
+
+  const eventState = (key: string) =>
+    events[key] === true ? 'on' : events[key] === false ? 'off' : 'inherit';
+  const setEvent = (key: string, state: 'inherit' | 'on' | 'off') => {
+    const next = { ...events };
+    if (state === 'inherit') delete next[key];
+    else next[key] = state === 'on';
+    setEvents(next);
+    save.mutate({ ...prefs, events: next });
+  };
+
+  return (
+    <div className="ruleset" style={{ marginTop: 4, marginBottom: 8 }}>
+      <div className="row">
+        {(['push', 'email', 'sound'] as const).map((k) => (
+          <label key={k} className="check-label" style={{ marginRight: 12 }}>
+            <input
+              type="checkbox"
+              checked={prefs[k]}
+              onChange={(e) => {
+                const next = { ...prefs, [k]: e.target.checked };
+                setPrefs(next);
+                save.mutate({ ...next, events });
+              }}
+            />
+            {k === 'push' ? 'Web push' : k === 'email' ? 'Email' : 'Alert sounds'}
+          </label>
+        ))}
+        {msg && <span className="muted">{msg}</span>}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '4px 12px', fontSize: 13, marginTop: 6 }}>
+        {NOTIFY_EVENT_LABELS.map(([key, label]) => (
+          <div key={key} className="row" style={{ justifyContent: 'space-between' }}>
+            <span>{label}</span>
+            <select
+              value={eventState(key)}
+              onChange={(e) => setEvent(key, e.target.value as 'inherit' | 'on' | 'off')}
+              disabled={save.isPending}
+            >
+              <option value="inherit">Inherit</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1679,6 +1824,28 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
   const roleBadge = (v: string) =>
     v === 'hidden' ? 'no privileges (hidden)' : v;
 
+  const [notifyFor, setNotifyFor] = useState<string | null>(null);
+  const notifyToggle = (userId: string) =>
+    isAdmin ? (
+      <button
+        className="btn"
+        style={{ marginLeft: 8, fontSize: 11 }}
+        onClick={() => setNotifyFor(notifyFor === userId ? null : userId)}
+        title="Edit this member's notification overrides for this agent"
+      >
+        alerts
+      </button>
+    ) : null;
+  const notifyEditor = (userId: string, notify: AgentMember['notify']) =>
+    notifyFor === userId ? (
+      <MemberNotifyEditor
+        agentId={agent.id}
+        userId={userId}
+        notify={notify}
+        onSaved={refresh}
+      />
+    ) : null;
+
   const roleSelect = (
     userId: string,
     value: string,
@@ -1726,36 +1893,48 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         users who see nothing but this agent.
       </div>
       {plainMembers.map((u) => (
-        <div key={u.id} className="row muted" style={{ marginTop: 6 }}>
-          <span className="grow">
-            {u.name} · {u.email}
-          </span>
-          {roleSelect(u.id, 'inherit', u.role, true)}
+        <div key={u.id}>
+          <div className="row muted" style={{ marginTop: 6 }}>
+            <span className="grow">
+              {u.name} · {u.email}
+            </span>
+            {notifyToggle(u.id)}
+            {roleSelect(u.id, 'inherit', u.role, true)}
+          </div>
+          {notifyEditor(u.id, null)}
         </div>
       ))}
       {memberRows
         .filter((m) => wsById.has(m.user_id))
         .map((m) => (
-          <div key={m.user_id} className="row muted" style={{ marginTop: 6 }}>
-            <span className="grow">
-              {m.name} · {m.email}
-              <span className="badge" style={{ marginLeft: 8 }}>override</span>
-            </span>
-            {roleSelect(m.user_id, m.role ?? 'inherit', wsById.get(m.user_id)?.role ?? 'member', true)}
+          <div key={m.user_id}>
+            <div className="row muted" style={{ marginTop: 6 }}>
+              <span className="grow">
+                {m.name} · {m.email}
+                <span className="badge" style={{ marginLeft: 8 }}>override</span>
+              </span>
+              {notifyToggle(m.user_id)}
+              {roleSelect(m.user_id, m.role ?? 'inherit', wsById.get(m.user_id)?.role ?? 'member', true)}
+            </div>
+            {notifyEditor(m.user_id, m.notify)}
           </div>
         ))}
       {agentOnly.map((m) => (
-        <div key={m.user_id} className="row muted" style={{ marginTop: 6 }}>
-          <span className="grow">
-            {m.name} · {m.email}
-            <span className="badge" style={{ marginLeft: 8 }}>this agent only</span>
-          </span>
-          {roleSelect(m.user_id, m.role ?? 'member', null, false)}
-          {isAdmin && m.user_id !== ownerId && (
-            <button className="btn danger" onClick={() => remove.mutate(m.user_id)} title="Remove access">
-              Remove
-            </button>
-          )}
+        <div key={m.user_id}>
+          <div className="row muted" style={{ marginTop: 6 }}>
+            <span className="grow">
+              {m.name} · {m.email}
+              <span className="badge" style={{ marginLeft: 8 }}>this agent only</span>
+            </span>
+            {notifyToggle(m.user_id)}
+            {roleSelect(m.user_id, m.role ?? 'member', null, false)}
+            {isAdmin && m.user_id !== ownerId && (
+              <button className="btn danger" onClick={() => remove.mutate(m.user_id)} title="Remove access">
+                Remove
+              </button>
+            )}
+          </div>
+          {notifyEditor(m.user_id, m.notify)}
         </div>
       ))}
       {isAdmin && (

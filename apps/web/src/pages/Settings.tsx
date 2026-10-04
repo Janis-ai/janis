@@ -581,14 +581,22 @@ export default function Settings() {
             <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 13 }}>
               {(
                 [
-                  ['handoff', 'Handoffs'],
+                  ['handoff', 'Needs human'],
+                  ['failure', 'Agent failures'],
+                  ['ops', 'Agent errors'],
+                  ['inactivity', 'Unanswered customers'],
+                  ['sentiment', 'Negative sentiment'],
+                  ['offer', 'Handoff offers'],
+                  ['sla', 'SLA breaches'],
                   ['assigned', 'Assigned to me'],
                   ['keyword', 'Keyword matches'],
+                  ['intent', 'Topic matches'],
+                  ['csat', 'Low CSAT scores'],
+                  ['custom', 'Custom alerts'],
                   ['approval', 'Approvals'],
+                  ['mention', 'Mentions'],
                   ['digest', 'Digests'],
                   ['eval', 'Eval regressions'],
-                  ['ops', 'Agent errors'],
-                  ['mention', 'Mentions'],
                 ] as const
               ).map(([key, label]) => (
                 <label key={key}>

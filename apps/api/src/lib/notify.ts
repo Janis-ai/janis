@@ -21,8 +21,16 @@ function ensureVapid(): boolean {
  *  (e.g. keyword pings) without turning off handoffs. Missing key = on. */
 export type NotifyEvent =
   | 'handoff'
+  | 'offer'
   | 'assigned'
   | 'keyword'
+  | 'intent'
+  | 'sentiment'
+  | 'csat'
+  | 'inactivity'
+  | 'sla'
+  | 'custom'
+  | 'failure'
   | 'mention'
   | 'digest'
   | 'approval'
@@ -36,13 +44,26 @@ interface NotifyPrefs {
   events?: Partial<Record<NotifyEvent, boolean>>;
 }
 
-/** Alert type → the pref bucket that can mute it. */
+/** Alert type → the pref bucket that can mute it. One bucket per alert
+ *  type so a member can unsubscribe from e.g. sentiment pages without
+ *  losing real handoffs. */
 export function eventForAlertType(type: string): NotifyEvent {
-  if (type === 'keyword') return 'keyword';
-  if (type === 'approval_request') return 'approval';
-  // run-degradation signals page the ops bucket, not the handoff queue
-  if (type === 'error') return 'ops';
-  return 'handoff';
+  switch (type) {
+    case 'help_request': return 'handoff';
+    case 'handoff_offer': return 'offer';
+    case 'keyword': return 'keyword';
+    case 'intent': return 'intent';
+    case 'sentiment': return 'sentiment';
+    case 'csat': return 'csat';
+    case 'inactivity': return 'inactivity';
+    case 'sla': return 'sla';
+    case 'custom': return 'custom';
+    case 'failure': return 'failure';
+    case 'approval_request': return 'approval';
+    // run-degradation signals page the ops bucket, not the handoff queue
+    case 'error': return 'ops';
+    default: return 'handoff';
+  }
 }
 
 /** Titles shared by in-app toasts, push, and email — one alert, one message. */
@@ -143,19 +164,27 @@ async function sendEmail(to: string[], title: string, body: string, url?: string
   if (!res.ok) console.error('email send failed:', res.status, await res.text().catch(() => ''));
 }
 
+export interface ResolvedRecipients {
+  /** Effective event bucket the suppression check ran against. */
+  event: NotifyEvent;
+  /** Members who get this notification at all. */
+  recipients: { id: string; email: string }[];
+  /** Effective prefs for a member (global merged with per-agent override). */
+  prefs: (userId: string) => NotifyPrefs;
+}
+
 /**
- * Alert workspace members when an agent needs a human — each user's
- * notify_prefs decide web push and/or email; `sound: false` marks the push
- * silent so the OS doesn't chime. opts.userIds scopes delivery to specific
- * members (e.g. an auto-assignee) instead of the whole workspace.
- * No-op without VAPID/Resend keys.
+ * Who receives a notification: workspace members + accepted agent-scoped
+ * members (minus 'hidden'), filtered by opts.userIds and the effective
+ * per-event prefs (user global merged with agent override). A targeted page
+ * (opts.userIds) checks the 'assigned' bucket so muting an alert kind never
+ * silences a page explicitly routed to the member.
  */
-export async function notifyWorkspace(
+export async function resolveNotifyRecipients(
   db: Db,
   workspaceId: string,
-  notification: { title: string; body: string; url?: string },
   opts: { userIds?: string[]; agentId?: string; event?: NotifyEvent } = {},
-): Promise<void> {
+): Promise<ResolvedRecipients> {
   let members = (await workspaceMembers(db, workspaceId)).map((m) => m.user);
   // Agent-scoped users hold no membership — pull them in when the alert is
   // for an agent they're granted on, else they'd never see escalations.
@@ -197,22 +226,41 @@ export async function notifyWorkspace(
         : {}),
     };
   };
+  const prefsById = (userId: string): NotifyPrefs => {
+    const u = members.find((m) => m.id === userId);
+    return u ? prefs(u) : (overrideByUser.get(userId) ?? {});
+  };
 
-  // Targeted pages to an owner count as 'assigned' events; broadcasts use the
-  // caller's event kind. A muted event drops the member entirely — push and
-  // email alike.
-  const event = opts.event ?? (opts.userIds?.length ? 'assigned' : 'handoff');
+  const event = opts.userIds?.length ? 'assigned' : (opts.event ?? 'handoff');
   const recipients = members.filter(
     (m) =>
       (!opts.userIds || opts.userIds.includes(m.id)) &&
       prefs(m).events?.[event] !== false,
   );
-  if (recipients.length === 0) return;
+  return { event, recipients, prefs: prefsById };
+}
 
-  const pushUserIds = recipients.filter((m) => prefs(m).push !== false).map((m) => m.id);
-  const emailAddrs = recipients.filter((m) => prefs(m).email !== false).map((m) => m.email);
+/**
+ * Alert workspace members when an agent needs a human — each user's
+ * notify_prefs decide web push and/or email; `sound: false` marks the push
+ * silent so the OS doesn't chime. opts.userIds scopes delivery to specific
+ * members (e.g. an auto-assignee) instead of the whole workspace.
+ * No-op without VAPID/Resend keys.
+ */
+export async function notifyWorkspace(
+  db: Db,
+  workspaceId: string,
+  notification: { title: string; body: string; url?: string },
+  opts: { userIds?: string[]; agentId?: string; event?: NotifyEvent } = {},
+): Promise<void> {
+  const { recipients, prefs } = await resolveNotifyRecipients(db, workspaceId, opts);
+  if (recipients.length === 0) return;
+  const prefsOf = (m: { id: string }) => prefs(m.id);
+
+  const pushUserIds = recipients.filter((m) => prefsOf(m).push !== false).map((m) => m.id);
+  const emailAddrs = recipients.filter((m) => prefsOf(m).email !== false).map((m) => m.email);
   const silentUsers = new Set(
-    recipients.filter((m) => prefs(m).sound === false).map((m) => m.id),
+    recipients.filter((m) => prefsOf(m).sound === false).map((m) => m.id),
   );
 
   const jobs: Promise<unknown>[] = [];

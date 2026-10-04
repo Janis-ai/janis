@@ -322,7 +322,7 @@ export async function sweep(db: Db): Promise<number> {
         type: 'conversation',
         data: { id: conversation.id, state: 'needs_human' },
       });
-      void notifyWorkspace(db, agent.workspaceId, n, { agentId: agent.id, event: 'handoff' });
+      void notifyWorkspace(db, agent.workspaceId, n, { agentId: agent.id, event: 'inactivity' });
       fired++;
     }
   }
@@ -394,7 +394,7 @@ export async function sweepSla(db: Db): Promise<number> {
         });
         // SLA breaches page the whole workspace even when assigned — the point
         // of the escalation is that the owner didn't respond
-        void notifyWorkspace(db, agent.workspaceId, n, { agentId: agent.id, event: 'handoff' });
+        void notifyWorkspace(db, agent.workspaceId, n, { agentId: agent.id, event: 'sla' });
       }
       if (escalated && alert) {
         void postSlackAlert(db, agent.workspaceId, conv, agent, alert);

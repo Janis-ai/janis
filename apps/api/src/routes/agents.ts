@@ -1205,6 +1205,7 @@ export function agentRoutes(db: Db) {
         push: z.boolean().optional(),
         email: z.boolean().optional(),
         sound: z.boolean().optional(),
+        events: z.record(z.string(), z.boolean()).optional(),
       })
       .nullable()
       .optional(),
