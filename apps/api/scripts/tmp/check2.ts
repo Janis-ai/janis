@@ -1,0 +1,11 @@
+import { createDb } from '../../src/db/client.js';
+import { agentTests, slackInstallations, agents } from '../../src/db/schema.js';
+import { desc, eq } from 'drizzle-orm';
+const db = await createDb();
+const ts = await db.select({ id: agentTests.id, name: agentTests.name, turns: agentTests.turns }).from(agentTests).where(eq(agentTests.agentId, '13e45248-77e9-4006-b8a5-76c442e522bd')).orderBy(desc(agentTests.createdAt)).limit(5);
+for (const t of ts) console.log(t.id, '|', t.name, '| turns:', (t.turns as unknown[]).length);
+const si = await db.select().from(slackInstallations).where(eq(slackInstallations.workspaceId, 'acd296f3-61e1-46c5-ae57-6cdbddbdca85'));
+console.log('slack installations:', si.length, si.map(s => ({ id: s.id, team: s.teamName })));
+const [a] = await db.select({ slackRoutes: agents.slackRoutes, slackChannelId: agents.slackChannelId }).from(agents).where(eq(agents.id, '13e45248-77e9-4006-b8a5-76c442e522bd'));
+console.log('agent slack_routes:', JSON.stringify(a.slackRoutes), 'legacy channel:', a.slackChannelId);
+process.exit(0);

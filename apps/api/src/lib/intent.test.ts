@@ -2,11 +2,11 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alertRules, conversations, messages, workspaces } from '../db/schema.js';
-import { recheckIntent } from './intent.js';
+import { agents, alertRules, alerts, conversations, messages, workspaces } from '../db/schema.js';
+import { checkInboundSentiment, recheckIntent } from './intent.js';
 
 let db: Db;
 let agent: typeof schema.agents.$inferSelect;
@@ -110,5 +110,49 @@ describe('recheckIntent — drift detection', () => {
     await recheckIntent(db, agent, { ...conv, intentCheckedAt: new Date() });
     expect(fetchMock).not.toHaveBeenCalled();
     expect((await intentOf()).intent).toBe('billing');
+  });
+});
+
+describe('checkInboundSentiment — per-message tone check', () => {
+  const sentimentAlerts = () =>
+    db
+      .select()
+      .from(alerts)
+      .where(and(eq(alerts.conversationId, conv.id), eq(alerts.type, 'sentiment')));
+
+  it('fires a sentiment rule on a hostile mid-thread message', async () => {
+    await db.insert(alertRules).values({
+      agentId: agent.id,
+      kind: 'sentiment',
+      config: { enabled: true },
+    });
+    llmAnswer('negative');
+    // mid-thread: the conv is already classified AND the drift throttle is
+    // fresh — this must still fire (the 15-min recheck window can't gate it)
+    await checkInboundSentiment(db, agent, { ...conv, intentCheckedAt: new Date() }, 'this is outrageous');
+    const rows = await sentimentAlerts();
+    expect(rows).toHaveLength(1);
+    await db.delete(alertRules);
+    await db.delete(alerts);
+  });
+
+  it('does nothing without a sentiment rule — no LLM call', async () => {
+    llmAnswer('negative');
+    await checkInboundSentiment(db, agent, conv, 'this is outrageous');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await sentimentAlerts()).toHaveLength(0);
+  });
+
+  it('ignores a non-negative read', async () => {
+    await db.insert(alertRules).values({
+      agentId: agent.id,
+      kind: 'sentiment',
+      config: { enabled: true },
+    });
+    llmAnswer('neutral');
+    await checkInboundSentiment(db, agent, conv, 'quick question about billing');
+    expect(await sentimentAlerts()).toHaveLength(0);
+    await db.delete(alertRules);
+    await db.delete(alerts);
   });
 });

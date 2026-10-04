@@ -316,6 +316,30 @@ describe('processEvents', () => {
       { type: 'message_in', conversation_id: 'c3', text: 'I am calling my lawyer' },
     ]);
     expect(results[0].alert_ids).toHaveLength(1);
+    // a keyword match is signal for operators — it must not pull the
+    // thread into needs_human; only a real handoff does that
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c3'));
+    expect(conv.state).toBe('active');
+  });
+
+  it('custom alerts notify without escalating the conversation', async () => {
+    await db.insert(alertRules).values({
+      agentId: agent.id,
+      kind: 'custom_alert',
+      config: { enabled: true },
+    });
+    const results = await processEvents(db, agent, [
+      { type: 'custom_alert', conversation_id: 'c3b', alert_type: 'payment_failed', text: 'charge failed' },
+    ]);
+    expect(results[0].alert_ids.length).toBeGreaterThan(0);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c3b'));
+    expect(conv.state).toBe('active');
   });
 });
 

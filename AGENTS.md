@@ -221,10 +221,14 @@ drizzle-kit/workbox-build, nothing to drop directly).
       Channel/workspace-delete FK cascade fixed (9e07ae2).
 43. Alert-matrix verified live (2026-10-03): all 10 rule kinds + sla,
     handoff_offer, approval_request fire end-to-end on the concierge.
-    Gotchas learned: ANY non-failure/handoff_offer alert escalates the
-    conv to needs_human (ingest.ts ~271); intent/sentiment classify the
-    OPENER only (mid-thread probes never re-classify unless drift
-    recheck trips); inactivity needs lastMessageDirection='in' AND
+    Fixes that came out of it: only help_request escalates to
+    needs_human now (keyword/custom/etc. notify without seizing the
+    thread — an explicit handoff_request still escalates even with its
+    rule disabled); sentiment is checked PER-INBOUND when a sentiment
+    rule exists (checkInboundSentiment — the 15-min drift recheck
+    throttle only covers topic re-classification); hosted prompt now
+    forbids disclaiming a capability a connected tool provides. Still
+    true: inactivity needs lastMessageDirection='in' AND
     state='active'; alerts_one_open_per_type dedupes repeat fires —
     resolve the open row before re-testing a type. Fresh convs:
     44dccd1b (billing→intent+offer), f34b32c5 (angry→sentiment+offer),

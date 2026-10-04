@@ -196,6 +196,35 @@ export async function classifyAndRoute(
   }
 }
 
+/** Per-inbound sentiment — a customer who opens calm and turns hostile
+ *  mid-thread is exactly what a sentiment rule exists for, but the drift
+ *  re-check below runs at most once per 15 minutes, so tone can't ride it.
+ *  This checks every inbound instead. Still opt-in: one rules query
+ *  short-circuits agents with no sentiment rule, and the LLM call happens
+ *  only when a rule asked for it. Repeat negatives dedupe on the open
+ *  alert, so an angry thread pages once, not per message. */
+export async function checkInboundSentiment(
+  db: Db,
+  agent: typeof agents.$inferSelect,
+  conv: typeof conversations.$inferSelect,
+  text: string,
+  /** Callers that already loaded the agent's rules pass them to skip the
+   *  query — ingest fetches them once per batch anyway. */
+  knownRules?: (typeof alertRules.$inferSelect)[],
+): Promise<void> {
+  const rules =
+    knownRules ??
+    (await db.select().from(alertRules).where(eq(alertRules.agentId, agent.id)));
+  if (!sentimentRules(rules).length) return;
+  let llm: LlmSettings;
+  try {
+    llm = await llmFor(db, agent);
+  } catch {
+    return;
+  }
+  await checkSentiment(db, agent, conv, llm, rules, text);
+}
+
 /** Drift re-check — a conversation that opened as "billing" can turn into
  * "cancellation" ten turns in, and the opener's label goes stale. Re-classify
  * the last few customer messages; a differing label updates the intent and

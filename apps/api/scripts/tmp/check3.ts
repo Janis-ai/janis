@@ -1,0 +1,10 @@
+import { createDb } from '../../src/db/client.js';
+import { slackInstallations, agentTests } from '../../src/db/schema.js';
+import { desc, eq } from 'drizzle-orm';
+const db = await createDb();
+const si = await db.select({ id: slackInstallations.id, team: slackInstallations.teamName, alertCh: slackInstallations.alertChannelId }).from(slackInstallations).where(eq(slackInstallations.workspaceId, 'acd296f3-61e1-46c5-ae57-6cdbddbdca85'));
+console.log(si);
+const all = await db.select({ id: agentTests.id, name: agentTests.name }).from(agentTests).where(eq(agentTests.agentId, '13e45248-77e9-4006-b8a5-76c442e522bd')).orderBy(desc(agentTests.createdAt));
+console.log('tests on concierge:', all.length);
+for (const t of all.slice(0, 12)) console.log(' ', t.name);
+process.exit(0);

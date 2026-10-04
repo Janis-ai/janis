@@ -1,0 +1,13 @@
+import { createDb } from '../../src/db/client.js';
+import { alerts, messages, conversations } from '../../src/db/schema.js';
+import { desc, eq } from 'drizzle-orm';
+const db = await createDb();
+const CONV = '1fb291f8-c3f9-422d-bf3d-09766829efb6';
+const rows = await db.select().from(alerts).where(eq(alerts.conversationId, CONV)).orderBy(desc(alerts.createdAt)).limit(15);
+for (const a of rows) console.log(a.createdAt.toISOString().slice(11, 19), a.type.padEnd(15), a.status, (a.detail ?? '').slice(0, 80));
+console.log('--- last 8 messages ---');
+const ms = await db.select().from(messages).where(eq(messages.conversationId, CONV)).orderBy(desc(messages.createdAt)).limit(8);
+for (const m of ms.reverse()) console.log(m.createdAt.toISOString().slice(11, 19), m.direction.padEnd(3), (m.text ?? '').slice(0, 70).replace(/\n/g, ' '));
+const [c] = await db.select().from(conversations).where(eq(conversations.id, CONV)).limit(1);
+console.log('state:', c.state, 'lastMsg:', c.lastMessageAt?.toISOString());
+process.exit(0);

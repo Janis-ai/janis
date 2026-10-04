@@ -15,7 +15,7 @@ import { enrichHandoff } from '../lib/handoff.js';
 import { alertNotification, eventForAlertType, notifyWorkspace, type NotifyEvent } from '../lib/notify.js';
 import { evaluateActions, evaluateEvent, type RuleConfig } from '../lib/rules.js';
 import { groupsForRules } from '../lib/ruleAlerts.js';
-import { classifyAndRoute, recheckIntent } from '../lib/intent.js';
+import { classifyAndRoute, checkInboundSentiment, recheckIntent } from '../lib/intent.js';
 import { fireEventWebhook } from '../lib/eventWebhook.js';
 import { emitHookEvent } from '../lib/hooks.js';
 import { mirrorToSlack, postSlackAlert, setSlackThreadStatus } from '../lib/slack.js';
@@ -152,13 +152,15 @@ export async function processEvents(
 
     // Intent classification — once per conversation, off the hot path. BYO
     // agents can stamp payload.intent and skip the LLM entirely. Later
-    // inbounds feed the drift re-check (throttled in recheckIntent).
+    // inbounds feed the drift re-check (throttled in recheckIntent) plus a
+    // per-message sentiment read when a sentiment rule opted in.
     if (event.type === 'message_in' && conv.intent == null) {
       const payloadIntent =
         typeof event.payload?.intent === 'string' ? event.payload.intent : null;
       void classifyAndRoute(db, agent, conv, event.text, payloadIntent).catch(() => {});
     } else if (event.type === 'message_in') {
       void recheckIntent(db, agent, conv).catch(() => {});
+      void checkInboundSentiment(db, agent, conv, event.text, rules).catch(() => {});
     }
 
     // Workspace event export — Zapier/Make catch hooks see inbound traffic
@@ -262,14 +264,14 @@ export async function processEvents(
       });
     }
 
-    // State transitions: alerts escalate to needs_human unless a human owns
-    // it — except 'failure' (agent may recover) and 'handoff_offer' (customer
-    // hasn't confirmed they want a human). Both still page operators.
-    // Archived conversations escalate too — an escalation unarchives: the
-    // thread resurfaces in the inbox as needs_human.
+    // State transitions: only a real handoff escalates to needs_human —
+    // keyword/custom/failure/offer alerts notify operators without pulling
+    // the thread out of the agent's queue (a "billing" keyword match is
+    // signal, not a takeover request). Archived conversations escalate too
+    // — an escalation unarchives: the thread resurfaces as needs_human.
     let state = conv.state;
     if (
-      newAlertTypes.some((t) => t !== 'failure' && t !== 'handoff_offer') &&
+      newAlertTypes.includes('help_request') &&
       (state === 'active' || state === 'archived')
     )
       state = 'needs_human';
