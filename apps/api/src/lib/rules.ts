@@ -78,36 +78,41 @@ export function ruleEnabled(rule: RuleRow): boolean {
 
 /**
  * Decide which alerts a single ingest event should fire for an agent.
- * Explicit event types (failure / handoff_request / custom_alert) always fire —
- * they're the agent asking for help. keyword rules only inspect message_in text.
+ * Explicit event types (failure / handoff_request / custom_alert) fire by
+ * default — they're the agent asking for help — and stay on until the
+ * workspace configures that KIND: an enabled rule of the kind keeps it
+ * firing, a kind whose rules exist but are all disabled is explicitly
+ * silenced. Rules of unrelated kinds can never swallow a default.
+ * keyword rules only inspect message_in text.
  */
 export function evaluateEvent(event: IngestEvent, rules: RuleRow[]): TriggeredAlert[] {
   const triggered: TriggeredAlert[] = [];
   const enabled = rules.filter(ruleEnabled);
 
   const ruleOn = (kind: RuleRow['kind']) => enabled.some((r) => r.kind === kind);
-  const alwaysFire = rules.length === 0; // no rules configured → sensible defaults
+  const fires = (kind: RuleRow['kind']) =>
+    ruleOn(kind) || !rules.some((r) => r.kind === kind);
 
   switch (event.type) {
     case 'failure':
-      if (alwaysFire || ruleOn('failure')) {
+      if (fires('failure')) {
         triggered.push({ type: 'failure', detail: event.reason ?? event.text ?? null });
       }
       break;
     case 'handoff_request':
-      if (alwaysFire || ruleOn('handoff_request')) {
+      if (fires('handoff_request')) {
         triggered.push({ type: 'help_request', detail: event.reason ?? 'Agent requested handoff' });
       }
       break;
     case 'handoff_offer':
       // Offers ride the handoff rule toggle — a workspace that disabled
       // handoff alerts doesn't want offer alerts either.
-      if (alwaysFire || ruleOn('handoff_request')) {
+      if (fires('handoff_request')) {
         triggered.push({ type: 'handoff_offer', detail: event.reason ?? 'Agent offered a human' });
       }
       break;
     case 'custom_alert':
-      if (alwaysFire || ruleOn('custom_alert')) {
+      if (fires('custom_alert')) {
         triggered.push({ type: 'custom', detail: event.alert_type });
       }
       break;
@@ -128,28 +133,46 @@ export function evaluateEvent(event: IngestEvent, rules: RuleRow[]): TriggeredAl
 }
 
 /**
- * Side-effects attached to rules that fired for this event — keyword matches
- * can route the thread (assign/tag) alongside their alert. Inactivity
- * actions are applied by the sweeper, which owns that trigger.
+ * Side-effects attached to rules that fired for this event. keyword rules
+ * match on message_in text; alert-typed events (handoff / failure /
+ * custom_alert) route through every enabled rule of that kind — a
+ * "handoff → assign on-call" rule's assign/tag must apply alongside its
+ * alert, not get dropped because only keywords carried routing.
+ * Inactivity actions are applied by the sweeper, which owns that trigger.
  */
 export function evaluateActions(
   event: IngestEvent,
   rules: RuleRow[],
   groups: GroupRef[] = [],
 ): RuleAction[] {
-  if (event.type !== 'message_in') return [];
-  const text = event.text.toLowerCase();
-  const actions: RuleAction[] = [];
-  for (const r of rules) {
-    const cfg = r.config as RuleConfig;
-    if (r.kind !== 'keyword' || cfg.enabled === false) continue;
-    const hit = (cfg.keywords ?? []).some((k) => k.length > 0 && text.includes(k.toLowerCase()));
-    if (!hit) continue;
-    const action = ruleAction(r, groups);
-    if (action.assignTo || action.tag) actions.push(action);
+  const matched: RuleRow[] = [];
+  if (event.type === 'message_in') {
+    const text = event.text.toLowerCase();
+    for (const r of rules) {
+      const cfg = r.config as RuleConfig;
+      if (r.kind !== 'keyword' || cfg.enabled === false) continue;
+      const hit = (cfg.keywords ?? []).some((k) => k.length > 0 && text.includes(k.toLowerCase()));
+      if (hit) matched.push(r);
+    }
+  } else {
+    const kind = EVENT_RULE_KIND[event.type];
+    if (kind) {
+      matched.push(...rules.filter((r) => r.kind === kind && ruleEnabled(r)));
+    }
   }
-  return actions;
+  return matched
+    .map((r) => ruleAction(r, groups))
+    .filter((a) => a.assignTo || a.tag);
 }
+
+/** Ingest event type → the rule kind that carries its routing. Offers ride
+ *  the handoff kind just like their alert toggle does. */
+const EVENT_RULE_KIND: Partial<Record<IngestEvent['type'], RuleRow['kind']>> = {
+  handoff_request: 'handoff_request',
+  handoff_offer: 'handoff_request',
+  failure: 'failure',
+  custom_alert: 'custom_alert',
+};
 
 /**
  * auto_assign rule → who owns a brand-new conversation. `assign_to` is a

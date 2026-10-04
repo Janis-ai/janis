@@ -36,9 +36,28 @@ describe('evaluateEvent', () => {
     expect(evaluateEvent(evt({ type: 'message_out', text: 'refund processed' }), rules)).toHaveLength(0);
   });
 
-  it('does not fire failure when failure rule absent but other rules exist', () => {
+  it('fires unconfigured kinds by default — unrelated rules cannot swallow them', () => {
     const rules = [rule('keyword', { enabled: true, keywords: ['x'] })];
+    // a keyword rule existing must NOT kill the failure/handoff/custom defaults
+    expect(evaluateEvent(evt({ type: 'failure' }), rules)).toHaveLength(1);
+    expect(evaluateEvent(evt({ type: 'handoff_request' }), rules)).toHaveLength(1);
+    expect(evaluateEvent(evt({ type: 'custom_alert', alert_type: 'x' }), rules)).toHaveLength(1);
+  });
+
+  it('a disabled-only kind is silenced but other kinds still default-fire', () => {
+    const rules = [
+      rule('failure', { enabled: false }),
+      rule('handoff_request', { enabled: false }),
+      rule('custom_alert', { enabled: false }),
+      rule('keyword', { enabled: true, keywords: ['x'] }),
+    ];
     expect(evaluateEvent(evt({ type: 'failure' }), rules)).toHaveLength(0);
+    expect(evaluateEvent(evt({ type: 'handoff_request' }), rules)).toHaveLength(0);
+    expect(evaluateEvent(evt({ type: 'handoff_offer' }), rules)).toHaveLength(0);
+    expect(evaluateEvent(evt({ type: 'custom_alert', alert_type: 'x' }), rules)).toHaveLength(0);
+    // ...but a kind with NO rule at all still defaults on
+    const onlyDisabledFailure = [rule('failure', { enabled: false })];
+    expect(evaluateEvent(evt({ type: 'handoff_request' }), onlyDisabledFailure)).toHaveLength(1);
   });
 });
 
@@ -73,6 +92,29 @@ describe('evaluateActions', () => {
   it('skips keyword rules with no actions attached', () => {
     const rules = [rule('keyword', { enabled: true, keywords: ['refund'] })];
     expect(evaluateActions(evt({ type: 'message_in', text: 'refund' }), rules)).toEqual([]);
+  });
+
+  it('routes alert-typed events through their kind\'s rules', () => {
+    const rules = [
+      rule('handoff_request', { enabled: true, assign_to: 'oncall1', tag: 'escalated' }),
+      rule('handoff_request', { enabled: false, assign_to: 'oncall2' }), // disabled — no action
+      rule('custom_alert', { enabled: true, tag: 'custom-tag' }),
+      rule('failure', { enabled: true, assignees: ['ops1'], next: 0 }),
+    ];
+    expect(evaluateActions(evt({ type: 'handoff_request' }), rules)).toEqual([
+      { assignTo: 'oncall1', tag: 'escalated' },
+    ]);
+    expect(evaluateActions(evt({ type: 'handoff_offer' }), rules)).toEqual([
+      { assignTo: 'oncall1', tag: 'escalated' },
+    ]);
+    expect(evaluateActions(evt({ type: 'custom_alert', alert_type: 'x' }), rules)).toEqual([
+      { assignTo: undefined, tag: 'custom-tag' },
+    ]);
+    expect(evaluateActions(evt({ type: 'failure' }), rules)).toEqual([
+      { assignTo: 'ops1', tag: undefined, ruleId: 'r1', next: 1 },
+    ]);
+    // non-alert events still produce nothing
+    expect(evaluateActions(evt({ type: 'resolve' }), rules)).toEqual([]);
   });
 });
 
