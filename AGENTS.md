@@ -213,7 +213,8 @@ drizzle-kit/workbox-build, nothing to drop directly).
       verification #1–#8" (old rescue checkpoints) + "Concierge live
       battery — tools + link integrity" (explicit 60-turn capture).
     - scripts/tmp/ holds the live-test harnesses (concierge-test,
-      adversarial, transcript peek) — untracked, reuse or delete.
+      adversarial, alert-matrix*, transcript peek) — tracked as of
+      ea2407e; they need DATABASE_URL + mint sessions/keys at runtime.
     - teach_from_conversation declined a vague ask ("save as regression
       test") but ran when named — discoverability tuning, low pri.
     - Notification email fixed: JANIS_EMAIL_FROM=alerts@inbound.janis.ai
