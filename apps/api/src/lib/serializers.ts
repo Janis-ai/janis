@@ -92,6 +92,7 @@ export function toConversation(row: Row<typeof conversations>, openAlertCount = 
     csat_pending: row.csatPending,
     intent: row.intent,
     intent_source: row.intentSource,
+    sentiment: (row.sentiment ?? null) as 'positive' | 'neutral' | 'negative' | null,
     contact_id: row.contactId ?? null,
     created_at: iso(row.createdAt)!,
   };

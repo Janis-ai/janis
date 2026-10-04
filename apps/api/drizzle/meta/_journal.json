@@ -624,6 +624,13 @@
       "when": 1791100000000,
       "tag": "0088_member_groups",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1791120904243,
+      "tag": "0089_conversation_sentiment",
+      "breakpoints": true
     }
   ]
 }

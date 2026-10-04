@@ -1357,6 +1357,19 @@ export default function ConversationPage() {
                 <strong>Phone:</strong> {p.phone}
               </div>
             )}
+            <div>
+              <strong>Sentiment:</strong>{' '}
+              {c.sentiment ? (
+                <span
+                  className={`badge ${c.sentiment}`}
+                  title="Latest classified tone of the customer's messages — updates each turn"
+                >
+                  {c.sentiment}
+                </span>
+              ) : (
+                '—'
+              )}
+            </div>
             <details style={{ marginTop: 4 }}>
               <summary>Context</summary>
               <div style={{ marginTop: 4 }}>

@@ -136,11 +136,32 @@ describe('checkInboundSentiment — per-message tone check', () => {
     await db.delete(alerts);
   });
 
-  it('does nothing without a sentiment rule — no LLM call', async () => {
+  it('scores and persists sentiment even without a rule — no alert fires', async () => {
     llmAnswer('negative');
     await checkInboundSentiment(db, agent, conv, 'this is outrageous');
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(await sentimentAlerts()).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalled(); // the score feeds the Details card
+    expect(await sentimentAlerts()).toHaveLength(0); // rules gate the page
+    expect((await intentOf()).sentiment).toBe('negative');
+  });
+
+  it('updates the stored mood as turns change tone', async () => {
+    llmAnswer('neutral');
+    await checkInboundSentiment(db, agent, conv, 'quick question about billing');
+    expect((await intentOf()).sentiment).toBe('neutral');
+    llmAnswer('positive');
+    await checkInboundSentiment(db, agent, conv, 'that fixed it, thanks!');
+    expect((await intentOf()).sentiment).toBe('positive');
+  });
+
+  it('leaves the score alone when the classifier returns nothing', async () => {
+    await db
+      .update(conversations)
+      .set({ sentiment: 'neutral' })
+      .where(eq(conversations.id, conv.id));
+    fetchMock = vi.fn(async () => ({ ok: false, json: async () => ({}) }));
+    vi.stubGlobal('fetch', fetchMock);
+    await checkInboundSentiment(db, agent, conv, 'hello?');
+    expect((await intentOf()).sentiment).toBe('neutral');
   });
 
   it('ignores a non-negative read', async () => {

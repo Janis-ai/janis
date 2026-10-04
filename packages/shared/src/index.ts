@@ -500,6 +500,8 @@ export const Conversation = z.object({
   intent: z.string().nullable(),
   /** Who set intent: 'ai' (drift re-checks may update), 'byo', or 'manual'. */
   intent_source: z.string().optional(),
+  /** Latest classified tone of the customer's messages — updated per turn. */
+  sentiment: z.enum(['positive', 'neutral', 'negative']).nullable().optional(),
   /** Unified customer record this conversation's identity resolved to. */
   contact_id: z.string().nullable().optional(),
   created_at: z.string(),

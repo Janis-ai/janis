@@ -208,6 +208,11 @@ export const conversations = pgTable(
     // Throttle marker for drift re-classification — one window check per
     // conversation per 15 minutes.
     intentCheckedAt: timestamp('intent_checked_at', { withTimezone: true }),
+    // Latest tone read — the classifier labels every inbound customer turn
+    // when the agent has an LLM ('positive' | 'neutral' | 'negative'); shown
+    // in the Details card. Rules fire on 'negative', the score itself is
+    // informational and needs no opt-in.
+    sentiment: text('sentiment'),
     // CSAT: prompt sent on archive; the customer's next reply carries the
     // rating and is captured in csatScore instead of reaching the agent
     csatPending: boolean('csat_pending').notNull().default(false),

@@ -47,6 +47,9 @@
 :root[data-theme='light'] .badge.active { background: #d1fae5; color: #065f46; }
 :root[data-theme='light'] .badge.needs_human { background: #ffedd5; color: #9a3412; }
 :root[data-theme='light'] .badge.warn { background: #fef3c7; color: #92400e; }
+:root[data-theme='light'] .badge.positive { background: #d1fae5; color: #065f46; }
+:root[data-theme='light'] .badge.neutral { background: var(--panel-2); color: var(--muted); }
+:root[data-theme='light'] .badge.negative { background: #fee2e2; color: #b91c1c; }
 /* Outbound bubbles use a dark navy in dark mode; on light that navy with
    dark text is illegible — flip to pale blue with dark text. */
 :root[data-theme='light'] .msg.out,
@@ -343,6 +346,9 @@ button, input, select, textarea { font: inherit; }
 .badge.human { background: var(--accent-dim); color: var(--accent); }
 .badge.active { background: #14532d; color: var(--ok); }
 .badge.archived { background: var(--panel-2); color: var(--muted); }
+.badge.positive { background: #14532d; color: var(--ok); }
+.badge.neutral { background: var(--panel-2); color: var(--muted); }
+.badge.negative { background: #7f1d1d; color: #fca5a5; }
 
 .conv-row {
   display: flex; align-items: center; gap: 12px; padding: 12px 16px;

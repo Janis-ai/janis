@@ -92,13 +92,39 @@ export async function classifySentiment(
   return null;
 }
 
-/** Sentiment rules enabled on this agent — the gate for classifySentiment. */
+/** Sentiment rules enabled on this agent — they gate the ALERT, not the
+ *  read: every inbound turn is scored and persisted so the Details card can
+ *  show the thread's current mood regardless of rule config. */
 function sentimentRules(rules: (typeof alertRules.$inferSelect)[]) {
   return rules.filter((r) => r.kind === 'sentiment' && ruleEnabled(r));
 }
 
-/** Fire sentiment rules on a negative read — shared by the opener
- *  classification and the drift re-check. */
+/** Classify tone and persist it on the conversation when it changed — one
+ *  field tracks the thread's latest mood; a bus event refreshes open detail
+ *  pages so the badge updates live. */
+async function scoreSentiment(
+  db: Db,
+  agent: typeof agents.$inferSelect,
+  conv: typeof conversations.$inferSelect,
+  llm: LlmSettings,
+  text: string,
+): Promise<'positive' | 'neutral' | 'negative' | null> {
+  const s = await classifySentiment(llm, text).catch(() => null);
+  if (!s || s === conv.sentiment) return s;
+  await db
+    .update(conversations)
+    .set({ sentiment: s })
+    .where(eq(conversations.id, conv.id));
+  conv.sentiment = s; // keep the in-memory row honest for later checks
+  bus.publish(agent.workspaceId, {
+    type: 'conversation',
+    data: { id: conv.id, state: conv.state },
+  });
+  return s;
+}
+
+/** Score tone and fire sentiment rules on a negative read — shared by the
+ *  opener classification, the drift re-check, and the per-inbound check. */
 async function checkSentiment(
   db: Db,
   agent: typeof agents.$inferSelect,
@@ -107,10 +133,9 @@ async function checkSentiment(
   rules: (typeof alertRules.$inferSelect)[],
   text: string,
 ): Promise<void> {
+  const s = await scoreSentiment(db, agent, conv, llm, text);
   const fired = sentimentRules(rules);
-  if (!fired.length) return;
-  const s = await classifySentiment(llm, text).catch(() => null);
-  if (s !== 'negative') return;
+  if (s !== 'negative' || !fired.length) return;
   await fireRuleAlert(db, agent, conv, {
     type: 'sentiment',
     detail: 'customer sentiment classified negative',
@@ -139,13 +164,13 @@ export async function classifyAndRoute(
     .where(eq(alertRules.agentId, agent.id));
 
   let intent = knownIntent?.slice(0, 60) ?? null;
+  // The LLM is needed for sentiment even when the intent came in BYO or no
+  // rules exist — the opener's tone seeds the Details-card score.
   let llm: LlmSettings | null = null;
-  if (!intent || sentimentRules(rules).length) {
-    try {
-      llm = await llmFor(db, agent);
-    } catch {
-      llm = null; // unpriced/no LLM — classification silently skipped
-    }
+  try {
+    llm = await llmFor(db, agent);
+  } catch {
+    llm = null; // unpriced/no LLM — classification silently skipped
   }
   if (!intent) {
     if (!llm) return; // no LLM and nothing BYO'd — leave unclassified
@@ -196,13 +221,11 @@ export async function classifyAndRoute(
   }
 }
 
-/** Per-inbound sentiment — a customer who opens calm and turns hostile
- *  mid-thread is exactly what a sentiment rule exists for, but the drift
- *  re-check below runs at most once per 15 minutes, so tone can't ride it.
- *  This checks every inbound instead. Still opt-in: one rules query
- *  short-circuits agents with no sentiment rule, and the LLM call happens
- *  only when a rule asked for it. Repeat negatives dedupe on the open
- *  alert, so an angry thread pages once, not per message. */
+/** Per-inbound sentiment — scores every customer turn so the conversation's
+ *  mood stays current in the Details card, and fires sentiment rules on a
+ *  negative read. Runs even without rules (the score is what the UI shows);
+ *  the rules query is skipped until a negative read needs it. Repeat
+ *  negatives dedupe on the open alert, so an angry thread pages once. */
 export async function checkInboundSentiment(
   db: Db,
   agent: typeof agents.$inferSelect,
@@ -212,17 +235,24 @@ export async function checkInboundSentiment(
    *  query — ingest fetches them once per batch anyway. */
   knownRules?: (typeof alertRules.$inferSelect)[],
 ): Promise<void> {
-  const rules =
-    knownRules ??
-    (await db.select().from(alertRules).where(eq(alertRules.agentId, agent.id)));
-  if (!sentimentRules(rules).length) return;
   let llm: LlmSettings;
   try {
     llm = await llmFor(db, agent);
   } catch {
     return;
   }
-  await checkSentiment(db, agent, conv, llm, rules, text);
+  const s = await scoreSentiment(db, agent, conv, llm, text);
+  if (s !== 'negative') return;
+  const rules =
+    knownRules ??
+    (await db.select().from(alertRules).where(eq(alertRules.agentId, agent.id)));
+  const fired = sentimentRules(rules);
+  if (!fired.length) return;
+  await fireRuleAlert(db, agent, conv, {
+    type: 'sentiment',
+    detail: 'customer sentiment classified negative',
+    rules: fired,
+  }).catch((err) => console.error('[intent] sentiment alert failed:', err));
 }
 
 /** Drift re-check — a conversation that opened as "billing" can turn into
