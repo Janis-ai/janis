@@ -6,6 +6,7 @@ import { deliverToChannel } from './channels.js';
 import { toMessage } from './serializers.js';
 import { fireRuleAlert } from './ruleAlerts.js';
 import { ruleEnabled, type RuleConfig } from './rules.js';
+import { systemNote } from './systemNote.js';
 
 const PROMPT =
   "How was your experience? Reply with a rating from 1 (poor) to 5 (great).";
@@ -125,6 +126,12 @@ export async function captureCsat(db: Db, conv: Conv, text: string): Promise<boo
         rules: fired,
       }).catch((err) => console.error('[csat] low-score alert failed:', err));
     }
+  }
+  // Transcript audit — the rating itself is a system line whether or not a
+  // low-score rule fired
+  if (agentRow) {
+    await systemNote(db, agentRow.workspaceId, conv.id,
+      `Customer rated the conversation ${score}/5`, 'csat');
   }
   const settings = await csatSettings(db, conv.agentId);
   const [note] = await db

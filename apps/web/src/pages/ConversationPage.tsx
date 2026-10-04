@@ -998,7 +998,7 @@ export default function ConversationPage() {
                     ? m.payload.teach
                       ? ' 🧠 taught the agent'
                       : m.payload.event
-                        ? ` ⚡ ${String(m.payload.event)}`
+                        ? ` ⚡ ${String(m.payload.event).replace(/_/g, ' ')}`
                         : ' 🔒 internal'
                     : ''}
                   <span className="time" title={new Date(m.created_at).toLocaleString()}>

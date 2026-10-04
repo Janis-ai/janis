@@ -7,6 +7,7 @@ import { alertNotification, notifyWorkspace } from '../lib/notify.js';
 import { opsAlert } from '../lib/opsAlert.js';
 import { inactivityActions, inactivityThresholds, type RuleConfig } from '../lib/rules.js';
 import { groupsForRules } from '../lib/ruleAlerts.js';
+import { systemNote, userNames } from '../lib/systemNote.js';
 import { toAlert, toMessage } from '../lib/serializers.js';
 import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
@@ -313,6 +314,33 @@ export async function sweep(db: Db): Promise<number> {
           ...(tags.length !== conversation.tags.length ? { tags } : {}),
         })
         .where(eq(conversations.id, conversation.id));
+      // Transcript audit — the escalation and its routing are recorded
+      // whether or not the notification lands with anyone
+      await systemNote(db, agent.workspaceId, conversation.id,
+        `Inactivity — no agent response for ${minutes}m`, 'rule_trigger');
+      await systemNote(db, agent.workspaceId, conversation.id,
+        'Status: agent → needs human', 'state_change');
+      if (assignTo || tags.length !== conversation.tags.length) {
+        const names = await userNames(db, [
+          ...(assignTo ? [assignTo] : []),
+          ...(conversation.assigneeId ? [conversation.assigneeId] : []),
+        ]);
+        if (assignTo) {
+          const target = names.get(assignTo) ?? 'a teammate';
+          if (!conversation.assigneeId) {
+            await systemNote(db, agent.workspaceId, conversation.id,
+              `Assigned to ${target} (inactivity rule)`, 'assign');
+          } else {
+            const owner = names.get(conversation.assigneeId) ?? 'a teammate';
+            await systemNote(db, agent.workspaceId, conversation.id,
+              `inactivity rule tried to assign ${target} — already owned by ${owner}`, 'assign');
+          }
+        }
+        for (const t of tags.filter((x) => !conversation.tags.includes(x))) {
+          await systemNote(db, agent.workspaceId, conversation.id,
+            `Tagged "${t}" (inactivity rule)`, 'tag');
+        }
+      }
       const n = await alertNotification(db, alert, conversation, agent);
       bus.publish(agent.workspaceId, {
         type: 'alert',
@@ -387,6 +415,9 @@ export async function sweepSla(db: Db): Promise<number> {
         detail: `unclaimed for ${ageMin}m (SLA ${slaMinutes}m)${escalated ? ' — escalated' : ''}`,
       });
       if (created) {
+        await systemNote(db, agent.workspaceId, conv.id,
+          `SLA breach — unclaimed for ${ageMin}m (SLA ${slaMinutes}m)${escalated ? ' — escalated' : ''}`,
+          'rule_trigger');
         const n = await alertNotification(db, alert, conv, agent);
         bus.publish(agent.workspaceId, {
           type: 'alert',

@@ -16,6 +16,7 @@ import {
 } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toAlert, toConversation, toMessage, toSuggestion } from '../lib/serializers.js';
+import { STATE_LABEL, systemNote, userNames } from '../lib/systemNote.js';
 import { convListConditions, convListQuery } from '../lib/convFilters.js';
 import { agentRoleFor, agentVis, conversationAgent, isAdminRole, operatorIdentity } from '../lib/access.js';
 import { bus } from '../lib/bus.js';
@@ -254,6 +255,37 @@ export function conversationRoutes(db: Db) {
           emitHookEvent(db, conv.agentId, 'conversation_resolved', archivedConv);
         }
       }
+    }
+
+    // Transcript audit — one line per changed conversation, attributed to
+    // the operator running the bulk action
+    const noteText = (conv: typeof conversations.$inferSelect): string | null => {
+      switch (action) {
+        case 'archive':
+          return conv.state !== 'archived' ? `${user.name} archived the conversation` : null;
+        case 'unarchive':
+          return conv.state === 'archived' ? `${user.name} reopened the conversation` : null;
+        case 'assign_me':
+          return conv.assigneeId !== user.id ? `${user.name} assigned themselves` : null;
+        case 'unassign':
+          return conv.assigneeId
+            ? `${user.name} unassigned ${prevNames.get(conv.assigneeId) ?? 'a teammate'}`
+            : null;
+        case 'tag':
+          return !conv.tags?.includes(tag!) ? `${user.name} tagged "${tag}"` : null;
+        case 'untag':
+          return conv.tags?.includes(tag!) ? `${user.name} removed the tag "${tag}"` : null;
+        default:
+          return null;
+      }
+    };
+    const prevNames =
+      action === 'unassign'
+        ? await userNames(db, rows.map((r) => r.conversations.assigneeId).filter((x): x is string => !!x))
+        : new Map<string, string>();
+    for (const r of rows) {
+      const text = noteText(r.conversations);
+      if (text) await systemNote(db, workspaceId, r.conversations.id, text, 'bulk_action');
     }
 
     // one event per row so detail-page subscribers see the new state —
@@ -776,10 +808,17 @@ export function conversationRoutes(db: Db) {
 
   app.patch('/:id', zValidator('json', patchBody), async (c) => {
     const workspaceId = c.get('workspaceId');
+    const user = c.get('user');
     const body = c.req.valid('json');
 
     const [owned] = await db
-      .select({ id: conversations.id, state: conversations.state })
+      .select({
+        id: conversations.id,
+        state: conversations.state,
+        assigneeId: conversations.assigneeId,
+        intent: conversations.intent,
+        tags: conversations.tags,
+      })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
       .where(and(eq(conversations.id, c.req.param('id')), ...agentVis(workspaceId, c.get('agentScope'))))
@@ -842,12 +881,67 @@ export function conversationRoutes(db: Db) {
       for (const a of resolved) {
         bus.publish(workspaceId, { type: 'alert', data: toAlert(a) });
       }
+      if (resolved.length) {
+        await systemNote(
+          db,
+          workspaceId,
+          owned.id,
+          `${user.name} resolved ${resolved.length} open alert${resolved.length === 1 ? '' : 's'}`,
+          'alert_status',
+        );
+      }
     }
 
     bus.publish(workspaceId, {
       type: 'conversation',
       data: { id: row.id, state: row.state },
     });
+
+    // Operator audit trail — every manual change is a transcript line with
+    // the actor's name, independent of notification preferences
+    if (body.state !== undefined && body.state !== owned.state) {
+      await systemNote(db, workspaceId, owned.id,
+        `${user.name} set status to ${STATE_LABEL[body.state] ?? body.state}`,
+        'state_change');
+    }
+    if (body.assignee_id !== undefined && body.assignee_id !== owned.assigneeId) {
+      const names = await userNames(db, [
+        ...(body.assignee_id ? [body.assignee_id] : []),
+        ...(owned.assigneeId ? [owned.assigneeId] : []),
+      ]);
+      if (body.assignee_id === user.id) {
+        await systemNote(db, workspaceId, owned.id,
+          `${user.name} assigned themselves`, 'assign');
+      } else if (body.assignee_id) {
+        await systemNote(db, workspaceId, owned.id,
+          `${user.name} assigned the conversation to ${names.get(body.assignee_id) ?? 'a teammate'}`,
+          'assign');
+      } else {
+        const prev = owned.assigneeId === user.id
+          ? 'themselves'
+          : names.get(owned.assigneeId ?? '') ?? 'a teammate';
+        await systemNote(db, workspaceId, owned.id,
+          `${user.name} unassigned ${prev}`, 'assign');
+      }
+    }
+    if (body.intent !== undefined && body.intent !== owned.intent) {
+      await systemNote(db, workspaceId, owned.id,
+        body.intent
+          ? `${user.name} set the topic to "${body.intent}"`
+          : `${user.name} cleared the topic`,
+        'intent');
+    }
+    if (body.tags !== undefined) {
+      const nextTags = body.tags;
+      const added = nextTags.filter((t) => !(owned.tags ?? []).includes(t));
+      const removed = (owned.tags ?? []).filter((t) => !nextTags.includes(t));
+      for (const t of added) {
+        await systemNote(db, workspaceId, owned.id, `${user.name} tagged "${t}"`, 'tag');
+      }
+      for (const t of removed) {
+        await systemNote(db, workspaceId, owned.id, `${user.name} removed the tag "${t}"`, 'tag');
+      }
+    }
     return c.json({ conversation: toConversation(row) });
   });
 

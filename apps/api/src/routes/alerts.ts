@@ -8,6 +8,7 @@ import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentScopeCond, agentVis } from '../lib/access.js';
 import { bus } from '../lib/bus.js';
 import { toAlert } from '../lib/serializers.js';
+import { ALERT_LABEL, systemNote } from '../lib/systemNote.js';
 
 const listQuery = z.object({
   status: z.enum(['open', 'acknowledged', 'resolved']).optional(),
@@ -61,6 +62,16 @@ export function alertRoutes(db: Db) {
     // Republish so other open clients clear the dot without waiting for an
     // unrelated event — every other resolve path already does this.
     bus.publish(workspaceId, { type: 'alert', data: toAlert(row) });
+    // Audit line in the transcript — who closed what, and on what
+    const actor = c.get('user');
+    const label = ALERT_LABEL[row.type] ?? row.type;
+    await systemNote(
+      db,
+      workspaceId,
+      row.conversationId,
+      `${actor.name} ${status === 'resolved' ? 'resolved' : 'acknowledged'} the alert — ${label}${row.detail ? ` (${row.detail})` : ''}`,
+      'alert_status',
+    );
     return c.json({ alert: toAlert(row) });
   });
 

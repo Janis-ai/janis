@@ -8,6 +8,7 @@ import { alertNotification, eventForAlertType, notifyWorkspace } from './notify.
 import { postSlackAlert } from './slack.js';
 import { toAlert } from './serializers.js';
 import { pickRuleAssignee, type GroupRef, type RuleConfig, type RuleRow } from './rules.js';
+import { ALERT_LABEL, systemNote, userNames } from './systemNote.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConvRow = typeof conversations.$inferSelect;
@@ -82,6 +83,33 @@ export async function fireRuleAlert(
   let updated = conv;
   const mergedTags = tags.length ? [...new Set([...conv.tags, ...tags])] : conv.tags;
   const changed = (assigneeId && !conv.assigneeId) || mergedTags.length !== conv.tags.length;
+
+  // Transcript audit — the rule fired whether or not the alert deduped or
+  // anyone was paged, so note it before openAlertOnce decides
+  const kinds = [...new Set(fired.map((r) => r.kind))];
+  const ruleName =
+    kinds.length === 1 ? `${kinds[0]} rule` : kinds.length > 1 ? 'rules' : 'rule';
+  if (assigneeId || tags.length) {
+    const names = await userNames(db, [
+      ...(assigneeId ? [assigneeId] : []),
+      ...(conv.assigneeId ? [conv.assigneeId] : []),
+    ]);
+    if (assigneeId) {
+      const target = names.get(assigneeId) ?? 'a teammate';
+      if (!conv.assigneeId) {
+        await systemNote(db, agent.workspaceId, conv.id,
+          `Assigned to ${target} (${ruleName})`, 'assign');
+      } else {
+        const owner = names.get(conv.assigneeId) ?? 'a teammate';
+        await systemNote(db, agent.workspaceId, conv.id,
+          `${ruleName} tried to assign ${target} — already owned by ${owner}`, 'assign');
+      }
+    }
+    for (const t of tags.filter((x) => !conv.tags.includes(x))) {
+      await systemNote(db, agent.workspaceId, conv.id, `Tagged "${t}" (${ruleName})`, 'tag');
+    }
+  }
+
   if (changed) {
     const [row] = await db
       .update(conversations)
@@ -103,6 +131,14 @@ export async function fireRuleAlert(
     type: opts.type,
     detail: opts.detail ?? undefined,
   });
+  const label = ALERT_LABEL[opts.type] ?? opts.type;
+  await systemNote(
+    db,
+    agent.workspaceId,
+    conv.id,
+    `${label}${opts.detail ? ` — ${opts.detail}` : ''}${created ? '' : ' (alert already open)'}`,
+    'rule_trigger',
+  );
   if (!created) return;
 
   const n = await alertNotification(db, alert, updated, agent);

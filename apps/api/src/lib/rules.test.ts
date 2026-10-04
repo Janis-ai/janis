@@ -81,8 +81,8 @@ describe('evaluateActions', () => {
     expect(
       evaluateActions(evt({ type: 'message_in', text: 'I want a refund and a lawyer' }), rules),
     ).toEqual([
-      { assignTo: 'u1', tag: 'billing' },
-      { assignTo: undefined, tag: 'legal' },
+      { assignTo: 'u1', tag: 'billing', ruleId: 'r1', kind: 'keyword' },
+      { assignTo: undefined, tag: 'legal', ruleId: 'r1', kind: 'keyword' },
     ]);
     expect(evaluateActions(evt({ type: 'message_in', text: 'hello' }), rules)).toEqual([]);
     // non-inbound events never trigger actions
@@ -102,16 +102,16 @@ describe('evaluateActions', () => {
       rule('failure', { enabled: true, assignees: ['ops1'], next: 0 }),
     ];
     expect(evaluateActions(evt({ type: 'handoff_request' }), rules)).toEqual([
-      { assignTo: 'oncall1', tag: 'escalated' },
+      { assignTo: 'oncall1', tag: 'escalated', ruleId: 'r1', kind: 'handoff_request' },
     ]);
     expect(evaluateActions(evt({ type: 'handoff_offer' }), rules)).toEqual([
-      { assignTo: 'oncall1', tag: 'escalated' },
+      { assignTo: 'oncall1', tag: 'escalated', ruleId: 'r1', kind: 'handoff_request' },
     ]);
     expect(evaluateActions(evt({ type: 'custom_alert', alert_type: 'x' }), rules)).toEqual([
-      { assignTo: undefined, tag: 'custom-tag' },
+      { assignTo: undefined, tag: 'custom-tag', ruleId: 'r1', kind: 'custom_alert' },
     ]);
     expect(evaluateActions(evt({ type: 'failure' }), rules)).toEqual([
-      { assignTo: 'ops1', tag: undefined, ruleId: 'r1', next: 1 },
+      { assignTo: 'ops1', tag: undefined, ruleId: 'r1', kind: 'failure', next: 1 },
     ]);
     // non-alert events still produce nothing
     expect(evaluateActions(evt({ type: 'resolve' }), rules)).toEqual([]);
@@ -174,7 +174,9 @@ describe('group-expanded pools', () => {
       rule('keyword', { enabled: true, keywords: ['refund'], assignees: ['u1'], group_ids: ['g1'] }),
     ];
     const actions = evaluateActions(evt({ type: 'message_in', text: 'refund please' }), rules, groups);
-    expect(actions).toEqual([{ assignTo: 'u1', tag: undefined, ruleId: 'r1', next: 1 }]);
+    expect(actions).toEqual([
+      { assignTo: 'u1', tag: undefined, ruleId: 'r1', kind: 'keyword', next: 1 },
+    ]);
   });
 });
 

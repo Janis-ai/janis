@@ -500,3 +500,107 @@ describe('handoff_offer lifecycle', () => {
     expect(results[1].conversation_state).toBe('needs_human');
   });
 });
+
+describe('system notes', () => {
+  // Fresh workspace — the shared one is message-capped by the hard-cap test.
+  let noteAgent: typeof agents.$inferSelect;
+  let noteUser: typeof users.$inferSelect;
+  beforeAll(async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Notes' }).returning();
+    [noteUser] = await db
+      .insert(users)
+      .values({ email: 'n@b.c', name: 'Nina', passwordHash: await hashPassword('password123') })
+      .returning();
+    await db.insert(memberships).values({
+      userId: noteUser.id,
+      workspaceId: ws.id,
+      role: 'admin',
+      acceptedAt: new Date(),
+    });
+    const { hash, preview } = generateApiKey();
+    [noteAgent] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'NoteBot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+  });
+  const convByExternal = async (externalId: string) =>
+    (await db
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.externalId, externalId), eq(conversations.agentId, noteAgent.id))))[0];
+  const sysNotes = async (convId: string) =>
+    (await db.select().from(messages).where(eq(messages.conversationId, convId))).filter(
+      (m) => (m.payload as { internal?: boolean })?.internal === true,
+    );
+
+  it('keyword match writes a rule-trigger note — and repeats when deduped', async () => {
+    await db.insert(alertRules).values({
+      agentId: noteAgent.id,
+      kind: 'keyword',
+      config: { enabled: true, keywords: ['refund'] },
+    });
+    await processEvents(db, noteAgent, [
+      { type: 'message_in', conversation_id: 'notes1', text: 'I want a refund' },
+    ]);
+    let conv = await convByExternal('notes1');
+    let notes = await sysNotes(conv.id);
+    const triggers = notes.filter((m) => m.payload.event === 'rule_trigger');
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0].text).toContain('keyword');
+    expect(triggers[0].text).toContain('refund');
+
+    // Second fire dedupes the alert but still logs the trigger — the audit
+    // trail is notification-independent
+    await processEvents(db, noteAgent, [
+      { type: 'message_in', conversation_id: 'notes1', text: 'refund again please' },
+    ]);
+    notes = await sysNotes(conv.id);
+    expect(notes.filter((m) => m.payload.event === 'rule_trigger')).toHaveLength(2);
+    expect(
+      (await db.select().from(alerts).where(eq(alerts.conversationId, conv.id))).filter(
+        (a) => a.type === 'keyword',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('state transitions and rule assignment are noted with attribution', async () => {
+    await db.insert(alertRules).values({
+      agentId: noteAgent.id,
+      kind: 'handoff_request',
+      config: { enabled: true, assign_to: noteUser.id },
+    });
+    await processEvents(db, noteAgent, [
+      { type: 'handoff_request', conversation_id: 'notes2', reason: 'stuck' },
+    ]);
+    const conv = await convByExternal('notes2');
+    const notes = await sysNotes(conv.id);
+    expect(notes.some((m) => m.payload.event === 'state_change' && m.text === 'Status: agent → needs human')).toBe(true);
+    expect(notes.some((m) => m.payload.event === 'assign' && m.text === 'Assigned to Nina (handoff_request rule)')).toBe(true);
+    expect((await convByExternal('notes2')).assigneeId).toBe(noteUser.id);
+  });
+
+  it('tags applied by a rule are noted', async () => {
+    await db.insert(alertRules).values({
+      agentId: noteAgent.id,
+      kind: 'keyword',
+      config: { enabled: true, keywords: ['vip'], tag: 'priority' },
+    });
+    await processEvents(db, noteAgent, [
+      { type: 'message_in', conversation_id: 'notes3', text: 'vip customer here' },
+    ]);
+    const conv = await convByExternal('notes3');
+    const notes = await sysNotes(conv.id);
+    expect(notes.some((m) => m.payload.event === 'tag' && m.text === 'Tagged "priority" (keyword rule)')).toBe(true);
+    expect((await convByExternal('notes3')).tags).toContain('priority');
+  });
+
+  it('system notes never reach the customer-facing direction', async () => {
+    const conv = await convByExternal('notes1');
+    const notes = await sysNotes(conv.id);
+    // direction stays 'out'/'human' but the internal flag is what channels
+    // and the renderer key on — asserted by payload, and no note bumps
+    // lastMessageDirection into a fake agent reply
+    expect(notes.every((m) => m.direction === 'out' || m.direction === 'human')).toBe(true);
+    expect(notes.every((m) => m.payload.internal === true)).toBe(true);
+  });
+});

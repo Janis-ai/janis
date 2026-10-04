@@ -25,9 +25,11 @@ export type RuleConfig = {
 export interface RuleAction {
   assignTo?: string;
   tag?: string;
+  /** Rule that produced this action — transcript notes name the kind. */
+  ruleId?: string;
+  kind?: RuleRow['kind'];
   /** Set when a rotation pool picked the assignee — caller persists the
    *  cursor back onto the rule config. */
-  ruleId?: string;
   next?: number;
 }
 
@@ -68,7 +70,9 @@ export function ruleAction(rule: RuleRow, groups: GroupRef[]): RuleAction {
   return {
     assignTo: pick?.userId,
     tag: cfg.tag,
-    ...(pick?.next !== undefined ? { ruleId: rule.id, next: pick.next } : {}),
+    ruleId: rule.id,
+    kind: rule.kind,
+    ...(pick?.next !== undefined ? { next: pick.next } : {}),
   };
 }
 

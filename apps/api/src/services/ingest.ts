@@ -27,6 +27,7 @@ import { METER_MESSAGES, billingCustomerFor, reportMeter } from '../lib/stripe.j
 import { messageCap } from '../lib/plans.js';
 import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
 import { sendCsatPrompt } from '../lib/csat.js';
+import { STATE_LABEL, systemNote, userNames } from '../lib/systemNote.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -181,6 +182,18 @@ export async function processEvents(
     let handoffAlertNew = false;
     const pendingNotifies: { title: string; body: string; url: string; event: NotifyEvent }[] = [];
     for (const triggered of evaluateEvent(event, rules)) {
+      // keyword alerts have no flagged transcript line — note every fire so
+      // the audit trail shows the rule triggered even when the alert dedupes
+      // or the workspace muted that bucket
+      if (triggered.type === 'keyword') {
+        await systemNote(
+          db,
+          agent.workspaceId,
+          conv.id,
+          `Alert rule fired — keyword ${triggered.detail ?? 'matched'}`,
+          'rule_trigger',
+        );
+      }
       const [open] = await db
         .select()
         .from(alerts)
@@ -304,6 +317,15 @@ export async function processEvents(
         .returning();
       for (const a of staleOffers)
         bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(a) });
+      if (staleOffers.length) {
+        await systemNote(
+          db,
+          agent.workspaceId,
+          conv.id,
+          'Handoff offer expired — the customer replied instead of accepting',
+          'alert_status',
+        );
+      }
     }
 
     // Automation: keyword rules can route the thread alongside their alert —
@@ -359,8 +381,44 @@ export async function processEvents(
         type: 'conversation',
         data: { id: updated.id, state: updated.state },
       });
+      await systemNote(
+        db,
+        agent.workspaceId,
+        conv.id,
+        `Status: ${STATE_LABEL[conv.state]} → ${STATE_LABEL[updated.state]}`,
+        'state_change',
+      );
       if (updated.state === 'needs_human')
         emitHookEvent(db, agent.id, 'conversation_escalated', updated);
+    }
+
+    // Rule-routing audit — every applied (or refused) effect is a line in the
+    // transcript, independent of whether the alert itself was deduped or its
+    // notifications were muted
+    if (actions.length) {
+      const names = await userNames(db, [
+        ...actions.map((a) => a.assignTo).filter((x): x is string => !!x),
+        ...(conv.assigneeId ? [conv.assigneeId] : []),
+      ]);
+      const addedTags = mergedTags.filter((t) => !conv.tags.includes(t));
+      for (const a of actions) {
+        const ruleName = a.kind ? `${a.kind} rule` : 'rule';
+        if (a.assignTo) {
+          const target = names.get(a.assignTo) ?? 'a teammate';
+          if (!conv.assigneeId) {
+            await systemNote(db, agent.workspaceId, conv.id,
+              `Assigned to ${target} (${ruleName})`, 'assign');
+          } else {
+            const owner = names.get(conv.assigneeId) ?? 'a teammate';
+            await systemNote(db, agent.workspaceId, conv.id,
+              `${ruleName} tried to assign ${target} — already owned by ${owner}`, 'assign');
+          }
+        }
+        if (a.tag && addedTags.includes(a.tag)) {
+          await systemNote(db, agent.workspaceId, conv.id,
+            `Tagged "${a.tag}" (${ruleName})`, 'tag');
+        }
+      }
     }
 
     // Resolution side effects — identical to an operator pressing archive:
@@ -395,6 +453,11 @@ export async function processEvents(
       (agent.config as { auto_assign?: boolean } | null)?.auto_assign
     ) {
       assigneeId = (await autoAssign(db, agent, updated)) ?? null;
+      if (assigneeId) {
+        const name = (await userNames(db, [assigneeId])).get(assigneeId) ?? 'a teammate';
+        await systemNote(db, agent.workspaceId, conv.id,
+          `Auto-assigned to ${name} (least-loaded)`, 'assign');
+      }
     }
 
     // Queued alert notifications — scoped to the assignee when one exists so
