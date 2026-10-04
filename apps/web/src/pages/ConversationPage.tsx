@@ -452,6 +452,21 @@ export default function ConversationPage() {
     onError: (e) => setError(e.message),
   });
 
+  // Dismiss an alert without touching conversation state — resolving marks
+  // it actioned and clears the list dot.
+  const resolveAlert = useMutation({
+    mutationFn: (alertId: string) =>
+      api(`/api/alerts/${alertId}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status: 'resolved' }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['conversation', id] });
+      void qc.invalidateQueries({ queryKey: ['conversations'] });
+    },
+    onError: (e) => setError(e.message),
+  });
+
   const suggest = useMutation({
     mutationFn: () => api(`/api/conversations/${id}/suggest`, { method: 'POST' }),
     onSuccess: () => { setError(''); void qc.invalidateQueries({ queryKey: ['conversation', id] }); },
@@ -863,8 +878,18 @@ export default function ConversationPage() {
         {openAlerts.length > 0 && (
           <div className="card" style={{ borderColor: 'var(--warn)' }}>
             {openAlerts.map((a) => (
-              <div key={a.id} className="muted">
-                ⚠ {a.type.replace('_', ' ')}{a.detail ? ` — ${a.detail}` : ''}
+              <div key={a.id} className="row muted">
+                <span className="grow">
+                  ⚠ {a.type.replace('_', ' ')}{a.detail ? ` — ${a.detail}` : ''}
+                </span>
+                <button
+                  className="btn sm"
+                  aria-label={`Dismiss ${a.type.replace('_', ' ')} alert`}
+                  disabled={resolveAlert.isPending}
+                  onClick={() => resolveAlert.mutate(a.id)}
+                >
+                  Dismiss
+                </button>
               </div>
             ))}
           </div>

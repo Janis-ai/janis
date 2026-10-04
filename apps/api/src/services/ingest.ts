@@ -286,6 +286,26 @@ export async function processEvents(
     if (event.type === 'resolve' && (state === 'active' || state === 'needs_human'))
       state = 'archived';
 
+    // A customer who replies past a handoff offer didn't take it — the
+    // "awaiting customer" window is over, so the offer alert is stale. If
+    // they accepted, this same event fires handoff_request → help_request,
+    // which opens its own alert and escalates — nothing real is hidden.
+    if (event.type === 'message_in' && !newAlertTypes.includes('help_request')) {
+      const staleOffers = await db
+        .update(alerts)
+        .set({ status: 'resolved' })
+        .where(
+          and(
+            eq(alerts.conversationId, conv.id),
+            eq(alerts.type, 'handoff_offer'),
+            eq(alerts.status, 'open'),
+          ),
+        )
+        .returning();
+      for (const a of staleOffers)
+        bus.publish(agent.workspaceId, { type: 'alert', data: toAlert(a) });
+    }
+
     // Automation: keyword rules can route the thread alongside their alert —
     // assign to a teammate (only when unassigned, so a routed thread doesn't
     // steal someone's queue) and/or tag it. Pools resolve through groups and

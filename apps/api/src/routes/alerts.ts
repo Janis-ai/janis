@@ -6,6 +6,7 @@ import type { Db } from '../db/client.js';
 import { agents, alerts, conversations } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentScopeCond, agentVis } from '../lib/access.js';
+import { bus } from '../lib/bus.js';
 import { toAlert } from '../lib/serializers.js';
 
 const listQuery = z.object({
@@ -57,6 +58,9 @@ export function alertRoutes(db: Db) {
       )
       .returning();
     if (!row) return c.json({ error: 'not found' }, 404);
+    // Republish so other open clients clear the dot without waiting for an
+    // unrelated event — every other resolve path already does this.
+    bus.publish(workspaceId, { type: 'alert', data: toAlert(row) });
     return c.json({ alert: toAlert(row) });
   });
 

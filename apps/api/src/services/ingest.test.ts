@@ -446,3 +446,57 @@ describe('hard cap', () => {
     expect(note).toHaveLength(1);
   });
 });
+
+describe('handoff_offer lifecycle', () => {
+  // Fresh workspace + agent — the hard-cap test above saturates the shared
+  // workspace's message cap, which early-continues inbound events before
+  // alert logic ever runs.
+  let offerAgent: typeof agents.$inferSelect;
+  beforeAll(async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Offers' }).returning();
+    const { hash, preview } = generateApiKey();
+    [offerAgent] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'OfferBot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+  });
+  const convByExternal = async (externalId: string) =>
+    (await db.select().from(conversations).where(and(eq(conversations.externalId, externalId), eq(conversations.agentId, offerAgent.id))))[0];
+  const offerAlert = (convId: string) =>
+    db
+      .select()
+      .from(alerts)
+      .where(and(eq(alerts.conversationId, convId), eq(alerts.type, 'handoff_offer')));
+
+  it('a customer reply past the offer resolves the stale offer alert', async () => {
+    await processEvents(db, offerAgent, [
+      { type: 'handoff_offer', conversation_id: 'offer1', reason: 'want a human?' },
+    ]);
+    const conv = await convByExternal('offer1');
+    expect((await offerAlert(conv.id))[0].status).toBe('open');
+
+    await processEvents(db, offerAgent, [
+      { type: 'message_in', conversation_id: 'offer1', text: 'actually never mind' },
+    ]);
+    expect((await offerAlert(conv.id))[0].status).toBe('resolved');
+    // still agent-owned — a reply is not a takeover
+    expect((await convByExternal('offer1')).state).toBe('active');
+  });
+
+  it('accepting the offer resolves it and opens a help_request instead', async () => {
+    await processEvents(db, offerAgent, [
+      { type: 'handoff_offer', conversation_id: 'offer2' },
+    ]);
+    const conv = await convByExternal('offer2');
+    const results = await processEvents(db, offerAgent, [
+      { type: 'message_in', conversation_id: 'offer2', text: 'yes please' },
+      { type: 'handoff_request', conversation_id: 'offer2', reason: 'customer accepted' },
+    ]);
+    const open = await db
+      .select()
+      .from(alerts)
+      .where(and(eq(alerts.conversationId, conv.id), eq(alerts.status, 'open')));
+    expect(open.map((a) => a.type)).toEqual(['help_request']);
+    expect(results[1].conversation_state).toBe('needs_human');
+  });
+});

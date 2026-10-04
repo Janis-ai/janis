@@ -113,7 +113,9 @@ function ConvRow({
           onChange={() => onToggle(c.id)}
         />
       )}
-      {c.open_alert_count > 0 && <span className="alert-dot" />}
+      {c.open_alert_count > 0 && (
+        <span className="alert-dot" title={`${c.open_alert_count} open alert${c.open_alert_count === 1 ? '' : 's'}`} />
+      )}
       {c.is_unread && <span className="unread-dot" title="Unread" />}
       <Avatar c={c} size={34} />
       <div className="who">
