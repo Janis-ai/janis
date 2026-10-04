@@ -602,7 +602,7 @@ export default function Settings() {
                 <label key={key}>
                   <input
                     type="checkbox"
-                    checked={(me.user.notify as { events?: Record<string, boolean> } | undefined)?.events?.[key] !== false}
+                    checked={me.user.notify?.events?.[key] !== false}
                     disabled={setNotify.isPending}
                     onChange={(e) => setNotify.mutate({ events: { [key]: e.target.checked } })}
                   />{' '}

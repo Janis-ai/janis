@@ -733,7 +733,13 @@ export const WorkspaceUser = z.object({
   // 'invited' = pending membership they haven't accepted yet
   status: z.enum(['active', 'invited']).default('active'),
   notify: z
-    .object({ push: z.boolean(), email: z.boolean(), sound: z.boolean() })
+    .object({
+      push: z.boolean(),
+      email: z.boolean(),
+      sound: z.boolean(),
+      // per-event-type subscriptions — missing key = on
+      events: z.record(z.string(), z.boolean()).optional(),
+    })
     .default({ push: true, email: true, sound: true }),
   // What customers see on operator replies when the channel shows operator
   // identity — defaults to the account's first name and no avatar.

@@ -367,7 +367,12 @@ export function toWorkspaceUser(
   row: Row<typeof users>,
   role: 'owner' | 'admin' | 'member' | 'viewer' = 'member',
 ): WorkspaceUser {
-  const prefs = (row.notifyPrefs ?? {}) as { push?: boolean; email?: boolean; sound?: boolean };
+  const prefs = (row.notifyPrefs ?? {}) as {
+    push?: boolean;
+    email?: boolean;
+    sound?: boolean;
+    events?: Record<string, boolean>;
+  };
   return {
     id: row.id,
     email: row.email,
@@ -378,6 +383,7 @@ export function toWorkspaceUser(
       push: prefs.push !== false,
       email: prefs.email !== false,
       sound: prefs.sound !== false,
+      ...(prefs.events ? { events: prefs.events } : {}),
     },
     display_name: row.displayName,
     avatar_url: row.avatarUrl,
