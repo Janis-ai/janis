@@ -231,6 +231,7 @@ export function agentRoutes(db: Db) {
       const config = {
         ...(purpose ? { purpose: purpose.slice(0, 2000) } : {}),
         ...(draft?.system_prompt ? { system_prompt: draft.system_prompt } : {}),
+        ...(draft?.tone ? { tone: draft.tone } : {}),
         ...(draft?.greeting ? { greeting: draft.greeting, greeting_enabled: true } : {}),
         builder: {
           ...(purpose ? { description: purpose.slice(0, 4000) } : {}),

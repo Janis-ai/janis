@@ -1007,6 +1007,7 @@ describe('agent bootstrap (guided builder)', () => {
                     name: 'Shop Support',
                     system_prompt:
                       'You are the support agent for Acme Store. Answer order and shipping questions. Offer a human when the customer asks for one.',
+                    tone: 'warm, concise, never apologetic',
                     greeting: 'Hi! How can I help with your order today?',
                     suggested_knowledge: [
                       'Refunds under $50 are approved within 24h',
@@ -1037,6 +1038,7 @@ describe('agent bootstrap (guided builder)', () => {
     expect(agent.name).toBe('Shop Support'); // draft name used — none supplied
     expect(agent.hosted).toBe(true);
     expect(agent.config.system_prompt).toContain('support agent for Acme Store');
+    expect(agent.config.tone).toBe('warm, concise, never apologetic');
     expect(agent.config.greeting).toContain('How can I help');
     expect(agent.config.greeting_enabled).toBe(true);
     expect(agent.config.purpose).toContain('ecommerce');

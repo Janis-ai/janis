@@ -26,6 +26,7 @@ interface BuilderDraft {
   note?: string;
   name?: string;
   system_prompt?: string;
+  tone?: string;
   greeting?: string;
 }
 
@@ -251,6 +252,12 @@ export default function AgentBuilder() {
                       <div style={{ fontSize: 13, marginTop: 2, whiteSpace: 'pre-wrap' }}>
                         {draft.system_prompt}
                       </div>
+                    </div>
+                  )}
+                  {draft.tone && (
+                    <div style={{ marginTop: 8 }}>
+                      <div className="muted" style={{ fontSize: 12 }}>Tone</div>
+                      <div style={{ fontSize: 13, marginTop: 2 }}>{draft.tone}</div>
                     </div>
                   )}
                   {builder?.suggested_knowledge?.length ? (

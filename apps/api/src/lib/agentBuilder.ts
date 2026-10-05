@@ -10,6 +10,7 @@ import { TOOL_TEMPLATES, templateInfo } from './toolTemplates.js';
 export interface BuilderDraft {
   name?: string;
   system_prompt?: string;
+  tone?: string;
   greeting?: string;
   suggested_knowledge: string[];
   suggested_templates: { id: string; name?: string; reason?: string }[];
@@ -76,6 +77,7 @@ export function validateDraft(
   return {
     name: clamp(parsed.name, 60),
     system_prompt: clamp(parsed.system_prompt, 8000),
+    tone: clamp(parsed.tone, 200),
     greeting: clamp(parsed.greeting, 500),
     suggested_knowledge: clampList(parsed.suggested_knowledge, 400, 30),
     suggested_templates: templates,
@@ -90,7 +92,8 @@ Given the operator's description of the agent they want, return ONE JSON object 
 
 {
   "name": "a short agent name, <= 40 chars",
-  "system_prompt": "the agent's operating instructions, 120-400 words: who it serves, its scope, tone of voice, what it must never do, and when it MUST offer a human (it says so plainly instead of guessing). Write in second person ('You are...'). Do not mention Janis, tools, or this JSON.",
+  "system_prompt": "the agent's operating instructions, 120-400 words: who it serves, its scope, what it must never do, and when it MUST offer a human (it says so plainly instead of guessing). Write in second person ('You are...'). Voice/style goes in the separate tone field — do NOT describe tone here. Do not mention Janis, tools, or this JSON.",
+  "tone": "the agent's voice in a few words — e.g. 'warm, concise, never apologetic' — <= 60 chars; omit if the description implies no particular voice",
   "greeting": "the first message the agent sends a customer, <= 200 chars",
   "suggested_knowledge": ["topics of information the operator must supply, phrased as what to add — e.g. 'shipping times and costs', 'return window', 'current coupon policy'. These are TOPICS, not content: you don't know the operator's real facts, so never invent values. Behavior rules ('always…', 'never…', 'remind customers…', 'prioritize…') do NOT go here — fold those into system_prompt. Max 12, one line each."],
   "suggested_templates": [{"id": "<an id from the integration catalog below>", "reason": "<why this agent needs it, <= 120 chars>"}],
