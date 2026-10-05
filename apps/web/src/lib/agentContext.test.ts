@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentSlug, janisBrain } from './agentContext';
+import { agentPathParam, agentSlug, janisBrain } from './agentContext';
 
 describe('agentSlug', () => {
   it('matches the slug shape concierge links emit', () => {
@@ -7,6 +7,25 @@ describe('agentSlug', () => {
     expect(agentSlug('Acme  Returns!')).toBe('acme-returns');
     expect(agentSlug("Mike's Bot")).toBe('mike-s-bot');
     expect(agentSlug('  padded  ')).toBe('padded');
+  });
+});
+
+describe('agentPathParam', () => {
+  const uuid = '7b90d58b-2253-495e-bc61-a575bf958c5b';
+
+  it('reads the agent segment of /agents/:id paths', () => {
+    expect(agentPathParam(`/agents/${uuid}`)).toBe(uuid);
+    expect(agentPathParam(`/agents/${uuid}/knowledge`)).toBe(uuid);
+    expect(agentPathParam('/agents/acme-returns/knowledge')).toBe('acme-returns');
+    expect(agentPathParam('/agents')).toBeUndefined();
+    expect(agentPathParam('/conversations')).toBeUndefined();
+  });
+
+  it('never treats the /agents/new builder as an agent — the rail URL-sync '
+    + 'stamps ?agent=<test-rail id> on navigations, which used to resolve '
+    + 'the builder to an existing agent', () => {
+    expect(agentPathParam('/agents/new')).toBeUndefined();
+    expect(agentPathParam(`/agents/new/${uuid}`)).toBeUndefined();
   });
 });
 

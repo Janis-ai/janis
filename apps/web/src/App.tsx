@@ -184,6 +184,7 @@ export default function App() {
           <Route path="/campaigns" element={<Campaigns />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/agents/new" element={<AgentBuilder />} />
+          <Route path="/agents/new/:agentId" element={<AgentBuilder />} />
           <Route path="/agents/:id" element={<AgentOverview />} />
           {/* Agent context — every section is its own path so the sidebar
               can flip the whole nav between workspace and agent. */}

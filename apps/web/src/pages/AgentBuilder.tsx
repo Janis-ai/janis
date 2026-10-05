@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAgents, useMe } from '../api/hooks';
-import { janisBrain } from '../lib/agentContext';
+import { janisBrain, setLastAgent } from '../lib/agentContext';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { AskJanis } from '../components/AskJanis';
@@ -41,14 +41,19 @@ type StepKey = (typeof STEPS)[number]['key'];
 
 export default function AgentBuilder() {
   usePageTitle('New agent');
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
   const { data: me } = useMe();
   const isAdmin = me?.user.role === 'admin';
   const { data: agentsData } = useAgents();
   const qc = useQueryClient();
 
-  const agentParam = params.get('agent') ?? '';
-  const agent = agentsData?.agents.find((a) => a.id === agentParam) ?? null;
+  // The agent id is a PATH segment (/agents/new/:agentId) — never ?agent=:
+  // the layout's rail URL-sync stamps ?agent=<test-rail agent> onto every
+  // navigation while the test rail is open, which silently resolved the
+  // builder to an existing agent.
+  const { agentId } = useParams<{ agentId?: string }>();
+  const agent = agentsData?.agents.find((a) => a.id === agentId) ?? null;
   const hosted = agent ? janisBrain(agent) : true;
   const stepParam = params.get('step');
   const step: StepKey = STEPS.some((s) => s.key === stepParam)
@@ -57,10 +62,7 @@ export default function AgentBuilder() {
       ? 'knowledge'
       : 'purpose';
   const goStep = (s: StepKey) => {
-    const p = new URLSearchParams(params);
-    p.set('step', s);
-    if (agent) p.set('agent', agent.id);
-    setParams(p, { replace: true });
+    navigate(`/agents/new${agent ? `/${agent.id}` : ''}?step=${s}`, { replace: true });
   };
 
   // Purpose stage — name + natural-language description → POST
@@ -82,11 +84,9 @@ export default function AgentBuilder() {
       }),
     onSuccess: (r) => {
       setDraft(r.draft ?? null);
+      setLastAgent(r.agent.id);
       void qc.invalidateQueries({ queryKey: ['agents'] });
-      const p = new URLSearchParams();
-      p.set('agent', r.agent.id);
-      p.set('step', 'purpose');
-      setParams(p, { replace: true });
+      navigate(`/agents/new/${r.agent.id}?step=purpose`, { replace: true });
     },
     onError: (e) => setError(e.message),
   });

@@ -38,10 +38,18 @@ export function agentSlug(name: string): string {
  *  Campaigns, Reports) still default to it and the sidebar keeps the
  *  agent's subsection. Cleared by the "All agents" scope pick or by
  *  choosing the workspace header in the switcher. */
+/** The agent-id-or-slug segment of an /agents/… path, or undefined on the
+ *  guided builder — 'new' is a route, never an agent (an agent literally
+ *  named "New" would otherwise hijack /agents/new). */
+export function agentPathParam(pathname: string): string | undefined {
+  const p = pathname.match(/^\/agents\/([^/]+)/)?.[1];
+  return p === 'new' ? undefined : p;
+}
+
 export function useAgentContext() {
   const location = useLocation();
   const navigate = useNavigate();
-  const param = location.pathname.match(/^\/agents\/([^/]+)/)?.[1];
+  const param = agentPathParam(location.pathname);
   const { data } = useAgents();
   // A non-uuid param is a name-slug — resolve it and swap the URL for the
   // canonical /agents/<uuid>/… so every downstream ?agent_id= call works.
