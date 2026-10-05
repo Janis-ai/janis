@@ -252,11 +252,9 @@ export default function AgentOverview() {
           <div className="build-progress">
             {BUILD_STEPS.map((s) => {
               const state = buildStatus?.steps[s.key] ?? 'pending';
-              const na = state === 'na';
               const isNext = state === 'pending' && nextStep?.key === s.key;
-              // Same marks as the sidebar/boxes: ✓ for completable steps,
-              // ⊙ for open-ended capabilities once engaged (seen or
-              // configured), + for addable, ○ unseen.
+              // Same marks as the sidebar/boxes: ✓ completed, ⊙ engaged
+              // (configured or seen), → recommended next, ○ untouched.
               const g = stepGlyph(s.key, buildStatus?.steps[s.key], {
                 seen: seenSteps.has(s.key),
                 isNext,
@@ -275,10 +273,9 @@ export default function AgentOverview() {
                 <Link
                   key={s.key}
                   to={buildStepLink(id!, s.key)}
-                  className={`bp-item${g === 'check' ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${isNext ? ' next' : ''}${g === 'plus' ? ' na' : ''}`}
-                  title={g === 'plus' ? (s.key === 'abilities' ? 'Add tools and integrations — anytime' : 'This agent doesn\u2019t need it — add it anytime') : undefined}
+                  className={`bp-item${g === 'check' ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${isNext ? ' next' : ''}`}
                 >
-                  <span className="bp-mark">{g === 'check' ? '✓' : g === 'plus' ? '+' : g === 'dot-ok' || g === 'dot' || g === 'dot-accent' ? '⊙' : '○'}</span>
+                  <span className="bp-mark">{g === 'check' ? '✓' : g === 'dot-ok' || g === 'dot' ? '⊙' : g === 'next' ? '→' : '○'}</span>
                   {s.label}
                   {caption && <span className="muted"> · {caption}</span>}
                 </Link>

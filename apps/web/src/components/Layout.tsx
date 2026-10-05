@@ -16,7 +16,7 @@ import { railBus, type RailRequest } from '../lib/railBus';
 import { markStepSeen, stepGlyph, useSeenSteps } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
-  Circle, CircleDot, CreditCard, Gauge, Inbox, Megaphone, Plus,
+  Circle, CircleDot, CreditCard, Gauge, Inbox, Megaphone,
   Settings, Sparkles, Users, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
@@ -681,26 +681,23 @@ export default function Layout() {
               return (
               <Link
                 key={s.key}
-                className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}${g === 'plus' ? ' na' : ''}`}
-                title={s.key === 'abilities' ? 'Add tools and integrations — anytime' : buildStatus?.steps[s.key] === 'na' ? 'This agent doesn\u2019t need it — add it anytime' : undefined}
+                className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}`}
                 to={s.to}
               >
                 <span className="label">{s.label}</span>
                 <span className={`step-mark ${
                   g === 'check' || g === 'dot-ok'
                     ? 'done'
-                    : g === 'dot-accent'
+                    : g === 'next'
                       ? 'next'
-                      : g === 'plus'
-                        ? 'na'
-                        : g === 'dot'
-                          ? 'seen'
-                          : 'todo'
+                      : g === 'dot'
+                        ? 'seen'
+                        : 'todo'
                 }`}>
                   {g === 'check' ? (
                     <Check size={12} />
-                  ) : g === 'plus' ? (
-                    <Plus size={12} />
+                  ) : g === 'next' ? (
+                    <ChevronRight size={13} />
                   ) : g === 'circle' ? (
                     <Circle size={12} />
                   ) : (

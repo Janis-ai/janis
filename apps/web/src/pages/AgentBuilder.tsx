@@ -105,10 +105,9 @@ export default function AgentBuilder() {
       // Straight into the flow — land on the first step this agent actually
       // needs: a draft that suggested no knowledge skips Teach it (it's an
       // optional capability, not a skipped task).
-      const teachNa = !(r.draft?.suggested_knowledge?.length);
-      navigate(`/agents/new/${r.agent.id}?step=${teachNa ? 'guide' : 'teach'}`, {
-        replace: true,
-      });
+      // Always land on Teach it — it's the first surface where the user
+      // adds what only they know, even when the draft suggested nothing.
+      navigate(`/agents/new/${r.agent.id}?step=teach`, { replace: true });
     },
     onError: (e) => setError(e.message),
   });
@@ -161,25 +160,10 @@ export default function AgentBuilder() {
   const builder = cfg.builder;
   const { data: status } = useBuildStatus(agent?.id ?? undefined);
   const seenSteps = useSeenSteps(agent?.id);
-  /** Steps the draft said this agent doesn't need — 'na' only when a draft
-   *  ran and suggested nothing AND nothing's been added since. */
-  const isNa = (key: StepKey) => {
-    if (status) return status.steps[key] === 'na';
-    const drafted = !!builder?.generated_at || !!draft;
-    if (key === 'teach')
-      return drafted && !(builder?.suggested_knowledge?.length ?? draft?.suggested_knowledge?.length);
-    if (key === 'abilities')
-      return (
-        drafted &&
-        !(builder?.suggested_templates?.length ?? draft?.suggested_templates?.length) &&
-        !(builder?.suggested_approvals?.length ?? draft?.suggested_approvals?.length)
-      );
-    return false;
-  };
   const idx = STEPS.findIndex((s) => s.key === step);
-  // "Next" skips steps the agent doesn't need — Create → Guide → Try →
-  // Deploy is a legitimate path for an agent that needs no knowledge.
-  const next = STEPS.slice(idx + 1).find((s) => !isNa(s.key));
+  // "Next" follows the rail literally — Create always advances to Teach
+  // it, never skips ahead. 'na' only affects marks/counts, not movement.
+  const next = STEPS[idx + 1];
   // The "recommended" marker is the first PENDING step in build order —
   // not the literal next step (that would fake a dot on the box after
   // whichever one you're on).
@@ -287,9 +271,8 @@ export default function AgentBuilder() {
           const locked = !agent && i > 0;
           // Marks: ✓ for steps that can genuinely complete (guide's ✓ only
           // once the user has actually seen the generated instructions);
-          // ⊙ for teach once engaged, and any pending step once opened;
-          // + for addable steps — abilities is + always, it's a catalog,
-          // not a step with an end state.
+          // ● for engaged steps (configured or opened); → for the
+          // recommended next; step number while untouched.
           const st = status?.steps[s.key];
           const g = status
             ? stepGlyph(s.key, st, {
@@ -301,21 +284,15 @@ export default function AgentBuilder() {
           return (
             <button
               key={s.key}
-              className={`builder-step${step === s.key ? ' active' : ''}${g === 'check' || (done && !status) ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${g === 'dot' ? ' seen' : ''}${g === 'dot-accent' ? ' nextp' : ''}${g === 'plus' ? ' na' : ''}`}
+              className={`builder-step${step === s.key ? ' active' : ''}${g === 'check' || (done && !status) ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${g === 'dot' ? ' seen' : ''}${g === 'next' ? ' nextp' : ''}`}
               disabled={locked}
-              title={
-                locked
-                  ? 'Create the agent first'
-                  : g === 'plus'
-                    ? 'This agent doesn’t need it — add it anytime'
-                    : s.hint
-              }
+              title={locked ? 'Create the agent first' : s.hint}
               onClick={() => goStep(s.key)}
             >
               <span className="builder-step-n">{
                 g === 'check' ? '✓'
-                : g === 'plus' ? '+'
-                : g === 'dot-ok' || g === 'dot' || g === 'dot-accent' ? '●'
+                : g === 'dot-ok' || g === 'dot' ? '●'
+                : g === 'next' ? '→'
                 : i + 1
               }</span>
               <span className="builder-step-label">{s.label}</span>

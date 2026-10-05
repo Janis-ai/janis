@@ -12,7 +12,7 @@ const listeners = new Set<() => void>();
 let version = 0;
 const cache = new Map<string, { v: number; set: Set<string> }>();
 
-const key = (agentId: string) => `janis.seen-steps.${agentId}`;
+const key = (agentId: string) => `janis.seen-steps.v2.${agentId}`;
 
 function read(agentId: string): Set<string> {
   try {
@@ -64,17 +64,15 @@ export const OPEN_ENDED_STEPS = new Set(['teach', 'abilities']);
  *  work — the draft writes instructions at create time, but Guide it's
  *  ✓ should mean the human reviewed them, not that a draft exists. */
 export const SEEN_GATED_STEPS = new Set(['guide']);
-/** Abilities is never "not needed" — it's a core capability surface, so
- *  'na' still renders as available (○/⊙), never the + opt-in mark. */
-const NEVER_NA_STEPS = new Set(['abilities']);
 
-export type StepGlyph = 'check' | 'dot-ok' | 'dot-accent' | 'dot' | 'circle' | 'plus';
+export type StepGlyph = 'check' | 'dot-ok' | 'next' | 'dot' | 'circle';
 
-/** Resolves the mark for a build step:
- *  done      → ✓, ⊙ for open-ended steps, ○ for done-but-unseen gated
- *              steps (guide)
- *  pending   → ⊙ accent if it's the recommended next, ⊙ if seen, else ○
- *  na        → + (addable), ⊙ if engaged — but never + for abilities */
+/** Resolves the mark for a build step. No + anywhere — 'na' renders like
+ *  available (○/⊙); it only matters for what "next" recommends and the
+ *  Overview count, not the mark.
+ *  done    → ✓, ⊙ for open-ended steps, ○ for done-but-unseen (guide)
+ *  pending → → accent if recommended next, ⊙ if seen, else ○
+ *  na      → same as pending */
 export function stepGlyph(
   key: string,
   state: 'done' | 'pending' | 'na' | undefined,
@@ -85,8 +83,6 @@ export function stepGlyph(
     if (SEEN_GATED_STEPS.has(key) && !opts.seen) return 'circle';
     return 'check';
   }
-  if (state === 'na')
-    return opts.seen ? 'dot' : NEVER_NA_STEPS.has(key) ? 'circle' : 'plus';
-  if (opts.isNext) return 'dot-accent';
+  if (opts.isNext) return 'next';
   return opts.seen ? 'dot' : 'circle';
 }
