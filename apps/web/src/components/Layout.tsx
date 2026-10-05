@@ -18,6 +18,7 @@ import {
   Plug, Radio, Settings, SlidersHorizontal, Sparkles, Users, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
+import { useNewAgentDialog } from './NewAgentDialog';
 import { CommandPalette } from './CommandPalette';
 
 interface Toast {
@@ -534,18 +535,7 @@ export default function Layout() {
     window.location.reload();
   };
 
-  const addAgent = async () => {
-    const name = await ask('Name the new agent:');
-    if (!name?.trim()) return;
-    // Hosted is the product's primary path — engine can be switched in the
-    // agent's Settings after creation.
-    const r = await api<{ agent: { id: string } }>('/api/agents', {
-      method: 'POST',
-      body: JSON.stringify({ name: name.trim(), hosted: true }),
-    });
-    void qc.invalidateQueries({ queryKey: ['agents'] });
-    navigate(`/agents/${r.agent.id}/channels`);
-  };
+  const [newAgentEl, openNewAgent] = useNewAgentDialog();
 
   const answerInvite = async (id: string, action: 'accept' | 'decline') => {
     await api(`/auth/invites/${id}/${action}`, { method: 'POST' });
@@ -556,6 +546,7 @@ export default function Layout() {
   return (
     <div className={`layout${railVisible ? ' ask-open' : ''}${isAskPage ? ' ask-page' : ''}`}>
       {promptEl}
+      {newAgentEl}
       <CommandPalette />
       <a className="skip-link" href="#main-content">Skip to content</a>
       {/* Clicking a nav item while the rail overlays (≤720px) folds it — even
@@ -591,7 +582,7 @@ export default function Layout() {
             onSwitchWorkspace={(id) => void switchWorkspace(id)}
             onCreateWorkspace={() => void switchWorkspace('__new')}
             onAnswerInvite={(id, action) => void answerInvite(id, action)}
-            onAddAgent={() => void addAgent()}
+            onAddAgent={openNewAgent}
           />
         )}
         {/* Agent subsection first — the agent's build surface, present only

@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { Agent } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgents, useChannels, useMe } from '../api/hooks';
 import { timeAgo } from '../components/bits';
 import { useConfirm } from '../components/Prompt';
+import { useNewAgentDialog } from '../components/NewAgentDialog';
 import { friendlyError } from '../lib/friendlyError';
 import { usePageTitle } from '../lib/title';
 
@@ -17,9 +17,8 @@ export default function Agents() {
   const { data: channelsData } = useChannels();
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [newName, setNewName] = useState('');
   const [confirmEl, confirm] = useConfirm();
-  const [newHosted, setNewHosted] = useState(true);
+  const [newAgentEl, openNewAgent] = useNewAgentDialog();
   const [error, setError] = useState('');
   // OAuth callbacks that fail before resolving the channel land here.
   const [params] = useSearchParams();
@@ -27,20 +26,6 @@ export default function Agents() {
     params.get('cf_error') ?? params.get('gmail_error') ?? params.get('outlook_error') ?? '';
 
   const refresh = () => void qc.invalidateQueries({ queryKey: ['agents'] });
-
-  const create = useMutation({
-    mutationFn: ({ name, hosted }: { name: string; hosted: boolean }) =>
-      api<{ agent: Agent }>('/api/agents', {
-        method: 'POST',
-        body: JSON.stringify({ name, hosted }),
-      }),
-    onSuccess: (r) => {
-      setNewName('');
-      refresh();
-      navigate(`/agents/${r.agent.id}/channels`);
-    },
-    onError: (e) => setError(e.message),
-  });
 
   const removeAgent = useMutation({
     mutationFn: (id: string) => api(`/api/agents/${id}`, { method: 'DELETE' }),
@@ -51,33 +36,17 @@ export default function Agents() {
   return (
     <>
       {confirmEl}
-      <h1 className="page-title">Agents</h1>
+      {newAgentEl}
+      <div className="row" style={{ alignItems: 'center' }}>
+        <h1 className="page-title grow">Agents</h1>
+        {isAdmin && (
+          <button className="btn primary" onClick={openNewAgent}>＋ Create agent</button>
+        )}
+      </div>
       {oauthError && (() => {
         const f = friendlyError(oauthError);
         return <div className="error" title={f.detail}>Connect failed: {f.text}</div>;
       })()}
-
-      {isAdmin && (
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (newName.trim()) create.mutate({ name: newName.trim(), hosted: newHosted });
-        }}
-      >
-        <input
-          className="grow"
-          placeholder="New agent name"
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-        />
-        <select value={newHosted ? 'hosted' : 'external'} onChange={(e) => setNewHosted(e.target.value === 'hosted')}>
-          <option value="hosted">Hosted by Janis</option>
-          <option value="external">External webhook</option>
-        </select>
-        <button className="btn primary">Create agent</button>
-      </form>
-      )}
 
       {error && <div className="error">{error}</div>}
 
@@ -135,7 +104,19 @@ export default function Agents() {
           );
         })}
         {data && data.agents.length === 0 && (
-          <div className="muted">No agents yet — create one above.</div>
+          <div className="card" style={{ marginTop: 12, padding: '28px 20px', textAlign: 'center' }}>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>No agents yet</div>
+            <div className="muted" style={{ marginTop: 6, maxWidth: 420, marginLeft: 'auto', marginRight: 'auto' }}>
+              An agent answers your customers on a channel — webchat, Messenger, email, voice.
+              Create one hosted by Janis to get AI replies with a shared inbox, or point an
+              external webhook at your own backend.
+            </div>
+            {isAdmin && (
+              <button className="btn primary" style={{ marginTop: 14 }} onClick={openNewAgent}>
+                Create your first agent
+              </button>
+            )}
+          </div>
         )}
       </div>
     </>
