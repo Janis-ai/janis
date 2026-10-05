@@ -28,6 +28,7 @@ interface BuilderDraft {
   system_prompt?: string;
   tone?: string;
   greeting?: string;
+  summary?: string;
 }
 
 const STEPS = [
@@ -87,7 +88,9 @@ export default function AgentBuilder() {
       setDraft(r.draft ?? null);
       setLastAgent(r.agent.id);
       void qc.invalidateQueries({ queryKey: ['agents'] });
-      navigate(`/agents/new/${r.agent.id}?step=teach`, { replace: true });
+      // Land on a confirmation card, not the draft — the create step's only
+      // job is "tell Janis what you want"; the summary proves it listened.
+      navigate(`/agents/new/${r.agent.id}?step=create`, { replace: true });
     },
     onError: (e) => setError(e.message),
   });
@@ -234,59 +237,79 @@ export default function AgentBuilder() {
             </>
           ) : (
             <>
-              <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                Created from your description — this is what Janis drafted.
-                Refine each part in the next stages.
+              <div style={{ fontSize: 15, marginTop: 8 }}>
+                <strong>Your agent is ready to teach</strong>
               </div>
-              {draft && (
-                <div className="card" style={{ margin: '12px 0 0', background: 'var(--bg)' }}>
-                  <strong style={{ fontSize: 13 }}>
-                    {draft.generated ? 'Generated draft — review and refine' : 'Created'}
-                  </strong>
-                  {draft.note && (
-                    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{draft.note}</div>
-                  )}
-                  {draft.system_prompt && (
-                    <div style={{ marginTop: 8 }}>
-                      <div className="muted" style={{ fontSize: 12 }}>Instructions</div>
-                      <div style={{ fontSize: 13, marginTop: 2, whiteSpace: 'pre-wrap' }}>
-                        {draft.system_prompt}
-                      </div>
-                    </div>
-                  )}
-                  {draft.tone && (
-                    <div style={{ marginTop: 8 }}>
-                      <div className="muted" style={{ fontSize: 12 }}>Tone</div>
-                      <div style={{ fontSize: 13, marginTop: 2 }}>{draft.tone}</div>
-                    </div>
-                  )}
-                  {builder?.suggested_knowledge?.length ? (
-                    <div style={{ marginTop: 8 }}>
-                      <div className="muted" style={{ fontSize: 12 }}>Suggested knowledge topics</div>
-                      <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }}>
-                        {builder.suggested_knowledge.map((k, i) => <li key={i}>{k}</li>)}
-                      </ul>
-                    </div>
-                  ) : null}
-                  {builder?.suggested_templates?.length ? (
-                    <div style={{ marginTop: 8 }}>
-                      <div className="muted" style={{ fontSize: 12 }}>Suggested integrations</div>
-                      <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }}>
-                        {builder.suggested_templates.map((t) => (
-                          <li key={t.id}>{t.name ?? t.id}{t.reason ? ` — ${t.reason}` : ''}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                  {builder?.suggested_approvals?.length ? (
-                    <div style={{ marginTop: 8 }}>
-                      <div className="muted" style={{ fontSize: 12 }}>Suggested approval gates</div>
-                      <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }}>
-                        {builder.suggested_approvals.map((a, i) => <li key={i}>{a}</li>)}
-                      </ul>
-                    </div>
-                  ) : null}
+              <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                I've created a starting point for <strong>{agent.name}</strong> based
+                on your description. You can refine it at any time.
+              </div>
+              {builder?.summary && (
+                <div style={{ fontSize: 13, marginTop: 10 }}>
+                  <span className="muted">It will: </span>{builder.summary}
                 </div>
+              )}
+              {builder?.suggested_templates?.length ? (
+                <div style={{ fontSize: 13, marginTop: 8 }}>
+                  <span className="muted">Suggested capabilities: </span>
+                  {builder.suggested_templates.map((t) => t.name ?? t.id).join(' · ')}
+                  {builder.suggested_approvals?.length ? ' · asks for approval when needed' : ''}
+                </div>
+              ) : null}
+              {builder?.suggested_knowledge?.length ? (
+                <div style={{ fontSize: 13, marginTop: 6 }}>
+                  <span className="muted">Suggested knowledge: </span>
+                  {builder.suggested_knowledge.slice(0, 5).join(' · ')}
+                </div>
+              ) : null}
+              <div className="row" style={{ marginTop: 14, gap: 8 }}>
+                <button className="btn primary" onClick={() => goStep('teach')}>
+                  Teach it →
+                </button>
+              </div>
+              {(draft || builder) && (
+                <details style={{ marginTop: 12, fontSize: 13 }}>
+                  <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>
+                    View what Janis created
+                  </summary>
+                  <div className="card" style={{ margin: '10px 0 0', background: 'var(--bg)' }}>
+                    {draft?.note && (
+                      <div className="muted" style={{ fontSize: 12 }}>{draft.note}</div>
+                    )}
+                    {cfg.system_prompt && (
+                      <div style={{ marginTop: 6 }}>
+                        <div className="muted" style={{ fontSize: 12 }}>Instructions</div>
+                        <div style={{ fontSize: 13, marginTop: 2, whiteSpace: 'pre-wrap' }}>
+                          {cfg.system_prompt}
+                        </div>
+                      </div>
+                    )}
+                    {cfg.tone && (
+                      <div style={{ marginTop: 8 }}>
+                        <div className="muted" style={{ fontSize: 12 }}>Tone</div>
+                        <div style={{ fontSize: 13, marginTop: 2 }}>{cfg.tone}</div>
+                      </div>
+                    )}
+                    {builder?.suggested_templates?.length ? (
+                      <div style={{ marginTop: 8 }}>
+                        <div className="muted" style={{ fontSize: 12 }}>Suggested integrations</div>
+                        <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }}>
+                          {builder.suggested_templates.map((t) => (
+                            <li key={t.id}>{t.name ?? t.id}{t.reason ? ` — ${t.reason}` : ''}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    {builder?.suggested_approvals?.length ? (
+                      <div style={{ marginTop: 8 }}>
+                        <div className="muted" style={{ fontSize: 12 }}>Suggested approval gates</div>
+                        <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }}>
+                          {builder.suggested_approvals.map((a, i) => <li key={i}>{a}</li>)}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </div>
+                </details>
               )}
             </>
           )}

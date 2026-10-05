@@ -326,6 +326,7 @@ export const AgentConfig = z.object({
   builder: z
     .object({
       description: z.string().max(4000).optional(),
+      summary: z.string().max(300).optional(),
       suggested_knowledge: z.array(z.string().max(400)).max(30).optional(),
       suggested_templates: z
         .array(

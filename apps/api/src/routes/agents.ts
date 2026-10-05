@@ -235,6 +235,7 @@ export function agentRoutes(db: Db) {
         ...(draft?.greeting ? { greeting: draft.greeting, greeting_enabled: true } : {}),
         builder: {
           ...(purpose ? { description: purpose.slice(0, 4000) } : {}),
+          ...(draft?.summary ? { summary: draft.summary } : {}),
           ...(draft?.suggested_knowledge.length
             ? { suggested_knowledge: draft.suggested_knowledge }
             : {}),
