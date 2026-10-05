@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { dedupeToolWidgets, widgetFromToolResult } from './widgets.js';
+import { dedupeToolWidgets, dedupeWidgetList, widgetFromToolResult } from './widgets.js';
 
 const products = JSON.stringify({
   products: [
@@ -317,5 +317,62 @@ describe('dedupeToolWidgets', () => {
     const w = { type: 'cards' as const, items: [{ title: 'x' }] };
     expect(dedupeToolWidgets([], [w])).toEqual([w]);
     expect(dedupeToolWidgets([toolCards], [])).toEqual([]);
+  });
+});
+
+describe('dedupeWidgetList', () => {
+  const cards = {
+    type: 'cards' as const,
+    items: [
+      { title: 'Tenth Stair', link: 'https://music.apple.com/a' },
+      { title: 'Dress Rehearsal', link: 'https://music.apple.com/b' },
+      { title: 'Gone', link: 'https://music.apple.com/c' },
+    ],
+  };
+
+  it('collapses a tool-bound widget emitted twice', () => {
+    expect(dedupeWidgetList([cards, cards])).toEqual([cards]);
+  });
+
+  it('strips restated items from a later row but keeps its new items', () => {
+    const later = {
+      type: 'cards' as const,
+      items: [
+        { title: 'Gone', link: 'https://music.apple.com/c' }, // dup
+        { title: 'New Track', link: 'https://music.apple.com/d' },
+      ],
+    };
+    expect(dedupeWidgetList([cards, later])).toEqual([
+      cards,
+      { type: 'cards', items: [{ title: 'New Track', link: 'https://music.apple.com/d' }] },
+    ]);
+  });
+
+  it('keeps genuinely different cards rows', () => {
+    const other = {
+      type: 'cards' as const,
+      items: [{ title: 'Merch Tee', link: 'https://shop.test/t' }],
+    };
+    expect(dedupeWidgetList([cards, other])).toEqual([cards, other]);
+  });
+
+  it('dedupes model-emitted dupes too (WIDGET: line twice)', () => {
+    const opts = {
+      type: 'options' as const,
+      items: [{ label: 'Yes' }, { label: 'No' }],
+    };
+    expect(dedupeWidgetList([opts, { ...opts }])).toEqual([opts]);
+  });
+
+  it('does not collapse different widget types sharing item titles', () => {
+    const status = {
+      type: 'status' as const,
+      title: 'Order',
+      steps: [
+        { label: 'Tenth Stair', state: 'done' as const },
+        { label: 'Shipped', state: 'current' as const },
+      ],
+    };
+    expect(dedupeWidgetList([cards, status])).toEqual([cards, status]);
   });
 });

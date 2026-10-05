@@ -448,3 +448,29 @@ export function dedupeToolWidgets(
   }
   return result;
 }
+
+/**
+ * Same rules as dedupeToolWidgets but pairwise across one ordered list —
+ * first-seen wins. Covers dupes inside either source: a widget-bound tool
+ * firing twice in the tool loop or across a regen attempt lands the same
+ * component in toolWidgets twice, and nothing else catches that.
+ */
+export function dedupeWidgetList(list: WidgetComponent[]): WidgetComponent[] {
+  const seenByType = new Map<string, Set<string>>();
+  const out: WidgetComponent[] = [];
+  for (const w of list) {
+    const seen = seenByType.get(w.type) ?? new Set<string>();
+    seenByType.set(w.type, seen);
+    const mine = widgetItemKeys(w);
+    if (w.type === 'cards' || w.type === 'options') {
+      const items = w.items.filter((_, i) => !seen.has(mine[i]));
+      mine.forEach((k) => seen.add(k));
+      if (items.length) out.push({ ...w, items } as WidgetComponent);
+      continue;
+    }
+    const dup = mine.filter((k) => seen.has(k)).length;
+    mine.forEach((k) => seen.add(k));
+    if (mine.length === 0 || dup < Math.ceil(mine.length * 0.6)) out.push(w);
+  }
+  return out;
+}
