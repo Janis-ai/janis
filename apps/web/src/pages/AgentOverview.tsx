@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import { useAgents, useBuildStatus, useChannels } from '../api/hooks';
 import { KIND_LABEL } from '../components/Channels';
 import { janisBrain } from '../lib/agentContext';
-import { OPEN_ENDED_STEPS, stepGlyph, useSeenSteps } from '../lib/seenSteps';
+import { stepGlyph, useSeenSteps } from '../lib/seenSteps';
 import { railBus } from '../lib/railBus';
 import { timeAgo } from '../components/bits';
 import { usePageTitle } from '../lib/title';
@@ -257,8 +257,7 @@ export default function AgentOverview() {
               // Same marks as the sidebar/boxes: ✓ for completable steps,
               // ⊙ for open-ended capabilities once engaged (seen or
               // configured), + for addable, ○ unseen.
-              const g = stepGlyph(buildStatus?.steps[s.key], {
-                openEnded: OPEN_ENDED_STEPS.has(s.key),
+              const g = stepGlyph(s.key, buildStatus?.steps[s.key], {
                 seen: seenSteps.has(s.key),
                 isNext,
               });
@@ -276,8 +275,8 @@ export default function AgentOverview() {
                 <Link
                   key={s.key}
                   to={buildStepLink(id!, s.key)}
-                  className={`bp-item${g === 'check' ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${isNext ? ' next' : ''}${na ? ' na' : ''}`}
-                  title={na ? 'This agent doesn\u2019t need it — add it anytime' : undefined}
+                  className={`bp-item${g === 'check' ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${isNext ? ' next' : ''}${g === 'plus' ? ' na' : ''}`}
+                  title={g === 'plus' ? (s.key === 'abilities' ? 'Add tools and integrations — anytime' : 'This agent doesn\u2019t need it — add it anytime') : undefined}
                 >
                   <span className="bp-mark">{g === 'check' ? '✓' : g === 'plus' ? '+' : g === 'dot-ok' || g === 'dot' || g === 'dot-accent' ? '⊙' : '○'}</span>
                   {s.label}

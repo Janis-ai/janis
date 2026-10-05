@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAgents, useBuildStatus, useMe } from '../api/hooks';
 import { janisBrain, setLastAgent } from '../lib/agentContext';
-import { OPEN_ENDED_STEPS, stepGlyph, useSeenSteps } from '../lib/seenSteps';
+import { stepGlyph, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { AskJanis } from '../components/AskJanis';
@@ -180,6 +180,12 @@ export default function AgentBuilder() {
   // "Next" skips steps the agent doesn't need — Create → Guide → Try →
   // Deploy is a legitimate path for an agent that needs no knowledge.
   const next = STEPS.slice(idx + 1).find((s) => !isNa(s.key));
+  // The "recommended" marker is the first PENDING step in build order —
+  // not the literal next step (that would fake a dot on the box after
+  // whichever one you're on).
+  const nextPending = status
+    ? STEPS.find((s) => status.steps[s.key] === 'pending')?.key
+    : undefined;
 
   // Create is the brief — revisitable, but never a silent regeneration
   // source: editing it offers to review suggested changes, nothing more.
@@ -279,31 +285,31 @@ export default function AgentBuilder() {
       <div className="builder-steps">
         {STEPS.map((s, i) => {
           const locked = !agent && i > 0;
-          // Marks: ✓ for steps that can genuinely complete; ⊙ for
-          // open-ended capabilities (teach/abilities) once configured, and
-          // for any step the user has opened — engagement, not completion.
-          // + for steps this agent doesn't need. Falls back to step
-          // numbers while status loads.
+          // Marks: ✓ for steps that can genuinely complete (guide's ✓ only
+          // once the user has actually seen the generated instructions);
+          // ⊙ for teach once engaged, and any pending step once opened;
+          // + for addable steps — abilities is + always, it's a catalog,
+          // not a step with an end state.
           const st = status?.steps[s.key];
           const g = status
-            ? stepGlyph(st, {
-                openEnded: OPEN_ENDED_STEPS.has(s.key),
+            ? stepGlyph(s.key, st, {
                 seen: seenSteps.has(s.key) || step === s.key,
-                isNext: next?.key === s.key,
+                isNext: nextPending === s.key,
               })
             : null;
-          const na = st === 'na';
           const done = st === 'done' || Boolean(agent && i < idx && !status);
           return (
             <button
               key={s.key}
-              className={`builder-step${step === s.key ? ' active' : ''}${done && g !== 'dot-ok' ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${g === 'dot' ? ' seen' : ''}${g === 'dot-accent' ? ' nextp' : ''}${na ? ' na' : ''}`}
+              className={`builder-step${step === s.key ? ' active' : ''}${g === 'check' || (done && !status) ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${g === 'dot' ? ' seen' : ''}${g === 'dot-accent' ? ' nextp' : ''}${g === 'plus' ? ' na' : ''}`}
               disabled={locked}
               title={
                 locked
                   ? 'Create the agent first'
-                  : na
-                    ? 'This agent doesn’t need it — add it anytime'
+                  : g === 'plus'
+                    ? s.key === 'abilities'
+                      ? 'Add tools and integrations — anytime'
+                      : 'This agent doesn’t need it — add it anytime'
                     : s.hint
               }
               onClick={() => goStep(s.key)}

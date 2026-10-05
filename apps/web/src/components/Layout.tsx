@@ -13,7 +13,7 @@ import PushBanner from './PushBanner';
 import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
-import { markStepSeen, stepGlyph, useSeenSteps, OPEN_ENDED_STEPS } from '../lib/seenSteps';
+import { markStepSeen, stepGlyph, useSeenSteps } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
   Circle, CircleDot, CreditCard, Gauge, Inbox, Megaphone, Plus,
@@ -674,16 +674,15 @@ export default function Layout() {
               // Marks: ✓ completed steps, ⊙ engaged (open-ended steps and
               // anything seen — you can always add knowledge/tools, so a ✓
               // overclaims), + addable-but-unneeded, ○ unseen.
-              const g = stepGlyph(buildStatus?.steps[s.key], {
-                openEnded: OPEN_ENDED_STEPS.has(s.key),
+              const g = stepGlyph(s.key, buildStatus?.steps[s.key], {
                 seen: seenSteps.has(s.key),
                 isNext: nextBuildStep === s.key,
               });
               return (
               <Link
                 key={s.key}
-                className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}${buildStatus?.steps[s.key] === 'na' ? ' na' : ''}`}
-                title={buildStatus?.steps[s.key] === 'na' ? 'This agent doesn\u2019t need it — add it anytime' : undefined}
+                className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}${g === 'plus' ? ' na' : ''}`}
+                title={s.key === 'abilities' ? 'Add tools and integrations — anytime' : buildStatus?.steps[s.key] === 'na' ? 'This agent doesn\u2019t need it — add it anytime' : undefined}
                 to={s.to}
               >
                 <span className="label">{s.label}</span>

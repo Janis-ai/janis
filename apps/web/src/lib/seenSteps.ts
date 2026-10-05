@@ -57,21 +57,36 @@ export function useSeenSteps(agentId?: string): Set<string> {
   );
 }
 
-/** Steps that can never be "finished" — knowledge and abilities grow
- *  forever, so they mark engagement (⊙) rather than completion (✓). */
-export const OPEN_ENDED_STEPS = new Set(['teach', 'abilities']);
+/** Steps that can never be "finished" — knowledge grows forever, so it
+ *  marks engagement (⊙) rather than completion (✓). */
+export const OPEN_ENDED_STEPS = new Set(['teach']);
+/** Always a "+": Abilities is a capability catalog, not a step with an
+ *  end state — it stays addable no matter what's connected. */
+export const ALWAYS_ADDABLE_STEPS = new Set(['abilities']);
+/** "Done" only counts once the user has actually seen the generated
+ *  work — the draft writes instructions at create time, but Guide it's
+ *  ✓ should mean the human reviewed them, not that a draft exists. */
+export const SEEN_GATED_STEPS = new Set(['guide']);
 
 export type StepGlyph = 'check' | 'dot-ok' | 'dot-accent' | 'dot' | 'circle' | 'plus';
 
 /** Resolves the mark for a build step:
- *  done      → ✓, or ⊙ for open-ended steps (live capability, not complete)
+ *  abilities → always + (addable catalog, never completes)
+ *  done      → ✓, ⊙ for open-ended steps, pending-ish for done-but-unseen
+ *              gated steps (guide)
  *  pending   → ⊙ accent if it's the recommended next, ⊙ if seen, else ○
  *  na        → + (addable), or ⊙ if the user engaged with it anyway */
 export function stepGlyph(
+  key: string,
   state: 'done' | 'pending' | 'na' | undefined,
-  opts: { openEnded: boolean; seen: boolean; isNext: boolean },
+  opts: { seen: boolean; isNext: boolean },
 ): StepGlyph {
-  if (state === 'done') return opts.openEnded ? 'dot-ok' : 'check';
+  if (ALWAYS_ADDABLE_STEPS.has(key)) return 'plus';
+  if (state === 'done') {
+    if (OPEN_ENDED_STEPS.has(key)) return 'dot-ok';
+    if (SEEN_GATED_STEPS.has(key) && !opts.seen) return 'circle';
+    return 'check';
+  }
   if (state === 'na') return opts.seen ? 'dot' : 'plus';
   if (opts.isNext) return 'dot-accent';
   return opts.seen ? 'dot' : 'circle';
