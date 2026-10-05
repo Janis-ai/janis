@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAgents, useBuildStatus, useMe } from '../api/hooks';
 import { janisBrain, setLastAgent } from '../lib/agentContext';
+import { OPEN_ENDED_STEPS, stepGlyph, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { AskJanis } from '../components/AskJanis';
@@ -159,6 +160,7 @@ export default function AgentBuilder() {
 
   const builder = cfg.builder;
   const { data: status } = useBuildStatus(agent?.id ?? undefined);
+  const seenSteps = useSeenSteps(agent?.id);
   /** Steps the draft said this agent doesn't need — 'na' only when a draft
    *  ran and suggested nothing AND nothing's been added since. */
   const isNa = (key: StepKey) => {
@@ -277,26 +279,41 @@ export default function AgentBuilder() {
       <div className="builder-steps">
         {STEPS.map((s, i) => {
           const locked = !agent && i > 0;
-          // Marks describe configuration, not visits — a step the draft
-          // said this agent doesn't need shows – (optional), never ✗.
+          // Marks: ✓ for steps that can genuinely complete; ⊙ for
+          // open-ended capabilities (teach/abilities) once configured, and
+          // for any step the user has opened — engagement, not completion.
+          // + for steps this agent doesn't need. Falls back to step
+          // numbers while status loads.
           const st = status?.steps[s.key];
-          const done = st ? st === 'done' : Boolean(agent && i < idx);
+          const g = status
+            ? stepGlyph(st, {
+                openEnded: OPEN_ENDED_STEPS.has(s.key),
+                seen: seenSteps.has(s.key) || step === s.key,
+                isNext: next?.key === s.key,
+              })
+            : null;
           const na = st === 'na';
+          const done = st === 'done' || Boolean(agent && i < idx && !status);
           return (
             <button
               key={s.key}
-              className={`builder-step${step === s.key ? ' active' : ''}${done ? ' done' : ''}${na ? ' na' : ''}`}
+              className={`builder-step${step === s.key ? ' active' : ''}${done && g !== 'dot-ok' ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${g === 'dot' ? ' seen' : ''}${g === 'dot-accent' ? ' nextp' : ''}${na ? ' na' : ''}`}
               disabled={locked}
               title={
                 locked
                   ? 'Create the agent first'
                   : na
-                    ? 'Not needed for this agent — available if you want it'
+                    ? 'This agent doesn’t need it — add it anytime'
                     : s.hint
               }
               onClick={() => goStep(s.key)}
             >
-              <span className="builder-step-n">{done ? '✓' : na ? '–' : i + 1}</span>
+              <span className="builder-step-n">{
+                g === 'check' ? '✓'
+                : g === 'plus' ? '+'
+                : g === 'dot-ok' || g === 'dot' || g === 'dot-accent' ? '●'
+                : i + 1
+              }</span>
               <span className="builder-step-label">{s.label}</span>
               <span className="builder-step-hint">{s.hint}</span>
             </button>

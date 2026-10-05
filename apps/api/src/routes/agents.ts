@@ -701,6 +701,7 @@ export function agentRoutes(db: Db) {
         deploy: publicCount > 0 ? 'done' : 'pending',
       },
       knowledge: { sources, updated_at: updatedAt?.toISOString() ?? null },
+      abilities,
       channels: publicCount,
       test_conversations: testConversations,
     });

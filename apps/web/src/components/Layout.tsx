@@ -13,6 +13,7 @@ import PushBanner from './PushBanner';
 import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
+import { markStepSeen, stepGlyph, useSeenSteps, OPEN_ENDED_STEPS } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
   Circle, CircleDot, CreditCard, Gauge, Inbox, Megaphone, Plus,
@@ -454,6 +455,24 @@ export default function Layout() {
   const { data: buildStatus } = useBuildStatus(
     hasWorkspace && currentAgent ? (ctxAgent ?? undefined) : undefined,
   );
+  const seenSteps = useSeenSteps(ctxAgent ?? undefined);
+  // Mark a build step seen when its surface is open — either the builder
+  // stage (/agents/new/:id?step=X) or the equivalent workspace section
+  // (/agents/:id/knowledge, /integrations, /behavior, /tests, /channels).
+  useEffect(() => {
+    if (!ctxAgent) return;
+    const builder = location.pathname.match(/^\/agents\/new\/([^/]+)$/);
+    if (builder?.[1] === ctxAgent) {
+      const s = searchParams.get('step');
+      if (s && (BUILD_STEP_ORDER as string[]).includes(s)) markStepSeen(ctxAgent, s);
+      return;
+    }
+    const sec = location.pathname.match(/^\/agents\/[^/]+\/(\w+)/)?.[1];
+    const key = (Object.keys(SECTION_TO_STEP) as BuildStepKey[]).find(
+      (k) => SECTION_TO_STEP[k] === sec,
+    );
+    if (key) markStepSeen(ctxAgent, key);
+  }, [location.pathname, searchParams, ctxAgent]);
   // The first 'pending' step gets the ● "next" marker; 'done' ✓, 'pending'
   // ○, 'na' — (the agent doesn't need it — a capability, not a skipped task).
   // External agents only render Deploy — compute next over rendered keys.
@@ -651,7 +670,16 @@ export default function Layout() {
             </div>
             <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Overview</span><span className="icon"><Gauge size={18} /></span></NavLink>
             <div className="nav-sec">Build</div>
-            {buildNav(currentAgent, ctxAgent!).map((s) => (
+            {buildNav(currentAgent, ctxAgent!).map((s) => {
+              // Marks: ✓ completed steps, ⊙ engaged (open-ended steps and
+              // anything seen — you can always add knowledge/tools, so a ✓
+              // overclaims), + addable-but-unneeded, ○ unseen.
+              const g = stepGlyph(buildStatus?.steps[s.key], {
+                openEnded: OPEN_ENDED_STEPS.has(s.key),
+                seen: seenSteps.has(s.key),
+                isNext: nextBuildStep === s.key,
+              });
+              return (
               <Link
                 key={s.key}
                 className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}${buildStatus?.steps[s.key] === 'na' ? ' na' : ''}`}
@@ -660,30 +688,29 @@ export default function Layout() {
               >
                 <span className="label">{s.label}</span>
                 <span className={`step-mark ${
-                  !buildStatus
-                    ? 'todo'
-                    : buildStatus.steps[s.key] === 'done'
-                      ? 'done'
-                      : buildStatus.steps[s.key] === 'na'
+                  g === 'check' || g === 'dot-ok'
+                    ? 'done'
+                    : g === 'dot-accent'
+                      ? 'next'
+                      : g === 'plus'
                         ? 'na'
-                        : nextBuildStep === s.key
-                          ? 'next'
+                        : g === 'dot'
+                          ? 'seen'
                           : 'todo'
                 }`}>
-                  {!buildStatus ? (
-                    <Circle size={12} />
-                  ) : buildStatus.steps[s.key] === 'done' ? (
+                  {g === 'check' ? (
                     <Check size={12} />
-                  ) : buildStatus.steps[s.key] === 'na' ? (
+                  ) : g === 'plus' ? (
                     <Plus size={12} />
-                  ) : nextBuildStep === s.key ? (
-                    <CircleDot size={12} />
-                  ) : (
+                  ) : g === 'circle' ? (
                     <Circle size={12} />
+                  ) : (
+                    <CircleDot size={12} />
                   )}
                 </span>
               </Link>
-            ))}
+              );
+            })}
             <div className="nav-sec">Configure</div>
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="label">Agent settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </div>

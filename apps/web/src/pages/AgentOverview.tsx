@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import { useAgents, useBuildStatus, useChannels } from '../api/hooks';
 import { KIND_LABEL } from '../components/Channels';
 import { janisBrain } from '../lib/agentContext';
+import { OPEN_ENDED_STEPS, stepGlyph, useSeenSteps } from '../lib/seenSteps';
 import { railBus } from '../lib/railBus';
 import { timeAgo } from '../components/bits';
 import { usePageTitle } from '../lib/title';
@@ -150,6 +151,7 @@ export default function AgentOverview() {
   const nextStep = buildStatus
     ? actionable.find((s) => buildStatus.steps[s.key] === 'pending')
     : undefined;
+  const seenSteps = useSeenSteps(agent?.id);
   // Ready = every actionable step is done except possibly deploy itself.
   const allBuilt =
     buildStatus &&
@@ -250,12 +252,21 @@ export default function AgentOverview() {
           <div className="build-progress">
             {BUILD_STEPS.map((s) => {
               const state = buildStatus?.steps[s.key] ?? 'pending';
-              const done = state === 'done';
               const na = state === 'na';
               const isNext = state === 'pending' && nextStep?.key === s.key;
+              // Same marks as the sidebar/boxes: ✓ for completable steps,
+              // ⊙ for open-ended capabilities once engaged (seen or
+              // configured), + for addable, ○ unseen.
+              const g = stepGlyph(buildStatus?.steps[s.key], {
+                openEnded: OPEN_ENDED_STEPS.has(s.key),
+                seen: seenSteps.has(s.key),
+                isNext,
+              });
               const caption =
                 s.key === 'teach' && buildStatus?.knowledge.sources
                   ? `${buildStatus.knowledge.sources} source${buildStatus.knowledge.sources > 1 ? 's' : ''}`
+                  : s.key === 'abilities' && buildStatus?.abilities
+                    ? `${buildStatus.abilities} tool${buildStatus.abilities > 1 ? 's' : ''}`
                   : s.key === 'try' && buildStatus?.test_conversations
                     ? `${buildStatus.test_conversations} test chat${buildStatus.test_conversations > 1 ? 's' : ''}`
                     : s.key === 'deploy' && buildStatus?.channels
@@ -265,10 +276,10 @@ export default function AgentOverview() {
                 <Link
                   key={s.key}
                   to={buildStepLink(id!, s.key)}
-                  className={`bp-item${done ? ' done' : ''}${isNext ? ' next' : ''}${na ? ' na' : ''}`}
+                  className={`bp-item${g === 'check' ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${isNext ? ' next' : ''}${na ? ' na' : ''}`}
                   title={na ? 'This agent doesn\u2019t need it — add it anytime' : undefined}
                 >
-                  <span className="bp-mark">{done ? '✓' : na ? '+' : isNext ? '●' : '○'}</span>
+                  <span className="bp-mark">{g === 'check' ? '✓' : g === 'plus' ? '+' : g === 'dot-ok' || g === 'dot' || g === 'dot-accent' ? '⊙' : '○'}</span>
                   {s.label}
                   {caption && <span className="muted"> · {caption}</span>}
                 </Link>

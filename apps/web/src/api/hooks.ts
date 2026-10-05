@@ -127,6 +127,7 @@ export interface BuildStatus {
   };
   knowledge: { sources: number; updated_at: string | null };
   channels: number;
+  abilities: number;
   test_conversations: number;
 }
 
