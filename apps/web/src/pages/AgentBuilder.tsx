@@ -185,22 +185,26 @@ export default function AgentBuilder() {
   const [brief, setBrief] = useState('');
   const [briefChanged, setBriefChanged] = useState(false);
   useEffect(() => {
-    setBrief(builder?.description ?? cfg.purpose ?? '');
+    // Seed from agent.config directly, not the `cfg` state — cfg is seeded
+    // by its own effect and is still stale ({}) the render this runs in.
+    const c = agent?.config;
+    setBrief(c?.builder?.description ?? c?.purpose ?? '');
   }, [agent?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const briefMutation = useMutation({
-    mutationFn: () =>
-      api(`/api/agents/${agent?.id}`, {
+    mutationFn: () => {
+      const config: AgentConfig = {
+        ...cfg,
+        purpose: brief.trim(),
+        builder: { ...cfg.builder, description: brief.trim() },
+      };
+      return api(`/api/agents/${agent?.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          config: {
-            ...cfg,
-            purpose: brief.trim(),
-            builder: { ...cfg.builder, description: brief.trim() },
-          },
-        }),
-      }),
-    onSuccess: () => {
+        body: JSON.stringify({ config }),
+      }).then(() => config);
+    },
+    onSuccess: (config) => {
       const changed = brief.trim() !== storedBrief.trim();
+      setCfg(config);
       setBriefChanged(changed);
       redraft.reset();
       applyDraft.reset();
@@ -219,34 +223,37 @@ export default function AgentBuilder() {
   // greeting) AND refreshes the stored suggestion lists — explicit, never
   // silent.
   const applyDraft = useMutation({
-    mutationFn: (d: BuilderDraft) =>
-      api(`/api/agents/${agent?.id}`, {
+    mutationFn: (d: BuilderDraft) => {
+      const config: AgentConfig = {
+        ...cfg,
+        ...(d.system_prompt ? { system_prompt: d.system_prompt } : {}),
+        ...(d.tone ? { tone: d.tone } : {}),
+        ...(d.greeting ? { greeting: d.greeting, greeting_enabled: true } : {}),
+        builder: {
+          ...cfg.builder,
+          description: brief.trim(),
+          ...(d.summary ? { summary: d.summary } : {}),
+          ...(d.suggested_knowledge?.length
+            ? { suggested_knowledge: d.suggested_knowledge }
+            : {}),
+          ...(d.suggested_templates?.length
+            ? { suggested_templates: d.suggested_templates }
+            : {}),
+          ...(d.suggested_approvals?.length
+            ? { suggested_approvals: d.suggested_approvals }
+            : {}),
+          generated_at: new Date().toISOString(),
+        },
+      };
+      return api(`/api/agents/${agent?.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          config: {
-            ...cfg,
-            ...(d.system_prompt ? { system_prompt: d.system_prompt } : {}),
-            ...(d.tone ? { tone: d.tone } : {}),
-            ...(d.greeting ? { greeting: d.greeting, greeting_enabled: true } : {}),
-            builder: {
-              ...cfg.builder,
-              description: brief.trim(),
-              ...(d.summary ? { summary: d.summary } : {}),
-              ...(d.suggested_knowledge?.length
-                ? { suggested_knowledge: d.suggested_knowledge }
-                : {}),
-              ...(d.suggested_templates?.length
-                ? { suggested_templates: d.suggested_templates }
-                : {}),
-              ...(d.suggested_approvals?.length
-                ? { suggested_approvals: d.suggested_approvals }
-                : {}),
-              generated_at: new Date().toISOString(),
-            },
-          },
-        }),
-      }),
-    onSuccess: () => {
+        body: JSON.stringify({ config }),
+      }).then(() => config);
+    },
+    onSuccess: (config) => {
+      // Sync cfg immediately so "See what Janis created" re-renders with
+      // the adopted draft — not just after the agents refetch lands.
+      setCfg(config);
       setBriefChanged(false);
       redraft.reset();
       void qc.invalidateQueries({ queryKey: ['agents'] });
