@@ -304,9 +304,6 @@ export default function AgentBuilder() {
         <h1 className="page-title grow">
           {agent ? agent.name : 'New agent'}
         </h1>
-        {agent && (
-          <Link className="muted" to={`/agents/${agent.id}`}>Open workspace →</Link>
-        )}
       </div>
 
       {step !== 'start' && step !== 'bring' && (
