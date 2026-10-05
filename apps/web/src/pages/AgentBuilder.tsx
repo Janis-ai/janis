@@ -307,9 +307,7 @@ export default function AgentBuilder() {
                 locked
                   ? 'Create the agent first'
                   : g === 'plus'
-                    ? s.key === 'abilities'
-                      ? 'Add tools and integrations — anytime'
-                      : 'This agent doesn’t need it — add it anytime'
+                    ? 'This agent doesn’t need it — add it anytime'
                     : s.hint
               }
               onClick={() => goStep(s.key)}

@@ -57,37 +57,36 @@ export function useSeenSteps(agentId?: string): Set<string> {
   );
 }
 
-/** Steps that can never be "finished" — knowledge grows forever, so it
- *  marks engagement (⊙) rather than completion (✓). */
-export const OPEN_ENDED_STEPS = new Set(['teach']);
-/** Always a "+": Abilities is a capability catalog, not a step with an
- *  end state — it stays addable no matter what's connected. */
-export const ALWAYS_ADDABLE_STEPS = new Set(['abilities']);
+/** Steps that can never be "finished" — knowledge and abilities grow
+ *  forever, so they mark engagement (⊙) rather than completion (✓). */
+export const OPEN_ENDED_STEPS = new Set(['teach', 'abilities']);
 /** "Done" only counts once the user has actually seen the generated
  *  work — the draft writes instructions at create time, but Guide it's
  *  ✓ should mean the human reviewed them, not that a draft exists. */
 export const SEEN_GATED_STEPS = new Set(['guide']);
+/** Abilities is never "not needed" — it's a core capability surface, so
+ *  'na' still renders as available (○/⊙), never the + opt-in mark. */
+const NEVER_NA_STEPS = new Set(['abilities']);
 
 export type StepGlyph = 'check' | 'dot-ok' | 'dot-accent' | 'dot' | 'circle' | 'plus';
 
 /** Resolves the mark for a build step:
- *  abilities → always + (addable catalog, never completes)
- *  done      → ✓, ⊙ for open-ended steps, pending-ish for done-but-unseen
- *              gated steps (guide)
+ *  done      → ✓, ⊙ for open-ended steps, ○ for done-but-unseen gated
+ *              steps (guide)
  *  pending   → ⊙ accent if it's the recommended next, ⊙ if seen, else ○
- *  na        → + (addable), or ⊙ if the user engaged with it anyway */
+ *  na        → + (addable), ⊙ if engaged — but never + for abilities */
 export function stepGlyph(
   key: string,
   state: 'done' | 'pending' | 'na' | undefined,
   opts: { seen: boolean; isNext: boolean },
 ): StepGlyph {
-  if (ALWAYS_ADDABLE_STEPS.has(key)) return 'plus';
   if (state === 'done') {
     if (OPEN_ENDED_STEPS.has(key)) return 'dot-ok';
     if (SEEN_GATED_STEPS.has(key) && !opts.seen) return 'circle';
     return 'check';
   }
-  if (state === 'na') return opts.seen ? 'dot' : 'plus';
+  if (state === 'na')
+    return opts.seen ? 'dot' : NEVER_NA_STEPS.has(key) ? 'circle' : 'plus';
   if (opts.isNext) return 'dot-accent';
   return opts.seen ? 'dot' : 'circle';
 }
