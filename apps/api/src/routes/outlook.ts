@@ -127,7 +127,7 @@ export function outlookPublicRoutes(db: Db) {
         `${env.webOrigin}/agents?outlook_error=${encodeURIComponent('invalid OAuth state')}`,
       );
     }
-    const done = (msg: string, ok = false) =>
+    const done = (msg: string, ok = false, channelId?: string) =>
       intent.l
         ? c.text(
             ok
@@ -135,7 +135,11 @@ export function outlookPublicRoutes(db: Db) {
               : `Outlook connect failed: ${msg}`,
           )
         : c.redirect(
-            `${env.webOrigin}/agents/${intent.a}?tab=channels&${ok ? 'outlook_connect' : 'outlook_error'}=${encodeURIComponent(msg)}`,
+            ok && channelId
+              ? // Success lands on the channel's own settings page — the
+                // mailbox has forwarding/watch config worth seeing.
+                `${env.webOrigin}/agents/${intent.a}/channels/${channelId}?outlook_connect=${encodeURIComponent(msg)}`
+              : `${env.webOrigin}/agents/${intent.a}?tab=channels&${ok ? 'outlook_connect' : 'outlook_error'}=${encodeURIComponent(msg)}`,
           );
 
     const code = c.req.query('code');
@@ -203,6 +207,7 @@ export function outlookPublicRoutes(db: Db) {
         .where(and(eq(channels.workspaceId, intent.w), eq(channels.kind, 'outlook')))
     ).find((ch) => (ch.credentials as ChannelCredentials).email_address === address);
 
+    let channelId: string;
     if (match) {
       const prev = match.credentials as ChannelCredentials;
       await db
@@ -217,20 +222,25 @@ export function outlookPublicRoutes(db: Db) {
           },
         })
         .where(eq(channels.id, match.id));
+      channelId = match.id;
     } else {
-      await db.insert(channels).values({
-        workspaceId: intent.w,
-        agentId: intent.a,
-        kind: 'outlook',
-        name: intent.n || address,
-        credentials: creds,
-      });
+      const [row] = await db
+        .insert(channels)
+        .values({
+          workspaceId: intent.w,
+          agentId: intent.a,
+          kind: 'outlook',
+          name: intent.n || address,
+          credentials: creds,
+        })
+        .returning();
+      channelId = row.id;
     }
     if (env.msPushToken) {
       const { renewOutlookWatches } = await import('../services/outlookSweep.js');
       void renewOutlookWatches(db).catch(() => {});
     }
-    return done(address, true);
+    return done(address, true, channelId);
   });
 
   // Graph change notifications land here. Subscription creation sends a

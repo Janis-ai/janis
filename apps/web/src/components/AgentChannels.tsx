@@ -81,18 +81,22 @@ export function AgentChannels({ agent }: { agent: Agent }) {
 
   const link = useMutation({
     mutationFn: (body: { kind: string; page_id?: string; phone_number_id?: string }) =>
-      api('/api/meta/link', {
+      api<{ channel: Channel }>('/api/meta/link', {
         method: 'POST',
         body: JSON.stringify({ connect_id: connectId, agent_id: agentId, ...body }),
       }),
-    onSuccess: () => {
+    onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),
   });
 
   // Deep link — ?channel=<id> opens that channel's settings page
   const navigate = useNavigate();
+  // A new channel always has more to configure — webhook URL, embed snippet,
+  // appearance, forwarding — so creation lands on its settings page.
+  const goToChannel = (id: string) => navigate(`/agents/${agentId}/channels/${id}`);
   const focusChannel = params.get('channel');
   useEffect(() => {
     if (!focusChannel || !data) return;
@@ -118,7 +122,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   });
   const create = useMutation({
     mutationFn: () =>
-      api('/api/channels', {
+      api<{ channel: Channel }>('/api/channels', {
         method: 'POST',
         body: JSON.stringify({
           kind: form.kind,
@@ -129,10 +133,11 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           access_token: form.access_token,
         }),
       }),
-    onSuccess: () => {
+    onSuccess: (r) => {
       setForm({ ...form, name: '', page_id: '', phone_number_id: '', access_token: '' });
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),
   });
@@ -141,7 +146,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   // edited on the channel card after creation.
   const createWebchat = useMutation({
     mutationFn: () =>
-      api('/api/channels', {
+      api<{ channel: Channel }>('/api/channels', {
         method: 'POST',
         body: JSON.stringify({
           kind: 'webchat',
@@ -149,15 +154,16 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           agent_id: agentId,
         }),
       }),
-    onSuccess: () => {
+    onSuccess: (r) => {
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),
   });
 
-  // Email channel — the address is minted server-side; shown once created.
-  const [emCreated, setEmCreated] = useState('');
+  // Email channel — the address is minted server-side; the settings page
+  // it lands on shows the address and MX instructions.
   const createEmail = useMutation({
     mutationFn: () =>
       api<{ channel: Channel }>('/api/channels', {
@@ -169,9 +175,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         }),
       }),
     onSuccess: (r) => {
-      setEmCreated(r.channel.meta.inbound_address ?? '');
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),
   });
@@ -244,7 +250,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   });
   const createVoice = useMutation({
     mutationFn: () =>
-      api('/api/channels', {
+      api<{ channel: Channel }>('/api/channels', {
         method: 'POST',
         body: JSON.stringify({
           kind: 'voice',
@@ -261,12 +267,13 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           greeting: voiceForm.greeting || undefined,
         }),
       }),
-    onSuccess: () => {
+    onSuccess: (r) => {
       setVoiceForm({ sid: '', token: '', number: '', forward_to: '', greeting: '' });
       setFoundNumbers(null);
       setPickedNumber('');
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),
   });
@@ -276,7 +283,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   const [smsForm, setSmsForm] = useState({ sid: '', token: '', number: '' });
   const createSms = useMutation({
     mutationFn: (fromVoiceId?: string) =>
-      api('/api/channels', {
+      api<{ channel: Channel }>('/api/channels', {
         method: 'POST',
         body: JSON.stringify({
           kind: 'sms',
@@ -291,10 +298,11 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               }),
         }),
       }),
-    onSuccess: () => {
+    onSuccess: (r) => {
       setSmsForm({ sid: '', token: '', number: '' });
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),
   });
@@ -872,12 +880,6 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               Name and reply From-name are set on the channel card.
             </span>
           </div>
-          {emCreated && (
-            <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-              Address created: <span className="mono">{emCreated}</span> — point this domain's MX
-              at your inbound provider, or forward an existing mailbox to it.
-            </div>
-          )}
         </details>
       </div>
 

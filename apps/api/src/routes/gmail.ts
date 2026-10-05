@@ -178,7 +178,7 @@ export function gmailPublicRoutes(db: Db) {
     // Link flows land here for people with no Janis login — answer in text
     // instead of redirecting them at a login wall. Session flows return to
     // the agent's Channels tab (the intent carries the agent id).
-    const done = (msg: string, ok = false) =>
+    const done = (msg: string, ok = false, channelId?: string) =>
       intent.l
         ? c.text(
             ok
@@ -186,7 +186,11 @@ export function gmailPublicRoutes(db: Db) {
               : `Gmail connect failed: ${msg}`,
           )
         : c.redirect(
-            `${env.webOrigin}/agents/${intent.a}?tab=channels&${ok ? 'gmail_connect' : 'gmail_error'}=${encodeURIComponent(msg)}`,
+            ok && channelId
+              ? // Success lands on the channel's own settings page — the
+                // mailbox has forwarding/watch config worth seeing.
+                `${env.webOrigin}/agents/${intent.a}/channels/${channelId}?gmail_connect=${encodeURIComponent(msg)}`
+              : `${env.webOrigin}/agents/${intent.a}?tab=channels&${ok ? 'gmail_connect' : 'gmail_error'}=${encodeURIComponent(msg)}`,
           );
 
     const code = c.req.query('code');
@@ -254,6 +258,7 @@ export function gmailPublicRoutes(db: Db) {
         .where(and(eq(channels.workspaceId, intent.w), eq(channels.kind, 'gmail')))
     ).find((ch) => (ch.credentials as ChannelCredentials).email_address === address);
 
+    let channelId: string;
     if (match) {
       const prev = match.credentials as ChannelCredentials;
       await db
@@ -264,14 +269,19 @@ export function gmailPublicRoutes(db: Db) {
           credentials: { ...creds, gmail_cursor: prev.gmail_cursor ?? creds.gmail_cursor },
         })
         .where(eq(channels.id, match.id));
+      channelId = match.id;
     } else {
-      await db.insert(channels).values({
-        workspaceId: intent.w,
-        agentId: intent.a,
-        kind: 'gmail',
-        name: intent.n || address,
-        credentials: creds,
-      });
+      const [row] = await db
+        .insert(channels)
+        .values({
+          workspaceId: intent.w,
+          agentId: intent.a,
+          kind: 'gmail',
+          name: intent.n || address,
+          credentials: creds,
+        })
+        .returning();
+      channelId = row.id;
     }
     // Register push immediately so the new mailbox is real-time from the
     // start; the sweeper keeps renewing it before it lapses.
@@ -279,7 +289,7 @@ export function gmailPublicRoutes(db: Db) {
       const { renewGmailWatches } = await import('../services/gmailSweep.js');
       void renewGmailWatches(db).catch(() => {});
     }
-    return done(address, true);
+    return done(address, true, channelId);
   });
 
   return app;

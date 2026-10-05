@@ -16,19 +16,23 @@ export default function ChannelPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
-  // Cloudflare OAuth lands back here with ?cf_connect= / ?cf_error= —
-  // refetch the channel so new creds (e.g. pushed DNS records) render.
-  const cfConnected = params.get('cf_connect') ?? '';
-  const cfError = params.get('cf_error') ?? '';
+  // OAuth flows land back here with ?cf_connect= / ?gmail_connect= /
+  // ?outlook_connect= (or *_error=) — refetch the channel so new creds
+  // (e.g. pushed DNS records) render.
+  const connected =
+    params.get('cf_connect') ?? params.get('gmail_connect') ?? params.get('outlook_connect') ?? '';
+  const connectError =
+    params.get('cf_error') ?? params.get('gmail_error') ?? params.get('outlook_error') ?? '';
   useEffect(() => {
-    if (!cfConnected && !cfError) return;
+    if (!connected && !connectError) return;
     void qc.invalidateQueries({ queryKey: ['channel', channelId] });
     void qc.invalidateQueries({ queryKey: ['channels'] });
-  }, [cfConnected, cfError]); // eslint-disable-line react-hooks/exhaustive-deps
-  const dropCfParams = () => {
+  }, [connected, connectError]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dropConnectParams = () => {
     const next = new URLSearchParams(params);
-    next.delete('cf_connect');
-    next.delete('cf_error');
+    for (const k of ['cf_connect', 'cf_error', 'gmail_connect', 'gmail_error', 'outlook_connect', 'outlook_error']) {
+      next.delete(k);
+    }
     setParams(next, { replace: true });
   };
   const agents = agentsData?.agents ?? [];
@@ -54,16 +58,16 @@ export default function ChannelPage() {
           ← {agent?.name ?? 'Agent'} · Channels
         </Link>
       </div>
-      {cfConnected && (
+      {connected && (
         <div className="muted" style={{ margin: '8px 0', fontSize: 13 }}>
-          Connected <strong>{cfConnected}</strong>{' '}
-          <a href="#" onClick={(e) => { e.preventDefault(); dropCfParams(); }}>dismiss</a>
+          Connected <strong>{connected}</strong>{' '}
+          <a href="#" onClick={(e) => { e.preventDefault(); dropConnectParams(); }}>dismiss</a>
         </div>
       )}
-      {cfError && (
+      {connectError && (
         <div className="error" style={{ margin: '8px 0' }}>
-          Cloudflare setup failed: {friendlyError(cfError).text}{' '}
-          <a href="#" onClick={(e) => { e.preventDefault(); dropCfParams(); }} className="muted">dismiss</a>
+          Connect failed: {friendlyError(connectError).text}{' '}
+          <a href="#" onClick={(e) => { e.preventDefault(); dropConnectParams(); }} className="muted">dismiss</a>
         </div>
       )}
       <ChannelCard

@@ -360,13 +360,13 @@ describe('gmail oauth', () => {
     });
     expect(cb.status).toBe(302);
     const loc = cb.headers.get('location')!;
-    // Returns to the connecting agent's Channels tab, not a global page.
-    expect(loc).toContain(`/agents/${agentId}?tab=channels`);
-    expect(loc).toContain('gmail_connect=cs%40acme.test');
     const [created] = await db
       .select()
       .from(channels)
       .where(and(eq(channels.kind, 'gmail'), eq(channels.name, 'Acme Inbox')));
+    // Success lands on the new channel's own settings page.
+    expect(loc).toContain(`/agents/${agentId}/channels/${created.id}`);
+    expect(loc).toContain('gmail_connect=cs%40acme.test');
     const creds = created.credentials as ChannelCredentials;
     expect(created.agentId).toBe(agentId);
     expect(creds.email_address).toBe('cs@acme.test');
