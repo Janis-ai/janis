@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Agent } from '@janis/shared';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { useAgents, useMe } from '../api/hooks';
+import { useAgents, useBuildStatus, useMe } from '../api/hooks';
 import { useStream, type StreamAlert } from '../lib/useStream';
 import { clearLastAgent, janisBrain, useContextAgent } from '../lib/agentContext';
 import { trackOnce } from '../lib/analytics';
@@ -14,8 +15,8 @@ import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
-  CreditCard, Gauge, Inbox, LibraryBig, Megaphone,
-  Plug, Settings, SlidersHorizontal, Sparkles, Users, X,
+  Circle, CircleDot, CreditCard, Gauge, Inbox, Megaphone,
+  Settings, Sparkles, Users, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
 import { CommandPalette } from './CommandPalette';
@@ -41,6 +42,37 @@ const ALERT_LABELS: Record<string, string> = {
   error: 'Agent run error',
   csat: 'Low satisfaction score',
 };
+
+/** The six-step build sequence, also the persistent nav into each surface.
+ *  create's SECTION_TO_STEP is a non-path so it never falsely lights on a
+ *  section URL — its own link target is the builder route. */
+type BuildStepKey = 'create' | 'teach' | 'guide' | 'abilities' | 'try' | 'deploy';
+const BUILD_STEP_ORDER: BuildStepKey[] = ['create', 'teach', 'guide', 'abilities', 'try', 'deploy'];
+const SECTION_TO_STEP: Record<BuildStepKey, string> = {
+  create: '∅',
+  teach: 'knowledge',
+  guide: 'behavior',
+  abilities: 'integrations',
+  try: 'tests',
+  deploy: 'channels',
+};
+
+/** Sidebar build nav — hosted agents get all six steps (each opens the
+ *  builder stage for it); external-webhook agents only have a deploy
+ *  surface, which links straight to the channels list. */
+function buildNav(agent: Agent, agentId: string) {
+  const steps: { key: BuildStepKey; label: string; to: string }[] = [
+    { key: 'create', label: 'Create', to: `/agents/new/${agentId}?step=create` },
+    { key: 'teach', label: 'Teach it', to: `/agents/new/${agentId}?step=teach` },
+    { key: 'guide', label: 'Guide it', to: `/agents/new/${agentId}?step=guide` },
+    { key: 'abilities', label: 'Abilities', to: `/agents/new/${agentId}?step=abilities` },
+    { key: 'try', label: 'Try it', to: `/agents/new/${agentId}?step=try` },
+    { key: 'deploy', label: 'Deploy', to: `/agents/new/${agentId}?step=deploy` },
+  ];
+  return janisBrain(agent)
+    ? steps
+    : [{ key: 'deploy' as const, label: 'Deploy', to: `/agents/${agentId}/channels` }];
+}
 
 interface MeData {
   workspace: { id: string; name: string } | null;
@@ -419,6 +451,26 @@ export default function Layout() {
     refetchInterval: 60_000,
     enabled: hasWorkspace && Boolean(ctxAgent),
   });
+  const { data: buildStatus } = useBuildStatus(
+    hasWorkspace && currentAgent ? (ctxAgent ?? undefined) : undefined,
+  );
+  // The first unfinished step gets the ● "next" marker; done ✓, rest ○.
+  // External agents only render Deploy — compute next over rendered keys.
+  const renderedSteps = currentAgent ? buildNav(currentAgent, ctxAgent!).map((s) => s.key) : [];
+  const nextBuildStep = buildStatus
+    ? (BUILD_STEP_ORDER.filter((k) => renderedSteps.includes(k)).find((k) => !buildStatus.steps[k]) ?? null)
+    : null;
+  /** A build step lights up on its builder URL AND on the workspace section
+   *  that IS that surface — /agents/:id/knowledge is "Teach it", etc. */
+  const buildNavActive = (key: BuildStepKey) => {
+    if (
+      location.pathname === `/agents/new/${ctxAgent}` &&
+      (searchParams.get('step') ?? 'teach') === key
+    )
+      return true;
+    const m = location.pathname.match(/^\/agents\/[^/]+\/(\w+)/);
+    return m?.[1] === SECTION_TO_STEP[key];
+  };
   const { data: billingStatus } = useQuery({
     queryKey: ['billing-status'],
     queryFn: () => api<{ plan_name: string }>('/api/billing/status'),
@@ -584,24 +636,43 @@ export default function Layout() {
             onAddAgent={() => navigate('/agents/new')}
           />
         )}
-        {/* Agent subsection first — the agent's build surface, present only
-            while an agent is in context. Items indent under the name row;
-            .agent-nav's bottom border separates them from the workspace
-            layer below. */}
+        {/* Agent subsection first — the agent's home + build surface, present
+            only while an agent is in context. Overview is the dashboard; the
+            six BUILD steps are the persistent way into each part (not a
+            one-time wizard) with ✓/●/○ status; settings configures it. */}
         {currentAgent && (
           <div className="agent-nav">
             <div className="nav-sec">
               <Bot size={13} />
               <span>{currentAgent.name}</span>
             </div>
-            <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Agent</span><span className="icon"><Gauge size={18} /></span></NavLink>
-            {janisBrain(currentAgent) && (
-              <>
-                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/knowledge`}><span className="label">Knowledge</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
-                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/integrations`}><span className="label">Actions</span><span className="icon"><Plug size={18} /></span></NavLink>
-              </>
-            )}
-            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/behavior`}><span className="label">Experience</span><span className="icon"><SlidersHorizontal size={18} /></span></NavLink>
+            <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Overview</span><span className="icon"><Gauge size={18} /></span></NavLink>
+            <div className="nav-sec">Build</div>
+            {buildNav(currentAgent, ctxAgent!).map((s) => (
+              <Link
+                key={s.key}
+                className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}`}
+                to={s.to}
+              >
+                <span className="label">{s.label}</span>
+                <span className={`step-mark ${
+                  buildStatus?.steps[s.key]
+                    ? 'done'
+                    : buildStatus && nextBuildStep === s.key
+                      ? 'next'
+                      : 'todo'
+                }`}>
+                  {buildStatus?.steps[s.key] ? (
+                    <Check size={12} />
+                  ) : buildStatus && nextBuildStep === s.key ? (
+                    <CircleDot size={12} />
+                  ) : (
+                    <Circle size={12} />
+                  )}
+                </span>
+              </Link>
+            ))}
+            <div className="nav-sec">Configure</div>
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="label">Agent settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </div>
         )}

@@ -1,8 +1,8 @@
-import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import type { Conversation } from '@janis/shared';
+import { MODEL_CATALOG, type Conversation } from '@janis/shared';
 import { api } from '../api/client';
-import { useAgents, useChannels } from '../api/hooks';
+import { useAgents, useBuildStatus, useChannels } from '../api/hooks';
 import { KIND_LABEL } from '../components/Channels';
 import { janisBrain } from '../lib/agentContext';
 import { railBus } from '../lib/railBus';
@@ -49,9 +49,22 @@ interface Gap {
   count: number;
 }
 
-/** Agent home — /agents/:id. An at-a-glance operational dashboard: what
- *  needs a human right now, this week's containment/CSAT, channel health,
- *  knowledge gaps, and the most recent conversations. */
+const BUILD_STEPS = [
+  { key: 'create', label: 'Create' },
+  { key: 'teach', label: 'Teach it' },
+  { key: 'guide', label: 'Guide it' },
+  { key: 'abilities', label: 'Abilities' },
+  { key: 'try', label: 'Try it' },
+  { key: 'deploy', label: 'Deploy' },
+] as const;
+type BuildStepKey = (typeof BUILD_STEPS)[number]['key'];
+
+/** Agent home — /agents/:id. The agent's dashboard: what it is, where it is
+ *  in its lifecycle (build progress + status), and what's happening — needs-
+ *  attention, this week's numbers, recent conversations. */
+export function buildStepLink(agentId: string, key: BuildStepKey) {
+  return `/agents/new/${agentId}?step=${key}`;
+}
 export default function AgentOverview() {
   const { id } = useParams();
   const [params] = useSearchParams();
@@ -61,6 +74,7 @@ export default function AgentOverview() {
   usePageTitle(agent ? agent.name : 'Agent');
   const { data: channelsData } = useChannels();
   const channels = (channelsData?.channels ?? []).filter((c) => c.agent_id === id);
+  const { data: buildStatus } = useBuildStatus(id);
 
   const attention = useQuery({
     queryKey: ['attention', id],
@@ -121,6 +135,28 @@ export default function AgentOverview() {
   const openHandoffs = handoffs.data?.unresolved ?? 0;
   const gapList = gaps.data?.gaps ?? [];
 
+  const hosted = janisBrain(agent);
+  const cfg = agent?.config ?? {};
+  const summary = cfg.builder?.summary?.trim();
+  // Lifecycle line: Live once a public channel exists; Ready when every
+  // build step is done; otherwise In build with the next step named.
+  const doneCount = buildStatus
+    ? BUILD_STEPS.filter((s) => buildStatus.steps[s.key]).length
+    : 0;
+  const nextStep = buildStatus
+    ? BUILD_STEPS.find((s) => !buildStatus.steps[s.key])
+    : undefined;
+  const status = !hosted
+    ? agent?.webhook_url ? 'live' : 'no-webhook'
+    : channels.length
+      ? 'live'
+      : buildStatus && !nextStep
+        ? 'ready'
+        : 'building';
+  const model = cfg.llm?.model
+    ? (MODEL_CATALOG.find((m) => m.id === cfg.llm?.model)?.name ?? cfg.llm.model)
+    : null;
+
   return (
     <>
       <div className="row" style={{ alignItems: 'center' }}>
@@ -130,7 +166,7 @@ export default function AgentOverview() {
             {agent.hosted ? 'hosted' : agent.webhook_url ? 'external' : 'unreachable'}
           </span>
         )}
-        {agent && janisBrain(agent) && (
+        {agent && hosted && (
           <button
             className="btn"
             disabled={testChat.isPending}
@@ -155,8 +191,78 @@ export default function AgentOverview() {
         </button>
       </div>
       <div className="muted" style={{ marginBottom: 12 }}>
-        {agent?.hosted ? 'hosted by Janis' : 'external webhook'}
-        {agent?.last_seen_at ? ` · last event ${timeAgo(agent.last_seen_at)}` : ' · no events yet'}
+        {summary
+          ? `It will ${summary.replace(/[.\s]+$/, '')}.`
+          : cfg.purpose || (agent?.hosted ? 'hosted by Janis' : 'external webhook')}
+        {agent?.last_seen_at ? ` · last event ${timeAgo(agent.last_seen_at)}` : ''}
+      </div>
+
+      {/* Lifecycle + build progress — Overview is the home you land on after
+          Create, so "where am I / what's next" is the first thing it says. */}
+      <div className="card">
+        <div className="row" style={{ alignItems: 'center' }}>
+          <strong className="grow" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              className="status-dot"
+              style={{
+                background:
+                  status === 'live' ? 'var(--ok)' : status === 'ready' ? 'var(--accent)' : 'var(--warn, #f59e0b)',
+              }}
+            />
+            {status === 'live'
+              ? channels.length
+                ? `Live — answering on ${channels.length} channel${channels.length > 1 ? 's' : ''}`
+                : 'Live'
+              : status === 'ready'
+                ? 'Ready to deploy'
+                : status === 'no-webhook'
+                  ? 'No webhook URL set'
+                  : `In build — ${doneCount} of ${BUILD_STEPS.length} steps done`}
+          </strong>
+          {nextStep && hosted && (
+            <button
+              className="btn primary"
+              onClick={() => navigate(buildStepLink(id!, nextStep.key))}
+            >
+              {nextStep.label} →
+            </button>
+          )}
+          {status === 'no-webhook' && (
+            <button
+              className="btn primary"
+              onClick={() => navigate(`/agents/${id}/settings?sub=general`)}
+            >
+              Set webhook →
+            </button>
+          )}
+        </div>
+        {hosted && (
+          <div className="build-progress">
+            {BUILD_STEPS.map((s) => {
+              const done = buildStatus?.steps[s.key] ?? false;
+              const isNext = buildStatus && !done && nextStep?.key === s.key;
+              const caption =
+                s.key === 'teach' && buildStatus?.knowledge.sources
+                  ? `${buildStatus.knowledge.sources} source${buildStatus.knowledge.sources > 1 ? 's' : ''}`
+                  : s.key === 'try' && buildStatus?.test_conversations
+                    ? `${buildStatus.test_conversations} test chat${buildStatus.test_conversations > 1 ? 's' : ''}`
+                    : s.key === 'deploy' && buildStatus?.channels
+                      ? `${buildStatus.channels} channel${buildStatus.channels > 1 ? 's' : ''}`
+                      : null;
+              return (
+                <Link
+                  key={s.key}
+                  to={buildStepLink(id!, s.key)}
+                  className={`bp-item${done ? ' done' : ''}${isNext ? ' next' : ''}`}
+                >
+                  <span className="bp-mark">{done ? '✓' : isNext ? '●' : '○'}</span>
+                  {s.label}
+                  {caption && <span className="muted"> · {caption}</span>}
+                </Link>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {needsHuman > 0 && (
@@ -241,6 +347,59 @@ export default function AgentOverview() {
 
         <div style={{ width: 300, flexShrink: 0 }}>
           <div className="card">
+            <strong>Configuration</strong>
+            <div style={{ marginTop: 6, fontSize: 13 }}>
+              <div className="row" style={{ padding: '4px 0', gap: 8 }}>
+                <span className="muted grow">Model</span>
+                <span>{model ? `${model} · custom` : 'Workspace default'}</span>
+              </div>
+              <div className="row" style={{ padding: '4px 0', gap: 8 }}>
+                <span className="muted grow">Brain</span>
+                <span>{hosted ? 'Janis hosted' : 'External webhook'}</span>
+              </div>
+              <div className="row" style={{ padding: '4px 0', gap: 8 }}>
+                <span className="muted grow">Escalation</span>
+                <span>
+                  {cfg.sla_minutes ? `re-alerts after ${cfg.sla_minutes} min` : 'Workspace default'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {hosted && (
+            <div className="card" style={{ marginTop: 12 }}>
+              <div className="row">
+                <strong className="grow">Knowledge</strong>
+                <button className="btn" onClick={() => navigate(buildStepLink(id!, 'teach'))}>
+                  Teach it
+                </button>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 13 }}>
+                <div className="row" style={{ padding: '4px 0', gap: 8 }}>
+                  <span className="muted grow">Sources</span>
+                  <span>{buildStatus?.knowledge.sources ?? '—'}</span>
+                </div>
+                <div
+                  className="row"
+                  style={{ padding: '4px 0', gap: 8, cursor: 'pointer' }}
+                  onClick={() => navigate(`/agents/${id}/knowledge?sub=gaps`)}
+                >
+                  <span className="muted grow">Knowledge gaps</span>
+                  <span>{gaps.data ? gapList.length : '—'}</span>
+                </div>
+                <div className="row" style={{ padding: '4px 0', gap: 8 }}>
+                  <span className="muted grow">Last updated</span>
+                  <span>
+                    {buildStatus?.knowledge.updated_at
+                      ? timeAgo(buildStatus.knowledge.updated_at)
+                      : 'never'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="card" style={{ marginTop: 12 }}>
             <div className="row">
               <strong className="grow">Channels</strong>
               <button className="btn" onClick={() => navigate(`/agents/${id}/channels`)}>
@@ -269,38 +428,6 @@ export default function AgentOverview() {
               </div>
             )}
           </div>
-
-          {janisBrain(agent) && (
-            <div className="card" style={{ marginTop: 12 }}>
-              <div className="row">
-                <strong className="grow">Knowledge gaps</strong>
-                <button className="btn" onClick={() => navigate(`/agents/${id}/knowledge?sub=gaps`)}>
-                  Review
-                </button>
-              </div>
-              {!gaps.data ? (
-                <div className="muted" style={{ marginTop: 8 }}>Detecting…</div>
-              ) : !gapList.length ? (
-                <div className="muted" style={{ marginTop: 8 }}>
-                  No recurring unanswered questions in the last 30 days.
-                </div>
-              ) : (
-                <div style={{ marginTop: 6 }}>
-                  <div className="muted" style={{ fontSize: 13 }}>
-                    {gapList.length} recurring question{gapList.length > 1 ? 's' : ''} the agent couldn't answer:
-                  </div>
-                  {gapList.slice(0, 3).map((g) => (
-                    <div
-                      key={g.key}
-                      style={{ marginTop: 6, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                    >
-                      · {g.questions[0]} <span className="muted">({g.count}×)</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       </div>
     </>

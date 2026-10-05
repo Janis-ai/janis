@@ -644,6 +644,56 @@ export function agentRoutes(db: Db) {
     });
   });
 
+  /** Build-status snapshot — which of the six build steps (create → teach →
+   *  guide → abilities → try → deploy) are done, plus the knowledge stats the
+   *  Overview and the sidebar's build-progress list render. One cheap query
+   *  set so the nav can show ✓/●/○ per step without stitching five endpoints. */
+  app.get('/:id/build-status', agentMember, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const cfg = (agent.config ?? {}) as AgentConfig;
+    const [files, chans] = await Promise.all([
+      db
+        .select({ createdAt: knowledgeFiles.createdAt, fetchedAt: knowledgeFiles.lastFetchedAt })
+        .from(knowledgeFiles)
+        .where(eq(knowledgeFiles.agentId, agent.id)),
+      db
+        .select({ id: channels.id, credentials: channels.credentials })
+        .from(channels)
+        .where(eq(channels.agentId, agent.id)),
+    ]);
+    const internalIds = chans
+      .filter((ch) => (ch.credentials as { internal?: boolean }).internal === true)
+      .map((ch) => ch.id);
+    const publicCount = chans.length - internalIds.length;
+    let testConversations = 0;
+    if (internalIds.length) {
+      const [row] = await db
+        .select({ n: sql<number>`count(distinct ${channelBindings.conversationId})` })
+        .from(channelBindings)
+        .where(inArray(channelBindings.channelId, internalIds));
+      testConversations = Number(row?.n ?? 0);
+    }
+    const sources = (cfg.knowledge?.length ?? 0) + files.length;
+    const updatedAt = files
+      .map((f) => f.fetchedAt ?? f.createdAt)
+      .reduce<Date | null>((m, d) => (!m || d > m ? d : m), null);
+    const abilities = (cfg.tools?.length ?? 0) + (cfg.builtin_tools?.length ?? 0);
+    return c.json({
+      steps: {
+        create: true,
+        teach: sources > 0,
+        guide: !!cfg.system_prompt?.trim(),
+        abilities: abilities > 0,
+        try: testConversations > 0,
+        deploy: publicCount > 0,
+      },
+      knowledge: { sources, updated_at: updatedAt?.toISOString() ?? null },
+      channels: publicCount,
+      test_conversations: testConversations,
+    });
+  });
+
   app.post('/:id/knowledge', agentAdmin, async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);

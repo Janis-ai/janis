@@ -21,11 +21,15 @@ describe('agentPathParam', () => {
     expect(agentPathParam('/conversations')).toBeUndefined();
   });
 
-  it('never treats the /agents/new builder as an agent — the rail URL-sync '
+  it('never treats bare /agents/new as an agent — the rail URL-sync '
     + 'stamps ?agent=<test-rail id> on navigations, which used to resolve '
     + 'the builder to an existing agent', () => {
     expect(agentPathParam('/agents/new')).toBeUndefined();
-    expect(agentPathParam(`/agents/new/${uuid}`)).toBeUndefined();
+  });
+
+  it('treats /agents/new/:id edit mode as that agent — the build nav '
+    + 'should track the agent being built', () => {
+    expect(agentPathParam(`/agents/new/${uuid}`)).toBe(uuid);
   });
 });
 

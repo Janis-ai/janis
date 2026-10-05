@@ -197,6 +197,8 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     void qc.invalidateQueries({ queryKey: ['channel'] });
     void qc.invalidateQueries({ queryKey: ['rules'] });
     void qc.invalidateQueries({ queryKey: ['deliveries'] });
+    // build progress is derived from config/channels — keep it fresh too
+    void qc.invalidateQueries({ queryKey: ['build-status'] });
   };
 
   const update = useMutation({
@@ -2693,6 +2695,7 @@ export function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string
     }
     setUploading(false);
     void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
+    void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
   };
 
   const [url, setUrl] = useState('');
@@ -2708,6 +2711,7 @@ export function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string
     onSuccess: () => {
       setUrl('');
       void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
+    void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
     },
     onError: (e) => setError(e.message),
   });
@@ -2729,19 +2733,26 @@ export function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string
           : `Found ${r.discovered} pages${dup} — ${r.queued} queued; the sweeper fetches them in batches.`,
       );
       void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
+    void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
     },
     onError: (e) => setError(e.message),
   });
   const refresh = useMutation({
     mutationFn: (fileId: string) =>
       api(`/api/agents/${agentId}/knowledge/${fileId}/refresh`, { method: 'POST' }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['knowledge', agentId] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
+    },
   });
 
   const remove = useMutation({
     mutationFn: (fileId: string) =>
       api(`/api/agents/${agentId}/knowledge/${fileId}`, { method: 'DELETE' }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['knowledge', agentId] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
+    },
   });
 
   const showWebsites = variant === 'websites';

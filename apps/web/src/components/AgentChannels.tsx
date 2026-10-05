@@ -87,6 +87,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['build-status'] });
       goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),
@@ -111,6 +112,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   useEffect(() => {
     if (!gmailConnected && !outlookConnected && !cfConnected) return;
     void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['build-status'] });
   }, [gmailConnected, outlookConnected, cfConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [form, setForm] = useState({
@@ -137,6 +139,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       setForm({ ...form, name: '', page_id: '', phone_number_id: '', access_token: '' });
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['build-status'] });
       goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),
@@ -157,6 +160,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     onSuccess: (r) => {
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['build-status'] });
       goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),
@@ -177,6 +181,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     onSuccess: (r) => {
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['build-status'] });
       goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),
@@ -273,6 +278,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       setPickedNumber('');
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['build-status'] });
       goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),
@@ -302,6 +308,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       setSmsForm({ sid: '', token: '', number: '' });
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['build-status'] });
       goToChannel(r.channel.id);
     },
     onError: (e) => setError(e.message),

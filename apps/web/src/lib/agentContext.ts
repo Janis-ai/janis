@@ -38,10 +38,13 @@ export function agentSlug(name: string): string {
  *  Campaigns, Reports) still default to it and the sidebar keeps the
  *  agent's subsection. Cleared by the "All agents" scope pick or by
  *  choosing the workspace header in the switcher. */
-/** The agent-id-or-slug segment of an /agents/… path, or undefined on the
- *  guided builder — 'new' is a route, never an agent (an agent literally
- *  named "New" would otherwise hijack /agents/new). */
+/** The agent-id-or-slug segment of an /agents/… path. /agents/new/<id> is
+ *  the builder's edit mode — the id being built IS the context agent so the
+ *  sidebar's build nav tracks it; bare /agents/new (the path-choice and
+ *  create screens) has no agent — 'new' is a route, never an agent name. */
 export function agentPathParam(pathname: string): string | undefined {
+  const built = pathname.match(/^\/agents\/new\/([^/]+)/)?.[1];
+  if (built) return built;
   const p = pathname.match(/^\/agents\/([^/]+)/)?.[1];
   return p === 'new' ? undefined : p;
 }

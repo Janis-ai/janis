@@ -110,6 +110,31 @@ export function useAgents() {
   });
 }
 
+/** Which of the six build steps are done + knowledge/channel counts — powers
+ *  the sidebar's build nav and the Overview's progress card. */
+export interface BuildStatus {
+  steps: {
+    create: boolean;
+    teach: boolean;
+    guide: boolean;
+    abilities: boolean;
+    try: boolean;
+    deploy: boolean;
+  };
+  knowledge: { sources: number; updated_at: string | null };
+  channels: number;
+  test_conversations: number;
+}
+
+export function useBuildStatus(agentId: string | undefined) {
+  return useQuery({
+    queryKey: ['build-status', agentId],
+    queryFn: () => api<BuildStatus>(`/api/agents/${agentId}/build-status`),
+    enabled: !!agentId,
+    refetchInterval: 30_000,
+  });
+}
+
 export function useAlertRules() {
   return useQuery({
     queryKey: ['rules'],

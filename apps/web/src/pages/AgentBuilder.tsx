@@ -98,9 +98,9 @@ export default function AgentBuilder() {
         navigate(`/agents/${r.agent.id}/settings?sub=general`);
         return;
       }
-      // Land on a confirmation card, not the draft — the create step's only
-      // job is "tell Janis what you want"; the summary proves it listened.
-      navigate(`/agents/new/${r.agent.id}?step=create`, { replace: true });
+      // Overview is the agent's home — creation lands there, where the
+      // status card ("In build — next: Teach it") picks up the story.
+      navigate(`/agents/${r.agent.id}`, { replace: true });
     },
     onError: (e) => setError(e.message),
   });
@@ -119,6 +119,7 @@ export default function AgentBuilder() {
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['agents'] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     },
