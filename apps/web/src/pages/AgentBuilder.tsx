@@ -161,11 +161,15 @@ export default function AgentBuilder() {
   const { data: status } = useBuildStatus(agent?.id ?? undefined);
   const seenSteps = useSeenSteps(agent?.id);
   const idx = STEPS.findIndex((s) => s.key === step);
-  // "Next" walks forward through surfaces you haven't opened yet — it
-  // points at the first unseen step after this one and disappears
-  // entirely once everything ahead has been seen (or on Deploy).
+  // "Next" always points at the first step in rail order that hasn't been
+  // opened yet — even if it's behind the current step, so jumping ahead
+  // never orphans a skipped surface. Disappears once all steps have been
+  // seen (Deploy itself never gets a Next).
   const seen = (k: StepKey) => seenSteps.has(k) || k === step;
-  const next = STEPS.slice(idx + 1).find((s) => !seen(s.key));
+  const next =
+    idx >= 0 && idx < STEPS.length - 1
+      ? STEPS.find((s) => !seen(s.key))
+      : undefined;
 
 
   // Create is the brief — revisitable, but never a silent regeneration
