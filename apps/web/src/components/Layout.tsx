@@ -657,7 +657,7 @@ export default function Layout() {
               <span>{currentAgent.name}</span>
             </div>
             <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Overview</span><span className="icon"><Gauge size={18} /></span></NavLink>
-            <div className="nav-sec">Build</div>
+            <div className="nav-sec"><span>Build</span></div>
             {buildNav(currentAgent, ctxAgent!).map((s) => (
               <Link
                 key={s.key}
@@ -667,7 +667,7 @@ export default function Layout() {
                 <span className="label">{s.label}</span>
               </Link>
             ))}
-            <div className="nav-sec">Configure</div>
+            <div className="nav-sec"><span>Configure</span></div>
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="label">Agent settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </div>
         )}
