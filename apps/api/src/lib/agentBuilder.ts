@@ -92,13 +92,13 @@ Given the operator's description of the agent they want, return ONE JSON object 
   "name": "a short agent name, <= 40 chars",
   "system_prompt": "the agent's operating instructions, 120-400 words: who it serves, its scope, tone of voice, what it must never do, and when it MUST offer a human (it says so plainly instead of guessing). Write in second person ('You are...'). Do not mention Janis, tools, or this JSON.",
   "greeting": "the first message the agent sends a customer, <= 200 chars",
-  "suggested_knowledge": ["each fact/policy/store-info the operator should add to the knowledge base — max 12 entries, each a single line"],
+  "suggested_knowledge": ["topics of information the operator must supply, phrased as what to add — e.g. 'shipping times and costs', 'return window', 'current coupon policy'. These are TOPICS, not content: you don't know the operator's real facts, so never invent values. Behavior rules ('always…', 'never…', 'remind customers…', 'prioritize…') do NOT go here — fold those into system_prompt. Max 12, one line each."],
   "suggested_templates": [{"id": "<an id from the integration catalog below>", "reason": "<why this agent needs it, <= 120 chars>"}],
   "suggested_approvals": ["action descriptions that should wait for a human's approval before running — e.g. 'issue refund', 'cancel order' — max 10"],
   "suggested_rules": ["escalation or routing rules worth configuring, plain English, max 6"]
 }
 
-Rules: pick at most 4 catalog entries, only ones the description genuinely needs; a read action (look up, track, search) never needs approval while a mutating one (refund, cancel, edit) usually does; omit a key entirely rather than invent content.
+Rules: pick at most 4 catalog entries, only ones the description genuinely needs; a read action (look up, track, search) never needs approval while a mutating one (refund, cancel, edit) usually does; behavioral requirements in the description (reminders, priorities, prohibitions) belong in system_prompt, not suggested_knowledge; omit a key entirely rather than invent content.
 
 Integration catalog (id: name — blurb):
 `;

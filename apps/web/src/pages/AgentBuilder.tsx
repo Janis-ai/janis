@@ -300,8 +300,9 @@ export default function AgentBuilder() {
                 <div className="card" style={{ marginTop: 12 }}>
                   <strong>What it needs to know</strong>
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    From your description — turn each into a knowledge line,
-                    a document, or a website source below.
+                    From your description — the real details only you have.
+                    Fill each in as a knowledge line, a document, or a website
+                    source below.
                   </div>
                   <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 13 }}>
                     {builder.suggested_knowledge.map((k, i) => <li key={i}>{k}</li>)}
