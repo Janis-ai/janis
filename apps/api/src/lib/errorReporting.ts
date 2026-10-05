@@ -28,3 +28,17 @@ export function reportError(err: unknown, c?: Context) {
   }
   console.error(JSON.stringify(entry));
 }
+
+/**
+ * True when the error is Postgres rejecting malformed input
+ * (invalid_text_representation, SQLSTATE 22P02) — the signature of a
+ * non-UUID/garbage id reaching a typed column. drizzle wraps driver errors
+ * as DrizzleQueryError, so walk the cause chain. Callers map it to 404: a
+ * lookup param Postgres can't even parse can never match a row.
+ */
+export function isPgInputSyntaxError(err: unknown): boolean {
+  for (let e: unknown = err; e instanceof Error; e = e.cause) {
+    if ((e as { code?: string }).code === '22P02') return true;
+  }
+  return false;
+}

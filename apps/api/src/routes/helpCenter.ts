@@ -65,7 +65,10 @@ async function ownsAgent(db: Db, workspaceId: string, agentId: string) {
   return row ?? null;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function ownsArticle(db: Db, workspaceId: string, id: string) {
+  if (!UUID_RE.test(id)) return null; // garbage path param → 404, not a PG error
   const [row] = await db
     .select()
     .from(helpArticles)
@@ -265,6 +268,7 @@ export function helpPublicRoutes(db: Db) {
 
   app.get('/:agentId', async (c) => {
     const agentId = c.req.param('agentId');
+    if (!UUID_RE.test(agentId)) return c.json({ error: 'not found' }, 404);
     const [agent] = await db
       .select({ id: agents.id, name: agents.name, workspaceId: agents.workspaceId })
       .from(agents)
@@ -331,6 +335,8 @@ export function helpPublicRoutes(db: Db) {
   // :articleId accepts a slug or the uuid — slugs are the public-facing
   // permalink; ids keep older links and internal fetches working.
   app.get('/:agentId/:articleId', async (c) => {
+    const agentId = c.req.param('agentId');
+    if (!UUID_RE.test(agentId)) return c.json({ error: 'not found' }, 404);
     const key = c.req.param('articleId');
     const byId = /^[0-9a-f-]{36}$/i.test(key);
     const [row] = await db
@@ -340,7 +346,7 @@ export function helpPublicRoutes(db: Db) {
       .where(
         and(
           byId ? eq(helpArticles.id, key) : eq(helpArticles.slug, key),
-          eq(helpArticles.agentId, c.req.param('agentId')),
+          eq(helpArticles.agentId, agentId),
           eq(helpArticles.status, 'published'),
         ),
       )
@@ -363,6 +369,8 @@ export function helpPublicRoutes(db: Db) {
     '/:agentId/:articleId/vote',
     zValidator('json', z.object({ helpful: z.boolean() })),
     async (c) => {
+      const agentId = c.req.param('agentId');
+      if (!UUID_RE.test(agentId)) return c.json({ error: 'not found' }, 404);
       const key = c.req.param('articleId');
       const byId = /^[0-9a-f-]{36}$/i.test(key);
       const [article] = await db
@@ -371,7 +379,7 @@ export function helpPublicRoutes(db: Db) {
         .where(
           and(
             byId ? eq(helpArticles.id, key) : eq(helpArticles.slug, key),
-            eq(helpArticles.agentId, c.req.param('agentId')),
+            eq(helpArticles.agentId, agentId),
             eq(helpArticles.status, 'published'),
           ),
         )

@@ -126,6 +126,24 @@ describe('help center public search', () => {
     const cats = body.categories as { articles: { title: string }[] }[];
     expect(cats.flatMap((g) => g.articles.map((a) => a.title))).toContain('Shipping times');
   });
+
+  it('404s cleanly on scanner probes — a non-UUID agent param never reaches Postgres', async () => {
+    for (const probe of ['/api/help/info.php', '/api/help/wp-admin']) {
+      const res = await app.fetch(new Request(`http://t${probe}`));
+      expect(res.status).toBe(404);
+    }
+    // article + vote paths guard the same param
+    const art = await app.fetch(new Request('http://t/api/help/info.php/some-slug'));
+    expect(art.status).toBe(404);
+    const vote = await app.fetch(
+      new Request('http://t/api/help/info.php/some-slug/vote', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ helpful: true }),
+      }),
+    );
+    expect(vote.status).toBe(404);
+  });
 });
 
 describe('view counts + insights', () => {

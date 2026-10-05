@@ -10,7 +10,7 @@ import { eq, sql } from 'drizzle-orm';
 import { sweeperLocks } from './db/schema.js';
 import type { Db } from './db/client.js';
 import { env } from './env.js';
-import { reportError } from './lib/errorReporting.js';
+import { isPgInputSyntaxError, reportError } from './lib/errorReporting.js';
 import { rateLimit, dbRateLimit } from './lib/rateLimit.js';
 import { getUpload } from './lib/uploads.js';
 import { authRoutes } from './routes/auth.js';
@@ -367,6 +367,11 @@ export function createApp(db: Db) {
   // Report unexpected errors to Cloud Error Reporting; HTTPException keeps its status.
   app.onError((err, c) => {
     if (err instanceof HTTPException) return err.getResponse();
+    // A malformed id in a path/query param dies inside Postgres as
+    // invalid_text_representation (22P02) before any row can match — that's
+    // a "not found", not a server error. Scanner probes (/info.php,
+    // /wp-admin) hit this constantly; they 404 quietly instead of paging.
+    if (isPgInputSyntaxError(err)) return c.json({ error: 'not found' }, 404);
     reportError(err, c);
     recordApiError(db, err, c);
     return c.json({ error: 'Internal server error' }, 500);
