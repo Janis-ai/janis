@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
@@ -47,6 +47,7 @@ import { toAgent } from '../lib/serializers.js';
 import { audit } from '../lib/audit.js';
 import { invalidateChannelCache } from '../lib/channels.js';
 import { TOOL_TEMPLATES } from '../lib/toolTemplates.js';
+import { generateDraft } from '../lib/agentBuilder.js';
 import { connectionToken } from '../lib/connections.js';
 import {
   createSlackChannel,
@@ -59,6 +60,14 @@ import {
 const createAgent = z.object({
   name: z.string().min(1).max(120),
   webhook_url: z.string().url().optional(),
+  hosted: z.boolean().optional(),
+  auto_resume_minutes: z.number().min(1).max(10080).optional(),
+});
+const bootstrapAgent = z.object({
+  name: z.string().max(120).optional(),
+  // Natural-language purpose — "what should this agent do". The builder
+  // turns it into a draft configuration; blank just creates the agent.
+  purpose: z.string().max(4000).optional(),
   hosted: z.boolean().optional(),
   auto_resume_minutes: z.number().min(1).max(10080).optional(),
 });
@@ -105,10 +114,10 @@ export function agentRoutes(db: Db) {
     return c.json({ agents: rows.map(toAgent) });
   });
 
-  app.post('/', adminOnly, zValidator('json', createAgent), async (c) => {
-    const body = c.req.valid('json');
-    // Agency children ride on the parent's plan but can't grow the fleet —
-    // new agents need a subscription of their own (or the parent's help).
+  /** Shared agency-plan gate — agency children ride on the parent's plan
+   *  and can't grow the fleet on their own. Returns the response to send,
+   *  or null when creation may proceed. */
+  const agencyGate = async (c: Context<SessionEnv>) => {
     const [ws] = await db
       .select({
         parentWorkspaceId: workspaces.parentWorkspaceId,
@@ -119,32 +128,42 @@ export function agentRoutes(db: Db) {
       .from(workspaces)
       .where(eq(workspaces.id, c.get('workspaceId')))
       .limit(1);
-    if (ws?.parentWorkspaceId && !ws.stripeSubscriptionId && !ws.connectSubscriptionId) {
-      const [parent] = await db
-        .select({ name: workspaces.name })
-        .from(workspaces)
-        .where(eq(workspaces.id, ws.parentWorkspaceId))
-        .limit(1);
-      return c.json(
-        {
-          error: `This account is covered by ${parent?.name ?? 'an agency plan'}. Contact ${ws.parentContact ?? 'your account administrator'} to add agents, or subscribe to your own plan.`,
-          covered_by: parent?.name,
-          contact: ws.parentContact,
-        },
-        402,
-      );
+    if (!ws?.parentWorkspaceId || ws.stripeSubscriptionId || ws.connectSubscriptionId) {
+      return null;
     }
+    const [parent] = await db
+      .select({ name: workspaces.name })
+      .from(workspaces)
+      .where(eq(workspaces.id, ws.parentWorkspaceId))
+      .limit(1);
+    return c.json(
+      {
+        error: `This account is covered by ${parent?.name ?? 'an agency plan'}. Contact ${ws.parentContact ?? 'your account administrator'} to add agents, or subscribe to your own plan.`,
+        covered_by: parent?.name,
+        contact: ws.parentContact,
+      },
+      402,
+    );
+  };
+
+  /** Shared insert — agent row, its Slack alert channel when connected,
+   *  and the audit entry. Both POST / and POST /bootstrap create through
+   *  this so every path mints the same row shape. */
+  const insertAgent = async (
+    c: Context<SessionEnv>,
+    fields: { name: string; hosted: boolean; webhook_url?: string; auto_resume_minutes?: number },
+  ) => {
     const [row] = await db
       .insert(agents)
       .values({
         workspaceId: c.get('workspaceId'),
         ownerUserId: c.get('user').id,
-        name: body.name,
+        name: fields.name,
         // no API key until the operator generates one — hosted agents never call /v1
         webhookSecret: generateWebhookSecret(),
-        webhookUrl: body.webhook_url ?? null,
-        hosted: body.hosted ?? false,
-        autoResumeMinutes: body.auto_resume_minutes ?? 10,
+        webhookUrl: fields.webhook_url ?? null,
+        hosted: fields.hosted,
+        autoResumeMinutes: fields.auto_resume_minutes ?? 10,
       })
       .returning();
     // Give the agent its own Slack alert channel (#janis-{name}) when the
@@ -173,7 +192,80 @@ export function agentRoutes(db: Db) {
       targetId: row.id,
       meta: { name: row.name, hosted: row.hosted },
     });
+    return row;
+  };
+
+  app.post('/', adminOnly, zValidator('json', createAgent), async (c) => {
+    const body = c.req.valid('json');
+    const gate = await agencyGate(c);
+    if (gate) return gate;
+    const row = await insertAgent(c, {
+      name: body.name,
+      hosted: body.hosted ?? false,
+      webhook_url: body.webhook_url,
+      auto_resume_minutes: body.auto_resume_minutes,
+    });
     return c.json({ agent: toAgent(row) }, 201);
+  });
+
+  /** Guided-builder creation — one call that mints the agent AND, when a
+   *  purpose description is given, drafts its starting configuration with
+   *  the platform LLM: system prompt, greeting, and review-list
+   *  suggestions (knowledge, integrations, approval gates, rules). The
+   *  draft is review material stored under config.builder — nothing
+   *  external is connected, gated, or armed by this endpoint. */
+  app.post('/bootstrap', adminOnly, zValidator('json', bootstrapAgent), async (c) => {
+    const body = c.req.valid('json');
+    const gate = await agencyGate(c);
+    if (gate) return gate;
+    const hosted = body.hosted ?? true;
+    const purpose = body.purpose?.trim() ?? '';
+    const draft = hosted && purpose ? await generateDraft(purpose).catch(() => null) : null;
+    const name = (body.name?.trim() || draft?.name || 'New agent').slice(0, 120);
+    const row = await insertAgent(c, {
+      name,
+      hosted,
+      auto_resume_minutes: body.auto_resume_minutes,
+    });
+    if (purpose || draft) {
+      const config = {
+        ...(purpose ? { purpose: purpose.slice(0, 2000) } : {}),
+        ...(draft?.system_prompt ? { system_prompt: draft.system_prompt } : {}),
+        ...(draft?.greeting ? { greeting: draft.greeting, greeting_enabled: true } : {}),
+        builder: {
+          ...(purpose ? { description: purpose.slice(0, 4000) } : {}),
+          ...(draft?.suggested_knowledge.length
+            ? { suggested_knowledge: draft.suggested_knowledge }
+            : {}),
+          ...(draft?.suggested_templates.length
+            ? { suggested_templates: draft.suggested_templates }
+            : {}),
+          ...(draft?.suggested_approvals.length
+            ? { suggested_approvals: draft.suggested_approvals }
+            : {}),
+          ...(draft?.suggested_rules.length ? { suggested_rules: draft.suggested_rules } : {}),
+          generated_at: new Date().toISOString(),
+        },
+      };
+      const [updated] = await db
+        .update(agents)
+        .set({ config })
+        .where(eq(agents.id, row.id))
+        .returning();
+      return c.json(
+        {
+          agent: toAgent(updated),
+          draft: draft ?? {
+            generated: false,
+            note: env.llmApiKey
+              ? 'the draft generator returned nothing — starting from a blank configuration'
+              : 'no platform LLM key configured — starting from a blank configuration',
+          },
+        },
+        201,
+      );
+    }
+    return c.json({ agent: toAgent(row), draft: { generated: false } }, 201);
   });
 
   app.patch('/:id', agentAdmin, zValidator('json', updateAgent), async (c) => {

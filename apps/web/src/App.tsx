@@ -12,6 +12,7 @@ import Docs from './pages/Docs';
 import Conversations from './pages/Conversations';
 import ConversationPage from './pages/ConversationPage';
 import Agents from './pages/Agents';
+import AgentBuilder from './pages/AgentBuilder';
 import AgentDetail from './pages/AgentDetail';
 import AgentOverview from './pages/AgentOverview';
 import Reports from './pages/Reports';
@@ -182,6 +183,7 @@ export default function App() {
           <Route path="/contacts/:id" element={<ContactDetail />} />
           <Route path="/campaigns" element={<Campaigns />} />
           <Route path="/agents" element={<Agents />} />
+          <Route path="/agents/new" element={<AgentBuilder />} />
           <Route path="/agents/:id" element={<AgentOverview />} />
           {/* Agent context — every section is its own path so the sidebar
               can flip the whole nav between workspace and agent. */}

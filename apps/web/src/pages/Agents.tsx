@@ -5,7 +5,6 @@ import { api } from '../api/client';
 import { useAgents, useChannels, useMe } from '../api/hooks';
 import { timeAgo } from '../components/bits';
 import { useConfirm } from '../components/Prompt';
-import { useNewAgentDialog } from '../components/NewAgentDialog';
 import { friendlyError } from '../lib/friendlyError';
 import { usePageTitle } from '../lib/title';
 
@@ -18,7 +17,6 @@ export default function Agents() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [confirmEl, confirm] = useConfirm();
-  const [newAgentEl, openNewAgent] = useNewAgentDialog();
   const [error, setError] = useState('');
   // OAuth callbacks that fail before resolving the channel land here.
   const [params] = useSearchParams();
@@ -36,11 +34,10 @@ export default function Agents() {
   return (
     <>
       {confirmEl}
-      {newAgentEl}
       <div className="row" style={{ alignItems: 'center' }}>
         <h1 className="page-title grow">Agents</h1>
         {isAdmin && (
-          <button className="btn primary" onClick={openNewAgent}>＋ Create agent</button>
+          <button className="btn primary" onClick={() => navigate('/agents/new')}>＋ Create agent</button>
         )}
       </div>
       {oauthError && (() => {
@@ -106,13 +103,14 @@ export default function Agents() {
         {data && data.agents.length === 0 && (
           <div className="card" style={{ marginTop: 12, padding: '28px 20px', textAlign: 'center' }}>
             <div style={{ fontWeight: 700, fontSize: 16 }}>No agents yet</div>
-            <div className="muted" style={{ marginTop: 6, maxWidth: 420, marginLeft: 'auto', marginRight: 'auto' }}>
-              An agent answers your customers on a channel — webchat, Messenger, email, voice.
-              Create one hosted by Janis to get AI replies with a shared inbox, or point an
-              external webhook at your own backend.
+            <div className="muted" style={{ marginTop: 6, maxWidth: 460, marginLeft: 'auto', marginRight: 'auto' }}>
+              An agent answers your customers and can act — look up orders,
+              issue refunds, escalate to a human. Describe what it should do
+              and the builder drafts a starting configuration you refine
+              through Purpose → Knowledge → Behavior → Actions → Test → Deploy.
             </div>
             {isAdmin && (
-              <button className="btn primary" style={{ marginTop: 14 }} onClick={openNewAgent}>
+              <button className="btn primary" style={{ marginTop: 14 }} onClick={() => navigate('/agents/new')}>
                 Create your first agent
               </button>
             )}

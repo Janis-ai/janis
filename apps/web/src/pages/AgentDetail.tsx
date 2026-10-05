@@ -48,11 +48,11 @@ const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
  *  hidden (and redirect) for external-webhook agents. */
 const SECTIONS = {
   behavior: 'Behavior',
-  knowledge: 'Knowledge base',
-  channels: 'Channels',
-  integrations: 'Integrations',
+  knowledge: 'Knowledge',
+  channels: 'Deploy',
+  integrations: 'Actions',
   components: 'Chat components',
-  tests: 'Tests',
+  tests: 'Test',
   settings: 'Settings',
 } as const;
 type Section = keyof typeof SECTIONS;
@@ -697,7 +697,7 @@ function useSyncedText(
 const joinLines = (v: unknown) => (Array.isArray(v) ? (v as string[]).join('\n') : '');
 const joinCsv = (v: unknown) => (Array.isArray(v) ? (v as string[]).join(', ') : '');
 
-function GreetingSection({
+export function GreetingSection({
   cfg,
   setCfg,
   isAdmin,
@@ -753,7 +753,7 @@ function GreetingSection({
 }
 
 /** Instructions — the system prompt plus the tone override, one card. */
-function InstructionsSection({
+export function InstructionsSection({
   cfg,
   setCfg,
   isAdmin,
@@ -900,7 +900,7 @@ function SatisfactionCard({
   );
 }
 
-function KnowledgeTextSection({
+export function KnowledgeTextSection({
   cfg,
   setCfg,
   isAdmin,
@@ -2025,7 +2025,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
   );
 }
 
-function ToolsTab({
+export function ToolsTab({
   cfg,
   setCfg,
   agentId,
@@ -2595,7 +2595,7 @@ function ConnectionTab({
 
 /** Per-agent LLM override — empty llm block inherits the workspace default
  *  (Settings → Default LLM), which itself falls back to the env default. */
-function LlmCard({
+export function LlmCard({
   agent,
   cfg,
   setCfg,
@@ -2646,7 +2646,7 @@ interface KnowledgeFile {
   created_at: string;
 }
 
-function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string; variant?: 'files' | 'websites' }) {
+export function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string; variant?: 'files' | 'websites' }) {
   const qc = useQueryClient();
   const { data } = useQuery({
     queryKey: ['knowledge', agentId],

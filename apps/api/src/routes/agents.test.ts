@@ -978,3 +978,100 @@ describe('agent list ordering', () => {
     ]);
   });
 });
+
+describe('agent bootstrap (guided builder)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    env.llmApiKey = '';
+  });
+
+  const bootstrap = (body: Record<string, unknown>) =>
+    app.request('/api/agents/bootstrap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify(body),
+    });
+
+  it('creates a hosted agent with a generated draft config', async () => {
+    env.llmApiKey = 'test-key';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: JSON.stringify({
+                    name: 'Shop Support',
+                    system_prompt:
+                      'You are the support agent for Acme Store. Answer order and shipping questions. Offer a human when the customer asks for one.',
+                    greeting: 'Hi! How can I help with your order today?',
+                    suggested_knowledge: [
+                      'Refunds under $50 are approved within 24h',
+                      'Standard shipping takes 3-5 business days',
+                    ],
+                    suggested_templates: [
+                      { id: 'shopify', reason: 'order lookups and refunds' },
+                      { id: 'totally_invented', reason: 'hallucinated id' },
+                    ],
+                    suggested_approvals: ['issue refund', 'cancel order'],
+                    suggested_rules: ['offer a human when the customer asks twice'],
+                  }),
+                },
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+
+    const res = await bootstrap({
+      purpose: 'customer support agent for my ecommerce store — orders, shipping, refunds',
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.draft.generated).toBe(true);
+    const agent = body.agent;
+    expect(agent.name).toBe('Shop Support'); // draft name used — none supplied
+    expect(agent.hosted).toBe(true);
+    expect(agent.config.system_prompt).toContain('support agent for Acme Store');
+    expect(agent.config.greeting).toContain('How can I help');
+    expect(agent.config.greeting_enabled).toBe(true);
+    expect(agent.config.purpose).toContain('ecommerce');
+    // hallucinated template id dropped; the real one kept with reason+name
+    expect(agent.config.builder.suggested_templates).toHaveLength(1);
+    expect(agent.config.builder.suggested_templates[0].id).toBe('shopify');
+    expect(agent.config.builder.suggested_approvals).toContain('issue refund');
+    expect(agent.config.builder.suggested_knowledge).toHaveLength(2);
+  });
+
+  it('creates a minimal agent when the LLM is unavailable — creation never blocks', async () => {
+    env.llmApiKey = ''; // no platform key → no draft
+    const res = await bootstrap({ name: 'Plain Bot', purpose: 'answers faq' });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.agent.name).toBe('Plain Bot');
+    expect(body.draft.generated).toBe(false);
+    expect(body.draft.note).toContain('LLM');
+    expect(body.agent.config.purpose).toBe('answers faq');
+  });
+
+  it('creates a blank agent with no purpose at all', async () => {
+    const res = await bootstrap({ name: 'Empty Bot' });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.agent.name).toBe('Empty Bot');
+    expect(body.draft.generated).toBe(false);
+  });
+
+  it('honours the agency gate like plain creation', async () => {
+    const res = await app.request('/api/agents/bootstrap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: childCookie },
+      body: JSON.stringify({ purpose: 'anything' }),
+    });
+    expect(res.status).toBe(402);
+  });
+});

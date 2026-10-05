@@ -18,7 +18,6 @@ import {
   Plug, Radio, Settings, SlidersHorizontal, Sparkles, Users, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
-import { useNewAgentDialog } from './NewAgentDialog';
 import { CommandPalette } from './CommandPalette';
 
 interface Toast {
@@ -535,7 +534,8 @@ export default function Layout() {
     window.location.reload();
   };
 
-  const [newAgentEl, openNewAgent] = useNewAgentDialog();
+
+
 
   const answerInvite = async (id: string, action: 'accept' | 'decline') => {
     await api(`/auth/invites/${id}/${action}`, { method: 'POST' });
@@ -546,7 +546,6 @@ export default function Layout() {
   return (
     <div className={`layout${railVisible ? ' ask-open' : ''}${isAskPage ? ' ask-page' : ''}`}>
       {promptEl}
-      {newAgentEl}
       <CommandPalette />
       <a className="skip-link" href="#main-content">Skip to content</a>
       {/* Clicking a nav item while the rail overlays (≤720px) folds it — even
@@ -582,7 +581,7 @@ export default function Layout() {
             onSwitchWorkspace={(id) => void switchWorkspace(id)}
             onCreateWorkspace={() => void switchWorkspace('__new')}
             onAnswerInvite={(id, action) => void answerInvite(id, action)}
-            onAddAgent={openNewAgent}
+            onAddAgent={() => navigate('/agents/new')}
           />
         )}
         {/* Agent subsection first — the agent's build surface, present only
@@ -596,18 +595,18 @@ export default function Layout() {
               <span>{currentAgent.name}</span>
             </div>
             <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Overview</span><span className="icon"><Gauge size={18} /></span></NavLink>
+            {janisBrain(currentAgent) && (
+              <NavLink className="nav-indent" to={`/agents/${ctxAgent}/knowledge`}><span className="label">Knowledge</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
+            )}
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/behavior`}><span className="label">Behavior</span><span className="icon"><SlidersHorizontal size={18} /></span></NavLink>
             {janisBrain(currentAgent) && (
-              <NavLink className="nav-indent" to={`/agents/${ctxAgent}/knowledge`}><span className="label">Knowledge base</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
-            )}
-            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/channels`}><span className="label">Channels</span><span className="icon"><Radio size={18} /></span></NavLink>
-            {janisBrain(currentAgent) && (
               <>
-                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/integrations`}><span className="label">Integrations</span><span className="icon"><Plug size={18} /></span></NavLink>
+                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/integrations`}><span className="label">Actions</span><span className="icon"><Plug size={18} /></span></NavLink>
                 <NavLink className="nav-indent" to={`/agents/${ctxAgent}/components`}><span className="label">Chat components</span><span className="icon"><LayoutGrid size={18} /></span></NavLink>
-                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/tests`}><span className="label">Tests</span><span className="icon"><FlaskConical size={18} /></span></NavLink>
+                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/tests`}><span className="label">Test</span><span className="icon"><FlaskConical size={18} /></span></NavLink>
               </>
             )}
+            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/channels`}><span className="label">Deploy</span><span className="icon"><Radio size={18} /></span></NavLink>
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="label">Agent settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </div>
         )}

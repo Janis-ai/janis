@@ -317,6 +317,31 @@ export const AgentConfig = z.object({
   // untested" suggestions — keeps the list from nagging about convs they've
   // deliberately decided aren't worth a regression test.
   dismissed_test_suggestions: z.array(z.string()).optional(),
+  // Why this agent exists — the builder's purpose statement; shown on the
+  // Overview and re-fed into prompt regeneration later.
+  purpose: z.string().max(2000).optional(),
+  // Builder draft — what the guided setup generated/suggested at creation.
+  // Suggestions are review material, not live config: templates must still
+  // be installed, approvals still ticked, rules still created.
+  builder: z
+    .object({
+      description: z.string().max(4000).optional(),
+      suggested_knowledge: z.array(z.string().max(400)).max(30).optional(),
+      suggested_templates: z
+        .array(
+          z.object({
+            id: z.string().max(60),
+            name: z.string().max(120).optional(),
+            reason: z.string().max(300).optional(),
+          }),
+        )
+        .max(20)
+        .optional(),
+      suggested_approvals: z.array(z.string().max(80)).max(30).optional(),
+      suggested_rules: z.array(z.string().max(300)).max(20).optional(),
+      generated_at: z.string().max(40).optional(),
+    })
+    .optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 

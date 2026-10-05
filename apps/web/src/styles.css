@@ -273,6 +273,28 @@ button, input, select, textarea { font: inherit; }
 .wgt-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13px; }
 .wgt-row .wgt-v { text-align: right; font-weight: 500; white-space: pre-line; }
 .wgt-row.wgt-total { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 7px; font-weight: 700; }
+.builder-steps { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+.builder-step {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); cursor: pointer; font-family: inherit;
+  min-width: 118px; text-align: left;
+}
+.builder-step:hover:not(:disabled) { border-color: var(--accent); }
+.builder-step.active { border-color: var(--accent); background: var(--accent-dim); }
+.builder-step:disabled { opacity: .45; cursor: default; }
+.builder-step-n {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%; font-size: 11px;
+  border: 1px solid var(--border); color: var(--muted);
+}
+.builder-step.active .builder-step-n { border-color: var(--accent); color: var(--accent); }
+.builder-step.done .builder-step-n { border-color: var(--ok); color: var(--ok); }
+.builder-step-label { font-weight: 600; font-size: 13px; }
+.builder-step-hint { color: var(--muted); font-size: 11px; }
+.builder-chat { height: 62vh; display: flex; flex-direction: column; overflow: hidden; }
+.builder-chat .ask-pane { height: 100%; min-height: 0; }
+
 .ask-attach { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }
 .ask-chip {
   display: inline-flex; align-items: center; gap: 4px;
