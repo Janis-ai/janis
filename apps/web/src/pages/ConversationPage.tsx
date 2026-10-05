@@ -877,7 +877,7 @@ export default function ConversationPage() {
         )}
 
         {openAlerts.length > 0 && (
-          <div className="card" style={{ borderColor: 'var(--warn)' }}>
+          <div className="card" style={{ borderColor: 'var(--warn)', marginTop: 8 }}>
             {openAlerts.map((a) => (
               <div key={a.id} className="row muted">
                 <span className="grow">
