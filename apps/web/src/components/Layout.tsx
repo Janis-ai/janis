@@ -15,7 +15,7 @@ import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
-  Circle, CircleDot, CreditCard, Gauge, Inbox, Megaphone, Minus,
+  Circle, CircleDot, CreditCard, Gauge, Inbox, Megaphone, Plus,
   Settings, Sparkles, Users, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
@@ -655,7 +655,7 @@ export default function Layout() {
               <Link
                 key={s.key}
                 className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}${buildStatus?.steps[s.key] === 'na' ? ' na' : ''}`}
-                title={buildStatus?.steps[s.key] === 'na' ? 'Not needed for this agent — available if you want it' : undefined}
+                title={buildStatus?.steps[s.key] === 'na' ? 'This agent doesn\u2019t need it — add it anytime' : undefined}
                 to={s.to}
               >
                 <span className="label">{s.label}</span>
@@ -675,7 +675,7 @@ export default function Layout() {
                   ) : buildStatus.steps[s.key] === 'done' ? (
                     <Check size={12} />
                   ) : buildStatus.steps[s.key] === 'na' ? (
-                    <Minus size={12} />
+                    <Plus size={12} />
                   ) : nextBuildStep === s.key ? (
                     <CircleDot size={12} />
                   ) : (

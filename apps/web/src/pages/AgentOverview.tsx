@@ -266,9 +266,9 @@ export default function AgentOverview() {
                   key={s.key}
                   to={buildStepLink(id!, s.key)}
                   className={`bp-item${done ? ' done' : ''}${isNext ? ' next' : ''}${na ? ' na' : ''}`}
-                  title={na ? 'Not needed for this agent — available if you want it' : undefined}
+                  title={na ? 'This agent doesn\u2019t need it — add it anytime' : undefined}
                 >
-                  <span className="bp-mark">{done ? '✓' : na ? '–' : isNext ? '●' : '○'}</span>
+                  <span className="bp-mark">{done ? '✓' : na ? '+' : isNext ? '●' : '○'}</span>
                   {s.label}
                   {caption && <span className="muted"> · {caption}</span>}
                 </Link>
