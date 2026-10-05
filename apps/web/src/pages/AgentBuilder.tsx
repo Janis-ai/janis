@@ -16,7 +16,7 @@ import {
   ToolsTab,
 } from './AgentDetail';
 
-/** Guided agent builder — Create → Teach it → Instructions → Abilities →
+/** Guided agent builder — Create → Teach it → Guide it → Abilities →
  *  Try it → Deploy. No configuration vocabulary: the user teaches Janis
  *  what the agent should do, and each stage is the same surface the agent's
  *  workspace exposes afterwards. Not a rigid form — stages are click-through
@@ -34,7 +34,7 @@ interface BuilderDraft {
 const STEPS = [
   { key: 'create', label: 'Create', hint: 'what it does' },
   { key: 'teach', label: 'Teach it', hint: 'what it knows' },
-  { key: 'instructions', label: 'Instructions', hint: 'how it behaves' },
+  { key: 'guide', label: 'Guide it', hint: 'how it behaves' },
   { key: 'abilities', label: 'Abilities', hint: 'what it can do' },
   { key: 'try', label: 'Try it', hint: 'prove it works' },
   { key: 'deploy', label: 'Deploy', hint: 'put it to work' },
@@ -242,11 +242,12 @@ export default function AgentBuilder() {
               </div>
               <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
                 I've created a starting point for <strong>{agent.name}</strong> based
-                on your description. You can refine it at any time.
+                on what you described. You can refine it at any time.
               </div>
               {builder?.summary && (
                 <div style={{ fontSize: 13, marginTop: 10 }}>
-                  <span className="muted">It will: </span>{builder.summary}
+                  <span className="muted">It will: </span>
+                  {builder.summary[0].toUpperCase() + builder.summary.slice(1)}
                 </div>
               )}
               {builder?.suggested_templates?.length ? (
@@ -264,13 +265,13 @@ export default function AgentBuilder() {
               ) : null}
               <div className="row" style={{ marginTop: 14, gap: 8 }}>
                 <button className="btn primary" onClick={() => goStep('teach')}>
-                  Teach it →
+                  Teach {agent.name.length > 20 ? `${agent.name.slice(0, 20)}…` : agent.name} →
                 </button>
               </div>
               {(draft || builder) && (
                 <details style={{ marginTop: 12, fontSize: 13 }}>
                   <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>
-                    View what Janis created
+                    See what Janis created
                   </summary>
                   <div className="card" style={{ margin: '10px 0 0', background: 'var(--bg)' }}>
                     {draft?.note && (
@@ -350,7 +351,7 @@ export default function AgentBuilder() {
         </>
       )}
 
-      {step === 'instructions' && agent && (
+      {step === 'guide' && agent && (
         <>
           {!hosted && <NotHosted />}
           {hosted && (
@@ -472,7 +473,7 @@ export default function AgentBuilder() {
         </>
       )}
 
-      {agent && (step === 'teach' || step === 'instructions') && hosted && (
+      {agent && (step === 'teach' || step === 'guide') && hosted && (
         <div className="row" style={{ marginTop: 14, gap: 8 }}>
           <button
             className="btn primary"
