@@ -33,6 +33,7 @@ interface BuilderDraft {
   suggested_knowledge?: string[];
   suggested_templates?: { id: string; name?: string; reason?: string }[];
   suggested_approvals?: string[];
+  suggested_rules?: string[];
 }
 
 const STEPS = [
@@ -227,15 +228,13 @@ export default function AgentBuilder() {
           ...cfg.builder,
           description: brief.trim(),
           ...(d.summary ? { summary: d.summary } : {}),
-          ...(d.suggested_knowledge?.length
-            ? { suggested_knowledge: d.suggested_knowledge }
-            : {}),
-          ...(d.suggested_templates?.length
-            ? { suggested_templates: d.suggested_templates }
-            : {}),
-          ...(d.suggested_approvals?.length
-            ? { suggested_approvals: d.suggested_approvals }
-            : {}),
+          // Apply replaces the suggestion SET, not just adds to it — a
+          // draft that suggests nothing clears stale suggestions from the
+          // old brief rather than leaving them orphaned on the grid.
+          suggested_knowledge: d.suggested_knowledge ?? [],
+          suggested_templates: d.suggested_templates ?? [],
+          suggested_approvals: d.suggested_approvals ?? [],
+          suggested_rules: d.suggested_rules ?? [],
           generated_at: new Date().toISOString(),
         },
       };
@@ -266,25 +265,24 @@ export default function AgentBuilder() {
       );
       const d = r.draft;
       if (!d) return { kind: 'failed' as const };
-      if (!d.suggested_templates?.length && !d.suggested_approvals?.length)
-        return { kind: 'empty' as const };
+      // Replace both lists wholesale — a fresh draft with no templates
+      // clears stale suggestions from an older brief, not just adds.
       const config: AgentConfig = {
         ...cfg,
         builder: {
           ...cfg.builder,
-          ...(d.suggested_templates?.length
-            ? { suggested_templates: d.suggested_templates }
-            : {}),
-          ...(d.suggested_approvals?.length
-            ? { suggested_approvals: d.suggested_approvals }
-            : {}),
+          suggested_templates: d.suggested_templates ?? [],
+          suggested_approvals: d.suggested_approvals ?? [],
         },
       };
       await api(`/api/agents/${agent?.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ config }),
       });
-      return { kind: 'applied' as const, config };
+      return {
+        kind: d.suggested_templates?.length ? ('applied' as const) : ('empty' as const),
+        config,
+      };
     },
     onSuccess: (r) => {
       if (r.config) setCfg(r.config);
