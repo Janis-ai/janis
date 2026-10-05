@@ -8,6 +8,22 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** Concierge/copilot replies link to console pages by name-slug
  *  (/agents/acme-returns/components) — agents have no slug field, so the
  *  param only resolves by matching the slugified name. */
+/** True when Janis generates this agent's replies — hosted AND the default
+ *  engine. False for external-webhook agents and migrated BYOK engines
+ *  ('dialogflow' = legacy Dialogflow ES, 'monitor' = Chatfuel/ManyChat bots)
+ *  where an outside platform owns the brain: knowledge, tools, components,
+ *  tests, and prompt config don't apply to them. Note `hosted` alone is a
+ *  transport flag — legacy engines are hosted:true because their inbound
+ *  still flows through Janis ingest, inbox, and takeover tracking. */
+export function janisBrain(
+  a?: { hosted?: boolean; config?: { engine?: string } | null } | null,
+): boolean {
+  return !!a?.hosted && (a.config?.engine ?? 'hosted') === 'hosted';
+}
+
+/** Concierge/copilot replies link to console pages by name-slug
+ *  (/agents/acme-returns/components) — agents have no slug field, so the
+ *  param only resolves by matching the slugified name. */
 export function agentSlug(name: string): string {
   return name
     .toLowerCase()

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAgents, useMe } from '../api/hooks';
 import { useStream, type StreamAlert } from '../lib/useStream';
-import { clearLastAgent, useContextAgent } from '../lib/agentContext';
+import { clearLastAgent, janisBrain, useContextAgent } from '../lib/agentContext';
 import { trackOnce } from '../lib/analytics';
 import { playAlertSound } from '../lib/alertSound';
 import { setTabBadge } from '../lib/tabBadge';
@@ -606,11 +606,11 @@ export default function Layout() {
             </div>
             <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Overview</span><span className="icon"><Gauge size={18} /></span></NavLink>
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/behavior`}><span className="label">Behavior</span><span className="icon"><SlidersHorizontal size={18} /></span></NavLink>
-            {currentAgent.hosted && (
+            {janisBrain(currentAgent) && (
               <NavLink className="nav-indent" to={`/agents/${ctxAgent}/knowledge`}><span className="label">Knowledge base</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
             )}
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/channels`}><span className="label">Channels</span><span className="icon"><Radio size={18} /></span></NavLink>
-            {currentAgent.hosted && (
+            {janisBrain(currentAgent) && (
               <>
                 <NavLink className="nav-indent" to={`/agents/${ctxAgent}/integrations`}><span className="label">Integrations</span><span className="icon"><Plug size={18} /></span></NavLink>
                 <NavLink className="nav-indent" to={`/agents/${ctxAgent}/components`}><span className="label">Chat components</span><span className="icon"><LayoutGrid size={18} /></span></NavLink>

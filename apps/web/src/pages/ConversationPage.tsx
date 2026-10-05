@@ -9,6 +9,7 @@ import { ArgsRows, Avatar, channelLabel, displayName, fmtTime } from '../compone
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
+import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks, splitEmphasis } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
@@ -781,7 +782,7 @@ export default function ConversationPage() {
             ))}
             <option value="wake">Unsnooze</option>
           </select>
-          {agent?.hosted && (
+          {janisBrain(agent) && (
             <button
               className="btn"
               title="Save this transcript as a regression test — replay it after prompt or knowledge changes"

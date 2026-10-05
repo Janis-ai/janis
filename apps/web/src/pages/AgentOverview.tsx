@@ -4,6 +4,7 @@ import type { Conversation } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgents, useChannels } from '../api/hooks';
 import { KIND_LABEL } from '../components/Channels';
+import { janisBrain } from '../lib/agentContext';
 import { timeAgo } from '../components/bits';
 import { usePageTitle } from '../lib/title';
 
@@ -82,7 +83,7 @@ export default function AgentOverview() {
     queryKey: ['knowledge-gaps', id],
     queryFn: () =>
       api<{ gaps: Gap[] }>(`/api/agents/${id}/knowledge-gaps`),
-    enabled: !!agent?.hosted,
+    enabled: janisBrain(agent),
   });
   const recent = useQuery({
     queryKey: ['conversations', 'overview', id],
@@ -241,7 +242,7 @@ export default function AgentOverview() {
             )}
           </div>
 
-          {agent?.hosted && (
+          {janisBrain(agent) && (
             <div className="card" style={{ marginTop: 12 }}>
               <div className="row">
                 <strong className="grow">Knowledge gaps</strong>

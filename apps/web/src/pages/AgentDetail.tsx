@@ -19,6 +19,7 @@ import { AutosizeText, timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { SavedWidgets } from '../components/WidgetComposer';
+import { janisBrain } from '../lib/agentContext';
 import { railBus } from '../lib/railBus';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
@@ -85,9 +86,10 @@ export default function AgentDetail() {
   const agent = data?.agents.find((a) => a.id === id);
   usePageTitle(agent?.name ?? 'Agent');
   const section = (rawSection && rawSection in SECTIONS ? rawSection : 'channels') as Section;
-  // Hosted-only sections make no sense for external-webhook agents — the
-  // sidebar hides them; direct hits bounce to Channels.
-  const hostedSection = agent && !agent.hosted && HOSTED_ONLY.includes(section);
+  // Hosted-only sections make no sense for external-webhook agents and for
+  // BYOK engines (dialogflow/monitor) where Janis doesn't write replies —
+  // the sidebar hides them; direct hits bounce to Channels.
+  const hostedSection = agent && !janisBrain(agent) && HOSTED_ONLY.includes(section);
 
   if (data && !agent) {
     return (
@@ -120,7 +122,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
   // Sub-tab lives in the URL (?sub=…) so refresh/back/deep links keep
   // position — the section itself is the route path.
   const [params, setParams] = useSearchParams();
-  const subs = (SUB_TABS[section] ?? []).filter((s) => agent.hosted || !s.hosted);
+  const subs = (SUB_TABS[section] ?? []).filter((s) => janisBrain(agent) || !s.hosted);
   const subParam = params.get('sub');
   // Legacy deep-links: prompt/tone merged into Instructions.
   const subKey = subParam === 'prompt' || subParam === 'tone' ? 'instructions' : subParam;
@@ -339,19 +341,19 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
       {error && <div className="error">{error}</div>}
 
       {section === 'channels' && <AgentChannels agent={agent} />}
-      {section === 'integrations' && agent.hosted && (
+      {section === 'integrations' && janisBrain(agent) && (
         <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />
       )}
-      {section === 'components' && agent.hosted && (
+      {section === 'components' && janisBrain(agent) && (
         <SavedWidgets agentId={agent.id} isAdmin={isAdmin} tools={(cfg.tools ?? []).map((t) => t.name)} />
       )}
-      {section === 'tests' && agent.hosted && <TestsTab agentId={agent.id} agent={agent} isAdmin={isAdmin} />}
+      {section === 'tests' && janisBrain(agent) && <TestsTab agentId={agent.id} agent={agent} isAdmin={isAdmin} />}
       {section === 'behavior' && (
         <>
-          {sub === 'llm' && agent.hosted && (
+          {sub === 'llm' && janisBrain(agent) && (
             <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
-          {sub === 'instructions' && agent.hosted && (
+          {sub === 'instructions' && janisBrain(agent) && (
             <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
           {sub === 'greeting' && (
@@ -362,7 +364,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
           )}
         </>
       )}
-      {section === 'knowledge' && agent.hosted && (
+      {section === 'knowledge' && janisBrain(agent) && (
         <>
           {sub === 'text' && (
             <KnowledgeTextSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
