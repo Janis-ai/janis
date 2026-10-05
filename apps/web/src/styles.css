@@ -118,6 +118,10 @@ button, input, select, textarea { font: inherit; }
   overflow-wrap: break-word;
 }
 .sidebar a.nav-indent { padding-left: 40px; }
+/* agent-nav rows carry real nav icons — shown next to the label at full
+   width (unlike workspace items whose icon only exists for the rail) */
+.sidebar .agent-nav a { display: flex; align-items: center; gap: 8px; }
+.sidebar .agent-nav a .icon { display: inline-flex; flex-shrink: 0; }
 /* Build-step nav links carry a completion marker in the right slot:
    ✓ done / ● next recommended / ○ pending. */
 
@@ -824,6 +828,7 @@ textarea:disabled { opacity: .55; }
   /* icon rail: no indent — icons centre like every other row; the agent
      label collapses to its bot glyph */
   .layout.ask-open:has(.conv-layout) .sidebar a.nav-indent { padding-left: 0; }
+  .layout.ask-open:has(.conv-layout) .sidebar .agent-nav a { justify-content: center; }
   .layout.ask-open:has(.conv-layout) .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
   .layout.ask-open:has(.conv-layout) .sidebar .nav-sec span { display: none; }
   /* the plain-text BUILD/CONFIGURE headers have no icon representation —
@@ -959,6 +964,7 @@ details summary:hover { color: var(--text); }
   /* icon rail on mobile: agent rows drop the indent, the name row collapses
      to its bot glyph */
   .sidebar a.nav-indent { padding-left: 0; }
+  .sidebar .agent-nav a { justify-content: center; }
   .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
   .sidebar .nav-sec span { display: none; }
   /* same collapse rules as the ask-rail case above */

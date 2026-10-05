@@ -661,7 +661,7 @@ export default function Layout() {
               <Bot size={13} />
               <span>{currentAgent.name}</span>
             </div>
-            <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Overview</span><span className="icon"><Gauge size={18} /></span></NavLink>
+            <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="icon"><Gauge size={18} /></span><span className="label">Overview</span></NavLink>
             <div className="nav-sec"><span>Build</span></div>
             {buildNav(currentAgent, ctxAgent!).map((s) => (
               <Link
@@ -670,12 +670,12 @@ export default function Layout() {
                 to={s.to}
                 title={s.label}
               >
-                <span className="label">{s.label}</span>
                 <span className="icon"><s.Icon size={18} /></span>
+                <span className="label">{s.label}</span>
               </Link>
             ))}
             <div className="nav-sec"><span>Configure</span></div>
-            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="label">Agent settings</span><span className="icon"><Settings size={18} /></span></NavLink>
+            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="icon"><Settings size={18} /></span><span className="label">Agent settings</span></NavLink>
           </div>
         )}
         {/* The shared customer layer — always the same spots. The four
