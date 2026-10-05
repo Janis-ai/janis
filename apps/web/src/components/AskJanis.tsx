@@ -280,6 +280,7 @@ export function AskJanis({
   expanded,
   seedMessage,
   agentId,
+  asCustomer,
 }: {
   channelId: string;
   badge?: string;
@@ -292,9 +293,14 @@ export function AskJanis({
   /** Agent the console is scoped to — sent as context so the concierge
    *  knows which agent "this agent" means. */
   agentId?: string;
+  /** Role-play a customer on an internal test channel: sends a cust_-
+   *  prefixed visitor id so the server skips the operator's session
+   *  identity — the agent sees a real customer (handoff/escalation work)
+   *  and the sim thread stays separate from the operator's test thread. */
+  asCustomer?: boolean;
 }) {
   const navigate = useNavigate();
-  const visitor = useRef(visitorId()).current;
+  const visitor = useRef((asCustomer ? 'cust_' : '') + visitorId()).current;
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [outbox, setOutbox] = useState<OutEntry[]>([]);
   const [pending, setPending] = useState<PendingFile[]>([]);
@@ -894,6 +900,11 @@ export function AskJanis({
             first poll after sending (same text: bootstrap resolves it
             synchronously to warm the cache), so this swaps seamlessly rather
             than vanishing when the outbox fills. */}
+        {asCustomer && !msgs.length && !outbox.length && (
+          <div className="ask-loading muted">
+            Testing as a customer — handoffs and escalations work like a real visitor's.
+          </div>
+        )}
         {loaded && (cfg?.greeting || cfg?.greeting_widgets?.length) && !msgs.length && (
           <div className="ask-msg them">
             {cfg.agent_name && (

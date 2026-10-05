@@ -792,6 +792,72 @@ describe('webchat authenticated identity', () => {
     expect(p.identity_verified).toBe(true);
   });
 
+  it('cust_ visitors on internal test channels skip the session — agent sees a customer, not the operator', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [ws] = await db.select().from(workspaces).limit(1);
+    const [agent] = await db.select().from(agents).limit(1);
+    const [internalChannel] = await db
+      .insert(channels)
+      .values({
+        workspaceId: ws.id,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Test chat',
+        credentials: { internal: true },
+      })
+      .returning();
+    const [u] = await db
+      .insert(users)
+      .values({ email: 'sim@janis.test', name: 'Sim Operator' })
+      .returning();
+    await db.insert(memberships).values({
+      userId: u.id,
+      workspaceId: ws.id,
+      role: 'admin',
+      acceptedAt: new Date(),
+    });
+    await db.insert(sessions).values({
+      id: sha256('tok-sim'),
+      userId: u.id,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const custVisitor = 'cust_simvisitor001';
+    // signed-in operator role-playing a customer — session identity skipped
+    const res = await app.request(`/chat/${internalChannel.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: 'janis_session=tok-sim' },
+      body: JSON.stringify({ visitor_id: custVisitor, text: 'hi there' }),
+    });
+    expect(res.status).toBe(200);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(
+        eq(conversations.externalId, `webchat:test:${internalChannel.id}:${custVisitor}`),
+      )
+      .limit(1);
+    expect(conv).toBeTruthy();
+    const p = (conv?.userProfile ?? {}) as Record<string, unknown>;
+    expect(p.identity_verified).not.toBe(true);
+    expect(p.external_id).not.toBe(u.id);
+    // the same operator's normal (un-prefixed) thread still binds u:<user>
+    const opVisitor = 'vis_simoperator01';
+    const res2 = await app.request(`/chat/${internalChannel.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: 'janis_session=tok-sim' },
+      body: JSON.stringify({ visitor_id: opVisitor, text: 'operator note' }),
+    });
+    expect(res2.status).toBe(200);
+    const [opConv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, `webchat:test:${internalChannel.id}:u:${u.id}`))
+      .limit(1);
+    expect(opConv).toBeTruthy();
+    const op = (opConv?.userProfile ?? {}) as Record<string, unknown>;
+    expect(op.identity_verified).toBe(true);
+  });
+
   it('shows concierge approval cards only to the verified session viewer', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     const prev = process.env.JANIS_SUPPORT_CHANNEL_ID;

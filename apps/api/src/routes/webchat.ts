@@ -345,6 +345,20 @@ function participantFor(resolved: InboundMessage['user'] | undefined, visitorId:
     : visitorId;
 }
 
+/** Simulated-customer visitor — internal test channels only. An operator
+ *  role-playing a customer uses a `cust_`-prefixed visitor id: the session
+ *  identity is skipped entirely, so the conversation never gets
+ *  identity_verified/external_id — the agent sees a real customer, and the
+ *  escalation ladder ([HANDOFF]/[OFFER_HUMAN]) works instead of the
+ *  copilot's "no human tier above you" clause. The prefix also binds a
+ *  separate conversation from the operator's own test thread (u:<user>). */
+function simVisitor(channel: ChannelRow, visitorId: string | undefined): boolean {
+  return (
+    !!visitorId?.startsWith('cust_') &&
+    (channel.credentials as ChannelCredentials).internal === true
+  );
+}
+
 /** Conversation for this channel + participant. Bound-conversation lookup
  * first; for verified Janis users (u:) fall back to the kind:participant
  * externalId — their thread is shared across surfaces by design and may be
@@ -554,7 +568,9 @@ export function webchatRoutes(db: Db) {
       c.header('Retry-After', String(perVisitor.retryAfter ?? perChannel.retryAfter ?? 60));
       return c.json({ error: 'Too many messages — slow down and retry.' }, 429);
     }
-    const resolved = await resolveIdentity(c, db, channel, user, page, agent_id);
+    const resolved = simVisitor(channel, visitor_id)
+      ? undefined
+      : await resolveIdentity(c, db, channel, user, page, agent_id);
     // Retry idempotency — the client resends with the same client_id after a
     // failed-looking POST (timeout, lost response). The write may have
     // landed already; if a stored inbound carries this id, acknowledge and
@@ -600,7 +616,9 @@ export function webchatRoutes(db: Db) {
       const channel = await findChannel(db, c.req.param('token'));
       if (!channel) return c.json({ error: 'not found' }, 404);
       const { visitor_id, user } = c.req.valid('json');
-      const resolved = await resolveIdentity(c, db, channel, user);
+      const resolved = simVisitor(channel, visitor_id)
+        ? undefined
+        : await resolveIdentity(c, db, channel, user);
       const conv = await findConversation(db, channel, participantFor(resolved, visitor_id));
       if (!resolved || !conv) return c.json({ ok: true }); // attaches on first message anyway
       const profile = (conv.userProfile ?? {}) as Record<string, unknown>;
@@ -734,14 +752,16 @@ export function webchatRoutes(db: Db) {
   app.get('/:token/messages', async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
+    const visitorId = c.req.query('visitor_id') ?? '';
     const claim: Claim = {
       id: c.req.query('u_id'),
       name: c.req.query('u_name'),
       email: c.req.query('u_email'),
       sig: c.req.query('u_sig'),
     };
-    const resolved = await resolveIdentity(c, db, channel, claim);
-    const visitorId = c.req.query('visitor_id') ?? '';
+    const resolved = simVisitor(channel, visitorId)
+      ? undefined
+      : await resolveIdentity(c, db, channel, claim);
     const bound =
       resolved?.verified && resolved.id && (resolved.via === 'session' || resolved.janisUser);
     if (!bound && !VISITOR_RE.test(visitorId)) {
@@ -919,7 +939,9 @@ export function webchatRoutes(db: Db) {
       const channel = await findChannel(db, c.req.param('token'));
       if (!channel) return c.json({ error: 'not found' }, 404);
       const { visitor_id } = c.req.valid('json');
-      const resolved = await resolveIdentity(c, db, channel, undefined);
+      const resolved = simVisitor(channel, visitor_id)
+        ? undefined
+        : await resolveIdentity(c, db, channel, undefined);
       const participant = participantFor(resolved, visitor_id);
       const conv = await findConversation(db, channel, participant);
       if (!conv) return c.json({ ok: true });
@@ -962,7 +984,9 @@ export function webchatRoutes(db: Db) {
       const channel = await findChannel(db, c.req.param('token'));
       if (!channel) return c.json({ error: 'not found' }, 404);
       const { visitor_id } = c.req.valid('json');
-      const resolved = await resolveIdentity(c, db, channel, undefined);
+      const resolved = simVisitor(channel, visitor_id)
+        ? undefined
+        : await resolveIdentity(c, db, channel, undefined);
       const participant = participantFor(resolved, visitor_id);
       const conv = await findConversation(db, channel, participant);
       if (!conv || conv.state === 'archived') return c.json({ ok: true, state: 'archived' });
@@ -990,7 +1014,9 @@ export function webchatRoutes(db: Db) {
       const channel = await findChannel(db, c.req.param('token'));
       if (!channel) return c.json({ error: 'not found' }, 404);
       const { visitor_id } = c.req.valid('json');
-      const resolved = await resolveIdentity(c, db, channel, undefined);
+      const resolved = simVisitor(channel, visitor_id)
+        ? undefined
+        : await resolveIdentity(c, db, channel, undefined);
       const participant = participantFor(resolved, visitor_id);
       const conv = await findConversation(db, channel, participant);
       if (!conv) return c.json({ ok: true, state: 'new' });

@@ -747,6 +747,7 @@ export default function Layout() {
               <AskJanis
                 channelId={testRail.channelId}
                 badge="TEST"
+                asCustomer
                 onClose={hasBoth ? undefined : closeRail}
               />
             </div>

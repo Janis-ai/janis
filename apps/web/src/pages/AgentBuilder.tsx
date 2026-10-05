@@ -490,7 +490,7 @@ export default function AgentBuilder() {
                   </div>
                 )}
                 {testChannel.data && (
-                  <AskJanis channelId={testChannel.data.channel_id} badge="TEST" />
+                  <AskJanis channelId={testChannel.data.channel_id} badge="TEST" asCustomer />
                 )}
               </div>
             </>
