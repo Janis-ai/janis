@@ -262,7 +262,7 @@ export default function AgentBuilder() {
                   )}
                   {builder?.suggested_knowledge?.length ? (
                     <div style={{ marginTop: 8 }}>
-                      <div className="muted" style={{ fontSize: 12 }}>It probably needs to know</div>
+                      <div className="muted" style={{ fontSize: 12 }}>Suggested knowledge topics</div>
                       <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }}>
                         {builder.suggested_knowledge.map((k, i) => <li key={i}>{k}</li>)}
                       </ul>
@@ -305,11 +305,10 @@ export default function AgentBuilder() {
               </div>
               {builder?.suggested_knowledge?.length ? (
                 <div className="card" style={{ marginTop: 12 }}>
-                  <strong>What it needs to know</strong>
+                  <strong>Suggested knowledge topics</strong>
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    From your description — the real details only you have.
-                    Fill each in as a knowledge line, a document, or a website
-                    source below.
+                    From your description — fill each in below with the real
+                    details (a line, a document, or a website).
                   </div>
                   <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 13 }}>
                     {builder.suggested_knowledge.map((k, i) => <li key={i}>{k}</li>)}
