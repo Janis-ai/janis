@@ -16,8 +16,8 @@ import { railBus, type RailRequest } from '../lib/railBus';
 import { markStepSeen } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
-  CreditCard, Gauge, Inbox, Megaphone,
-  Settings, Sparkles, Users, X,
+  Compass, CreditCard, FlaskConical, Gauge, Inbox, Megaphone,
+  PenLine, Rocket, Settings, Sparkles, Users, Wrench, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
 import { CommandPalette } from './CommandPalette';
@@ -62,17 +62,22 @@ const SECTION_TO_STEP: Record<BuildStepKey, string> = {
  *  builder stage for it); external-webhook agents only have a deploy
  *  surface, which links straight to the channels list. */
 function buildNav(agent: Agent, agentId: string) {
-  const steps: { key: BuildStepKey; label: string; to: string }[] = [
-    { key: 'create', label: 'Create', to: `/agents/new/${agentId}?step=create` },
-    { key: 'teach', label: 'Teach it', to: `/agents/new/${agentId}?step=teach` },
-    { key: 'guide', label: 'Guide it', to: `/agents/new/${agentId}?step=guide` },
-    { key: 'abilities', label: 'Abilities', to: `/agents/new/${agentId}?step=abilities` },
-    { key: 'try', label: 'Try it', to: `/agents/new/${agentId}?step=try` },
-    { key: 'deploy', label: 'Deploy', to: `/agents/new/${agentId}?step=deploy` },
+  const steps: {
+    key: BuildStepKey;
+    label: string;
+    to: string;
+    Icon: typeof BookOpen;
+  }[] = [
+    { key: 'create', label: 'Create', to: `/agents/new/${agentId}?step=create`, Icon: PenLine },
+    { key: 'teach', label: 'Teach it', to: `/agents/new/${agentId}?step=teach`, Icon: BookOpen },
+    { key: 'guide', label: 'Guide it', to: `/agents/new/${agentId}?step=guide`, Icon: Compass },
+    { key: 'abilities', label: 'Abilities', to: `/agents/new/${agentId}?step=abilities`, Icon: Wrench },
+    { key: 'try', label: 'Try it', to: `/agents/new/${agentId}?step=try`, Icon: FlaskConical },
+    { key: 'deploy', label: 'Deploy', to: `/agents/new/${agentId}?step=deploy`, Icon: Rocket },
   ];
   return janisBrain(agent)
     ? steps
-    : [{ key: 'deploy' as const, label: 'Deploy', to: `/agents/${agentId}/channels` }];
+    : [{ key: 'deploy' as const, label: 'Deploy', to: `/agents/${agentId}/channels`, Icon: Rocket }];
 }
 
 interface MeData {
@@ -663,8 +668,10 @@ export default function Layout() {
                 key={s.key}
                 className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}`}
                 to={s.to}
+                title={s.label}
               >
                 <span className="label">{s.label}</span>
+                <span className="icon"><s.Icon size={18} /></span>
               </Link>
             ))}
             <div className="nav-sec"><span>Configure</span></div>

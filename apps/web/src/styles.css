@@ -826,10 +826,8 @@ textarea:disabled { opacity: .55; }
   .layout.ask-open:has(.conv-layout) .sidebar a.nav-indent { padding-left: 0; }
   .layout.ask-open:has(.conv-layout) .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
   .layout.ask-open:has(.conv-layout) .sidebar .nav-sec span { display: none; }
-  /* icon-less rows have no collapsed representation: the six build steps
-     and the plain-text BUILD/CONFIGURE headers drop out entirely, leaving
-     Overview + Agent settings (which carry icons) */
-  .layout.ask-open:has(.conv-layout) .sidebar a.build-step { display: none; }
+  /* the plain-text BUILD/CONFIGURE headers have no icon representation —
+     drop them; the agent-name row keeps its Bot glyph */
   .layout.ask-open:has(.conv-layout) .sidebar .nav-sec:not(:has(svg)) { display: none; }
   /* badge overlays the icon's top-right so the icon itself stays centred
      and aligned with the rows below */
@@ -964,7 +962,6 @@ details summary:hover { color: var(--text); }
   .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
   .sidebar .nav-sec span { display: none; }
   /* same collapse rules as the ask-rail case above */
-  .sidebar a.build-step { display: none; }
   .sidebar .nav-sec:not(:has(svg)) { display: none; }
   /* badge overlays the icon's top-right so the icon itself stays centred
      and aligned with the rows below */
