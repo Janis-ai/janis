@@ -255,6 +255,43 @@ export default function AgentBuilder() {
     },
     onError: (e) => setError(e.message),
   });
+  // Abilities-step "suggest" — redrafts from the stored brief and merges
+  // only the suggestion lists into config.builder (review material, so
+  // refreshing it can't overwrite user-authored configuration).
+  const suggestAbilities = useMutation({
+    mutationFn: async () => {
+      const r = await api<{ draft: BuilderDraft | null }>(
+        `/api/agents/${agent?.id}/redraft`,
+        { method: 'POST', body: JSON.stringify({ description: storedBrief }) },
+      );
+      const d = r.draft;
+      if (!d?.suggested_templates?.length && !d?.suggested_approvals?.length)
+        return null;
+      const config: AgentConfig = {
+        ...cfg,
+        builder: {
+          ...cfg.builder,
+          ...(d.suggested_templates?.length
+            ? { suggested_templates: d.suggested_templates }
+            : {}),
+          ...(d.suggested_approvals?.length
+            ? { suggested_approvals: d.suggested_approvals }
+            : {}),
+        },
+      };
+      await api(`/api/agents/${agent?.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ config }),
+      });
+      return config;
+    },
+    onSuccess: (config) => {
+      if (config) setCfg(config);
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+    },
+    onError: (e) => setError(e.message),
+  });
 
   return (
     <>
@@ -671,6 +708,31 @@ export default function AgentBuilder() {
                   <Link to={`/agents/${agent.id}/settings?sub=escalation`}>Agent settings → Escalation</Link>.
                 </div>
               </div>
+              {!builder?.suggested_templates?.length && storedBrief && (
+                <div className="card" style={{ marginTop: 12 }}>
+                  <strong>No abilities suggested yet</strong>
+                  <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                    Janis can read the brief and flag the integrations this
+                    agent probably needs — suggested ones float to the top of
+                    the grid below.
+                  </div>
+                  <button
+                    className="btn"
+                    style={{ marginTop: 10 }}
+                    disabled={suggestAbilities.isPending}
+                    onClick={() => suggestAbilities.mutate()}
+                  >
+                    {suggestAbilities.isPending
+                      ? 'Asking Janis…'
+                      : 'Suggest abilities from the brief'}
+                  </button>
+                  {suggestAbilities.isSuccess && !suggestAbilities.data && (
+                    <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                      Nothing obvious for this brief — browse the catalog below.
+                    </div>
+                  )}
+                </div>
+              )}
               <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />
             </>
           )}
