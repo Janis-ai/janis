@@ -473,15 +473,6 @@ export default function Layout() {
     );
     if (key) markStepSeen(ctxAgent, key);
   }, [location.pathname, searchParams, ctxAgent]);
-  // The first 'pending' step gets the ● "next" marker; 'done' ✓, 'pending'
-  // ○, 'na' — (the agent doesn't need it — a capability, not a skipped task).
-  // External agents only render Deploy — compute next over rendered keys.
-  const renderedSteps = currentAgent ? buildNav(currentAgent, ctxAgent!).map((s) => s.key) : [];
-  const nextBuildStep = buildStatus
-    ? (BUILD_STEP_ORDER.filter((k) => renderedSteps.includes(k)).find(
-        (k) => buildStatus.steps[k] === 'pending',
-      ) ?? null)
-    : null;
   /** A build step lights up on its builder URL AND on the workspace section
    *  that IS that surface — /agents/:id/knowledge is "Teach it", etc. */
   const buildNavActive = (key: BuildStepKey) => {
@@ -671,12 +662,10 @@ export default function Layout() {
             <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Overview</span><span className="icon"><Gauge size={18} /></span></NavLink>
             <div className="nav-sec">Build</div>
             {buildNav(currentAgent, ctxAgent!).map((s) => {
-              // Marks: ✓ completed steps, ⊙ engaged (open-ended steps and
-              // anything seen — you can always add knowledge/tools, so a ✓
-              // overclaims), + addable-but-unneeded, ○ unseen.
+              // Marks are status only: ✓ completed, ⊙ engaged (open-ended
+              // steps and anything seen), ○ untouched.
               const g = stepGlyph(s.key, buildStatus?.steps[s.key], {
                 seen: seenSteps.has(s.key),
-                isNext: nextBuildStep === s.key,
               });
               return (
               <Link
@@ -688,16 +677,12 @@ export default function Layout() {
                 <span className={`step-mark ${
                   g === 'check' || g === 'dot-ok'
                     ? 'done'
-                    : g === 'next'
-                      ? 'next'
-                      : g === 'dot'
-                        ? 'seen'
-                        : 'todo'
+                    : g === 'dot'
+                      ? 'seen'
+                      : 'todo'
                 }`}>
                   {g === 'check' ? (
                     <Check size={12} />
-                  ) : g === 'next' ? (
-                    <ChevronRight size={13} />
                   ) : g === 'circle' ? (
                     <Circle size={12} />
                   ) : (

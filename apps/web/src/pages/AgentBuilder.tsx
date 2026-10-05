@@ -164,12 +164,7 @@ export default function AgentBuilder() {
   // "Next" follows the rail literally — Create always advances to Teach
   // it, never skips ahead. 'na' only affects marks/counts, not movement.
   const next = STEPS[idx + 1];
-  // The "recommended" marker is the first PENDING step in build order —
-  // not the literal next step (that would fake a dot on the box after
-  // whichever one you're on).
-  const nextPending = status
-    ? STEPS.find((s) => status.steps[s.key] === 'pending')?.key
-    : undefined;
+
 
   // Create is the brief — revisitable, but never a silent regeneration
   // source: editing it offers to review suggested changes, nothing more.
@@ -271,20 +266,19 @@ export default function AgentBuilder() {
           const locked = !agent && i > 0;
           // Marks: ✓ for steps that can genuinely complete (guide's ✓ only
           // once the user has actually seen the generated instructions);
-          // ● for engaged steps (configured or opened); → for the
-          // recommended next; step number while untouched.
+          // ● for engaged steps (configured or opened); step number
+          // while untouched.
           const st = status?.steps[s.key];
           const g = status
             ? stepGlyph(s.key, st, {
                 seen: seenSteps.has(s.key) || step === s.key,
-                isNext: nextPending === s.key,
               })
             : null;
           const done = st === 'done' || Boolean(agent && i < idx && !status);
           return (
             <button
               key={s.key}
-              className={`builder-step${step === s.key ? ' active' : ''}${g === 'check' || (done && !status) ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${g === 'dot' ? ' seen' : ''}${g === 'next' ? ' nextp' : ''}`}
+              className={`builder-step${step === s.key ? ' active' : ''}${g === 'check' || (done && !status) ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${g === 'dot' ? ' seen' : ''}`}
               disabled={locked}
               title={locked ? 'Create the agent first' : s.hint}
               onClick={() => goStep(s.key)}
@@ -292,7 +286,6 @@ export default function AgentBuilder() {
               <span className="builder-step-n">{
                 g === 'check' ? '✓'
                 : g === 'dot-ok' || g === 'dot' ? '●'
-                : g === 'next' ? '→'
                 : i + 1
               }</span>
               <span className="builder-step-label">{s.label}</span>

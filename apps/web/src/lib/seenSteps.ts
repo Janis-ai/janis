@@ -65,24 +65,23 @@ export const OPEN_ENDED_STEPS = new Set(['teach', 'abilities']);
  *  ✓ should mean the human reviewed them, not that a draft exists. */
 export const SEEN_GATED_STEPS = new Set(['guide']);
 
-export type StepGlyph = 'check' | 'dot-ok' | 'next' | 'dot' | 'circle';
+export type StepGlyph = 'check' | 'dot-ok' | 'dot' | 'circle';
 
-/** Resolves the mark for a build step. No + anywhere — 'na' renders like
- *  available (○/⊙); it only matters for what "next" recommends and the
- *  Overview count, not the mark.
+/** Resolves the mark for a build step. Marks are status only — no "next"
+ *  arrow, no "+", no expandable-nav lookalikes; the Overview CTA and the
+ *  Next button carry guidance instead.
  *  done    → ✓, ⊙ for open-ended steps, ○ for done-but-unseen (guide)
- *  pending → → accent if recommended next, ⊙ if seen, else ○
+ *  pending → ⊙ if seen, else ○
  *  na      → same as pending */
 export function stepGlyph(
   key: string,
   state: 'done' | 'pending' | 'na' | undefined,
-  opts: { seen: boolean; isNext: boolean },
+  opts: { seen: boolean },
 ): StepGlyph {
   if (state === 'done') {
     if (OPEN_ENDED_STEPS.has(key)) return 'dot-ok';
     if (SEEN_GATED_STEPS.has(key) && !opts.seen) return 'circle';
     return 'check';
   }
-  if (opts.isNext) return 'next';
   return opts.seen ? 'dot' : 'circle';
 }
