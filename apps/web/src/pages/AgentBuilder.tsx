@@ -161,9 +161,11 @@ export default function AgentBuilder() {
   const { data: status } = useBuildStatus(agent?.id ?? undefined);
   const seenSteps = useSeenSteps(agent?.id);
   const idx = STEPS.findIndex((s) => s.key === step);
-  // "Next" follows the rail literally — Create always advances to Teach
-  // it, never skips ahead. 'na' only affects marks/counts, not movement.
-  const next = STEPS[idx + 1];
+  // "Next" walks forward through surfaces you haven't opened yet — it
+  // points at the first unseen step after this one and disappears
+  // entirely once everything ahead has been seen (or on Deploy).
+  const seen = (k: StepKey) => seenSteps.has(k) || k === step;
+  const next = STEPS.slice(idx + 1).find((s) => !seen(s.key));
 
 
   // Create is the brief — revisitable, but never a silent regeneration
@@ -753,6 +755,13 @@ export default function AgentBuilder() {
               Next: {next.label} →
             </button>
           )}
+        </div>
+      )}
+      {agent && hosted && (step === 'abilities' || step === 'try') && next && (
+        <div className="row" style={{ marginTop: 14 }}>
+          <button className="btn" onClick={() => goStep(next.key)}>
+            Next: {next.label} →
+          </button>
         </div>
       )}
       {agent && !hosted && step !== 'create' && next && (
