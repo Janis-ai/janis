@@ -120,6 +120,9 @@ button, input, select, textarea { font: inherit; }
   overflow-wrap: break-word;
 }
 .sidebar a.nav-indent { padding-left: 40px; }
+/* BUILD/CONFIGURE are group labels inside the agent block — nudge them in
+   past the agent-name row so they read as sub-headers, not siblings. */
+.sidebar .agent-nav .nav-sec:not(:has(svg)) { padding-left: 28px; }
 /* Build-step nav links carry a completion marker in the right slot:
    ✓ done / ● next recommended / ○ pending. */
 
