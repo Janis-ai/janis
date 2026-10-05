@@ -120,7 +120,7 @@ button, input, select, textarea { font: inherit; }
 .sidebar a.nav-indent { padding-left: 40px; }
 /* Build-step nav links carry a completion marker in the right slot:
    ✓ done / ● next recommended / ○ pending. */
-.sidebar a.build-step { display: flex; align-items: center; gap: 6px; }
+
 /* na = optional capability the agent doesn't need — dim the whole item,
    not just the marker, so it doesn't read as a skipped task. */
 /* na rows look identical to normal nav — 'na' means optional/addable,
