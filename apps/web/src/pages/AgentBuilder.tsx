@@ -58,12 +58,17 @@ export default function AgentBuilder() {
   const agent = agentsData?.agents.find((a) => a.id === agentId) ?? null;
   const hosted = agent ? janisBrain(agent) : true;
   const stepParam = params.get('step');
-  const step: StepKey = STEPS.some((s) => s.key === stepParam)
+  // 'start'/'bring' are pre-builder branches: the path choice, and the
+  // external-agent create. Neither shows the six-step rail — the user
+  // hasn't entered (or isn't entering) the build flow at those points.
+  const step: StepKey | 'start' | 'bring' = STEPS.some((s) => s.key === stepParam)
     ? (stepParam as StepKey)
-    : agent
-      ? 'teach'
-      : 'create';
-  const goStep = (s: StepKey) => {
+    : stepParam === 'bring'
+      ? 'bring'
+      : agent
+        ? 'teach'
+        : 'start';
+  const goStep = (s: StepKey | 'start' | 'bring') => {
     navigate(`/agents/new${agent ? `/${agent.id}` : ''}?step=${s}`, { replace: true });
   };
 
@@ -71,23 +76,28 @@ export default function AgentBuilder() {
   // /api/agents/bootstrap creates the agent with a generated draft config.
   const [name, setName] = useState('');
   const [purpose, setPurpose] = useState('');
-  const [hostedFlag, setHostedFlag] = useState(true);
   const [error, setError] = useState('');
   const [draft, setDraft] = useState<BuilderDraft | null>(null);
   const create = useMutation({
-    mutationFn: () =>
+    mutationFn: (hosted: boolean) =>
       api<{ agent: Agent; draft?: BuilderDraft }>('/api/agents/bootstrap', {
         method: 'POST',
         body: JSON.stringify({
           name: name.trim() || undefined,
-          purpose: purpose.trim() || undefined,
-          hosted: hostedFlag,
+          purpose: hosted ? purpose.trim() || undefined : undefined,
+          hosted,
         }),
       }),
     onSuccess: (r) => {
       setDraft(r.draft ?? null);
       setLastAgent(r.agent.id);
       void qc.invalidateQueries({ queryKey: ['agents'] });
+      if (!r.agent.hosted) {
+        // External agent — the builder's teach/guide/abilities don't apply;
+        // webhook credentials live on the settings page.
+        navigate(`/agents/${r.agent.id}/settings?sub=general`);
+        return;
+      }
       // Land on a confirmation card, not the draft — the create step's only
       // job is "tell Janis what you want"; the summary proves it listened.
       navigate(`/agents/new/${r.agent.id}?step=create`, { replace: true });
@@ -154,6 +164,7 @@ export default function AgentBuilder() {
         )}
       </div>
 
+      {step !== 'start' && step !== 'bring' && (
       <div className="builder-steps">
         {STEPS.map((s, i) => {
           const locked = !agent && i > 0;
@@ -173,9 +184,58 @@ export default function AgentBuilder() {
           );
         })}
       </div>
+      )}
 
       {error && <div className="error">{error}</div>}
       {saved && <div className="muted" style={{ margin: '6px 0' }}>Saved ✓</div>}
+
+      {step === 'start' && !agent && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <strong>How do you want to get started?</strong>
+          <div className="row" style={{ marginTop: 12, gap: 10, alignItems: 'stretch', flexWrap: 'wrap' }}>
+            <button className="builder-path" onClick={() => goStep('create')}>
+              <strong>Build an agent with Janis</strong>
+              <span className="muted" style={{ fontSize: 13 }}>
+                Start with an idea and let Janis build the foundation.
+              </span>
+            </button>
+            <button className="builder-path" onClick={() => goStep('bring')}>
+              <strong>Bring an existing agent</strong>
+              <span className="muted" style={{ fontSize: 13 }}>
+                Connect an agent you've already built.
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === 'bring' && !agent && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <strong>Bring an existing agent</strong>
+          <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Your own backend answers inbound messages via webhook; Janis
+            carries the conversation layer — inbox, human takeover, alerts,
+            and escalation. You'll set the webhook URL on the next screen.
+          </div>
+          <input
+            className="input"
+            style={{ width: '100%', marginTop: 12, boxSizing: 'border-box' }}
+            placeholder="Agent name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <div className="row" style={{ marginTop: 14, gap: 8 }}>
+            <button
+              className="btn primary"
+              disabled={create.isPending || isAdmin === false || !name.trim()}
+              onClick={() => create.mutate(false)}
+            >
+              {create.isPending ? 'Adding…' : 'Add agent'}
+            </button>
+            <button className="btn" onClick={() => goStep('start')}>← Back</button>
+          </div>
+        </div>
+      )}
 
       {step === 'create' && (
         <div className="card" style={{ marginTop: 12 }}>
@@ -206,28 +266,16 @@ export default function AgentBuilder() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
-              <label className="check-label" style={{ marginTop: 10, fontSize: 13 }}>
-                <input
-                  type="checkbox"
-                  checked={hostedFlag}
-                  onChange={(e) => setHostedFlag(e.target.checked)}
-                />
-                <span>Hosted by Janis</span>
-              </label>
-              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                {hostedFlag
-                  ? 'Janis writes the replies — knowledge, tests, and actions included.'
-                  : 'External webhook — your own backend answers inbound events.'}
-              </div>
               <div className="row" style={{ marginTop: 14, gap: 8 }}>
                 <button
                   className="btn primary"
                   disabled={create.isPending || isAdmin === false}
                   title={purpose.trim() ? '' : 'No description — creates a blank agent you teach yourself'}
-                  onClick={() => create.mutate()}
+                  onClick={() => create.mutate(true)}
                 >
                   {create.isPending ? 'Building agent…' : 'Create agent'}
                 </button>
+                <button className="btn" onClick={() => goStep('start')}>← Back</button>
               </div>
               {create.isPending && purpose.trim() && (
                 <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>

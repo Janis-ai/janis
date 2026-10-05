@@ -294,6 +294,13 @@ button, input, select, textarea { font: inherit; }
 .builder-step-hint { color: var(--muted); font-size: 11px; }
 .builder-chat { height: 62vh; display: flex; flex-direction: column; overflow: hidden; }
 .builder-chat .ask-pane { height: 100%; min-height: 0; }
+.builder-path {
+  flex: 1; min-width: 220px; padding: 18px; text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); color: var(--text);
+}
+.builder-path:hover { border-color: var(--accent); }
 
 .ask-attach { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }
 .ask-chip {
