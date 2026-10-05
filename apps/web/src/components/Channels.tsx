@@ -217,6 +217,7 @@ export function ChannelCard({
             <CodeBlock
               title="Embed — paste before </body> on your site"
               code={`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
+              lang="html"
             />
             <WebchatIdentity channel={ch} />
             <WidgetDomainField channel={ch} />
@@ -592,6 +593,7 @@ function WebchatIdentity({ channel }: { channel: Channel }) {
   .update(\`\${user.id}|\${user.email}|\${user.name}\`)
   .digest('hex');
 // send sig to the page with the rest of the user payload`}
+        lang="js"
       />
       <CodeBlock
         title="Your page — after the bubble script"
@@ -601,6 +603,7 @@ Janis.identify({ id: user.id, name: user.name, email: user.email });
 // pass extra context the agent can use (plan, company, page…):
 Janis.identify({ id: user.id, name: user.name, email: user.email, sig,
   traits: { plan: 'pro', company: 'Acme Inc' } });`}
+        lang="js"
       />
       <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
         <span className="mono">traits</span> reaches the agent as host-provided context —
@@ -703,6 +706,7 @@ function WidgetDomainField({ channel }: { channel: Channel }) {
           <CodeBlock
             title="Branded embed — served from your domain"
             code={`<script src="https://${current}/widget.js" data-janis-token="${channel.id}" async></script>`}
+            lang="html"
           />
         </>
       )}

@@ -1222,6 +1222,7 @@ function EventTokenCard() {
           <CodeBlock
             title="Test it from a terminal"
             code={`curl -XPOST ${url} -H 'content-type: application/json' -d '{"event":"purchase","email":"who@co.com"}'`}
+            lang="sh"
           />
         </>
       ) : (

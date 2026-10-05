@@ -11,6 +11,13 @@
   --danger: #f87171;
   --warn: #fbbf24;
   --ok: #34d399;
+  /* syntax tokens — CodeBlock highlighting */
+  --tok-kw: #c792ea;
+  --tok-str: #a5d6ff;
+  --tok-num: #f0b866;
+  --tok-prop: #82aaff;
+  --tok-tag: #5eead4;
+  --tok-attr: #ffcb6b;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
@@ -35,6 +42,12 @@
   --danger: #dc2626;
   --warn: #b45309;
   --ok: #059669;
+  --tok-kw: #7c3aed;
+  --tok-str: #0369a1;
+  --tok-num: #b45309;
+  --tok-prop: #1d4ed8;
+  --tok-tag: #0d9488;
+  --tok-attr: #a16207;
 }
 :root[data-theme='light'] .card,
 :root[data-theme='light'] input,
@@ -901,6 +914,13 @@ details summary:hover { color: var(--text); }
   margin: 0; padding: 12px 14px; font-family: ui-monospace, monospace;
   font-size: 12.5px; line-height: 1.55; overflow-x: auto; white-space: pre;
 }
+.codeblock .tok-kw { color: var(--tok-kw); }
+.codeblock .tok-str { color: var(--tok-str); }
+.codeblock .tok-com { color: var(--muted); font-style: italic; }
+.codeblock .tok-num { color: var(--tok-num); }
+.codeblock .tok-prop { color: var(--tok-prop); }
+.codeblock .tok-tag { color: var(--tok-tag); }
+.codeblock .tok-attr { color: var(--tok-attr); }
 
 .onboarding { border-color: var(--accent-dim); margin-bottom: 16px; }
 .onboarding .steps { margin-top: 8px; }

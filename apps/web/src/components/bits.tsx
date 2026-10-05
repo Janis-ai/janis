@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import type { Conversation, ConversationState, UserProfile } from '@janis/shared';
 import { friendlyName } from '@janis/shared';
 import { currentTheme, THEME_CHANGE_EVENT } from '../lib/theme';
+import { highlight, type CodeLang } from '../lib/highlight';
 
 /** The wordmark/mark PNGs are white-on-transparent — invisible in light mode.
  *  Swaps to the ink variant when the theme flips (or on first render). */
@@ -79,8 +80,10 @@ export function Avatar({
   );
 }
 
-/** Titled code card with a copy button — used for embed snippets and docs. */
-export function CodeBlock({ title, code }: { title: string; code: string }) {
+/** Titled code card with a copy button — used for embed snippets and docs.
+ *  `lang` syntax-highlights (js/html/sh) via the tiny tokenizer in
+ *  lib/highlight; omitted for plain mono text. */
+export function CodeBlock({ title, code, lang }: { title: string; code: string; lang?: CodeLang }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
     void navigator.clipboard.writeText(code).then(() => {
@@ -94,7 +97,19 @@ export function CodeBlock({ title, code }: { title: string; code: string }) {
         <span>{title}</span>
         <button type="button" onClick={copy}>{copied ? 'Copied ✓' : 'Copy'}</button>
       </div>
-      <pre>{code}</pre>
+      <pre>
+        {lang
+          ? highlight(code, lang).map((t, i) =>
+              t.t ? (
+                <span key={i} className={t.t}>
+                  {t.s}
+                </span>
+              ) : (
+                t.s
+              ),
+            )
+          : code}
+      </pre>
     </div>
   );
 }
