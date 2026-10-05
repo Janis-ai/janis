@@ -254,25 +254,31 @@ export default function AgentBuilder() {
     },
     onError: (e) => setError(e.message),
   });
-  // Abilities-step "suggest" — redrafts from the stored brief and merges
-  // only the suggestion lists into config.builder (review material, so
-  // refreshing it can't overwrite user-authored configuration).
+  // Refresh-derived-suggestions — redrafts from the CURRENT instructions
+  // (or the brief when none exist) and merges only the suggestion lists
+  // into config.builder. The source is the instructions rather than the
+  // brief because they may have been edited since create — suggestions
+  // should reflect what the agent does now, and authored config
+  // (prompt/tone/greeting) is never touched.
   const suggestAbilities = useMutation({
     mutationFn: async () => {
+      const source = (cfg.system_prompt || storedBrief).slice(0, 4000);
       const r = await api<{ draft: BuilderDraft | null }>(
         `/api/agents/${agent?.id}/redraft`,
-        { method: 'POST', body: JSON.stringify({ description: storedBrief }) },
+        { method: 'POST', body: JSON.stringify({ description: source }) },
       );
       const d = r.draft;
       if (!d) return { kind: 'failed' as const };
-      // Replace both lists wholesale — a fresh draft with no templates
+      // Replace the lists wholesale — a fresh draft with no templates
       // clears stale suggestions from an older brief, not just adds.
       const config: AgentConfig = {
         ...cfg,
         builder: {
           ...cfg.builder,
+          suggested_knowledge: d.suggested_knowledge ?? [],
           suggested_templates: d.suggested_templates ?? [],
           suggested_approvals: d.suggested_approvals ?? [],
+          suggested_rules: d.suggested_rules ?? [],
         },
       };
       await api(`/api/agents/${agent?.id}`, {
@@ -674,6 +680,31 @@ export default function AgentBuilder() {
               </div>
               <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
               <GreetingSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+              {isAdmin && (storedBrief || cfg.system_prompt) && (
+                <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                  Changed what the agent does here?{' '}
+                  <button
+                    className="btn sm"
+                    disabled={suggestAbilities.isPending}
+                    onClick={() => suggestAbilities.mutate()}
+                  >
+                    {suggestAbilities.isPending
+                      ? 'Refreshing…'
+                      : 'Refresh suggested knowledge + abilities'}
+                  </button>{' '}
+                  so Teach it and Abilities match — the instructions above are
+                  never touched.
+                  {suggestAbilities.isSuccess &&
+                    suggestAbilities.data?.kind === 'applied' &&
+                    ' Suggestions updated.'}
+                  {suggestAbilities.isSuccess &&
+                    suggestAbilities.data?.kind === 'empty' &&
+                    ' Nothing new to suggest.'}
+                  {suggestAbilities.isSuccess &&
+                    suggestAbilities.data?.kind === 'failed' &&
+                    " Couldn't draft suggestions — try again in a moment."}
+                </div>
+              )}
             </>
           )}
         </>
@@ -714,9 +745,9 @@ export default function AgentBuilder() {
                 <div className="card" style={{ marginTop: 12 }}>
                   <strong>No abilities suggested yet</strong>
                   <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                    Janis can read the brief and flag the integrations this
-                    agent probably needs — suggested ones float to the top of
-                    the grid below.
+                    Janis can read the brief and current instructions and flag
+                    the integrations this agent probably needs — suggested ones
+                    float to the top of the grid below.
                   </div>
                   <button
                     className="btn"
@@ -726,7 +757,7 @@ export default function AgentBuilder() {
                   >
                     {suggestAbilities.isPending
                       ? 'Asking Janis…'
-                      : 'Suggest abilities from the brief'}
+                      : 'Suggest abilities'}
                   </button>
                   {suggestAbilities.isSuccess &&
                     suggestAbilities.data?.kind === 'failed' && (
