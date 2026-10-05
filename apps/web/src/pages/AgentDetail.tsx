@@ -2245,18 +2245,40 @@ function IntegrationCards({
     return t.tools.every((x) => names.has(x.name));
   };
 
-  const templates = data?.templates ?? [];
+  // Brief-derived suggestions (stored on config.builder) float their
+  // templates to the top of the grid and explain why this agent needs them.
+  const suggestions = cfg.builder?.suggested_templates ?? [];
+  const sugOrder = new Map(suggestions.map((s, i) => [s.id, i]));
+  const sugReason = new Map(suggestions.map((s) => [s.id, s.reason]));
+  const templates = [...(data?.templates ?? [])].sort(
+    (a, b) =>
+      (sugOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+      (sugOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+  );
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
       {templates.map((t) => (
-        <div key={t.id} className="card" style={{ padding: 14, margin: 0 }}>
+        <div
+          key={t.id}
+          className="card"
+          style={{
+            padding: 14, margin: 0,
+            ...(sugOrder.has(t.id) ? { borderColor: 'var(--accent-dim)' } : null),
+          }}
+        >
           <div className="row" style={{ alignItems: 'center' }}>
             <strong>{t.name}</strong>
+            {sugOrder.has(t.id) && <span className="badge human">suggested</span>}
             {t.auth === 'oauth' && <span className="badge">oauth</span>}
             <span className="badge" style={{ marginLeft: 'auto' }}>{t.category}</span>
           </div>
           <div className="muted" style={{ fontSize: 12, margin: '8px 0 10px' }}>{t.blurb}</div>
+          {sugReason.get(t.id) ? (
+            <div className="muted" style={{ fontSize: 11, margin: '-4px 0 10px', fontStyle: 'italic' }}>
+              From your brief — {sugReason.get(t.id)}
+            </div>
+          ) : null}
           {t.docs_url && (
             <a
               href={t.docs_url}
