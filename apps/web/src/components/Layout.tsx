@@ -14,8 +14,8 @@ import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
-  CreditCard, FlaskConical, Gauge, Inbox, LayoutGrid, LibraryBig, Megaphone,
-  Plug, Radio, Settings, SlidersHorizontal, Sparkles, Users, X,
+  CreditCard, Gauge, Inbox, LibraryBig, Megaphone,
+  Plug, Settings, SlidersHorizontal, Sparkles, Users, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
 import { CommandPalette } from './CommandPalette';
@@ -594,19 +594,14 @@ export default function Layout() {
               <Bot size={13} />
               <span>{currentAgent.name}</span>
             </div>
-            <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Overview</span><span className="icon"><Gauge size={18} /></span></NavLink>
-            {janisBrain(currentAgent) && (
-              <NavLink className="nav-indent" to={`/agents/${ctxAgent}/knowledge`}><span className="label">Knowledge</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
-            )}
-            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/behavior`}><span className="label">Behavior</span><span className="icon"><SlidersHorizontal size={18} /></span></NavLink>
+            <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Agent</span><span className="icon"><Gauge size={18} /></span></NavLink>
             {janisBrain(currentAgent) && (
               <>
+                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/knowledge`}><span className="label">Knowledge</span><span className="icon"><LibraryBig size={18} /></span></NavLink>
                 <NavLink className="nav-indent" to={`/agents/${ctxAgent}/integrations`}><span className="label">Actions</span><span className="icon"><Plug size={18} /></span></NavLink>
-                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/components`}><span className="label">Chat components</span><span className="icon"><LayoutGrid size={18} /></span></NavLink>
-                <NavLink className="nav-indent" to={`/agents/${ctxAgent}/tests`}><span className="label">Test</span><span className="icon"><FlaskConical size={18} /></span></NavLink>
               </>
             )}
-            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/channels`}><span className="label">Deploy</span><span className="icon"><Radio size={18} /></span></NavLink>
+            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/behavior`}><span className="label">Experience</span><span className="icon"><SlidersHorizontal size={18} /></span></NavLink>
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="label">Agent settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </div>
         )}

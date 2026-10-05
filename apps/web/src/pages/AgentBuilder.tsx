@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAgents, useMe } from '../api/hooks';
 import { janisBrain, setLastAgent } from '../lib/agentContext';
@@ -13,14 +13,14 @@ import {
   InstructionsSection,
   KnowledgeFiles,
   KnowledgeTextSection,
-  LlmCard,
   ToolsTab,
 } from './AgentDetail';
 
-/** Guided agent builder — Purpose → Knowledge → Behavior → Actions → Test →
- *  Deploy. Not a rigid form: stages are click-through, edits save to the
- *  live agent as you go, and every stage is the same surface the agent's
- *  workspace exposes afterwards. */
+/** Guided agent builder — Create → Teach it → Instructions → Abilities →
+ *  Try it → Deploy. No configuration vocabulary: the user teaches Janis
+ *  what the agent should do, and each stage is the same surface the agent's
+ *  workspace exposes afterwards. Not a rigid form — stages are click-through
+ *  and edits save to the live agent as you go. */
 interface BuilderDraft {
   generated?: boolean;
   note?: string;
@@ -30,11 +30,11 @@ interface BuilderDraft {
 }
 
 const STEPS = [
-  { key: 'purpose', label: 'Purpose', hint: 'what it does' },
-  { key: 'knowledge', label: 'Knowledge', hint: 'what it knows' },
-  { key: 'behavior', label: 'Behavior', hint: 'how it behaves' },
-  { key: 'actions', label: 'Actions', hint: 'what it can do' },
-  { key: 'test', label: 'Test', hint: 'prove it works' },
+  { key: 'create', label: 'Create', hint: 'what it does' },
+  { key: 'teach', label: 'Teach it', hint: 'what it knows' },
+  { key: 'instructions', label: 'Instructions', hint: 'how it behaves' },
+  { key: 'abilities', label: 'Abilities', hint: 'what it can do' },
+  { key: 'try', label: 'Try it', hint: 'prove it works' },
   { key: 'deploy', label: 'Deploy', hint: 'put it to work' },
 ] as const;
 type StepKey = (typeof STEPS)[number]['key'];
@@ -59,13 +59,13 @@ export default function AgentBuilder() {
   const step: StepKey = STEPS.some((s) => s.key === stepParam)
     ? (stepParam as StepKey)
     : agent
-      ? 'knowledge'
-      : 'purpose';
+      ? 'teach'
+      : 'create';
   const goStep = (s: StepKey) => {
     navigate(`/agents/new${agent ? `/${agent.id}` : ''}?step=${s}`, { replace: true });
   };
 
-  // Purpose stage — name + natural-language description → POST
+  // Create stage — name + natural-language description → POST
   // /api/agents/bootstrap creates the agent with a generated draft config.
   const [name, setName] = useState('');
   const [purpose, setPurpose] = useState('');
@@ -86,7 +86,7 @@ export default function AgentBuilder() {
       setDraft(r.draft ?? null);
       setLastAgent(r.agent.id);
       void qc.invalidateQueries({ queryKey: ['agents'] });
-      navigate(`/agents/new/${r.agent.id}?step=purpose`, { replace: true });
+      navigate(`/agents/new/${r.agent.id}?step=teach`, { replace: true });
     },
     onError: (e) => setError(e.message),
   });
@@ -111,8 +111,9 @@ export default function AgentBuilder() {
     onError: (e) => setError(e.message),
   });
 
-  // Test stage — the agent's test channel drives a real conversation
-  // (same AskJanis pane the right rail uses).
+  // Try stage — the agent's test channel drives a real conversation (same
+  // AskJanis pane the right rail uses); knowledge gaps the agent hits while
+  // testing surface alongside it (SSE invalidates the query live).
   const testChannel = useMutation({
     mutationFn: () =>
       api<{ channel_id: string }>(`/api/agents/${agent?.id}/test-channel`, {
@@ -120,10 +121,19 @@ export default function AgentBuilder() {
       }),
   });
   useEffect(() => {
-    if (step === 'test' && agent && hosted && !testChannel.data && !testChannel.isPending) {
+    if (step === 'try' && agent && hosted && !testChannel.data && !testChannel.isPending) {
       testChannel.mutate();
     }
   }, [step, agent?.id, hosted]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data: gapData } = useQuery({
+    queryKey: ['knowledge-gaps', agent?.id],
+    queryFn: () =>
+      api<{ gaps: { key: string; count: number; questions: string[]; added: boolean }[] }>(
+        `/api/agents/${agent?.id}/knowledge-gaps`,
+      ),
+    enabled: Boolean(agent && hosted && step === 'try'),
+  });
+  const openGaps = (gapData?.gaps ?? []).filter((g) => !g.added);
 
   const builder = cfg.builder;
   const idx = STEPS.findIndex((s) => s.key === step);
@@ -163,33 +173,34 @@ export default function AgentBuilder() {
       {error && <div className="error">{error}</div>}
       {saved && <div className="muted" style={{ margin: '6px 0' }}>Saved ✓</div>}
 
-      {step === 'purpose' && (
+      {step === 'create' && (
         <div className="card" style={{ marginTop: 12 }}>
-          <strong>Purpose — what should this agent do?</strong>
+          <strong>Create your agent</strong>
           {!agent ? (
             <>
               <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                Describe the agent's job in your own words. Janis drafts a starting
-                configuration — instructions, greeting, the integrations and
-                approval gates it probably needs — and you refine it in the next
-                stages.
+                What should this agent do? Describe the job in your own words —
+                Janis drafts a starting configuration (instructions, greeting,
+                the integrations and approval gates it probably needs) and you
+                refine it in the next stages.
               </div>
-              <input
-                className="input"
-                style={{ width: '100%', marginTop: 12, boxSizing: 'border-box' }}
-                placeholder="Agent name (optional — we can name it for you)"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
               <textarea
                 rows={5}
-                style={{ width: '100%', marginTop: 10, boxSizing: 'border-box' }}
+                style={{ width: '100%', marginTop: 12, boxSizing: 'border-box' }}
                 placeholder={
-                  'e.g. "A customer support agent for my ecommerce store that answers ' +
-                  'order and shipping questions and can issue refunds when appropriate."'
+                  'Describe the job you want your agent to do…\n\ne.g. "Handle customer ' +
+                  'support for my ecommerce store. Answer questions about orders ' +
+                  'and shipping, and help customers with refunds."'
                 }
                 value={purpose}
                 onChange={(e) => setPurpose(e.target.value)}
+              />
+              <input
+                className="input"
+                style={{ width: '100%', marginTop: 10, boxSizing: 'border-box' }}
+                placeholder="Agent name (optional — we can name it for you)"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
               />
               <label className="check-label" style={{ marginTop: 10, fontSize: 13 }}>
                 <input
@@ -208,14 +219,10 @@ export default function AgentBuilder() {
                 <button
                   className="btn primary"
                   disabled={create.isPending || isAdmin === false}
-                  title={purpose.trim() ? '' : 'No description — creates a blank agent you configure yourself'}
+                  title={purpose.trim() ? '' : 'No description — creates a blank agent you teach yourself'}
                   onClick={() => create.mutate()}
                 >
-                  {create.isPending
-                    ? 'Building agent…'
-                    : purpose.trim()
-                      ? 'Create agent with AI draft'
-                      : 'Create agent'}
+                  {create.isPending ? 'Building agent…' : 'Create agent'}
                 </button>
               </div>
               {create.isPending && purpose.trim() && (
@@ -227,15 +234,9 @@ export default function AgentBuilder() {
           ) : (
             <>
               <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                The agent's job statement — it anchors everything else you
-                configure. Edit and Save to update.
+                Created from your description — this is what Janis drafted.
+                Refine each part in the next stages.
               </div>
-              <textarea
-                rows={4}
-                style={{ width: '100%', marginTop: 10, boxSizing: 'border-box' }}
-                value={cfg.purpose ?? ''}
-                onChange={(e) => setCfg({ ...cfg, purpose: e.target.value })}
-              />
               {draft && (
                 <div className="card" style={{ margin: '12px 0 0', background: 'var(--bg)' }}>
                   <strong style={{ fontSize: 13 }}>
@@ -285,16 +286,21 @@ export default function AgentBuilder() {
         </div>
       )}
 
-      {step === 'knowledge' && agent && (
+      {step === 'teach' && agent && (
         <>
           {!hosted && <NotHosted />}
           {hosted && (
             <>
+              <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
+                What should your agent know? Add the information it needs to do
+                its job — files, websites, pasted text, or a help center. These
+                are all just sources of knowledge.
+              </div>
               {builder?.suggested_knowledge?.length ? (
                 <div className="card" style={{ marginTop: 12 }}>
                   <strong>What it needs to know</strong>
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    From the purpose draft — turn each into a knowledge line,
+                    From your description — turn each into a knowledge line,
                     a document, or a website source below.
                   </div>
                   <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 13 }}>
@@ -305,36 +311,47 @@ export default function AgentBuilder() {
               <KnowledgeTextSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
               <KnowledgeFiles agentId={agent.id} variant="files" />
               <KnowledgeFiles agentId={agent.id} variant="websites" />
+              <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                Have an existing help center?{' '}
+                <Link to={`/agents/${agent.id}/knowledge?sub=help`}>Connect it in Knowledge → Help center</Link>
+              </div>
             </>
           )}
         </>
       )}
 
-      {step === 'behavior' && agent && (
+      {step === 'instructions' && agent && (
         <>
           {!hosted && <NotHosted />}
           {hosted && (
             <>
+              <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
+                Anything else it should know about how to do its job? Rules,
+                boundaries, tone — e.g. "always be concise", "never promise a
+                refund until eligibility is verified", "ask for human approval
+                before refunds over $100". Janis drafted these from your
+                description.
+              </div>
               <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
               <GreetingSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
-              <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
             </>
           )}
         </>
       )}
 
-      {step === 'actions' && agent && (
+      {step === 'abilities' && agent && (
         <>
           {!hosted && <NotHosted />}
           {hosted && (
             <>
               <div className="card" style={{ marginTop: 12 }}>
-                <strong>What can it actually do?</strong>
+                <strong>What should your agent be able to do?</strong>
                 <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                  Connect an integration and the agent can act — look up orders,
-                  issue refunds, cancel subscriptions. Every action can require a
-                  teammate's approval before it runs: the agent asks, a human
-                  approves, the action executes, and the conversation continues.
+                  Connect an integration and the agent can act — look up an
+                  order, issue a refund, create a ticket. Every action can
+                  require a teammate's approval before it runs: the agent asks,
+                  a human approves, the action executes, and the conversation
+                  continues.
                 </div>
                 {builder?.suggested_approvals?.length ? (
                   <div style={{ marginTop: 8, fontSize: 13 }}>
@@ -356,16 +373,34 @@ export default function AgentBuilder() {
         </>
       )}
 
-      {step === 'test' && agent && (
+      {step === 'try' && agent && (
         <>
           {!hosted && <NotHosted />}
           {hosted && (
             <>
               <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
-                A real conversation on a private test channel — same pipeline as
-                production. Try the knowledge you added, ask it to take an
-                action, and watch approval cards pause for a human.
+                Try your agent — a real conversation on a private test channel,
+                same pipeline as production. Ask the questions you taught it,
+                ask it to take an action, and watch approval cards pause for a
+                human.
               </div>
+              {openGaps.length > 0 && (
+                <div className="card" style={{ marginTop: 10 }}>
+                  <strong>Your agent doesn't know how to answer this</strong>
+                  <ul style={{ margin: '6px 0', paddingLeft: 18, fontSize: 13 }}>
+                    {openGaps.slice(0, 3).flatMap((g) => g.questions.slice(0, 1)).map((q, i) => (
+                      <li key={i}>{q}</li>
+                    ))}
+                  </ul>
+                  <div className="row" style={{ gap: 8 }}>
+                    <button className="btn" onClick={() => goStep('teach')}>Teach it →</button>
+                    <Link className="muted" style={{ fontSize: 12, alignSelf: 'center' }}
+                      to={`/agents/${agent.id}/knowledge?sub=gaps`}>
+                      all knowledge gaps
+                    </Link>
+                  </div>
+                </div>
+              )}
               <div className="card builder-chat" style={{ marginTop: 10, padding: 0 }}>
                 {testChannel.isPending && (
                   <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
@@ -387,8 +422,9 @@ export default function AgentBuilder() {
       {step === 'deploy' && agent && (
         <>
           <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
-            Put the agent to work — add a channel and it's live. Each channel
-            lands on its own configuration page after creation.
+            Your agent is ready — where should it work? Add a channel and it's
+            live; each channel lands on its own configuration page after
+            creation.
           </div>
           {hosted ? (
             <AgentChannels agent={agent} />
@@ -406,7 +442,7 @@ export default function AgentBuilder() {
         </>
       )}
 
-      {agent && (step !== 'test' && step !== 'deploy' && step !== 'actions') && hosted && (
+      {agent && (step === 'teach' || step === 'instructions') && hosted && (
         <div className="row" style={{ marginTop: 14, gap: 8 }}>
           <button
             className="btn primary"
@@ -422,7 +458,7 @@ export default function AgentBuilder() {
           )}
         </div>
       )}
-      {agent && !hosted && step !== 'purpose' && next && (
+      {agent && !hosted && step !== 'create' && next && (
         <div className="row" style={{ marginTop: 14 }}>
           <button className="btn" onClick={() => goStep(next.key)}>Next: {next.label} →</button>
         </div>

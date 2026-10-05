@@ -47,7 +47,7 @@ const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
 /** Agent config sections — one per sidebar entry. `hosted` sections are
  *  hidden (and redirect) for external-webhook agents. */
 const SECTIONS = {
-  behavior: 'Behavior',
+  behavior: 'Experience',
   knowledge: 'Knowledge',
   channels: 'Deploy',
   integrations: 'Actions',
@@ -60,10 +60,11 @@ const HOSTED_ONLY: Section[] = ['knowledge', 'integrations', 'components', 'test
 
 const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: boolean }[]>> = {
   behavior: [
-    { key: 'llm', label: 'Language model', hosted: true },
     { key: 'instructions', label: 'Instructions', hosted: true },
     { key: 'greeting', label: 'Greeting' },
+    { key: 'components', label: 'Chat components', hosted: true },
     { key: 'satisfaction', label: 'Satisfaction survey' },
+    { key: 'llm', label: 'Language model', hosted: true },
   ],
   knowledge: [
     { key: 'text', label: 'Text' },
@@ -317,10 +318,23 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
           >
             {testChat.isPending ? 'Opening…' : 'Test agent'}
           </button>
+          <button
+            className="btn primary"
+            title="Channels, widget, embed — put this agent to work"
+            onClick={() => navigate(`/agents/${agent.id}/channels`)}
+          >
+            Deploy
+          </button>
         </div>
         <div className="muted" style={{ marginTop: 10 }}>
           {agent.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
           {channels.length > 0 && ` · channels: ${channels.map((c) => c.name).join(', ')}`}
+          {janisBrain(agent) && (
+            <>
+              {' · '}
+              <Link to={`/agents/${agent.id}/tests`}>test suites</Link>
+            </>
+          )}
         </div>
         {subs.length > 0 && (
           <div className="tabs">
@@ -344,7 +358,10 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
       {section === 'integrations' && janisBrain(agent) && (
         <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />
       )}
-      {section === 'components' && janisBrain(agent) && (
+      {/* Legacy /components route still renders standalone; the canonical
+          home is now the Experience → Chat components sub-tab. */}
+      {(section === 'components' || (section === 'behavior' && sub === 'components')) &&
+        janisBrain(agent) && (
         <SavedWidgets agentId={agent.id} isAdmin={isAdmin} tools={(cfg.tools ?? []).map((t) => t.name)} />
       )}
       {section === 'tests' && janisBrain(agent) && <TestsTab agentId={agent.id} agent={agent} isAdmin={isAdmin} />}

@@ -1,10 +1,11 @@
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import type { Conversation } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgents, useChannels } from '../api/hooks';
 import { KIND_LABEL } from '../components/Channels';
 import { janisBrain } from '../lib/agentContext';
+import { railBus } from '../lib/railBus';
 import { timeAgo } from '../components/bits';
 import { usePageTitle } from '../lib/title';
 
@@ -93,6 +94,16 @@ export default function AgentOverview() {
   });
   const recentConvs = (recent.data?.conversations ?? []).slice(0, 6);
 
+  // Same head action as the editor — open the agent's test channel in the
+  // right rail. Hosted-brain only: external/monitor agents' replies come
+  // from an outside platform, the test pipeline can't stand in for them.
+  const testChat = useMutation({
+    mutationFn: () =>
+      api<{ channel_id: string }>(`/api/agents/${id}/test-channel`, { method: 'POST' }),
+    onSuccess: (r) =>
+      railBus.publish({ channelId: r.channel_id, label: agent?.name ?? '', agentId: id! }),
+  });
+
   const tab = params.get('tab');
   if (tab && LEGACY_TAB_SECTION[tab]) {
     return (
@@ -119,8 +130,25 @@ export default function AgentOverview() {
             {agent.hosted ? 'hosted' : agent.webhook_url ? 'external' : 'unreachable'}
           </span>
         )}
+        {agent && janisBrain(agent) && (
+          <button
+            className="btn"
+            disabled={testChat.isPending}
+            title="Chat with this agent in the side rail — real pipeline, test channel"
+            onClick={() => testChat.mutate()}
+          >
+            {testChat.isPending ? 'Opening…' : 'Test agent'}
+          </button>
+        )}
         <button className="btn" onClick={() => navigate(`/agents/${id}/inbox`)}>
           Inbox
+        </button>
+        <button
+          className="btn primary"
+          title="Channels, widget, embed — put this agent to work"
+          onClick={() => navigate(`/agents/${id}/channels`)}
+        >
+          Deploy
         </button>
         <button className="btn" onClick={() => navigate(`/agents/${id}/settings`)}>
           Agent settings
