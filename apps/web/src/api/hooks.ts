@@ -110,16 +110,20 @@ export function useAgents() {
   });
 }
 
-/** Which of the six build steps are done + knowledge/channel counts — powers
- *  the sidebar's build nav and the Overview's progress card. */
+/** Build steps as capabilities, not a checklist: 'done' = configured,
+ *  'pending' = available but untouched, 'na' = this agent doesn't need it
+ *  (create-draft suggested nothing and nothing was added). na is only
+ *  trusted when a draft ran. */
+export type BuildStepState = 'done' | 'pending' | 'na';
+
 export interface BuildStatus {
   steps: {
-    create: boolean;
-    teach: boolean;
-    guide: boolean;
-    abilities: boolean;
-    try: boolean;
-    deploy: boolean;
+    create: BuildStepState;
+    teach: BuildStepState;
+    guide: BuildStepState;
+    abilities: BuildStepState;
+    try: BuildStepState;
+    deploy: BuildStepState;
   };
   knowledge: { sources: number; updated_at: string | null };
   channels: number;

@@ -125,6 +125,10 @@ button, input, select, textarea { font: inherit; }
 .sidebar a.build-step .step-mark.done { color: var(--ok); }
 .sidebar a.build-step .step-mark.next { color: var(--accent); }
 .sidebar a.build-step .step-mark.todo { color: var(--muted); opacity: .45; }
+.sidebar a.build-step .step-mark.na { color: var(--muted); opacity: .4; }
+/* na = optional capability the agent doesn't need — dim the whole item,
+   not just the marker, so it doesn't read as a skipped task. */
+.sidebar a.build-step.na .label { opacity: .55; }
 /* Rule separating the workspace layer from the Copilot toggle below it. */
 .sidebar .nav-divider { border-top: 1px solid var(--border); margin: 6px 0; }
 /* "Ask Janis" toggle — looks like a nav link but toggles the docked rail */
@@ -303,6 +307,11 @@ button, input, select, textarea { font: inherit; }
 .builder-step:hover:not(:disabled) { border-color: var(--accent); }
 .builder-step.active { border-color: var(--accent); background: var(--accent-dim); }
 .builder-step:disabled { opacity: .45; cursor: default; }
+/* 'na' = the draft said this agent doesn't need the step — optional
+   capability, not an incomplete task. Dashes, dimmed, still clickable. */
+.builder-step.na { border-style: dashed; opacity: .65; }
+.builder-step.na:hover { opacity: 1; }
+.builder-step.na .builder-step-n { color: var(--muted); }
 .builder-step-n {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; border-radius: 50%; font-size: 11px;
@@ -333,6 +342,10 @@ button, input, select, textarea { font: inherit; }
 .bp-item.done .bp-mark { color: var(--ok); }
 .bp-item.next .bp-mark { color: var(--accent); }
 .bp-item:not(.done):not(.next) .bp-mark { color: var(--muted); opacity: .5; }
+/* 'na' steps are optional capabilities — dimmed, dashed edge, still
+   clickable; never read as an unchecked task. */
+.bp-item.na { opacity: .55; border-style: dashed; }
+.bp-item.na:hover { opacity: 1; }
 .builder-path {
   flex: 1; min-width: 220px; padding: 18px; text-align: left; cursor: pointer;
   display: flex; flex-direction: column; gap: 6px;

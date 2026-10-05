@@ -644,10 +644,14 @@ export function agentRoutes(db: Db) {
     });
   });
 
-  /** Build-status snapshot — which of the six build steps (create → teach →
-   *  guide → abilities → try → deploy) are done, plus the knowledge stats the
-   *  Overview and the sidebar's build-progress list render. One cheap query
-   *  set so the nav can show ✓/●/○ per step without stitching five endpoints. */
+  /** Build-status snapshot — the six build steps as CAPABILITIES, not a
+   *  checklist. Per step: 'done' = configured, 'pending' = available but
+   *  untouched, 'na' = this agent doesn't need it (the create-draft
+   *  suggested nothing and nothing was added). 'na' is only trusted when a
+   *  draft ran — a blank/legacy agent can't prove teach/abilities are
+   *  unneeded, so they stay 'pending' (available). Powers the sidebar's
+   *  ✓/●/○/— markers, the Overview progress card, and the builder's
+   *  next-step skipping. */
   app.get('/:id/build-status', agentMember, async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
@@ -679,20 +683,43 @@ export function agentRoutes(db: Db) {
       .map((f) => f.fetchedAt ?? f.createdAt)
       .reduce<Date | null>((m, d) => (!m || d > m ? d : m), null);
     const abilities = (cfg.tools?.length ?? 0) + (cfg.builtin_tools?.length ?? 0);
+    const drafted = !!cfg.builder?.generated_at;
+    const suggestedKnowledge = (cfg.builder?.suggested_knowledge?.length ?? 0) > 0;
+    const suggestedAbilities =
+      (cfg.builder?.suggested_templates?.length ?? 0) +
+        (cfg.builder?.suggested_approvals?.length ?? 0) >
+      0;
     return c.json({
       steps: {
-        create: true,
-        teach: sources > 0,
-        guide: !!cfg.system_prompt?.trim(),
-        abilities: abilities > 0,
-        try: testConversations > 0,
-        deploy: publicCount > 0,
+        create: 'done',
+        teach:
+          sources > 0 ? 'done' : drafted && !suggestedKnowledge ? 'na' : 'pending',
+        guide: cfg.system_prompt?.trim() ? 'done' : 'pending',
+        abilities:
+          abilities > 0 ? 'done' : drafted && !suggestedAbilities ? 'na' : 'pending',
+        try: testConversations > 0 ? 'done' : 'pending',
+        deploy: publicCount > 0 ? 'done' : 'pending',
       },
       knowledge: { sources, updated_at: updatedAt?.toISOString() ?? null },
       channels: publicCount,
       test_conversations: testConversations,
     });
   });
+
+  /** Re-draft a starting configuration from a (possibly revised) brief —
+   *  review material only, nothing is written. The Create step's
+   *  "brief changed → review suggested changes" flow calls this; applying
+   *  is an explicit user action on top of the normal config PATCH. */
+  app.post(
+    '/:id/redraft',
+    agentAdmin,
+    zValidator('json', z.object({ description: z.string().min(1).max(4000) })),
+    async (c) => {
+      if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
+      const draft = await generateDraft(c.req.valid('json').description).catch(() => null);
+      return c.json({ draft });
+    },
+  );
 
   app.post('/:id/knowledge', agentAdmin, async (c) => {
     const agent = await ownedAgent(c);

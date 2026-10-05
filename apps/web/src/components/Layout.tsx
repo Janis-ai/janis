@@ -15,7 +15,7 @@ import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
-  Circle, CircleDot, CreditCard, Gauge, Inbox, Megaphone,
+  Circle, CircleDot, CreditCard, Gauge, Inbox, Megaphone, Minus,
   Settings, Sparkles, Users, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
@@ -454,11 +454,14 @@ export default function Layout() {
   const { data: buildStatus } = useBuildStatus(
     hasWorkspace && currentAgent ? (ctxAgent ?? undefined) : undefined,
   );
-  // The first unfinished step gets the ● "next" marker; done ✓, rest ○.
+  // The first 'pending' step gets the ● "next" marker; 'done' ✓, 'pending'
+  // ○, 'na' — (the agent doesn't need it — a capability, not a skipped task).
   // External agents only render Deploy — compute next over rendered keys.
   const renderedSteps = currentAgent ? buildNav(currentAgent, ctxAgent!).map((s) => s.key) : [];
   const nextBuildStep = buildStatus
-    ? (BUILD_STEP_ORDER.filter((k) => renderedSteps.includes(k)).find((k) => !buildStatus.steps[k]) ?? null)
+    ? (BUILD_STEP_ORDER.filter((k) => renderedSteps.includes(k)).find(
+        (k) => buildStatus.steps[k] === 'pending',
+      ) ?? null)
     : null;
   /** A build step lights up on its builder URL AND on the workspace section
    *  that IS that surface — /agents/:id/knowledge is "Teach it", etc. */
@@ -651,20 +654,29 @@ export default function Layout() {
             {buildNav(currentAgent, ctxAgent!).map((s) => (
               <Link
                 key={s.key}
-                className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}`}
+                className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}${buildStatus?.steps[s.key] === 'na' ? ' na' : ''}`}
+                title={buildStatus?.steps[s.key] === 'na' ? 'Not needed for this agent — available if you want it' : undefined}
                 to={s.to}
               >
                 <span className="label">{s.label}</span>
                 <span className={`step-mark ${
-                  buildStatus?.steps[s.key]
-                    ? 'done'
-                    : buildStatus && nextBuildStep === s.key
-                      ? 'next'
-                      : 'todo'
+                  !buildStatus
+                    ? 'todo'
+                    : buildStatus.steps[s.key] === 'done'
+                      ? 'done'
+                      : buildStatus.steps[s.key] === 'na'
+                        ? 'na'
+                        : nextBuildStep === s.key
+                          ? 'next'
+                          : 'todo'
                 }`}>
-                  {buildStatus?.steps[s.key] ? (
+                  {!buildStatus ? (
+                    <Circle size={12} />
+                  ) : buildStatus.steps[s.key] === 'done' ? (
                     <Check size={12} />
-                  ) : buildStatus && nextBuildStep === s.key ? (
+                  ) : buildStatus.steps[s.key] === 'na' ? (
+                    <Minus size={12} />
+                  ) : nextBuildStep === s.key ? (
                     <CircleDot size={12} />
                   ) : (
                     <Circle size={12} />

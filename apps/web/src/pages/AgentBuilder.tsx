@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { useAgents, useMe } from '../api/hooks';
+import { useAgents, useBuildStatus, useMe } from '../api/hooks';
 import { janisBrain, setLastAgent } from '../lib/agentContext';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
@@ -29,6 +29,9 @@ interface BuilderDraft {
   tone?: string;
   greeting?: string;
   summary?: string;
+  suggested_knowledge?: string[];
+  suggested_templates?: { id: string; name?: string; reason?: string }[];
+  suggested_approvals?: string[];
 }
 
 const STEPS = [
@@ -98,9 +101,13 @@ export default function AgentBuilder() {
         navigate(`/agents/${r.agent.id}/settings?sub=general`);
         return;
       }
-      // Straight into the flow — creation lands on Teach it; Overview is
-      // the home they return to, not a stop on the way in.
-      navigate(`/agents/new/${r.agent.id}?step=teach`, { replace: true });
+      // Straight into the flow — land on the first step this agent actually
+      // needs: a draft that suggested no knowledge skips Teach it (it's an
+      // optional capability, not a skipped task).
+      const teachNa = !(r.draft?.suggested_knowledge?.length);
+      navigate(`/agents/new/${r.agent.id}?step=${teachNa ? 'guide' : 'teach'}`, {
+        replace: true,
+      });
     },
     onError: (e) => setError(e.message),
   });
@@ -151,8 +158,102 @@ export default function AgentBuilder() {
   const openGaps = (gapData?.gaps ?? []).filter((g) => !g.added);
 
   const builder = cfg.builder;
+  const { data: status } = useBuildStatus(agent?.id ?? undefined);
+  /** Steps the draft said this agent doesn't need — 'na' only when a draft
+   *  ran and suggested nothing AND nothing's been added since. */
+  const isNa = (key: StepKey) => {
+    if (status) return status.steps[key] === 'na';
+    const drafted = !!builder?.generated_at || !!draft;
+    if (key === 'teach')
+      return drafted && !(builder?.suggested_knowledge?.length ?? draft?.suggested_knowledge?.length);
+    if (key === 'abilities')
+      return (
+        drafted &&
+        !(builder?.suggested_templates?.length ?? draft?.suggested_templates?.length) &&
+        !(builder?.suggested_approvals?.length ?? draft?.suggested_approvals?.length)
+      );
+    return false;
+  };
   const idx = STEPS.findIndex((s) => s.key === step);
-  const next = STEPS[idx + 1];
+  // "Next" skips steps the agent doesn't need — Create → Guide → Try →
+  // Deploy is a legitimate path for an agent that needs no knowledge.
+  const next = STEPS.slice(idx + 1).find((s) => !isNa(s.key));
+
+  // Create is the brief — revisitable, but never a silent regeneration
+  // source: editing it offers to review suggested changes, nothing more.
+  const storedBrief = builder?.description ?? cfg.purpose ?? '';
+  const [brief, setBrief] = useState('');
+  const [briefChanged, setBriefChanged] = useState(false);
+  useEffect(() => {
+    setBrief(builder?.description ?? cfg.purpose ?? '');
+  }, [agent?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const briefMutation = useMutation({
+    mutationFn: () =>
+      api(`/api/agents/${agent?.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          config: {
+            ...cfg,
+            purpose: brief.trim(),
+            builder: { ...cfg.builder, description: brief.trim() },
+          },
+        }),
+      }),
+    onSuccess: () => {
+      const changed = brief.trim() !== storedBrief.trim();
+      setBriefChanged(changed);
+      redraft.reset();
+      applyDraft.reset();
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+    },
+    onError: (e) => setError(e.message),
+  });
+  const redraft = useMutation({
+    mutationFn: () =>
+      api<{ draft: BuilderDraft | null }>(`/api/agents/${agent?.id}/redraft`, {
+        method: 'POST',
+        body: JSON.stringify({ description: brief.trim() }),
+      }),
+  });
+  // Applying a re-draft adopts its authored fields (instructions, tone,
+  // greeting) AND refreshes the stored suggestion lists — explicit, never
+  // silent.
+  const applyDraft = useMutation({
+    mutationFn: (d: BuilderDraft) =>
+      api(`/api/agents/${agent?.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          config: {
+            ...cfg,
+            ...(d.system_prompt ? { system_prompt: d.system_prompt } : {}),
+            ...(d.tone ? { tone: d.tone } : {}),
+            ...(d.greeting ? { greeting: d.greeting, greeting_enabled: true } : {}),
+            builder: {
+              ...cfg.builder,
+              description: brief.trim(),
+              ...(d.summary ? { summary: d.summary } : {}),
+              ...(d.suggested_knowledge?.length
+                ? { suggested_knowledge: d.suggested_knowledge }
+                : {}),
+              ...(d.suggested_templates?.length
+                ? { suggested_templates: d.suggested_templates }
+                : {}),
+              ...(d.suggested_approvals?.length
+                ? { suggested_approvals: d.suggested_approvals }
+                : {}),
+              generated_at: new Date().toISOString(),
+            },
+          },
+        }),
+      }),
+    onSuccess: () => {
+      setBriefChanged(false);
+      redraft.reset();
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+    },
+    onError: (e) => setError(e.message),
+  });
 
   return (
     <>
@@ -169,16 +270,26 @@ export default function AgentBuilder() {
       <div className="builder-steps">
         {STEPS.map((s, i) => {
           const locked = !agent && i > 0;
-          const done = agent && i < idx;
+          // Marks describe configuration, not visits — a step the draft
+          // said this agent doesn't need shows – (optional), never ✗.
+          const st = status?.steps[s.key];
+          const done = st ? st === 'done' : Boolean(agent && i < idx);
+          const na = st === 'na';
           return (
             <button
               key={s.key}
-              className={`builder-step${step === s.key ? ' active' : ''}${done ? ' done' : ''}`}
+              className={`builder-step${step === s.key ? ' active' : ''}${done ? ' done' : ''}${na ? ' na' : ''}`}
               disabled={locked}
-              title={locked ? 'Create the agent first' : s.hint}
+              title={
+                locked
+                  ? 'Create the agent first'
+                  : na
+                    ? 'Not needed for this agent — available if you want it'
+                    : s.hint
+              }
               onClick={() => goStep(s.key)}
             >
-              <span className="builder-step-n">{done ? '✓' : i + 1}</span>
+              <span className="builder-step-n">{done ? '✓' : na ? '–' : i + 1}</span>
               <span className="builder-step-label">{s.label}</span>
               <span className="builder-step-hint">{s.hint}</span>
             </button>
@@ -240,7 +351,7 @@ export default function AgentBuilder() {
 
       {step === 'create' && (
         <div className="card" style={{ marginTop: 12 }}>
-          <strong>Create your agent</strong>
+          <strong>{agent ? 'What you asked Janis to build' : 'Create your agent'}</strong>
           {!agent ? (
             <>
               <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
@@ -286,14 +397,127 @@ export default function AgentBuilder() {
             </>
           ) : (
             <>
-              <div style={{ fontSize: 15, marginTop: 8 }}>
-                <strong>Your agent is ready to teach</strong>
-              </div>
               <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                I've created a starting point for <strong>{agent.name}</strong> based
-                on what you described. You can refine it at any time.
+                This is the brief you gave Janis — it seeded the instructions,
+                greeting, and suggestions below. Editing it won't rewrite your
+                agent's setup: Janis will only offer suggested changes to
+                review.
               </div>
-              {builder?.summary && (
+              <textarea
+                rows={5}
+                style={{ width: '100%', marginTop: 12, boxSizing: 'border-box' }}
+                placeholder="Describe the job you want your agent to do…"
+                value={brief}
+                disabled={!isAdmin}
+                onChange={(e) => setBrief(e.target.value)}
+              />
+              <div className="row" style={{ marginTop: 10, gap: 8 }}>
+                <button
+                  className="btn"
+                  disabled={
+                    briefMutation.isPending || !isAdmin ||
+                    brief.trim() === storedBrief.trim()
+                  }
+                  onClick={() => briefMutation.mutate()}
+                >
+                  {briefMutation.isPending ? 'Saving…' : 'Save brief'}
+                </button>
+                {next && (
+                  <button className="btn primary" onClick={() => goStep(next.key)}>
+                    Next: {next.label} →
+                  </button>
+                )}
+              </div>
+
+              {/* Brief changed → offer review, never a silent rewrite. */}
+              {briefChanged && !applyDraft.isSuccess && (
+                <div className="card" style={{ marginTop: 12, borderColor: 'var(--accent-dim)' }}>
+                  <strong>Your agent's brief has changed.</strong>
+                  <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                    The instructions and training you've built weren't touched.
+                    Janis can suggest updates that match the new brief — nothing
+                    changes until you approve them.
+                  </div>
+                  <div className="row" style={{ marginTop: 10, gap: 8 }}>
+                    <button
+                      className="btn primary"
+                      disabled={redraft.isPending}
+                      onClick={() => redraft.mutate()}
+                    >
+                      {redraft.isPending ? 'Drafting…' : 'Review suggested changes'}
+                    </button>
+                    <button className="btn" onClick={() => setBriefChanged(false)}>
+                      Keep existing setup
+                    </button>
+                  </div>
+                  {redraft.data && !redraft.data.draft && (
+                    <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                      Couldn't generate suggestions right now — nothing was changed.
+                    </div>
+                  )}
+                  {redraft.data?.draft && (
+                    <div style={{ marginTop: 10 }}>
+                      <div className="muted" style={{ fontSize: 12 }}>Suggested updates</div>
+                      {redraft.data.draft.summary && (
+                        <div style={{ fontSize: 13, marginTop: 6 }}>
+                          <span className="muted">It would: </span>
+                          {redraft.data.draft.summary[0].toUpperCase() +
+                            redraft.data.draft.summary.slice(1)}
+                        </div>
+                      )}
+                      {redraft.data.draft.system_prompt && (
+                        <div style={{ marginTop: 8 }}>
+                          <div className="muted" style={{ fontSize: 12 }}>Instructions</div>
+                          <div
+                            style={{
+                              fontSize: 13,
+                              marginTop: 2,
+                              whiteSpace: 'pre-wrap',
+                              maxHeight: 160,
+                              overflow: 'auto',
+                            }}
+                          >
+                            {redraft.data.draft.system_prompt}
+                          </div>
+                        </div>
+                      )}
+                      {redraft.data.draft.tone && (
+                        <div style={{ marginTop: 8, fontSize: 13 }}>
+                          <span className="muted">Tone: </span>
+                          {redraft.data.draft.tone}
+                        </div>
+                      )}
+                      {redraft.data.draft.suggested_knowledge?.length ? (
+                        <div style={{ marginTop: 8, fontSize: 13 }}>
+                          <span className="muted">New knowledge topics: </span>
+                          {redraft.data.draft.suggested_knowledge.slice(0, 6).join(' · ')}
+                        </div>
+                      ) : null}
+                      <div className="row" style={{ marginTop: 12, gap: 8 }}>
+                        <button
+                          className="btn primary"
+                          disabled={applyDraft.isPending}
+                          title="Adopt the new instructions, tone, and greeting, and refresh the suggestion lists"
+                          onClick={() => applyDraft.mutate(redraft.data!.draft!)}
+                        >
+                          {applyDraft.isPending ? 'Applying…' : 'Apply suggested setup'}
+                        </button>
+                        <button className="btn" onClick={() => { redraft.reset(); }}>
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {applyDraft.isSuccess && (
+                <div className="muted" style={{ fontSize: 13, marginTop: 10 }}>
+                  Applied — the instructions, tone, and greeting now follow the
+                  new brief. Review them in Guide it.
+                </div>
+              )}
+
+              {builder?.summary && !briefChanged && (
                 <div style={{ fontSize: 13, marginTop: 10 }}>
                   <span className="muted">It will: </span>
                   {builder.summary[0].toUpperCase() + builder.summary.slice(1)}
@@ -312,11 +536,6 @@ export default function AgentBuilder() {
                   {builder.suggested_knowledge.slice(0, 5).join(' · ')}
                 </div>
               ) : null}
-              <div className="row" style={{ marginTop: 14, gap: 8 }}>
-                <button className="btn primary" onClick={() => goStep('teach')}>
-                  Teach {agent.name.length > 20 ? `${agent.name.slice(0, 20)}…` : agent.name} →
-                </button>
-              </div>
               {(draft || builder) && (
                 <details style={{ marginTop: 12, fontSize: 13 }}>
                   <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>

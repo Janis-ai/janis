@@ -139,18 +139,28 @@ export default function AgentOverview() {
   const cfg = agent?.config ?? {};
   const summary = cfg.builder?.summary?.trim();
   // Lifecycle line: Live once a public channel exists; Ready when every
-  // build step is done; otherwise In build with the next step named.
+  // ACTIONABLE step is done ('na' steps don't count — the agent doesn't
+  // need them); otherwise In build with the next actionable step named.
+  const actionable = BUILD_STEPS.filter(
+    (s) => !buildStatus || buildStatus.steps[s.key] !== 'na',
+  );
   const doneCount = buildStatus
-    ? BUILD_STEPS.filter((s) => buildStatus.steps[s.key]).length
+    ? actionable.filter((s) => buildStatus.steps[s.key] === 'done').length
     : 0;
   const nextStep = buildStatus
-    ? BUILD_STEPS.find((s) => !buildStatus.steps[s.key])
+    ? actionable.find((s) => buildStatus.steps[s.key] === 'pending')
     : undefined;
+  // Ready = every actionable step is done except possibly deploy itself.
+  const allBuilt =
+    buildStatus &&
+    actionable.every(
+      (s) => s.key === 'deploy' || buildStatus.steps[s.key] === 'done',
+    );
   const status = !hosted
     ? agent?.webhook_url ? 'live' : 'no-webhook'
     : channels.length
       ? 'live'
-      : buildStatus && !nextStep
+      : buildStatus && allBuilt
         ? 'ready'
         : 'building';
   const model = cfg.llm?.model
@@ -217,7 +227,7 @@ export default function AgentOverview() {
                 ? 'Ready to deploy'
                 : status === 'no-webhook'
                   ? 'No webhook URL set'
-                  : `In build — ${doneCount} of ${BUILD_STEPS.length} steps done`}
+                  : `In build — ${doneCount} of ${actionable.length} steps done`}
           </strong>
           {nextStep && hosted && (
             <button
@@ -239,8 +249,10 @@ export default function AgentOverview() {
         {hosted && (
           <div className="build-progress">
             {BUILD_STEPS.map((s) => {
-              const done = buildStatus?.steps[s.key] ?? false;
-              const isNext = buildStatus && !done && nextStep?.key === s.key;
+              const state = buildStatus?.steps[s.key] ?? 'pending';
+              const done = state === 'done';
+              const na = state === 'na';
+              const isNext = state === 'pending' && nextStep?.key === s.key;
               const caption =
                 s.key === 'teach' && buildStatus?.knowledge.sources
                   ? `${buildStatus.knowledge.sources} source${buildStatus.knowledge.sources > 1 ? 's' : ''}`
@@ -253,9 +265,10 @@ export default function AgentOverview() {
                 <Link
                   key={s.key}
                   to={buildStepLink(id!, s.key)}
-                  className={`bp-item${done ? ' done' : ''}${isNext ? ' next' : ''}`}
+                  className={`bp-item${done ? ' done' : ''}${isNext ? ' next' : ''}${na ? ' na' : ''}`}
+                  title={na ? 'Not needed for this agent — available if you want it' : undefined}
                 >
-                  <span className="bp-mark">{done ? '✓' : isNext ? '●' : '○'}</span>
+                  <span className="bp-mark">{done ? '✓' : na ? '–' : isNext ? '●' : '○'}</span>
                   {s.label}
                   {caption && <span className="muted"> · {caption}</span>}
                 </Link>
