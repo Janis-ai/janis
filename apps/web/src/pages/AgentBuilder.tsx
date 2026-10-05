@@ -265,8 +265,9 @@ export default function AgentBuilder() {
         { method: 'POST', body: JSON.stringify({ description: storedBrief }) },
       );
       const d = r.draft;
-      if (!d?.suggested_templates?.length && !d?.suggested_approvals?.length)
-        return null;
+      if (!d) return { kind: 'failed' as const };
+      if (!d.suggested_templates?.length && !d.suggested_approvals?.length)
+        return { kind: 'empty' as const };
       const config: AgentConfig = {
         ...cfg,
         builder: {
@@ -283,10 +284,10 @@ export default function AgentBuilder() {
         method: 'PATCH',
         body: JSON.stringify({ config }),
       });
-      return config;
+      return { kind: 'applied' as const, config };
     },
-    onSuccess: (config) => {
-      if (config) setCfg(config);
+    onSuccess: (r) => {
+      if (r.config) setCfg(r.config);
       void qc.invalidateQueries({ queryKey: ['agents'] });
       void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
     },
@@ -696,7 +697,10 @@ export default function AgentBuilder() {
                 </div>
                 {builder?.suggested_approvals?.length ? (
                   <div style={{ marginTop: 8, fontSize: 13 }}>
-                    <span className="muted">Suggested approval gates: </span>
+                    <span className="muted">
+                      From your brief — these should wait for a human's sign-off
+                      once an integration provides them:{' '}
+                    </span>
                     {builder.suggested_approvals.map((a, i) => (
                       <span key={i} className="badge" style={{ marginRight: 4 }}>{a}</span>
                     ))}
@@ -726,11 +730,19 @@ export default function AgentBuilder() {
                       ? 'Asking Janis…'
                       : 'Suggest abilities from the brief'}
                   </button>
-                  {suggestAbilities.isSuccess && !suggestAbilities.data && (
-                    <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-                      Nothing obvious for this brief — browse the catalog below.
-                    </div>
-                  )}
+                  {suggestAbilities.isSuccess &&
+                    suggestAbilities.data?.kind === 'failed' && (
+                      <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                        Janis couldn't draft suggestions right now — try again in
+                        a moment.
+                      </div>
+                    )}
+                  {suggestAbilities.isSuccess &&
+                    suggestAbilities.data?.kind === 'empty' && (
+                      <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                        Nothing in the catalog fits this brief — browse it below.
+                      </div>
+                    )}
                 </div>
               )}
               <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />

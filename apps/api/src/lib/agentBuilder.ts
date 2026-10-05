@@ -61,13 +61,23 @@ function catalogBrief(): string {
 export function validateDraft(
   parsed: Record<string, unknown>,
 ): Omit<BuilderDraft, 'generated' | 'note'> {
+  // Models emit the obvious name, not our id — 'cal.com', 'CalCom',
+  // 'cal_com' must all resolve to the 'calcom' catalog entry.
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
   const known = new Map(TOOL_TEMPLATES.map((t) => [t.id, templateInfo(t).name]));
+  const knownByNorm = new Map<string, string>();
+  for (const [id, name] of known) {
+    knownByNorm.set(norm(id), id);
+    knownByNorm.set(norm(name), id);
+  }
   const templates: BuilderDraft['suggested_templates'] = [];
   if (Array.isArray(parsed.suggested_templates)) {
     for (const x of parsed.suggested_templates.slice(0, 20)) {
       if (!x || typeof x !== 'object') continue;
-      const id = clamp((x as Record<string, unknown>).id, 60);
-      if (!id || !known.has(id)) continue;
+      const rec = x as Record<string, unknown>;
+      const raw = clamp(rec.id, 60) || clamp(rec.name, 60);
+      const id = raw ? knownByNorm.get(norm(raw)) : undefined;
+      if (!id) continue;
       templates.push({
         id,
         name: known.get(id),
