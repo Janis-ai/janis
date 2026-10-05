@@ -164,11 +164,12 @@ export default function AgentBuilder() {
   // "Next" always points at the first step in rail order that hasn't been
   // opened yet — even if it's behind the current step, so jumping ahead
   // never orphans a skipped surface. Disappears once all steps have been
-  // seen (Deploy itself never gets a Next).
+  // seen (Deploy itself never gets a Next). Create is excluded: an agent
+  // that exists has by definition already been created.
   const seen = (k: StepKey) => seenSteps.has(k) || k === step;
   const next =
     idx >= 0 && idx < STEPS.length - 1
-      ? STEPS.find((s) => !seen(s.key))
+      ? STEPS.find((s) => s.key !== 'create' && !seen(s.key))
       : undefined;
 
 
