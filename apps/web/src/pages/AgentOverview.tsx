@@ -19,7 +19,7 @@ const LEGACY_TAB_SECTION: Record<string, string> = {
   tools: 'integrations',
   tests: 'tests',
   help: 'knowledge',
-  llm: 'behavior',
+  llm: 'settings',
 };
 const LEGACY_SUB: Record<string, string> = {
   llm: 'llm',

@@ -64,7 +64,6 @@ const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: b
     { key: 'greeting', label: 'Greeting' },
     { key: 'components', label: 'Chat components', hosted: true },
     { key: 'satisfaction', label: 'Satisfaction survey' },
-    { key: 'llm', label: 'Language model', hosted: true },
   ],
   knowledge: [
     { key: 'text', label: 'Text' },
@@ -76,6 +75,7 @@ const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: b
   settings: [
     { key: 'general', label: 'General' },
     { key: 'escalation', label: 'Escalation' },
+    { key: 'llm', label: 'Language model', hosted: true },
     { key: 'team', label: 'Team' },
     { key: 'replies', label: 'Saved replies' },
   ],
@@ -369,9 +369,6 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
       {section === 'tests' && janisBrain(agent) && <TestsTab agentId={agent.id} agent={agent} isAdmin={isAdmin} />}
       {section === 'behavior' && (
         <>
-          {sub === 'llm' && janisBrain(agent) && (
-            <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
-          )}
           {sub === 'instructions' && janisBrain(agent) && (
             <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
@@ -430,6 +427,9 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
               onUpdateRule={(id, config) => updateRule.mutate({ id, config })}
               onDeleteRule={(rid) => deleteRule.mutate(rid)}
             />
+          )}
+          {sub === 'llm' && janisBrain(agent) && (
+            <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
           {sub === 'team' && <TeamSection agent={agent} isAdmin={isAdmin} />}
           {sub === 'replies' && (
