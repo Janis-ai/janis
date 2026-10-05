@@ -98,9 +98,9 @@ export default function AgentBuilder() {
         navigate(`/agents/${r.agent.id}/settings?sub=general`);
         return;
       }
-      // Overview is the agent's home — creation lands there, where the
-      // status card ("In build — next: Teach it") picks up the story.
-      navigate(`/agents/${r.agent.id}`, { replace: true });
+      // Straight into the flow — creation lands on Teach it; Overview is
+      // the home they return to, not a stop on the way in.
+      navigate(`/agents/new/${r.agent.id}?step=teach`, { replace: true });
     },
     onError: (e) => setError(e.message),
   });
