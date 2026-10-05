@@ -121,11 +121,6 @@ button, input, select, textarea { font: inherit; }
 /* Build-step nav links carry a completion marker in the right slot:
    ✓ done / ● next recommended / ○ pending. */
 .sidebar a.build-step { display: flex; align-items: center; gap: 6px; }
-.sidebar a.build-step .step-mark { margin-left: auto; display: inline-flex; flex-shrink: 0; }
-.sidebar a.build-step .step-mark.done { color: var(--ok); }
-.sidebar a.build-step .step-mark.next { color: var(--accent); }
-.sidebar a.build-step .step-mark.todo { color: var(--muted); opacity: .45; }
-.sidebar a.build-step .step-mark.seen { color: var(--muted); opacity: .7; }
 /* na = optional capability the agent doesn't need — dim the whole item,
    not just the marker, so it doesn't read as a skipped task. */
 /* na rows look identical to normal nav — 'na' means optional/addable,

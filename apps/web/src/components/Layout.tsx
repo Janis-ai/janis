@@ -3,7 +3,7 @@ import type { Agent } from '@janis/shared';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { useAgents, useBuildStatus, useMe } from '../api/hooks';
+import { useAgents, useMe } from '../api/hooks';
 import { useStream, type StreamAlert } from '../lib/useStream';
 import { clearLastAgent, janisBrain, useContextAgent } from '../lib/agentContext';
 import { trackOnce } from '../lib/analytics';
@@ -13,10 +13,10 @@ import PushBanner from './PushBanner';
 import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
-import { markStepSeen, stepGlyph, useSeenSteps } from '../lib/seenSteps';
+import { markStepSeen } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
-  Circle, CircleDot, CreditCard, Gauge, Inbox, Megaphone,
+  CreditCard, Gauge, Inbox, Megaphone,
   Settings, Sparkles, Users, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
@@ -452,10 +452,7 @@ export default function Layout() {
     refetchInterval: 60_000,
     enabled: hasWorkspace && Boolean(ctxAgent),
   });
-  const { data: buildStatus } = useBuildStatus(
-    hasWorkspace && currentAgent ? (ctxAgent ?? undefined) : undefined,
-  );
-  const seenSteps = useSeenSteps(ctxAgent ?? undefined);
+
   // Mark a build step seen when its surface is open — either the builder
   // stage (/agents/new/:id?step=X) or the equivalent workspace section
   // (/agents/:id/knowledge, /integrations, /behavior, /tests, /channels).
@@ -661,37 +658,15 @@ export default function Layout() {
             </div>
             <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="label">Overview</span><span className="icon"><Gauge size={18} /></span></NavLink>
             <div className="nav-sec">Build</div>
-            {buildNav(currentAgent, ctxAgent!).map((s) => {
-              // Marks are status only: ✓ completed, ⊙ engaged (open-ended
-              // steps and anything seen), ○ untouched.
-              const g = stepGlyph(s.key, buildStatus?.steps[s.key], {
-                seen: seenSteps.has(s.key),
-              });
-              return (
+            {buildNav(currentAgent, ctxAgent!).map((s) => (
               <Link
                 key={s.key}
                 className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}`}
                 to={s.to}
               >
                 <span className="label">{s.label}</span>
-                <span className={`step-mark ${
-                  g === 'check' || g === 'dot-ok'
-                    ? 'done'
-                    : g === 'dot'
-                      ? 'seen'
-                      : 'todo'
-                }`}>
-                  {g === 'check' ? (
-                    <Check size={12} />
-                  ) : g === 'circle' ? (
-                    <Circle size={12} />
-                  ) : (
-                    <CircleDot size={12} />
-                  )}
-                </span>
               </Link>
-              );
-            })}
+            ))}
             <div className="nav-sec">Configure</div>
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="label">Agent settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </div>
