@@ -678,30 +678,37 @@ export default function Layout() {
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="icon"><Settings size={18} /></span><span className="label">Agent settings</span></NavLink>
           </div>
         )}
-        {/* The shared customer layer — always the same spots. The four
-            scoped-able pages default to the context agent; their on-page
-            picker is the context control. scopedActive lights the workspace
-            item for the scoped URL too — /agents/:id/inbox is still Inbox,
-            not Agents. */}
-        <NavLink to="/conversations" className={scopedActive('inbox')}>
+        {/* The shared customer layer — always the same spots, nested under
+            the workspace header the way build steps nest under the agent.
+            The four scoped-able pages default to the context agent; their
+            on-page picker is the context control. scopedActive lights the
+            workspace item for the scoped URL too — /agents/:id/inbox is
+            still Inbox, not Agents. */}
+        {data?.workspace && (
+          <div className="nav-sec">
+            <Building2 size={13} />
+            <span>{data.workspace.name}</span>
+          </div>
+        )}
+        <NavLink to="/conversations" className={({ isActive }) => `nav-indent${scopedActive('inbox')({ isActive }) ? ' active' : ''}`}>
           <span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>
           {(ctxAgent ? agentAttention : attention)?.count ? (
             <span className="nav-badge">{(ctxAgent ? agentAttention : attention)!.count}</span>
           ) : null}
         </NavLink>
-        <NavLink to="/agents" end><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>
-        <NavLink to="/contacts" className={scopedActive('contacts')}><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
-        <NavLink to="/campaigns" className={scopedActive('campaigns')}><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
+        <NavLink to="/agents" end className="nav-indent"><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>
+        <NavLink to="/contacts" className={({ isActive }) => `nav-indent${scopedActive('contacts')({ isActive }) ? ' active' : ''}`}><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
+        <NavLink to="/campaigns" className={({ isActive }) => `nav-indent${scopedActive('campaigns')({ isActive }) ? ' active' : ''}`}><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
         {/* Workspace-wide sections vanish for agent-scoped users — they only
             hold grants on specific agents, not the workspace itself. */}
         {!data?.agent_scope && (
           <>
-            <NavLink to="/reports" className={scopedActive('reports')}><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
+            <NavLink to="/reports" className={({ isActive }) => `nav-indent${scopedActive('reports')({ isActive }) ? ' active' : ''}`}><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
             {data?.operator && (
-              <NavLink to="/errors"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
+              <NavLink to="/errors" className="nav-indent"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
             )}
-            <NavLink to="/billing"><span className="label">Billing</span><span className="icon"><CreditCard size={18} /></span></NavLink>
-            <NavLink to="/settings"><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
+            <NavLink to="/billing" className="nav-indent"><span className="label">Billing</span><span className="icon"><CreditCard size={18} /></span></NavLink>
+            <NavLink to="/settings" className="nav-indent"><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
           </>
         )}
         {/* Copilot closes the nav, divided off from the workspace layer —
