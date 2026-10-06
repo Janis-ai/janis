@@ -1798,7 +1798,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       name: 'new agent name — renames the agent',
       greeting: 'new greeting text (blank string disables it)',
       greeting_enabled: 'true/false — send the greeting on new conversations',
-      quick_replies: 'comma-separated chips shown in the widget (max 8)',
+      quick_replies: 'comma-separated chips shown in the widget (max 8, each <= 20 chars — Meta limit)',
       csat_enabled: 'true/false — post-resolution satisfaction survey',
       csat_prompt: 'the survey question text',
       csat_thanks: 'the reply sent after a survey answer',

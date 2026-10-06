@@ -862,15 +862,23 @@ function WebchatBranding({
   const { data: agents } = useAgents();
   const agentCfg = agents?.agents.find((a) => a.id === channel.agent_id)?.config;
   const externalHelp = agentCfg?.help_url;
-  // Placeholder hints come from the draft's suggested questions — real
-  // things customers would ask THIS agent, which is exactly what a quick
-  // reply sends when tapped. Generic fallback for agents without a draft.
+  // Quick replies are buttons, not questions — Meta caps titles at 20
+  // characters, so only suggestions that fit make the hint. Suggested
+  // knowledge topics are noun phrases — usually the right shape already.
   const replyHints =
-    (agentCfg?.builder?.suggested_questions ?? [])
+    [
+      ...(agentCfg?.builder?.suggested_questions ?? []),
+      ...(agentCfg?.builder?.suggested_knowledge ?? []).map((t) =>
+        typeof t === 'string' ? t : t.text,
+      ),
+    ]
+      .map((s) => s.trim())
+      .filter((s) => [...s].length <= 20)
       .slice(0, 3)
-      .map((q) => q.trim().slice(0, 40))
-      .filter(Boolean)
-      .join(', ') || 'Hours, Location, Contact';
+      .join(', ') || 'e.g. "Hours", "Pricing", "Talk to a human"';
+  // Over-limit entries get shortened at send time (qrTitle) — flag it here
+  // so the truncation is a choice, not a surprise.
+  const qrOver = parseReplies(f.quick_replies).filter((r) => [...r].length > 20);
   const [msg, setMsg] = useState('');
   const uploadLogo = async (file: File) => {
     setMsg('Uploading…');
@@ -965,7 +973,15 @@ function WebchatBranding({
                 onChange={(e) => setF({ ...f, greeting: e.target.value })}
               />
             </BubField>
-            <BubField label="Quick replies" hint="Comma-separated — tappable prompts under the greeting">
+            <BubField
+              label="Quick replies"
+              hint={
+                'Tappable buttons under the greeting — comma-separated, max 20 chars each (Meta limit).' +
+                (qrOver.length
+                  ? ` ${qrOver.length} will be shortened: ${qrOver.map((o) => `"${[...o].slice(0, 18).join('')}…"`).join(', ')}`
+                  : '')
+              }
+            >
               <input
                 placeholder={replyHints}
                 value={f.quick_replies}

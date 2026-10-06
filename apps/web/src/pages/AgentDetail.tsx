@@ -823,10 +823,11 @@ export function GreetingSection({
           />
           <label>
             Suggested replies — comma-separated prompts customers can tap (webchat chips;
-            reply buttons on Messenger/IG/WhatsApp greetings)
+            reply buttons on Messenger/IG/WhatsApp greetings). Max 20 chars each — Meta
+            shortens anything longer.
           </label>
           <input
-            placeholder="e.g. Pricing questions, Talk to a human, How does this work?"
+            placeholder='e.g. "Pricing", "Hours", "Talk to a human"'
             value={repliesText}
             onChange={(e) => setRepliesText(e.target.value)}
             onBlur={() =>
@@ -836,6 +837,17 @@ export function GreetingSection({
               })
             }
           />
+          {(() => {
+            const over = repliesText
+              .split(/[,\n]/)
+              .map((s) => s.trim())
+              .filter((s) => [...s].length > 20);
+            return over.length ? (
+              <span className="muted" style={{ fontSize: 12, color: 'var(--warn, #f59e0b)' }}>
+                {over.length} over 20 chars — Meta will shorten {over.length === 1 ? 'it' : 'them'}
+              </span>
+            ) : null;
+          })()}
         </>
       )}
       </ReadOnly>
