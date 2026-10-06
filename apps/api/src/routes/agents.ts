@@ -753,12 +753,23 @@ export function agentRoutes(db: Db) {
     // A deployment is validated when a real conversation has flowed through
     // a public channel — a created-but-unused channel is 'partial', since
     // "added" isn't "live" (widget uninstalled, webhook unverified, etc.).
+    // Console-originated participants don't count: the Bubble editor's live
+    // preview chats as 'preview…' visitors on the real channel, 'cust_…' is
+    // a simulated customer, 'u:…' a signed-in operator — none are deployment
+    // proof.
     let liveConversations = 0;
     if (publicIds.length) {
       const [row] = await db
         .select({ n: sql<number>`count(distinct ${channelBindings.conversationId})` })
         .from(channelBindings)
-        .where(inArray(channelBindings.channelId, publicIds));
+        .where(
+          and(
+            inArray(channelBindings.channelId, publicIds),
+            sql`left(${channelBindings.platformUserId}, 7) <> 'preview'`,
+            sql`left(${channelBindings.platformUserId}, 5) <> 'cust_'`,
+            sql`left(${channelBindings.platformUserId}, 2) <> 'u:'`,
+          ),
+        );
       liveConversations = Number(row?.n ?? 0);
     }
     const sources = (cfg.knowledge?.length ?? 0) + files.length;
