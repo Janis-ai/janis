@@ -13,7 +13,7 @@ export interface BuilderDraft {
   tone?: string;
   greeting?: string;
   summary?: string;
-  suggested_knowledge: string[];
+  suggested_knowledge: { id: string; text: string; priority?: 'high' | 'normal' }[];
   suggested_templates: { id: string; name?: string; reason?: string }[];
   suggested_approvals: string[];
   suggested_rules: string[];
@@ -60,6 +60,42 @@ export function catalogBrief(): string {
   return TOOL_TEMPLATES.map((t) => `${t.id}: ${t.name} — ${t.blurb}`).join('\n');
 }
 
+/** Stable topic id — a slug of the text, so a redraft that phrases the
+ *  same topic slightly differently still resolves to the same tag a
+ *  knowledge source was stored under. */
+const topicId = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+
+/** Tolerant topic parse — the model may send strings or
+ *  {topic|text, priority} objects; both become typed rows. */
+const clampTopics = (
+  v: unknown,
+): BuilderDraft['suggested_knowledge'] => {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set<string>();
+  const out: BuilderDraft['suggested_knowledge'] = [];
+  for (const x of v.slice(0, 30)) {
+    let text: string | undefined;
+    let priority: 'high' | 'normal' | undefined;
+    if (typeof x === 'string') text = x.trim().slice(0, 400);
+    else if (x && typeof x === 'object') {
+      const rec = x as Record<string, unknown>;
+      text = (clamp(rec.text, 400) ?? clamp(rec.topic, 400)) as string | undefined;
+      priority = rec.priority === 'high' || rec.priority === 'normal' ? rec.priority : undefined;
+    }
+    if (!text) continue;
+    const id = topicId(text);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, text, priority });
+  }
+  return out;
+};
+
 export function validateDraft(
   parsed: Record<string, unknown>,
 ): Omit<BuilderDraft, 'generated' | 'note'> {
@@ -93,7 +129,7 @@ export function validateDraft(
     tone: clamp(parsed.tone, 200),
     greeting: clamp(parsed.greeting, 500),
     summary: clamp(parsed.summary, 300),
-    suggested_knowledge: clampList(parsed.suggested_knowledge, 400, 30),
+    suggested_knowledge: clampTopics(parsed.suggested_knowledge),
     suggested_templates: templates,
     suggested_approvals: clampList(parsed.suggested_approvals, 80, 30),
     suggested_rules: clampList(parsed.suggested_rules, 300, 20),
@@ -117,7 +153,7 @@ Given the operator's description of the agent they want, return ONE JSON object 
   "tone": "the agent's voice in a few words — e.g. 'warm, concise, never apologetic' — <= 60 chars; omit if the description implies no particular voice",
   "summary": "one plain-language sentence stating what the agent will do for customers — e.g. 'answers product, order, and shipping questions and handles returns' — <= 140 chars, lowercase verb phrase, no preamble",
   "greeting": "the first message the agent sends a customer, <= 200 chars",
-  "suggested_knowledge": ["topics of information the operator must supply, phrased as what to add — e.g. 'shipping times and costs', 'return window', 'current coupon policy'. These are TOPICS, not content: you don't know the operator's real facts, so never invent values. Behavior rules ('always…', 'never…', 'remind customers…', 'prioritize…') do NOT go here — fold those into system_prompt. Max 12, one line each."],
+  "suggested_knowledge": [{"topic": "a topic of information the operator must supply, phrased as what to add — e.g. 'shipping times and costs', 'return window', 'current coupon policy'", "priority": "high|normal"}], ranked most-important first. These are TOPICS, not content: you don't know the operator's real facts, so never invent values. priority 'high' is for topics where a wrong answer has real consequences or varies by the operator's locale/situation — health, safety, schedules, pricing; everything else is 'normal'. Behavior rules ('always…', 'never…', 'remind customers…', 'prioritize…') do NOT go here — fold those into system_prompt. Max 12, one line each.
   "suggested_templates": [{"id": "<an id from the integration catalog below>", "reason": "<why this agent needs it, <= 120 chars>"}],
   "suggested_approvals": ["action descriptions that should wait for a human's approval before running — e.g. 'issue refund', 'cancel order' — max 10"],
   "suggested_rules": ["escalation or routing rules worth configuring, plain English, max 6"],

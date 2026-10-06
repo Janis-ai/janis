@@ -32,7 +32,7 @@ interface BuilderDraft {
   tone?: string;
   greeting?: string;
   summary?: string;
-  suggested_knowledge?: string[];
+  suggested_knowledge?: { id: string; text: string; priority?: 'high' | 'normal' }[];
   suggested_templates?: { id: string; name?: string; reason?: string }[];
   suggested_approvals?: string[];
   suggested_rules?: string[];
@@ -145,10 +145,27 @@ export default function AgentBuilder() {
     mutationFn: () => {
       // Saving on Guide it counts as review — a human looked at the draft
       // and kept it, so the step marks confirmed, not "drafted by Janis".
-      const config: AgentConfig =
-        step === 'guide'
-          ? { ...cfg, builder: { ...cfg.builder, guide_confirmed: true } }
-          : cfg;
+      // On Teach it, facts written under a topic's "Writing for" context
+      // count it covered — text lines can't carry a tag like file rows.
+      const coverActive =
+        step === 'teach' &&
+        activeTopic &&
+        teachSub === 'text' &&
+        (cfg.knowledge ?? []).some((l) => l.trim());
+      const config: AgentConfig = {
+        ...cfg,
+        builder: {
+          ...cfg.builder,
+          ...(step === 'guide' ? { guide_confirmed: true } : {}),
+          ...(coverActive
+            ? {
+                covered_topics: [
+                  ...new Set([...(cfg.builder?.covered_topics ?? []), activeTopic!.id]),
+                ],
+              }
+            : {}),
+        },
+      };
       return api(`/api/agents/${agent?.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ config }),
@@ -217,7 +234,9 @@ export default function AgentBuilder() {
   const { data: knowledgeData } = useQuery({
     queryKey: ['knowledge', agent?.id],
     queryFn: () =>
-      api<{ files: { source_url: string | null }[] }>(`/api/agents/${agent?.id}/knowledge`),
+      api<{ files: { source_url: string | null; topic: string | null }[] }>(
+        `/api/agents/${agent?.id}/knowledge`,
+      ),
     enabled: Boolean(agent && hosted && step === 'teach'),
   });
   const { data: articlesData } = useQuery({
@@ -252,12 +271,14 @@ export default function AgentBuilder() {
     : visibleTeachSubs.some((t) => t.key === storedSub)
       ? (storedSub as TeachSub)
       : 'websites';
+  const [activeTopic, setActiveTopic] = useState<{ id: string; text: string; priority?: 'high' | 'normal' } | null>(null);
   const goTeachSub = (s: TeachSub) => {
     try {
       if (agentId) localStorage.setItem(teachSubKey(agentId), s);
     } catch {
       /* private-mode quota — persistence just won't stick */
     }
+    setActiveTopic(null);
     navigate(`/agents/new/${agent!.id}?step=teach&sub=${s}`, { replace: true });
   };
 
@@ -303,6 +324,56 @@ export default function AgentBuilder() {
   const nextLabel = next
     ? `Next: ${next.label}${nextReason ? ` · ${nextReason}` : ''}`
     : '';
+
+  // Suggested topics — stored drafts may be plain strings (pre-priority)
+  // or typed objects; both normalize to {id, text, priority}. Ids are
+  // text slugs so a tagged source survives a rephrasing redraft.
+  type Topic = { id: string; text: string; priority?: 'high' | 'normal' };
+  const topicSlug = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60);
+  const topics: Topic[] = (builder?.suggested_knowledge ?? [])
+    .map((t): Topic | null => {
+      if (typeof t === 'string') {
+        const text = t.trim();
+        return text ? { id: topicSlug(text), text } : null;
+      }
+      const text = (t.text ?? '').trim();
+      return text ? { id: t.id || topicSlug(text), text, priority: t.priority } : null;
+    })
+    .filter((t): t is Topic => Boolean(t?.id && t.text));
+  const rankedTopics = [...topics].sort(
+    (a, b) => (b.priority === 'high' ? 1 : 0) - (a.priority === 'high' ? 1 : 0),
+  );
+  const [showAllTopics, setShowAllTopics] = useState(false);
+  const visibleTopics = showAllTopics ? rankedTopics : rankedTopics.slice(0, 4);
+  // Coverage is provable, not claimed: a source tagged to the topic, or
+  // the operator's explicit "Mark as covered" (text facts can't tag).
+  const topicCounts = new Map<string, number>();
+  for (const f of knowledgeFiles) {
+    if (f.topic) topicCounts.set(f.topic, (topicCounts.get(f.topic) ?? 0) + 1);
+  }
+  const coveredSet = new Set(builder?.covered_topics ?? []);
+  const pickTopic = (t: Topic, sub: TeachSub) => {
+    // goTeachSub clears the context chip — set it after the navigate so
+    // the "Adding for" line survives into the new tab.
+    goTeachSub(sub);
+    setActiveTopic(t);
+  };
+  const markCovered = (t: Topic) =>
+    confirmFlag.mutate({ covered_topics: [...new Set([...coveredSet, t.id])] });
+  // Text-tab placeholder comes from the draft's own topics — "Parasite
+  // control and vaccination: …" — so non-support agents never see the
+  // support-template refund copy. Neutral stems when no draft exists.
+  const textPlaceholder = rankedTopics.length
+    ? rankedTopics
+        .slice(0, 3)
+        .map((t) => `${t.text}: …`)
+        .join('\n')
+    : 'The one thing customers ask most often is …\nThe policy people get wrong most often is …\nA fact the model could not know is …';
 
 
   // Create is the brief — revisitable, but never a silent regeneration
@@ -696,7 +767,10 @@ export default function AgentBuilder() {
                       {redraft.data.draft.suggested_knowledge?.length ? (
                         <div style={{ marginTop: 8, fontSize: 13 }}>
                           <span className="muted">New knowledge topics: </span>
-                          {redraft.data.draft.suggested_knowledge.slice(0, 6).join(' · ')}
+                          {redraft.data.draft.suggested_knowledge
+                            .slice(0, 6)
+                            .map((t) => t.text)
+                            .join(' · ')}
                         </div>
                       ) : null}
                       <div className="row" style={{ marginTop: 12, gap: 8 }}>
@@ -739,7 +813,10 @@ export default function AgentBuilder() {
               {builder?.suggested_knowledge?.length ? (
                 <div style={{ fontSize: 13, marginTop: 6 }}>
                   <span className="muted">Suggested knowledge: </span>
-                  {builder.suggested_knowledge.slice(0, 5).join(' · ')}
+                  {builder.suggested_knowledge
+                    .slice(0, 5)
+                    .map((t) => (typeof t === 'string' ? t : t.text))
+                    .join(' · ')}
                 </div>
               ) : null}
               {(draft || builder) && (
@@ -856,22 +933,102 @@ export default function AgentBuilder() {
                   </button>
                 ))}
               </div>
-              {builder?.suggested_knowledge?.length ? (
+              {rankedTopics.length ? (
                 <div className="card" style={{ marginTop: 12 }}>
-                  <strong>Suggested knowledge topics</strong>
+                  <strong>Suggested topics</strong>
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                     Your agent will answer these best with a source for each.
                   </div>
-                  <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 13 }}>
-                    {builder.suggested_knowledge.map((k, i) => <li key={i}>{k}</li>)}
-                  </ul>
+                  {visibleTopics.map((t) => {
+                    const n = topicCounts.get(t.id) ?? 0;
+                    const covered = n > 0 || coveredSet.has(t.id);
+                    return (
+                      <div
+                        key={t.id}
+                        className="row"
+                        style={{ marginTop: 8, gap: 8, alignItems: 'baseline' }}
+                      >
+                        <span
+                          className={`step-mark${covered ? ' done' : ''}`}
+                          style={{ fontSize: 12 }}
+                        >
+                          {covered ? '✓' : '○'}
+                        </span>
+                        <span className="grow" style={{ fontSize: 13 }}>
+                          {t.text}
+                          {t.priority === 'high' && !covered ? (
+                            <span className="muted" style={{ fontSize: 12 }}> — priority</span>
+                          ) : null}
+                          {covered ? (
+                            <span className="muted" style={{ fontSize: 12 }}>
+                              {' '}· Covered{n ? ` · ${n} source${n > 1 ? 's' : ''}` : ''}
+                            </span>
+                          ) : null}
+                        </span>
+                        {!covered && isAdmin ? (
+                          <span style={{ whiteSpace: 'nowrap' }}>
+                            <button className="link small" onClick={() => pickTopic(t, 'websites')}>
+                              Add website
+                            </button>
+                            <span className="muted"> · </span>
+                            <button className="link small" onClick={() => pickTopic(t, 'files')}>
+                              Upload file
+                            </button>
+                            <span className="muted"> · </span>
+                            <button className="link small" onClick={() => pickTopic(t, 'text')}>
+                              Write it
+                            </button>
+                            <span className="muted"> · </span>
+                            <button
+                              className="link small muted"
+                              title="An existing source already covers this"
+                              disabled={confirmFlag.isPending}
+                              onClick={() => markCovered(t)}
+                            >
+                              Mark as covered
+                            </button>
+                          </span>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                  {rankedTopics.length > 4 ? (
+                    <button
+                      className="link small"
+                      style={{ marginTop: 8 }}
+                      onClick={() => setShowAllTopics((v) => !v)}
+                    >
+                      {showAllTopics ? 'Show less' : `Show ${rankedTopics.length - 4} more`}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
               {teachSub === 'text' && (
-                <KnowledgeTextSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+                <KnowledgeTextSection
+                  cfg={cfg}
+                  setCfg={setCfg}
+                  isAdmin={isAdmin}
+                  forTopicText={activeTopic?.text}
+                  onTopicSettled={() => setActiveTopic(null)}
+                  placeholder={textPlaceholder}
+                />
               )}
-              {teachSub === 'files' && <KnowledgeFiles agentId={agent.id} variant="files" />}
-              {teachSub === 'websites' && <KnowledgeFiles agentId={agent.id} variant="websites" />}
+              {teachSub === 'files' && (
+                <KnowledgeFiles
+                  agentId={agent.id}
+                  variant="files"
+                  forTopic={activeTopic}
+                  onTopicSettled={() => setActiveTopic(null)}
+                />
+              )}
+              {teachSub === 'websites' && (
+                <KnowledgeFiles
+                  agentId={agent.id}
+                  variant="websites"
+                  forTopic={activeTopic}
+                  onTopicSettled={() => setActiveTopic(null)}
+                />
+              )}
               {teachSub === 'gaps' && <KnowledgeGaps agentId={agent.id} config={cfg} />}
               {teachSub === 'help' && <HelpCenter agent={agent} />}
             </>
@@ -1106,7 +1263,7 @@ export default function AgentBuilder() {
       )}
 
       {agent && (step === 'teach' || step === 'guide') && hosted && (
-        <div className="row" style={{ marginTop: 14, gap: 8 }}>
+        <div className="row" style={{ marginTop: 14, gap: 8, alignItems: 'center' }}>
           <button
             className="btn primary"
             disabled={saveCfg.isPending || !isAdmin}
@@ -1115,10 +1272,20 @@ export default function AgentBuilder() {
             {saveCfg.isPending ? 'Saving…' : 'Save configuration'}
           </button>
           {next && (
-            <button className="btn" onClick={() => goStep(next.key)}>
+            <button
+              className="btn"
+              disabled={saveCfg.isPending}
+              title="Saves this page first, then moves on"
+              onClick={() =>
+                saveCfg.mutate(undefined, { onSuccess: () => goStep(next.key) })
+              }
+            >
               {nextLabel} →
             </button>
           )}
+          {step === 'teach' && totalSources === 0 && !builder?.teach_skipped ? (
+            <span className="muted" style={{ fontSize: 12 }}>Knowledge still empty</span>
+          ) : null}
         </div>
       )}
       {agent && hosted && (step === 'abilities' || step === 'try') && next && (

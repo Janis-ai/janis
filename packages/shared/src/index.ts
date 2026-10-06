@@ -327,7 +327,26 @@ export const AgentConfig = z.object({
     .object({
       description: z.string().max(4000).optional(),
       summary: z.string().max(300).optional(),
-      suggested_knowledge: z.array(z.string().max(400)).max(30).optional(),
+      // Suggested topics — objects with id/priority from newer drafts;
+      // plain strings from drafts stored before priorities existed. The
+      // union keeps old configs readable without a migration.
+      suggested_knowledge: z
+        .array(
+          z.union([
+            z.string().max(400),
+            z.object({
+              id: z.string().max(80),
+              text: z.string().max(400),
+              priority: z.enum(['high', 'normal']).optional(),
+            }),
+          ]),
+        )
+        .max(30)
+        .optional(),
+      // Topics the operator marked covered without a tagged source (e.g.
+      // text facts can't carry a tag, or an existing source already covers
+      // it). Holds topic ids, distinct from the model's suggestions.
+      covered_topics: z.array(z.string().max(80)).max(30).optional(),
       suggested_templates: z
         .array(
           z.object({

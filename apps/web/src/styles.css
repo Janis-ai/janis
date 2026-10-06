@@ -671,6 +671,13 @@ textarea:disabled { opacity: .55; }
 .ask-loading { text-align: center; font-size: 12px; padding: 18px 0; }
 .btn + .btn { margin-left: 8px; }
 .btn.sm { padding: 5px 12px; font-size: 13px; }
+/* Quiet text action — inline checklist actions, dismiss links. Was an
+   undeclared class on existing buttons (they rendered as default boxes). */
+button.link { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font-size: inherit; }
+button.link:hover { text-decoration: underline; }
+button.link.small { font-size: 12px; }
+button.link.muted { color: var(--muted); }
+button.link:disabled { opacity: .5; cursor: not-allowed; }
 .action-card {
   margin-top: 6px; padding: 10px 12px; border: 1px solid var(--border);
   border-radius: 10px; background: var(--panel-2); max-width: 420px;

@@ -923,21 +923,38 @@ export function KnowledgeTextSection({
   cfg,
   setCfg,
   isAdmin,
+  forTopicText,
+  onTopicSettled,
+  placeholder,
 }: {
   cfg: AgentConfig;
   setCfg: (c: AgentConfig) => void;
   isAdmin: boolean;
+  /** Builder checklist context — the operator is writing facts for a
+   *  suggested topic; saving counts it covered (text can't tag rows). */
+  forTopicText?: string;
+  onTopicSettled?: () => void;
+  /** Brief-aware placeholder lines — the builder passes generated topic
+   *  lines so non-support agents never see the refund example. */
+  placeholder?: string;
 }) {
   const [knowledgeText, setKnowledgeText] = useSyncedText(cfg, 'knowledge', joinLines);
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, flex: 1 }}>
       <strong>Knowledge text</strong>
       <ReadOnly off={!isAdmin}>
-      <label>One fact/snippet per line — the agent quotes these verbatim in answers</label>
+      {forTopicText && (
+        <div className="muted" style={{ fontSize: 12 }}>
+          Writing for: <strong>{forTopicText}</strong> — facts you save count
+          this topic covered.{' '}
+          <button className="link small muted" onClick={onTopicSettled}>clear</button>
+        </div>
+      )}
+      <label>Write each fact as a standalone sentence — one per line</label>
       <textarea
         rows={10}
         style={{ flex: 1, resize: 'none' }}
-        placeholder={'Refunds are allowed within 30 days of purchase.\nSupport hours are 9-5 ET.\nOrder lookup requires the order number.'}
+        placeholder={placeholder ?? 'One fact per line, written as a standalone sentence.'}
         value={knowledgeText}
         onChange={(e) => setKnowledgeText(e.target.value)}
         onBlur={() => setCfg({ ...cfg, knowledge: knowledgeText.split('\n').filter(Boolean) })}
@@ -2715,13 +2732,26 @@ interface KnowledgeFile {
   status: string;
   error: string | null;
   source_url: string | null;
+  topic: string | null;
   refresh_hours: number | null;
   last_fetched_at: string | null;
   next_fetch_at: string | null;
   created_at: string;
 }
 
-export function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string; variant?: 'files' | 'websites' }) {
+export function KnowledgeFiles({
+  agentId,
+  variant = 'files',
+  forTopic,
+  onTopicSettled,
+}: {
+  agentId: string;
+  variant?: 'files' | 'websites';
+  /** Builder checklist context — a source added while this is set is
+   *  tagged to the topic so the row can show real coverage. */
+  forTopic?: { id: string; text: string } | null;
+  onTopicSettled?: () => void;
+}) {
   const qc = useQueryClient();
   const { data } = useQuery({
     queryKey: ['knowledge', agentId],
@@ -2738,6 +2768,7 @@ export function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string
     for (const f of Array.from(list)) {
       const form = new FormData();
       form.append('file', f);
+      if (forTopic) form.append('topic', forTopic.id);
       const res = await fetch(`/api/agents/${agentId}/knowledge`, {
         method: 'POST',
         body: form,
@@ -2752,6 +2783,7 @@ export function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string
     setUploading(false);
     void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
     void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
+    if (forTopic) onTopicSettled?.();
   };
 
   const [url, setUrl] = useState('');
@@ -2762,12 +2794,17 @@ export function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string
     mutationFn: () =>
       api(`/api/agents/${agentId}/knowledge-url`, {
         method: 'POST',
-        body: JSON.stringify({ url: url.trim(), refresh_hours: urlHours }),
+        body: JSON.stringify({
+          url: url.trim(),
+          refresh_hours: urlHours,
+          ...(forTopic ? { topic: forTopic.id } : {}),
+        }),
       }),
     onSuccess: () => {
       setUrl('');
       void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
     void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
+      if (forTopic) onTopicSettled?.();
     },
     onError: (e) => setError(e.message),
   });
@@ -2815,6 +2852,12 @@ export function KnowledgeFiles({ agentId, variant = 'files' }: { agentId: string
   const rows = (data?.files ?? []).filter((f) => (showWebsites ? Boolean(f.source_url) : !f.source_url));
   return (
     <div>
+      {forTopic && (
+        <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+          Adding for: <strong>{forTopic.text}</strong>{' '}
+          <button className="link small muted" onClick={onTopicSettled}>clear</button>
+        </div>
+      )}
       {rows.map((f) => (
         <div key={f.id} className="row muted" style={{ marginTop: 6 }}>
           <span className="grow">

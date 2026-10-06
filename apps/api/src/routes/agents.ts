@@ -640,6 +640,7 @@ export function agentRoutes(db: Db) {
         status: r.status,
         error: r.error,
         source_url: r.sourceUrl,
+        topic: r.topic,
         refresh_hours: r.refreshHours,
         last_fetched_at: r.lastFetchedAt?.toISOString() ?? null,
         next_fetch_at: r.nextFetchAt?.toISOString() ?? null,
@@ -778,6 +779,7 @@ export function agentRoutes(db: Db) {
     if (count >= MAX_KNOWLEDGE_SOURCES)
       return c.json({ error: `knowledge file limit reached (${MAX_KNOWLEDGE_SOURCES})` }, 409);
 
+    const topic = form.get('topic');
     const buf = Buffer.from(await file.arrayBuffer());
     let text: string;
     try {
@@ -793,6 +795,9 @@ export function agentRoutes(db: Db) {
         workspaceId: c.get('workspaceId'),
         agentId: agent.id,
         name: file.name,
+        ...(typeof topic === 'string' && topic.trim()
+          ? { topic: topic.trim().slice(0, 80) }
+          : {}),
         mimeType: file.type || 'application/octet-stream',
         sizeBytes: file.size,
         text,
@@ -819,11 +824,14 @@ export function agentRoutes(db: Db) {
   const urlBody = z.object({
     url: z.string().url().max(2000),
     refresh_hours: z.number().int().min(1).max(24 * 30).default(24),
+    // Builder topic this source covers — the checklist tags rows so
+    // "Covered · N sources" is provable, not a user claim.
+    topic: z.string().max(80).optional(),
   });
   app.post('/:id/knowledge-url', agentAdmin, zValidator('json', urlBody), async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
-    const { url, refresh_hours } = c.req.valid('json');
+    const { url, refresh_hours, topic } = c.req.valid('json');
     const [{ count }] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(knowledgeFiles)
@@ -847,6 +855,7 @@ export function agentRoutes(db: Db) {
         sizeBytes: fetched.sizeBytes,
         text: fetched.text,
         sourceUrl: url,
+        topic: topic ?? null,
         refreshHours: refresh_hours,
         lastFetchedAt: now,
         nextFetchAt: new Date(now.getTime() + refresh_hours * 3600_000),

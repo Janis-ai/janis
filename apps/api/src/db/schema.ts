@@ -737,6 +737,9 @@ export const knowledgeFiles = pgTable(
     // URL sources — the row's text is re-crawled from source_url on a
     // refresh_hours cadence (null = manual only, like an uploaded file).
     sourceUrl: text('source_url'),
+    // Suggested-knowledge topic this source was added for (builder.topic id)
+    // — untagged for sources added straight from the tabs.
+    topic: text('topic'),
     refreshHours: integer('refresh_hours'),
     lastFetchedAt: timestamp('last_fetched_at', { withTimezone: true }),
     nextFetchAt: timestamp('next_fetch_at', { withTimezone: true }),
