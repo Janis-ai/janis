@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Agent, HelpArticle } from '@janis/shared';
 import { api } from '../api/client';
+import type { KnowledgeFile } from './SourceList';
 
 interface Form {
   title: string;
@@ -39,6 +40,54 @@ export function HelpCenter({ agent }: { agent: Agent }) {
   });
   const [editing, setEditing] = useState<HelpArticle | 'new' | null>(null);
   const [form, setForm] = useState<Form>(emptyForm);
+  // Condensed authoring — the model distills a source (imported file,
+  // fetched URL, or pasted text) into a draft that lands in the editor
+  // for review. Nothing saves until the operator clicks Save.
+  const [draftOpen, setDraftOpen] = useState(false);
+  const [draftMode, setDraftMode] = useState<'file' | 'url' | 'text'>('file');
+  const [draftFileId, setDraftFileId] = useState('');
+  const [draftUrl, setDraftUrl] = useState('');
+  const [draftText, setDraftText] = useState('');
+  const [draftTopic, setDraftTopic] = useState('');
+  const [draftErr, setDraftErr] = useState('');
+  const { data: knowledgeData } = useQuery({
+    queryKey: ['knowledge', agent.id],
+    queryFn: () =>
+      api<{ files: KnowledgeFile[] }>(`/api/agents/${agent.id}/knowledge`),
+  });
+  const draftableFiles = (knowledgeData?.files ?? []).filter(
+    (f) => f.status === 'ready',
+  );
+  const draftArticle = useMutation({
+    mutationFn: () =>
+      api<{ draft: { title: string; category: string; body: string } }>(
+        '/api/articles/draft',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            agent_id: agent.id,
+            ...(draftMode === 'file'
+              ? { file_id: draftFileId }
+              : draftMode === 'url'
+                ? { url: draftUrl.trim() }
+                : { text: draftText }),
+            ...(draftTopic.trim() ? { topic: draftTopic.trim() } : {}),
+          }),
+        },
+      ),
+    onSuccess: (r) => {
+      setForm({
+        ...emptyForm,
+        title: r.draft.title,
+        category: r.draft.category,
+        body: r.draft.body,
+      });
+      setEditing('new');
+      setDraftOpen(false);
+      setDraftErr('');
+    },
+    onError: (e) => setDraftErr(e instanceof Error ? e.message : 'failed'),
+  });
   const [domainDraft, setDomainDraft] = useState<string | null>(null);
   const [domainMsg, setDomainMsg] = useState('');
   const [helpUrlDraft, setHelpUrlDraft] = useState<string | null>(null);
@@ -198,17 +247,114 @@ export function HelpCenter({ agent }: { agent: Agent }) {
               {helpUrlMsg && <span className="muted" style={{ fontSize: 12 }}>{helpUrlMsg}</span>}
             </div>
           </div>
-          <button
-            className="btn primary"
-            onClick={() => {
-              setForm(emptyForm);
-              setEditing('new');
-            }}
-          >
-            New article
-          </button>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn" onClick={() => setDraftOpen((o) => !o)}>
+              Draft from a source
+            </button>
+            <button
+              className="btn primary"
+              onClick={() => {
+                setForm(emptyForm);
+                setEditing('new');
+              }}
+            >
+              New article
+            </button>
+          </div>
         </div>
       </div>
+
+      {draftOpen && (
+        <div className="card">
+          <strong>Draft an article from a source</strong>
+          <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
+            Janis condenses the source into a short article — the answer
+            first, boilerplate cut. It lands in the editor as a draft;
+            nothing saves or publishes until you do it.
+          </p>
+          <div className="row" style={{ marginTop: 10, gap: 8 }}>
+            <select
+              className="input"
+              style={{ maxWidth: 160 }}
+              value={draftMode}
+              onChange={(e) => setDraftMode(e.target.value as 'file' | 'url' | 'text')}
+            >
+              <option value="file">An imported source</option>
+              <option value="url">A URL</option>
+              <option value="text">Pasted text</option>
+            </select>
+            {draftMode === 'file' && (
+              <select
+                className="input"
+                style={{ flex: 1 }}
+                value={draftFileId}
+                onChange={(e) => setDraftFileId(e.target.value)}
+              >
+                <option value="">Choose a source…</option>
+                {draftableFiles.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {draftMode === 'url' && (
+              <input
+                className="input"
+                style={{ flex: 1 }}
+                placeholder="https://yoursite.com/returns-policy"
+                value={draftUrl}
+                onChange={(e) => setDraftUrl(e.target.value)}
+              />
+            )}
+            <input
+              className="input"
+              style={{ maxWidth: 220 }}
+              placeholder="Topic (optional) — e.g. returns"
+              value={draftTopic}
+              onChange={(e) => setDraftTopic(e.target.value)}
+            />
+          </div>
+          {draftMode === 'file' && draftableFiles.length === 0 && (
+            <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
+              No imported sources yet — add one under Sources above, or
+              pick a URL/pasted text here.
+            </p>
+          )}
+          {draftMode === 'text' && (
+            <textarea
+              rows={6}
+              className="input"
+              style={{ width: '100%', marginTop: 8, boxSizing: 'border-box' }}
+              placeholder="Paste the raw material — a policy page, a spec, meeting notes…"
+              value={draftText}
+              onChange={(e) => setDraftText(e.target.value)}
+            />
+          )}
+          <div className="row" style={{ marginTop: 8, gap: 8 }}>
+            <button
+              className="btn sm primary"
+              disabled={
+                draftArticle.isPending ||
+                (draftMode === 'file'
+                  ? !draftFileId
+                  : draftMode === 'url'
+                    ? !draftUrl.trim()
+                    : !draftText.trim())
+              }
+              onClick={() => draftArticle.mutate()}
+            >
+              {draftArticle.isPending ? 'Drafting…' : 'Draft article'}
+            </button>
+            <button className="btn sm" onClick={() => setDraftOpen(false)}>
+              Cancel
+            </button>
+            {draftErr && (
+              <span className="error" style={{ fontSize: 12 }}>{draftErr}</span>
+            )}
+          </div>
+        </div>
+      )}
 
       {editing && (
         <div className="card">

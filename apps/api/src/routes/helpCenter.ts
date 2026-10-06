@@ -4,9 +4,21 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, asc, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, helpArticles, helpSearchLog, helpVotes, workspaces } from '../db/schema.js';
+import {
+  agents,
+  helpArticles,
+  helpSearchLog,
+  helpVotes,
+  knowledgeFiles,
+  workspaces,
+} from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toHelpArticle } from '../lib/serializers.js';
+import { env } from '../env.js';
+import { meteredSettingsFor } from '../lib/llm.js';
+import { complete } from '../lib/hostedAgent.js';
+import { parseDraftJson } from '../lib/agentBuilder.js';
+import { fetchUrlText } from '../lib/urlSource.js';
 
 const slugRe = /^[a-z0-9][a-z0-9-]{0,80}$/;
 const seoField = z.string().max(300).nullable().optional();
@@ -168,6 +180,78 @@ export function articleRoutes(db: Db) {
       })
       .returning();
     return c.json({ article: toHelpArticle(row) }, 201);
+  });
+
+  // Condensed article authoring — turns raw source material (an imported
+  // knowledge file, a fetched URL, or pasted text) into a tight article
+  // draft for review. Returns the draft; nothing is saved or published —
+  // the operator edits and publishes through the normal article form.
+  const draftBody = z
+    .object({
+      agent_id: z.string().uuid(),
+      file_id: z.string().uuid().optional(),
+      url: z.string().url().max(2000).optional(),
+      text: z.string().max(24_000).optional(),
+      topic: z.string().max(200).optional(),
+    })
+    .refine((b) => b.file_id || b.url || b.text?.trim(), {
+      message: 'file_id, url, or text required',
+    });
+  app.post('/draft', zValidator('json', draftBody), async (c) => {
+    const b = c.req.valid('json');
+    if (!(await ownsAgent(db, c.get('workspaceId'), b.agent_id)))
+      return c.json({ error: 'not found' }, 404);
+    let source = '';
+    if (b.file_id) {
+      const [f] = await db
+        .select({ text: knowledgeFiles.text })
+        .from(knowledgeFiles)
+        .where(and(eq(knowledgeFiles.id, b.file_id), eq(knowledgeFiles.agentId, b.agent_id)))
+        .limit(1);
+      if (!f) return c.json({ error: 'not found' }, 404);
+      source = f.text;
+    } else if (b.url) {
+      try {
+        source = (await fetchUrlText(b.url)).text;
+      } catch (e) {
+        return c.json(
+          { error: e instanceof Error ? e.message : "couldn't fetch that URL" },
+          400,
+        );
+      }
+    } else {
+      source = b.text ?? '';
+    }
+    source = source.trim().slice(0, 20_000);
+    if (!source) return c.json({ error: 'no readable source text' }, 400);
+    if (!env.llmApiKey) return c.json({ error: 'no LLM configured' }, 503);
+    const completion = await complete(
+      { ...meteredSettingsFor(env.llmModel), temperature: 0, maxTokens: 4096 },
+      `You condense source material into one help-center article draft for the operator to review and edit.
+Output JSON only: {"title": "the question customers actually ask, phrased as a question or How-to", "category": "one or two words", "body": "the article"}.
+Rules for the body: plain text, short paragraphs, under 400 words. State the answer first, then the details. Keep only facts present in the source — never invent prices, dates, policies, or contact details. Cut boilerplate, navigation, and marketing. If the source can't support a real article, output {"error":"reason"} instead.`,
+      [
+        {
+          role: 'user',
+          content: `${b.topic?.trim() ? `Topic the operator wants covered: ${b.topic.trim()}\n\n` : ''}Source material:\n${source}`,
+        },
+      ],
+    );
+    const parsed = parseDraftJson(completion.text ?? '');
+    if (!parsed) return c.json({ error: 'draft generation failed' }, 502);
+    if (typeof parsed.error === 'string')
+      return c.json({ error: parsed.error.slice(0, 200) }, 422);
+    const draft = {
+      title: typeof parsed.title === 'string' ? parsed.title.trim().slice(0, 200) : '',
+      category:
+        typeof parsed.category === 'string'
+          ? parsed.category.trim().slice(0, 60) || 'General'
+          : 'General',
+      body: typeof parsed.body === 'string' ? parsed.body.trim().slice(0, 60_000) : '',
+    };
+    if (!draft.title || !draft.body)
+      return c.json({ error: 'draft generation failed' }, 502);
+    return c.json({ draft });
   });
 
   app.patch('/:id', zValidator('json', articlePatch), async (c) => {

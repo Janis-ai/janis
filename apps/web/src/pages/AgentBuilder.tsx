@@ -1283,7 +1283,9 @@ export default function AgentBuilder() {
                     <>
                       <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                         Tick the ones worth importing — check the domain; weak
-                        sources are worse than none.
+                        sources are worse than none. Each page imports as its
+                        own source, so you can deselect later; its real size
+                        shows in the list once fetched.
                       </div>
                       {candidates.map((cand) => (
                         <label
