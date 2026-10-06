@@ -349,23 +349,60 @@ button, input, select, textarea { font: inherit; }
 .builder-chat { height: 62vh; display: flex; flex-direction: column; overflow: hidden; }
 .builder-chat .ask-pane { height: 100%; min-height: 0; }
 
-/* Docked test panel — the Try it channel as a drawer on every build
-   step, so an edit to instructions/knowledge/tools gets immediate
-   feedback without jumping the rail. Full-width sheet on mobile. */
-.test-fab {
-  position: fixed; right: 18px; bottom: 18px; z-index: 40;
-  border: 1px solid var(--border); border-radius: 999px;
-  background: var(--panel); color: var(--text);
-  padding: 8px 16px; font-size: 13px; cursor: pointer;
-  box-shadow: 0 2px 10px rgba(0,0,0,.18);
+/* Right-edge strip — the dock's always-visible handle. It claims its own
+   48px (content reserves it via body.test-dock-available) so it can never
+   cover anything; the accent tint and green icon make it the one visible
+   test affordance on the page. The dot pulses until the agent has been
+   chatted with once, then goes quiet for good. */
+.test-strip {
+  position: fixed; right: 0; top: 0; bottom: 0; width: 48px; z-index: 41;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 16px 0; gap: 10px; border: 0; font-family: inherit;
+  border-left: 1px solid var(--border);
+  background: var(--accent-dim); cursor: pointer;
 }
-.test-fab:hover { border-color: var(--accent); color: var(--accent); }
+.test-strip:hover { background: var(--accent-dim); filter: brightness(1.15); }
+.test-strip.open { background: var(--accent-dim); }
+.test-strip-icon { color: var(--accent); flex-shrink: 0; }
+.test-strip-label {
+  writing-mode: vertical-rl; font-size: 11px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--text); white-space: nowrap;
+  opacity: .8;
+}
+.test-strip-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  animation: strip-pulse 1.6s ease-in-out infinite;
+}
+@keyframes strip-pulse { 50% { opacity: .2; transform: scale(.75); } }
+/* One-time nudge anchored to the strip — shown once when there's no room
+   to auto-open the panel. */
+.test-callout {
+  position: fixed; right: 56px; top: 110px; z-index: 41;
+  display: flex; align-items: center; gap: 6px;
+  background: var(--panel); border: 1px solid var(--accent);
+  border-radius: 8px; padding: 8px 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.2);
+}
+.test-callout button {
+  background: none; border: 0; color: var(--text); cursor: pointer;
+  font-size: 13px; padding: 0 2px; font-family: inherit;
+}
+.test-callout button:hover { color: var(--accent); }
+/* When the concierge rail is docked it owns the right edge — the strip,
+   callout and panel slide left of it so nothing overlaps. */
+.layout.ask-open .test-strip { right: 340px; }
+.layout.ask-open .test-dock { right: 388px; }
+.layout.ask-open .test-callout { right: 396px; }
+/* Docked test panel — slides out from the strip so the two read as one
+   control. Full-height minus the strip's 48px on the right. */
 .test-dock {
-  position: fixed; right: 0; top: 0; bottom: 0; width: 400px; max-width: 92vw;
+  position: fixed; right: 48px; top: 0; bottom: 0; width: 400px; max-width: 92vw;
   z-index: 40; display: flex; flex-direction: column;
   background: var(--panel); border-left: 1px solid var(--border);
   box-shadow: -4px 0 16px rgba(0,0,0,.14);
+  animation: dock-in .16s ease;
 }
+@keyframes dock-in { from { transform: translateX(56px); opacity: .6; } }
 .test-dock-head {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 10px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0;
@@ -380,10 +417,14 @@ button, input, select, textarea { font: inherit; }
   display: block; background: rgba(8, 10, 14, .35); cursor: default;
 }
 :root[data-theme='light'] .test-dock-dim { background: rgba(30, 35, 50, .22); }
+/* The strip always owns its 48px — content never hides under it. And on
+   builder pages the column caps at ~880px so the space the docked panel
+   takes is space that was empty anyway. */
+body.test-dock-available .main { margin-right: 48px; max-width: 880px; }
 /* With room to spare, push the column instead — reflow beats overlay. */
-@media (min-width: 1400px) {
+@media (min-width: 1440px) {
   .test-dock-dim { display: none; }
-  body.test-dock-open .main { margin-right: 424px; }
+  body.test-dock-open .main { margin-right: 448px; }
 }
 .main { transition: margin-right .15s ease; }
 @media (max-width: 640px) {

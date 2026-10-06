@@ -7,7 +7,7 @@ import { janisBrain, setLastAgent } from '../lib/agentContext';
 import { stepGlyph, stepSubtitle, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, MessageSquare } from 'lucide-react';
 import { AskJanis } from '../components/AskJanis';
 import { AgentChannels } from '../components/AgentChannels';
 import { SourceList, type KnowledgeBudget } from '../components/SourceList';
@@ -215,11 +215,49 @@ export default function AgentBuilder() {
   // from any build step so feedback is never a rail-jump away. Lazy:
   // the channel row is created on first open (or on Try it), not load.
   const [testOpen, setTestOpen] = useState(false);
+  // Per-agent open/closed memory — the user's choice survives navigation;
+  // the first encounter auto-opens (wide screens) or shows a one-time
+  // callout on the strip (narrow ones), then never intrudes again.
+  const dockKey = (id: string) => `janis.test-dock.v1.${id}`;
+  const [dockCallout, setDockCallout] = useState(false);
+  const setDockOpen = (open: boolean) => {
+    setTestOpen(open);
+    setDockCallout(false);
+    if (agent)
+      try {
+        localStorage.setItem(dockKey(agent.id), open ? 'open' : 'closed');
+      } catch {
+        /* private mode */
+      }
+  };
+  useEffect(() => {
+    if (!agent || !hosted) return;
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(dockKey(agent.id));
+    } catch {
+      /* private mode */
+    }
+    if (saved) {
+      setTestOpen(saved === 'open');
+      return;
+    }
+    const wide = window.innerWidth >= 1440;
+    setTestOpen(wide);
+    if (!wide) setDockCallout(true);
+    try {
+      localStorage.setItem(dockKey(agent.id), wide ? 'open' : 'closed');
+    } catch {
+      /* private mode */
+    }
+  }, [agent?.id, hosted]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if ((step === 'try' || testOpen) && agent && hosted && !testChannel.data && !testChannel.isPending) {
       testChannel.mutate();
     }
   }, [step, testOpen, agent?.id, hosted]); // eslint-disable-line react-hooks/exhaustive-deps
+  // "Save & test" focuses the composer once the panel is open.
+  const [chatFocus, setChatFocus] = useState(0);
   // New chat — a fresh cust_ visitor starts a NEW persistent conversation
   // on the internal channel; earlier threads stay in the inbox where they
   // remain useful for alert and takeover testing.
@@ -233,16 +271,20 @@ export default function AgentBuilder() {
     setChatActive(false);
     setCfgDrifted(false);
   };
-  // Push or overlay — at ≥1400px the main column shrinks to make room;
-  // below that the dock is a drawer over dimmed content (click-outside
-  // closes it). CSS does the switching; the class just marks "open".
+  // Push or overlay — at ≥1440px the main column shrinks to make room for
+  // strip + panel; below that the dock is a drawer over dimmed content
+  // (click-outside closes it). The strip itself reserves its 48px whenever
+  // it's on screen so it can never cover content.
+  const dockAvailable =
+    !!agent && hosted && step !== 'start' && step !== 'bring' && step !== 'try';
   useEffect(() => {
-    const open =
-      testOpen && !!agent && hosted &&
-      step !== 'start' && step !== 'bring' && step !== 'try';
-    document.body.classList.toggle('test-dock-open', open);
-    return () => document.body.classList.remove('test-dock-open');
-  }, [testOpen, agent, hosted, step]);
+    document.body.classList.toggle('test-dock-open', dockAvailable && testOpen);
+    document.body.classList.toggle('test-dock-available', dockAvailable);
+    return () => {
+      document.body.classList.remove('test-dock-open');
+      document.body.classList.remove('test-dock-available');
+    };
+  }, [dockAvailable, testOpen]);
   const { data: gapData } = useQuery({
     queryKey: ['knowledge-gaps', agent?.id],
     queryFn: () =>
@@ -350,7 +392,9 @@ export default function AgentBuilder() {
           status && status.test_conversations > 0
             ? 'open gaps to teach'
             : "you haven't tested yet",
-        deploy: 'no channel live yet',
+        // Same string the rail carries — "added · no messages yet" vs
+        // "no channel live yet" disagreeing was the bug.
+        deploy: status ? stepSubtitle('deploy', status) : undefined,
       } as Partial<Record<StepKey, string>>)[next.key]
     : undefined;
   const nextLabel = next
@@ -1458,9 +1502,9 @@ export default function AgentBuilder() {
                                 </>
                               ) : null}
                             </span>
-                            <span className="muted"> · </span>
                             <button
                               className="link small muted"
+                              style={{ marginLeft: 10 }}
                               title="An existing source already covers this"
                               disabled={confirmFlag.isPending}
                               onClick={() => markCovered(t)}
@@ -1951,6 +1995,23 @@ export default function AgentBuilder() {
           >
             {saveCfg.isPending ? 'Saving…' : 'Save configuration'}
           </button>
+          {hosted && (
+            <button
+              className="btn"
+              disabled={saveCfg.isPending || !isAdmin}
+              title="Save, then open the test chat — so you're never testing the unsaved version"
+              onClick={() =>
+                saveCfg.mutate(undefined, {
+                  onSuccess: () => {
+                    setDockOpen(true);
+                    setChatFocus(Date.now());
+                  },
+                })
+              }
+            >
+              Save &amp; test
+            </button>
+          )}
           {next && (
             <button
               className="btn"
@@ -1983,23 +2044,25 @@ export default function AgentBuilder() {
       {/* Docked test panel — Try it's full-screen chat lives on its own
           step; everywhere else the same private channel rides along in a
           drawer so an edit gets feedback immediately. */}
-      {agent && hosted && step !== 'start' && step !== 'bring' && step !== 'try' && (
-        testOpen ? (
-          <>
-            {/* Under the reflow breakpoint the dock is a drawer — the dim
-                reads "content is covered, not broken" and catches
-                click-outside-to-close. Hidden when CSS pushes the column. */}
-            <button
-              className="test-dock-dim"
-              aria-label="Close test panel"
-              onClick={() => setTestOpen(false)}
-            />
-            <div className="test-dock">
+      {dockAvailable && (
+        <>
+          {testOpen && (
+            <>
+              {/* Under the reflow breakpoint the dock is a drawer — the dim
+                  reads "content is covered, not broken" and catches
+                  click-outside-to-close. Hidden when CSS pushes the column. */}
+              <button
+                className="test-dock-dim"
+                aria-label="Close test panel"
+                onClick={() => setDockOpen(false)}
+              />
+              <div className="test-dock">
               {/* One header — the pane's own header stays hidden so the two
-                  don't stack ("Test it — private…" over "Test — agent"). */}
+                  don't stack. One name everywhere: "Test your agent" is the
+                  surface, "Try it" is the setup step. */}
               <div className="test-dock-head">
                 <strong className="grow" style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  Test — {agent.name}
+                  Test your agent
                 </strong>
                 <span
                   className="badge"
@@ -2016,7 +2079,7 @@ export default function AgentBuilder() {
                 </button>
                 <button
                   className="btn sm"
-                  onClick={() => setTestOpen(false)}
+                  onClick={() => setDockOpen(false)}
                   title="Close panel"
                   aria-label="Close test panel"
                 >
@@ -2053,6 +2116,7 @@ export default function AgentBuilder() {
                     channelId={testChannel.data.channel_id}
                     asCustomer
                     hideHeader
+                    focusSignal={chatFocus}
                     onCustomerMessage={() => setChatActive(true)}
                     onCorrect={(ctx) => {
                       setCorrectTarget(ctx);
@@ -2068,10 +2132,47 @@ export default function AgentBuilder() {
                 {correctCard}
               </div>
             </div>
-          </>
-        ) : (
-          <button className="test-fab" onClick={() => setTestOpen(true)}>Test it</button>
-        )
+            </>
+          )}
+          {/* Right-edge strip — the dock's always-visible handle. It claims
+              its own 48px (content reserves it via body.test-dock-available)
+              so it can never cover anything, and the panel slides out from
+              beside it so strip and panel read as one control. The dot
+              pulses until the first test conversation exists. */}
+          <button
+            className={`test-strip${testOpen ? ' open' : ''}`}
+            title={testOpen ? 'Close test panel' : 'Test your agent'}
+            aria-expanded={testOpen}
+            onClick={() => setDockOpen(!testOpen)}
+          >
+            <MessageSquare size={16} className="test-strip-icon" />
+            <span className="test-strip-label">Test your agent</span>
+            {!testOpen && (status?.test_conversations ?? 0) === 0 && (
+              <span className="test-strip-dot" />
+            )}
+          </button>
+          {dockCallout && !testOpen && (
+            <div className="test-callout">
+              <button className="grow" onClick={() => setDockOpen(true)}>
+                Chat with your draft agent →
+              </button>
+              <button
+                aria-label="Dismiss"
+                onClick={() => {
+                  setDockCallout(false);
+                  if (agent)
+                    try {
+                      localStorage.setItem(dockKey(agent.id), 'closed');
+                    } catch {
+                      /* private mode */
+                    }
+                }}
+              >
+                ×
+              </button>
+            </div>
+          )}
+        </>
       )}
     </>
   );

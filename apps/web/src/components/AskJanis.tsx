@@ -286,6 +286,7 @@ export function AskJanis({
   onCorrect,
   hideHeader,
   visitorOverride,
+  focusSignal,
 }: {
   channelId: string;
   badge?: string;
@@ -320,6 +321,9 @@ export function AskJanis({
    *  each test chat is its own persistent conversation (remount via key
    *  alone would reuse the localStorage id and continue the old thread). */
   visitorOverride?: string;
+  /** Bump to focus the composer — "Save & test" opens the panel and lands
+   *  the cursor ready to type. */
+  focusSignal?: number;
 }) {
   const navigate = useNavigate();
   const visitor = useRef(
@@ -734,6 +738,11 @@ export function AskJanis({
         flashDictNote(err?.name === 'NotAllowedError' ? 'Microphone access denied' : 'No microphone found');
       });
   };
+
+  // "Save & test" / external focus requests land the cursor in the composer.
+  useEffect(() => {
+    if (focusSignal) inputRef.current?.focus();
+  }, [focusSignal]);
 
   // Rail closing mid-dictation shouldn't keep the mic live.
   useEffect(
