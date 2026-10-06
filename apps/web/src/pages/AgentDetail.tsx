@@ -2089,13 +2089,29 @@ export function ToolsTab({
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
       <ReadOnly off={!isAdmin}>
       <label>Integrations — services the agent can act in</label>
-      <IntegrationCards
-        cfg={cfg}
-        setCfg={setCfg}
-        agentId={agentId}
-        customOpen={showCustom}
-        onToggleCustom={() => setShowCustom((v) => !v)}
-      />
+      <IntegrationCards cfg={cfg} setCfg={setCfg} agentId={agentId} />
+      <details
+        key={customTools.length ? 'adv-open' : 'adv'}
+        open={customTools.length > 0}
+        style={{ marginTop: 12 }}
+      >
+        <summary className="muted" style={{ cursor: 'pointer', fontSize: 13 }}>
+          Advanced — custom API actions and secrets
+        </summary>
+        <div style={{ marginTop: 10 }}>
+          <div className="card" style={{ padding: 14, margin: '0 0 10px', maxWidth: 320 }}>
+            <div className="row" style={{ alignItems: 'center' }}>
+              <strong>Custom API action</strong>
+              <span className="badge" style={{ marginLeft: 'auto' }}>JSON</span>
+            </div>
+            <div className="muted" style={{ fontSize: 12, margin: '8px 0 10px' }}>
+              Call any API — describe the request as JSON. "approval": true gates it behind
+              teammate sign-off.
+            </div>
+            <button className="btn" onClick={() => setShowCustom((v) => !v)}>
+              {showCustom ? 'Hide editor' : 'Configure'}
+            </button>
+          </div>
       {showCustom && (
       <>
       <label>Custom API actions — the agent calls your backend: order lookups, refunds, subscription changes, bookings. {'{param}'} placeholders in the URL become arguments; "needs approval" parks a call for teammate sign-off.</label>
@@ -2161,11 +2177,13 @@ export function ToolsTab({
       </details>
       </>
       )}
-      <label>
-        Secrets — API credentials for tool calls; reference as{' '}
-        <span className="mono">{'{{secrets.NAME}}'}</span> in tool URLs and headers
-      </label>
-      <Secrets agentId={agentId} />
+          <label>
+            Secrets — API credentials for tool calls; reference as{' '}
+            <span className="mono">{'{{secrets.NAME}}'}</span> in tool URLs and headers
+          </label>
+          <Secrets agentId={agentId} />
+        </div>
+      </details>
       </ReadOnly>
     </div>
   );
@@ -2177,14 +2195,10 @@ function IntegrationCards({
   cfg,
   setCfg,
   agentId,
-  customOpen,
-  onToggleCustom,
 }: {
   cfg: AgentConfig;
   setCfg: (c: AgentConfig) => void;
   agentId: string;
-  customOpen: boolean;
-  onToggleCustom: () => void;
 }) {
   const qc = useQueryClient();
   const { data } = useQuery({
@@ -2256,9 +2270,19 @@ function IntegrationCards({
       (sugOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER),
   );
 
-  return (
+  // Progressive disclosure — suggested-for-this-agent (plus anything
+  // already installed) leads; the rest of the catalog is one click away
+  // under "Browse all", not a wall of irrelevant cards.
+  const shown = templates.filter((t) => sugOrder.has(t.id) || installed(t));
+  const rest = templates.filter((t) => !shown.includes(t));
+  const grid = (list: ToolTemplateInfo[]) => (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
-      {templates.map((t) => (
+      {list.map(card)}
+    </div>
+  );
+
+  function card(t: ToolTemplateInfo) {
+    return (
         <div
           key={t.id}
           className="card"
@@ -2377,21 +2401,23 @@ function IntegrationCards({
             </div>
           )}
         </div>
-      ))}
-      <div className="card" style={{ padding: 14, margin: 0 }}>
-        <div className="row" style={{ alignItems: 'center' }}>
-          <strong>Custom API action</strong>
-          <span className="badge" style={{ marginLeft: 'auto' }}>JSON</span>
-        </div>
-        <div className="muted" style={{ fontSize: 12, margin: '8px 0 10px' }}>
-          Call any API — describe the request as JSON. "approval": true gates it behind
-          teammate sign-off.
-        </div>
-        <button className="btn" onClick={onToggleCustom}>
-          {customOpen ? 'Hide editor' : 'Configure'}
-        </button>
-      </div>
-    </div>
+    );
+  }
+
+  return shown.length ? (
+    <>
+      {grid(shown)}
+      {rest.length > 0 && (
+        <details style={{ marginTop: 12 }}>
+          <summary className="muted" style={{ cursor: 'pointer', fontSize: 13 }}>
+            Browse all integrations ({rest.length})
+          </summary>
+          <div style={{ marginTop: 10 }}>{grid(rest)}</div>
+        </details>
+      )}
+    </>
+  ) : (
+    grid(rest)
   );
 }
 
