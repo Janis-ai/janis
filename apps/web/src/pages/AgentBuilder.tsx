@@ -406,7 +406,8 @@ export default function AgentBuilder() {
       setPicked(new Set()); // nothing imports without explicit ticks
     },
     onError: (e) => {
-      setFindTopic(null);
+      // Keep the card mounted so the failure is visible — clearing the
+      // topic here would make a search error silent.
       setCandidates(null);
       setFindNote(e.message);
     },
