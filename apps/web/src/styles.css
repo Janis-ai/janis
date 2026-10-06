@@ -260,7 +260,9 @@ button, input, select, textarea { font: inherit; }
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
   30% { transform: translateY(-4px); opacity: 1; }
 }
-.ask-qrs { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 4px 8px; }
+/* Wrapped chip/button rows keep left alignment — a centered second line
+   under a left-aligned bubble reads as broken. */
+.ask-qrs { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px; padding: 2px 4px 8px; }
 .ask-qrs .btn { border-radius: 16px; padding: 7px 14px; font-size: 13px; border-color: var(--accent); color: var(--accent); }
 .ask-qrs .btn:hover { background: var(--accent-dim); }
 /* In-conversation widgets (cards/options/form/status/receipt) — console
@@ -281,7 +283,7 @@ button, input, select, textarea { font: inherit; }
 .wgt-card-p { font-weight: 600; font-size: 13px; margin-top: 4px; }
 /* Actions pin to the card's bottom edge — a row of cards keeps every
    button on the same plane regardless of title/subtitle length. */
-.wgt-card-btns { display: flex; gap: 4px; padding: 0 8px 8px; flex-wrap: wrap; margin-top: auto; }
+.wgt-card-btns { display: flex; gap: 4px; padding: 0 8px 8px; flex-wrap: wrap; justify-content: flex-start; margin-top: auto; }
 .wgt-btn { display: inline-block; border: 1px solid var(--accent); color: var(--accent); background: var(--panel); border-radius: 14px; padding: 5px 10px; font-size: 12px; cursor: pointer; text-decoration: none; font-family: inherit; }
 .wgt-btn.wgt-btn-primary { background: var(--accent); color: #fff; }
 .wgt-title { font-weight: 600; margin-bottom: 6px; }
@@ -538,7 +540,7 @@ body.test-dock-available .main { margin-right: 48px; max-width: 880px; }
 
 .ask-attach { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }
 /* Try-asking chips — draft-generated questions that seed the test chat */
-.try-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px 0; }
+.try-chips { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px; align-items: center; padding: 8px 12px 0; }
 .try-chip {
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
   border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer;
@@ -688,7 +690,7 @@ body.test-dock-available .main { margin-right: 48px; max-width: 880px; }
 .md-gap { margin-top: 8px; }
 /* Suggested replies mirrored in the transcript — dashed/muted so they read
    as "shown to the customer", never tappable here. */
-.transcript-qrs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.transcript-qrs { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px; margin-top: 8px; }
 .transcript-qr {
   display: inline-block; border: 1px dashed var(--border); border-radius: 999px;
   padding: 3px 10px; font-size: 12px; color: var(--muted); white-space: nowrap;

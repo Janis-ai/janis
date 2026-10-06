@@ -336,7 +336,9 @@
     '@keyframes janis-blink{0%,80%,100%{opacity:.25}40%{opacity:1}}' +
     '.janis-msg.failed{outline:1.5px solid #ef4444;opacity:1;cursor:pointer}' +
     '.janis-status{align-self:flex-end;font-size:10px;color:#9ca3af;margin-top:-5px;padding-right:2px;cursor:default}' +
-    '.janis-qrs{display:flex;flex-wrap:wrap;gap:6px;padding:2px 4px 8px}' +
+    /* flex-start is the point, not the default: wrapped chip/button rows
+       stay left-aligned under the message, never center or spread out. */
+    '.janis-qrs{display:flex;flex-wrap:wrap;justify-content:flex-start;gap:6px;padding:2px 4px 8px}' +
     '.janis-qr{border:1px solid var(--janis-accent,#5b21b6);color:var(--janis-accent,#5b21b6);background:#fff;' +
     'border-radius:16px;padding:7px 14px;font-size:13px;cursor:pointer;font-family:inherit;line-height:1.3;text-align:left}' +
     '.janis-qr:active{opacity:.7}' +
@@ -347,7 +349,7 @@
     '.janis-msg img{display:block;max-width:180px;max-height:180px;border-radius:8px;margin-top:4px}' +
     '.janis-file{display:inline-flex;align-items:center;gap:4px;margin-top:4px;padding:4px 8px;border-radius:8px;' +
     'background:rgba(0,0,0,.08);color:inherit;text-decoration:none;font-size:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-    '#janis-attach{display:none;flex-wrap:wrap;gap:6px;padding:8px 12px 0;background:#fff}' +
+    '#janis-attach{display:none;flex-wrap:wrap;justify-content:flex-start;gap:6px;padding:8px 12px 0;background:#fff}' +
     '#janis-attach.show{display:flex}' +
     '.janis-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:8px;' +
     'background:#f3f4f6;font-size:12px;color:#374151;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
@@ -389,7 +391,7 @@
     '.janis-wcard-t{font-weight:600;font-size:13px;line-height:1.3}' +
     '.janis-wcard-s{color:#6b7280;font-size:12px;margin-top:2px;line-height:1.3}' +
     '.janis-wcard-p{font-weight:600;font-size:13px;margin-top:4px}' +
-    '.janis-wcard-btns{display:flex;gap:4px;padding:0 8px 8px;flex-wrap:wrap}' +
+    '.janis-wcard-btns{display:flex;gap:4px;padding:0 8px 8px;flex-wrap:wrap;justify-content:flex-start}' +
     '.janis-wbtn{display:inline-block;border:1px solid var(--janis-accent);color:var(--janis-accent);background:#fff;' +
     'border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit}' +
     '.janis-wbtn.janis-wbtn-primary{background:var(--janis-accent);color:#fff}' +
