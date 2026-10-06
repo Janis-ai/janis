@@ -372,6 +372,7 @@ export default function AgentBuilder() {
   // this": a weak answer becomes a Text-tab write with the question as
   // context, which is exactly the rescue loop Try it formalizes later.
   const [lastTestQuestion, setLastTestQuestion] = useState('');
+  const [guideOpen, setGuideOpen] = useState(false);
   // Customer region — optional; saved to builder.region on blur and
   // injected into the runtime prompt (hostedAgent), not the authored one.
   const [region, setRegion] = useState('');
@@ -719,9 +720,10 @@ export default function AgentBuilder() {
                 rows={5}
                 style={{ width: '100%', marginTop: 12, boxSizing: 'border-box' }}
                 placeholder={
-                  'Describe the job you want your agent to do…\n\ne.g. "Handle customer ' +
-                  'support for my ecommerce store. Answer questions about orders ' +
-                  'and shipping, and help customers with refunds."'
+                  'Describe the job you want your agent to do…\n\ne.g. "Answer ' +
+                  'questions about my community garden — plot availability, ' +
+                  'volunteer hours, and how to join — and point people at the ' +
+                  'signup form when they\'re ready."'
                 }
                 value={purpose}
                 onChange={(e) => setPurpose(e.target.value)}
@@ -1283,10 +1285,10 @@ export default function AgentBuilder() {
             <>
               <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
                 Anything else it should know about how to do its job? Rules,
-                boundaries, tone — e.g. "always be concise", "never promise a
-                refund until eligibility is verified", "ask for human approval
-                before refunds over $100". Janis drafted these from your
-                description.
+                boundaries, tone — e.g. "always be concise", "never quote a
+                price that isn't in your knowledge", "ask for human approval
+                before changing or cancelling an order". Janis drafted these
+                from your description.
               </div>
               {builder?.domain_risk === 'elevated' && !builder?.guide_confirmed ? (
                 <div
@@ -1303,8 +1305,37 @@ export default function AgentBuilder() {
                   </div>
                 </div>
               ) : null}
-              <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
-              <GreetingSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+              {status?.steps.guide === 'partial' && !guideOpen ? (
+                <div className="card" style={{ marginTop: 10 }}>
+                  <strong>Janis drafted your instructions</strong>
+                  <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                    Persona, rules, and greeting written from your brief
+                    {cfg.system_prompt
+                      ? ` — ~${Math.round(cfg.system_prompt.split(/\s+/).length)} words`
+                      : ''}
+                    . Review before the agent goes live; you can edit any of it.
+                  </div>
+                  <div className="row" style={{ marginTop: 8, gap: 8 }}>
+                    <button className="btn sm" onClick={() => setGuideOpen(true)}>
+                      Review draft
+                    </button>
+                    {isAdmin && (
+                      <button
+                        className="btn sm"
+                        disabled={confirmFlag.isPending}
+                        onClick={() => confirmFlag.mutate({ guide_confirmed: true })}
+                      >
+                        Looks good
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+                  <GreetingSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+                </>
+              )}
               {isAdmin && (storedBrief || cfg.system_prompt) && (
                 <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
                   Changed what the agent does here?{' '}
@@ -1330,7 +1361,7 @@ export default function AgentBuilder() {
                     " Couldn't draft suggestions — try again in a moment."}
                 </div>
               )}
-              {isAdmin && status?.steps.guide === 'partial' && (
+              {isAdmin && status?.steps.guide === 'partial' && guideOpen && (
                 <div className="row" style={{ marginTop: 10, gap: 8, alignItems: 'center' }}>
                   <span className="muted" style={{ fontSize: 12 }}>
                     Janis drafted this — happy with it?

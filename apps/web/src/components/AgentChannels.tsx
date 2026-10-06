@@ -746,7 +746,10 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       <div className="card connect-card">
         <div className="row">
           <div className="grow">
-            <strong>Bubble</strong>
+            <strong>Bubble</strong>{' '}
+            <span className="badge" title="Live in minutes — no OAuth app, no review">
+              Fastest
+            </span>
             <div className="muted" style={{ marginTop: 4 }}>
               Embed a chat bubble on any website — visitors land in the same inbox, with
               agent answers and human takeover. No Meta app required.

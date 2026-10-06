@@ -201,7 +201,7 @@ export function ChannelCard({
               className={bubTab === 'deploy' ? 'on' : ''}
               onClick={() => setBubTab('deploy')}
             >
-              Deploy
+              Install
             </button>
           </div>
         );
@@ -579,9 +579,14 @@ function WebchatIdentity({ channel }: { channel: Channel }) {
     setMsg('Generated — Save to activate.');
   };
   return (
-    <div style={{ marginTop: 14 }}>
-      <strong style={{ fontSize: 13 }}>Identify logged-in visitors</strong>
-      <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+    <details className="webhook-details" style={{ marginTop: 14 }}>
+      <summary>
+        <span className="details-title">Identify logged-in visitors</span>
+        <span className="details-sub">
+          anonymous by default — sign visitor identity server-side if your site has accounts
+        </span>
+      </summary>
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
         Anonymous by default. If your site has accounts, tell the bubble who the visitor is — the
         agent sees their name/email/account id instead of asking. To mark the identity{' '}
         <em>verified</em> (required before the agent trusts the account id for lookups), sign it on
@@ -623,7 +628,7 @@ Janis.identify({ id: user.id, name: user.name, email: user.email, sig,
       {channel.meta.identity_secret && secret !== channel.meta.identity_secret && (
         <div className="muted" style={{ fontSize: 12 }}>unsaved changes — the bubble still uses the stored secret</div>
       )}
-    </div>
+    </details>
   );
 }
 
@@ -952,7 +957,7 @@ function WebchatBranding({
             </BubField>
             <BubField label="Quick replies" hint="Comma-separated — tappable prompts under the greeting">
               <input
-                placeholder="Pricing, Support, Book demo"
+                placeholder="Hours, Location, Contact"
                 value={f.quick_replies}
                 onChange={(e) => setF({ ...f, quick_replies: e.target.value })}
               />
