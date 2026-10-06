@@ -124,9 +124,9 @@ export function HelpCenter({ agent }: { agent: Agent }) {
       <div className="card" style={{ marginTop: 12 }}>
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <div>
-            <strong>Public help center</strong>
+            <strong>Articles you publish for customers</strong>
             <p className="muted" style={{ margin: '6px 0 0' }}>
-              Articles customers can self-serve at{' '}
+              Customers can self-serve these at{' '}
               <a href={publicUrl} target="_blank" rel="noreferrer">{publicUrl}</a>
               . Published articles also feed the agent's knowledge — answers
               never contradict the public KB.

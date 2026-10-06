@@ -15,6 +15,7 @@ import { api } from '../api/client';
 import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useGroups, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
 import { AgentChannels } from '../components/AgentChannels';
 import { HelpCenter } from '../components/HelpCenter';
+import { SourceList } from '../components/SourceList';
 import { AutosizeText, timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
@@ -23,7 +24,7 @@ import { janisBrain } from '../lib/agentContext';
 import { railBus } from '../lib/railBus';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { Pencil, RefreshCw, Trash2, Upload, X } from 'lucide-react';
+import { Pencil, Trash2, Upload, X } from 'lucide-react';
 
 type RuleKind = AlertRule['kind'];
 /** `defaultOn` kinds page the workspace even with zero rules — a rule exists
@@ -66,11 +67,11 @@ const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: b
     { key: 'satisfaction', label: 'Satisfaction survey' },
   ],
   knowledge: [
-    { key: 'websites', label: 'Websites' },
-    { key: 'files', label: 'Files' },
-    { key: 'text', label: 'Text' },
+    { key: 'sources', label: 'Sources' },
     { key: 'gaps', label: 'Gaps' },
-    { key: 'help', label: 'Help center' },
+    // "Articles" — not "help center": this is where the operator writes
+    // for their customers, not where they get help themselves.
+    { key: 'articles', label: 'Articles' },
   ],
   settings: [
     { key: 'general', label: 'General' },
@@ -125,8 +126,17 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
   const [params, setParams] = useSearchParams();
   const subs = (SUB_TABS[section] ?? []).filter((s) => janisBrain(agent) || !s.hosted);
   const subParam = params.get('sub');
-  // Legacy deep-links: prompt/tone merged into Instructions.
-  const subKey = subParam === 'prompt' || subParam === 'tone' ? 'instructions' : subParam;
+  // Legacy deep-links: prompt/tone merged into Instructions; the old
+  // per-type knowledge tabs merged into Sources; help is now Articles.
+  const LEGACY_SUBS: Record<string, string> = {
+    prompt: 'instructions',
+    tone: 'instructions',
+    websites: 'sources',
+    files: 'sources',
+    text: 'sources',
+    help: 'articles',
+  };
+  const subKey = subParam ? (LEGACY_SUBS[subParam] ?? subParam) : subParam;
   const sub = subs.some((s) => s.key === subKey) ? subKey! : (subs[0]?.key ?? '');
   const setSub = (s: string) =>
     setParams((prev) => {
@@ -286,14 +296,12 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     });
 
   // Sections whose edits live in the shared draft — the bottom Save button
-  // renders there. Behavior is all-cfg; in Knowledge only the Text sub is a
-  // draft (files/gaps/help self-save); Settings shows it on every sub — its
-  // drafts span General (name, webhook URL) and Escalation (auto-resume), and
-  // Team/Saved-replies cards self-save but the shared save still applies.
-  const hasDrafts =
-    section === 'behavior' ||
-    (section === 'knowledge' && sub === 'text') ||
-    section === 'settings';
+  // renders there. Knowledge self-saves per row now (the unified source
+  // list writes each change immediately); Settings shows it on every sub —
+  // its drafts span General (name, webhook URL) and Escalation
+  // (auto-resume), and Team/Saved-replies cards self-save but the shared
+  // save still applies.
+  const hasDrafts = section === 'behavior' || section === 'settings';
 
   return (
     <div className="agent-editor">
@@ -382,13 +390,50 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
       )}
       {section === 'knowledge' && janisBrain(agent) && (
         <>
-          {sub === 'text' && (
-            <KnowledgeTextSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+          {sub === 'sources' && (
+            <SourceList
+              agentId={agent.id}
+              agent={agent}
+              cfg={cfg}
+              isAdmin={isAdmin}
+              onConfigSaved={(config) =>
+                api(`/api/agents/${agent.id}`, {
+                  method: 'PATCH',
+                  body: JSON.stringify({ config }),
+                }).then(() => {
+                  setCfg(config);
+                  refresh();
+                })
+              }
+              articlesExtras={
+                <label
+                  className="row muted"
+                  style={{ fontSize: 12, marginTop: 6, gap: 6, cursor: 'pointer' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!cfg.builder?.include_drafts_in_test}
+                    disabled={update.isPending}
+                    onChange={(e) => {
+                      const config: AgentConfig = {
+                        ...cfg,
+                        builder: {
+                          ...cfg.builder,
+                          include_drafts_in_test: e.target.checked,
+                        },
+                      };
+                      setCfg(config);
+                      update.mutate({ config });
+                    }}
+                  />
+                  Include draft articles in test chats — production always
+                  injects published only
+                </label>
+              }
+            />
           )}
-          {sub === 'files' && <KnowledgeFiles agentId={agent.id} variant="files" />}
-          {sub === 'websites' && <KnowledgeFiles agentId={agent.id} variant="websites" />}
           {sub === 'gaps' && <KnowledgeGaps agentId={agent.id} config={agent.config ?? {}} />}
-          {sub === 'help' && (
+          {sub === 'articles' && (
             <>
               <label
                 className="row muted"
@@ -943,51 +988,6 @@ function SatisfactionCard({
         </div>
         </ReadOnly>
       </div>
-  );
-}
-
-export function KnowledgeTextSection({
-  cfg,
-  setCfg,
-  isAdmin,
-  forTopicText,
-  onTopicSettled,
-  placeholder,
-}: {
-  cfg: AgentConfig;
-  setCfg: (c: AgentConfig) => void;
-  isAdmin: boolean;
-  /** Builder checklist context — the operator is writing facts for a
-   *  suggested topic; saving counts it covered (text can't tag rows). */
-  forTopicText?: string;
-  onTopicSettled?: () => void;
-  /** Brief-aware placeholder lines — the builder passes generated topic
-   *  lines so non-support agents never see the refund example. */
-  placeholder?: string;
-}) {
-  const [knowledgeText, setKnowledgeText] = useSyncedText(cfg, 'knowledge', joinLines);
-  return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, flex: 1 }}>
-      <strong>Knowledge text</strong>
-      <ReadOnly off={!isAdmin}>
-      {forTopicText && (
-        <div className="muted" style={{ fontSize: 12 }}>
-          Writing for: <strong>{forTopicText}</strong> — facts you save count
-          this topic covered.{' '}
-          <button className="link small muted" onClick={onTopicSettled}>clear</button>
-        </div>
-      )}
-      <label>Write each fact as a standalone sentence — one per line</label>
-      <textarea
-        rows={10}
-        style={{ flex: 1, resize: 'none' }}
-        placeholder={placeholder ?? 'One fact per line, written as a standalone sentence.'}
-        value={knowledgeText}
-        onChange={(e) => setKnowledgeText(e.target.value)}
-        onBlur={() => setCfg({ ...cfg, knowledge: knowledgeText.split('\n').filter(Boolean) })}
-      />
-      </ReadOnly>
-    </div>
   );
 }
 
@@ -2749,303 +2749,6 @@ export function LlmCard({
         inheritedModel={inherited}
         inheritedLabel="workspace default"
       />
-    </div>
-  );
-}
-
-interface KnowledgeFile {
-  id: string;
-  name: string;
-  mime_type: string;
-  size_bytes: number;
-  chars: number;
-  status: string;
-  error: string | null;
-  source_url: string | null;
-  topic: string | null;
-  enabled: boolean;
-  refresh_hours: number | null;
-  last_fetched_at: string | null;
-  next_fetch_at: string | null;
-  created_at: string;
-}
-
-export interface KnowledgeBudget {
-  limit: number;
-  notes_limit: number;
-  notes_chars: number;
-  docs_chars: number;
-  used_chars: number;
-}
-
-export function KnowledgeFiles({
-  agentId,
-  variant = 'files',
-  forTopic,
-  onTopicSettled,
-}: {
-  agentId: string;
-  variant?: 'files' | 'websites';
-  /** Builder checklist context — a source added while this is set is
-   *  tagged to the topic so the row can show real coverage. */
-  forTopic?: { id: string; text: string } | null;
-  onTopicSettled?: () => void;
-}) {
-  const qc = useQueryClient();
-  const { data } = useQuery({
-    queryKey: ['knowledge', agentId],
-    queryFn: () =>
-      api<{ files: KnowledgeFile[]; budget: KnowledgeBudget }>(
-        `/api/agents/${agentId}/knowledge`,
-      ),
-  });
-  const [uploading, setUploading] = useState(false);
-  const [dragging, setDragging] = useState(false);
-  const [error, setError] = useState('');
-
-  const upload = async (list: FileList | null) => {
-    if (!list?.length) return;
-    setUploading(true);
-    setError('');
-    for (const f of Array.from(list)) {
-      const form = new FormData();
-      form.append('file', f);
-      if (forTopic) form.append('topic', forTopic.id);
-      const res = await fetch(`/api/agents/${agentId}/knowledge`, {
-        method: 'POST',
-        body: form,
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(`${f.name}: ${body.error ?? `HTTP ${res.status}`}`);
-        break;
-      }
-    }
-    setUploading(false);
-    void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
-    void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
-    if (forTopic) onTopicSettled?.();
-  };
-
-  const [url, setUrl] = useState('');
-  const [urlHours, setUrlHours] = useState(24);
-  const [urlMode, setUrlMode] = useState<'page' | 'centre'>('page');
-  const [importMsg, setImportMsg] = useState('');
-  const addUrl = useMutation({
-    mutationFn: () =>
-      api(`/api/agents/${agentId}/knowledge-url`, {
-        method: 'POST',
-        body: JSON.stringify({
-          url: url.trim(),
-          refresh_hours: urlHours,
-          ...(forTopic ? { topic: forTopic.id } : {}),
-        }),
-      }),
-    onSuccess: () => {
-      setUrl('');
-      void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
-    void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
-      if (forTopic) onTopicSettled?.();
-    },
-    onError: (e) => setError(e.message),
-  });
-  const importCentre = useMutation({
-    mutationFn: () =>
-      api<{ kind: string; imported: number; queued: number; skipped: number; discovered: number }>(
-        `/api/agents/${agentId}/knowledge-import`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ url: url.trim(), refresh_hours: urlHours }),
-        },
-      ),
-    onSuccess: (r) => {
-      setUrl('');
-      const dup = r.skipped ? ` (${r.skipped} already imported)` : '';
-      setImportMsg(
-        r.kind === 'zendesk'
-          ? `Imported ${r.imported} article${r.imported === 1 ? '' : 's'} from the Zendesk API${dup} — they re-crawl on this schedule.`
-          : `Found ${r.discovered} pages${dup} — ${r.queued} queued; the sweeper fetches them in batches.`,
-      );
-      void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
-    void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
-    },
-    onError: (e) => setError(e.message),
-  });
-  const refresh = useMutation({
-    mutationFn: (fileId: string) =>
-      api(`/api/agents/${agentId}/knowledge/${fileId}/refresh`, { method: 'POST' }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
-      void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
-    },
-  });
-
-  const remove = useMutation({
-    mutationFn: (fileId: string) =>
-      api(`/api/agents/${agentId}/knowledge/${fileId}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
-      void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
-    },
-  });
-
-  const toggle = useMutation({
-    mutationFn: ({ fileId, enabled }: { fileId: string; enabled: boolean }) =>
-      api(`/api/agents/${agentId}/knowledge/${fileId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ enabled }),
-      }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
-      void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
-    },
-  });
-
-  const showWebsites = variant === 'websites';
-  const overBudget = (data?.budget.used_chars ?? 0) > (data?.budget.limit ?? Infinity);
-  // Over budget, the biggest row is the likeliest fix — sort by size so
-  // the thing to disable or trim floats to the top.
-  const rows = (data?.files ?? [])
-    .filter((f) => (showWebsites ? Boolean(f.source_url) : !f.source_url))
-    .sort((a, b) => (overBudget ? b.chars - a.chars : 0));
-  return (
-    <div>
-      {forTopic && (
-        <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-          Adding for: <strong>{forTopic.text}</strong>{' '}
-          <button className="link small muted" onClick={onTopicSettled}>clear</button>
-        </div>
-      )}
-      {rows.map((f) => (
-        <div key={f.id} className="row muted" style={{ marginTop: 6, opacity: f.enabled ? 1 : 0.55 }}>
-          <input
-            type="checkbox"
-            checked={f.enabled}
-            disabled={toggle.isPending}
-            title={f.enabled ? 'Included in the agent — uncheck to exclude it without deleting' : 'Excluded — the agent never sees this source'}
-            onChange={(e) => toggle.mutate({ fileId: f.id, enabled: e.target.checked })}
-          />
-          <span className="grow">
-            {f.source_url ? '🔗' : '📄'} {f.name}
-            <span className="muted">
-              {' '}— {Math.max(1, Math.round(f.size_bytes / 1024))}KB → {f.chars.toLocaleString()} chars (~{Math.round(f.chars / 4).toLocaleString()} tok)
-            </span>
-            {!f.enabled && <span className="muted"> · excluded</span>}
-            {f.enabled &&
-              data?.budget &&
-              f.chars > data.budget.limit && (
-                <span className="error"> · larger than the whole budget — always truncated</span>
-              )}
-            {f.source_url && (
-              <span className="muted">
-                {' '}· fetched {f.last_fetched_at ? timeAgo(f.last_fetched_at) : 'never'}
-                {f.refresh_hours ? ` · re-checks every ${f.refresh_hours}h` : ''}
-              </span>
-            )}
-            {f.status === 'failed' && <span className="error"> {f.error}</span>}
-          </span>
-          {f.source_url && (
-            <button
-              className="btn sm"
-              title="Re-crawl now"
-              aria-label="Re-crawl now"
-              disabled={refresh.isPending}
-              onClick={() => refresh.mutate(f.id)}
-            >
-              <RefreshCw size={13} className={refresh.isPending ? 'spin-ic' : ''} />
-            </button>
-          )}
-          <button className="btn danger" onClick={() => remove.mutate(f.id)} aria-label="Delete file"><Trash2 size={14} /></button>
-        </div>
-      ))}
-      {!showWebsites && (
-        <label
-          className={`drop-zone${dragging ? ' over' : ''}${uploading ? ' busy' : ''}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            if (!uploading) setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragging(false);
-            if (!uploading) void upload(e.dataTransfer.files);
-          }}
-        >
-          <Upload size={18} />
-          <span>
-            <strong>{uploading ? 'Extracting…' : 'Drop files here or click to upload'}</strong>
-            <span className="muted drop-zone-hint">
-              The agent answers from their contents — docs, FAQs, price lists, policies.
-            </span>
-            <span className="muted drop-zone-types">
-              PDF · DOCX · TXT · MD · CSV · JSON · XML · HTML · YAML · PNG · JPG · WEBP · GIF
-            </span>
-          </span>
-          <input
-            type="file"
-            multiple
-            hidden
-            disabled={uploading}
-            accept=".pdf,.docx,.txt,.md,.csv,.json,.xml,.html,.log,.yaml,.yml,.png,.jpg,.jpeg,.webp,.gif"
-            onChange={(e) => {
-              void upload(e.target.files);
-              e.target.value = '';
-            }}
-          />
-        </label>
-      )}
-      {showWebsites && (
-      <>
-      <div className="muted" style={{ marginTop: 12, fontSize: 13 }}>
-        Keep a live web source — re-crawled on the schedule you pick:
-      </div>
-      <div className="row" style={{ marginTop: 6 }}>
-        <input
-          className="grow"
-          placeholder={
-            urlMode === 'page'
-              ? 'A single page — e.g. https://acme.com/faq'
-              : 'A help centre root — e.g. https://acme.zendesk.com (add /hc/en-us to scope a locale)'
-          }
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-        />
-        <select
-          value={urlMode}
-          onChange={(e) => setUrlMode(e.target.value as 'page' | 'centre')}
-          title="What to import"
-        >
-          <option value="page">Single page</option>
-          <option value="centre">Whole help centre</option>
-        </select>
-        <select
-          value={urlHours}
-          onChange={(e) => setUrlHours(Number(e.target.value))}
-          title="How often it re-crawls"
-        >
-          <option value={1}>every hour</option>
-          <option value={24}>daily</option>
-          <option value={168}>weekly</option>
-        </select>
-        <button
-          className="btn sm"
-          disabled={!url.trim() || addUrl.isPending || importCentre.isPending}
-          onClick={() => (urlMode === 'page' ? addUrl : importCentre).mutate()}
-        >
-          {addUrl.isPending ? 'Fetching…' : importCentre.isPending ? 'Importing…' : 'Add'}
-        </button>
-      </div>
-      <div className="muted" style={{ marginTop: 4, fontSize: 12.5 }}>
-        {urlMode === 'page'
-          ? 'Fetches this one page now and re-crawls it on the cadence — good for a pricing or FAQ page that changes.'
-          : 'Imports every article it finds: Zendesk help centres use their API directly; any other site is discovered via its sitemap. Each article becomes its own re-crawled source.'}
-      </div>
-      </>
-      )}
-      {importMsg && <div className="muted" style={{ marginTop: 4 }}>{importMsg}</div>}
-      {error && <div className="error">{error}</div>}
     </div>
   );
 }

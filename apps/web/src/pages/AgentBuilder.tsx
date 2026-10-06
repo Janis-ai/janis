@@ -9,15 +9,12 @@ import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { AskJanis } from '../components/AskJanis';
 import { AgentChannels } from '../components/AgentChannels';
-import { HelpCenter } from '../components/HelpCenter';
+import { SourceList, type KnowledgeBudget } from '../components/SourceList';
 import {
   GreetingSection,
   InstructionsSection,
-  KnowledgeFiles,
   KnowledgeGaps,
-  KnowledgeTextSection,
   ToolsTab,
-  type KnowledgeBudget,
 } from './AgentDetail';
 
 /** Guided agent builder — Create → Teach it → Guide it → Abilities →
@@ -52,16 +49,12 @@ const STEPS = [
 ] as const;
 type StepKey = (typeof STEPS)[number]['key'];
 
-/** Teach it sub-surfaces — the same five the agent's Knowledge section
- *  exposes, so the builder stage is the section. Order is lowest-effort
- *  first: a link beats an upload beats typing facts verbatim. Gaps only
- *  earns a tab when real conversations produced them. */
+/** Teach it sub-surfaces — one unified source list (websites, files,
+ *  notes, and help-center articles all land in it); Gaps earns a tab only
+ *  when real conversations produced them. */
 const TEACH_SUBS = [
-  { key: 'websites', label: 'Websites' },
-  { key: 'files', label: 'Files' },
-  { key: 'text', label: 'Text' },
+  { key: 'sources', label: 'Sources' },
   { key: 'gaps', label: 'Gaps' },
-  { key: 'help', label: 'Help center' },
 ] as const;
 type TeachSub = (typeof TEACH_SUBS)[number]['key'];
 const teachSubKey = (agentId: string) => `janis.teach-sub.${agentId}`;
@@ -152,7 +145,7 @@ export default function AgentBuilder() {
       const coverActive =
         step === 'teach' &&
         activeTopic &&
-        teachSub === 'text' &&
+        teachSub === 'sources' &&
         (cfg.knowledge ?? []).some((l) => l.trim());
       const config: AgentConfig = {
         ...cfg,
@@ -248,18 +241,23 @@ export default function AgentBuilder() {
     enabled: Boolean(agent && hosted && step === 'teach'),
   });
   const knowledgeFiles = knowledgeData?.files ?? [];
+  const noteLines = Array.isArray(cfg.knowledge)
+    ? cfg.knowledge.filter((l) => l.trim()).length
+    : 0;
   const teachSubCount: Record<TeachSub, number> = {
-    websites: knowledgeFiles.filter((f) => f.source_url).length,
-    files: knowledgeFiles.filter((f) => !f.source_url).length,
-    text: Array.isArray(cfg.knowledge) ? cfg.knowledge.filter((l) => l.trim()).length : 0,
+    sources: knowledgeFiles.length + noteLines + (articlesData?.articles?.length ?? 0),
     gaps: openGaps.length,
-    help: articlesData?.articles?.length ?? 0,
   };
-  const totalSources =
-    teachSubCount.websites + teachSubCount.files + teachSubCount.text + teachSubCount.help;
+  const totalSources = teachSubCount.sources;
   // Gaps only earns a tab once real conversations produce them — on a
   // fresh agent it would be a cryptic empty panel.
   const visibleTeachSubs = TEACH_SUBS.filter((t) => t.key !== 'gaps' || openGaps.length > 0);
+  const LEGACY_SUBS: Record<string, TeachSub> = {
+    websites: 'sources',
+    files: 'sources',
+    text: 'sources',
+    help: 'sources',
+  };
   const storedSub = agentId
     ? (() => {
         try {
@@ -271,9 +269,11 @@ export default function AgentBuilder() {
     : null;
   const teachSub: TeachSub = visibleTeachSubs.some((t) => t.key === subParam)
     ? (subParam as TeachSub)
-    : visibleTeachSubs.some((t) => t.key === storedSub)
-      ? (storedSub as TeachSub)
-      : 'websites';
+    : subParam && LEGACY_SUBS[subParam]
+      ? LEGACY_SUBS[subParam]
+      : visibleTeachSubs.some((t) => t.key === storedSub)
+        ? (storedSub as TeachSub)
+        : 'sources';
   const [activeTopic, setActiveTopic] = useState<{ id: string; text: string; priority?: 'high' | 'normal' } | null>(null);
   const goTeachSub = (s: TeachSub) => {
     try {
@@ -282,6 +282,7 @@ export default function AgentBuilder() {
       /* private-mode quota — persistence just won't stick */
     }
     setActiveTopic(null);
+    setTopicFocus(null);
     navigate(`/agents/new/${agent!.id}?step=teach&sub=${s}`, { replace: true });
   };
 
@@ -360,10 +361,12 @@ export default function AgentBuilder() {
     if (f.topic) topicCounts.set(f.topic, (topicCounts.get(f.topic) ?? 0) + 1);
   }
   const coveredSet = new Set(builder?.covered_topics ?? []);
-  const pickTopic = (t: Topic, sub: TeachSub) => {
-    // goTeachSub clears the context chip — set it after the navigate so
-    // the "Adding for" line survives into the new tab.
-    goTeachSub(sub);
+  const [topicFocus, setTopicFocus] = useState<'url' | 'file' | 'note' | null>(null);
+  const pickTopic = (t: Topic, focus: 'url' | 'file' | 'note') => {
+    // The unified list keeps one surface — the topic action aims the
+    // right affordance inside it instead of switching tabs.
+    if (teachSub !== 'sources') goTeachSub('sources');
+    setTopicFocus(focus);
     setActiveTopic(t);
   };
   const markCovered = (t: Topic) =>
@@ -442,16 +445,6 @@ export default function AgentBuilder() {
     },
     onError: (e) => setFindNote(e.message),
   });
-  // Text-tab placeholder comes from the draft's own topics — "Parasite
-  // control and vaccination: …" — so non-support agents never see the
-  // support-template refund copy. Neutral stems when no draft exists.
-  const textPlaceholder = rankedTopics.length
-    ? rankedTopics
-        .slice(0, 3)
-        .map((t) => `${t.text}: …`)
-        .join('\n')
-    : 'The one thing customers ask most often is …\nThe policy people get wrong most often is …\nA fact the model could not know is …';
-
 
   // Create is the brief — revisitable, but never a silent regeneration
   // source: editing it offers to review suggested changes, nothing more.
@@ -1025,18 +1018,20 @@ export default function AgentBuilder() {
                   </button>
                 </div>
               ) : null}
-              <div className="tabs" style={{ marginTop: 12 }}>
-                {visibleTeachSubs.map((t) => (
-                  <button
-                    key={t.key}
-                    className={`tab${teachSub === t.key ? ' active' : ''}`}
-                    onClick={() => goTeachSub(t.key)}
-                  >
-                    {t.label}
-                    {teachSubCount[t.key] > 0 ? ` · ${teachSubCount[t.key]}` : ''}
-                  </button>
-                ))}
-              </div>
+              {visibleTeachSubs.length > 1 && (
+                <div className="tabs" style={{ marginTop: 12 }}>
+                  {visibleTeachSubs.map((t) => (
+                    <button
+                      key={t.key}
+                      className={`tab${teachSub === t.key ? ' active' : ''}`}
+                      onClick={() => goTeachSub(t.key)}
+                    >
+                      {t.label}
+                      {teachSubCount[t.key] > 0 ? ` · ${teachSubCount[t.key]}` : ''}
+                    </button>
+                  ))}
+                </div>
+              )}
               {rankedTopics.length ? (
                 <div style={{ marginTop: 12 }}>
                   <label
@@ -1098,15 +1093,15 @@ export default function AgentBuilder() {
                         </span>
                         {!covered && isAdmin ? (
                           <span style={{ whiteSpace: 'nowrap' }}>
-                            <button className="link small" onClick={() => pickTopic(t, 'websites')}>
+                            <button className="link small" onClick={() => pickTopic(t, 'url')}>
                               Add website
                             </button>
                             <span className="muted"> · </span>
-                            <button className="link small" onClick={() => pickTopic(t, 'files')}>
+                            <button className="link small" onClick={() => pickTopic(t, 'file')}>
                               Upload file
                             </button>
                             <span className="muted"> · </span>
-                            <button className="link small" onClick={() => pickTopic(t, 'text')}>
+                            <button className="link small" onClick={() => pickTopic(t, 'note')}>
                               Write it
                             </button>
                             <span className="muted"> · </span>
@@ -1226,53 +1221,47 @@ export default function AgentBuilder() {
                   )}
                 </div>
               ) : null}
-              {teachSub === 'text' && (
-                <KnowledgeTextSection
+              {teachSub === 'sources' && (
+                <SourceList
+                  agentId={agent.id}
+                  agent={agent}
                   cfg={cfg}
-                  setCfg={setCfg}
                   isAdmin={isAdmin}
-                  forTopicText={activeTopic?.text}
-                  onTopicSettled={() => setActiveTopic(null)}
-                  placeholder={textPlaceholder}
-                />
-              )}
-              {teachSub === 'files' && (
-                <KnowledgeFiles
-                  agentId={agent.id}
-                  variant="files"
                   forTopic={activeTopic}
-                  onTopicSettled={() => setActiveTopic(null)}
-                />
-              )}
-              {teachSub === 'websites' && (
-                <KnowledgeFiles
-                  agentId={agent.id}
-                  variant="websites"
-                  forTopic={activeTopic}
-                  onTopicSettled={() => setActiveTopic(null)}
+                  focusAdd={topicFocus}
+                  onTopicSettled={() => {
+                    setActiveTopic(null);
+                    setTopicFocus(null);
+                  }}
+                  onConfigSaved={(config) =>
+                    api(`/api/agents/${agent.id}`, {
+                      method: 'PATCH',
+                      body: JSON.stringify({ config }),
+                    }).then(() => {
+                      setCfg(config);
+                      void qc.invalidateQueries({ queryKey: ['agents'] });
+                    })
+                  }
+                  articlesExtras={
+                    <label
+                      className="row muted"
+                      style={{ fontSize: 12, marginTop: 6, gap: 6, cursor: 'pointer' }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!builder?.include_drafts_in_test}
+                        disabled={confirmFlag.isPending}
+                        onChange={(e) =>
+                          confirmFlag.mutate({ include_drafts_in_test: e.target.checked })
+                        }
+                      />
+                      Include draft articles in test chats — production always
+                      injects published only
+                    </label>
+                  }
                 />
               )}
               {teachSub === 'gaps' && <KnowledgeGaps agentId={agent.id} config={cfg} />}
-              {teachSub === 'help' && (
-                <>
-                  <label
-                    className="row muted"
-                    style={{ fontSize: 12, marginTop: 10, gap: 6, cursor: 'pointer' }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!!builder?.include_drafts_in_test}
-                      disabled={confirmFlag.isPending}
-                      onChange={(e) =>
-                        confirmFlag.mutate({ include_drafts_in_test: e.target.checked })
-                      }
-                    />
-                    Include draft articles in test chats — production always
-                    injects published only
-                  </label>
-                  <HelpCenter agent={agent} />
-                </>
-              )}
             </>
           )}
         </>
@@ -1602,7 +1591,8 @@ export default function AgentBuilder() {
                   className="link small"
                   title={`Write the answer to: ${lastTestQuestion}`}
                   onClick={() => {
-                    goTeachSub('text');
+                    goTeachSub('sources');
+                    setTopicFocus('note');
                     setActiveTopic({
                       id: topicSlug(lastTestQuestion) || 'test-question',
                       text: lastTestQuestion,
