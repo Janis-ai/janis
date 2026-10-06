@@ -390,6 +390,25 @@ export const AgentConfig = z.object({
       // Try-asking chips — questions a real customer would ask this agent,
       // drafted from the brief. Shown in Try it / the test dock.
       suggested_questions: z.array(z.string().max(200)).max(8).optional(),
+      // Scenario checklist for Try it — drafted test cases grouped by
+      // category; seeded into agent_tests (source 'generated') on create.
+      suggested_scenarios: z
+        .array(
+          z.object({
+            category: z.enum([
+              'safety',
+              'knowledge',
+              'actions',
+              'out_of_scope',
+              'tone',
+              'general',
+            ]),
+            prompt: z.string().max(400),
+            expected: z.string().max(600),
+          }),
+        )
+        .max(20)
+        .optional(),
       // The user read the "doesn't need extra knowledge" banner and chose
       // to skip Teach it — distinct from empty ('nothing added').
       teach_skipped: z.boolean().optional(),

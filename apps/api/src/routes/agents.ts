@@ -38,7 +38,7 @@ import { checkpointIndices, draftExpectation, runAgentTest, transcriptTurns } fr
 import { recordRun } from '../lib/evalRuns.js';
 import { enqueueJob, runJobs } from '../lib/jobs.js';
 import { applySuggestion, type SuggestionPatch } from '../lib/evalTriage.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { effectiveMeteredModel } from '../lib/llm.js';
 import { llmModelsResult } from '../lib/llmModels.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
@@ -96,6 +96,24 @@ const updateAgent = z.object({
   slack_installation_id: z.string().nullable().optional(),
   config: AgentConfig.optional(),
 });
+
+/** Fingerprint of the behavior-bearing config — instructions, knowledge,
+ *  and abilities. A Try-it verdict stored against a different fingerprint
+ *  is stale: fixing one answer can break another, so edits ask for a
+ *  re-run rather than silently aging out. */
+function configVersion(cfg: AgentConfig): string {
+  return createHash('sha1')
+    .update(
+      JSON.stringify({
+        s: cfg.system_prompt ?? '',
+        k: cfg.knowledge ?? [],
+        t: cfg.tools ?? [],
+        b: cfg.builtin_tools ?? [],
+      }),
+    )
+    .digest('hex')
+    .slice(0, 12);
+}
 
 export function agentRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
@@ -250,6 +268,9 @@ export function agentRoutes(db: Db) {
           ...(draft?.suggested_questions.length
             ? { suggested_questions: draft.suggested_questions }
             : {}),
+          ...(draft?.suggested_scenarios.length
+            ? { suggested_scenarios: draft.suggested_scenarios }
+            : {}),
           ...(draft?.knowledge_need ? { knowledge_need: draft.knowledge_need } : {}),
           ...(draft?.knowledge_need_reason
             ? { knowledge_need_reason: draft.knowledge_need_reason }
@@ -264,6 +285,24 @@ export function agentRoutes(db: Db) {
         .set({ config })
         .where(eq(agents.id, row.id))
         .returning();
+      // Materialize the draft's test checklist — Try it runs real
+      // scenarios, not an empty chat box. Creation never blocks on this.
+      if (draft?.suggested_scenarios.length) {
+        await db
+          .insert(agentTests)
+          .values(
+            draft.suggested_scenarios.map((s) => ({
+              workspaceId: c.get('workspaceId'),
+              agentId: row.id,
+              name: s.prompt.slice(0, 120),
+              expectation: s.expected,
+              turns: [{ role: 'customer' as const, text: s.prompt }] as never,
+              category: s.category,
+              source: 'generated',
+            })),
+          )
+          .catch(() => undefined);
+      }
       return c.json(
         {
           agent: toAgent(updated),
@@ -774,6 +813,34 @@ export function agentRoutes(db: Db) {
         );
       liveConversations = Number(row?.n ?? 0);
     }
+    // Try-it scenarios — the saved checklist that becomes the regression
+    // suite. A verdict stored against an older config fingerprint is
+    // stale, not reviewed: the fix you're testing may have changed it.
+    const cfgVersion = configVersion(cfg);
+    const testRows = await db
+      .select({
+        category: agentTests.category,
+        humanResult: agentTests.humanResult,
+        configVersion: agentTests.configVersion,
+      })
+      .from(agentTests)
+      .where(eq(agentTests.agentId, agent.id));
+    const testsTotal = testRows.length;
+    // 'checked' = a verdict was given (pass or fail); 'unreviewed' means
+    // the scenario ran but nobody judged the reply yet.
+    const testsRun = testRows.filter((t) => !!t.humanResult).length;
+    const testsChecked = testRows.filter(
+      (t) => t.humanResult === 'pass' || t.humanResult === 'fail',
+    ).length;
+    const testsPassing = testRows.filter((t) => t.humanResult === 'pass').length;
+    const testsFailing = testRows.filter((t) => t.humanResult === 'fail').length;
+    const testsStale = testRows.filter(
+      (t) => t.humanResult && t.configVersion && t.configVersion !== cfgVersion,
+    ).length;
+    const safetyRows = testRows.filter((t) => t.category === 'safety');
+    const safetyChecked = safetyRows.filter(
+      (t) => t.humanResult === 'pass' || t.humanResult === 'fail',
+    ).length;
     const sources = (cfg.knowledge?.length ?? 0) + files.length;
     const updatedAt = files
       .map((f) => f.fetchedAt ?? f.createdAt)
@@ -823,11 +890,20 @@ export function agentRoutes(db: Db) {
                 ? 'na'
                 : 'pending',
         try:
-          testConversations > 0
-            ? openGaps > 0
-              ? 'partial'
-              : 'done'
-            : 'pending',
+          testsTotal > 0
+            ? // Scenario checklist exists — verdicts drive the mark.
+              // ✓ every scenario passed and none are stale; ◐ some run or
+              // reviewed, any needs-work, or results stale; ○ nothing run.
+              testsPassing === testsTotal && testsStale === 0
+              ? 'done'
+              : testsRun > 0 || testConversations > 0
+                ? 'partial'
+                : 'pending'
+            : testConversations > 0
+              ? openGaps > 0
+                ? 'partial'
+                : 'done'
+              : 'pending',
         deploy:
           publicCount === 0 ? 'pending' : liveConversations > 0 ? 'done' : 'partial',
       },
@@ -849,6 +925,15 @@ export function agentRoutes(db: Db) {
       live_conversations: liveConversations,
       test_conversations: testConversations,
       open_gaps: openGaps,
+      // Try-it scenario checklist — the rail subtitle reads these.
+      test_scenarios: {
+        total: testsTotal,
+        checked: testsChecked,
+        failing: testsFailing,
+        stale: testsStale,
+        safety_total: safetyRows.length,
+        safety_checked: safetyChecked,
+      },
     });
   });
 
@@ -1816,7 +1901,7 @@ export function agentRoutes(db: Db) {
   // ── Regression tests — saved transcripts replayed against current config ──
   // The flywheel's closing loop: rescue → gap → fix → proof it can't regress.
 
-  const toTest = (t: typeof agentTests.$inferSelect) => ({
+  const toTest = (t: typeof agentTests.$inferSelect, currentVersion?: string) => ({
     id: t.id,
     name: t.name,
     turns: t.turns,
@@ -1826,26 +1911,45 @@ export function agentRoutes(db: Db) {
     source_message_id: t.sourceMessageId,
     original_reply: t.originalReply,
     last_run: t.lastRun,
+    category: t.category,
+    source: t.source,
+    // The Try-it panel's human verdict — distinct from the judge's last_run.
+    human_result: t.humanResult,
+    human_run_at: t.humanRunAt?.toISOString() ?? null,
+    // Stale = the config changed since the panel run — the verdict was
+    // earned against a different agent and needs a re-run.
+    stale: !!t.configVersion && currentVersion !== undefined && t.configVersion !== currentVersion,
     created_at: t.createdAt.toISOString(),
   });
 
   app.get('/:id/tests', agentMember, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const version = configVersion((agent.config ?? {}) as AgentConfig);
     const rows = await db
       .select()
       .from(agentTests)
-      .where(eq(agentTests.agentId, c.req.param('id')))
+      .where(eq(agentTests.agentId, agent.id))
       .orderBy(desc(agentTests.createdAt));
-    return c.json({ tests: rows.map(toTest) });
+    return c.json({ tests: rows.map((t) => toTest(t, version)), config_version: version });
   });
 
+  const TEST_CATEGORIES = ['safety', 'knowledge', 'actions', 'out_of_scope', 'tone', 'general'] as const;
+  const TEST_SOURCES = ['generated', 'user', 'correction', 'transcript'] as const;
   const testBody = z.object({
-    name: z.string().min(1).max(120),
+    // Optional for the prompt shorthand — the trigger becomes the name.
+    name: z.string().min(1).max(120).optional(),
     expectation: z.string().max(4000).default(''),
     turns: z
       .array(z.object({ role: z.enum(['customer', 'agent']), text: z.string().min(1) }))
       .max(60)
       .optional(),
     conversation_id: z.string().optional(),
+    // Try-it scenario shorthand — a single-turn case saved from the panel
+    // or a correction: prompt is the customer message that triggers it.
+    prompt: z.string().min(1).max(400).optional(),
+    category: z.enum(TEST_CATEGORIES).optional(),
+    source: z.enum(TEST_SOURCES).optional(),
   });
 
   app.post('/:id/tests', agentAdmin, zValidator('json', testBody), async (c) => {
@@ -1912,7 +2016,7 @@ export function agentRoutes(db: Db) {
             ends.map((end, i) => ({
               workspaceId: c.get('workspaceId'),
               agentId,
-              name: ends.length > 1 ? `${b.name} #${i + 1}` : b.name,
+              name: ((b.name ?? full[end].text).slice(0, 120)) + (ends.length > 1 ? ` #${i + 1}` : ''),
               expectation: b.expectation || drafts[i] || '',
               expectationDraft: !b.expectation && !!drafts[i],
               turns: full.slice(Math.max(0, end + 1 - 16), end + 1) as never,
@@ -1924,8 +2028,11 @@ export function agentRoutes(db: Db) {
             })),
           )
           .returning();
-        return c.json({ test: toTest(rows[0]), tests: rows.map(toTest) }, 201);
+        return c.json({ test: toTest(rows[0]), tests: rows.map((t) => toTest(t)) }, 201);
       }
+    }
+    if (!turns.length && b.prompt) {
+      turns = [{ role: 'customer' as const, text: b.prompt }];
     }
     if (!turns.length) return c.json({ error: 'no turns — supply turns or a conversation_id' }, 400);
     const [row] = await db
@@ -1933,31 +2040,98 @@ export function agentRoutes(db: Db) {
       .values({
         workspaceId: c.get('workspaceId'),
         agentId,
-        name: b.name,
+        name: (b.name ?? b.prompt ?? 'test').slice(0, 120),
         expectation: b.expectation,
         turns: turns as never,
         sourceConversationId,
+        ...(b.category ? { category: b.category } : {}),
+        ...(b.source ? { source: b.source } : {}),
       })
       .returning();
     return c.json({ test: toTest(row) }, 201);
   });
 
-  app.patch('/:id/tests/:testId', agentAdmin, zValidator('json', testBody.partial()), async (c) => {
-    const b = c.req.valid('json');
-    const [row] = await db
-      .update(agentTests)
-      .set({
-        ...(b.name !== undefined ? { name: b.name } : {}),
-        // editing the draft is the review — clears the AI-draft marker
-        ...(b.expectation !== undefined
-          ? { expectation: b.expectation, expectationDraft: false }
-          : {}),
-        ...(b.turns !== undefined ? { turns: b.turns as never } : {}),
-      })
-      .where(and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, c.req.param('id'))))
+  app.patch(
+    '/:id/tests/:testId',
+    agentAdmin,
+    zValidator(
+      'json',
+      testBody.partial().extend({
+        // The panel-run verdict — human judgment, stored beside the
+        // judge's machine verdict (last_run). Stamping the config version
+        // at run time is what lets a later config edit mark this stale.
+        human_result: z.enum(['pass', 'fail', 'unreviewed']).optional(),
+      }),
+    ),
+    async (c) => {
+      const b = c.req.valid('json');
+      const [agent] = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, c.req.param('id')))
+        .limit(1);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const [row] = await db
+        .update(agentTests)
+        .set({
+          ...(b.name !== undefined ? { name: b.name } : {}),
+          // editing the draft is the review — clears the AI-draft marker
+          ...(b.expectation !== undefined
+            ? { expectation: b.expectation, expectationDraft: false }
+            : {}),
+          ...(b.turns !== undefined ? { turns: b.turns as never } : {}),
+          ...(b.category !== undefined ? { category: b.category } : {}),
+          ...(b.human_result !== undefined
+            ? {
+                humanResult: b.human_result,
+                humanRunAt: new Date(),
+                configVersion: configVersion((agent.config ?? {}) as AgentConfig),
+              }
+            : {}),
+        })
+        .where(and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, c.req.param('id'))))
+        .returning();
+      if (!row) return c.json({ error: 'not found' }, 404);
+      return c.json({ test: toTest(row, configVersion((agent.config ?? {}) as AgentConfig)) });
+    },
+  );
+
+  // Materialize the draft's suggested_scenarios as test rows — the Try it
+  // checklist. Idempotent: a prompt that already exists (any source) is
+  // skipped, so a re-draft refreshes suggestions without overwriting
+  // user-written or correction-saved cases.
+  app.post('/:id/tests-seed', agentAdmin, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const cfg = (agent.config ?? {}) as AgentConfig;
+    const suggested = cfg.builder?.suggested_scenarios ?? [];
+    if (!suggested.length) return c.json({ created: 0 });
+    const existing = await db
+      .select({ turns: agentTests.turns })
+      .from(agentTests)
+      .where(eq(agentTests.agentId, agent.id));
+    const seen = new Set(
+      existing
+        .map((r) => (r.turns as { role: string; text: string }[])?.[0]?.text?.trim().toLowerCase())
+        .filter(Boolean),
+    );
+    const fresh = suggested.filter((s) => !seen.has(s.prompt.trim().toLowerCase()));
+    if (!fresh.length) return c.json({ created: 0 });
+    const rows = await db
+      .insert(agentTests)
+      .values(
+        fresh.map((s) => ({
+          workspaceId: c.get('workspaceId'),
+          agentId: agent.id,
+          name: s.prompt.slice(0, 120),
+          expectation: s.expected,
+          turns: [{ role: 'customer' as const, text: s.prompt }] as never,
+          category: s.category,
+          source: 'generated',
+        })),
+      )
       .returning();
-    if (!row) return c.json({ error: 'not found' }, 404);
-    return c.json({ test: toTest(row) });
+    return c.json({ created: rows.length, tests: rows.map((t) => toTest(t)) });
   });
 
   // DELETE /:id/tests?source=<conversationId> — remove a whole saved batch at

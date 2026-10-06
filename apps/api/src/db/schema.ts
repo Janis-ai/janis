@@ -858,6 +858,21 @@ export const agentTests = pgTable(
     expectationDraft: boolean('expectation_draft').notNull().default(false),
     /** {at, passed, reason, reply, tools, model} — last replay outcome. */
     lastRun: jsonb('last_run'),
+    /** Try-it scenario grouping — safety | knowledge | actions |
+     *  out_of_scope | tone | general. */
+    category: text('category').notNull().default('general'),
+    /** Where the case came from — generated (draft), user (saved from a
+     *  test chat), correction (Correct this), transcript (a rescued or
+     *  imported conversation — the pre-scenario default). */
+    source: text('source').notNull().default('transcript'),
+    /** The Try-it panel verdict — 'pass' | 'fail' | 'unreviewed' once a
+     *  scenario has been run and judged by a human. Distinct from lastRun:
+     *  the judge's machine verdict, not the operator's. */
+    humanResult: text('human_result'),
+    humanRunAt: timestamp('human_run_at', { withTimezone: true }),
+    /** Fingerprint of the config at the last panel run — a config edit
+     *  since makes the verdict stale ("Run all again"). */
+    configVersion: text('config_version'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('agent_tests_agent').on(t.agentId)],

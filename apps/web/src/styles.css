@@ -364,7 +364,11 @@ button, input, select, textarea { font: inherit; }
   background: var(--accent-dim); cursor: pointer;
 }
 .test-strip:hover { background: var(--accent-dim); filter: brightness(1.15); }
-.test-strip.open { background: var(--accent-dim); }
+/* Open: the strip reads as the dock's edge handle — panel background, no
+   border between strip and dock, just the collapse chevron. */
+.test-strip.open { background: var(--panel); border-left-color: transparent; }
+.test-strip.open .test-strip-icon { color: var(--muted); }
+.test-strip.open:hover .test-strip-icon { color: var(--accent); }
 .test-strip-icon { color: var(--accent); flex-shrink: 0; }
 .test-strip-label {
   writing-mode: vertical-rl; font-size: 11px; letter-spacing: .1em;
@@ -466,6 +470,30 @@ body.test-dock-available .main { margin-right: 48px; max-width: 880px; }
   .correct-this { opacity: .55; }
 }
 .correct-this:hover { color: var(--text); border-color: var(--muted); }
+.correct-row { display: flex; gap: 6px; }
+/* Try-it scenario checklist — the step page is the runner's list; the
+   docked panel is the chat. */
+.scenario-cat {
+  font-size: 11px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 6px;
+}
+.scenario-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 10px; margin-bottom: 6px; background: var(--panel);
+  flex-wrap: wrap;
+}
+.scenario-verdict { display: flex; gap: 4px; align-items: center; }
+.scenario-badge {
+  font-size: 11px; padding: 1px 8px; border-radius: 999px;
+  color: var(--muted); border: 1px solid var(--border); white-space: nowrap;
+}
+.scenario-badge.pass { color: var(--accent); border-color: var(--accent); }
+.scenario-badge.fail {
+  color: var(--warn, #f59e0b);
+  border-color: var(--warn, #f59e0b);
+}
+.scenario-badge.stale { border-style: dashed; }
 /* Test-dock status strip — which config the chat exercises. */
 .test-dock-status {
   padding: 6px 14px; font-size: 11px; color: var(--muted);

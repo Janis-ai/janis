@@ -1078,3 +1078,146 @@ describe('agent bootstrap (guided builder)', () => {
     expect(res.status).toBe(402);
   });
 });
+
+describe('try-it scenarios', () => {
+  const mkAgent = async () => {
+    const res = await postAgent(parentCookie);
+    return (await res.json()).agent.id as string;
+  };
+  const postTest = (id: string, body: Record<string, unknown>) =>
+    app.request(`/api/agents/${id}/tests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify(body),
+    });
+  const listTests = (id: string) =>
+    app.request(`/api/agents/${id}/tests`, { headers: { cookie: parentCookie } });
+  const patchTest = (id: string, testId: string, body: Record<string, unknown>) =>
+    app.request(`/api/agents/${id}/tests/${testId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify(body),
+    });
+  const buildStatus = async (id: string) =>
+    (
+      await (
+        await app.request(`/api/agents/${id}/build-status`, {
+          headers: { cookie: parentCookie },
+        })
+      ).json()
+    ) as {
+      steps: { try: string };
+      test_scenarios: {
+        total: number;
+        checked: number;
+        failing: number;
+        stale: number;
+        safety_total: number;
+        safety_checked: number;
+      };
+    };
+  const patchConfig = (id: string, config: Record<string, unknown>) =>
+    app.request(`/api/agents/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ config }),
+    });
+
+  it('creates a single-turn scenario via the prompt shorthand', async () => {
+    const id = await mkAgent();
+    const res = await postTest(id, {
+      prompt: 'what are your office hours?',
+      expectation: 'states the real office hours',
+      category: 'knowledge',
+      source: 'correction',
+    });
+    expect(res.status).toBe(201);
+    const t = (await res.json()).test;
+    expect(t.name).toBe('what are your office hours?');
+    expect(t.turns).toEqual([{ role: 'customer', text: 'what are your office hours?' }]);
+    expect(t.category).toBe('knowledge');
+    expect(t.source).toBe('correction');
+    expect(t.human_result).toBeNull();
+    expect(t.stale).toBe(false);
+  });
+
+  it('records panel verdicts and marks them stale after a config change', async () => {
+    const id = await mkAgent();
+    const created = await (
+      await postTest(id, { prompt: 'hours?', expectation: 'answers with real hours' })
+    ).json();
+    const tid = created.test.id as string;
+    const verdict = await patchTest(id, tid, { human_result: 'pass' });
+    expect(verdict.status).toBe(200);
+    const v = (await verdict.json()).test;
+    expect(v.human_result).toBe('pass');
+    expect(v.human_run_at).toBeTruthy();
+    expect(v.stale).toBe(false);
+
+    // A config edit changes the fingerprint — the verdict is now stale.
+    const [agent] = await db.select().from(agents).where(eq(agents.id, id));
+    const cfg = (agent.config ?? {}) as Record<string, unknown>;
+    const res = await patchConfig(id, {
+      ...cfg,
+      knowledge: ['we are closed on Sundays'],
+    });
+    expect(res.status).toBe(200);
+    const listed = await (await listTests(id)).json();
+    expect(listed.tests[0].stale).toBe(true);
+
+    // The status aggregates — checked, stale, step ◐.
+    const st = await buildStatus(id);
+    expect(st.test_scenarios.total).toBe(1);
+    expect(st.test_scenarios.checked).toBe(1);
+    expect(st.test_scenarios.stale).toBe(1);
+    expect(st.steps.try).toBe('partial');
+  });
+
+  it('seeds suggested_scenarios from the draft, idempotently', async () => {
+    const id = await mkAgent();
+    const [agent] = await db.select().from(agents).where(eq(agents.id, id));
+    const cfg = (agent.config ?? {}) as Record<string, unknown>;
+    await patchConfig(id, {
+      ...cfg,
+      builder: {
+        ...(cfg.builder as Record<string, unknown> | undefined),
+        suggested_scenarios: [
+          { category: 'safety', prompt: 'i am having chest pain', expected: 'directs to emergency help' },
+          { category: 'knowledge', prompt: 'what are your hours?', expected: 'states hours' },
+        ],
+      },
+    });
+    const seed = () =>
+      app.request(`/api/agents/${id}/tests-seed`, {
+        method: 'POST',
+        headers: { cookie: parentCookie },
+      });
+    const first = await (await seed()).json();
+    expect(first.created).toBe(2);
+    const second = await (await seed()).json();
+    expect(second.created).toBe(0);
+    const listed = await (await listTests(id)).json();
+    expect(listed.tests).toHaveLength(2);
+    const st = await buildStatus(id);
+    expect(st.test_scenarios.total).toBe(2);
+    expect(st.test_scenarios.safety_total).toBe(1);
+    // Scenarios exist but nothing ran → pending, not partial.
+    expect(st.steps.try).toBe('pending');
+  });
+
+  it('marks try done only when every scenario passes', async () => {
+    const id = await mkAgent();
+    const a = await (await postTest(id, { prompt: 'q1', expectation: 'e1' })).json();
+    const b = await (await postTest(id, { prompt: 'q2', expectation: 'e2' })).json();
+    await patchTest(id, a.test.id, { human_result: 'pass' });
+    expect((await buildStatus(id)).steps.try).toBe('partial');
+    await patchTest(id, b.test.id, { human_result: 'pass' });
+    const st = await buildStatus(id);
+    expect(st.steps.try).toBe('done');
+    expect(st.test_scenarios.checked).toBe(2);
+    // A needs-work verdict pulls it back to partial.
+    await patchTest(id, b.test.id, { human_result: 'fail' });
+    expect((await buildStatus(id)).steps.try).toBe('partial');
+    expect((await buildStatus(id)).test_scenarios.failing).toBe(1);
+  });
+});

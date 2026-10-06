@@ -132,6 +132,15 @@ export interface BuildStatus {
   abilities: number;
   test_conversations: number;
   open_gaps: number;
+  // Try-it scenario checklist — verdicts from panel runs.
+  test_scenarios: {
+    total: number;
+    checked: number;
+    failing: number;
+    stale: number;
+    safety_total: number;
+    safety_checked: number;
+  };
 }
 
 export function useBuildStatus(agentId: string | undefined) {

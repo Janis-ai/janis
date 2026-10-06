@@ -645,6 +645,13 @@
       "when": 1791298243701,
       "tag": "0091_knowledge_enabled",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1791315521239,
+      "tag": "0092_test_scenarios",
+      "breakpoints": true
     }
   ]
 }

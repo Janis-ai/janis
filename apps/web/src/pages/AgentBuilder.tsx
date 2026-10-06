@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -7,7 +7,7 @@ import { janisBrain, setLastAgent } from '../lib/agentContext';
 import { stepGlyph, stepSubtitle, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
-import { ChevronDown, MessageSquare } from 'lucide-react';
+import { ChevronDown, MessageSquare, PanelRightClose } from 'lucide-react';
 import { AskJanis } from '../components/AskJanis';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { AgentChannels } from '../components/AgentChannels';
@@ -62,6 +62,18 @@ const TEACH_SUBS = [
 ] as const;
 type TeachSub = (typeof TEACH_SUBS)[number]['key'];
 const teachSubKey = (agentId: string) => `janis.teach-sub.${agentId}`;
+
+// Try-it scenario categories — safety leads so an elevated-risk agent
+// can't look tested on office-hours questions alone.
+const CAT_ORDER = ['safety', 'knowledge', 'actions', 'out_of_scope', 'tone', 'general'];
+const CAT_LABELS: Record<string, string> = {
+  safety: 'Safety & escalation',
+  knowledge: 'Knowledge',
+  actions: 'Actions',
+  out_of_scope: 'Out of scope',
+  tone: 'Tone & style',
+  general: 'General',
+};
 
 export default function AgentBuilder() {
   usePageTitle('New agent');
@@ -276,8 +288,21 @@ export default function AgentBuilder() {
   // strip + panel; below that the dock is a drawer over dimmed content
   // (click-outside closes it). The strip itself reserves its 48px whenever
   // it's on screen so it can never cover content.
-  const dockAvailable =
-    !!agent && hosted && step !== 'start' && step !== 'bring' && step !== 'try';
+  const dockAvailable = !!agent && hosted && step !== 'start' && step !== 'bring';
+  // On the Try step the dock IS the surface — open it by default once per
+  // agent; after that, the operator's open/closed choice wins.
+  useEffect(() => {
+    if (step !== 'try' || !agent || !hosted) return;
+    const k = `janis.try-dock.${agent.id}`;
+    try {
+      if (localStorage.getItem(k)) return;
+      localStorage.setItem(k, '1');
+    } catch {
+      /* private mode */
+    }
+    setDockOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, agent?.id, hosted]);
   useEffect(() => {
     document.body.classList.toggle('test-dock-open', dockAvailable && testOpen);
     document.body.classList.toggle('test-dock-available', dockAvailable);
@@ -463,21 +488,156 @@ export default function AgentBuilder() {
   const markDrift = () => {
     if (chatActive) setCfgDrifted(true);
   };
-  // Try-asking chips — draft-generated questions seed the test chat. The
-  // nonce bumps on every click so the same question can be sent again;
-  // target gates which chat instance (Try page vs dock) receives it.
+  // Try-asking chips — scenario prompts seed the test chat so the panel
+  // and the checklist share one source of truth; falls back to the
+  // draft's suggested questions while no scenarios exist. The nonce
+  // bumps on every click so the same prompt can be sent again.
   const [seed, setSeed] = useState<{
     text: string;
     nonce: number;
     target: 'try' | 'dock';
   } | null>(null);
-  const tryChips = (target: 'try' | 'dock') =>
-    (builder?.suggested_questions?.length ?? 0) > 0 && (
+  const [testNotice, setTestNotice] = useState('');
+  // ── Try-it scenario runner ──────────────────────────────────────────
+  // Scenarios are agent_tests rows — the same suite that runs post-launch
+  // regression. Try it is the human-judgment layer: Run sends the prompt
+  // into the docked panel on the real test pipeline, the reply comes back
+  // through onAgentReply, and the operator marks Looks right / Needs work.
+  interface ScenarioRow {
+    id: string;
+    name: string;
+    turns: { role: 'customer' | 'agent'; text: string }[];
+    expectation: string;
+    category: string;
+    source: string;
+    human_result: 'pass' | 'fail' | 'unreviewed' | null;
+    human_run_at: string | null;
+    stale: boolean;
+  }
+  const testsQ = useQuery({
+    queryKey: ['agent-tests', agent?.id],
+    queryFn: () =>
+      api<{ tests: ScenarioRow[]; config_version: string }>(
+        `/api/agents/${agent?.id}/tests`,
+      ),
+    enabled: !!agent?.id && hosted,
+    refetchInterval: 30_000,
+  });
+  const scenarios = testsQ.data?.tests ?? [];
+  // First visit to the checklist materializes the draft's suggested
+  // scenarios (bootstrap already seeds; this catches agents created
+  // before suggestions existed or a regenerate that added new ones).
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current || !agent || !hosted || !testsQ.data) return;
+    if (testsQ.data.tests.length || !builder?.suggested_scenarios?.length) return;
+    seededRef.current = true;
+    void api(`/api/agents/${agent.id}/tests-seed`, { method: 'POST' })
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: ['agent-tests', agent.id] });
+        void qc.invalidateQueries({ queryKey: ['build-status', agent.id] });
+      })
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testsQ.data, builder, agent?.id, hosted]);
+  /** The customer message a scenario replays — last inbound turn for
+   *  multi-turn transcript cases, the single turn for scenarios. */
+  const scenarioPrompt = (s: ScenarioRow) =>
+    [...(s.turns ?? [])].reverse().find((t) => t.role === 'customer')?.text ?? s.name;
+  const [runningId, setRunningId] = useState<string | null>(null);
+  const runQueueRef = useRef<string[]>([]);
+  const replyRef = useRef<Map<string, string>>(new Map());
+  const [repliesTick, bumpReplies] = useState(0);
+  void repliesTick;
+  const markTest = useMutation({
+    mutationFn: ({ id, result }: { id: string; result: 'pass' | 'fail' | 'unreviewed' }) =>
+      api(`/api/agents/${agent?.id}/tests/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ human_result: result }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+    },
+  });
+  const saveTest = useMutation({
+    mutationFn: (ctx: { agentText: string; customerText?: string }) =>
+      api(`/api/agents/${agent?.id}/tests`, {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt: (ctx.customerText ?? ctx.agentText).slice(0, 400),
+          // The reply it gave IS the expectation — save-as-test means
+          // "this was right, keep it that way".
+          expectation: ctx.agentText.slice(0, 600),
+          category: 'general',
+          source: 'user',
+        }),
+      }),
+    onSuccess: () => {
+      setTestNotice('Added to the scenario list');
+      void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+    },
+    onError: (e) => setTestNotice(e.message),
+  });
+  // Sequential runner — one prompt in flight at a time so replies pair
+  // unambiguously. A multi-bubble answer attaches to the running scenario;
+  // the queue advances on a short delay after the first reply lands.
+  const advanceRun = (queue = runQueueRef.current) => {
+    const id = queue.shift();
+    const s = id ? scenarios.find((x) => x.id === id) : undefined;
+    if (!s) {
+      setRunningId(null);
+      return;
+    }
+    setRunningId(s.id);
+    setSeed({ text: scenarioPrompt(s), nonce: Date.now(), target: 'dock' });
+  };
+  const runScenario = (s: ScenarioRow) => {
+    runQueueRef.current = [s.id];
+    setDockOpen(true);
+    advanceRun();
+  };
+  const runAll = () => {
+    runQueueRef.current = scenarios.map((s) => s.id);
+    setDockOpen(true);
+    advanceRun();
+  };
+  const runAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onAgentReply = (text: string) => {
+    if (!runningId) return;
+    replyRef.current.set(
+      runningId,
+      (replyRef.current.get(runningId) ? `${replyRef.current.get(runningId)}\n` : '') + text,
+    );
+    bumpReplies((n) => n + 1);
+    markTest.mutate({ id: runningId, result: 'unreviewed' });
+    if (runAdvanceTimer.current) return; // already scheduled — keep gathering
+    runAdvanceTimer.current = setTimeout(() => {
+      runAdvanceTimer.current = null;
+      advanceRun();
+    }, 1500);
+  };
+  // "Running: safety #2" — category + its ordinal within the group.
+  const runningLabel = (() => {
+    if (!runningId) return null;
+    const s = scenarios.find((x) => x.id === runningId);
+    if (!s) return 'scenario';
+    const sameCat = scenarios.filter((x) => x.category === s.category);
+    return `${CAT_LABELS[s.category] ?? s.category} #${sameCat.indexOf(s) + 1}`;
+  })();
+  const tryChips = (target: 'try' | 'dock') => {
+    const qs = scenarios
+      .map((s) => scenarioPrompt(s))
+      .filter(Boolean)
+      .slice(0, 6);
+    const chips = qs.length ? qs : (builder?.suggested_questions ?? []);
+    return chips.length > 0 && (
       <div className="try-chips">
         <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>
           Try asking:
         </span>
-        {builder?.suggested_questions?.map((q) => (
+        {chips.map((q) => (
           <button
             key={q}
             className="try-chip"
@@ -489,6 +649,7 @@ export default function AgentBuilder() {
         ))}
       </div>
     );
+  };
   const correctCard = correctTarget && agent && (
     <CorrectThisCard
       agentId={agent.id}
@@ -1642,18 +1803,33 @@ export default function AgentBuilder() {
             <>
               <div className="row" style={{ marginTop: 12, alignItems: 'center', gap: 10 }}>
                 <div className="muted grow" style={{ fontSize: 13 }}>
-                  Try your agent — a real conversation on a private test channel,
-                  same pipeline as production. Ask the questions you taught it,
-                  ask it to take an action, and watch approval cards pause for a
-                  human.
+                  Deliberate checks, not a second chat — Run sends the prompt
+                  into the test panel on the right, and you judge the reply.
+                  This list becomes the agent's regression suite after launch.
                 </div>
                 <button
                   className="btn sm"
                   title="Start a fresh test conversation — earlier chats stay in the inbox"
-                  onClick={newChat}
+                  onClick={() => {
+                    newChat();
+                    setDockOpen(true);
+                  }}
                 >
                   New chat
                 </button>
+                {scenarios.length > 0 && (
+                  <button
+                    className="btn sm"
+                    title={
+                      scenarios.some((s) => s.stale)
+                        ? 'Config changed since some results — re-run the list'
+                        : 'Run every scenario through the panel, one at a time'
+                    }
+                    onClick={runAll}
+                  >
+                    {scenarios.some((s) => s.stale) ? 'Run all again' : 'Run all'}
+                  </button>
+                )}
               </div>
               {openGaps.length > 0 && (
                 <div className="card" style={{ marginTop: 10 }}>
@@ -1672,48 +1848,118 @@ export default function AgentBuilder() {
                   </div>
                 </div>
               )}
-              <div style={{ marginTop: 12 }}>{tryChips('try')}</div>
-              <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-                Testing saved version
-                {builder?.include_drafts_in_test ? ' + drafts' : ''}
-                {cfgDrifted ? (
-                  <>
-                    {' — '}
-                    <span style={{ color: 'var(--warn, #f59e0b)' }}>
-                      config changed since this chat started
-                    </span>{' '}
-                    <button className="link small" onClick={newChat}>
-                      Start new chat
-                    </button>
-                  </>
-                ) : null}
-              </div>
-              <div className="card builder-chat" style={{ marginTop: 6, padding: 0 }}>
-                {testChannel.isPending && (
-                  <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
-                )}
-                {testChannel.isError && (
-                  <div className="error" style={{ margin: 14 }}>
-                    {(testChannel.error as Error).message}
+              {testNotice && (
+                <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                  {testNotice}
+                </div>
+              )}
+              {scenarios.some((s) => s.stale) && (
+                <div className="test-dock-notice" style={{ borderRadius: 8, marginTop: 10 }}>
+                  Instructions, knowledge, or abilities changed since{' '}
+                  {scenarios.filter((s) => s.stale).length} of these ran —{' '}
+                  <button className="link small" onClick={runAll}>
+                    run all again
+                  </button>{' '}
+                  before trusting them.
+                </div>
+              )}
+              {testsQ.isPending && (
+                <div className="muted" style={{ marginTop: 14 }}>Loading scenarios…</div>
+              )}
+              {testsQ.data && scenarios.length === 0 && (
+                <div className="card" style={{ marginTop: 12 }}>
+                  <strong>No scenarios yet</strong>
+                  <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                    Chat in the test panel — every agent reply offers
+                    "Save as test", and "Correct this → Add to tests" turns a
+                    fix into a re-runnable check.
                   </div>
-                )}
-                {testChannel.data && (
-                  <AskJanis
-                    key={chatVisitor ?? 'base'}
-                    visitorOverride={chatVisitor ?? undefined}
-                    channelId={testChannel.data.channel_id}
-                    badge="TEST"
-                    asCustomer
-                    onCustomerMessage={() => setChatActive(true)}
-                    onCorrect={(ctx) => {
-                      setCorrectTarget(ctx);
-                    }}
-                    seedMessage={seed?.target === 'try' ? seed.text : undefined}
-                    seedNonce={seed?.nonce}
-                  />
-                )}
-                {correctCard}
-              </div>
+                </div>
+              )}
+              {CAT_ORDER.filter((cat) => scenarios.some((s) => s.category === cat)).map(
+                (cat) => (
+                  <div key={cat} style={{ marginTop: 16 }}>
+                    <div className="scenario-cat">{CAT_LABELS[cat] ?? cat}</div>
+                    {scenarios
+                      .filter((s) => s.category === cat)
+                      .map((s) => {
+                        const prompt = scenarioPrompt(s);
+                        const reply = replyRef.current.get(s.id);
+                        const running = runningId === s.id;
+                        return (
+                          <div key={s.id} className="scenario-row">
+                            <div className="grow" style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 13 }}>“{prompt}”</div>
+                              {s.expectation && (
+                                <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                                  expected: {s.expectation}
+                                </div>
+                              )}
+                              {s.category === 'actions' && (
+                                <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                                  runs the live pipeline — gated actions pause on an
+                                  approval card, nothing executes silently
+                                </div>
+                              )}
+                              {s.source === 'correction' && (
+                                <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                                  saved from a Correct this fix
+                                </div>
+                              )}
+                            </div>
+                            <div className="scenario-verdict">
+                              {s.stale && (
+                                <span className="scenario-badge stale" title="Config changed since this ran">
+                                  stale
+                                </span>
+                              )}
+                              {s.human_result === 'pass' && !s.stale && (
+                                <span className="scenario-badge pass">looks right</span>
+                              )}
+                              {s.human_result === 'fail' && !s.stale && (
+                                <span className="scenario-badge fail">needs work</span>
+                              )}
+                              {s.human_result === 'unreviewed' && !s.stale && (
+                                <span className="scenario-badge">unreviewed</span>
+                              )}
+                            </div>
+                            {reply && s.human_result === 'unreviewed' && (
+                              <div className="row" style={{ gap: 6 }}>
+                                <button
+                                  className="btn sm primary"
+                                  disabled={markTest.isPending}
+                                  onClick={() =>
+                                    markTest.mutate({ id: s.id, result: 'pass' })
+                                  }
+                                >
+                                  Looks right
+                                </button>
+                                <button
+                                  className="btn sm"
+                                  disabled={markTest.isPending}
+                                  onClick={() => {
+                                    markTest.mutate({ id: s.id, result: 'fail' });
+                                    setDockOpen(true);
+                                    setCorrectTarget({ agentText: reply, customerText: prompt });
+                                  }}
+                                >
+                                  Needs work
+                                </button>
+                              </div>
+                            )}
+                            <button
+                              className="btn sm"
+                              disabled={running}
+                              onClick={() => runScenario(s)}
+                            >
+                              {running ? 'Running…' : s.human_result ? 'Run again' : 'Run'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                  </div>
+                ),
+              )}
             </>
           )}
         </>
@@ -1853,18 +2099,11 @@ export default function AgentBuilder() {
                 >
                   New chat
                 </button>
-                <button
-                  className="btn sm"
-                  onClick={() => setDockOpen(false)}
-                  title="Close panel"
-                  aria-label="Close test panel"
-                >
-                  ×
-                </button>
               </div>
               <div className="test-dock-status">
                 Testing saved version
                 {builder?.include_drafts_in_test ? ' + drafts' : ''}
+                {runningLabel ? ` · running: ${runningLabel}` : ''}
               </div>
               {cfgDrifted && (
                 <div className="test-dock-notice">
@@ -1897,6 +2136,23 @@ export default function AgentBuilder() {
                     onCorrect={(ctx) => {
                       setCorrectTarget(ctx);
                     }}
+                    onAgentReply={onAgentReply}
+                    onSaveTest={(ctx) => {
+                      // A reply to a checklist prompt IS that scenario —
+                      // saving it again would duplicate the row.
+                      if (
+                        ctx.customerText &&
+                        scenarios.some(
+                          (s) =>
+                            scenarioPrompt(s).trim().toLowerCase() ===
+                            ctx.customerText!.trim().toLowerCase(),
+                        )
+                      ) {
+                        setTestNotice('That prompt is already a scenario');
+                        return;
+                      }
+                      saveTest.mutate(ctx);
+                    }}
                     seedMessage={seed?.target === 'dock' ? seed.text : undefined}
                     seedNonce={seed?.nonce}
                   />
@@ -1911,16 +2167,25 @@ export default function AgentBuilder() {
               so it can never cover anything, and the panel slides out from
               beside it so strip and panel read as one control. The dot
               pulses until the first test conversation exists. */}
+          {/* The strip merges INTO the open panel — it becomes the dock's
+              edge handle (collapse chevron) rather than a second green bar
+              beside it. Closed: chat icon + vertical label + activity dot. */}
           <button
             className={`test-strip${testOpen ? ' open' : ''}`}
-            title={testOpen ? 'Close test panel' : 'Test your agent'}
+            title={testOpen ? 'Collapse test panel' : 'Test your agent'}
             aria-expanded={testOpen}
             onClick={() => setDockOpen(!testOpen)}
           >
-            <MessageSquare size={16} className="test-strip-icon" />
-            <span className="test-strip-label">Test your agent</span>
-            {!testOpen && (status?.test_conversations ?? 0) === 0 && (
-              <span className="test-strip-dot" />
+            {testOpen ? (
+              <PanelRightClose size={16} className="test-strip-icon" />
+            ) : (
+              <>
+                <MessageSquare size={16} className="test-strip-icon" />
+                <span className="test-strip-label">Test your agent</span>
+                {(status?.test_conversations ?? 0) === 0 && (
+                  <span className="test-strip-dot" />
+                )}
+              </>
             )}
           </button>
           {dockCallout && !testOpen && (

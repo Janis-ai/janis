@@ -40,6 +40,7 @@ export function CorrectThisCard({
   const [branch, setBranch] = useState<'knowledge' | 'behavior' | null>(null);
   const [instrEdit, setInstrEdit] = useState('');
   const [error, setError] = useState('');
+  const [addedTest, setAddedTest] = useState(false);
 
   // A fresh target means a fresh draft — reset during render (the
   // React-blessed pattern; an effect would flash the previous reply's
@@ -53,6 +54,7 @@ export function CorrectThisCard({
     setBranch(null);
     setInstrEdit('');
     setError('');
+    setAddedTest(false);
   }
 
   const saveCorrection = useMutation({
@@ -139,6 +141,46 @@ export function CorrectThisCard({
     onError: (e) => setError(e.message),
   });
 
+  // "Add to tests" — the correction becomes a regression scenario (the
+  // customer's prompt is the trigger, the fix is the expectation) so a
+  // later config change can't silently regress it. Doesn't close the
+  // card — the correction itself still lands as a note/article/rule.
+  const addTest = useMutation({
+    mutationFn: () =>
+      api(`/api/agents/${agentId}/tests`, {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt: target.customerText ?? target.agentText.slice(0, 200),
+          expectation:
+            correction.trim() || instrEdit.trim() || 'the reply should answer this correctly',
+          category: 'general',
+          source: 'correction',
+        }),
+      }),
+    onSuccess: () => {
+      setAddedTest(true);
+      void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
+    },
+    onError: (e) => setError(e.message),
+  });
+
+  // Needs the customer's prompt — a scenario without a trigger can't re-run.
+  const addTestBtn = !target.customerText ? null : addedTest ? (
+    <span className="muted" style={{ fontSize: 12 }}>
+      ✓ in tests
+    </span>
+  ) : (
+    <button
+      className="link small"
+      disabled={addTest.isPending}
+      title="Save the customer's prompt + this fix as a re-runnable scenario on Try it"
+      onClick={() => addTest.mutate()}
+    >
+      ＋ Add to tests
+    </button>
+  );
+
   return (
     <div className="card" style={{ margin: '10px 0' }}>
       <strong style={{ fontSize: 13 }}>Correct this answer</strong>
@@ -190,6 +232,7 @@ export function CorrectThisCard({
             <button className="link small" onClick={() => setBranch('knowledge')}>
               it's a fact instead
             </button>
+            {addTestBtn}
             <button className="btn sm" onClick={onClose}>
               Cancel
             </button>
@@ -225,6 +268,7 @@ export function CorrectThisCard({
             <button className="link small" onClick={() => setBranch('behavior')}>
               it's about behavior
             </button>
+            {addTestBtn}
             <button className="btn sm" onClick={onClose}>
               Cancel
             </button>
@@ -243,6 +287,7 @@ export function CorrectThisCard({
           >
             {correctionPlan.isPending ? 'Checking…' : 'Continue →'}
           </button>
+          {addTestBtn}
           <button className="btn sm" onClick={onClose}>
             Cancel
           </button>

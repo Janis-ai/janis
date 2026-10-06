@@ -284,6 +284,8 @@ export function AskJanis({
   asCustomer,
   onCustomerMessage,
   onCorrect,
+  onAgentReply,
+  onSaveTest,
   hideHeader,
   visitorOverride,
   focusSignal,
@@ -314,6 +316,14 @@ export function AskJanis({
    *  agent reply; the parent decides where the correction lands (note,
    *  draft article). Omitted elsewhere (inbox, concierge, widget). */
   onCorrect?: (ctx: { agentText: string; customerText?: string }) => void;
+  /** Try-it runner — every new agent reply (incremental polls only, never
+   *  history backfill) reports its text so the parent can attach a
+   *  verdict to the scenario that was run. */
+  onAgentReply?: (text: string) => void;
+  /** Try-it free chat — "Save as test" next to Correct this under replies,
+   *  turning an ad-hoc exchange into a scenario. The parent dedupes
+   *  against scenarios that were run from the checklist itself. */
+  onSaveTest?: (ctx: { agentText: string; customerText?: string }) => void;
   /** The parent renders its own merged header (builder test dock) — the
    *  pane header stays off so the two don't stack. */
   hideHeader?: boolean;
@@ -445,11 +455,21 @@ export function AskJanis({
       setConvState(d.state);
       if (d.conversation_id) setConvId(d.conversation_id);
       if (d.has_more !== undefined) setHasMore(d.has_more);
+      // A set cursor means this is an incremental poll — fresh 'out' rows
+      // are genuinely new replies. On the first fetch 'fresh' is history
+      // backfill; reporting those as new replies would fire the
+      // scenario-runner against old transcripts.
+      const hadCursor = !!lastTs.current;
       const { outbox: next, fresh, maxTs, minTs } = reconcilePoll(
         outboxRef.current,
         d.messages,
         seen.current,
       );
+      if (hadCursor) {
+        for (const m of fresh) {
+          if (m.direction === 'out' && m.text?.trim()) onAgentReply?.(m.text);
+        }
+      }
       if (maxTs && (!lastTs.current || maxTs > lastTs.current)) lastTs.current = maxTs;
       if (minTs && (!oldestTs.current || minTs < oldestTs.current)) oldestTs.current = minTs;
       setOb(() => next);
@@ -1034,24 +1054,47 @@ export function AskJanis({
                   </div>
                 )}
                 <AttachmentNodes atts={item.m.attachments ?? []} />
-                {onCorrect && item.m.direction === 'out' && item.m.text && (
-                  <button
-                    className="correct-this"
-                    title="Tell Janis what it should have said — saves as a note or a draft article"
-                    onClick={() => {
-                      const prevCustomer = [...arr]
-                        .slice(0, idx)
-                        .reverse()
-                        .find((x) => x.kind === 'msg' && x.m.direction === 'in');
-                      onCorrect({
-                        agentText: item.m.text,
-                        customerText:
-                          prevCustomer?.kind === 'msg' ? prevCustomer.m.text : undefined,
-                      });
-                    }}
-                  >
-                    Correct this
-                  </button>
+                {(onCorrect || onSaveTest) && item.m.direction === 'out' && item.m.text && (
+                  <div className="correct-row">
+                    {onCorrect && (
+                      <button
+                        className="correct-this"
+                        title="Tell Janis what it should have said — saves as a note or a draft article"
+                        onClick={() => {
+                          const prevCustomer = [...arr]
+                            .slice(0, idx)
+                            .reverse()
+                            .find((x) => x.kind === 'msg' && x.m.direction === 'in');
+                          onCorrect({
+                            agentText: item.m.text,
+                            customerText:
+                              prevCustomer?.kind === 'msg' ? prevCustomer.m.text : undefined,
+                          });
+                        }}
+                      >
+                        Correct this
+                      </button>
+                    )}
+                    {onSaveTest && (
+                      <button
+                        className="correct-this"
+                        title="Keep this exchange as a scenario — re-run it after config changes"
+                        onClick={() => {
+                          const prevCustomer = [...arr]
+                            .slice(0, idx)
+                            .reverse()
+                            .find((x) => x.kind === 'msg' && x.m.direction === 'in');
+                          onSaveTest({
+                            agentText: item.m.text,
+                            customerText:
+                              prevCustomer?.kind === 'msg' ? prevCustomer.m.text : undefined,
+                          });
+                        }}
+                      >
+                        Save as test
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             ) : (

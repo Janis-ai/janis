@@ -108,12 +108,26 @@ export function stepSubtitle(key: string, status: BuildStatus): string {
           : st === 'na'
             ? 'none needed'
             : 'nothing connected';
-    case 'try':
+    case 'try': {
+      const t = status.test_scenarios;
+      if (t?.total) {
+        const bits = [
+          `${t.checked} of ${t.total} checked`,
+          ...(t.failing ? [`${t.failing} need${t.failing > 1 ? '' : 's'} work`] : []),
+          ...(t.stale ? [`${t.stale} stale`] : []),
+        ];
+        // Safety can't hide inside a healthy-sounding total — an elevated
+        // agent must earn its mark on the hard cases, not office hours.
+        return t.safety_total
+          ? `safety checks ${t.safety_checked} of ${t.safety_total} · ${bits.join(' · ')}`
+          : bits.join(' · ');
+      }
       return status.test_conversations
         ? status.open_gaps
           ? `${status.open_gaps} open gap${status.open_gaps > 1 ? 's' : ''}`
           : 'tested'
         : 'not tested yet';
+    }
     case 'deploy':
       return status.channels
         ? status.live_conversations
