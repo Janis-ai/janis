@@ -337,15 +337,21 @@ export default function AgentBuilder() {
     },
     onError: (e) => setError(e.message),
   });
-  // Refresh-derived-suggestions — redrafts from the CURRENT instructions
-  // (or the brief when none exist) and merges only the suggestion lists
-  // into config.builder. The source is the instructions rather than the
-  // brief because they may have been edited since create — suggestions
-  // should reflect what the agent does now, and authored config
-  // (prompt/tone/greeting) is never touched.
+  // Refresh-derived-suggestions — redrafts from the brief AND the current
+  // instructions, and merges only the suggestion lists into config.builder.
+  // The brief must stay in the source: drafted instructions are told not
+  // to mention tools, so an instructions-only redraft forgets abilities
+  // the user named outright ("share songs from iTunes") and the wholesale
+  // replace would erase the suggestion. Instructions are included because
+  // they may have been edited since create — suggestions should reflect
+  // what the agent does now. Authored config (prompt/tone/greeting) is
+  // never touched.
   const suggestAbilities = useMutation({
     mutationFn: async () => {
-      const source = (cfg.system_prompt || storedBrief).slice(0, 4000);
+      const source = [storedBrief, cfg.system_prompt]
+        .filter(Boolean)
+        .join('\n\n')
+        .slice(0, 4000);
       const r = await api<{ draft: BuilderDraft | null }>(
         `/api/agents/${agent?.id}/redraft`,
         { method: 'POST', body: JSON.stringify({ description: source }) },
