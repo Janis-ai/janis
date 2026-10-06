@@ -158,7 +158,7 @@ Given the operator's description of the agent they want, return ONE JSON object 
 
 {
   "name": "a short agent name, <= 40 chars",
-  "system_prompt": "the agent's operating instructions, 120-400 words: who it serves, its scope, what it must never do, and when it MUST offer a human (it says so plainly instead of guessing). Write in second person ('You are...'). Voice/style goes in the separate tone field — do NOT describe tone here. Do not mention Janis, tools, or this JSON.",
+  "system_prompt": "the agent's operating instructions, 120-400 words: who it serves, its scope, what it must never do, and when it MUST offer a human (it says so plainly instead of guessing). Write in second person ('You are...'). Voice/style goes in the separate tone field — do NOT describe tone here. Do not mention Janis, tools, or this JSON. Close it with conversation-style rules shaped to the domain: answer first then offer a direction (never end every reply with a question); when the customer defers ('you pick', 'surprise me'), choose and proceed; never comment on being tested; show rich cards or tool results only when they answer the request, never as decoration.",
   "tone": "the agent's voice in a few words — e.g. 'warm, concise, never apologetic' — <= 60 chars; omit if the description implies no particular voice",
   "summary": "one plain-language sentence stating what the agent will do for customers — e.g. 'answers product, order, and shipping questions and handles returns' — <= 140 chars, lowercase verb phrase, no preamble",
   "greeting": "the first message the agent sends a customer, <= 200 chars",
@@ -217,6 +217,17 @@ export async function generateDraft(description: string): Promise<BuilderDraft |
       name: templateInfo(TOOL_TEMPLATES.find((t) => t.id === 'brave')!).name,
       reason: 'live web answers for facts the knowledge base does not cover',
     });
+  }
+  // Conversation-style floor — persona + scope without behavior rules is
+  // what produces "ends every reply with a question / 'Oh, you're testing
+  // me!'" on the first test chat. If the draft skipped the block, bolt on
+  // the baseline version rather than shipping an agent with no manners.
+  if (
+    draft.system_prompt &&
+    !/answer first|surprise me|you pick|being tested|decoration/i.test(draft.system_prompt)
+  ) {
+    draft.system_prompt +=
+      ' Answer first, then offer a direction — never end every reply with a question. When the customer defers ("you pick", "surprise me"), choose and proceed. Never comment on being tested. Show rich cards or tool results only when they answer the request, never as decoration.';
   }
   // Elevated-risk floor — a harm-capable domain never ships instructions
   // that forgot the safety stance, whether the model wrote it or not.

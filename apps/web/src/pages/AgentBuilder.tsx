@@ -7,6 +7,7 @@ import { janisBrain, setLastAgent } from '../lib/agentContext';
 import { stepGlyph, stepSubtitle, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
+import { ChevronDown } from 'lucide-react';
 import { AskJanis } from '../components/AskJanis';
 import { AgentChannels } from '../components/AgentChannels';
 import { SourceList, type KnowledgeBudget } from '../components/SourceList';
@@ -174,6 +175,7 @@ export default function AgentBuilder() {
       void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+      markDrift();
     },
     onError: (e) => setError(e.message),
   });
@@ -195,6 +197,7 @@ export default function AgentBuilder() {
       setCfg(config);
       void qc.invalidateQueries({ queryKey: ['agents'] });
       void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+      markDrift();
     },
     onError: (e) => setError(e.message),
   });
@@ -221,12 +224,15 @@ export default function AgentBuilder() {
   // on the internal channel; earlier threads stay in the inbox where they
   // remain useful for alert and takeover testing.
   const [chatVisitor, setChatVisitor] = useState<string | null>(null);
-  const newChat = () =>
+  const newChat = () => {
     setChatVisitor(
       (crypto.randomUUID?.() ??
         `v${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`
       ).replace(/-/g, ''),
     );
+    setChatActive(false);
+    setCfgDrifted(false);
+  };
   // Push or overlay — at ≥1400px the main column shrinks to make room;
   // below that the dock is a drawer over dimmed content (click-outside
   // closes it). CSS does the switching; the class just marks "open".
@@ -405,6 +411,23 @@ export default function AgentBuilder() {
     customerText?: string;
   } | null>(null);
   const [correction, setCorrection] = useState('');
+  // Correct-this routing — a correction is either missing knowledge (note /
+  // article) or a behavior fix (an instruction rule). Janis classifies and
+  // drafts the rule; the operator can override the branch before saving.
+  const [corrPlan, setCorrPlan] = useState<{
+    kind: 'knowledge' | 'behavior';
+    instruction?: string;
+    classified: boolean;
+  } | null>(null);
+  const [corrBranch, setCorrBranch] = useState<'knowledge' | 'behavior' | null>(null);
+  const [instrEdit, setInstrEdit] = useState('');
+  // Mid-chat config drift — a saved change while a test conversation has
+  // messages means earlier replies ran the old config; nudge a fresh chat.
+  const [chatActive, setChatActive] = useState(false);
+  const [cfgDrifted, setCfgDrifted] = useState(false);
+  const markDrift = () => {
+    if (chatActive) setCfgDrifted(true);
+  };
   // Try-asking chips — draft-generated questions seed the test chat. The
   // nonce bumps on every click so the same question can be sent again;
   // target gates which chat instance (Try page vs dock) receives it.
@@ -460,8 +483,70 @@ export default function AgentBuilder() {
       void qc.invalidateQueries({ queryKey: ['agents'] });
       setCorrectTarget(null);
       setCorrection('');
+      setCorrPlan(null);
+      setCorrBranch(null);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+      markDrift();
+    },
+    onError: (e) => setError(e.message),
+  });
+  // Janis reads the correction and suggests the branch: knowledge (the
+  // fact was missing/wrong) or behavior (how it replied needs an
+  // instruction rule — drafted for review). The operator can override.
+  const correctionPlan = useMutation({
+    mutationFn: () =>
+      api<{ kind: 'knowledge' | 'behavior'; instruction?: string; classified: boolean }>(
+        `/api/agents/${agent?.id}/correction-plan`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            customerText: correctTarget?.customerText,
+            agentText: correctTarget?.agentText,
+            correction: correction.trim(),
+          }),
+        },
+      ),
+    onSuccess: (p) => {
+      setCorrPlan(p);
+      setCorrBranch(p.kind);
+      setInstrEdit(p.instruction ?? '');
+    },
+    onError: (e) => setError(e.message),
+  });
+  // Behavior branch — the drafted rule lands appended to the agent's
+  // instructions (draft→approve like Gaps: editable until accepted), and
+  // is logged so Guide it can credit testing for the improvement.
+  const applyInstruction = useMutation({
+    mutationFn: (text: string) => {
+      const config: AgentConfig = {
+        ...cfg,
+        system_prompt: `${(cfg.system_prompt ?? '').trim()}\n\n${text}`.trim(),
+        builder: {
+          ...cfg.builder,
+          instruction_edits: [
+            ...(cfg.builder?.instruction_edits ?? []),
+            text,
+          ].slice(-20),
+        },
+      };
+      return api(`/api/agents/${agent?.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ config }),
+      }).then(() => config);
+    },
+    onSuccess: (config) => {
+      setCfg(config);
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+      setCorrectTarget(null);
+      setCorrection('');
+      setCorrPlan(null);
+      setCorrBranch(null);
+      setInstrEdit('');
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      markDrift();
     },
     onError: (e) => setError(e.message),
   });
@@ -481,41 +566,117 @@ export default function AgentBuilder() {
       <textarea
         rows={3}
         style={{ width: '100%', marginTop: 8, boxSizing: 'border-box' }}
-        placeholder="What should it have said? One fact or the right answer…"
+        placeholder="What should it have said or done?"
         value={correction}
         autoFocus
         onChange={(e) => setCorrection(e.target.value)}
       />
-      <div className="row" style={{ marginTop: 8, gap: 8 }}>
-        <button
-          className="btn sm primary"
-          disabled={!correction.trim() || saveCorrection.isPending}
-          onClick={() => saveCorrection.mutate({ mode: 'note', text: correction.trim() })}
-        >
-          {saveCorrection.isPending ? 'Saving…' : 'Save as note'}
-        </button>
-        <button
-          className="btn sm"
-          disabled={!correction.trim() || saveCorrection.isPending}
-          title="Creates an unpublished draft — review it under Teach it → Articles"
-          onClick={() => saveCorrection.mutate({ mode: 'article', text: correction.trim() })}
-        >
-          Draft article
-        </button>
-        <button
-          className="btn sm"
-          onClick={() => {
-            setCorrectTarget(null);
-            setCorrection('');
-          }}
-        >
-          Cancel
-        </button>
-      </div>
-      <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
-        A note teaches this agent only. An article also becomes a public help
-        page — saved as a draft until you publish it.
-      </div>
+      {corrBranch === 'behavior' ? (
+        <>
+          <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+            {corrPlan?.classified
+              ? 'Janis reads this as a behavior fix — it becomes a rule in the instructions:'
+              : 'A behavior fix becomes a rule in the instructions:'}
+          </div>
+          <textarea
+            rows={2}
+            style={{ width: '100%', marginTop: 6, boxSizing: 'border-box' }}
+            placeholder={'e.g. "When the customer defers, choose and proceed"'}
+            value={instrEdit}
+            onChange={(e) => setInstrEdit(e.target.value)}
+          />
+          <div className="row" style={{ marginTop: 8, gap: 8 }}>
+            <button
+              className="btn sm primary"
+              disabled={!instrEdit.trim() || applyInstruction.isPending}
+              onClick={() => applyInstruction.mutate(instrEdit.trim())}
+            >
+              {applyInstruction.isPending ? 'Saving…' : 'Add to instructions'}
+            </button>
+            <button className="link small" onClick={() => setCorrBranch('knowledge')}>
+              it's a fact instead
+            </button>
+            <button
+              className="btn sm"
+              onClick={() => {
+                setCorrectTarget(null);
+                setCorrection('');
+                setCorrPlan(null);
+                setCorrBranch(null);
+                setInstrEdit('');
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+            The rule is appended to the instructions — review it any time on
+            Guide it.
+          </div>
+        </>
+      ) : corrBranch === 'knowledge' ? (
+        <>
+          <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+            {corrPlan?.classified
+              ? 'Janis reads this as missing knowledge — where should it live?'
+              : 'Where should this fix live?'}
+          </div>
+          <div className="row" style={{ marginTop: 8, gap: 8 }}>
+            <button
+              className="btn sm primary"
+              disabled={saveCorrection.isPending}
+              onClick={() => saveCorrection.mutate({ mode: 'note', text: correction.trim() })}
+            >
+              {saveCorrection.isPending ? 'Saving…' : 'Save as note'}
+            </button>
+            <button
+              className="btn sm"
+              disabled={saveCorrection.isPending}
+              title="Creates an unpublished draft — review it under Teach it → Articles"
+              onClick={() => saveCorrection.mutate({ mode: 'article', text: correction.trim() })}
+            >
+              Draft article
+            </button>
+            <button className="link small" onClick={() => setCorrBranch('behavior')}>
+              it's about behavior
+            </button>
+            <button
+              className="btn sm"
+              onClick={() => {
+                setCorrectTarget(null);
+                setCorrection('');
+                setCorrPlan(null);
+                setCorrBranch(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+            A note teaches this agent only. An article also becomes a public
+            help page — saved as a draft until you publish it.
+          </div>
+        </>
+      ) : (
+        <div className="row" style={{ marginTop: 8, gap: 8 }}>
+          <button
+            className="btn sm primary"
+            disabled={!correction.trim() || correctionPlan.isPending}
+            onClick={() => correctionPlan.mutate()}
+          >
+            {correctionPlan.isPending ? 'Checking…' : 'Continue →'}
+          </button>
+          <button
+            className="btn sm"
+            onClick={() => {
+              setCorrectTarget(null);
+              setCorrection('');
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
     </div>
   );
   // Customer region — optional; saved to builder.region on blur and
@@ -764,7 +925,12 @@ export default function AgentBuilder() {
               key={s.key}
               className={`builder-step${step === s.key ? ' active' : ''}${g === 'check' || (done && !status) ? ' done' : ''}${g === 'half' ? ' partial' : ''}`}
               disabled={locked}
-              title={locked ? 'Create the agent first' : s.hint}
+              title={
+                locked
+                  ? 'Create the agent first'
+                  : // The full subtitle survives container-query truncation.
+                    `${s.label} — ${subtitle}`
+              }
               onClick={() => goStep(s.key)}
             >
               <span className={`builder-step-n${g === 'check-muted' ? ' muted' : ''}`}>{
@@ -1262,7 +1428,7 @@ export default function AgentBuilder() {
                                   setSrcMenuFor(srcMenuFor === t.id ? null : t.id)
                                 }
                               >
-                                Add source ▾
+                                Add source <ChevronDown size={11} style={{ verticalAlign: -1 }} />
                               </button>
                               {srcMenuFor === t.id ? (
                                 <>
@@ -1503,6 +1669,19 @@ export default function AgentBuilder() {
               ) : (
                 <>
                   <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+                  {(builder?.instruction_edits?.length ?? 0) > 0 && (
+                    <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                      Janis improved the instructions after testing —{' '}
+                      {builder!.instruction_edits!.length} rule
+                      {builder!.instruction_edits!.length > 1 ? 's' : ''} added
+                      from Correct this:
+                      <ul style={{ margin: '4px 0', paddingLeft: 18 }}>
+                        {builder!.instruction_edits!.map((r, i) => (
+                          <li key={i}>{r}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   <GreetingSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
                 </>
               )}
@@ -1670,7 +1849,22 @@ export default function AgentBuilder() {
                 </div>
               )}
               <div style={{ marginTop: 12 }}>{tryChips('try')}</div>
-              <div className="card builder-chat" style={{ marginTop: 10, padding: 0 }}>
+              <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                Testing saved version
+                {builder?.include_drafts_in_test ? ' + drafts' : ''}
+                {cfgDrifted ? (
+                  <>
+                    {' — '}
+                    <span style={{ color: 'var(--warn, #f59e0b)' }}>
+                      config changed since this chat started
+                    </span>{' '}
+                    <button className="link small" onClick={newChat}>
+                      Start new chat
+                    </button>
+                  </>
+                ) : null}
+              </div>
+              <div className="card builder-chat" style={{ marginTop: 6, padding: 0 }}>
                 {testChannel.isPending && (
                   <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
                 )}
@@ -1686,7 +1880,14 @@ export default function AgentBuilder() {
                     channelId={testChannel.data.channel_id}
                     badge="TEST"
                     asCustomer
-                    onCorrect={setCorrectTarget}
+                    onCustomerMessage={() => setChatActive(true)}
+                    onCorrect={(ctx) => {
+                      setCorrectTarget(ctx);
+                      setCorrection('');
+                      setCorrPlan(null);
+                      setCorrBranch(null);
+                      setInstrEdit('');
+                    }}
                     seedMessage={seed?.target === 'try' ? seed.text : undefined}
                     seedNonce={seed?.nonce}
                   />
@@ -1822,6 +2023,19 @@ export default function AgentBuilder() {
                   ×
                 </button>
               </div>
+              <div className="test-dock-status">
+                Testing saved version
+                {builder?.include_drafts_in_test ? ' + drafts' : ''}
+              </div>
+              {cfgDrifted && (
+                <div className="test-dock-notice">
+                  Config changed since this chat started — replies may mix old
+                  and new behavior.{' '}
+                  <button className="link small" onClick={newChat}>
+                    Start new chat
+                  </button>
+                </div>
+              )}
               <div className="test-dock-body">
                 {tryChips('dock')}
                 {testChannel.isPending && (
@@ -1839,7 +2053,14 @@ export default function AgentBuilder() {
                     channelId={testChannel.data.channel_id}
                     asCustomer
                     hideHeader
-                    onCorrect={setCorrectTarget}
+                    onCustomerMessage={() => setChatActive(true)}
+                    onCorrect={(ctx) => {
+                      setCorrectTarget(ctx);
+                      setCorrection('');
+                      setCorrPlan(null);
+                      setCorrBranch(null);
+                      setInstrEdit('');
+                    }}
                     seedMessage={seed?.target === 'dock' ? seed.text : undefined}
                     seedNonce={seed?.nonce}
                   />

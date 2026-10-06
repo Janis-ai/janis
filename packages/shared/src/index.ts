@@ -393,6 +393,9 @@ export const AgentConfig = z.object({
       // The user read the "doesn't need extra knowledge" banner and chose
       // to skip Teach it — distinct from empty ('nothing added').
       teach_skipped: z.boolean().optional(),
+      // Behavior rules appended to the instructions via "Correct this →
+      // behavior" — provenance so Guide it can credit testing as the source.
+      instruction_edits: z.array(z.string().max(200)).max(20).optional(),
       generated_at: z.string().max(40).optional(),
     })
     .optional(),

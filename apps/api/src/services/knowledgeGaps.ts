@@ -2,6 +2,7 @@ import { and, desc, eq, gt, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, conversations, messages } from '../db/schema.js';
 import { llmFor } from '../lib/hostedAgent.js';
+import { parseDraftJson } from '../lib/agentBuilder.js';
 import { recordLlmUsage } from '../lib/usage.js';
 
 /**
@@ -579,6 +580,47 @@ export async function recheckGaps(
   } catch {
     return [];
   }
+}
+
+const CORRECT_SYSTEM =
+  'You classify an operator\u2019s correction to a customer-support AI. The ' +
+  'operator saw a bad agent reply and wrote what it should have said or done. ' +
+  'Return ONE JSON object, no prose: {"kind": "knowledge"|"behavior", ' +
+  '"instruction": "…"}. knowledge = a missing or wrong FACT (a price, policy, ' +
+  'date, name, capability) — it gets taught as a note or article. behavior = ' +
+  'HOW the reply was delivered (ending every reply with a question, refusing ' +
+  'to pick when the customer defers, commenting on being tested, showing ' +
+  'unrelated content, wrong tone) — it becomes a rule in the agent\u2019s ' +
+  'instructions. For behavior, "instruction" is ONE imperative rule shaped to ' +
+  'this correction, <= 140 chars, phrased as what TO do ("When the customer ' +
+  'defers, choose and proceed") not vague criticism. Omit it for knowledge.';
+
+/** Route a test-chat correction: missing fact or a behavior fix? For behavior
+ *  the model also drafts the instruction rule (draft→approve, like gaps).
+ *  `classified` false = no LLM verdict — the UI shows both branches without
+ *  a suggestion. */
+export async function planCorrection(
+  db: Db,
+  agent: typeof agents.$inferSelect,
+  ctx: { customerText?: string; agentText: string; correction: string },
+): Promise<{ kind: 'knowledge' | 'behavior'; instruction?: string; classified: boolean }> {
+  const user = [
+    ctx.customerText ? `Customer asked: ${ctx.customerText}` : '',
+    `Agent replied: ${ctx.agentText}`,
+    `Operator correction: ${ctx.correction}`,
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 3000);
+  const text = await llmChat(db, agent, CORRECT_SYSTEM, user, 220);
+  const parsed = text ? parseDraftJson(text) : null;
+  if (!parsed) return { kind: 'knowledge', classified: false };
+  const kind = parsed.kind === 'behavior' ? ('behavior' as const) : ('knowledge' as const);
+  const instruction =
+    kind === 'behavior' && typeof parsed.instruction === 'string'
+      ? parsed.instruction.trim().slice(0, 200) || undefined
+      : undefined;
+  return { kind, instruction, classified: true };
 }
 
 /** Draft a knowledge entry for a cluster — LLM when configured, else a template. */

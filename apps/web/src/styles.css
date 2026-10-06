@@ -307,12 +307,22 @@ button, input, select, textarea { font: inherit; }
 .wgt-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13px; }
 .wgt-row .wgt-v { text-align: right; font-weight: 500; white-space: pre-line; }
 .wgt-row.wgt-total { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 7px; font-weight: 700; }
-.builder-steps { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+.builder-steps { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; container-type: inline-size; }
 .builder-step {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
   padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px;
   background: var(--panel); cursor: pointer; font-family: inherit;
   min-width: 118px; text-align: left;
+}
+/* Tighten before wrapping — a wrapped rail reads as broken. Chips give up
+   min-width, slim their padding, and truncate the subtitle (it stays in
+   the title tooltip). Only a truly narrow column still wraps. */
+@container (max-width: 780px) {
+  .builder-step { padding: 6px 9px; min-width: 0; flex: 1 1 auto; }
+  .builder-step-hint {
+    max-width: 100%; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
 }
 .builder-step:hover:not(:disabled) { border-color: var(--accent); }
 .builder-step.active { border-color: var(--accent); background: var(--accent-dim); }
@@ -396,13 +406,31 @@ button, input, select, textarea { font: inherit; }
 .menu-pop button:hover:not(:disabled) { background: var(--panel-2); }
 .menu-pop button:disabled { color: var(--muted); cursor: default; }
 /* Correct this — a real button under every agent reply on test surfaces,
-   not a gray text link that reads as metadata. Quiet until hovered. */
+   but invisible until hover/focus: a persistent pill on every message
+   makes each reply look broken. Touch devices get it always-on but dim. */
 .correct-this {
   margin-top: 6px; padding: 2px 9px; font-size: 12px; cursor: pointer;
   color: var(--muted); background: transparent;
   border: 1px solid var(--border); border-radius: 999px;
+  opacity: 0; transition: opacity .12s ease;
+}
+.ask-msg:hover .correct-this,
+.correct-this:focus-visible { opacity: 1; }
+@media (hover: none) {
+  .correct-this { opacity: .55; }
 }
 .correct-this:hover { color: var(--text); border-color: var(--muted); }
+/* Test-dock status strip — which config the chat exercises. */
+.test-dock-status {
+  padding: 6px 14px; font-size: 11px; color: var(--muted);
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.test-dock-notice {
+  padding: 7px 14px; font-size: 12px; flex-shrink: 0;
+  color: var(--warn, #f59e0b);
+  border-bottom: 1px solid var(--border);
+  background: rgba(245, 158, 11, .08);
+}
 
 /* Overview build progress — the six-step checklist as linkable pills. */
 .status-dot {

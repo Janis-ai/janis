@@ -118,7 +118,7 @@ export function stepSubtitle(key: string, status: BuildStatus): string {
       return status.channels
         ? status.live_conversations
           ? `${status.channels} channel${status.channels > 1 ? 's' : ''} live`
-          : 'added — waiting for the first real message'
+          : 'added · no messages yet'
         : 'no channels yet';
     default:
       return '';

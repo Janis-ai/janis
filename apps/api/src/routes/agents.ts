@@ -28,6 +28,7 @@ import {
   filterDismissedGaps,
   listLearnNotes,
   markGapsAdded,
+  planCorrection,
   readGapsCache,
   recheckGaps,
 } from '../services/knowledgeGaps.js';
@@ -1148,6 +1149,24 @@ export function agentRoutes(db: Db) {
     }
     return c.json({ covered });
   });
+
+  // Correct-this routing — reads the correction against the reply it
+  // targets and says whether it's a missing fact (note/article) or a
+  // behavior fix (drafted instruction rule). `classified: false` means no
+  // LLM verdict; the operator picks the branch.
+  app.post(
+    '/:id/correction-plan', agentAdmin, zValidator('json', z.object({
+      customerText: z.string().max(2000).optional(),
+      agentText: z.string().min(1).max(4000),
+      correction: z.string().min(1).max(2000),
+    })),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const { customerText, agentText, correction } = c.req.valid('json');
+      return c.json(await planCorrection(db, agent, { customerText, agentText, correction }));
+    },
+  );
 
   // Approve an entry — append to config.knowledge without clobbering other keys.
   app.post(
