@@ -11,12 +11,33 @@ import { typingState } from '../db/schema.js';
  */
 const TTL_MS = 6_000;
 
+/**
+ * Best-effort wrapper — typing state is cosmetic (dots, "agent is
+ * working"). A transient pool failure (ECONNRESET mid-read off the
+ * Neon pooler) must not 500 a message poll or poison a fire-and-forget
+ * write into an unhandled rejection. Retry once — the next pooled
+ * connection is almost always healthy — then fall back to the neutral
+ * value and warn (visible in logs, absent from the error feed).
+ */
+async function soft<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await fn();
+  } catch {
+    try {
+      return await fn();
+    } catch (e) {
+      console.warn(`typing_state soft-fail: ${e instanceof Error ? e.message : e}`);
+      return fallback;
+    }
+  }
+}
+
 export async function markOperatorTyping(
   db: Db,
   conversationId: string,
   name: string | null,
 ): Promise<void> {
-  await db
+  await soft(() => db
     .insert(typingState)
     .values({
       conversationId,
@@ -27,25 +48,27 @@ export async function markOperatorTyping(
     .onConflictDoUpdate({
       target: [typingState.conversationId, typingState.kind],
       set: { name, expiresAt: new Date(Date.now() + TTL_MS) },
-    });
+    }), undefined);
 }
 
 export async function operatorTyping(
   db: Db,
   conversationId: string,
 ): Promise<{ name: string | null } | null> {
-  const [t] = await db
-    .select({ name: typingState.name })
-    .from(typingState)
-    .where(
-      and(
-        eq(typingState.conversationId, conversationId),
-        eq(typingState.kind, 'operator'),
-        gt(typingState.expiresAt, new Date()),
-      ),
-    )
-    .limit(1);
-  return t ?? null;
+  return soft(async () => {
+    const [t] = await db
+      .select({ name: typingState.name })
+      .from(typingState)
+      .where(
+        and(
+          eq(typingState.conversationId, conversationId),
+          eq(typingState.kind, 'operator'),
+          gt(typingState.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+    return t ?? null;
+  }, null);
 }
 
 /** The operator's reply just stored — they can't still be composing it. */
@@ -85,7 +108,7 @@ export function shouldRelayTyping(conversationId: string, windowMs = 8_000): boo
 const AGENT_TTL_MS = 90_000;
 
 export async function markAgentWorking(db: Db, conversationId: string): Promise<void> {
-  await db
+  await soft(() => db
     .insert(typingState)
     .values({
       conversationId,
@@ -95,28 +118,30 @@ export async function markAgentWorking(db: Db, conversationId: string): Promise<
     .onConflictDoUpdate({
       target: [typingState.conversationId, typingState.kind],
       set: { expiresAt: new Date(Date.now() + AGENT_TTL_MS) },
-    });
+    }), undefined);
 }
 
 export async function clearAgentWorking(db: Db, conversationId: string): Promise<void> {
-  await db
+  await soft(() => db
     .delete(typingState)
     .where(
       and(eq(typingState.conversationId, conversationId), eq(typingState.kind, 'agent')),
-    );
+    ), undefined);
 }
 
 export async function agentWorking(db: Db, conversationId: string): Promise<boolean> {
-  const [t] = await db
-    .select({ conversationId: typingState.conversationId })
-    .from(typingState)
-    .where(
-      and(
-        eq(typingState.conversationId, conversationId),
-        eq(typingState.kind, 'agent'),
-        gt(typingState.expiresAt, new Date()),
-      ),
-    )
-    .limit(1);
-  return Boolean(t);
+  return soft(async () => {
+    const [t] = await db
+      .select({ conversationId: typingState.conversationId })
+      .from(typingState)
+      .where(
+        and(
+          eq(typingState.conversationId, conversationId),
+          eq(typingState.kind, 'agent'),
+          gt(typingState.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+    return Boolean(t);
+  }, false);
 }
