@@ -17,7 +17,7 @@ import { getUpload } from './uploads.js';
 import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
-import { dedupeWidgetList, extractWidgets, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { dedupeWidgetList, extractWidgets, filterRowsByQuery, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -1677,8 +1677,9 @@ export async function complete(
       const gated = !!tool?.approval && !!ctx?.agent;
       let outcome: InspectorToolCall['outcome'] = 'ran';
       let result: string;
+      let args: Record<string, unknown> = {};
       try {
-        const args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
+        args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
         // Customer-record tools hard-bind to the verified identity — a typed
         // email is a claim, never proof. Blocks before gating too, so an
         // unverifiable call can't even reach the approval queue.
@@ -1720,6 +1721,11 @@ export async function complete(
       }
       // Ids in a real result become the anchor for later identity-scoped
       // calls this run (find_customer → its cus_… feeds charges/subs).
+      // Fuzzy-search tools pad results with off-query filler — drop rows
+      // that don't match the query before the model narrates them or the
+      // cards render ("Now and Then" shouldn't show Drive My Car).
+      if (outcome === 'ran' && tool?.widget?.relevance)
+        result = filterRowsByQuery(tool.widget, args, result);
       if (outcome === 'ran' || outcome === 'proposed') harvestProducedIds(result, producedIds);
       // URLs/uuids a tool emitted are the model's linkable corpus — the
       // reply guard blesses them and rejects id segments it never saw.

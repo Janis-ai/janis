@@ -87,8 +87,12 @@ export function stepSubtitle(key: string, status: BuildStatus): string {
     case 'create':
       return 'brief saved';
     case 'teach':
+      // Notes are one list row — "3 sources" for three note lines misreads
+      // as three documents; call them what they are.
       return status.knowledge.sources
-        ? `${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
+        ? status.knowledge.sources === status.knowledge.notes
+          ? `${status.knowledge.notes} note${status.knowledge.notes > 1 ? 's' : ''}`
+          : `${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
         : st === 'na'
           ? status.teach_skipped
             ? 'skipped'

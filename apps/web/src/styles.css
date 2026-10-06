@@ -362,9 +362,47 @@ button, input, select, textarea { font: inherit; }
 }
 .test-dock-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .test-dock-body .ask-pane { flex: 1; min-height: 0; }
+.test-dock-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The dim — an open dock that can't make room is a drawer, and covered
+   content should read as covered. Click-outside closes it. */
+.test-dock-dim {
+  position: fixed; inset: 0; z-index: 39; border: 0; padding: 0;
+  display: block; background: rgba(8, 10, 14, .35); cursor: default;
+}
+:root[data-theme='light'] .test-dock-dim { background: rgba(30, 35, 50, .22); }
+/* With room to spare, push the column instead — reflow beats overlay. */
+@media (min-width: 1400px) {
+  .test-dock-dim { display: none; }
+  body.test-dock-open .main { margin-right: 424px; }
+}
+.main { transition: margin-right .15s ease; }
 @media (max-width: 640px) {
   .test-dock { left: 0; width: auto; border-left: none; }
 }
+/* Per-topic "Add source" popover — four affordances behind one control. */
+.src-menu-wrap { position: relative; display: inline-block; }
+.menu-backdrop { position: fixed; inset: 0; z-index: 35; }
+.menu-pop {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 45;
+  min-width: 150px; padding: 4px; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+.menu-pop button {
+  text-align: left; padding: 6px 10px; border: 0; border-radius: 6px;
+  background: none; color: var(--text); font-size: 13px;
+  cursor: pointer; white-space: nowrap;
+}
+.menu-pop button:hover:not(:disabled) { background: var(--panel-2); }
+.menu-pop button:disabled { color: var(--muted); cursor: default; }
+/* Correct this — a real button under every agent reply on test surfaces,
+   not a gray text link that reads as metadata. Quiet until hovered. */
+.correct-this {
+  margin-top: 6px; padding: 2px 9px; font-size: 12px; cursor: pointer;
+  color: var(--muted); background: transparent;
+  border: 1px solid var(--border); border-radius: 999px;
+}
+.correct-this:hover { color: var(--text); border-color: var(--muted); }
 
 /* Overview build progress — the six-step checklist as linkable pills. */
 .status-dot {

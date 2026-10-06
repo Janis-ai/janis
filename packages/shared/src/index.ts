@@ -372,6 +372,10 @@ export const AgentConfig = z.object({
       // knowledge_need value — it's the user's decision, not the model's.
       knowledge_need: z.enum(['required', 'helpful', 'unnecessary']).optional(),
       knowledge_need_reason: z.string().max(300).optional(),
+      // The draft's call on whether correct answers vary by WHERE the
+      // customer is (schedules, laws, taxes, climate) — gates the region
+      // field on Teach it so trivia agents aren't asked irrelevant questions.
+      region_sensitive: z.boolean().optional(),
       // The draft's harm classification — 'elevated' when wrong answers
       // hurt a person or animal (health, dosing, safety). Drives the
       // drafted safety stance in Guide it and its review flag.

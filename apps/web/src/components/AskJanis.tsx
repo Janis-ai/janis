@@ -284,6 +284,8 @@ export function AskJanis({
   asCustomer,
   onCustomerMessage,
   onCorrect,
+  hideHeader,
+  visitorOverride,
 }: {
   channelId: string;
   badge?: string;
@@ -311,9 +313,18 @@ export function AskJanis({
    *  agent reply; the parent decides where the correction lands (note,
    *  draft article). Omitted elsewhere (inbox, concierge, widget). */
   onCorrect?: (ctx: { agentText: string; customerText?: string }) => void;
+  /** The parent renders its own merged header (builder test dock) — the
+   *  pane header stays off so the two don't stack. */
+  hideHeader?: boolean;
+  /** Force the visitor id — the builder's "New chat" passes a fresh one so
+   *  each test chat is its own persistent conversation (remount via key
+   *  alone would reuse the localStorage id and continue the old thread). */
+  visitorOverride?: string;
 }) {
   const navigate = useNavigate();
-  const visitor = useRef((asCustomer ? 'cust_' : '') + visitorId()).current;
+  const visitor = useRef(
+    (asCustomer ? 'cust_' : '') + (visitorOverride ?? visitorId()),
+  ).current;
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [outbox, setOutbox] = useState<OutEntry[]>([]);
   const [pending, setPending] = useState<PendingFile[]>([]);
@@ -891,23 +902,25 @@ export function AskJanis({
 
   return (
     <div className="ask-pane">
-      <div className="ask-head">
-        <strong className="grow">{cfg?.title || cfg?.agent_name || 'Ask Janis'}</strong>
-        {badge && <span className="badge">{badge}</span>}
-        {onToggleExpand && (
-          <button
-            className="btn"
-            onClick={onToggleExpand}
-            title={expanded ? 'Dock panel' : 'Expand'}
-            aria-label={expanded ? 'Dock panel' : 'Expand panel'}
-          >
-            {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-          </button>
-        )}
-        {onClose && (
-          <button className="btn" onClick={onClose} title="Close" aria-label="Close panel"><X size={14} /></button>
-        )}
-      </div>
+      {!hideHeader && (
+        <div className="ask-head">
+          <strong className="grow">{cfg?.title || cfg?.agent_name || 'Ask Janis'}</strong>
+          {badge && <span className="badge">{badge}</span>}
+          {onToggleExpand && (
+            <button
+              className="btn"
+              onClick={onToggleExpand}
+              title={expanded ? 'Dock panel' : 'Expand'}
+              aria-label={expanded ? 'Dock panel' : 'Expand panel'}
+            >
+              {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </button>
+          )}
+          {onClose && (
+            <button className="btn" onClick={onClose} title="Close" aria-label="Close panel"><X size={14} /></button>
+          )}
+        </div>
+      )}
       <div className="ask-scroll" ref={scrollRef} onScroll={onScroll}>
         {!loaded && <div className="ask-loading muted">Loading conversation…</div>}
         {fetchingOlder && <div className="ask-loading muted">Loading earlier messages…</div>}
@@ -1014,8 +1027,7 @@ export function AskJanis({
                 <AttachmentNodes atts={item.m.attachments ?? []} />
                 {onCorrect && item.m.direction === 'out' && item.m.text && (
                   <button
-                    className="link small muted"
-                    style={{ marginTop: 4 }}
+                    className="correct-this"
                     title="Tell Janis what it should have said — saves as a note or a draft article"
                     onClick={() => {
                       const prevCustomer = [...arr]

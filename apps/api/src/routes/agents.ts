@@ -253,6 +253,7 @@ export function agentRoutes(db: Db) {
           ...(draft?.knowledge_need_reason
             ? { knowledge_need_reason: draft.knowledge_need_reason }
             : {}),
+          ...(draft?.region_sensitive ? { region_sensitive: true } : {}),
           ...(draft?.domain_risk ? { domain_risk: draft.domain_risk } : {}),
           generated_at: new Date().toISOString(),
         },
@@ -831,6 +832,7 @@ export function agentRoutes(db: Db) {
       },
       knowledge: {
         sources,
+        notes: cfg.knowledge?.length ?? 0,
         updated_at: updatedAt?.toISOString() ?? null,
         // Notes + enabled docs + published articles vs the injection cap —
         // same math the Teach it meter reads from GET /knowledge.

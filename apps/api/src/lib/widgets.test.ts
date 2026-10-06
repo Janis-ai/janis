@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { dedupeToolWidgets, dedupeWidgetList, widgetFromToolResult } from './widgets.js';
+import { dedupeToolWidgets, dedupeWidgetList, filterRowsByQuery, widgetFromToolResult } from './widgets.js';
 
 const products = JSON.stringify({
   products: [
@@ -374,5 +374,60 @@ describe('dedupeWidgetList', () => {
       ],
     };
     expect(dedupeWidgetList([cards, status])).toEqual([cards, status]);
+  });
+});
+
+describe('filterRowsByQuery', () => {
+  const cfg = {
+    type: 'cards' as const,
+    items: 'results',
+    relevance: { arg: 'term', fields: ['trackName', 'collectionName', 'artistName'] },
+  };
+  const result = JSON.stringify({
+    resultCount: 3,
+    results: [
+      { trackName: 'Now and Then', collectionName: 'Now and Then - Single', artistName: 'The Beatles' },
+      { trackName: 'Now and Then (Remix)', collectionName: 'Now and Then', artistName: 'The Beatles' },
+      { trackName: 'Drive My Car', collectionName: 'Rubber Soul', artistName: 'The Beatles' },
+    ],
+  });
+
+  it('drops rows sharing no tokens with the query', () => {
+    const out = JSON.parse(
+      filterRowsByQuery(cfg, { term: 'now and then' }, result),
+    );
+    expect(out.resultCount).toBe(2);
+    expect(out.results.map((r: { trackName: string }) => r.trackName)).toEqual([
+      'Now and Then',
+      'Now and Then (Remix)',
+    ]);
+  });
+
+  it('empties the list when nothing matches — honest "no match" narration', () => {
+    const out = JSON.parse(
+      filterRowsByQuery(cfg, { term: 'songs by abba' }, result),
+    );
+    expect(out.results).toEqual([]);
+  });
+
+  it('is a no-op without a relevance spec or matching rows path', () => {
+    const noRel = { type: 'cards' as const, items: 'results' };
+    expect(filterRowsByQuery(noRel, { term: 'x' }, result)).toBe(result);
+    expect(
+      filterRowsByQuery(cfg, { term: 'now' }, JSON.stringify({ ok: 1 })),
+    ).toBe(JSON.stringify({ ok: 1 }));
+  });
+
+  it('matches whole words, not substrings', () => {
+    const r = JSON.stringify({
+      results: [
+        { trackName: 'Knowing You', collectionName: 'X', artistName: 'Y' },
+        { trackName: 'Snow', collectionName: 'X', artistName: 'Y' },
+      ],
+    });
+    const out = JSON.parse(filterRowsByQuery(cfg, { term: 'snow' }, r));
+    expect(out.results).toEqual([
+      { trackName: 'Snow', collectionName: 'X', artistName: 'Y' },
+    ]);
   });
 });

@@ -242,6 +242,15 @@ export interface ToolWidgetConfig {
   /** Widget field → dot path into each row object. cards: title, subtitle,
    *  image, price, link. options: label, description. */
   map?: Record<string, string>;
+  /** Fuzzy-search APIs pad results with unrelated filler (iTunes "now and
+   *  then" returns Drive My Car). When set, rows are filtered against the
+   *  query arg before the model and the cards see them. */
+  relevance?: {
+    /** Tool arg carrying the search query. */
+    arg: string;
+    /** Row dot paths whose values are matched against the query. */
+    fields: string[];
+  };
 }
 
 /** Resolve a dot path ("a.b.0.c") against a row — numbers index arrays. */
@@ -333,6 +342,63 @@ export function widgetFromToolResult(
 
   const parsed = WidgetComponent.safeParse(candidate);
   return parsed.success ? parsed.data : null;
+}
+
+/** Write `value` at a dot path inside an object — mirrors digPath. */
+function setPath(obj: Record<string, unknown>, path: string, value: unknown) {
+  const parts = path.split('.');
+  let cur: Record<string, unknown> = obj;
+  for (const part of parts.slice(0, -1)) {
+    const next = cur[part];
+    if (!next || typeof next !== 'object') return;
+    cur = next as Record<string, unknown>;
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+
+/** Drop result rows unrelated to the search query before the model narrates
+ *  them or they render as cards. A row survives on a whole-phrase match or
+ *  ≥50% token overlap (word-boundary — "now" doesn't match "know"). All rows
+ *  failing means no real match: the array empties so the agent reports that
+ *  instead of narrating filler. */
+export function filterRowsByQuery(
+  cfg: ToolWidgetConfig,
+  args: Record<string, unknown>,
+  resultText: string,
+): string {
+  const rel = cfg.relevance;
+  if (!rel) return resultText;
+  const q = String(args[rel.arg] ?? '').trim().toLowerCase();
+  if (!q) return resultText;
+  let data: unknown;
+  try {
+    data = JSON.parse(resultText);
+  } catch {
+    return resultText;
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return resultText;
+  const path = cfg.items;
+  if (!path) return resultText;
+  const rows = digPath(data, path);
+  if (!Array.isArray(rows)) return resultText;
+  const obj = data as Record<string, unknown>;
+  const qTokens = [...new Set(q.split(/[^a-z0-9]+/).filter((t) => t.length > 1))];
+  const kept = rows.filter((r) => {
+    const hay = rel.fields
+      .map((f) => String(digPath(r, f) ?? ''))
+      .join(' ')
+      .toLowerCase();
+    if (!hay.trim()) return false;
+    if (hay.includes(q)) return true;
+    const hits = qTokens.filter((t) =>
+      new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(hay),
+    );
+    return qTokens.length > 0 && hits.length / qTokens.length >= 0.5;
+  });
+  if (kept.length === rows.length) return resultText;
+  setPath(obj, path, kept);
+  if (typeof obj.resultCount === 'number') obj.resultCount = kept.length;
+  return JSON.stringify(obj);
 }
 
 

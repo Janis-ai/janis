@@ -644,6 +644,12 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
             link: 'trackViewUrl',
           },
           link_label: 'Apple Music ↗',
+          // Apple's search is fuzzy — "now and then" returns filler tracks
+          // sharing no tokens. Drop them so cards and narration stay honest.
+          relevance: {
+            arg: 'term',
+            fields: ['trackName', 'collectionName', 'artistName'],
+          },
         },
       },
     ],

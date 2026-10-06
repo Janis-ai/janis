@@ -340,13 +340,13 @@ export function SourceList({
               className="link small muted"
               onClick={() => setImportOpen((v) => !v)}
             >
-              Import a whole help centre
+              Import a whole help center
             </button>
           </div>
           {importOpen && (
             <div className="card" style={{ marginTop: 8 }}>
               <div className="muted" style={{ fontSize: 12 }}>
-                Zendesk/Intercom-style centres import via their articles API;
+                Zendesk/Intercom-style centers import via their articles API;
                 other sites are discovered through the sitemap and fetched in
                 batches — each page lands as its own row you can keep or drop.
               </div>

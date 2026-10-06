@@ -183,7 +183,7 @@ export function HelpCenter({ agent }: { agent: Agent }) {
             <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
               The chat widget shows a "Browse help articles" link once at least
               one article is published. You can hide that link per widget under
-              Channels → appearance, or point it at an external help centre
+              Channels → appearance, or point it at an external help center
               below — neither changes what the agent knows.
               {helpDomain
                 ? ` Serving at https://${helpDomain} — CNAME it at ${window.location.host}.${agentDomain ? ' (agent override)' : ' (workspace domain)'}`
@@ -220,10 +220,10 @@ export function HelpCenter({ agent }: { agent: Agent }) {
               </p>
             )}
             <p className="muted" style={{ margin: '10px 0 0', fontSize: 12 }}>
-              <strong>External help link</strong> — already run a help centre
+              <strong>External help link</strong> — already run a help center
               elsewhere (Zendesk, Intercom, your own docs)? Set it here and the
-              widget's help button goes there instead of this centre, even with
-              no published articles. Clear it to use this centre again.
+              widget's help button goes there instead of this center, even with
+              no published articles. Clear it to use this center again.
             </p>
             <div className="row" style={{ marginTop: 8, gap: 8 }}>
               <input

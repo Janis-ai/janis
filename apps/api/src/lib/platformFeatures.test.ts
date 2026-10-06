@@ -204,7 +204,7 @@ describe('public help center', () => {
     await db.update(workspaces).set({ config: {} }).where(eq(workspaces.id, wsId));
 
     // agent-level override wins over the workspace claim and serves just
-    // that agent's centre at the domain root
+    // that agent's center at the domain root
     const [other] = await db
       .insert(agents)
       .values({ workspaceId: wsId, name: 'Second' })

@@ -20,6 +20,7 @@ export interface BuilderDraft {
   suggested_questions: string[];
   knowledge_need?: 'required' | 'helpful' | 'unnecessary';
   knowledge_need_reason?: string;
+  region_sensitive?: boolean;
   domain_risk?: 'low' | 'elevated';
   generated: boolean;
   note?: string;
@@ -143,6 +144,7 @@ export function validateDraft(
         ? parsed.knowledge_need
         : undefined,
     knowledge_need_reason: clamp(parsed.knowledge_need_reason, 300),
+    region_sensitive: parsed.region_sensitive === true ? true : undefined,
     domain_risk:
       parsed.domain_risk === 'elevated' || parsed.domain_risk === 'low'
         ? parsed.domain_risk
@@ -167,6 +169,7 @@ Given the operator's description of the agent they want, return ONE JSON object 
   "suggested_questions": ["4-6 questions a real customer would ask this agent, written the way customers actually type them — short, lowercase-ish, no preamble. Include at least one hard factual question the agent can only answer if it's been taught the specifics — these become the Try it chips, so they should probe both breadth and the knowledge gaps in suggested_knowledge"],
   "knowledge_need": "required|helpful|unnecessary — does answering well need information only the operator can supply? required = private business data (prices, inventory, account lookups, shop-specific policies); helpful = the model knows the broad domain but operator sources improve accuracy or authority; unnecessary = purely public-domain knowledge the model already knows. When unsure, choose helpful.",
   "knowledge_need_reason": "one sentence naming what varies or is private, e.g. 'health and schedule details vary by region and breed' — <= 120 chars; only when knowledge_need is 'helpful'",
+  "region_sensitive": "true|false — do correct answers depend on WHERE the customer is? true when advice varies by location (schedules, laws, taxes, shipping zones, climate, local services). false for universal or pop-culture knowledge (a Beatles expert, a math tutor). When unsure, omit the key.",
   "domain_risk": "low|elevated — 'elevated' when wrong answers could hurt a person or animal: health, dosing, safety, dangerous mistakes. When elevated, system_prompt MUST include a safety stance — not a substitute for a veterinarian/doctor, the urgent signs that need escalation named for this domain, and an offer of a human for those"
 }
 

@@ -6,7 +6,7 @@ import { usePageTitle } from '../lib/title';
 /** Custom Bubble domain — a webchat channel that claimed chat.acme.com gets
  *  the hosted chat surface for that channel: the same full-page messenger
  *  /chat/:token/page?mode=full serves. A host with no claim falls through
- *  to the help-centre domain resolution. */
+ *  to the help-center domain resolution. */
 export function ChatDomain() {
   const [data, setData] = useState<{ token: string; agent_name: string } | null>(null);
   const [miss, setMiss] = useState(false);

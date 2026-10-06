@@ -125,7 +125,7 @@ export interface BuildStatus {
     try: BuildStepState;
     deploy: BuildStepState;
   };
-  knowledge: { sources: number; updated_at: string | null; over_budget: boolean };
+  knowledge: { sources: number; notes: number; updated_at: string | null; over_budget: boolean };
   teach_skipped: boolean;
   channels: number;
   live_conversations: number;

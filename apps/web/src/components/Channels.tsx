@@ -1179,7 +1179,7 @@ function WebchatBranding({
               label="Help link"
               hint={
                 externalHelp
-                  ? "links to the agent's external help centre"
+                  ? "links to the agent's external help center"
                   : hasHelp
                     ? "links to the agent's published help articles"
                     : "appears once an article is published — or set an external help link on the agent's Help page"

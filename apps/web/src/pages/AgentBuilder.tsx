@@ -37,6 +37,7 @@ interface BuilderDraft {
   suggested_questions?: string[];
   knowledge_need?: 'required' | 'helpful' | 'unnecessary';
   knowledge_need_reason?: string;
+  region_sensitive?: boolean;
   domain_risk?: 'low' | 'elevated';
 }
 
@@ -216,6 +217,26 @@ export default function AgentBuilder() {
       testChannel.mutate();
     }
   }, [step, testOpen, agent?.id, hosted]); // eslint-disable-line react-hooks/exhaustive-deps
+  // New chat — a fresh cust_ visitor starts a NEW persistent conversation
+  // on the internal channel; earlier threads stay in the inbox where they
+  // remain useful for alert and takeover testing.
+  const [chatVisitor, setChatVisitor] = useState<string | null>(null);
+  const newChat = () =>
+    setChatVisitor(
+      (crypto.randomUUID?.() ??
+        `v${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`
+      ).replace(/-/g, ''),
+    );
+  // Push or overlay — at ≥1400px the main column shrinks to make room;
+  // below that the dock is a drawer over dimmed content (click-outside
+  // closes it). CSS does the switching; the class just marks "open".
+  useEffect(() => {
+    const open =
+      testOpen && !!agent && hosted &&
+      step !== 'start' && step !== 'bring' && step !== 'try';
+    document.body.classList.toggle('test-dock-open', open);
+    return () => document.body.classList.remove('test-dock-open');
+  }, [testOpen, agent, hosted, step]);
   const { data: gapData } = useQuery({
     queryKey: ['knowledge-gaps', agent?.id],
     queryFn: () =>
@@ -363,6 +384,9 @@ export default function AgentBuilder() {
   }
   const coveredSet = new Set(builder?.covered_topics ?? []);
   const [topicFocus, setTopicFocus] = useState<'url' | 'file' | 'note' | null>(null);
+  // Which topic's "Add source" menu is open — one small popover instead of
+  // four inline links, the widest element on a narrow column.
+  const [srcMenuFor, setSrcMenuFor] = useState<string | null>(null);
   const pickTopic = (t: Topic, focus: 'url' | 'file' | 'note') => {
     // The unified list keeps one surface — the topic action aims the
     // right affordance inside it instead of switching tabs.
@@ -372,10 +396,6 @@ export default function AgentBuilder() {
   };
   const markCovered = (t: Topic) =>
     confirmFlag.mutate({ covered_topics: [...new Set([...coveredSet, t.id])] });
-  // Last question asked in the docked test panel — powers "Teach it
-  // this": a weak answer becomes a Text-tab write with the question as
-  // context, which is exactly the rescue loop Try it formalizes later.
-  const [lastTestQuestion, setLastTestQuestion] = useState('');
   const [guideOpen, setGuideOpen] = useState(false);
   // "Correct this" on a test-chat agent reply — the operator writes what
   // it should have said, then chooses where it lands: a private note or a
@@ -634,6 +654,9 @@ export default function AgentBuilder() {
           ...(d.knowledge_need_reason
             ? { knowledge_need_reason: d.knowledge_need_reason }
             : {}),
+          // Replace semantics — a re-draft that now finds the domain isn't
+          // location-dependent should hide the region field, not keep it.
+          region_sensitive: d.region_sensitive === true,
           ...(d.domain_risk ? { domain_risk: d.domain_risk } : {}),
           // A re-draft that now says 'required' clears a stale skip — the
           // classification changed, hiding the step would bury a real need.
@@ -693,6 +716,7 @@ export default function AgentBuilder() {
           ...(d.knowledge_need_reason
             ? { knowledge_need_reason: d.knowledge_need_reason }
             : {}),
+          region_sensitive: d.region_sensitive === true,
           ...(d.knowledge_need === 'required' ? { teach_skipped: false } : {}),
           ...(d.domain_risk ? { domain_risk: d.domain_risk } : {}),
         },
@@ -1071,13 +1095,24 @@ export default function AgentBuilder() {
           {hosted && (
             <>
               <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
-                Add trusted sources for the things your agent shouldn't guess
-                at. Paste a link, upload a document, or write it in.
+                {builder?.knowledge_need === 'unnecessary'
+                  ? 'This domain is general knowledge — the model already answers it. Add a source only for facts it couldn\u2019t know, or skip this step.'
+                  : 'Add trusted sources for the things your agent shouldn\u2019t guess at. Paste a link, upload a document, or write it in.'}
               </div>
               {(() => {
                 const b = knowledgeData?.budget;
                 if (!b || b.used_chars === 0) return null;
                 const pct = Math.round((b.used_chars / b.limit) * 100);
+                // Under ~25% the numbers are false precision — "33 tokens"
+                // is noise next to the cap. Say enough and get out of the
+                // way; the meter earns its detail as it fills. A notes cap
+                // breach is a real warning though — never quiet that.
+                if (pct < 25 && !(b.notes_chars > b.notes_limit))
+                  return (
+                    <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                      Knowledge budget — plenty of room.
+                    </div>
+                  );
                 const tok =
                   b.used_chars >= 40_000
                     ? `${Math.round(b.used_chars / 4000)}k`
@@ -1156,7 +1191,10 @@ export default function AgentBuilder() {
                   ))}
                 </div>
               )}
-              {rankedTopics.length ? (
+              {/* Region matters only where answers vary by location — the
+                  draft classifies it (region_sensitive); an agent with a
+                  region already set keeps the field regardless. */}
+              {rankedTopics.length && (builder?.region_sensitive || builder?.region) ? (
                 <div style={{ marginTop: 12 }}>
                   <label
                     className="muted"
@@ -1217,27 +1255,43 @@ export default function AgentBuilder() {
                         </span>
                         {!covered && isAdmin ? (
                           <span style={{ whiteSpace: 'nowrap' }}>
-                            <button className="link small" onClick={() => pickTopic(t, 'url')}>
-                              Add website
-                            </button>
-                            <span className="muted"> · </span>
-                            <button className="link small" onClick={() => pickTopic(t, 'file')}>
-                              Upload file
-                            </button>
-                            <span className="muted"> · </span>
-                            <button className="link small" onClick={() => pickTopic(t, 'note')}>
-                              Write it
-                            </button>
-                            <span className="muted"> · </span>
-                            <button
-                              className="link small"
-                              disabled={findSources.isPending}
-                              onClick={() => findSources.mutate(t)}
-                            >
-                              {findSources.isPending && findTopic?.id === t.id
-                                ? 'Searching…'
-                                : 'Find sources'}
-                            </button>
+                            <span className="src-menu-wrap">
+                              <button
+                                className="link small"
+                                onClick={() =>
+                                  setSrcMenuFor(srcMenuFor === t.id ? null : t.id)
+                                }
+                              >
+                                Add source ▾
+                              </button>
+                              {srcMenuFor === t.id ? (
+                                <>
+                                  <div
+                                    className="menu-backdrop"
+                                    onClick={() => setSrcMenuFor(null)}
+                                  />
+                                  <div className="menu-pop" role="menu">
+                                    <button onClick={() => { setSrcMenuFor(null); pickTopic(t, 'url'); }}>
+                                      Website
+                                    </button>
+                                    <button onClick={() => { setSrcMenuFor(null); pickTopic(t, 'file'); }}>
+                                      File
+                                    </button>
+                                    <button onClick={() => { setSrcMenuFor(null); pickTopic(t, 'note'); }}>
+                                      Note
+                                    </button>
+                                    <button
+                                      disabled={findSources.isPending}
+                                      onClick={() => { setSrcMenuFor(null); findSources.mutate(t); }}
+                                    >
+                                      {findSources.isPending && findTopic?.id === t.id
+                                        ? 'Searching…'
+                                        : 'Find sources'}
+                                    </button>
+                                  </div>
+                                </>
+                              ) : null}
+                            </span>
                             <span className="muted"> · </span>
                             <button
                               className="link small muted"
@@ -1583,11 +1637,20 @@ export default function AgentBuilder() {
           {!hosted && <NotHosted />}
           {hosted && (
             <>
-              <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
-                Try your agent — a real conversation on a private test channel,
-                same pipeline as production. Ask the questions you taught it,
-                ask it to take an action, and watch approval cards pause for a
-                human.
+              <div className="row" style={{ marginTop: 12, alignItems: 'center', gap: 10 }}>
+                <div className="muted grow" style={{ fontSize: 13 }}>
+                  Try your agent — a real conversation on a private test channel,
+                  same pipeline as production. Ask the questions you taught it,
+                  ask it to take an action, and watch approval cards pause for a
+                  human.
+                </div>
+                <button
+                  className="btn sm"
+                  title="Start a fresh test conversation — earlier chats stay in the inbox"
+                  onClick={newChat}
+                >
+                  New chat
+                </button>
               </div>
               {openGaps.length > 0 && (
                 <div className="card" style={{ marginTop: 10 }}>
@@ -1618,6 +1681,8 @@ export default function AgentBuilder() {
                 )}
                 {testChannel.data && (
                   <AskJanis
+                    key={chatVisitor ?? 'base'}
+                    visitorOverride={chatVisitor ?? undefined}
                     channelId={testChannel.data.channel_id}
                     badge="TEST"
                     asCustomer
@@ -1643,7 +1708,9 @@ export default function AgentBuilder() {
             <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>
               Readiness — knowledge:{' '}
               {status.knowledge.sources
-                ? `${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
+                ? status.knowledge.sources === status.knowledge.notes
+                  ? `${status.knowledge.notes} note${status.knowledge.notes > 1 ? 's' : ''}`
+                  : `${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
                 : status.steps.teach === 'na'
                   ? status.teach_skipped
                     ? 'skipped'
@@ -1717,58 +1784,70 @@ export default function AgentBuilder() {
           drawer so an edit gets feedback immediately. */}
       {agent && hosted && step !== 'start' && step !== 'bring' && step !== 'try' && (
         testOpen ? (
-          <div className="test-dock">
-            <div className="test-dock-head">
-              <strong style={{ fontSize: 13 }}>
-                Test it <span className="muted" style={{ fontWeight: 400 }}>— private channel, same pipeline as production{builder?.include_drafts_in_test ? ' · includes drafts' : ''}</span>
-              </strong>
-              {step === 'teach' && lastTestQuestion ? (
-                <button
-                  className="link small"
-                  title={`Write the answer to: ${lastTestQuestion}`}
-                  onClick={() => {
-                    goTeachSub('sources');
-                    setTopicFocus('note');
-                    setActiveTopic({
-                      id: topicSlug(lastTestQuestion) || 'test-question',
-                      text: lastTestQuestion,
-                    });
-                    setTestOpen(false);
-                  }}
+          <>
+            {/* Under the reflow breakpoint the dock is a drawer — the dim
+                reads "content is covered, not broken" and catches
+                click-outside-to-close. Hidden when CSS pushes the column. */}
+            <button
+              className="test-dock-dim"
+              aria-label="Close test panel"
+              onClick={() => setTestOpen(false)}
+            />
+            <div className="test-dock">
+              {/* One header — the pane's own header stays hidden so the two
+                  don't stack ("Test it — private…" over "Test — agent"). */}
+              <div className="test-dock-head">
+                <strong className="grow" style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  Test — {agent.name}
+                </strong>
+                <span
+                  className="badge"
+                  title={`Private channel, same pipeline as production${builder?.include_drafts_in_test ? ' — includes drafts' : ''}`}
                 >
-                  Teach it this →
-                </button>
-              ) : step === 'teach' && rankedTopics[0] ? (
-                <span className="muted" style={{ fontSize: 12 }}>
-                  try asking about: {rankedTopics[0].text}
+                  TEST
                 </span>
-              ) : null}
-              <button className="link small" onClick={() => setTestOpen(false)}>close</button>
+                <button
+                  className="btn sm"
+                  title="Start a fresh test conversation — earlier chats stay in the inbox"
+                  onClick={newChat}
+                >
+                  New chat
+                </button>
+                <button
+                  className="btn sm"
+                  onClick={() => setTestOpen(false)}
+                  title="Close panel"
+                  aria-label="Close test panel"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="test-dock-body">
+                {tryChips('dock')}
+                {testChannel.isPending && (
+                  <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
+                )}
+                {testChannel.isError && (
+                  <div className="error" style={{ margin: 14 }}>
+                    {(testChannel.error as Error).message}
+                  </div>
+                )}
+                {testChannel.data && (
+                  <AskJanis
+                    key={chatVisitor ?? 'base'}
+                    visitorOverride={chatVisitor ?? undefined}
+                    channelId={testChannel.data.channel_id}
+                    asCustomer
+                    hideHeader
+                    onCorrect={setCorrectTarget}
+                    seedMessage={seed?.target === 'dock' ? seed.text : undefined}
+                    seedNonce={seed?.nonce}
+                  />
+                )}
+                {correctCard}
+              </div>
             </div>
-            <div className="test-dock-body">
-              {tryChips('dock')}
-              {testChannel.isPending && (
-                <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
-              )}
-              {testChannel.isError && (
-                <div className="error" style={{ margin: 14 }}>
-                  {(testChannel.error as Error).message}
-                </div>
-              )}
-              {testChannel.data && (
-                <AskJanis
-                  channelId={testChannel.data.channel_id}
-                  badge="TEST"
-                  asCustomer
-                  onCustomerMessage={setLastTestQuestion}
-                  onCorrect={setCorrectTarget}
-                  seedMessage={seed?.target === 'dock' ? seed.text : undefined}
-                  seedNonce={seed?.nonce}
-                />
-              )}
-              {correctCard}
-            </div>
-          </div>
+          </>
         ) : (
           <button className="test-fab" onClick={() => setTestOpen(true)}>Test it</button>
         )
