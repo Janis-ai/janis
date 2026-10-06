@@ -263,6 +263,9 @@ button, input, select, textarea { font: inherit; }
 /* Wrapped chip/button rows keep left alignment — a centered second line
    under a left-aligned bubble reads as broken. */
 .ask-qrs { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px; padding: 2px 4px 8px; }
+/* gap already spaces the chips — the global .btn+.btn sibling margin would
+   indent the first button of every wrapped row */
+.ask-qrs .btn + .btn { margin-left: 0; }
 .ask-qrs .btn { border-radius: 16px; padding: 7px 14px; font-size: 13px; border-color: var(--accent); color: var(--accent); }
 .ask-qrs .btn:hover { background: var(--accent-dim); }
 /* In-conversation widgets (cards/options/form/status/receipt) — console
@@ -820,6 +823,9 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 5px
 textarea:disabled { opacity: .55; }
 .ask-loading { text-align: center; font-size: 12px; padding: 18px 0; }
 .btn + .btn { margin-left: 8px; }
+/* …but not where a flex gap already spaces them — the margin double-spaces
+   row 1 AND indents the first button of every wrapped row */
+.row .btn + .btn, .asset-row .btn + .btn { margin-left: 0; }
 .btn.sm { padding: 5px 12px; font-size: 13px; }
 /* Quiet text action — inline checklist actions, dismiss links. Was an
    undeclared class on existing buttons (they rendered as default boxes). */
@@ -1196,9 +1202,6 @@ details summary:hover { color: var(--text); }
   .asset-row .grow { overflow-wrap: anywhere; }
   .search-box { min-width: 0; flex-basis: 100%; }
   input, select, textarea { max-width: 100%; }
-  /* .row already spaces children via gap — the extra button margin only
-     misaligns once the buttons wrap onto their own line */
-  .row .btn + .btn, .asset-row .btn + .btn { margin-left: 0; }
   /* the title must claim its own line — with min-width:0 + anywhere
      wrapping it can otherwise be squeezed to one character per line */
   .row > .page-title { flex-basis: 100%; }
