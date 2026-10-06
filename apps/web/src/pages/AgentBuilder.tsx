@@ -223,10 +223,38 @@ export default function AgentBuilder() {
   // seen (Deploy itself never gets a Next). Create is excluded: an agent
   // that exists has by definition already been created.
   const seen = (k: StepKey) => seenSteps.has(k) || k === step;
-  const next =
-    idx >= 0 && idx < STEPS.length - 1
+  // "Next" goes to the next step that actually needs attention — pending
+  // (nothing there) or partial (exists but unconfirmed/has gaps) — and
+  // says why, not just where. Falls back to first-unseen while the
+  // build-status query is still loading.
+  const next = status
+    ? STEPS.find(
+        (s) =>
+          s.key !== 'create' &&
+          s.key !== step &&
+          (status.steps[s.key] === 'pending' || status.steps[s.key] === 'partial'),
+      )
+    : idx >= 0 && idx < STEPS.length - 1
       ? STEPS.find((s) => s.key !== 'create' && !seen(s.key))
       : undefined;
+  const nextReason = next
+    ? ({
+        teach: 'no sources yet',
+        guide: status?.steps.guide === 'partial' ? 'drafted — take a look' : 'nothing there yet',
+        abilities:
+          status?.steps.abilities === 'partial'
+            ? 'suggested — none connected'
+            : 'nothing connected yet',
+        try:
+          status && status.test_conversations > 0
+            ? 'open gaps to teach'
+            : "you haven't tested yet",
+        deploy: 'no channel live yet',
+      } as Partial<Record<StepKey, string>>)[next.key]
+    : undefined;
+  const nextLabel = next
+    ? `Next: ${next.label}${nextReason ? ` · ${nextReason}` : ''}`
+    : '';
 
 
   // Create is the brief — revisitable, but never a silent regeneration
@@ -562,7 +590,7 @@ export default function AgentBuilder() {
                 </button>
                 {next && (
                   <button className="btn primary" onClick={() => goStep(next.key)}>
-                    Next: {next.label} →
+                    {nextLabel} →
                   </button>
                 )}
               </div>
@@ -957,10 +985,25 @@ export default function AgentBuilder() {
       {step === 'deploy' && agent && (
         <>
           <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
-            Your agent is ready — where should it work? Add a channel and it's
-            live; each channel lands on its own configuration page after
-            creation.
+            Where should it work? Add a channel and it's live; each channel
+            lands on its own configuration page after creation.
           </div>
+          {hosted && status && (
+            <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+              Readiness — knowledge:{' '}
+              {status.knowledge.sources
+                ? `${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
+                : status.steps.teach === 'na'
+                  ? 'not needed for this agent'
+                  : 'nothing added'}
+              {' · '}tested:{' '}
+              {status.test_conversations
+                ? `${status.test_conversations} chat${status.test_conversations > 1 ? 's' : ''}${status.open_gaps ? `, ${status.open_gaps} open gap${status.open_gaps > 1 ? 's' : ''}` : ''}`
+                : 'not yet'}
+              {status.steps.guide === 'partial' && ' · instructions unreviewed'}
+              {status.test_conversations === 0 && ' — worth a test first'}
+            </div>
+          )}
           {hosted ? (
             <AgentChannels agent={agent} />
           ) : (
@@ -988,7 +1031,7 @@ export default function AgentBuilder() {
           </button>
           {next && (
             <button className="btn" onClick={() => goStep(next.key)}>
-              Next: {next.label} →
+              {nextLabel} →
             </button>
           )}
         </div>
@@ -996,13 +1039,13 @@ export default function AgentBuilder() {
       {agent && hosted && (step === 'abilities' || step === 'try') && next && (
         <div className="row" style={{ marginTop: 14 }}>
           <button className="btn" onClick={() => goStep(next.key)}>
-            Next: {next.label} →
+            {nextLabel} →
           </button>
         </div>
       )}
       {agent && !hosted && step !== 'create' && next && (
         <div className="row" style={{ marginTop: 14 }}>
-          <button className="btn" onClick={() => goStep(next.key)}>Next: {next.label} →</button>
+          <button className="btn" onClick={() => goStep(next.key)}>{nextLabel} →</button>
         </div>
       )}
       {/* Docked test panel — Try it's full-screen chat lives on its own
