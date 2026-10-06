@@ -129,6 +129,15 @@ function AgentUsageRedirect() {
   const { id } = useParams();
   return <Navigate to={`/agents/${id}/reports`} replace />;
 }
+/** /agents/new and /agents/new/:id render the same element type at the
+ *  same position, so React keeps ONE mounted instance across navigation —
+ *  which left the last agent's brief in the create textarea (and could
+ *  leak a stale test channel into the dock). Key by agentId so entering
+ *  a different agent's builder is a genuinely fresh page. */
+function AgentBuilderKeyed() {
+  const { agentId } = useParams();
+  return <AgentBuilder key={agentId ?? 'new'} />;
+}
 
 /** OpenRouter OAuth landing: exchange ?code, stash the key, bounce back to
  * the agent page that started the flow (stored in sessionStorage). */
@@ -183,8 +192,8 @@ export default function App() {
           <Route path="/contacts/:id" element={<ContactDetail />} />
           <Route path="/campaigns" element={<Campaigns />} />
           <Route path="/agents" element={<Agents />} />
-          <Route path="/agents/new" element={<AgentBuilder />} />
-          <Route path="/agents/new/:agentId" element={<AgentBuilder />} />
+          <Route path="/agents/new" element={<AgentBuilderKeyed />} />
+          <Route path="/agents/new/:agentId" element={<AgentBuilderKeyed />} />
           <Route path="/agents/:id" element={<AgentOverview />} />
           {/* Agent context — every section is its own path so the sidebar
               can flip the whole nav between workspace and agent. */}
