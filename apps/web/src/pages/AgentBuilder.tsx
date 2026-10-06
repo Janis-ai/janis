@@ -1355,6 +1355,7 @@ export default function AgentBuilder() {
                   isAdmin={isAdmin}
                   forTopic={activeTopic}
                   focusAdd={topicFocus}
+                  onFocusConsumed={() => setTopicFocus(null)}
                   onTopicSettled={() => {
                     setActiveTopic(null);
                     setTopicFocus(null);

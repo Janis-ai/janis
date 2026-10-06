@@ -57,6 +57,7 @@ export function SourceList({
   forTopic,
   focusAdd,
   onTopicSettled,
+  onFocusConsumed,
   articlesExtras,
 }: {
   agentId: string;
@@ -69,6 +70,10 @@ export function SourceList({
   forTopic?: Topic | null;
   focusAdd?: 'url' | 'file' | 'note' | null;
   onTopicSettled?: () => void;
+  /** The focus intent is one-shot — the caller clears it once we've
+   *  aimed the affordance, so a dismiss + remount doesn't re-open the
+   *  file dialog the user already declined. */
+  onFocusConsumed?: () => void;
   /** Rendered inside the expanded Articles row — the builder passes the
    *  drafts-in-test toggle here. */
   articlesExtras?: React.ReactNode;
@@ -102,9 +107,19 @@ export function SourceList({
   const fileRef = useRef<HTMLInputElement>(null);
 
   // A topic action ("Add website", "Write it") aims the right affordance —
-  // the checklist above supplies forTopic + focusAdd together.
+  // the checklist above supplies forTopic + focusAdd together. The aim is
+  // consumed on fire: leaving the step and coming back remounts this list,
+  // and a dismissed file dialog must not reopen on every visit. The topic
+  // itself stays in context until a source for it actually lands.
+  const aimedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!forTopic) return;
+    if (!forTopic || !focusAdd) {
+      aimedFor.current = null;
+      return;
+    }
+    const key = `${forTopic.id}:${focusAdd}`;
+    if (aimedFor.current === key) return;
+    aimedFor.current = key;
     if (focusAdd === 'note') {
       setNotesOpen(true);
       inputRef.current?.focus();
@@ -113,6 +128,8 @@ export function SourceList({
     } else {
       inputRef.current?.focus();
     }
+    onFocusConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [forTopic, focusAdd]);
 
   const invalidate = () => {
