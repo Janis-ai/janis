@@ -277,6 +277,9 @@ export function agentRoutes(db: Db) {
             : {}),
           ...(draft?.region_sensitive ? { region_sensitive: true } : {}),
           ...(draft?.domain_risk ? { domain_risk: draft.domain_risk } : {}),
+          ...(draft?.suggested_channels?.length
+            ? { suggested_channels: draft.suggested_channels }
+            : {}),
           generated_at: new Date().toISOString(),
         },
       };
@@ -752,13 +755,19 @@ export function agentRoutes(db: Db) {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const cfg = (agent.config ?? {}) as AgentConfig;
-    const [files, chans, [docChars], [artChars]] = await Promise.all([
+    const [files, chans, [docChars], [artChars], [artCounts]] = await Promise.all([
       db
         .select({ createdAt: knowledgeFiles.createdAt, fetchedAt: knowledgeFiles.lastFetchedAt })
         .from(knowledgeFiles)
         .where(eq(knowledgeFiles.agentId, agent.id)),
       db
-        .select({ id: channels.id, credentials: channels.credentials })
+        .select({
+          id: channels.id,
+          credentials: channels.credentials,
+          kind: channels.kind,
+          name: channels.name,
+          createdAt: channels.createdAt,
+        })
         .from(channels)
         .where(eq(channels.agentId, agent.id)),
       db
@@ -775,14 +784,27 @@ export function agentRoutes(db: Db) {
         .select({ total: sql<number>`coalesce(sum(length(${helpArticles.body})),0)::int` })
         .from(helpArticles)
         .where(and(eq(helpArticles.agentId, agent.id), eq(helpArticles.status, 'published'))),
+      db
+        .select({
+          total: sql<number>`count(*)::int`,
+          published: sql<number>`count(*) filter (where ${helpArticles.status} = 'published')::int`,
+        })
+        .from(helpArticles)
+        .where(eq(helpArticles.agentId, agent.id)),
     ]);
     const internalIds = chans
       .filter((ch) => (ch.credentials as { internal?: boolean }).internal === true)
       .map((ch) => ch.id);
-    const publicIds = chans
-      .filter((ch) => (ch.credentials as { internal?: boolean }).internal !== true)
-      .map((ch) => ch.id);
+    const publicChans = chans.filter(
+      (ch) => (ch.credentials as { internal?: boolean }).internal !== true,
+    );
+    const publicIds = publicChans.map((ch) => ch.id);
     const publicCount = publicIds.length;
+    // Launch = the moment the first public channel connected — the channel's
+    // own created_at is the launch timestamp, no separate flag to maintain.
+    const firstChan = [...publicChans].sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+    )[0];
     let testConversations = 0;
     if (internalIds.length) {
       const [row] = await db
@@ -791,13 +813,13 @@ export function agentRoutes(db: Db) {
         .where(inArray(channelBindings.channelId, internalIds));
       testConversations = Number(row?.n ?? 0);
     }
-    // A deployment is validated when a real conversation has flowed through
-    // a public channel — a created-but-unused channel is 'partial', since
-    // "added" isn't "live" (widget uninstalled, webhook unverified, etc.).
-    // Console-originated participants don't count: the Bubble editor's live
-    // preview chats as 'preview…' visitors on the real channel, 'cust_…' is
-    // a simulated customer, 'u:…' a signed-in operator — none are deployment
-    // proof.
+    // Launch happens at connection: a public channel's existence marks the
+    // agent live (Deploy step done, nav flips to live mode). The first real
+    // conversation is a health signal, not the launch gate — it still shows
+    // up in the Deploy subtitle as "added · no messages yet".
+    // Console-originated participants don't count as live traffic: the
+    // Bubble editor's live preview chats as 'preview…' visitors on the real
+    // channel, 'cust_…' is a simulated customer, 'u:…' a signed-in operator.
     let liveConversations = 0;
     if (publicIds.length) {
       const [row] = await db
@@ -915,8 +937,10 @@ export function agentRoutes(db: Db) {
                 ? 'partial'
                 : 'done'
               : 'pending',
-        deploy:
-          publicCount === 0 ? 'pending' : liveConversations > 0 ? 'done' : 'partial',
+        // A connected public channel IS the launch — the owner pressed
+        // Connect and the channel went live; whether traffic has arrived
+        // yet is a subtitle detail, not the mark.
+        deploy: publicCount === 0 ? 'pending' : 'done',
       },
       knowledge: {
         sources,
@@ -933,6 +957,17 @@ export function agentRoutes(db: Db) {
       teach_skipped: !!cfg.builder?.teach_skipped,
       abilities,
       channels: publicCount,
+      launched_at: firstChan?.createdAt.toISOString() ?? null,
+      launched_via: firstChan ? { name: firstChan.name, kind: firstChan.kind } : null,
+      // The draft's harm call — the Deploy readiness block keeps the safety
+      // row visible for elevated agents even when everything else is green.
+      domain_risk: cfg.builder?.domain_risk ?? null,
+      // Draft-vs-published articles — "unpublished help center" is one of
+      // the readiness warnings.
+      help_center: {
+        total: Number(artCounts?.total ?? 0),
+        published: Number(artCounts?.published ?? 0),
+      },
       live_conversations: liveConversations,
       test_conversations: testConversations,
       open_gaps: openGaps,

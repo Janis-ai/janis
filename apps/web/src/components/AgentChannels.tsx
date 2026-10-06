@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
@@ -64,11 +64,34 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   const [pickerOpen, setPickerOpen] = useState(Boolean(params.get('meta_connect')));
   // "Where do your customers reach you?" — picks the card that answers it.
   const [need, setNeed] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  // The "your agent is live" banner acknowledges once per agent.
+  const [launchAcked, setLaunchAcked] = useState(() => {
+    try {
+      return localStorage.getItem(`janis.launch-ack.${agentId}`) === '1';
+    } catch {
+      return true;
+    }
+  });
+  const ackLaunch = () => {
+    setLaunchAcked(true);
+    try {
+      localStorage.setItem(`janis.launch-ack.${agentId}`, '1');
+    } catch {}
+  };
+  type ChKey = 'bubble' | 'meta' | 'gmail' | 'outlook' | 'email' | 'voice' | 'sms';
+  const ALL_CH: ChKey[] = ['bubble', 'meta', 'gmail', 'outlook', 'email', 'voice', 'sms'];
   const NEED_TARGETS: Record<string, string> = {
     site: 'ch-bubble',
     social: 'ch-meta',
     email: 'ch-gmail',
     phone: 'ch-voice',
+  };
+  const NEED_TO_CH: Record<string, ChKey> = {
+    site: 'bubble',
+    social: 'meta',
+    email: 'gmail',
+    phone: 'voice',
   };
   const connectId =
     params.get('meta_connect') ?? (session.data?.connected ? session.data.connect_id ?? '' : '');
@@ -391,6 +414,29 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     return bits.join(' · ');
   };
 
+  // Channel hierarchy — the draft's suggested_channels lead (the first one
+  // carries the screen's one primary button); everything else collapses
+  // under "More channels". Agents without a suggestion default to the two
+  // most common paths: the website bubble and Meta.
+  const suggestedCh = ((agent.config?.builder?.suggested_channels ?? []) as string[]).filter(
+    (k): k is ChKey => (ALL_CH as string[]).includes(k),
+  );
+  const leadCh: ChKey[] = suggestedCh.length ? suggestedCh : ['bubble', 'meta'];
+  const moreCh = ALL_CH.filter((k) => !leadCh.includes(k));
+  const primaryCh = leadCh[0];
+  const CH_SUMMARY: Record<ChKey, string> = {
+    bubble: 'chat bubble for your website',
+    meta: 'Facebook, Instagram & WhatsApp',
+    gmail: 'Gmail',
+    outlook: 'Outlook / Microsoft 365',
+    email: 'any mailbox via forwarding',
+    voice: 'voice calls',
+    sms: 'SMS texting',
+  };
+  const firstCh = [...channels].sort((a, b) =>
+    a.created_at.localeCompare(b.created_at),
+  )[0];
+
   // Members and agent-scoped users get a read-only view — wiring, credentials
   // and removal are workspace-admin actions.
   if (me && !isAdmin) {
@@ -424,12 +470,538 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     );
   }
 
+  /** One channel card per key — rendered in suggested order above the
+   *  fold, everything else under "More channels". The first lead card is
+   *  the screen's single primary action; a sorter pick highlights its
+   *  card wherever it lives. */
+  const cardFor = (k: ChKey) => {
+    const primCls = primaryCh === k ? 'btn primary' : 'btn';
+    const rec = need ? NEED_TO_CH[need] === k : false;
+    const sTag = suggestedCh.includes(k) ? (
+      <span className="ch-suggested">suggested</span>
+    ) : null;
+    switch (k) {
+      case 'meta':
+        // The asset picker is an active OAuth flow, not a card — it
+        // renders standalone above the ordering.
+        if (connectId && pickerOpen) return null;
+        return session.data?.connected ? (
+          <div className={`card connect-card${rec ? ' recommended' : ''}`} id="ch-meta">
+            <div className="row">
+              <div className="grow">
+                <strong>Meta connected{sTag && <> — {sTag}</>}</strong>
+                <div className="muted" style={{ marginTop: 4 }}>
+                  {(() => {
+                    const linked = channels.filter((ch) =>
+                      ['messenger', 'instagram', 'whatsapp'].includes(ch.kind),
+                    );
+                    return linked.length
+                      ? `${linked.length} channel${linked.length === 1 ? '' : 's'} linked to ${agent.name} — more Pages and numbers are available on this Meta login.`
+                      : 'No channels linked to this agent yet — Pages, Instagram, and WhatsApp numbers are ready to connect.';
+                  })()}
+                </div>
+              </div>
+              <button className="btn" onClick={() => setPickerOpen(true)}>Manage</button>
+              <button className="btn" disabled={disconnect.isPending} onClick={() => disconnect.mutate()}>
+                Disconnect
+              </button>
+            </div>
+          </div>
+        ) : session.isPending ? (
+          <div className="card connect-card" id="ch-meta">
+            <div className="row">
+              <span className="spin" />
+              <span className="muted">Checking for a stored Meta connection…</span>
+            </div>
+          </div>
+        ) : (
+          <div className={`card connect-card${rec ? ' recommended' : ''}`} id="ch-meta">
+            {metaStatus.data?.configured ? (
+              <>
+                <div className="row">
+                  <div className="grow">
+                    <strong>Connect with Meta{sTag && <> — {sTag}</>}</strong>
+                    {session.data?.expired && (
+                      <div className="error" style={{ marginTop: 4 }}>
+                        Your Facebook session expired — reconnect to manage channels.
+                      </div>
+                    )}
+                    <div className="muted" style={{ marginTop: 4 }}>
+                      Sign in once — Janis finds your Pages, Instagram accounts, and WhatsApp
+                      numbers and sets up the webhook for you.
+                    </div>
+                    <div className="needs-line">Needs: admin access to your Facebook Page</div>
+                  </div>
+                  <a className={primCls} href={`/api/meta/connect?agent=${agentId}`}>Connect Facebook</a>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <a
+                    href="#"
+                    className="muted"
+                    style={{ fontSize: 12 }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setShowManual((v) => !v);
+                    }}
+                  >
+                    {showManual ? 'Hide credentials form' : 'Use credentials instead'}
+                  </a>
+                </div>
+                {showManual && metaManualForm}
+              </>
+            ) : metaStatus.isPending ? (
+              <div className="row">
+                <span className="spin" />
+                <span className="muted">Checking Meta configuration…</span>
+              </div>
+            ) : showManual ? (
+              <>
+                <strong>Meta with credentials{sTag && <> — {sTag}</>}</strong>
+                {metaManualForm}
+              </>
+            ) : (
+              <div className="muted">
+                One-click connect isn't configured —{' '}
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setShowManual(true);
+                  }}
+                >
+                  use credentials instead
+                </a>
+                , or set <span className="mono">META_APP_ID</span> and{' '}
+                <span className="mono">META_APP_SECRET</span> on the API to enable it.
+              </div>
+            )}
+          </div>
+        );
+      case 'bubble':
+        return (
+          <div className={`card connect-card${rec ? ' recommended' : ''}`} id="ch-bubble">
+            <div className="row">
+              <div className="grow">
+                <strong>Bubble{sTag && <> — {sTag}</>}</strong>
+                <div className="muted" style={{ marginTop: 4 }}>
+                  Embed a chat bubble on any website — visitors land in the same inbox, with
+                  agent answers and human takeover. No Meta app required.
+                </div>
+                <div className="needs-line">Needs: ability to add a script to your website</div>
+              </div>
+            </div>
+            <div className="row" style={{ marginTop: 12 }}>
+              <button
+                className={primCls}
+                disabled={createWebchat.isPending}
+                onClick={() => createWebchat.mutate()}
+              >
+                Create bubble
+              </button>
+              <span className="muted" style={{ fontSize: 12 }}>
+                Name, greeting and quick replies are set on the channel card.
+              </span>
+            </div>
+          </div>
+        );
+      case 'gmail':
+        return (
+          <div className={`card connect-card${rec ? ' recommended' : ''}`} id="ch-gmail">
+            <div className="row">
+              <div className="grow">
+                <strong>Gmail{sTag && <> — {sTag}</>}</strong>
+                <div className="muted" style={{ marginTop: 4 }}>
+                  Connect an existing Gmail or Google Workspace mailbox (like support@you.com) —
+                  mail lands in the same inbox, and replies send from that address in the
+                  customer's thread. The inbox is polled about once a minute. If the mailbox
+                  belongs to someone else, send them the invite link — they grant access
+                  themselves, no Janis login needed.
+                </div>
+                <div className="needs-line">Needs: sign-in to the mailbox — yours, or the owner's via invite</div>
+              </div>
+            </div>
+            <div className="row" style={{ marginTop: 12 }}>
+              <button
+                className={primCls}
+                onClick={() => {
+                  window.location.href = `${apiOrigin}/api/gmail/connect?agent_id=${agentId}`;
+                }}
+              >
+                Connect Gmail
+              </button>
+              <button
+                type="button"
+                className="btn ghost"
+                disabled={gmInvite.isPending}
+                onClick={() => gmInvite.mutate()}
+              >
+                Copy invite link
+              </button>
+            </div>
+            {gmLink && (
+              <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+                Invite link (copied — valid 7 days):{' '}
+                <span className="mono" style={{ wordBreak: 'break-all' }}>{gmLink}</span>
+              </div>
+            )}
+            {gmailConnected && (
+              <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+                Connected <span className="mono">{gmailConnected}</span> — new mail from that inbox
+                becomes conversations here; replies send from the mailbox itself.
+              </div>
+            )}
+          </div>
+        );
+      case 'outlook':
+        return (
+          <div className={`card connect-card${rec ? ' recommended' : ''}`}>
+            <div className="row">
+              <div className="grow">
+                <strong>Outlook / Microsoft 365{sTag && <> — {sTag}</>}</strong>
+                <div className="muted" style={{ marginTop: 4 }}>
+                  Connect an Outlook.com or Microsoft 365 mailbox — mail lands in the same
+                  inbox and replies send from that address in the customer's thread. If the
+                  mailbox belongs to someone else, send them the invite link — they grant
+                  access themselves, no Janis login needed.
+                </div>
+                <div className="needs-line">Needs: sign-in to the mailbox — yours, or the owner's via invite</div>
+              </div>
+            </div>
+            <div className="row" style={{ marginTop: 12 }}>
+              <button
+                className={primCls}
+                onClick={() => {
+                  window.location.href = `${apiOrigin}/api/outlook/connect?agent_id=${agentId}`;
+                }}
+              >
+                Connect Outlook
+              </button>
+              <button
+                type="button"
+                className="btn ghost"
+                disabled={olInvite.isPending}
+                onClick={() => olInvite.mutate()}
+              >
+                Copy invite link
+              </button>
+            </div>
+            {olLink && (
+              <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+                Invite link (copied — valid 7 days):{' '}
+                <span className="mono" style={{ wordBreak: 'break-all' }}>{olLink}</span>
+              </div>
+            )}
+            {outlookConnected && (
+              <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+                Connected <span className="mono">{outlookConnected}</span>.
+              </div>
+            )}
+            {outlookError && (
+              <div className="error" style={{ marginTop: 10 }} title={outlookError}>Outlook connect failed: {friendlyError(outlookError).text}</div>
+            )}
+          </div>
+        );
+      case 'email':
+        return (
+          <div className="card">
+            <details className="appearance-details">
+              <summary>
+                <span className="details-title">Email — any provider{sTag && <> — {sTag}</>}</span>
+                <span className="details-sub">
+                  needs: mail forwarding or DNS access — Janis mints an inbound address you
+                  forward to or point MX at
+                </span>
+              </summary>
+              <div className="muted" style={{ marginTop: 10 }}>
+                Customer mail lands in the same inbox, and replies go out as threaded email from
+                that address.
+              </div>
+              <div className="row" style={{ marginTop: 12 }}>
+                <button
+                  className={primCls}
+                  disabled={createEmail.isPending}
+                  onClick={() => createEmail.mutate()}
+                >
+                  Create address
+                </button>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Name and reply From-name are set on the channel card.
+                </span>
+              </div>
+            </details>
+          </div>
+        );
+      case 'voice':
+        return (
+          <div className={`card${rec ? ' recommended' : ''}`} id="ch-voice">
+            <details className="appearance-details">
+              <summary>
+                <span className="details-title">Voice — Twilio phone number{sTag && <> — {sTag}</>}</span>
+                <span className="details-sub">
+                  needs: nothing (hosted provisions a number) or your Twilio account — callers
+                  talk, the agent speaks, the whole call lands in the inbox
+                </span>
+              </summary>
+              <div className="row" style={{ marginTop: 12, gap: 8 }}>
+                <button
+                  className={`btn ${voiceMode === 'hosted' ? 'primary' : ''}`}
+                  onClick={() => setVoiceMode('hosted')}
+                  disabled={!hostedConfigured}
+                >
+                  Get a number
+                </button>
+                <button
+                  className={`btn ${voiceMode === 'byo' ? 'primary' : ''}`}
+                  onClick={() => setVoiceMode('byo')}
+                >
+                  Use my Twilio account
+                </button>
+              </div>
+              <form
+                style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, maxWidth: 520 }}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (voiceMode === 'hosted') createVoice.mutate();
+                  else createVoice.mutate();
+                }}
+              >
+                {voiceMode === 'hosted' ? (
+                  <>
+                    <div className="row" style={{ gap: 8 }}>
+                      <input
+                        style={{ width: 130 }}
+                        placeholder="Area code (e.g. 415)"
+                        value={areaCode}
+                        onChange={(e) => setAreaCode(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={searchNumbers.isPending}
+                        onClick={() => searchNumbers.mutate()}
+                      >
+                        {searchNumbers.isPending ? 'Searching…' : 'Find numbers'}
+                      </button>
+                    </div>
+                    {foundNumbers !== null &&
+                      (foundNumbers.length ? (
+                        <select
+                          value={pickedNumber}
+                          onChange={(e) => setPickedNumber(e.target.value)}
+                        >
+                          {foundNumbers.map((n) => (
+                            <option key={n.phone_number} value={n.phone_number}>
+                              {n.friendly_name}
+                              {n.locality ? ` — ${n.locality}` : ''}
+                              {n.region ? `, ${n.region}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="muted">No numbers in that area code — try another.</div>
+                      ))}
+                  </>
+                ) : (
+                  <>
+                    <input
+                      placeholder="Twilio Account SID (AC…)"
+                      value={voiceForm.sid}
+                      onChange={(e) => setVoiceForm({ ...voiceForm, sid: e.target.value })}
+                      required
+                    />
+                    <input
+                      placeholder="Twilio Auth Token"
+                      value={voiceForm.token}
+                      onChange={(e) => setVoiceForm({ ...voiceForm, token: e.target.value })}
+                      required
+                    />
+                    <input
+                      placeholder="Phone number — E.164, e.g. +15551234567"
+                      value={voiceForm.number}
+                      onChange={(e) => setVoiceForm({ ...voiceForm, number: e.target.value })}
+                      required
+                    />
+                  </>
+                )}
+                <input
+                  placeholder="Forward-to number when a human takes over (optional)"
+                  value={voiceForm.forward_to}
+                  onChange={(e) => setVoiceForm({ ...voiceForm, forward_to: e.target.value })}
+                />
+                <input
+                  placeholder="Spoken greeting (optional)"
+                  value={voiceForm.greeting}
+                  onChange={(e) => setVoiceForm({ ...voiceForm, greeting: e.target.value })}
+                />
+                <div>
+                  <button
+                    className="btn"
+                    disabled={
+                      createVoice.isPending || (voiceMode === 'hosted' && !pickedNumber)
+                    }
+                  >
+                    {voiceMode === 'hosted' ? 'Get this number' : 'Add voice channel'}
+                  </button>
+                </div>
+              </form>
+              <div className="muted" style={{ marginTop: 10 }}>
+                {voiceMode === 'hosted'
+                  ? 'Janis provisions the number and wires it up — callers are transcribed turn-by-turn, the agent answers by voice, and a human takeover can bridge straight to the forward-to number.'
+                  : 'Then in the Twilio console, set the number\'s Voice → "A call comes in" webhook to the URL on the channel card. Callers are transcribed turn-by-turn; the agent\'s reply is spoken, and when a human takes over the call can bridge straight to the forward-to number.'}
+              </div>
+            </details>
+          </div>
+        );
+      case 'sms':
+        return (
+          <div className="card">
+            <details className="appearance-details">
+              <summary>
+                <span className="details-title">SMS — text messaging{sTag && <> — {sTag}</>}</span>
+                <span className="details-sub">
+                  needs: a Twilio number — texts to it become conversations here
+                </span>
+              </summary>
+              {channels.some((v) => v.kind === 'voice') ? (
+                <div style={{ marginTop: 12 }}>
+                  {channels
+                    .filter((v) => v.kind === 'voice')
+                    .map((v) => {
+                      const sibling = channels.find(
+                        (s) => s.kind === 'sms' && s.meta.phone_number === v.meta.phone_number,
+                      );
+                      return (
+                        <div key={v.id} className="row" style={{ marginBottom: 6 }}>
+                          <span className="mono grow">{v.meta.phone_number ?? v.name}</span>
+                          {sibling ? (
+                            <span className="muted">SMS enabled</span>
+                          ) : (
+                            <button
+                              className="btn"
+                              disabled={createSms.isPending}
+                              onClick={() => createSms.mutate(v.id)}
+                            >
+                              Enable SMS
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+                    One click — the same number answers texts and calls, and the webhook wires
+                    itself.
+                  </div>
+                </div>
+              ) : (
+                <div className="muted" style={{ marginTop: 12, fontSize: 13 }}>
+                  No voice number yet — get one above, or bring your own Twilio SMS number:
+                </div>
+              )}
+              <form
+                style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, maxWidth: 520 }}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  createSms.mutate(undefined);
+                }}
+              >
+                <input
+                  placeholder="Twilio Account SID (AC…)"
+                  value={smsForm.sid}
+                  onChange={(e) => setSmsForm({ ...smsForm, sid: e.target.value })}
+                  required
+                />
+                <input
+                  placeholder="Twilio Auth Token"
+                  value={smsForm.token}
+                  onChange={(e) => setSmsForm({ ...smsForm, token: e.target.value })}
+                  required
+                />
+                <input
+                  placeholder="SMS-capable phone number — E.164, e.g. +15551234567"
+                  value={smsForm.number}
+                  onChange={(e) => setSmsForm({ ...smsForm, number: e.target.value })}
+                  required
+                />
+                <div>
+                  <button className="btn" disabled={createSms.isPending}>
+                    Add SMS channel
+                  </button>
+                </div>
+              </form>
+              <div className="muted" style={{ marginTop: 10 }}>
+                We wire the number's inbound-message webhook automatically — texts arrive as
+                conversations and replies send from the same number.
+              </div>
+            </details>
+          </div>
+        );
+    }
+  };
+
+  /** The advanced Meta form — folded into the Meta card behind "Use
+   *  credentials instead" instead of sitting as a card of its own. */
+  const metaManualForm = (
+    <>
+      <form
+        style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, maxWidth: 520 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          create.mutate();
+        }}
+      >
+        <select
+          value={form.kind}
+          onChange={(e) => setForm({ ...form, kind: e.target.value as typeof form.kind })}
+        >
+          <option value="messenger">Facebook Messenger</option>
+          <option value="instagram">Instagram DM</option>
+          <option value="whatsapp">WhatsApp Business</option>
+        </select>
+        <input
+          placeholder="Channel name (e.g. Acme Facebook Page)"
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          required
+        />
+        {form.kind !== 'whatsapp' && (
+          <input
+            placeholder="Facebook Page ID"
+            value={form.page_id}
+            onChange={(e) => setForm({ ...form, page_id: e.target.value })}
+            required
+          />
+        )}
+        {form.kind === 'whatsapp' && (
+          <input
+            placeholder="WhatsApp phone_number_id"
+            value={form.phone_number_id}
+            onChange={(e) => setForm({ ...form, phone_number_id: e.target.value })}
+            required
+          />
+        )}
+        <input
+          placeholder="Access token (page token / system user token)"
+          value={form.access_token}
+          onChange={(e) => setForm({ ...form, access_token: e.target.value })}
+          required
+        />
+        <div>
+          <button className="btn" disabled={create.isPending}>Add channel</button>
+        </div>
+      </form>
+      <div className="muted" style={{ marginTop: 10 }}>
+        Then register <span className="mono">{apiOrigin}/channels/meta/webhook</span>{' '}
+        in your Meta app with the channel's verify token, and subscribe to <span className="mono">messages</span>.
+      </div>
+    </>
+  );
+
   return (
     <>
       <div className="lede" style={{ marginTop: 12 }}>
         <p className="muted">
-          Where do your customers reach you? Connect a channel and the agent is live there
-          — each channel gets its own settings page.
+          Choose where your agent answers. It replies only while it owns the
+          conversation — when a teammate takes over, it stops until you hand it back.
         </p>
       </div>
 
@@ -442,6 +1014,20 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         </div>
       )}
       {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
+
+      {/* The launch moment — first channel connect flips the agent live;
+          acknowledge it once, then get out of the way. */}
+      {firstCh && !launchAcked && (
+        <div className="card launch-banner">
+          <strong className="grow">
+            ✓ Your agent is live on {firstCh.name}.
+            <div className="muted" style={{ fontWeight: 400, fontSize: 13, marginTop: 2 }}>
+              Next: send it a message from there to confirm.
+            </div>
+          </strong>
+          <button className="btn" onClick={ackLaunch}>Got it</button>
+        </div>
+      )}
 
       {/* Connected channels — compact index; configuration lives on each
           channel's own page (/agents/:id/channels/:channelId). */}
@@ -495,7 +1081,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         </>
       )}
       {channels.length === 0 && !connectId && (
-        <Empty>No channels connected yet — this agent isn't answering anywhere.</Empty>
+        <p className="muted" style={{ fontSize: 13, margin: '4px 0 12px' }}>
+          Not answering anywhere yet.
+        </p>
       )}
 
       <h2 className="section-title">Add a channel</h2>
@@ -517,7 +1105,11 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               key={k}
               className={`try-chip${need === k ? ' pass' : ''}`}
               onClick={() => {
-                setNeed(need === k ? null : k);
+                const next = need === k ? null : k;
+                setNeed(next);
+                // A sorter pick whose card lives under "More channels"
+                // opens the disclosure so the highlight is visible.
+                if (next && moreCh.includes(NEED_TO_CH[next])) setMoreOpen(true);
                 document
                   .getElementById(NEED_TARGETS[k])
                   ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -529,8 +1121,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         </div>
       )}
 
-      {/* Meta connect (primary path) or the pending asset picker */}
-      {connectId && pickerOpen ? (
+      {/* Meta OAuth return lands in the asset picker — an active flow,
+          so it renders above the ordering regardless of suggestion. */}
+      {connectId && pickerOpen && (
         <div className="card connect-card">
           <div className="row">
             <strong className="grow">Meta connected — pick what to link to {agent.name}</strong>
@@ -664,477 +1257,27 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             </>
           )}
         </div>
-      ) : session.data?.connected ? (
-        <div className={`card connect-card${need === 'social' ? ' recommended' : ''}`} id="ch-meta">
-          <div className="row">
-            <div className="grow">
-              <strong>Meta connected</strong>
-              <div className="muted" style={{ marginTop: 4 }}>
-                {(() => {
-                  const linked = channels.filter((ch) =>
-                    ['messenger', 'instagram', 'whatsapp'].includes(ch.kind),
-                  );
-                  return linked.length
-                    ? `${linked.length} channel${linked.length === 1 ? '' : 's'} linked to ${agent.name} — more Pages and numbers are available on this Meta login.`
-                    : 'No channels linked to this agent yet — Pages, Instagram, and WhatsApp numbers are ready to connect.';
-                })()}
-              </div>
-            </div>
-            <button className="btn" onClick={() => setPickerOpen(true)}>Manage</button>
-            <button className="btn" disabled={disconnect.isPending} onClick={() => disconnect.mutate()}>
-              Disconnect
-            </button>
-          </div>
-        </div>
-      ) : session.isPending ? (
-        <div className="card connect-card" id="ch-meta">
-          <div className="row">
-            <span className="spin" />
-            <span className="muted">Checking for a stored Meta connection…</span>
-          </div>
-        </div>
-      ) : (
-        <div className={`card connect-card${need === 'social' ? ' recommended' : ''}`} id="ch-meta">
-          {metaStatus.data?.configured ? (
-            <div className="row">
-              <div className="grow">
-                <strong>Connect with Meta</strong>
-                {session.data?.expired && (
-                  <div className="error" style={{ marginTop: 4 }}>
-                    Your Facebook session expired — reconnect to manage channels.
-                  </div>
-                )}
-                <div className="muted" style={{ marginTop: 4 }}>
-                  Sign in once — Janis finds your Pages, Instagram accounts, and WhatsApp numbers
-                  and sets up the webhook for you.
-                </div>
-                <div className="needs-line">Needs: admin access to your Facebook Page</div>
-              </div>
-              <a className="btn primary" href={`/api/meta/connect?agent=${agentId}`}>Connect Facebook</a>
-            </div>
-          ) : (
-            <div className="muted">
-              One-click connect isn't configured — set <span className="mono">META_APP_ID</span> and{' '}
-              <span className="mono">META_APP_SECRET</span> on the API to enable it.
-            </div>
-          )}
-        </div>
       )}
 
-      {/* Manual Meta entry — advanced fallback for the connect flow */}
-      <div className="card">
-        <details open={showManual} onToggle={(e) => setShowManual((e.target as HTMLDetailsElement).open)}>
-          <summary><strong>Connect to Meta with credentials</strong>{' '}
-            <span className="needs-line" style={{ display: 'inline' }}>advanced — needs a Meta app + Page token</span>
-          </summary>
-          <form
-            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, maxWidth: 520 }}
-            onSubmit={(e) => {
-              e.preventDefault();
-              create.mutate();
-            }}
-          >
-            <select
-              value={form.kind}
-              onChange={(e) => setForm({ ...form, kind: e.target.value as typeof form.kind })}
-            >
-              <option value="messenger">Facebook Messenger</option>
-              <option value="instagram">Instagram DM</option>
-              <option value="whatsapp">WhatsApp Business</option>
-            </select>
-            <input
-              placeholder="Channel name (e.g. Acme Facebook Page)"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              required
-            />
-            {form.kind !== 'whatsapp' && (
-              <input
-                placeholder="Facebook Page ID"
-                value={form.page_id}
-                onChange={(e) => setForm({ ...form, page_id: e.target.value })}
-                required
-              />
-            )}
-            {form.kind === 'whatsapp' && (
-              <input
-                placeholder="WhatsApp phone_number_id"
-                value={form.phone_number_id}
-                onChange={(e) => setForm({ ...form, phone_number_id: e.target.value })}
-                required
-              />
-            )}
-            <input
-              placeholder="Access token (page token / system user token)"
-              value={form.access_token}
-              onChange={(e) => setForm({ ...form, access_token: e.target.value })}
-              required
-            />
-            <div>
-              <button className="btn" disabled={create.isPending}>Add channel</button>
-            </div>
-          </form>
-          <div className="muted" style={{ marginTop: 10 }}>
-            Then register <span className="mono">{apiOrigin}/channels/meta/webhook</span>{' '}
-            in your Meta app with the channel's verify token, and subscribe to <span className="mono">messages</span>.
-          </div>
-        </details>
-      </div>
+      {/* Suggested channels lead; everything else folds under "More
+          channels". The first lead is the page's one primary action. */}
+      {leadCh.map((k) => <Fragment key={k}>{cardFor(k)}</Fragment>)}
 
-      {/* Chat bubble (webchat) */}
-      <div className={`card connect-card${need === 'site' ? ' recommended' : ''}`} id="ch-bubble">
-        <div className="row">
-          <div className="grow">
-            <strong>Bubble</strong>
-            <div className="muted" style={{ marginTop: 4 }}>
-              Embed a chat bubble on any website — visitors land in the same inbox, with
-              agent answers and human takeover. No Meta app required.
-            </div>
-            <div className="needs-line">Needs: ability to add a script to your website</div>
-          </div>
-        </div>
-        <div className="row" style={{ marginTop: 12 }}>
-          <button
-            className="btn"
-            disabled={createWebchat.isPending}
-            onClick={() => createWebchat.mutate()}
-          >
-            Create bubble
-          </button>
-          <span className="muted" style={{ fontSize: 12 }}>
-            Name, greeting and quick replies are set on the channel card.
-          </span>
-        </div>
-      </div>
-
-      {/* Gmail — the obvious email path: OAuth onto an existing mailbox */}
-      <div className={`card connect-card${need === 'email' ? ' recommended' : ''}`} id="ch-gmail">
-        <div className="row">
-          <div className="grow">
-            <strong>Gmail</strong>
-            <div className="muted" style={{ marginTop: 4 }}>
-              Connect an existing Gmail or Google Workspace mailbox (like support@you.com) —
-              mail lands in the same inbox, and replies send from that address in the
-              customer's thread. The inbox is polled about once a minute. If the mailbox
-              belongs to someone else, send them the invite link — they grant access
-              themselves, no Janis login needed.
-            </div>
-            <div className="needs-line">Needs: sign-in to the mailbox — yours, or the owner's via invite</div>
-          </div>
-        </div>
-        <div className="row" style={{ marginTop: 12 }}>
-          <button
-            className="btn primary"
-            onClick={() => {
-              window.location.href = `${apiOrigin}/api/gmail/connect?agent_id=${agentId}`;
-            }}
-          >
-            Connect Gmail
-          </button>
-          <button
-            type="button"
-            className="btn ghost"
-            disabled={gmInvite.isPending}
-            onClick={() => gmInvite.mutate()}
-          >
-            Copy invite link
-          </button>
-        </div>
-        {gmLink && (
-          <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-            Invite link (copied — valid 7 days):{' '}
-            <span className="mono" style={{ wordBreak: 'break-all' }}>{gmLink}</span>
-          </div>
-        )}
-        {gmailConnected && (
-          <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-            Connected <span className="mono">{gmailConnected}</span> — new mail from that inbox
-            becomes conversations here; replies send from the mailbox itself.
-          </div>
-        )}
-      </div>
-
-      {/* Outlook / Microsoft 365 — same OAuth mailbox pattern as Gmail */}
-      <div className={`card connect-card${need === 'email' ? ' recommended' : ''}`}>
-        <div className="row">
-          <div className="grow">
-            <strong>Outlook / Microsoft 365</strong>
-            <div className="muted" style={{ marginTop: 4 }}>
-              Connect an Outlook.com or Microsoft 365 mailbox — mail lands in the same
-              inbox and replies send from that address in the customer's thread. If the
-              mailbox belongs to someone else, send them the invite link — they grant
-              access themselves, no Janis login needed.
-            </div>
-            <div className="needs-line">Needs: sign-in to the mailbox — yours, or the owner's via invite</div>
-          </div>
-        </div>
-        <div className="row" style={{ marginTop: 12 }}>
-          <button
-            className="btn primary"
-            onClick={() => {
-              window.location.href = `${apiOrigin}/api/outlook/connect?agent_id=${agentId}`;
-            }}
-          >
-            Connect Outlook
-          </button>
-          <button
-            type="button"
-            className="btn ghost"
-            disabled={olInvite.isPending}
-            onClick={() => olInvite.mutate()}
-          >
-            Copy invite link
-          </button>
-        </div>
-        {olLink && (
-          <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-            Invite link (copied — valid 7 days):{' '}
-            <span className="mono" style={{ wordBreak: 'break-all' }}>{olLink}</span>
-          </div>
-        )}
-        {outlookConnected && (
-          <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-            Connected <span className="mono">{outlookConnected}</span>.
-          </div>
-        )}
-        {outlookError && (
-          <div className="error" style={{ marginTop: 10 }} title={outlookError}>Outlook connect failed: {friendlyError(outlookError).text}</div>
-        )}
-      </div>
-
-      {/* Email — advanced: a minted inbound address for any provider
-          (forwarding or MX), for mailboxes that aren't Gmail. */}
-      <div className="card">
-        <details className="appearance-details">
+      {moreCh.length > 0 && (
+        <details
+          className="more-channels"
+          open={moreOpen}
+          onToggle={(e) => setMoreOpen((e.target as HTMLDetailsElement).open)}
+        >
           <summary>
-            <span className="details-title">Email — any provider</span>
-            <span className="details-sub">
-              needs: mail forwarding or DNS access — Janis mints an inbound address you
-              forward to or point MX at
-            </span>
+            More channels
+            <span className="muted"> — {moreCh.map((k) => CH_SUMMARY[k]).join(' · ')}</span>
           </summary>
-          <div className="muted" style={{ marginTop: 10 }}>
-            Customer mail lands in the same inbox, and replies go out as threaded email from
-            that address.
-          </div>
-          <div className="row" style={{ marginTop: 12 }}>
-            <button
-              className="btn"
-              disabled={createEmail.isPending}
-              onClick={() => createEmail.mutate()}
-            >
-              Create address
-            </button>
-            <span className="muted" style={{ fontSize: 12 }}>
-              Name and reply From-name are set on the channel card.
-            </span>
+          <div className="ch-more-list">
+            {moreCh.map((k) => <Fragment key={k}>{cardFor(k)}</Fragment>)}
           </div>
         </details>
-      </div>
-
-      {/* Voice — Twilio number answers calls: caller speech is transcribed,
-          the agent replies with TTS, and the transcript lands in the inbox. */}
-      <div className={`card${need === 'phone' ? ' recommended' : ''}`} id="ch-voice">
-        <details className="appearance-details">
-          <summary>
-            <span className="details-title">Voice — Twilio phone number</span>
-            <span className="details-sub">
-              needs: nothing (hosted provisions a number) or your Twilio account — callers
-              talk, the agent speaks, the whole call lands in the inbox
-            </span>
-          </summary>
-          <div className="row" style={{ marginTop: 12, gap: 8 }}>
-            <button
-              className={`btn ${voiceMode === 'hosted' ? 'primary' : ''}`}
-              onClick={() => setVoiceMode('hosted')}
-              disabled={!hostedConfigured}
-            >
-              Get a number
-            </button>
-            <button
-              className={`btn ${voiceMode === 'byo' ? 'primary' : ''}`}
-              onClick={() => setVoiceMode('byo')}
-            >
-              Use my Twilio account
-            </button>
-          </div>
-          <form
-            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, maxWidth: 520 }}
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (voiceMode === 'hosted') createVoice.mutate();
-              else createVoice.mutate();
-            }}
-          >
-            {voiceMode === 'hosted' ? (
-              <>
-                <div className="row" style={{ gap: 8 }}>
-                  <input
-                    style={{ width: 130 }}
-                    placeholder="Area code (e.g. 415)"
-                    value={areaCode}
-                    onChange={(e) => setAreaCode(e.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={searchNumbers.isPending}
-                    onClick={() => searchNumbers.mutate()}
-                  >
-                    {searchNumbers.isPending ? 'Searching…' : 'Find numbers'}
-                  </button>
-                </div>
-                {foundNumbers !== null &&
-                  (foundNumbers.length ? (
-                    <select
-                      value={pickedNumber}
-                      onChange={(e) => setPickedNumber(e.target.value)}
-                    >
-                      {foundNumbers.map((n) => (
-                        <option key={n.phone_number} value={n.phone_number}>
-                          {n.friendly_name}
-                          {n.locality ? ` — ${n.locality}` : ''}
-                          {n.region ? `, ${n.region}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <div className="muted">No numbers in that area code — try another.</div>
-                  ))}
-              </>
-            ) : (
-              <>
-                <input
-                  placeholder="Twilio Account SID (AC…)"
-                  value={voiceForm.sid}
-                  onChange={(e) => setVoiceForm({ ...voiceForm, sid: e.target.value })}
-                  required
-                />
-                <input
-                  placeholder="Twilio Auth Token"
-                  value={voiceForm.token}
-                  onChange={(e) => setVoiceForm({ ...voiceForm, token: e.target.value })}
-                  required
-                />
-                <input
-                  placeholder="Phone number — E.164, e.g. +15551234567"
-                  value={voiceForm.number}
-                  onChange={(e) => setVoiceForm({ ...voiceForm, number: e.target.value })}
-                  required
-                />
-              </>
-            )}
-            <input
-              placeholder="Forward-to number when a human takes over (optional)"
-              value={voiceForm.forward_to}
-              onChange={(e) => setVoiceForm({ ...voiceForm, forward_to: e.target.value })}
-            />
-            <input
-              placeholder="Spoken greeting (optional)"
-              value={voiceForm.greeting}
-              onChange={(e) => setVoiceForm({ ...voiceForm, greeting: e.target.value })}
-            />
-            <div>
-              <button
-                className="btn"
-                disabled={
-                  createVoice.isPending || (voiceMode === 'hosted' && !pickedNumber)
-                }
-              >
-                {voiceMode === 'hosted' ? 'Get this number' : 'Add voice channel'}
-              </button>
-            </div>
-          </form>
-          <div className="muted" style={{ marginTop: 10 }}>
-            {voiceMode === 'hosted'
-              ? 'Janis provisions the number and wires it up — callers are transcribed turn-by-turn, the agent answers by voice, and a human takeover can bridge straight to the forward-to number.'
-              : 'Then in the Twilio console, set the number\'s Voice → "A call comes in" webhook to the URL on the channel card. Callers are transcribed turn-by-turn; the agent\'s reply is spoken, and when a human takes over the call can bridge straight to the forward-to number.'}
-          </div>
-        </details>
-      </div>
-
-      {/* SMS — one click off an existing voice number, or BYO Twilio creds.
-          Texts land in the same inbox; replies go out via the Messages API. */}
-      <div className="card">
-        <details className="appearance-details">
-          <summary>
-            <span className="details-title">SMS — text messaging</span>
-            <span className="details-sub">
-              needs: a Twilio number — texts to it become conversations here
-            </span>
-          </summary>
-          {channels.some((v) => v.kind === 'voice') ? (
-            <div style={{ marginTop: 12 }}>
-              {channels
-                .filter((v) => v.kind === 'voice')
-                .map((v) => {
-                  const sibling = channels.find(
-                    (s) => s.kind === 'sms' && s.meta.phone_number === v.meta.phone_number,
-                  );
-                  return (
-                    <div key={v.id} className="row" style={{ marginBottom: 6 }}>
-                      <span className="mono grow">{v.meta.phone_number ?? v.name}</span>
-                      {sibling ? (
-                        <span className="muted">SMS enabled</span>
-                      ) : (
-                        <button
-                          className="btn"
-                          disabled={createSms.isPending}
-                          onClick={() => createSms.mutate(v.id)}
-                        >
-                          Enable SMS
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-                One click — the same number answers texts and calls, and the webhook wires
-                itself.
-              </div>
-            </div>
-          ) : (
-            <div className="muted" style={{ marginTop: 12, fontSize: 13 }}>
-              No voice number yet — get one above, or bring your own Twilio SMS number:
-            </div>
-          )}
-          <form
-            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, maxWidth: 520 }}
-            onSubmit={(e) => {
-              e.preventDefault();
-              createSms.mutate(undefined);
-            }}
-          >
-            <input
-              placeholder="Twilio Account SID (AC…)"
-              value={smsForm.sid}
-              onChange={(e) => setSmsForm({ ...smsForm, sid: e.target.value })}
-              required
-            />
-            <input
-              placeholder="Twilio Auth Token"
-              value={smsForm.token}
-              onChange={(e) => setSmsForm({ ...smsForm, token: e.target.value })}
-              required
-            />
-            <input
-              placeholder="SMS-capable phone number — E.164, e.g. +15551234567"
-              value={smsForm.number}
-              onChange={(e) => setSmsForm({ ...smsForm, number: e.target.value })}
-              required
-            />
-            <div>
-              <button className="btn" disabled={createSms.isPending}>
-                Add SMS channel
-              </button>
-            </div>
-          </form>
-          <div className="muted" style={{ marginTop: 10 }}>
-            We wire the number's inbound-message webhook automatically — texts arrive as
-            conversations and replies send from the same number.
-          </div>
-        </details>
-      </div>
+      )}
 
       {confirmEl}
     </>

@@ -27,6 +27,7 @@ export interface BuilderDraft {
   knowledge_need_reason?: string;
   region_sensitive?: boolean;
   domain_risk?: 'low' | 'elevated';
+  suggested_channels?: ('bubble' | 'meta' | 'gmail' | 'outlook' | 'email' | 'voice' | 'sms')[];
   generated: boolean;
   note?: string;
 }
@@ -184,8 +185,15 @@ export function validateDraft(
       parsed.domain_risk === 'elevated' || parsed.domain_risk === 'low'
         ? parsed.domain_risk
         : undefined,
+    suggested_channels: clampList(parsed.suggested_channels, 20, 3).filter(
+      (x): x is NonNullable<BuilderDraft['suggested_channels']>[number] =>
+        CHANNEL_IDS.includes(x as never),
+    ),
   };
 }
+
+// Deploy card ids the draft may recommend — anything else is dropped.
+const CHANNEL_IDS = ['bubble', 'meta', 'gmail', 'outlook', 'email', 'voice', 'sms'] as const;
 
 export const BUILDER_SYSTEM = `You are the Janis agent builder. Janis agents are not chatbots — they answer customers on real channels AND take actions (refunds, order lookups, cancellations) through tools, pausing for human approval where configured, then continuing the conversation.
 
@@ -206,7 +214,8 @@ Given the operator's description of the agent they want, return ONE JSON object 
   "knowledge_need": "required|helpful|unnecessary — does answering well need information only the operator can supply? required = private business data (prices, inventory, account lookups, shop-specific policies); helpful = the model knows the broad domain but operator sources improve accuracy or authority; unnecessary = purely public-domain knowledge the model already knows. When unsure, choose helpful.",
   "knowledge_need_reason": "one sentence naming what varies or is private, e.g. 'health and schedule details vary by region and breed' — <= 120 chars; only when knowledge_need is 'helpful'",
   "region_sensitive": "true|false — do correct answers depend on WHERE the customer is? true when advice varies by location (schedules, laws, taxes, shipping zones, climate, local services). false for universal or pop-culture knowledge (a Beatles expert, a math tutor). When unsure, omit the key.",
-  "domain_risk": "low|elevated — 'elevated' when wrong answers could hurt a person or animal: health, dosing, safety, dangerous mistakes. When elevated, system_prompt MUST include a safety stance — not a substitute for a veterinarian/doctor, the urgent signs that need escalation named for this domain, and an offer of a human for those"
+  "domain_risk": "low|elevated — 'elevated' when wrong answers could hurt a person or animal: health, dosing, safety, dangerous mistakes. When elevated, system_prompt MUST include a safety stance — not a substitute for a veterinarian/doctor, the urgent signs that need escalation named for this domain, and an offer of a human for those",
+  "suggested_channels": ["1-2 channel ids this agent should go live on first, from: bubble = chat widget on the operator's own website; meta = Facebook Page / Instagram / WhatsApp; gmail = Gmail or Google Workspace mailbox; outlook = Outlook/Microsoft 365 mailbox; email = any mailbox via forwarding or MX; voice = phone number; sms = text messaging. Pick where THIS agent's customers plausibly reach it — a storefront's support inbox wants an email or social channel, a website concierge wants bubble, a booking line wants voice/sms. Omit entirely when the description implies nothing about channels."]
 }
 
 Rules: pick at most 4 catalog entries, only ones the description genuinely needs; a read action (look up, track, search) never needs approval while a mutating one (refund, cancel, edit) usually does; behavioral requirements in the description (reminders, priorities, prohibitions) belong in system_prompt, not suggested_knowledge; omit a key entirely rather than invent content.

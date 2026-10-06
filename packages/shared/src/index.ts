@@ -380,6 +380,17 @@ export const AgentConfig = z.object({
       // hurt a person or animal (health, dosing, safety). Drives the
       // drafted safety stance in Guide it and its review flag.
       domain_risk: z.enum(['low', 'elevated']).optional(),
+      // The draft's channel picks — Deploy leads with these cards instead
+      // of showing nine equal options; everything else collapses under
+      // "More channels". Card ids, not channel kinds: 'meta' covers
+      // messenger/instagram/whatsapp via OAuth, 'bubble' is the webchat
+      // widget, 'email' is the minted-address any-provider path.
+      suggested_channels: z
+        .array(
+          z.enum(['bubble', 'meta', 'gmail', 'outlook', 'email', 'voice', 'sms']),
+        )
+        .max(3)
+        .optional(),
       // Where the agent's customers are — schedules, units, and guidance
       // vary by region. Injected into the runtime prompt rather than
       // baked into the authored instructions.

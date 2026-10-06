@@ -128,6 +128,16 @@ export interface BuildStatus {
   knowledge: { sources: number; notes: number; updated_at: string | null; over_budget: boolean };
   teach_skipped: boolean;
   channels: number;
+  /** First public channel's created_at — the launch moment. Deploy flips
+   *  to done on connection, not on the first real message. */
+  launched_at: string | null;
+  launched_via: { name: string; kind: string } | null;
+  /** The draft's harm call — Deploy keeps the safety row visible for
+   *  elevated agents even when everything else is green. */
+  domain_risk: 'low' | 'elevated' | null;
+  /** Help-center articles total vs published — unpublished drafts are a
+   *  readiness warning on Deploy. */
+  help_center?: { total: number; published: number };
   live_conversations: number;
   abilities: number;
   test_conversations: number;

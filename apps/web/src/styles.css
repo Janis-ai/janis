@@ -370,7 +370,8 @@ button, input, select, textarea { font: inherit; }
   display: flex; flex-direction: column; align-items: center;
   padding: 14px 0; gap: 6px;
   border-left: 1px solid var(--border);
-  background: var(--panel);
+  /* A shade off the page so it reads as a control, not page margin. */
+  background: var(--panel-2);
 }
 .dock-strip-btn {
   position: relative; width: 36px; height: 36px; border-radius: 9px;
@@ -388,6 +389,8 @@ button, input, select, textarea { font: inherit; }
   width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
   animation: strip-pulse 1.6s ease-in-out infinite;
 }
+/* The copilot unread dot takes the copilot hue — green belongs to Test. */
+.copilot-dot { background: var(--copilot, #7c6cf0); }
 @keyframes strip-pulse { 50% { opacity: .2; transform: scale(.75); } }
 /* One-time nudge anchored to the strip — shown once when there's no room
    to auto-open the panel. */
@@ -503,6 +506,45 @@ button, input, select, textarea { font: inherit; }
 /* Per-channel requirement + sorter highlight on the Deploy cards */
 .needs-line { font-size: 12px; color: var(--muted); margin-top: 6px; }
 .card.recommended { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+/* Deploy — "Before you go live" checklist: informational rows that link
+   to their step; warn styling only where skipping has teeth (required
+   knowledge missing, untested safety, unpublished articles, stale runs). */
+.readiness { padding: 12px 14px; }
+.readiness-title { font-size: 13px; }
+.readiness-list { list-style: none; margin: 8px 0 6px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.readiness-link {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 13px; color: var(--text); text-decoration: none;
+}
+.readiness-link:hover { text-decoration: underline; }
+.readiness-mark { width: 14px; flex-shrink: 0; text-align: center; }
+.readiness-row.ok .readiness-mark { color: var(--accent); }
+.readiness-row.ok .readiness-link { color: var(--muted); }
+.readiness-row.warn .readiness-mark,
+.readiness-row.warn .readiness-link { color: var(--warn, #f59e0b); }
+.readiness-row.todo .readiness-mark { color: var(--muted); }
+/* Launch acknowledgment — once per agent, above the channel list. */
+.launch-banner {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
+  border-color: var(--accent); background: var(--accent-dim);
+}
+/* "More channels" disclosure — a quiet row, not another card, so the
+   cards inside it don't nest. */
+.more-channels { margin-top: 4px; }
+.more-channels > summary {
+  cursor: pointer; padding: 10px 2px; font-size: 13px; font-weight: 600;
+  color: var(--muted); list-style: none; user-select: none;
+}
+.more-channels > summary::-webkit-details-marker { display: none; }
+.more-channels > summary::before { content: '▸ '; color: var(--muted); }
+.more-channels[open] > summary::before { content: '▾ '; }
+.more-channels > summary:hover { color: var(--text); }
+.ch-more-list { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 4px; }
+/* "suggested" tag on the draft-picked channel cards. */
+.ch-suggested {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--accent);
+}
 /* Scenario verdict under a run reply — the written expectation sits above
    the buttons so the reviewer judges against it, not a feeling. */
 .verdict-box {

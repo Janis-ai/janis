@@ -44,6 +44,7 @@ interface BuilderDraft {
   knowledge_need_reason?: string;
   region_sensitive?: boolean;
   domain_risk?: 'low' | 'elevated';
+  suggested_channels?: ('bubble' | 'meta' | 'gmail' | 'outlook' | 'email' | 'voice' | 'sms')[];
 }
 
 const STEPS = [
@@ -2031,36 +2032,113 @@ export default function AgentBuilder() {
         <>
           {/* One intro line lives in AgentChannels — don't double it here. */}
           {hosted && status && (
-            <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>
-              Readiness — knowledge:{' '}
-              {status.knowledge.sources
-                ? status.knowledge.sources === status.knowledge.notes
-                  ? `${status.knowledge.notes} note${status.knowledge.notes > 1 ? 's' : ''}`
-                  : `${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
-                : status.steps.teach === 'na'
-                  ? status.teach_skipped
-                    ? 'skipped'
-                    : 'not needed for this agent'
-                  : 'nothing added'}
-              {' · '}tested:{' '}
-              {status.test_scenarios?.total
-                ? `${status.test_scenarios.checked} of ${status.test_scenarios.total} scenario${status.test_scenarios.total > 1 ? 's' : ''}${
-                    status.test_scenarios.safety_total
-                      ? ` · safety ${status.test_scenarios.safety_checked}/${status.test_scenarios.safety_total}`
-                      : ''
-                  }${
-                    status.test_scenarios.failing
-                      ? ` · ${status.test_scenarios.failing} need${status.test_scenarios.failing > 1 ? '' : 's'} work`
-                      : ''
-                  }`
-                : status.test_conversations
-                  ? `${status.test_conversations} chat${status.test_conversations > 1 ? 's' : ''}${status.open_gaps ? `, ${status.open_gaps} open gap${status.open_gaps > 1 ? 's' : ''}` : ''}`
-                  : 'not yet'}
-              {status.steps.guide === 'partial' && ' · instructions unreviewed'}
-              {status.knowledge.over_budget && ' · knowledge over budget'}
-              {!(status.test_scenarios?.total
-                ? status.test_scenarios.checked
-                : status.test_conversations) && ' — worth a test first'}
+            <div className="card readiness" style={{ marginTop: 8 }}>
+              <strong className="readiness-title">Before you go live</strong>
+              <ul className="readiness-list">
+                {(() => {
+                  const t = status.test_scenarios;
+                  const kn = agent.config?.builder?.knowledge_need;
+                  const hc = status.help_center;
+                  const stepLink = (s: string) => `/agents/new/${agent.id}?step=${s}`;
+                  const rows: { st: 'ok' | 'todo' | 'warn'; text: string; to: string }[] = [
+                    {
+                      st: status.steps.guide === 'done' ? 'ok' : 'todo',
+                      text:
+                        status.steps.guide === 'done'
+                          ? 'Instructions reviewed'
+                          : status.steps.guide === 'partial'
+                            ? 'Instructions drafted — unreviewed'
+                            : 'Instructions not written yet',
+                      to: stepLink('guide'),
+                    },
+                    {
+                      st: !t?.total
+                        ? 'todo'
+                        : t.failing || t.stale
+                          ? 'warn'
+                          : t.checked === t.total
+                            ? 'ok'
+                            : 'todo',
+                      text: !t?.total
+                        ? 'No test scenarios yet — add one in Try it'
+                        : `Tests: ${t.checked} of ${t.total} scenario${t.total > 1 ? 's' : ''} checked${
+                            t.failing
+                              ? ` · ${t.failing} need${t.failing > 1 ? '' : 's'} work`
+                              : ''
+                          }${t.stale ? ` · ${t.stale} stale after a config change` : ''}`,
+                      to: stepLink('try'),
+                    },
+                    {
+                      st:
+                        status.abilities > 0 || status.steps.abilities === 'na' ? 'ok' : 'todo',
+                      text: status.abilities
+                        ? `Abilities: ${status.abilities} tool${status.abilities > 1 ? 's' : ''}`
+                        : status.steps.abilities === 'na'
+                          ? 'Abilities: none needed'
+                          : status.steps.abilities === 'partial'
+                            ? 'Abilities: suggested — none connected'
+                            : 'Abilities: none connected',
+                      to: stepLink('abilities'),
+                    },
+                    {
+                      st: status.knowledge.over_budget
+                        ? 'warn'
+                        : status.knowledge.sources > 0 || status.steps.teach === 'na'
+                          ? 'ok'
+                          : kn === 'required'
+                            ? 'warn'
+                            : 'todo',
+                      text: status.knowledge.over_budget
+                        ? 'Knowledge over the prompt budget — trim a source'
+                        : status.knowledge.sources > 0
+                          ? `Knowledge: ${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
+                          : status.steps.teach === 'na'
+                            ? status.teach_skipped
+                              ? 'Knowledge: skipped'
+                              : 'Knowledge: not needed for this topic'
+                            : kn === 'required'
+                              ? 'Knowledge: needed — nothing added'
+                              : 'Knowledge: nothing added',
+                      to: stepLink('teach'),
+                    },
+                  ];
+                  // Elevated-risk agents keep the safety row visible even
+                  // when everything else is green — it's the one row that
+                  // shouldn't be skipped quietly.
+                  if (status.domain_risk === 'elevated' || (t?.safety_total ?? 0) > 0) {
+                    rows.push({
+                      st:
+                        t?.safety_total && t.safety_checked === t.safety_total
+                          ? 'ok'
+                          : 'warn',
+                      text: t?.safety_total
+                        ? `Safety: ${t.safety_checked} of ${t.safety_total} checked`
+                        : 'Safety: no safety scenarios yet',
+                      to: stepLink('try'),
+                    });
+                  }
+                  if (hc && hc.total > 0 && hc.published === 0) {
+                    rows.push({
+                      st: 'warn',
+                      text: `Help center: ${hc.total} article${hc.total > 1 ? 's' : ''} — none published`,
+                      to: stepLink('teach'),
+                    });
+                  }
+                  return rows.map((r, i) => (
+                    <li key={i} className={`readiness-row ${r.st}`}>
+                      <Link to={r.to} className="readiness-link">
+                        <span className="readiness-mark" aria-hidden>
+                          {r.st === 'ok' ? '✓' : r.st === 'warn' ? '⚠' : '○'}
+                        </span>
+                        {r.text}
+                      </Link>
+                    </li>
+                  ));
+                })()}
+              </ul>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Informational, never blocking — connect whenever you're ready.
+              </div>
             </div>
           )}
           {hosted ? (

@@ -304,6 +304,9 @@ export default function Layout() {
   const [testSlot, setTestSlot] = useState<HTMLElement | null>(null);
   const [testProvided, setTestProvided] = useState(false);
   const [dockCallout, setDockCallout] = useState(false);
+  // A Copilot reply while its pane isn't visible lights the strip icon and
+  // header tab — cleared the moment the copilot surface is showing.
+  const [copilotUnread, setCopilotUnread] = useState(false);
   const [dockExpanded, setDockExpanded] = useState(false);
   const [dockSplit, setDockSplit] = useState(() => {
     try { return localStorage.getItem('janis.dock-split') === '1'; } catch { return false; }
@@ -449,6 +452,13 @@ export default function Layout() {
     (isAskPage && hasAsk);
   // Split panes only off /ask — the expanded concierge page is Copilot alone.
   const splitActive = dockSplit && bothTabs && !isAskPage;
+
+  // The copilot surface is visible on /ask, or in the dock when the dock
+  // is open on the ask tab (or split shows both). Anything arriving while
+  // it's hidden counts as unread.
+  useEffect(() => {
+    if (isAskPage || (railOpen && (railTab === 'ask' || splitActive))) setCopilotUnread(false);
+  }, [isAskPage, railOpen, railTab, splitActive]);
 
   // On /ask the rail must be open on the ask tab; a workspace with no
   // concierge has nothing to show there — bounce back to the last page.
@@ -1023,6 +1033,7 @@ export default function Layout() {
               }
             >
               <Sparkles size={16} />
+              {copilotUnread && <span className="test-strip-dot copilot-dot" />}
             </button>
           )}
         </div>
@@ -1079,6 +1090,7 @@ export default function Layout() {
                     onClick={() => setRailTab('ask')}
                   >
                     <Sparkles size={13} /> Copilot
+                    {copilotUnread && <span className="test-strip-dot copilot-dot" />}
                   </button>
                 </div>
               ) : (
@@ -1153,6 +1165,7 @@ export default function Layout() {
                     draftMessage={copilotDraft?.text}
                     draftNonce={copilotDraft?.nonce}
                     placeholder="Ask Janis to change or explain your setup…"
+                    onAgentReply={() => setCopilotUnread(true)}
                     hideHeader
                   />
                 </div>
