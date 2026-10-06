@@ -589,15 +589,25 @@ export default function AgentBuilder() {
   // Sequential runner — one prompt in flight at a time so replies pair
   // unambiguously. A multi-bubble answer attaches to the running scenario;
   // the queue advances on a short delay after the first reply lands.
+  const runTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const advanceRun = (queue = runQueueRef.current) => {
     const id = queue.shift();
     const s = id ? scenarios.find((x) => x.id === id) : undefined;
     if (!s) {
       setRunningId(null);
+      if (runTimeoutRef.current) clearTimeout(runTimeoutRef.current);
       return;
     }
     setRunningId(s.id);
     setSeed({ text: scenarioPrompt(s), nonce: Date.now(), target: 'dock' });
+    // Stall guard — a reply that never comes (agent error, dropped send)
+    // must not wedge the checklist on "Running…" forever.
+    if (runTimeoutRef.current) clearTimeout(runTimeoutRef.current);
+    runTimeoutRef.current = setTimeout(() => {
+      runTimeoutRef.current = null;
+      setTestNotice('No reply — marked unreviewed');
+      advanceRun();
+    }, 90_000);
   };
   const runScenario = (s: ScenarioRow) => {
     runQueueRef.current = [s.id];
@@ -612,6 +622,11 @@ export default function AgentBuilder() {
   const runAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onAgentReply = (text: string) => {
     if (!runningId) return;
+    // Reply landed — the stall guard's job is done for this scenario.
+    if (runTimeoutRef.current) {
+      clearTimeout(runTimeoutRef.current);
+      runTimeoutRef.current = null;
+    }
     replyRef.current.set(
       runningId,
       (replyRef.current.get(runningId) ? `${replyRef.current.get(runningId)}\n` : '') + text,

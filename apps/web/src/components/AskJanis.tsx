@@ -358,6 +358,12 @@ export function AskJanis({
   const [hasMore, setHasMore] = useState(false); // older pages exist — scroll up to back-fill
   const [fetchingOlder, setFetchingOlder] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The poll interval closes over the mount-time render — callbacks it
+  // invokes (onAgentReply) would stay that render's closure forever and
+  // see stale parent state (a null runningId → replies dropped, runner
+  // stuck). Route through a ref so interval polls always call the latest.
+  const onAgentReplyRef = useRef(onAgentReply);
+  onAgentReplyRef.current = onAgentReply;
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Dictation — MediaRecorder → server-side transcription (POST
@@ -467,7 +473,7 @@ export function AskJanis({
       );
       if (hadCursor) {
         for (const m of fresh) {
-          if (m.direction === 'out' && m.text?.trim()) onAgentReply?.(m.text);
+          if (m.direction === 'out' && m.text?.trim()) onAgentReplyRef.current?.(m.text);
         }
       }
       if (maxTs && (!lastTs.current || maxTs > lastTs.current)) lastTs.current = maxTs;
