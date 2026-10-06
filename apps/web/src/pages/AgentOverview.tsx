@@ -7,7 +7,7 @@ import { KIND_LABEL } from '../components/Channels';
 import { janisBrain } from '../lib/agentContext';
 import { stepGlyph } from '../lib/seenSteps';
 import { railBus } from '../lib/railBus';
-import { timeAgo } from '../components/bits';
+import { Md, timeAgo } from '../components/bits';
 import { usePageTitle } from '../lib/title';
 
 /** Old /agents/:id?tab=X links resolve to the new section paths. */
@@ -375,7 +375,15 @@ export default function AgentOverview() {
                   onClick={() => navigate(`/agents/${id}/inbox/${conv.id}`)}
                 >
                   <span className="grow" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {conv.is_unread ? <strong>{conv.last_message_preview ?? 'New conversation'}</strong> : conv.last_message_preview ?? 'Conversation'}
+                    {conv.is_unread ? (
+                      <strong>
+                        {conv.last_message_preview ? <Md>{conv.last_message_preview}</Md> : 'New conversation'}
+                      </strong>
+                    ) : conv.last_message_preview ? (
+                      <Md>{conv.last_message_preview}</Md>
+                    ) : (
+                      'Conversation'
+                    )}
                   </span>
                   <span className={`badge ${conv.state}`}>{conv.state.replace('_', ' ')}</span>
                   <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { splitBlocks, splitEmphasis } from './richText';
+import { plainText, splitBlocks, splitEmphasis } from './richText';
 
 describe('splitEmphasis', () => {
   it('passes plain text through as a single segment', () => {
@@ -166,5 +166,19 @@ describe('splitBlocks', () => {
       { kind: 'para', text: 'pick:' },
       { kind: 'list', items: ['one', 'two'], ordered: false, breakBefore: true },
     ]);
+  });
+});
+
+describe('plainText', () => {
+  it('strips paired markers and keeps the content', () => {
+    expect(plainText('a **bold** and *ital* and `code`')).toBe('a bold and ital and code');
+  });
+
+  it('drops stray markers left by truncation', () => {
+    expect(plainText('preview cut mid-**word')).toBe('preview cut mid-word');
+  });
+
+  it('leaves lone operators alone', () => {
+    expect(plainText('5 * 3 = 15 and snake_case')).toBe('5 * 3 = 15 and snake_case');
   });
 });

@@ -23,6 +23,20 @@ export function splitEmphasis(text: string): EmphSeg[] {
   return out;
 }
 
+/** Paired emphasis markers become segments; a marker left in a 'text'
+ *  segment is unpaired — either literal ("**" typed as such) or a preview
+ *  truncated mid-pair. Previews strip the strays so a cut doesn't leak
+ *  half a marker. Single * and _ survive ("5 * 3", snake_case). */
+export const stripStrayMarkers = (s: string) => s.replace(/\*\*|~~|`/g, '');
+
+/** Plain string with emphasis markers stripped — for contexts that can't
+ *  take elements (palette hints, title attributes, aria labels). */
+export function plainText(text: string): string {
+  return splitEmphasis(text)
+    .map((s) => (s.kind === 'text' ? stripStrayMarkers(s.text) : s.text))
+    .join('');
+}
+
 export interface RichBlock {
   kind: 'para' | 'list';
   /** para */

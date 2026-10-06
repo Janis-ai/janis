@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useAgents, useSearch } from '../api/hooks';
 import { displayName } from './bits';
+import { plainText } from '../lib/richText';
 
 interface Item {
   id: string;
@@ -71,7 +72,7 @@ export function CommandPalette() {
     const convItems: Item[] = (hits?.conversations ?? []).slice(0, 8).map((c) => ({
       id: `conv-${c.id}`,
       label: displayName(c),
-      hint: c.last_message_preview ?? undefined,
+      hint: c.last_message_preview ? plainText(c.last_message_preview) : undefined,
       icon: <Search size={15} />,
       run: () => go(`/conversations/${c.id}`),
     }));

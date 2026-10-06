@@ -4,6 +4,7 @@ import type { Conversation, ConversationState, UserProfile } from '@janis/shared
 import { friendlyName } from '@janis/shared';
 import { currentTheme, THEME_CHANGE_EVENT } from '../lib/theme';
 import { highlight, type CodeLang } from '../lib/highlight';
+import { splitEmphasis, stripStrayMarkers } from '../lib/richText';
 
 /** The wordmark/mark PNGs are white-on-transparent — invisible in light mode.
  *  Swaps to the ink variant when the theme flips (or on first render). */
@@ -111,6 +112,32 @@ export function CodeBlock({ title, code, lang }: { title: string; code: string; 
           : code}
       </pre>
     </div>
+  );
+}
+
+/** Inline markdown-ish emphasis for one-line contexts — conversation
+ *  previews, list rows. No links: these render inside row links already,
+ *  and nested <a> is invalid. */
+export function Md({ children }: { children: string }) {
+  return (
+    <>
+      {splitEmphasis(children).map((seg, i) => {
+        if (seg.kind === 'text') return stripStrayMarkers(seg.text);
+        const Tag =
+          seg.kind === 'bold'
+            ? 'b'
+            : seg.kind === 'italic'
+              ? 'em'
+              : seg.kind === 'strike'
+                ? 's'
+                : 'code';
+        return (
+          <Tag key={i} className={seg.kind === 'code' ? 'md-code' : undefined}>
+            {seg.text}
+          </Tag>
+        );
+      })}
+    </>
   );
 }
 

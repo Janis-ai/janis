@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
 import { useConversations, useAgents, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
-import { Avatar, channelLabel, displayName, Empty, StateBadge, timeAgo } from '../components/bits';
+import { Avatar, channelLabel, displayName, Empty, Md, StateBadge, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
 import { Bot, Cog, Headset, Moon, Save, Star, User, X } from 'lucide-react';
@@ -141,7 +141,9 @@ function ConvRow({
             </span>
           )}
         </div>
-        <div className="preview">{c.last_message_preview}</div>
+        <div className="preview">
+          {c.last_message_preview ? <Md>{c.last_message_preview}</Md> : null}
+        </div>
       </div>
       <StateBadge state={c.state} />
       <div className="meta">{timeAgo(c.last_message_at)}</div>

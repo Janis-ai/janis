@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
-import { timeAgo } from '../components/bits';
+import { Md, timeAgo } from '../components/bits';
 import { useConfirm } from '../components/Prompt';
 import { AgentScopePicker } from '../components/AgentScopePicker';
 import { useChannels, useMe } from '../api/hooks';
@@ -676,7 +676,9 @@ export function ContactDetail() {
         {data.conversations.map((v) => (
           <Link key={v.id} to={agentScope ? `/agents/${agentScope}/inbox/${v.id}` : `/conversations/${v.id}`} className="row" style={{ padding: '6px 0', color: 'inherit', textDecoration: 'none' }}>
             <span className={`badge ${v.state}`}>{v.state}</span>
-            <span className="grow">{v.agent_name} — {v.last_message_preview ?? ''}</span>
+            <span className="grow">
+              {v.agent_name} — {v.last_message_preview ? <Md>{v.last_message_preview}</Md> : ''}
+            </span>
             <span className="muted">{v.last_message_at ? timeAgo(v.last_message_at) : ''}</span>
           </Link>
         ))}
