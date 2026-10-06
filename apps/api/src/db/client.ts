@@ -49,34 +49,58 @@ export async function createDb(): Promise<Db> {
   const { drizzle } = await import('drizzle-orm/pglite');
   const fs = await import('node:fs/promises');
   const open = () => drizzle(new PGlite(env.pgliteDir), { schema }) as unknown as Db;
+  // The owner file sits BESIDE the datadir — stray files inside PGDATA could
+  // upset the engine. PGlite stubs postmaster.pid at -42, so a real pid file
+  // is the only way the self-heal below can tell a live holder from a wedged
+  // leftover. (A kill(0) ESRCH/EPERM check can't run on a negative pid, and
+  // treating a live holder as dead renames the data dir mid-flight.)
+  const ownerFile = `${env.pgliteDir}.owner`;
+  const markOwner = () =>
+    fs.writeFile(ownerFile, String(process.pid)).catch(() => {});
+  // A positive response to kill(pid, 0) means alive; EPERM also means alive
+  // (a process we don't own). ESRCH or a missing/unreadable file means dead.
+  const pidAlive = (pid: number): boolean => {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (e) {
+      return (e as NodeJS.ErrnoException).code === 'EPERM';
+    }
+  };
   try {
     const db = open();
     // PGlite init is lazy — force it now so a wedged dir (a killed tsx watch
     // leaves one: initdb/WAL aborts on every subsequent boot) fails HERE.
     await db.execute(sql`select 1`);
+    await markOwner();
     return db;
   } catch (err) {
-    // Distinguish lock-contention from corruption: postmaster.pid records the
-    // holder's pid — if that process is alive this is the forbidden
-    // two-watchers-on-one-dir case, so fail loudly instead of renaming a live
-    // server's data out from under it. Dead/stale pid → quarantine + retry.
+    // Distinguish lock-contention from corruption: our sibling .owner file
+    // records the holder's REAL pid — if that process is alive this is the
+    // forbidden two-watchers-on-one-dir case, so fail loudly instead of
+    // renaming a live server's data out from under it. (postmaster.pid is
+    // checked too, but only honored when it holds a positive pid — PGlite
+    // stubs it at -42.) Dead/stale pid → quarantine + retry.
     let holderAlive = false;
-    try {
-      const pid = Number(
-        (await fs.readFile(`${env.pgliteDir}/postmaster.pid`, 'utf8')).split('\n')[0],
-      );
-      if (pid) {
-        process.kill(pid, 0);
-        holderAlive = true;
+    for (const file of [ownerFile, `${env.pgliteDir}/postmaster.pid`]) {
+      try {
+        const pid = Number((await fs.readFile(file, 'utf8')).split('\n')[0]);
+        if (pidAlive(pid)) {
+          holderAlive = true;
+          break;
+        }
+      } catch {
+        // unreadable file — try the next marker
       }
-    } catch {
-      holderAlive = false; // ESRCH (dead pid) or no pid file
     }
     if (holderAlive) throw err;
     const broken = `${env.pgliteDir}.broken-${Date.now()}`;
     console.error(`PGlite failed to open ${env.pgliteDir} — quarantining to ${broken}`, err);
     await fs.rename(env.pgliteDir, broken).catch(() => {});
-    return open();
+    const db = open();
+    await markOwner();
+    return db;
   }
 }
 

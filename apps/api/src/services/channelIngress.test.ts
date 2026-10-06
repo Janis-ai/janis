@@ -518,6 +518,100 @@ describe('hosted handoff offers', () => {
     ).toBeUndefined();
   });
 
+  it('a bare [OFFER_HUMAN] still sends a visible offer with the buttons', async () => {
+    // Prod incident: "sure" → model emitted [OFFER_HUMAN] with no text —
+    // the empty partial meant NO message_out, so the customer saw silence
+    // while an offer alert (with no buttons to accept it) sat open.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => Promise.resolve(llmResponse('[OFFER_HUMAN]'))),
+    );
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'Hosted',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-offer-bare' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'sure' });
+
+    await runHostedEvent(db, hosted, offerEvent(conv.id, 'ext-offer-bare'));
+
+    const outs = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    const visible = outs.filter(
+      (m) => m.direction === 'out' && !(m.flags as { handoff_offer?: boolean } | null)?.handoff_offer,
+    );
+    // the customer must get a real line + the accept/decline buttons
+    expect(visible).toHaveLength(1);
+    expect(visible[0].text?.length).toBeGreaterThan(0);
+    expect((visible[0].payload as { quick_replies?: unknown[] }).quick_replies).toEqual([
+      'Yes, get a human',
+      'No thanks',
+    ]);
+    const offers = await db
+      .select()
+      .from(alerts)
+      .where(eq(alerts.conversationId, conv.id))
+      .then((rows) => rows.filter((a) => a.type === 'handoff_offer'));
+    expect(offers).toHaveLength(1);
+  });
+
+  it('a bare [HANDOFF] still tells the customer a human is coming', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => Promise.resolve(llmResponse('[HANDOFF]'))),
+    );
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'Hosted',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-handoff-bare' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'get me a human' });
+
+    await runHostedEvent(db, hosted, offerEvent(conv.id, 'ext-handoff-bare'));
+
+    const outs = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    // internal rows (handoff note, state_change) are filtered from the
+    // customer transcript — what remains is the agent's visible reply
+    const visible = outs.filter(
+      (m) =>
+        m.direction === 'out' &&
+        (m.payload as { via?: string; internal?: boolean } | null)?.via === 'hosted',
+    );
+    expect(visible).toHaveLength(1);
+    expect(visible[0].text?.length).toBeGreaterThan(0);
+  });
+
   it('a widget-only reply delivers the widget instead of escalating', async () => {
     // Regression: "show me your plans" made the concierge emit a bare WIDGET
     // line — extraction left empty text and the reply path read it as

@@ -2283,6 +2283,18 @@ const FAILURE_LINES = [
 
 const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
 
+// The escalation tags can arrive bare ([OFFER_HUMAN] with no reply text) —
+// without a fallback the customer sees silence, and an offer with no text
+// also never ships its buttons, so it can never be accepted.
+const OFFER_FALLBACKS = [
+  'Would you like me to bring in a human teammate to help with this?',
+  'Want me to get a human teammate to take a look with you?',
+];
+const HANDOFF_FALLBACKS = [
+  'One moment — connecting you with a human teammate now.',
+  'Got it — bringing in a human teammate now.',
+];
+
 // Tappable yes/no attached to every "want a human?" offer — webchat chips,
 // native quick replies on Meta channels.
 const OFFER_CHOICES = ['Yes, get a human', 'No thanks'];
@@ -2687,17 +2699,16 @@ async function replyAsHostedAgent(
     if (tag?.kind === 'handoff') {
       // The model may pair the tag with a partial answer — deliver it so the
       // customer gets more than the bare "human is on the way" notice, then
-      // still flag the handoff.
-      const partial = tag.partial;
+      // still flag the handoff. A bare [HANDOFF] still tells the customer
+      // a human is coming — silence reads as a dead chat.
+      const partial = tag.partial || pick(HANDOFF_FALLBACKS);
       const events: Parameters<typeof processEvents>[2] = [];
-      if (partial) {
-        events.push({
-          type: 'message_out',
-          conversation_id: externalId,
-          text: partial,
-          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
-        });
-      }
+      events.push({
+        type: 'message_out',
+        conversation_id: externalId,
+        text: partial,
+        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+      });
       events.push({
         type: 'handoff_request',
         conversation_id: externalId,
@@ -2737,18 +2748,16 @@ async function replyAsHostedAgent(
         .from(alerts)
         .where(and(eq(alerts.conversationId, convId), eq(alerts.type, 'handoff_offer')))
         .limit(1))[0];
-      const partial = tag.partial;
+      const partial = tag.partial || pick(OFFER_FALLBACKS);
       const events: Parameters<typeof processEvents>[2] = [];
-      if (partial) {
-        events.push({
-          type: 'message_out',
-          conversation_id: externalId,
-          text: partial,
-          payload: offeredBefore
-            ? { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag }
-            : { via: 'hosted', quick_replies: OFFER_CHOICES, ...linkFlag, ...widgetFlag, ...inspectorFlag },
-        });
-      }
+      events.push({
+        type: 'message_out',
+        conversation_id: externalId,
+        text: partial,
+        payload: offeredBefore
+          ? { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag }
+          : { via: 'hosted', quick_replies: OFFER_CHOICES, ...linkFlag, ...widgetFlag, ...inspectorFlag },
+      });
       if (!offeredBefore) {
         events.push({
           type: 'handoff_offer',
