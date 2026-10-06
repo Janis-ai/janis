@@ -69,7 +69,11 @@ export function toAgent(row: Row<typeof agents>): Agent {
   };
 }
 
-export function toConversation(row: Row<typeof conversations>, openAlertCount = 0): Conversation {
+export function toConversation(
+  row: Row<typeof conversations>,
+  openAlertCount = 0,
+  isTest?: boolean,
+): Conversation {
   return {
     id: row.id,
     agent_id: row.agentId,
@@ -84,6 +88,11 @@ export function toConversation(row: Row<typeof conversations>, openAlertCount = 
     last_message_at: iso(row.lastMessageAt),
     last_message_preview: row.lastMessagePreview,
     open_alert_count: openAlertCount,
+    // List/search pass the bound-channel check; other callers fall back to
+    // the ':test:'-namespaced externalId (covers every internal-channel
+    // thread written since namespacing — legacy ones get re-keyed on their
+    // next inbound).
+    is_test: isTest ?? row.externalId.split(':')[1] === 'test',
     is_starred: row.isStarred,
     is_unread: row.isUnread,
     human_since: iso(row.humanSince),

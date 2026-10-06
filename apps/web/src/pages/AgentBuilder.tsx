@@ -640,27 +640,70 @@ export default function AgentBuilder() {
     const sameCat = scenarios.filter((x) => x.category === s.category);
     return `${CAT_LABELS[s.category] ?? s.category} #${sameCat.indexOf(s) + 1}`;
   })();
+  /** Match a reply's customer prompt back to its scenario — the docked
+   *  panel renders the expectation + verdict buttons in place. */
+  const verdictFor = (customerText?: string) => {
+    if (!customerText) return null;
+    const s = scenarios.find(
+      (x) =>
+        scenarioPrompt(x).trim().toLowerCase() === customerText.trim().toLowerCase(),
+    );
+    if (!s) return null;
+    return {
+      expectation: s.expectation,
+      result: s.human_result,
+      verdict: (r: 'pass' | 'fail') => markTest.mutate({ id: s.id, result: r }),
+    };
+  };
   const tryChips = (target: 'try' | 'dock') => {
-    const qs = scenarios
-      .map((s) => scenarioPrompt(s))
-      .filter(Boolean)
-      .slice(0, 6);
-    const chips = qs.length ? qs : (builder?.suggested_questions ?? []);
-    return chips.length > 0 && (
+    const list = scenarios.filter((s) => scenarioPrompt(s)).slice(0, 6);
+    return (list.length > 0 || (builder?.suggested_questions?.length ?? 0) > 0) && (
       <div className="try-chips">
         <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>
           Try asking:
         </span>
-        {chips.map((q) => (
-          <button
-            key={q}
-            className="try-chip"
-            title={q}
-            onClick={() => setSeed({ text: q, nonce: Date.now(), target })}
-          >
-            {q}
-          </button>
-        ))}
+        {list.length
+          ? list.map((s) => {
+              // Scenario chips run through the runner — the reply pairs,
+              // the run is recorded, and the verdict shows on the chip.
+              const state = s.stale
+                ? 'stale'
+                : s.human_result === 'pass'
+                  ? 'pass'
+                  : s.human_result === 'fail'
+                    ? 'fail'
+                    : '';
+              const mark = s.stale ? '◷' : s.human_result === 'pass' ? '✓' : s.human_result === 'fail' ? '⚑' : null;
+              return (
+                <button
+                  key={s.id}
+                  className={`try-chip${state ? ` ${state}` : ''}`}
+                  title={`${scenarioPrompt(s)}${
+                    s.stale
+                      ? ' — verdict stale, re-run'
+                      : s.human_result === 'pass'
+                        ? ' — looks right'
+                        : s.human_result === 'fail'
+                          ? ' — needs work'
+                          : ''
+                  }`}
+                  onClick={() => runScenario(s)}
+                >
+                  {mark && <span className="try-chip-mark">{mark}</span>}
+                  <span className="try-chip-text">{scenarioPrompt(s)}</span>
+                </button>
+              );
+            })
+          : (builder?.suggested_questions ?? []).map((q) => (
+              <button
+                key={q}
+                className="try-chip"
+                title={q}
+                onClick={() => setSeed({ text: q, nonce: Date.now(), target })}
+              >
+                <span className="try-chip-text">{q}</span>
+              </button>
+            ))}
       </div>
     );
   };
@@ -928,8 +971,12 @@ export default function AgentBuilder() {
               title={
                 locked
                   ? 'Create the agent first'
-                  : // The full subtitle survives container-query truncation.
-                    `${s.label} — ${subtitle}`
+                  : // The full subtitle survives container-query truncation;
+                    // Try it also names what's still unchecked or stale.
+                    `${s.label} — ${subtitle}` +
+                    (s.key === 'try' && status?.test_scenarios?.unchecked?.length
+                      ? `\nUnchecked: ${status.test_scenarios.unchecked.join(', ')}`
+                      : '')
               }
               onClick={() => goStep(s.key)}
             >
@@ -1982,10 +2029,7 @@ export default function AgentBuilder() {
 
       {step === 'deploy' && agent && (
         <>
-          <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
-            Where should it work? Add a channel and it's live; each channel
-            lands on its own configuration page after creation.
-          </div>
+          {/* One intro line lives in AgentChannels — don't double it here. */}
           {hosted && status && (
             <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>
               Readiness — knowledge:{' '}
@@ -1999,12 +2043,24 @@ export default function AgentBuilder() {
                     : 'not needed for this agent'
                   : 'nothing added'}
               {' · '}tested:{' '}
-              {status.test_conversations
-                ? `${status.test_conversations} chat${status.test_conversations > 1 ? 's' : ''}${status.open_gaps ? `, ${status.open_gaps} open gap${status.open_gaps > 1 ? 's' : ''}` : ''}`
-                : 'not yet'}
+              {status.test_scenarios?.total
+                ? `${status.test_scenarios.checked} of ${status.test_scenarios.total} scenario${status.test_scenarios.total > 1 ? 's' : ''}${
+                    status.test_scenarios.safety_total
+                      ? ` · safety ${status.test_scenarios.safety_checked}/${status.test_scenarios.safety_total}`
+                      : ''
+                  }${
+                    status.test_scenarios.failing
+                      ? ` · ${status.test_scenarios.failing} need${status.test_scenarios.failing > 1 ? '' : 's'} work`
+                      : ''
+                  }`
+                : status.test_conversations
+                  ? `${status.test_conversations} chat${status.test_conversations > 1 ? 's' : ''}${status.open_gaps ? `, ${status.open_gaps} open gap${status.open_gaps > 1 ? 's' : ''}` : ''}`
+                  : 'not yet'}
               {status.steps.guide === 'partial' && ' · instructions unreviewed'}
               {status.knowledge.over_budget && ' · knowledge over budget'}
-              {status.test_conversations === 0 && ' — worth a test first'}
+              {!(status.test_scenarios?.total
+                ? status.test_scenarios.checked
+                : status.test_conversations) && ' — worth a test first'}
             </div>
           )}
           {hosted ? (
@@ -2162,6 +2218,7 @@ export default function AgentBuilder() {
                   setCorrectTarget(ctx);
                 }}
                 onAgentReply={onAgentReply}
+                verdictFor={verdictFor}
                 onSaveTest={(ctx) => {
                   // A reply to a checklist prompt IS that scenario —
                   // saving it again would duplicate the row.

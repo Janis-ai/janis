@@ -17,7 +17,7 @@ import {
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toAlert, toConversation, toMessage, toSuggestion } from '../lib/serializers.js';
 import { applyConvEffects } from '../lib/conversationOps.js';
-import { convListConditions, convListQuery } from '../lib/convFilters.js';
+import { convListConditions, convListQuery, TEST_CONV } from '../lib/convFilters.js';
 import { agentRoleFor, agentVis, conversationAgent, isAdminRole, operatorIdentity } from '../lib/access.js';
 import { bus } from '../lib/bus.js';
 import {
@@ -124,6 +124,7 @@ export function conversationRoutes(db: Db) {
           where ${alerts.conversationId} = ${conversations.id}
             and ${alerts.status} = 'open'
         )`,
+        isTest: sql<boolean>`${TEST_CONV}`,
       })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
@@ -140,7 +141,7 @@ export function conversationRoutes(db: Db) {
         : null;
 
     return c.json({
-      conversations: page.map((r) => toConversation(r.conversation, r.openAlertCount)),
+      conversations: page.map((r) => toConversation(r.conversation, r.openAlertCount, r.isTest)),
       has_more: hasMore,
       next_cursor: nextCursor,
     });
@@ -167,6 +168,9 @@ export function conversationRoutes(db: Db) {
             ...scope,
             ...agentCond,
             inArray(conversations.state, ['needs_human', 'human']),
+            // a test chat flipping needs_human is the suite working, not a
+            // customer waiting — the badge must not cry wolf
+            sql`not ${TEST_CONV}`,
             // snoozed = out of sight until it wakes
             sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
           ),
@@ -180,6 +184,7 @@ export function conversationRoutes(db: Db) {
             ...scope,
             ...agentCond,
             eq(conversations.isUnread, true),
+            sql`not ${TEST_CONV}`,
             sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
           ),
         ),

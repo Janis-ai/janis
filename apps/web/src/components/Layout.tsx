@@ -471,15 +471,38 @@ export default function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAskPage, hasAsk, data, searchParams]);
 
-  // At ≤720px the rail is position:fixed over the whole view — a nav click
-  // beneath it lands on an invisible page, so fold the rail on navigation.
-  // Declared before the ?rail= consumer so a deeplinked rail still opens.
-  const prevPath = useRef(location.pathname);
+  // Overlay mode (under the push breakpoint) covers the page — a nav click
+  // beneath it lands on an invisible page, and a user who clicks Next
+  // shouldn't resurface behind a dock they forgot was open. Fold on any
+  // real navigation (rail/agent params are the dock's own mirror — ignored).
+  // Push mode (≥1200px) persists across steps, as specced. Declared before
+  // the ?rail= consumer so a deeplinked dock still opens.
+  const prevNav = useRef('');
   useEffect(() => {
-    if (location.pathname === prevPath.current) return;
-    prevPath.current = location.pathname;
-    if (window.matchMedia('(max-width: 720px)').matches) setRailOpen(false);
-  }, [location.pathname]);
+    const p = new URLSearchParams(searchParams);
+    p.delete('rail');
+    p.delete('agent');
+    const key = `${location.pathname}?${p.toString()}`;
+    if (!prevNav.current || key === prevNav.current) {
+      prevNav.current = key;
+      return;
+    }
+    prevNav.current = key;
+    if (window.matchMedia('(max-width: 1199px)').matches) setRailOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, location.search]);
+
+  // Overlay mode dismisses like a drawer — Escape too. Deliberate, so it
+  // never surprises the persistent push-mode dock.
+  useEffect(() => {
+    if (!railOpen || isAskPage) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && window.matchMedia('(max-width: 1199px)').matches)
+        setRailOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [railOpen, isAskPage]);
 
   // Deeplinks: ?rail=ask | ?rail=test&agent=<id> — merged into the existing
   // params so page params like ?tab= survive. Consumed once per combo.
@@ -1045,6 +1068,9 @@ export default function Layout() {
                     onClick={() => setRailTab('test')}
                   >
                     <FlaskConical size={13} /> Test
+                    {(agentStatus?.test_conversations ?? 0) === 0 && (
+                      <span className="test-strip-dot" />
+                    )}
                   </button>
                   <button
                     role="tab"

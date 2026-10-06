@@ -232,8 +232,11 @@ button, input, select, textarea { font: inherit; }
   border-bottom: 2px solid transparent; border-radius: 7px 7px 0 0;
 }
 .dock-tab:hover { color: var(--text); }
-.dock-tab-test.active { color: var(--accent); background: var(--accent-dim); border-bottom-color: var(--accent); }
-.dock-tab-copilot.active { color: var(--copilot, #7c6cf0); background: rgba(124, 108, 240, .12); border-bottom-color: var(--copilot, #7c6cf0); }
+/* Active = accent underline only. A filled box reads as a focus ring and
+   makes focused-vs-active indistinguishable. */
+.dock-tab-test.active { color: var(--accent); border-bottom-color: var(--accent); }
+.dock-tab-copilot.active { color: var(--copilot, #7c6cf0); border-bottom-color: var(--copilot, #7c6cf0); }
+.dock-tab .test-strip-dot { margin-left: 2px; }
 .ask-scroll { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .ask-msg {
   max-width: 85%; padding: 8px 11px; border-radius: 10px; font-size: 14px;
@@ -403,7 +406,7 @@ button, input, select, textarea { font: inherit; }
 /* The dock — one column shared by Test and Copilot. Slides out from the
    strip so the two read as one control. */
 .dock {
-  position: fixed; right: 48px; top: 0; bottom: 0; width: 400px; max-width: 92vw;
+  position: fixed; right: 0; top: 0; bottom: 0; width: 360px; max-width: 92vw;
   z-index: 40; display: flex; flex-direction: column;
   background: var(--panel); border-left: 1px solid var(--border);
   box-shadow: -4px 0 16px rgba(0,0,0,.14);
@@ -439,17 +442,19 @@ button, input, select, textarea { font: inherit; }
   display: block; background: rgba(8, 10, 14, .35); cursor: default;
 }
 :root[data-theme='light'] .test-dock-dim { background: rgba(30, 35, 50, .22); }
-/* The strip always owns its 48px — content never hides under it. On
-   builder pages the column also caps at ~880px so the space the docked
-   panel takes is space that was empty anyway. */
-.layout.dock-available .main { margin-right: 48px; }
+/* The strip owns its 48px only while the dock is closed — once the panel
+   is open the labeled header tabs are the switcher and the strip folds
+   away, so the width cost is never paid twice. */
+.layout.dock-available:not(.dock-open) .main { margin-right: 48px; }
+.layout.dock-open .dock-strip { display: none; }
 .layout.dock-testable .main { max-width: 880px; }
-/* With room to spare, push the column instead — reflow beats overlay. */
-@media (min-width: 1440px) {
+/* With room to spare, push the column instead — reflow beats overlay.
+   Below this the dock is a drawer: dim + click-outside/Esc/nav close. */
+@media (min-width: 1200px) {
   .test-dock-dim { display: none; }
-  .layout.dock-open .main { margin-right: 448px; }
-  .layout.dock-split.dock-open .main { margin-right: 888px; }
-  .layout.dock-wide.dock-open .main { margin-right: 828px; }
+  .layout.dock-open .main { margin-right: 360px; }
+  .layout.dock-split.dock-open .main { margin-right: 840px; }
+  .layout.dock-wide.dock-open .main { margin-right: 780px; }
 }
 .main { transition: margin-right .15s ease; }
 @media (max-width: 640px) {
@@ -481,15 +486,34 @@ button, input, select, textarea { font: inherit; }
   opacity: 0; transition: opacity .12s ease;
 }
 .ask-msg:hover .correct-this,
+.ask-msg:focus-within .correct-this,
 .msg:hover + .inspector-wrap .correct-this,
 .inspector-wrap:hover .correct-this,
 .inspector-wrap:focus-within .correct-this,
 .correct-this:focus-visible { opacity: 1; }
+/* In the test dock the affordance is the point — keep it discoverable at
+   rest, full opacity on hover/focus. */
+.dock .correct-this { opacity: .55; }
+.dock .correct-this:hover, .dock .correct-this:focus-visible { opacity: 1; }
 @media (hover: none) {
   .correct-this { opacity: .55; }
 }
 .correct-this:hover { color: var(--text); border-color: var(--muted); }
 .correct-row { display: flex; gap: 6px; }
+/* Per-channel requirement + sorter highlight on the Deploy cards */
+.needs-line { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.card.recommended { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+/* Scenario verdict under a run reply — the written expectation sits above
+   the buttons so the reviewer judges against it, not a feeling. */
+.verdict-box {
+  margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--panel-2);
+}
+.verdict-expect { font-size: 12px; font-style: italic; margin-bottom: 6px; }
+.verdict-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.verdict-btns .btn { margin-left: 0; }
+.verdict-on { border-color: var(--accent); color: var(--accent); }
+.verdict-fail.verdict-on { border-color: #c0392b; color: #c0392b; }
 /* Try-it scenario checklist — the step page is the runner's list; the
    docked panel is the chat. */
 .scenario-cat {
@@ -559,10 +583,23 @@ button, input, select, textarea { font: inherit; }
 /* Try-asking chips — draft-generated questions that seed the test chat */
 .try-chips { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px; align-items: center; padding: 8px 12px 0; }
 .try-chip {
+  display: inline-flex; align-items: flex-start; gap: 4px;
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
-  border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer;
-  max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-radius: 12px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  max-width: 240px; text-align: left; line-height: 1.3;
 }
+/* Two lines instead of an ellipsis — a truncated prompt can't be judged
+   or re-run with confidence. */
+.try-chip-text {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.try-chip-mark { flex-shrink: 0; }
+.try-chip.pass { border-color: var(--accent); }
+.try-chip.pass .try-chip-mark { color: var(--accent); }
+.try-chip.fail { border-color: #c0392b; }
+.try-chip.fail .try-chip-mark { color: #c0392b; }
+.try-chip.stale { border-style: dashed; }
 .try-chip:hover { border-color: var(--accent); }
 .ask-chip {
   display: inline-flex; align-items: center; gap: 4px;

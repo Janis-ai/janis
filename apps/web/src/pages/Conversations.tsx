@@ -133,6 +133,11 @@ function ConvRow({
               )}
             </span>
           )}
+          {c.is_test && (
+            <span className="channel-tag" title="Internal test channel — excluded from the Inbox badge">
+              Test
+            </span>
+          )}
           {c.intent && <span className="channel-tag intent-tag" title="Classified intent">{c.intent}</span>}
           {snoozed && (
             <span className="channel-tag" title={`Snoozed until ${new Date(c.snoozed_until!).toLocaleString()}`}>

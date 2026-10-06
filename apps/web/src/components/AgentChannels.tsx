@@ -62,6 +62,14 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   // a fresh OAuth return (?meta_connect=) or an explicit Manage click, so a
   // long Page list doesn't bury the other channel cards.
   const [pickerOpen, setPickerOpen] = useState(Boolean(params.get('meta_connect')));
+  // "Where do your customers reach you?" — picks the card that answers it.
+  const [need, setNeed] = useState<string | null>(null);
+  const NEED_TARGETS: Record<string, string> = {
+    site: 'ch-bubble',
+    social: 'ch-meta',
+    email: 'ch-gmail',
+    phone: 'ch-voice',
+  };
   const connectId =
     params.get('meta_connect') ?? (session.data?.connected ? session.data.connect_id ?? '' : '');
   const disconnect = useMutation({
@@ -420,9 +428,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     <>
       <div className="lede" style={{ marginTop: 12 }}>
         <p className="muted">
-          Where this agent answers — Messenger, Instagram, WhatsApp, web chat, and email.
-          Messages relay to the agent only while it owns the conversation; during a human
-          takeover it's cut off at the pipe.
+          Where do your customers reach you? Connect a channel and the agent is live there
+          — each channel gets its own settings page.
         </p>
       </div>
 
@@ -492,6 +499,35 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       )}
 
       <h2 className="section-title">Add a channel</h2>
+
+      {/* Optional sorter — pick where customers reach you and the matching
+          card lights up and scrolls into view. */}
+      {!connectId && (
+        <div className="row" style={{ gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+          <span className="muted" style={{ fontSize: 12 }}>Where do your customers reach you?</span>
+          {(
+            [
+              ['site', 'On my website'],
+              ['social', 'Facebook, Instagram or WhatsApp'],
+              ['email', 'Email'],
+              ['phone', 'Phone or SMS'],
+            ] as const
+          ).map(([k, label]) => (
+            <button
+              key={k}
+              className={`try-chip${need === k ? ' pass' : ''}`}
+              onClick={() => {
+                setNeed(need === k ? null : k);
+                document
+                  .getElementById(NEED_TARGETS[k])
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }}
+            >
+              <span className="try-chip-text">{label}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Meta connect (primary path) or the pending asset picker */}
       {connectId && pickerOpen ? (
@@ -629,7 +665,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           )}
         </div>
       ) : session.data?.connected ? (
-        <div className="card connect-card">
+        <div className={`card connect-card${need === 'social' ? ' recommended' : ''}`} id="ch-meta">
           <div className="row">
             <div className="grow">
               <strong>Meta connected</strong>
@@ -651,14 +687,14 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           </div>
         </div>
       ) : session.isPending ? (
-        <div className="card connect-card">
+        <div className="card connect-card" id="ch-meta">
           <div className="row">
             <span className="spin" />
             <span className="muted">Checking for a stored Meta connection…</span>
           </div>
         </div>
       ) : (
-        <div className="card connect-card">
+        <div className={`card connect-card${need === 'social' ? ' recommended' : ''}`} id="ch-meta">
           {metaStatus.data?.configured ? (
             <div className="row">
               <div className="grow">
@@ -672,6 +708,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                   Sign in once — Janis finds your Pages, Instagram accounts, and WhatsApp numbers
                   and sets up the webhook for you.
                 </div>
+                <div className="needs-line">Needs: admin access to your Facebook Page</div>
               </div>
               <a className="btn primary" href={`/api/meta/connect?agent=${agentId}`}>Connect Facebook</a>
             </div>
@@ -687,7 +724,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       {/* Manual Meta entry — advanced fallback for the connect flow */}
       <div className="card">
         <details open={showManual} onToggle={(e) => setShowManual((e.target as HTMLDetailsElement).open)}>
-          <summary><strong>Connect to Meta with credentials</strong></summary>
+          <summary><strong>Connect to Meta with credentials</strong>{' '}
+            <span className="needs-line" style={{ display: 'inline' }}>advanced — needs a Meta app + Page token</span>
+          </summary>
           <form
             style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, maxWidth: 520 }}
             onSubmit={(e) => {
@@ -743,17 +782,15 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       </div>
 
       {/* Chat bubble (webchat) */}
-      <div className="card connect-card">
+      <div className={`card connect-card${need === 'site' ? ' recommended' : ''}`} id="ch-bubble">
         <div className="row">
           <div className="grow">
-            <strong>Bubble</strong>{' '}
-            <span className="badge" title="Live in minutes — no OAuth app, no review">
-              Fastest
-            </span>
+            <strong>Bubble</strong>
             <div className="muted" style={{ marginTop: 4 }}>
               Embed a chat bubble on any website — visitors land in the same inbox, with
               agent answers and human takeover. No Meta app required.
             </div>
+            <div className="needs-line">Needs: ability to add a script to your website</div>
           </div>
         </div>
         <div className="row" style={{ marginTop: 12 }}>
@@ -771,7 +808,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       </div>
 
       {/* Gmail — the obvious email path: OAuth onto an existing mailbox */}
-      <div className="card connect-card">
+      <div className={`card connect-card${need === 'email' ? ' recommended' : ''}`} id="ch-gmail">
         <div className="row">
           <div className="grow">
             <strong>Gmail</strong>
@@ -782,6 +819,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               belongs to someone else, send them the invite link — they grant access
               themselves, no Janis login needed.
             </div>
+            <div className="needs-line">Needs: sign-in to the mailbox — yours, or the owner's via invite</div>
           </div>
         </div>
         <div className="row" style={{ marginTop: 12 }}>
@@ -817,7 +855,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       </div>
 
       {/* Outlook / Microsoft 365 — same OAuth mailbox pattern as Gmail */}
-      <div className="card connect-card">
+      <div className={`card connect-card${need === 'email' ? ' recommended' : ''}`}>
         <div className="row">
           <div className="grow">
             <strong>Outlook / Microsoft 365</strong>
@@ -827,6 +865,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               mailbox belongs to someone else, send them the invite link — they grant
               access themselves, no Janis login needed.
             </div>
+            <div className="needs-line">Needs: sign-in to the mailbox — yours, or the owner's via invite</div>
           </div>
         </div>
         <div className="row" style={{ marginTop: 12 }}>
@@ -870,8 +909,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           <summary>
             <span className="details-title">Email — any provider</span>
             <span className="details-sub">
-              advanced: Janis mints an inbound address; forward an existing mailbox to it or
-              point a domain's MX at it
+              needs: mail forwarding or DNS access — Janis mints an inbound address you
+              forward to or point MX at
             </span>
           </summary>
           <div className="muted" style={{ marginTop: 10 }}>
@@ -895,12 +934,13 @@ export function AgentChannels({ agent }: { agent: Agent }) {
 
       {/* Voice — Twilio number answers calls: caller speech is transcribed,
           the agent replies with TTS, and the transcript lands in the inbox. */}
-      <div className="card">
+      <div className={`card${need === 'phone' ? ' recommended' : ''}`} id="ch-voice">
         <details className="appearance-details">
           <summary>
             <span className="details-title">Voice — Twilio phone number</span>
             <span className="details-sub">
-              callers talk, the agent speaks — the whole call lands in the inbox
+              needs: nothing (hosted provisions a number) or your Twilio account — callers
+              talk, the agent speaks, the whole call lands in the inbox
             </span>
           </summary>
           <div className="row" style={{ marginTop: 12, gap: 8 }}>
@@ -1020,7 +1060,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           <summary>
             <span className="details-title">SMS — text messaging</span>
             <span className="details-sub">
-              texts to your Twilio number become conversations here
+              needs: a Twilio number — texts to it become conversations here
             </span>
           </summary>
           {channels.some((v) => v.kind === 'voice') ? (

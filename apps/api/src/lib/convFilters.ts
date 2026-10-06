@@ -1,6 +1,6 @@
 import { eq, gte, inArray, isNull, lt, ne, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { agents, alerts, conversations } from '../db/schema.js';
+import { agents, alerts, channelBindings, channels, conversations } from '../db/schema.js';
 import { agentScopeCond, type AgentScope } from './access.js';
 
 /** Query params shared by the conversation list and search endpoints —
@@ -28,6 +28,20 @@ export const convListQuery = z.object({
     .optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
 });
+
+/** Internal test-channel conversations — the externalId carries ':test:'
+ * (kind:test:<channelId>:<participant>); the binding check catches legacy
+ * threads written before the namespacing. These ride the real pipeline for
+ * takeover/alert testing but must not drive the Inbox badge. */
+export const TEST_CONV = sql`(
+  ${conversations.externalId} like '%:test:%'
+  or exists (
+    select 1 from ${channelBindings}
+    inner join ${channels} on ${channels.id} = ${channelBindings.channelId}
+    where ${channelBindings.conversationId} = ${conversations.id}
+      and ${channels.credentials}->>'internal' = 'true'
+  )
+)`;
 
 /** WHERE conditions for conversation listing — workspace scope + filters.
  * Shared by /api/conversations and /api/search so filters behave identically. */

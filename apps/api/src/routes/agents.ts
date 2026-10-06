@@ -819,6 +819,7 @@ export function agentRoutes(db: Db) {
     const cfgVersion = configVersion(cfg);
     const testRows = await db
       .select({
+        name: agentTests.name,
         category: agentTests.category,
         humanResult: agentTests.humanResult,
         configVersion: agentTests.configVersion,
@@ -841,6 +842,16 @@ export function agentRoutes(db: Db) {
     const safetyChecked = safetyRows.filter(
       (t) => t.humanResult === 'pass' || t.humanResult === 'fail',
     ).length;
+    // Names of what's still unchecked or stale — the nav chip tooltip lists
+    // them so "4 of 5 checked" is inspectable, not just a number.
+    const uncheckedNames = testRows
+      .filter(
+        (t) =>
+          !(t.humanResult === 'pass' || t.humanResult === 'fail') ||
+          (t.configVersion !== null && t.configVersion !== cfgVersion),
+      )
+      .map((t) => t.name)
+      .slice(0, 6);
     const sources = (cfg.knowledge?.length ?? 0) + files.length;
     const updatedAt = files
       .map((f) => f.fetchedAt ?? f.createdAt)

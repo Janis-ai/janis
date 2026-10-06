@@ -140,6 +140,8 @@ export interface BuildStatus {
     stale: number;
     safety_total: number;
     safety_checked: number;
+    /** Scenario names still unjudged or stale — the chip tooltip lists them. */
+    unchecked?: string[];
   };
 }
 

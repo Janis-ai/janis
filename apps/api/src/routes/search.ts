@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import { agents, alerts, conversations, messages } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toConversation, toMessage } from '../lib/serializers.js';
-import { convListConditions, convListQuery } from '../lib/convFilters.js';
+import { convListConditions, convListQuery, TEST_CONV } from '../lib/convFilters.js';
 
 const searchQuery = convListQuery.extend({
   q: z.string().optional(),
@@ -34,6 +34,7 @@ export function searchRoutes(db: Db) {
           where ${alerts.conversationId} = ${conversations.id}
             and ${alerts.status} = 'open'
         )`,
+        isTest: sql<boolean>`${TEST_CONV}`,
       })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
@@ -67,7 +68,7 @@ export function searchRoutes(db: Db) {
       : [];
 
     return c.json({
-      conversations: convRows.map((r) => toConversation(r.conversation, r.openAlertCount)),
+      conversations: convRows.map((r) => toConversation(r.conversation, r.openAlertCount, r.isTest)),
       messages: msgHits.map(toMessage),
     });
   });

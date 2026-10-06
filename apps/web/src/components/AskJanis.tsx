@@ -284,6 +284,7 @@ export function AskJanis({
   asCustomer,
   onCustomerMessage,
   onCorrect,
+  verdictFor,
   onAgentReply,
   onSaveTest,
   hideHeader,
@@ -323,10 +324,20 @@ export function AskJanis({
    *  history backfill) reports its text so the parent can attach a
    *  verdict to the scenario that was run. */
   onAgentReply?: (text: string) => void;
-  /** Try-it free chat — "Save as test" next to Correct this under replies,
-   *  turning an ad-hoc exchange into a scenario. The parent dedupes
-   *  against scenarios that were run from the checklist itself. */
+  /** Try-it free chat — "Save as scenario" next to Correct this under
+   *  replies, turning an ad-hoc exchange into a scenario. The parent
+   *  dedupes against scenarios that were run from the checklist itself. */
   onSaveTest?: (ctx: { agentText: string; customerText?: string }) => void;
+  /** Try-it scenario verdicts — called with the customer prompt a reply
+   *  answers; on a match the reply renders the scenario's expected bar and
+   *  Looks right / Needs work in place, so the reviewer judges against the
+   *  written expectation instead of a feeling (and never returns to the
+   *  checklist just to record a verdict). */
+  verdictFor?: (customerText: string | undefined) => {
+    expectation?: string | null;
+    result: 'pass' | 'fail' | 'unreviewed' | null;
+    verdict(r: 'pass' | 'fail'): void;
+  } | null;
   /** The parent renders its own merged header (builder test dock) — the
    *  pane header stays off so the two don't stack. */
   hideHeader?: boolean;
@@ -1105,38 +1116,77 @@ export function AskJanis({
                   </div>
                 )}
                 <AttachmentNodes atts={item.m.attachments ?? []} />
-                {(onCorrect || onSaveTest) && item.m.direction === 'out' && item.m.text && (
-                  <div className="correct-row">
-                    {onCorrect && (
-                      <button
-                        className="correct-this"
-                        title="Tell Janis what it should have said — saves as a note or a draft article"
-                        onClick={() =>
-                          onCorrect({
-                            agentText: item.m.text,
-                            customerText: prevCustomerText,
-                          })
-                        }
-                      >
-                        Correct this
-                      </button>
-                    )}
-                    {onSaveTest && prevCustomerText && (
-                      <button
-                        className="correct-this"
-                        title="Keep this exchange as a scenario — re-run it after config changes"
-                        onClick={() =>
-                          onSaveTest({
-                            agentText: item.m.text,
-                            customerText: prevCustomerText,
-                          })
-                        }
-                      >
-                        Save as test
-                      </button>
-                    )}
-                  </div>
-                )}
+                {(() => {
+                  const verdictCtx =
+                    item.m.direction === 'out' && item.m.text
+                      ? verdictFor?.(prevCustomerText)
+                      : null;
+                  return (
+                    <>
+                      {verdictCtx && (
+                        <div className="verdict-box">
+                          {/* The written bar — "Looks right" must mean
+                              "meets the expectation", not "feels fine". */}
+                          {verdictCtx.expectation ? (
+                            <div className="verdict-expect muted" title={verdictCtx.expectation}>
+                              Aim: {verdictCtx.expectation}
+                            </div>
+                          ) : null}
+                          <div className="verdict-btns">
+                            <button
+                              className={`btn sm${verdictCtx.result === 'pass' ? ' verdict-on' : ''}`}
+                              onClick={() => verdictCtx.verdict('pass')}
+                            >
+                              ✓ Looks right
+                            </button>
+                            <button
+                              className={`btn sm${verdictCtx.result === 'fail' ? ' verdict-on verdict-fail' : ''}`}
+                              onClick={() => verdictCtx.verdict('fail')}
+                            >
+                              ⚑ Needs work
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {(onCorrect || onSaveTest) &&
+                        item.m.direction === 'out' &&
+                        item.m.text && (
+                          <div className="correct-row">
+                            {onCorrect && (
+                              <button
+                                className="correct-this"
+                                title="Tell Janis what it should have said — saves as a note or a draft article"
+                                onClick={() =>
+                                  onCorrect({
+                                    agentText: item.m.text,
+                                    customerText: prevCustomerText,
+                                  })
+                                }
+                              >
+                                Correct this
+                              </button>
+                            )}
+                            {/* A reply answering a scenario prompt IS that
+                                scenario — verdicts above, not a second row. */}
+                            {!verdictCtx && onSaveTest && prevCustomerText && (
+                              <button
+                                className="correct-this"
+                                title="Keep this exchange as a scenario — re-run it after config changes"
+                                onClick={() =>
+                                  onSaveTest({
+                                    agentText: item.m.text,
+                                    customerText: prevCustomerText,
+                                  })
+                                }
+                              >
+                                Save as scenario
+                              </button>
+                            )}
+                          </div>
+                        )}
+                    </>
+                  );
+                })()}
               </div>
             ) : (
               <Fragment key={item.key}>

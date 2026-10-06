@@ -587,4 +587,32 @@ describe('attention-count', () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it('excludes internal test-channel threads from both counts', async () => {
+    const base = await app.request('/api/conversations/attention-count', {
+      headers: { cookie: adminCookie },
+    });
+    const before = (await base.json()) as { count: number; unread: number };
+    // A needs_human test thread — the safety-scenario path that was leaking
+    // into the badge. Namespaced externalId marks it a test conversation.
+    const test = await makeConversation(
+      `webchat:test:${crypto.randomUUID()}:cust_attn`,
+    );
+    await db
+      .update(conversations)
+      .set({ state: 'needs_human', isUnread: true })
+      .where(eq(conversations.id, test.id));
+    const real = await makeConversation(`webchat:cust_attn_${Date.now()}`);
+    await db
+      .update(conversations)
+      .set({ state: 'needs_human', isUnread: true })
+      .where(eq(conversations.id, real.id));
+    const res = await app.request('/api/conversations/attention-count', {
+      headers: { cookie: adminCookie },
+    });
+    const after = (await res.json()) as { count: number; unread: number };
+    // Only the real conversation moved the badge
+    expect(after.count).toBe(before.count + 1);
+    expect(after.unread).toBe(before.unread + 1);
+  });
 });
