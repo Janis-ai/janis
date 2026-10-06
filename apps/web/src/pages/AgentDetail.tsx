@@ -2922,7 +2922,7 @@ interface Learning {
 
 /** Recurring handoff clusters + agent self-reported gaps → draft → approve
  * into the knowledge base. */
-function KnowledgeGaps({ agentId, config }: { agentId: string; config: AgentConfig }) {
+export function KnowledgeGaps({ agentId, config }: { agentId: string; config: AgentConfig }) {
   const qc = useQueryClient();
   const { data } = useQuery({
     queryKey: ['knowledge-gaps', agentId],

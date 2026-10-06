@@ -14,6 +14,7 @@ import {
   GreetingSection,
   InstructionsSection,
   KnowledgeFiles,
+  KnowledgeGaps,
   KnowledgeTextSection,
   ToolsTab,
 } from './AgentDetail';
@@ -47,6 +48,17 @@ const STEPS = [
 ] as const;
 type StepKey = (typeof STEPS)[number]['key'];
 
+/** Teach it sub-surfaces — the same five the agent's Knowledge section
+ *  exposes, so the builder stage is the section. */
+const TEACH_SUBS = [
+  { key: 'text', label: 'Text' },
+  { key: 'files', label: 'Files' },
+  { key: 'websites', label: 'Websites' },
+  { key: 'gaps', label: 'Gaps' },
+  { key: 'help', label: 'Help center' },
+] as const;
+type TeachSub = (typeof TEACH_SUBS)[number]['key'];
+
 export default function AgentBuilder() {
   usePageTitle('New agent');
   const [params] = useSearchParams();
@@ -76,6 +88,13 @@ export default function AgentBuilder() {
         : 'start';
   const goStep = (s: StepKey | 'start' | 'bring') => {
     navigate(`/agents/new${agent ? `/${agent.id}` : ''}?step=${s}`, { replace: true });
+  };
+  const subParam = params.get('sub');
+  const teachSub: TeachSub = TEACH_SUBS.some((t) => t.key === subParam)
+    ? (subParam as TeachSub)
+    : 'text';
+  const goTeachSub = (s: TeachSub) => {
+    navigate(`/agents/new/${agent!.id}?step=teach&sub=${s}`, { replace: true });
   };
 
   // Create stage — name + natural-language description → POST
@@ -652,10 +671,24 @@ export default function AgentBuilder() {
                   </ul>
                 </div>
               ) : null}
-              <KnowledgeTextSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
-              <KnowledgeFiles agentId={agent.id} variant="files" />
-              <KnowledgeFiles agentId={agent.id} variant="websites" />
-              <HelpCenter agent={agent} />
+              <div className="tabs" style={{ marginTop: 12 }}>
+                {TEACH_SUBS.map((t) => (
+                  <button
+                    key={t.key}
+                    className={`tab${teachSub === t.key ? ' active' : ''}`}
+                    onClick={() => goTeachSub(t.key)}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              {teachSub === 'text' && (
+                <KnowledgeTextSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+              )}
+              {teachSub === 'files' && <KnowledgeFiles agentId={agent.id} variant="files" />}
+              {teachSub === 'websites' && <KnowledgeFiles agentId={agent.id} variant="websites" />}
+              {teachSub === 'gaps' && <KnowledgeGaps agentId={agent.id} config={cfg} />}
+              {teachSub === 'help' && <HelpCenter agent={agent} />}
             </>
           )}
         </>
@@ -797,7 +830,7 @@ export default function AgentBuilder() {
                   <div className="row" style={{ gap: 8 }}>
                     <button className="btn" onClick={() => goStep('teach')}>Teach it →</button>
                     <Link className="muted" style={{ fontSize: 12, alignSelf: 'center' }}
-                      to={`/agents/${agent.id}/knowledge?sub=gaps`}>
+                      to={`/agents/new/${agent.id}?step=teach&sub=gaps`}>
                       all knowledge gaps
                     </Link>
                   </div>
