@@ -17,6 +17,7 @@ export interface BuilderDraft {
   suggested_templates: { id: string; name?: string; reason?: string }[];
   suggested_approvals: string[];
   suggested_rules: string[];
+  suggested_questions: string[];
   knowledge_need?: 'required' | 'helpful' | 'unnecessary';
   knowledge_need_reason?: string;
   domain_risk?: 'low' | 'elevated';
@@ -134,6 +135,7 @@ export function validateDraft(
     suggested_templates: templates,
     suggested_approvals: clampList(parsed.suggested_approvals, 80, 30),
     suggested_rules: clampList(parsed.suggested_rules, 300, 20),
+    suggested_questions: clampList(parsed.suggested_questions, 200, 6),
     knowledge_need:
       parsed.knowledge_need === 'required' ||
       parsed.knowledge_need === 'helpful' ||
@@ -162,6 +164,7 @@ Given the operator's description of the agent they want, return ONE JSON object 
   "suggested_templates": [{"id": "<an id from the integration catalog below>", "reason": "<why this agent needs it, <= 120 chars>"}],
   "suggested_approvals": ["action descriptions that should wait for a human's approval before running — e.g. 'issue refund', 'cancel order' — max 10"],
   "suggested_rules": ["escalation or routing rules worth configuring, plain English, max 6"],
+  "suggested_questions": ["4-6 questions a real customer would ask this agent, written the way customers actually type them — short, lowercase-ish, no preamble. Include at least one hard factual question the agent can only answer if it's been taught the specifics — these become the Try it chips, so they should probe both breadth and the knowledge gaps in suggested_knowledge"],
   "knowledge_need": "required|helpful|unnecessary — does answering well need information only the operator can supply? required = private business data (prices, inventory, account lookups, shop-specific policies); helpful = the model knows the broad domain but operator sources improve accuracy or authority; unnecessary = purely public-domain knowledge the model already knows. When unsure, choose helpful.",
   "knowledge_need_reason": "one sentence naming what varies or is private, e.g. 'health and schedule details vary by region and breed' — <= 120 chars; only when knowledge_need is 'helpful'",
   "domain_risk": "low|elevated — 'elevated' when wrong answers could hurt a person or animal: health, dosing, safety, dangerous mistakes. When elevated, system_prompt MUST include a safety stance — not a substitute for a veterinarian/doctor, the urgent signs that need escalation named for this domain, and an offer of a human for those"

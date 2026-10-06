@@ -397,6 +397,14 @@ button, input, select, textarea { font: inherit; }
 .builder-path:hover { border-color: var(--accent); }
 
 .ask-attach { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }
+/* Try-asking chips — draft-generated questions that seed the test chat */
+.try-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px 0; }
+.try-chip {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.try-chip:hover { border-color: var(--accent); }
 .ask-chip {
   display: inline-flex; align-items: center; gap: 4px;
   background: var(--panel-2); border: 1px solid var(--border);

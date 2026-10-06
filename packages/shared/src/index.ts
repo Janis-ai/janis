@@ -383,6 +383,9 @@ export const AgentConfig = z.object({
       // Draft help-center articles join the prompt on internal test
       // channels only — production always injects published-only.
       include_drafts_in_test: z.boolean().optional(),
+      // Try-asking chips — questions a real customer would ask this agent,
+      // drafted from the brief. Shown in Try it / the test dock.
+      suggested_questions: z.array(z.string().max(200)).max(8).optional(),
       // The user read the "doesn't need extra knowledge" banner and chose
       // to skip Teach it — distinct from empty ('nothing added').
       teach_skipped: z.boolean().optional(),

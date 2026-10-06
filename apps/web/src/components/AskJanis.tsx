@@ -279,9 +279,11 @@ export function AskJanis({
   onToggleExpand,
   expanded,
   seedMessage,
+  seedNonce,
   agentId,
   asCustomer,
   onCustomerMessage,
+  onCorrect,
 }: {
   channelId: string;
   badge?: string;
@@ -291,6 +293,9 @@ export function AskJanis({
   expanded?: boolean;
   // Auto-sent once on load — discovery cards / ?rail=ask&q= deeplinks.
   seedMessage?: string;
+  /** Bumps a repeated seed through — clicking the same chip twice should
+   *  ask twice. */
+  seedNonce?: number;
   /** Agent the console is scoped to — sent as context so the concierge
    *  knows which agent "this agent" means. */
   agentId?: string;
@@ -302,6 +307,10 @@ export function AskJanis({
   /** Fires with each sent customer message — the builder's docked test
    *  panel uses it for "Teach it this" on the last question asked. */
   onCustomerMessage?: (text: string) => void;
+  /** Test surfaces only — adds a "Correct this" affordance under every
+   *  agent reply; the parent decides where the correction lands (note,
+   *  draft article). Omitted elsewhere (inbox, concierge, widget). */
+  onCorrect?: (ctx: { agentText: string; customerText?: string }) => void;
 }) {
   const navigate = useNavigate();
   const visitor = useRef((asCustomer ? 'cust_' : '') + visitorId()).current;
@@ -834,15 +843,17 @@ export function AskJanis({
     }
   };
 
-  // Seeded questions fire once each — tracked by value so a second card click
-  // (or a fresh ?q= link) sends its own question.
+  // Seeded questions fire once each — tracked by value+nonce so a second
+  // card click (or a fresh ?q= link, or the same chip tapped twice) sends
+  // its own question.
   const seededFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!seedMessage || !loaded || seedMessage === seededFor.current) return;
-    seededFor.current = seedMessage;
+    const key = `${seedNonce ?? 0}:${seedMessage}`;
+    if (!seedMessage || !loaded || key === seededFor.current) return;
+    seededFor.current = key;
     void send(seedMessage, []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seedMessage, loaded]);
+  }, [seedMessage, seedNonce, loaded]);
 
   const submit = () => {
     const ready = pending.filter((p) => !p.uploading);
@@ -1001,6 +1012,26 @@ export function AskJanis({
                   </div>
                 )}
                 <AttachmentNodes atts={item.m.attachments ?? []} />
+                {onCorrect && item.m.direction === 'out' && item.m.text && (
+                  <button
+                    className="link small muted"
+                    style={{ marginTop: 4 }}
+                    title="Tell Janis what it should have said — saves as a note or a draft article"
+                    onClick={() => {
+                      const prevCustomer = [...arr]
+                        .slice(0, idx)
+                        .reverse()
+                        .find((x) => x.kind === 'msg' && x.m.direction === 'in');
+                      onCorrect({
+                        agentText: item.m.text,
+                        customerText:
+                          prevCustomer?.kind === 'msg' ? prevCustomer.m.text : undefined,
+                      });
+                    }}
+                  >
+                    Correct this
+                  </button>
+                )}
               </div>
             ) : (
               <Fragment key={item.key}>

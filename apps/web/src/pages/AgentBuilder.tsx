@@ -34,6 +34,7 @@ interface BuilderDraft {
   suggested_templates?: { id: string; name?: string; reason?: string }[];
   suggested_approvals?: string[];
   suggested_rules?: string[];
+  suggested_questions?: string[];
   knowledge_need?: 'required' | 'helpful' | 'unnecessary';
   knowledge_need_reason?: string;
   domain_risk?: 'low' | 'elevated';
@@ -376,6 +377,127 @@ export default function AgentBuilder() {
   // context, which is exactly the rescue loop Try it formalizes later.
   const [lastTestQuestion, setLastTestQuestion] = useState('');
   const [guideOpen, setGuideOpen] = useState(false);
+  // "Correct this" on a test-chat agent reply — the operator writes what
+  // it should have said, then chooses where it lands: a private note or a
+  // public article draft (reviewed before publishing).
+  const [correctTarget, setCorrectTarget] = useState<{
+    agentText: string;
+    customerText?: string;
+  } | null>(null);
+  const [correction, setCorrection] = useState('');
+  // Try-asking chips — draft-generated questions seed the test chat. The
+  // nonce bumps on every click so the same question can be sent again;
+  // target gates which chat instance (Try page vs dock) receives it.
+  const [seed, setSeed] = useState<{
+    text: string;
+    nonce: number;
+    target: 'try' | 'dock';
+  } | null>(null);
+  const tryChips = (target: 'try' | 'dock') =>
+    (builder?.suggested_questions?.length ?? 0) > 0 && (
+      <div className="try-chips">
+        <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>
+          Try asking:
+        </span>
+        {builder?.suggested_questions?.map((q) => (
+          <button
+            key={q}
+            className="try-chip"
+            title={q}
+            onClick={() => setSeed({ text: q, nonce: Date.now(), target })}
+          >
+            {q}
+          </button>
+        ))}
+      </div>
+    );
+  const saveCorrection = useMutation({
+    mutationFn: ({ mode, text }: { mode: 'note' | 'article'; text: string }) =>
+      mode === 'note'
+        ? api(`/api/agents/${agent?.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              config: { ...cfg, knowledge: [...(cfg.knowledge ?? []), text] },
+            }),
+          })
+        : api('/api/articles', {
+            method: 'POST',
+            body: JSON.stringify({
+              agent_id: agent?.id,
+              // The customer's question is the article title — help pages
+              // answer questions.
+              title: (correctTarget?.customerText ?? text).slice(0, 80),
+              body: text,
+              category: 'General',
+              status: 'draft',
+            }),
+          }),
+    onSuccess: (_r, v) => {
+      if (v.mode === 'note') setCfg({ ...cfg, knowledge: [...(cfg.knowledge ?? []), v.text] });
+      void qc.invalidateQueries({ queryKey: ['knowledge', agent?.id] });
+      void qc.invalidateQueries({ queryKey: ['articles', agent?.id] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      setCorrectTarget(null);
+      setCorrection('');
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    },
+    onError: (e) => setError(e.message),
+  });
+  const correctCard = correctTarget && (
+    <div className="card" style={{ margin: '10px 0' }}>
+      <strong style={{ fontSize: 13 }}>Correct this answer</strong>
+      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+        It said: “
+        {correctTarget.agentText.length > 140
+          ? `${correctTarget.agentText.slice(0, 140)}…`
+          : correctTarget.agentText}
+        ”
+        {correctTarget.customerText
+          ? ` — the customer asked “${correctTarget.customerText.slice(0, 80)}”`
+          : ''}
+      </div>
+      <textarea
+        rows={3}
+        style={{ width: '100%', marginTop: 8, boxSizing: 'border-box' }}
+        placeholder="What should it have said? One fact or the right answer…"
+        value={correction}
+        autoFocus
+        onChange={(e) => setCorrection(e.target.value)}
+      />
+      <div className="row" style={{ marginTop: 8, gap: 8 }}>
+        <button
+          className="btn sm primary"
+          disabled={!correction.trim() || saveCorrection.isPending}
+          onClick={() => saveCorrection.mutate({ mode: 'note', text: correction.trim() })}
+        >
+          {saveCorrection.isPending ? 'Saving…' : 'Save as note'}
+        </button>
+        <button
+          className="btn sm"
+          disabled={!correction.trim() || saveCorrection.isPending}
+          title="Creates an unpublished draft — review it under Teach it → Articles"
+          onClick={() => saveCorrection.mutate({ mode: 'article', text: correction.trim() })}
+        >
+          Draft article
+        </button>
+        <button
+          className="btn sm"
+          onClick={() => {
+            setCorrectTarget(null);
+            setCorrection('');
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+      <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+        A note teaches this agent only. An article also becomes a public help
+        page — saved as a draft until you publish it.
+      </div>
+    </div>
+  );
   // Customer region — optional; saved to builder.region on blur and
   // injected into the runtime prompt (hostedAgent), not the authored one.
   const [region, setRegion] = useState('');
@@ -507,6 +629,7 @@ export default function AgentBuilder() {
           suggested_templates: d.suggested_templates ?? [],
           suggested_approvals: d.suggested_approvals ?? [],
           suggested_rules: d.suggested_rules ?? [],
+          suggested_questions: d.suggested_questions ?? [],
           ...(d.knowledge_need ? { knowledge_need: d.knowledge_need } : {}),
           ...(d.knowledge_need_reason
             ? { knowledge_need_reason: d.knowledge_need_reason }
@@ -565,6 +688,7 @@ export default function AgentBuilder() {
           suggested_templates: d.suggested_templates ?? [],
           suggested_approvals: d.suggested_approvals ?? [],
           suggested_rules: d.suggested_rules ?? [],
+          suggested_questions: d.suggested_questions ?? [],
           ...(d.knowledge_need ? { knowledge_need: d.knowledge_need } : {}),
           ...(d.knowledge_need_reason
             ? { knowledge_need_reason: d.knowledge_need_reason }
@@ -1479,6 +1603,7 @@ export default function AgentBuilder() {
                   </div>
                 </div>
               )}
+              <div style={{ marginTop: 12 }}>{tryChips('try')}</div>
               <div className="card builder-chat" style={{ marginTop: 10, padding: 0 }}>
                 {testChannel.isPending && (
                   <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
@@ -1489,8 +1614,16 @@ export default function AgentBuilder() {
                   </div>
                 )}
                 {testChannel.data && (
-                  <AskJanis channelId={testChannel.data.channel_id} badge="TEST" asCustomer />
+                  <AskJanis
+                    channelId={testChannel.data.channel_id}
+                    badge="TEST"
+                    asCustomer
+                    onCorrect={setCorrectTarget}
+                    seedMessage={seed?.target === 'try' ? seed.text : undefined}
+                    seedNonce={seed?.nonce}
+                  />
                 )}
+                {correctCard}
               </div>
             </>
           )}
@@ -1610,6 +1743,7 @@ export default function AgentBuilder() {
               <button className="link small" onClick={() => setTestOpen(false)}>close</button>
             </div>
             <div className="test-dock-body">
+              {tryChips('dock')}
               {testChannel.isPending && (
                 <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
               )}
@@ -1624,8 +1758,12 @@ export default function AgentBuilder() {
                   badge="TEST"
                   asCustomer
                   onCustomerMessage={setLastTestQuestion}
+                  onCorrect={setCorrectTarget}
+                  seedMessage={seed?.target === 'dock' ? seed.text : undefined}
+                  seedNonce={seed?.nonce}
                 />
               )}
+              {correctCard}
             </div>
           </div>
         ) : (

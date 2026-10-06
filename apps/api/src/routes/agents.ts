@@ -246,6 +246,9 @@ export function agentRoutes(db: Db) {
             ? { suggested_approvals: draft.suggested_approvals }
             : {}),
           ...(draft?.suggested_rules.length ? { suggested_rules: draft.suggested_rules } : {}),
+          ...(draft?.suggested_questions.length
+            ? { suggested_questions: draft.suggested_questions }
+            : {}),
           ...(draft?.knowledge_need ? { knowledge_need: draft.knowledge_need } : {}),
           ...(draft?.knowledge_need_reason
             ? { knowledge_need_reason: draft.knowledge_need_reason }
