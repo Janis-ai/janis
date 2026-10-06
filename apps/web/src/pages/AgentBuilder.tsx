@@ -49,15 +49,18 @@ const STEPS = [
 type StepKey = (typeof STEPS)[number]['key'];
 
 /** Teach it sub-surfaces — the same five the agent's Knowledge section
- *  exposes, so the builder stage is the section. */
+ *  exposes, so the builder stage is the section. Order is lowest-effort
+ *  first: a link beats an upload beats typing facts verbatim. Gaps only
+ *  earns a tab when real conversations produced them. */
 const TEACH_SUBS = [
-  { key: 'text', label: 'Text' },
-  { key: 'files', label: 'Files' },
   { key: 'websites', label: 'Websites' },
+  { key: 'files', label: 'Files' },
+  { key: 'text', label: 'Text' },
   { key: 'gaps', label: 'Gaps' },
   { key: 'help', label: 'Help center' },
 ] as const;
 type TeachSub = (typeof TEACH_SUBS)[number]['key'];
+const teachSubKey = (agentId: string) => `janis.teach-sub.${agentId}`;
 
 export default function AgentBuilder() {
   usePageTitle('New agent');
@@ -90,12 +93,6 @@ export default function AgentBuilder() {
     navigate(`/agents/new${agent ? `/${agent.id}` : ''}?step=${s}`, { replace: true });
   };
   const subParam = params.get('sub');
-  const teachSub: TeachSub = TEACH_SUBS.some((t) => t.key === subParam)
-    ? (subParam as TeachSub)
-    : 'text';
-  const goTeachSub = (s: TeachSub) => {
-    navigate(`/agents/new/${agent!.id}?step=teach&sub=${s}`, { replace: true });
-  };
 
   // Create stage — name + natural-language description → POST
   // /api/agents/bootstrap creates the agent with a generated draft config.
@@ -209,9 +206,55 @@ export default function AgentBuilder() {
       api<{ gaps: { key: string; count: number; questions: string[]; added: boolean }[] }>(
         `/api/agents/${agent?.id}/knowledge-gaps`,
       ),
-    enabled: Boolean(agent && hosted && step === 'try'),
+    enabled: Boolean(agent && hosted && (step === 'try' || step === 'teach')),
   });
   const openGaps = (gapData?.gaps ?? []).filter((g) => !g.added);
+  // Source counts for the Teach it tabs — same queries the sections use,
+  // so numbers can't drift between builder and workspace surfaces.
+  const { data: knowledgeData } = useQuery({
+    queryKey: ['knowledge', agent?.id],
+    queryFn: () =>
+      api<{ files: { source_url: string | null }[] }>(`/api/agents/${agent?.id}/knowledge`),
+    enabled: Boolean(agent && hosted && step === 'teach'),
+  });
+  const { data: articlesData } = useQuery({
+    queryKey: ['articles', agent?.id],
+    queryFn: () => api<{ articles: { id: string }[] }>(`/api/articles?agent_id=${agent?.id}`),
+    enabled: Boolean(agent && hosted && step === 'teach'),
+  });
+  const knowledgeFiles = knowledgeData?.files ?? [];
+  const teachSubCount: Record<TeachSub, number> = {
+    websites: knowledgeFiles.filter((f) => f.source_url).length,
+    files: knowledgeFiles.filter((f) => !f.source_url).length,
+    text: Array.isArray(cfg.knowledge) ? cfg.knowledge.filter((l) => l.trim()).length : 0,
+    gaps: openGaps.length,
+    help: articlesData?.articles?.length ?? 0,
+  };
+  // Gaps only earns a tab once real conversations produce them — on a
+  // fresh agent it would be a cryptic empty panel.
+  const visibleTeachSubs = TEACH_SUBS.filter((t) => t.key !== 'gaps' || openGaps.length > 0);
+  const storedSub = agentId
+    ? (() => {
+        try {
+          return localStorage.getItem(teachSubKey(agentId));
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+  const teachSub: TeachSub = visibleTeachSubs.some((t) => t.key === subParam)
+    ? (subParam as TeachSub)
+    : visibleTeachSubs.some((t) => t.key === storedSub)
+      ? (storedSub as TeachSub)
+      : 'websites';
+  const goTeachSub = (s: TeachSub) => {
+    try {
+      if (agentId) localStorage.setItem(teachSubKey(agentId), s);
+    } catch {
+      /* private-mode quota — persistence just won't stick */
+    }
+    navigate(`/agents/new/${agent!.id}?step=teach&sub=${s}`, { replace: true });
+  };
 
   const builder = cfg.builder;
   const { data: status } = useBuildStatus(agent?.id ?? undefined);
@@ -754,13 +797,14 @@ export default function AgentBuilder() {
                 </div>
               ) : null}
               <div className="tabs" style={{ marginTop: 12 }}>
-                {TEACH_SUBS.map((t) => (
+                {visibleTeachSubs.map((t) => (
                   <button
                     key={t.key}
                     className={`tab${teachSub === t.key ? ' active' : ''}`}
                     onClick={() => goTeachSub(t.key)}
                   >
                     {t.label}
+                    {teachSubCount[t.key] > 0 ? ` · ${teachSubCount[t.key]}` : ''}
                   </button>
                 ))}
               </div>

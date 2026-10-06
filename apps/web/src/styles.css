@@ -327,7 +327,9 @@ button, input, select, textarea { font: inherit; }
   width: 18px; height: 18px; border-radius: 50%; font-size: 11px;
   border: 1px solid var(--border); color: var(--muted);
 }
-.builder-step.active .builder-step-n { border-color: var(--accent); color: var(--accent); }
+/* The mark inside an active chip keeps its STATUS colour — active is
+   expressed by the chip's border/background, so ○/◐/✓ mean the same
+   thing in the rail and the nav whether the step is current or not. */
 .builder-step.done .builder-step-n { border-color: var(--ok); color: var(--ok); }
 /* ◐ partial — exists but unconfirmed or needs a look. */
 .builder-step.partial .builder-step-n { border-color: var(--warn, #f59e0b); color: var(--warn, #f59e0b); }

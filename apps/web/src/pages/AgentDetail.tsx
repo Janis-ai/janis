@@ -66,9 +66,9 @@ const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: b
     { key: 'satisfaction', label: 'Satisfaction survey' },
   ],
   knowledge: [
-    { key: 'text', label: 'Text' },
-    { key: 'files', label: 'Files' },
     { key: 'websites', label: 'Websites' },
+    { key: 'files', label: 'Files' },
+    { key: 'text', label: 'Text' },
     { key: 'gaps', label: 'Gaps' },
     { key: 'help', label: 'Help center' },
   ],
