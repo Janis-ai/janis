@@ -533,7 +533,10 @@ export function SourceList({
                 onChange={(e) => toggle.mutate({ fileId: f.id, enabled: e.target.checked })}
               />
             )}
-            <span className="grow">
+            {/* URLs-as-names are one long unbroken string — without a break
+                opportunity the text overflows its box and paints over the
+                row's buttons. */}
+            <span className="grow" style={{ overflowWrap: 'anywhere' }}>
               {f.source_url ? <Globe size={13} /> : <FileText size={13} />} {f.name}
               {f.topic ? <span className="badge" style={{ marginLeft: 6 }}>{f.topic}</span> : null}
               <span className="muted">
