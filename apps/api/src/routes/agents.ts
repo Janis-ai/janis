@@ -738,7 +738,10 @@ export function agentRoutes(db: Db) {
     const internalIds = chans
       .filter((ch) => (ch.credentials as { internal?: boolean }).internal === true)
       .map((ch) => ch.id);
-    const publicCount = chans.length - internalIds.length;
+    const publicIds = chans
+      .filter((ch) => (ch.credentials as { internal?: boolean }).internal !== true)
+      .map((ch) => ch.id);
+    const publicCount = publicIds.length;
     let testConversations = 0;
     if (internalIds.length) {
       const [row] = await db
@@ -746,6 +749,17 @@ export function agentRoutes(db: Db) {
         .from(channelBindings)
         .where(inArray(channelBindings.channelId, internalIds));
       testConversations = Number(row?.n ?? 0);
+    }
+    // A deployment is validated when a real conversation has flowed through
+    // a public channel — a created-but-unused channel is 'partial', since
+    // "added" isn't "live" (widget uninstalled, webhook unverified, etc.).
+    let liveConversations = 0;
+    if (publicIds.length) {
+      const [row] = await db
+        .select({ n: sql<number>`count(distinct ${channelBindings.conversationId})` })
+        .from(channelBindings)
+        .where(inArray(channelBindings.channelId, publicIds));
+      liveConversations = Number(row?.n ?? 0);
     }
     const sources = (cfg.knowledge?.length ?? 0) + files.length;
     const updatedAt = files
@@ -801,7 +815,8 @@ export function agentRoutes(db: Db) {
               ? 'partial'
               : 'done'
             : 'pending',
-        deploy: publicCount > 0 ? 'done' : 'pending',
+        deploy:
+          publicCount === 0 ? 'pending' : liveConversations > 0 ? 'done' : 'partial',
       },
       knowledge: {
         sources,
@@ -817,6 +832,7 @@ export function agentRoutes(db: Db) {
       teach_skipped: !!cfg.builder?.teach_skipped,
       abilities,
       channels: publicCount,
+      live_conversations: liveConversations,
       test_conversations: testConversations,
       open_gaps: openGaps,
     });

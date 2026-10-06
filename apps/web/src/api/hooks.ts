@@ -128,6 +128,7 @@ export interface BuildStatus {
   knowledge: { sources: number; updated_at: string | null; over_budget: boolean };
   teach_skipped: boolean;
   channels: number;
+  live_conversations: number;
   abilities: number;
   test_conversations: number;
   open_gaps: number;

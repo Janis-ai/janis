@@ -139,9 +139,10 @@ export default function AgentOverview() {
   const hosted = janisBrain(agent);
   const cfg = agent?.config ?? {};
   const summary = cfg.builder?.summary?.trim();
-  // Lifecycle line: Live once a public channel exists; Ready when every
-  // ACTIONABLE step is done ('na' steps don't count — the agent doesn't
-  // need them); otherwise In build with the next actionable step named.
+  // Lifecycle line: Live once a real conversation has flowed on a public
+  // channel (build-status deploy=done); Deployed when a channel exists but
+  // nothing has arrived yet; Ready when every ACTIONABLE step is done
+  // ('na' steps don't count); otherwise In build with the next step named.
   const actionable = BUILD_STEPS.filter(
     (s) => !buildStatus || buildStatus.steps[s.key] !== 'na',
   );
@@ -164,11 +165,13 @@ export default function AgentOverview() {
     );
   const status = !hosted
     ? agent?.webhook_url ? 'live' : 'no-webhook'
-    : channels.length
+    : buildStatus?.steps.deploy === 'done'
       ? 'live'
-      : buildStatus && allBuilt
-        ? 'ready'
-        : 'building';
+      : channels.length
+        ? 'deployed'
+        : buildStatus && allBuilt
+          ? 'ready'
+          : 'building';
   const model = cfg.llm?.model
     ? (MODEL_CATALOG.find((m) => m.id === cfg.llm?.model)?.name ?? cfg.llm.model)
     : null;
@@ -229,11 +232,13 @@ export default function AgentOverview() {
               ? channels.length
                 ? `Live — answering on ${channels.length} channel${channels.length > 1 ? 's' : ''}`
                 : 'Live'
-              : status === 'ready'
-                ? 'Ready to deploy'
-                : status === 'no-webhook'
-                  ? 'No webhook URL set'
-                  : `In build — ${doneCount} of ${actionable.length} steps done`}
+              : status === 'deployed'
+                ? 'Deployed — waiting for the first message'
+                : status === 'ready'
+                  ? 'Ready to deploy'
+                  : status === 'no-webhook'
+                    ? 'No webhook URL set'
+                    : `In build — ${doneCount} of ${actionable.length} steps done`}
           </strong>
           {nextStep && hosted && (
             <button
