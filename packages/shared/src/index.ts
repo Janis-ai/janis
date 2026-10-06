@@ -340,6 +340,13 @@ export const AgentConfig = z.object({
         .optional(),
       suggested_approvals: z.array(z.string().max(80)).max(30).optional(),
       suggested_rules: z.array(z.string().max(300)).max(20).optional(),
+      // Whether the agent needs operator-supplied knowledge at all —
+      // 'required' for private business data, 'unnecessary' for public-domain
+      // topics the model already knows, 'helpful' when unsure (biased middle).
+      knowledge_need: z.enum(['required', 'helpful', 'unnecessary']).optional(),
+      // Operator explicitly marked Teach it as not needed — distinct from an
+      // untouched step so Deploy can say "not needed" vs "nothing added".
+      teach_skipped: z.boolean().optional(),
       generated_at: z.string().max(40).optional(),
     })
     .optional(),

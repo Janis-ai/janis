@@ -2352,14 +2352,18 @@ function IntegrationCards({
             </div>
           ) : (
             <div className="row" style={{ marginTop: 10 }}>
-              <button
-                className="btn"
-                onClick={() =>
-                  t.fields.length ? (setOpenId(t.id), setErr(''), setFields({})) : install.mutate(t)
-                }
-              >
-                {installed(t) ? 'Update credentials' : 'Connect'}
-              </button>
+              {/* Credential-less integrations have nothing to update once
+                  installed — show the badge + Remove, not a dead button. */}
+              {(!installed(t) || t.fields.length > 0) && (
+                <button
+                  className="btn"
+                  onClick={() =>
+                    t.fields.length ? (setOpenId(t.id), setErr(''), setFields({})) : install.mutate(t)
+                  }
+                >
+                  {installed(t) ? 'Update credentials' : t.fields.length ? 'Connect' : 'Add'}
+                </button>
+              )}
               {installed(t) && (
                 <>
                   <span className="badge active">connected</span>

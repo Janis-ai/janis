@@ -36,6 +36,7 @@ interface BuilderDraft {
   suggested_templates?: { id: string; name?: string; reason?: string }[];
   suggested_approvals?: string[];
   suggested_rules?: string[];
+  knowledge_need?: 'required' | 'helpful' | 'unnecessary';
 }
 
 const STEPS = [
@@ -168,17 +169,66 @@ export default function AgentBuilder() {
       testChannel.mutate();
     }
   }, [step, agent?.id, hosted]); // eslint-disable-line react-hooks/exhaustive-deps
+  const builder = cfg.builder;
   const { data: gapData } = useQuery({
     queryKey: ['knowledge-gaps', agent?.id],
     queryFn: () =>
       api<{ gaps: { key: string; count: number; questions: string[]; added: boolean }[] }>(
         `/api/agents/${agent?.id}/knowledge-gaps`,
       ),
-    enabled: Boolean(agent && hosted && step === 'try'),
+    enabled: Boolean(agent && hosted && (step === 'try' || step === 'teach')),
   });
   const openGaps = (gapData?.gaps ?? []).filter((g) => !g.added);
+  // Teach it tab counts — files/sites come from the same ['knowledge', id]
+  // cache KnowledgeFiles populates, so they stay in sync.
+  const { data: kfData } = useQuery({
+    queryKey: ['knowledge', agent?.id],
+    queryFn: () =>
+      api<{ files: { source_url: string | null }[] }>(
+        `/api/agents/${agent?.id}/knowledge`,
+      ),
+    enabled: Boolean(agent && hosted && step === 'teach'),
+  });
+  const { data: articleData } = useQuery({
+    queryKey: ['articles', agent?.id],
+    queryFn: () => api<{ articles: unknown[] }>(`/api/articles?agent_id=${agent?.id}`),
+    enabled: Boolean(agent && hosted && step === 'teach'),
+  });
+  const kf = kfData?.files ?? [];
+  const teachCounts: Record<TeachSub, number> = {
+    text: cfg.knowledge?.length ?? 0,
+    files: kf.filter((f) => !f.source_url).length,
+    websites: kf.filter((f) => f.source_url).length,
+    gaps: openGaps.length,
+    help: articleData?.articles?.length ?? 0,
+  };
+  // Whether this agent needs operator knowledge at all — drafted at create,
+  // re-classified on refresh. Bias: missing/old agents count as 'helpful'.
+  const knowledgeNeed =
+    builder?.knowledge_need ?? (builder?.suggested_knowledge?.length ? 'required' : 'helpful');
+  const teachSkipped = Boolean(builder?.teach_skipped);
+  const teachSkip = useMutation({
+    mutationFn: (skipped: boolean) => {
+      const config: AgentConfig = {
+        ...cfg,
+        builder: { ...cfg.builder, teach_skipped: skipped },
+      };
+      return api(`/api/agents/${agent?.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ config }),
+      }).then(() => config);
+    },
+    onSuccess: (config) => {
+      setCfg(config);
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+    },
+    onError: (e) => setError(e.message),
+  });
+  // Try it — chips seed the test chat with a question (AskJanis re-fires on
+  // each distinct seedMessage value).
+  const [trySeed, setTrySeed] = useState<string | null>(null);
 
-  const builder = cfg.builder;
   const { data: status } = useBuildStatus(agent?.id ?? undefined);
   const seenSteps = useSeenSteps(agent?.id);
   const idx = STEPS.findIndex((s) => s.key === step);
@@ -255,6 +305,10 @@ export default function AgentBuilder() {
           suggested_templates: d.suggested_templates ?? [],
           suggested_approvals: d.suggested_approvals ?? [],
           suggested_rules: d.suggested_rules ?? [],
+          ...(d.knowledge_need ? { knowledge_need: d.knowledge_need } : {}),
+          // A re-classification to 'required' invalidates a stale skip —
+          // the operator said "not needed" about a different agent.
+          ...(d.knowledge_need === 'required' ? { teach_skipped: false } : {}),
           generated_at: new Date().toISOString(),
         },
       };
@@ -299,6 +353,8 @@ export default function AgentBuilder() {
           suggested_templates: d.suggested_templates ?? [],
           suggested_approvals: d.suggested_approvals ?? [],
           suggested_rules: d.suggested_rules ?? [],
+          ...(d.knowledge_need ? { knowledge_need: d.knowledge_need } : {}),
+          ...(d.knowledge_need === 'required' ? { teach_skipped: false } : {}),
         },
       };
       await api(`/api/agents/${agent?.id}`, {
@@ -655,19 +711,44 @@ export default function AgentBuilder() {
           {hosted && (
             <>
               <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
-                What should your agent know? Add the information it needs to do
-                its job — files, websites, pasted text, or a help center. These
-                are all just sources of knowledge.
+                {teachSkipped
+                  ? 'Marked as not needed — the model handles this domain on its own. You can still add sources below.'
+                  : knowledgeNeed === 'unnecessary'
+                    ? 'The model probably already knows this domain — add sources only for things it could not know (your prices, house rules, private docs).'
+                    : knowledgeNeed === 'required'
+                      ? 'This agent answers from information only you have — add it as text, files, websites, or a help center.'
+                      : 'What should your agent know? The model may already know the broad strokes — add sources where accuracy matters or the facts are yours.'}
+                {isAdmin && !teachSkipped && knowledgeNeed === 'unnecessary' && (
+                  <> <button className="btn sm" disabled={teachSkip.isPending} onClick={() => teachSkip.mutate(true)}>Skip — it doesn&rsquo;t need extra knowledge</button></>
+                )}
+                {isAdmin && teachSkipped && (
+                  <> <button className="btn sm" disabled={teachSkip.isPending} onClick={() => teachSkip.mutate(false)}>Mark as needed after all</button></>
+                )}
               </div>
               {builder?.suggested_knowledge?.length ? (
                 <div className="card" style={{ marginTop: 12 }}>
                   <strong>Suggested knowledge topics</strong>
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    From your description — fill each in below with the real
-                    details (a line, a document, or a website).
+                    From your description — click one to start a fact line for it
+                    under Text, or use the tabs below for files and websites.
                   </div>
                   <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 13 }}>
-                    {builder.suggested_knowledge.map((k, i) => <li key={i}>{k}</li>)}
+                    {builder.suggested_knowledge.map((k, i) => (
+                      <li key={i} style={{ marginBottom: 2 }}>
+                        {isAdmin ? (
+                          <button
+                            className="link small"
+                            title="Start a fact line for this under Text"
+                            onClick={() => {
+                              setCfg({ ...cfg, knowledge: [...(cfg.knowledge ?? []), `${k}: `] });
+                              goTeachSub('text');
+                            }}
+                          >
+                            {k}
+                          </button>
+                        ) : k}
+                      </li>
+                    ))}
                   </ul>
                 </div>
               ) : null}
@@ -678,7 +759,7 @@ export default function AgentBuilder() {
                     className={`tab${teachSub === t.key ? ' active' : ''}`}
                     onClick={() => goTeachSub(t.key)}
                   >
-                    {t.label}
+                    {t.label}{teachCounts[t.key] ? ` · ${teachCounts[t.key]}` : ''}
                   </button>
                 ))}
               </div>
@@ -836,6 +917,22 @@ export default function AgentBuilder() {
                   </div>
                 </div>
               )}
+              {testChannel.data && (builder?.suggested_knowledge?.length ?? 0) > 0 && (
+                <div className="muted" style={{ fontSize: 13, margin: '10px 0 6px' }}>
+                  Try asking:{' '}
+                  {builder!.suggested_knowledge!.slice(0, 4).map((t, i) => (
+                    <button
+                      key={i}
+                      className="btn sm"
+                      style={{ marginLeft: 6, marginBottom: 4 }}
+                      disabled={!isAdmin}
+                      onClick={() => setTrySeed(`Tell me about ${t}`)}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="card builder-chat" style={{ marginTop: 10, padding: 0 }}>
                 {testChannel.isPending && (
                   <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
@@ -846,7 +943,7 @@ export default function AgentBuilder() {
                   </div>
                 )}
                 {testChannel.data && (
-                  <AskJanis channelId={testChannel.data.channel_id} badge="TEST" asCustomer />
+                  <AskJanis channelId={testChannel.data.channel_id} badge="TEST" asCustomer seedMessage={trySeed ?? undefined} />
                 )}
               </div>
             </>
@@ -857,10 +954,26 @@ export default function AgentBuilder() {
       {step === 'deploy' && agent && (
         <>
           <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
-            Your agent is ready — where should it work? Add a channel and it's
-            live; each channel lands on its own configuration page after
-            creation.
+            Where should it work? Add a channel and it's live; each channel
+            lands on its own configuration page after creation.
           </div>
+          {hosted && status && (
+            <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+              Readiness — knowledge:{' '}
+              {teachSkipped || knowledgeNeed === 'unnecessary'
+                ? 'not needed for this agent'
+                : status.knowledge.sources
+                  ? `${status.knowledge.sources} source${status.knowledge.sources === 1 ? '' : 's'}`
+                  : knowledgeNeed === 'required'
+                    ? 'nothing added — this agent needs your information'
+                    : 'nothing added yet'}
+              {' · '}tested:{' '}
+              {status.test_conversations
+                ? `${status.test_conversations} conversation${status.test_conversations === 1 ? '' : 's'}`
+                : 'no conversations yet'}
+              {status.channels ? ` · live on ${status.channels} channel${status.channels === 1 ? '' : 's'}` : ''}
+            </div>
+          )}
           {hosted ? (
             <AgentChannels agent={agent} />
           ) : (

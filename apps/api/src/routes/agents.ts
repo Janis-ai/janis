@@ -693,7 +693,13 @@ export function agentRoutes(db: Db) {
       steps: {
         create: 'done',
         teach:
-          sources > 0 ? 'done' : drafted && !suggestedKnowledge ? 'na' : 'pending',
+          sources > 0
+            ? 'done'
+            : cfg.builder?.teach_skipped ||
+                cfg.builder?.knowledge_need === 'unnecessary' ||
+                (drafted && !suggestedKnowledge)
+              ? 'na'
+              : 'pending',
         guide: cfg.system_prompt?.trim() ? 'done' : 'pending',
         abilities:
           abilities > 0 ? 'done' : drafted && !suggestedAbilities ? 'na' : 'pending',
