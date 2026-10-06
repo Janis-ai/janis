@@ -259,16 +259,25 @@ export default function Settings() {
     },
     onError: (e) => setProfileMsg(e instanceof ApiError ? e.message : 'failed'),
   });
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const uploadAvatar = async (file: File) => {
+    setUploadingAvatar(true);
     setProfileMsg('Uploading…');
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await fetch('/api/uploads', { method: 'POST', body: fd, credentials: 'include' });
-    if (res.ok) {
-      const att = (await res.json()) as { url: string };
-      saveProfile.mutate({ avatar_url: att.url });
-    } else {
-      setProfileMsg('Upload failed.');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/uploads', { method: 'POST', body: fd, credentials: 'include' });
+      if (res.ok) {
+        const att = (await res.json()) as { url: string };
+        // Sync local state — the preview renders profile.avatar_url, not
+        // the ['me'] cache the PATCH updates.
+        setProfile((p) => ({ ...p, avatar_url: att.url }));
+        saveProfile.mutate({ avatar_url: att.url });
+      } else {
+        setProfileMsg('Upload failed.');
+      }
+    } finally {
+      setUploadingAvatar(false);
     }
   };
 
@@ -469,13 +478,28 @@ export default function Settings() {
           />
           <button className="btn" disabled={saveProfile.isPending}>Save</button>
           <span className="grow" />
-          <label className="btn" style={{ cursor: 'pointer' }}>
-            {profile.avatar_url ? 'Change avatar' : 'Upload avatar'}
+          <label
+            className="btn"
+            style={{
+              cursor: uploadingAvatar ? 'default' : 'pointer',
+              opacity: uploadingAvatar ? 0.6 : 1,
+            }}
+          >
+            {uploadingAvatar
+              ? 'Uploading…'
+              : profile.avatar_url
+                ? 'Change avatar'
+                : 'Upload avatar'}
             <input
               type="file"
               accept="image/*"
               hidden
-              onChange={(e) => e.target.files?.[0] && void uploadAvatar(e.target.files[0])}
+              disabled={uploadingAvatar}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = '';
+                if (f) void uploadAvatar(f);
+              }}
             />
           </label>
           {profile.avatar_url && (
