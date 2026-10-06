@@ -458,6 +458,9 @@ body.test-dock-available .main { margin-right: 48px; max-width: 880px; }
   opacity: 0; transition: opacity .12s ease;
 }
 .ask-msg:hover .correct-this,
+.msg:hover + .inspector-wrap .correct-this,
+.inspector-wrap:hover .correct-this,
+.inspector-wrap:focus-within .correct-this,
 .correct-this:focus-visible { opacity: 1; }
 @media (hover: none) {
   .correct-this { opacity: .55; }

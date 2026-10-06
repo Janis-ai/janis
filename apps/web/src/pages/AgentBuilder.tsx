@@ -9,6 +9,7 @@ import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { ChevronDown, MessageSquare } from 'lucide-react';
 import { AskJanis } from '../components/AskJanis';
+import { CorrectThisCard } from '../components/CorrectThis';
 import { AgentChannels } from '../components/AgentChannels';
 import { SourceList, type KnowledgeBudget } from '../components/SourceList';
 import {
@@ -448,23 +449,13 @@ export default function AgentBuilder() {
     confirmFlag.mutate({ covered_topics: [...new Set([...coveredSet, t.id])] });
   const [guideOpen, setGuideOpen] = useState(false);
   // "Correct this" on a test-chat agent reply — the operator writes what
-  // it should have said, then chooses where it lands: a private note or a
-  // public article draft (reviewed before publishing).
+  // it should have said, then chooses where it lands: a private note, a
+  // public article draft, or an instruction rule. The card itself is
+  // shared with the inbox (CorrectThis.tsx).
   const [correctTarget, setCorrectTarget] = useState<{
     agentText: string;
     customerText?: string;
   } | null>(null);
-  const [correction, setCorrection] = useState('');
-  // Correct-this routing — a correction is either missing knowledge (note /
-  // article) or a behavior fix (an instruction rule). Janis classifies and
-  // drafts the rule; the operator can override the branch before saving.
-  const [corrPlan, setCorrPlan] = useState<{
-    kind: 'knowledge' | 'behavior';
-    instruction?: string;
-    classified: boolean;
-  } | null>(null);
-  const [corrBranch, setCorrBranch] = useState<'knowledge' | 'behavior' | null>(null);
-  const [instrEdit, setInstrEdit] = useState('');
   // Mid-chat config drift — a saved change while a test conversation has
   // messages means earlier replies ran the old config; nudge a fresh chat.
   const [chatActive, setChatActive] = useState(false);
@@ -498,230 +489,19 @@ export default function AgentBuilder() {
         ))}
       </div>
     );
-  const saveCorrection = useMutation({
-    mutationFn: ({ mode, text }: { mode: 'note' | 'article'; text: string }) =>
-      mode === 'note'
-        ? api(`/api/agents/${agent?.id}`, {
-            method: 'PATCH',
-            body: JSON.stringify({
-              config: { ...cfg, knowledge: [...(cfg.knowledge ?? []), text] },
-            }),
-          })
-        : api('/api/articles', {
-            method: 'POST',
-            body: JSON.stringify({
-              agent_id: agent?.id,
-              // The customer's question is the article title — help pages
-              // answer questions.
-              title: (correctTarget?.customerText ?? text).slice(0, 80),
-              body: text,
-              category: 'General',
-              status: 'draft',
-            }),
-          }),
-    onSuccess: (_r, v) => {
-      if (v.mode === 'note') setCfg({ ...cfg, knowledge: [...(cfg.knowledge ?? []), v.text] });
-      void qc.invalidateQueries({ queryKey: ['knowledge', agent?.id] });
-      void qc.invalidateQueries({ queryKey: ['articles', agent?.id] });
-      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
-      void qc.invalidateQueries({ queryKey: ['agents'] });
-      setCorrectTarget(null);
-      setCorrection('');
-      setCorrPlan(null);
-      setCorrBranch(null);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      markDrift();
-    },
-    onError: (e) => setError(e.message),
-  });
-  // Janis reads the correction and suggests the branch: knowledge (the
-  // fact was missing/wrong) or behavior (how it replied needs an
-  // instruction rule — drafted for review). The operator can override.
-  const correctionPlan = useMutation({
-    mutationFn: () =>
-      api<{ kind: 'knowledge' | 'behavior'; instruction?: string; classified: boolean }>(
-        `/api/agents/${agent?.id}/correction-plan`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            customerText: correctTarget?.customerText,
-            agentText: correctTarget?.agentText,
-            correction: correction.trim(),
-          }),
-        },
-      ),
-    onSuccess: (p) => {
-      setCorrPlan(p);
-      setCorrBranch(p.kind);
-      setInstrEdit(p.instruction ?? '');
-    },
-    onError: (e) => setError(e.message),
-  });
-  // Behavior branch — the drafted rule lands appended to the agent's
-  // instructions (draft→approve like Gaps: editable until accepted), and
-  // is logged so Guide it can credit testing for the improvement.
-  const applyInstruction = useMutation({
-    mutationFn: (text: string) => {
-      const config: AgentConfig = {
-        ...cfg,
-        system_prompt: `${(cfg.system_prompt ?? '').trim()}\n\n${text}`.trim(),
-        builder: {
-          ...cfg.builder,
-          instruction_edits: [
-            ...(cfg.builder?.instruction_edits ?? []),
-            text,
-          ].slice(-20),
-        },
-      };
-      return api(`/api/agents/${agent?.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ config }),
-      }).then(() => config);
-    },
-    onSuccess: (config) => {
-      setCfg(config);
-      void qc.invalidateQueries({ queryKey: ['agents'] });
-      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
-      setCorrectTarget(null);
-      setCorrection('');
-      setCorrPlan(null);
-      setCorrBranch(null);
-      setInstrEdit('');
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      markDrift();
-    },
-    onError: (e) => setError(e.message),
-  });
-  const correctCard = correctTarget && (
-    <div className="card" style={{ margin: '10px 0' }}>
-      <strong style={{ fontSize: 13 }}>Correct this answer</strong>
-      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-        It said: “
-        {correctTarget.agentText.length > 140
-          ? `${correctTarget.agentText.slice(0, 140)}…`
-          : correctTarget.agentText}
-        ”
-        {correctTarget.customerText
-          ? ` — the customer asked “${correctTarget.customerText.slice(0, 80)}”`
-          : ''}
-      </div>
-      <textarea
-        rows={3}
-        style={{ width: '100%', marginTop: 8, boxSizing: 'border-box' }}
-        placeholder="What should it have said or done?"
-        value={correction}
-        autoFocus
-        onChange={(e) => setCorrection(e.target.value)}
-      />
-      {corrBranch === 'behavior' ? (
-        <>
-          <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-            {corrPlan?.classified
-              ? 'Janis reads this as a behavior fix — it becomes a rule in the instructions:'
-              : 'A behavior fix becomes a rule in the instructions:'}
-          </div>
-          <textarea
-            rows={2}
-            style={{ width: '100%', marginTop: 6, boxSizing: 'border-box' }}
-            placeholder={'e.g. "When the customer defers, choose and proceed"'}
-            value={instrEdit}
-            onChange={(e) => setInstrEdit(e.target.value)}
-          />
-          <div className="row" style={{ marginTop: 8, gap: 8 }}>
-            <button
-              className="btn sm primary"
-              disabled={!instrEdit.trim() || applyInstruction.isPending}
-              onClick={() => applyInstruction.mutate(instrEdit.trim())}
-            >
-              {applyInstruction.isPending ? 'Saving…' : 'Add to instructions'}
-            </button>
-            <button className="link small" onClick={() => setCorrBranch('knowledge')}>
-              it's a fact instead
-            </button>
-            <button
-              className="btn sm"
-              onClick={() => {
-                setCorrectTarget(null);
-                setCorrection('');
-                setCorrPlan(null);
-                setCorrBranch(null);
-                setInstrEdit('');
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-          <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
-            The rule is appended to the instructions — review it any time on
-            Guide it.
-          </div>
-        </>
-      ) : corrBranch === 'knowledge' ? (
-        <>
-          <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-            {corrPlan?.classified
-              ? 'Janis reads this as missing knowledge — where should it live?'
-              : 'Where should this fix live?'}
-          </div>
-          <div className="row" style={{ marginTop: 8, gap: 8 }}>
-            <button
-              className="btn sm primary"
-              disabled={saveCorrection.isPending}
-              onClick={() => saveCorrection.mutate({ mode: 'note', text: correction.trim() })}
-            >
-              {saveCorrection.isPending ? 'Saving…' : 'Save as note'}
-            </button>
-            <button
-              className="btn sm"
-              disabled={saveCorrection.isPending}
-              title="Creates an unpublished draft — review it under Teach it → Articles"
-              onClick={() => saveCorrection.mutate({ mode: 'article', text: correction.trim() })}
-            >
-              Draft article
-            </button>
-            <button className="link small" onClick={() => setCorrBranch('behavior')}>
-              it's about behavior
-            </button>
-            <button
-              className="btn sm"
-              onClick={() => {
-                setCorrectTarget(null);
-                setCorrection('');
-                setCorrPlan(null);
-                setCorrBranch(null);
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-          <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
-            A note teaches this agent only. An article also becomes a public
-            help page — saved as a draft until you publish it.
-          </div>
-        </>
-      ) : (
-        <div className="row" style={{ marginTop: 8, gap: 8 }}>
-          <button
-            className="btn sm primary"
-            disabled={!correction.trim() || correctionPlan.isPending}
-            onClick={() => correctionPlan.mutate()}
-          >
-            {correctionPlan.isPending ? 'Checking…' : 'Continue →'}
-          </button>
-          <button
-            className="btn sm"
-            onClick={() => {
-              setCorrectTarget(null);
-              setCorrection('');
-            }}
-          >
-            Cancel
-          </button>
-        </div>
-      )}
-    </div>
+  const correctCard = correctTarget && agent && (
+    <CorrectThisCard
+      agentId={agent.id}
+      cfg={cfg}
+      target={correctTarget}
+      onClose={() => setCorrectTarget(null)}
+      onSaved={(config) => {
+        setCfg(config);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+        markDrift();
+      }}
+    />
   );
   // Customer region — optional; saved to builder.region on blur and
   // injected into the runtime prompt (hostedAgent), not the authored one.
@@ -1927,10 +1707,6 @@ export default function AgentBuilder() {
                     onCustomerMessage={() => setChatActive(true)}
                     onCorrect={(ctx) => {
                       setCorrectTarget(ctx);
-                      setCorrection('');
-                      setCorrPlan(null);
-                      setCorrBranch(null);
-                      setInstrEdit('');
                     }}
                     seedMessage={seed?.target === 'try' ? seed.text : undefined}
                     seedNonce={seed?.nonce}
@@ -2120,10 +1896,6 @@ export default function AgentBuilder() {
                     onCustomerMessage={() => setChatActive(true)}
                     onCorrect={(ctx) => {
                       setCorrectTarget(ctx);
-                      setCorrection('');
-                      setCorrPlan(null);
-                      setCorrBranch(null);
-                      setInstrEdit('');
                     }}
                     seedMessage={seed?.target === 'dock' ? seed.text : undefined}
                     seedNonce={seed?.nonce}

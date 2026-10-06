@@ -8,6 +8,7 @@ import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers
 import { ArgsRows, Avatar, channelLabel, displayName, fmtTime } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
+import { CorrectThisCard } from '../components/CorrectThis';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
@@ -218,6 +219,14 @@ export default function ConversationPage() {
   const [fetchingNewer, setFetchingNewer] = useState(false);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [inspectorFor, setInspectorFor] = useState<string | null>(null);
+  // "Correct this" on a live agent reply — same routing as the test chat
+  // (note / draft article / instruction rule). Bad replies in real
+  // conversations are the highest-signal corrections there are.
+  const [correctFor, setCorrectFor] = useState<{
+    id: string;
+    agentText: string;
+    customerText?: string;
+  } | null>(null);
   const [testSaveOpen, setTestSaveOpen] = useState(false);
   const [testName, setTestName] = useState('');
   const [testExpectation, setTestExpectation] = useState('');
@@ -1112,34 +1121,72 @@ export default function ConversationPage() {
                 </div>
               )}
             </div>
-            {m.direction === 'out' && m.payload.inspector && (
+            {m.direction === 'out' && !isSystem && (
               <div className="inspector-wrap">
-                <button
-                  className="inspector-toggle"
-                  onClick={() => {
-                    const opening = inspectorFor !== m.id;
-                    setInspectorFor(opening ? m.id : null);
-                    if (!opening) return;
-                    // Reveal the panel: bottom-anchored when it fits the
-                    // viewport, top-pinned when it's taller.
-                    requestAnimationFrame(() => {
-                      const el = transcriptRef.current;
-                      const panel = el?.querySelector<HTMLElement>('.inspector-panel');
-                      if (!el || !panel) return;
-                      const elRect = el.getBoundingClientRect();
-                      const pRect = panel.getBoundingClientRect();
-                      const pTop = pRect.top - elRect.top + el.scrollTop;
-                      const pBottom = pRect.bottom - elRect.top + el.scrollTop;
-                      el.scrollTo({
-                        top: pRect.height <= el.clientHeight ? pBottom - el.clientHeight : pTop - 12,
-                        behavior: 'smooth',
+                {!!m.payload.inspector && (
+                  <button
+                    className="inspector-toggle"
+                    onClick={() => {
+                      const opening = inspectorFor !== m.id;
+                      setInspectorFor(opening ? m.id : null);
+                      if (!opening) return;
+                      // Reveal the panel: bottom-anchored when it fits the
+                      // viewport, top-pinned when it's taller.
+                      requestAnimationFrame(() => {
+                        const el = transcriptRef.current;
+                        const panel = el?.querySelector<HTMLElement>('.inspector-panel');
+                        if (!el || !panel) return;
+                        const elRect = el.getBoundingClientRect();
+                        const pRect = panel.getBoundingClientRect();
+                        const pTop = pRect.top - elRect.top + el.scrollTop;
+                        const pBottom = pRect.bottom - elRect.top + el.scrollTop;
+                        el.scrollTo({
+                          top: pRect.height <= el.clientHeight ? pBottom - el.clientHeight : pTop - 12,
+                          behavior: 'smooth',
+                        });
                       });
-                    });
-                  }}
-                >
-                  ✦ why this reply
-                </button>
-                {inspectorFor === m.id && <InspectorPanel data={m.payload.inspector} />}
+                    }}
+                  >
+                    ✦ why this reply
+                  </button>
+                )}
+                {m.text?.trim() ? (
+                  <button
+                    className="correct-this"
+                    title="Tell Janis what it should have said — the fix lands as a note, a draft article, or an instruction rule"
+                    onClick={() => {
+                      // The customer's prompt is the previous inbound row —
+                      // same pairing the test chat uses.
+                      const prevIn = items
+                        .slice(0, i)
+                        .reverse()
+                        .find((x) => x.kind === 'msg' && x.m.direction === 'in');
+                      setCorrectFor({
+                        id: m.id,
+                        agentText: m.text ?? '',
+                        customerText:
+                          prevIn?.kind === 'msg' ? (prevIn.m.text ?? undefined) : undefined,
+                      });
+                    }}
+                  >
+                    Correct this
+                  </button>
+                ) : null}
+                {inspectorFor === m.id && !!m.payload.inspector && (
+                  <InspectorPanel data={m.payload.inspector} />
+                )}
+                {correctFor?.id === m.id && agent && (
+                  // Fixed width — the wrap is a shrink-to-fit column, so an
+                  // unsized card would collapse the composer.
+                  <div style={{ width: 380, maxWidth: '86vw' }}>
+                    <CorrectThisCard
+                      agentId={agent.id}
+                      cfg={agent.config}
+                      target={correctFor}
+                      onClose={() => setCorrectFor(null)}
+                    />
+                  </div>
+                )}
               </div>
             )}
             {i === lastDeliveredIdx && (
