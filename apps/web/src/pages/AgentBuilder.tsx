@@ -194,11 +194,15 @@ export default function AgentBuilder() {
         method: 'POST',
       }),
   });
+  // Docked test panel — the same private channel Try it uses, openable
+  // from any build step so feedback is never a rail-jump away. Lazy:
+  // the channel row is created on first open (or on Try it), not load.
+  const [testOpen, setTestOpen] = useState(false);
   useEffect(() => {
-    if (step === 'try' && agent && hosted && !testChannel.data && !testChannel.isPending) {
+    if ((step === 'try' || testOpen) && agent && hosted && !testChannel.data && !testChannel.isPending) {
       testChannel.mutate();
     }
-  }, [step, agent?.id, hosted]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, testOpen, agent?.id, hosted]); // eslint-disable-line react-hooks/exhaustive-deps
   const { data: gapData } = useQuery({
     queryKey: ['knowledge-gaps', agent?.id],
     queryFn: () =>
@@ -1000,6 +1004,36 @@ export default function AgentBuilder() {
         <div className="row" style={{ marginTop: 14 }}>
           <button className="btn" onClick={() => goStep(next.key)}>Next: {next.label} →</button>
         </div>
+      )}
+      {/* Docked test panel — Try it's full-screen chat lives on its own
+          step; everywhere else the same private channel rides along in a
+          drawer so an edit gets feedback immediately. */}
+      {agent && hosted && step !== 'start' && step !== 'bring' && step !== 'try' && (
+        testOpen ? (
+          <div className="test-dock">
+            <div className="test-dock-head">
+              <strong style={{ fontSize: 13 }}>
+                Test it <span className="muted" style={{ fontWeight: 400 }}>— private channel, same pipeline as production</span>
+              </strong>
+              <button className="link small" onClick={() => setTestOpen(false)}>close</button>
+            </div>
+            <div className="test-dock-body">
+              {testChannel.isPending && (
+                <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
+              )}
+              {testChannel.isError && (
+                <div className="error" style={{ margin: 14 }}>
+                  {(testChannel.error as Error).message}
+                </div>
+              )}
+              {testChannel.data && (
+                <AskJanis channelId={testChannel.data.channel_id} badge="TEST" asCustomer />
+              )}
+            </div>
+          </div>
+        ) : (
+          <button className="test-fab" onClick={() => setTestOpen(true)}>Test it</button>
+        )
       )}
     </>
   );

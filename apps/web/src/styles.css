@@ -329,6 +329,33 @@ button, input, select, textarea { font: inherit; }
 .builder-chat { height: 62vh; display: flex; flex-direction: column; overflow: hidden; }
 .builder-chat .ask-pane { height: 100%; min-height: 0; }
 
+/* Docked test panel — the Try it channel as a drawer on every build
+   step, so an edit to instructions/knowledge/tools gets immediate
+   feedback without jumping the rail. Full-width sheet on mobile. */
+.test-fab {
+  position: fixed; right: 18px; bottom: 18px; z-index: 40;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--panel); color: var(--text);
+  padding: 8px 16px; font-size: 13px; cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0,0,0,.18);
+}
+.test-fab:hover { border-color: var(--accent); color: var(--accent); }
+.test-dock {
+  position: fixed; right: 0; top: 0; bottom: 0; width: 400px; max-width: 92vw;
+  z-index: 40; display: flex; flex-direction: column;
+  background: var(--panel); border-left: 1px solid var(--border);
+  box-shadow: -4px 0 16px rgba(0,0,0,.14);
+}
+.test-dock-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.test-dock-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.test-dock-body .ask-pane { flex: 1; min-height: 0; }
+@media (max-width: 640px) {
+  .test-dock { left: 0; width: auto; border-left: none; }
+}
+
 /* Overview build progress — the six-step checklist as linkable pills. */
 .status-dot {
   width: 9px; height: 9px; border-radius: 50%; display: inline-block;
