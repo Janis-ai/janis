@@ -976,9 +976,12 @@ export function agentRoutes(db: Db) {
         total: testsTotal,
         checked: testsChecked,
         failing: testsFailing,
+        // fix applied, re-run queued/in-flight — awaiting the re-verdict.
+        fixed: testRows.filter((t) => t.humanResult === 'fixed_recheck').length,
         stale: testsStale,
         safety_total: safetyRows.length,
         safety_checked: safetyChecked,
+        unchecked: uncheckedNames,
       },
     });
   });
@@ -1281,21 +1284,31 @@ export function agentRoutes(db: Db) {
     return c.json({ covered });
   });
 
-  // Correct-this routing — reads the correction against the reply it
-  // targets and says whether it's a missing fact (note/article) or a
-  // behavior fix (drafted instruction rule). `classified: false` means no
-  // LLM verdict; the operator picks the branch.
+  // Failure diagnosis — reads the reply (against the customer's prompt, the
+  // scenario's expectation, and what's connected) and guesses the cause:
+  // knowledge | behavior | ability | expectation. `correction` is optional —
+  // the inbox "Correct this" path supplies one; a scenario "Needs work"
+  // diagnoses from the reply+expectation alone. `classified: false` means no
+  // LLM verdict; the operator picks the cause.
   app.post(
     '/:id/correction-plan', agentAdmin, zValidator('json', z.object({
       customerText: z.string().max(2000).optional(),
       agentText: z.string().min(1).max(4000),
-      correction: z.string().min(1).max(2000),
+      correction: z.string().max(2000).optional(),
+      expected: z.string().max(2000).optional(),
     })),
     async (c) => {
       const agent = await ownedAgent(c);
       if (!agent) return c.json({ error: 'not found' }, 404);
-      const { customerText, agentText, correction } = c.req.valid('json');
-      return c.json(await planCorrection(db, agent, { customerText, agentText, correction }));
+      const { customerText, agentText, correction, expected } = c.req.valid('json');
+      const cfg = (agent.config ?? {}) as AgentConfig;
+      const abilities = [
+        ...(cfg.tools ?? []).map((t) => t.name || t.template || 'tool'),
+        ...(cfg.builtin_tools ?? []),
+      ];
+      return c.json(
+        await planCorrection(db, agent, { customerText, agentText, correction, expected, abilities }),
+      );
     },
   );
 
@@ -1961,6 +1974,8 @@ export function agentRoutes(db: Db) {
     source: t.source,
     // The Try-it panel's human verdict — distinct from the judge's last_run.
     human_result: t.humanResult,
+    // Why a 'fail' was judged wrong — drives the rescue fix card.
+    fail_cause: t.failCause,
     human_run_at: t.humanRunAt?.toISOString() ?? null,
     // Stale = the config changed since the panel run — the verdict was
     // earned against a different agent and needs a re-run.
@@ -2106,7 +2121,12 @@ export function agentRoutes(db: Db) {
         // The panel-run verdict — human judgment, stored beside the
         // judge's machine verdict (last_run). Stamping the config version
         // at run time is what lets a later config edit mark this stale.
-        human_result: z.enum(['pass', 'fail', 'unreviewed']).optional(),
+        // 'fixed_recheck' = a fix was applied post-fail and the scenario is
+        // queued/rerunning — awaiting the re-verdict.
+        human_result: z.enum(['pass', 'fail', 'unreviewed', 'fixed_recheck']).optional(),
+        // Why a fail was judged wrong — set by the diagnose flow; null
+        // clears it (e.g. a fresh pass).
+        fail_cause: z.enum(['knowledge', 'behavior', 'ability', 'expectation']).nullable().optional(),
       }),
     ),
     async (c) => {
@@ -2132,8 +2152,12 @@ export function agentRoutes(db: Db) {
                 humanResult: b.human_result,
                 humanRunAt: new Date(),
                 configVersion: configVersion((agent.config ?? {}) as AgentConfig),
+                // A pass clears the recorded cause — a fail/fixed_recheck
+                // keeps the one the diagnose flow set unless overridden.
+                ...(b.human_result === 'pass' ? { failCause: null } : {}),
               }
             : {}),
+          ...(b.fail_cause !== undefined ? { failCause: b.fail_cause } : {}),
         })
         .where(and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, c.req.param('id'))))
         .returning();

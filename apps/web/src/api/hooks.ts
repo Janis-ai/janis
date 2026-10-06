@@ -150,6 +150,8 @@ export interface BuildStatus {
     stale: number;
     safety_total: number;
     safety_checked: number;
+    /** Fix applied, re-run queued/in-flight — awaiting the re-verdict. */
+    fixed?: number;
     /** Scenario names still unjudged or stale — the chip tooltip lists them. */
     unchecked?: string[];
   };

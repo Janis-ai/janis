@@ -333,9 +333,9 @@ export function AskJanis({
    *  Looks right / Needs work in place, so the reviewer judges against the
    *  written expectation instead of a feeling (and never returns to the
    *  checklist just to record a verdict). */
-  verdictFor?: (customerText: string | undefined) => {
+  verdictFor?: (customerText: string | undefined, replyText?: string) => {
     expectation?: string | null;
-    result: 'pass' | 'fail' | 'unreviewed' | null;
+    result: 'pass' | 'fail' | 'unreviewed' | 'fixed_recheck' | null;
     verdict(r: 'pass' | 'fail'): void;
   } | null;
   /** The parent renders its own merged header (builder test dock) — the
@@ -1119,7 +1119,7 @@ export function AskJanis({
                 {(() => {
                   const verdictCtx =
                     item.m.direction === 'out' && item.m.text
-                      ? verdictFor?.(prevCustomerText)
+                      ? verdictFor?.(prevCustomerText, item.m.text)
                       : null;
                   return (
                     <>

@@ -582,45 +582,87 @@ export async function recheckGaps(
   }
 }
 
-const CORRECT_SYSTEM =
-  'You classify an operator\u2019s correction to a customer-support AI. The ' +
-  'operator saw a bad agent reply and wrote what it should have said or done. ' +
-  'Return ONE JSON object, no prose: {"kind": "knowledge"|"behavior", ' +
-  '"instruction": "…"}. knowledge = a missing or wrong FACT (a price, policy, ' +
-  'date, name, capability) — it gets taught as a note or article. behavior = ' +
-  'HOW the reply was delivered (ending every reply with a question, refusing ' +
-  'to pick when the customer defers, commenting on being tested, showing ' +
-  'unrelated content, wrong tone) — it becomes a rule in the agent\u2019s ' +
-  'instructions. For behavior, "instruction" is ONE imperative rule shaped to ' +
-  'this correction, <= 140 chars, phrased as what TO do ("When the customer ' +
-  'defers, choose and proceed") not vague criticism. Omit it for knowledge.';
+const DIAGNOSE_SYSTEM =
+  'You diagnose why a customer-support AI\u2019s reply failed review. The owner ' +
+  'marked it "needs work" \u2014 pick the ONE root cause. Return ONE JSON ' +
+  'object, no prose: {"cause": "knowledge"|"behavior"|"ability"|' +
+  '"expectation", "instruction": "\u2026", "knowledge_shape": "\u2026"}. ' +
+  'Causes: knowledge = a missing or wrong FACT the reply needed (a price, ' +
+  'policy, date, limit, name, capability) \u2014 it gets taught as a note or ' +
+  'article. behavior = HOW the reply was delivered (ending every reply with ' +
+  'a question, refusing to pick when the customer defers, commenting on ' +
+  'being tested, wrong tone, promising what it cannot do) \u2014 it becomes a ' +
+  'rule in the agent\u2019s instructions. ability = the reply promised or ' +
+  'needed an ACTION and the connected tools cannot do it (book, look up, ' +
+  'refund, cancel, subscribe) \u2014 "none" listed means it cannot act at ' +
+  'all. expectation = the reply was actually fine \u2014 the written ' +
+  'expectation is wrong, obsolete, or impossible as stated. When the ' +
+  'operator wrote a correction, it is the strongest signal for the cause. ' +
+  'Fields: for behavior, "instruction" is ONE imperative rule shaped to ' +
+  'this fix, <= 140 chars, phrased as what TO do ("When the customer ' +
+  'defers, choose and proceed") not vague criticism. For ability when no ' +
+  'matching tool is connected, "instruction" is the honest fallback rule ' +
+  '\u2014 collect the relevant details and hand off to a human instead of ' +
+  'promising the action. For knowledge, "knowledge_shape" is the SHAPE of ' +
+  'the note that would fix it with blanks for facts you do not know (e.g. ' +
+  '"Junior certification age: ___ years; adult: ___ years") \u2014 NEVER ' +
+  'invent the values; the owner supplies the real facts. Omit both fields ' +
+  'otherwise.';
 
-/** Route a test-chat correction: missing fact or a behavior fix? For behavior
- *  the model also drafts the instruction rule (draft→approve, like gaps).
- *  `classified` false = no LLM verdict — the UI shows both branches without
- *  a suggestion. */
+export type FailCause = 'knowledge' | 'behavior' | 'ability' | 'expectation';
+
+/** Diagnose a failed reply: missing fact, wrong behavior, missing ability,
+ *  or a bad expectation — the rescue flow's first step. `correction` is the
+ *  operator's own note when they wrote one (the inbox "Correct this" path);
+ *  for scenario failures the (prompt, reply, expectation) triple is enough
+ *  and the owner picks or overrides the cause afterward. For behavior and
+ *  ability-fallback the model also drafts the instruction rule
+ *  (draft→approve, like gaps); for knowledge it drafts the note's SHAPE
+ *  with blanks — the owner fills real facts, so model memory never lands
+ *  in the knowledge base unverified. `classified` false = no LLM verdict;
+ *  the UI shows the cause picker without a suggestion. */
 export async function planCorrection(
   db: Db,
   agent: typeof agents.$inferSelect,
-  ctx: { customerText?: string; agentText: string; correction: string },
-): Promise<{ kind: 'knowledge' | 'behavior'; instruction?: string; classified: boolean }> {
+  ctx: {
+    customerText?: string;
+    agentText: string;
+    correction?: string;
+    expected?: string;
+    abilities?: string[];
+  },
+): Promise<{
+  cause: FailCause;
+  instruction?: string;
+  knowledge_shape?: string;
+  classified: boolean;
+}> {
+  const CAUSES: FailCause[] = ['knowledge', 'behavior', 'ability', 'expectation'];
   const user = [
     ctx.customerText ? `Customer asked: ${ctx.customerText}` : '',
     `Agent replied: ${ctx.agentText}`,
-    `Operator correction: ${ctx.correction}`,
+    ctx.expected ? `Written expectation: ${ctx.expected}` : '',
+    ctx.correction ? `Operator correction: ${ctx.correction}` : '',
+    `Connected abilities: ${ctx.abilities?.length ? ctx.abilities.join(', ') : 'none'}`,
   ]
     .filter(Boolean)
     .join('\n')
-    .slice(0, 3000);
-  const text = await llmChat(db, agent, CORRECT_SYSTEM, user, 220);
+    .slice(0, 4000);
+  const text = await llmChat(db, agent, DIAGNOSE_SYSTEM, user, 300);
   const parsed = text ? parseDraftJson(text) : null;
-  if (!parsed) return { kind: 'knowledge', classified: false };
-  const kind = parsed.kind === 'behavior' ? ('behavior' as const) : ('knowledge' as const);
+  if (!parsed || !CAUSES.includes(parsed.cause as FailCause)) {
+    return { cause: 'knowledge', classified: false };
+  }
+  const cause = parsed.cause as FailCause;
   const instruction =
-    kind === 'behavior' && typeof parsed.instruction === 'string'
+    (cause === 'behavior' || cause === 'ability') && typeof parsed.instruction === 'string'
       ? parsed.instruction.trim().slice(0, 200) || undefined
       : undefined;
-  return { kind, instruction, classified: true };
+  const knowledge_shape =
+    cause === 'knowledge' && typeof parsed.knowledge_shape === 'string'
+      ? parsed.knowledge_shape.trim().slice(0, 400) || undefined
+      : undefined;
+  return { cause, instruction, knowledge_shape, classified: true };
 }
 
 /** Draft a knowledge entry for a cluster — LLM when configured, else a template. */

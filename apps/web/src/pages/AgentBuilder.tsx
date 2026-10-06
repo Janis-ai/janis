@@ -273,12 +273,12 @@ export default function AgentBuilder() {
   // on the internal channel; earlier threads stay in the inbox where they
   // remain useful for alert and takeover testing.
   const [chatVisitor, setChatVisitor] = useState<string | null>(null);
+  const freshVisitor = () =>
+    (crypto.randomUUID?.() ??
+      `v${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`
+    ).replace(/-/g, '');
   const newChat = () => {
-    setChatVisitor(
-      (crypto.randomUUID?.() ??
-        `v${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`
-      ).replace(/-/g, ''),
-    );
+    setChatVisitor(freshVisitor());
     setChatActive(false);
     setCfgDrifted(false);
   };
@@ -385,14 +385,18 @@ export default function AgentBuilder() {
   // "Next" goes to the next step that actually needs attention — pending
   // (nothing there) or partial (exists but unconfirmed/has gaps) — and
   // says why, not just where. Falls back to first-unseen while the
-  // build-status query is still loading.
+  // build-status query is still loading. Failures outrank step-order:
+  // a failing scenario is THE next action even from inside Try it.
+  const failing = status?.test_scenarios?.failing ?? 0;
   const next = status
-    ? STEPS.find(
-        (s) =>
-          s.key !== 'create' &&
-          s.key !== step &&
-          (status.steps[s.key] === 'pending' || status.steps[s.key] === 'partial'),
-      )
+    ? failing > 0
+      ? STEPS.find((s) => s.key === 'try')
+      : STEPS.find(
+          (s) =>
+            s.key !== 'create' &&
+            s.key !== step &&
+            (status.steps[s.key] === 'pending' || status.steps[s.key] === 'partial'),
+        )
     : idx >= 0 && idx < STEPS.length - 1
       ? STEPS.find((s) => s.key !== 'create' && !seen(s.key))
       : undefined;
@@ -414,8 +418,22 @@ export default function AgentBuilder() {
       } as Partial<Record<StepKey, string>>)[next.key]
     : undefined;
   const nextLabel = next
-    ? `Next: ${next.label}${nextReason ? ` · ${nextReason}` : ''}`
+    ? failing > 0
+      ? `Fix ${failing} item${failing > 1 ? 's' : ''}`
+      : `Next: ${next.label}${nextReason ? ` · ${nextReason}` : ''}`
     : '';
+  // Already on Try it — "Fix N items" can't navigate; it scrolls to the
+  // first failing row instead.
+  const nextClick = () => {
+    if (failing > 0 && step === 'try') {
+      const first = scenarios.find((s) => s.human_result === 'fail');
+      document
+        .getElementById(`sc-${first?.id}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (next) goStep(next.key);
+  };
 
   // Suggested topics — stored drafts may be plain strings (pre-priority)
   // or typed objects; both normalize to {id, text, priority}. Ids are
@@ -470,6 +488,9 @@ export default function AgentBuilder() {
   const [correctTarget, setCorrectTarget] = useState<{
     agentText: string;
     customerText?: string;
+    /** Set when the card opens from a failed scenario — switches the card
+     *  to diagnose-first and enables the ability/expectation branches. */
+    scenarioId?: string;
   } | null>(null);
   // Mid-chat config drift — a saved change while a test conversation has
   // messages means earlier replies ran the old config; nudge a fresh chat.
@@ -504,8 +525,13 @@ export default function AgentBuilder() {
     expectation: string;
     category: string;
     source: string;
-    human_result: 'pass' | 'fail' | 'unreviewed' | null;
+    human_result: 'pass' | 'fail' | 'unreviewed' | 'fixed_recheck' | null;
+    fail_cause: 'knowledge' | 'behavior' | 'ability' | 'expectation' | null;
     human_run_at: string | null;
+    /** Last replay outcome — carries the reply text for rows judged after
+     *  a reload, when the live replyRef map is empty. */
+    last_run?: { reply?: string | null } | null;
+    original_reply?: string | null;
     stale: boolean;
   }
   const testsQ = useQuery({
@@ -544,10 +570,18 @@ export default function AgentBuilder() {
   const [repliesTick, bumpReplies] = useState(0);
   void repliesTick;
   const markTest = useMutation({
-    mutationFn: ({ id, result }: { id: string; result: 'pass' | 'fail' | 'unreviewed' }) =>
+    mutationFn: ({
+      id,
+      result,
+      cause,
+    }: {
+      id: string;
+      result: 'pass' | 'fail' | 'unreviewed' | 'fixed_recheck';
+      cause?: 'knowledge' | 'behavior' | 'ability' | 'expectation';
+    }) =>
       api(`/api/agents/${agent?.id}/tests/${id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ human_result: result }),
+        body: JSON.stringify({ human_result: result, ...(cause ? { fail_cause: cause } : {}) }),
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });
@@ -593,6 +627,10 @@ export default function AgentBuilder() {
       return;
     }
     setRunningId(s.id);
+    // Each scenario runs in its OWN test conversation — a fresh cust_
+    // visitor remounts the panel so a prior scenario's context (the
+    // "healed eardrum" leak) can never contaminate the next reply.
+    setChatVisitor(freshVisitor());
     setSeed({ text: scenarioPrompt(s), nonce: Date.now(), target: 'dock' });
     // Stall guard — a reply that never comes (agent error, dropped send)
     // must not wedge the checklist on "Running…" forever.
@@ -643,7 +681,7 @@ export default function AgentBuilder() {
   })();
   /** Match a reply's customer prompt back to its scenario — the docked
    *  panel renders the expectation + verdict buttons in place. */
-  const verdictFor = (customerText?: string) => {
+  const verdictFor = (customerText?: string, replyText?: string) => {
     if (!customerText) return null;
     const s = scenarios.find(
       (x) =>
@@ -653,11 +691,23 @@ export default function AgentBuilder() {
     return {
       expectation: s.expectation,
       result: s.human_result,
-      verdict: (r: 'pass' | 'fail') => markTest.mutate({ id: s.id, result: r }),
+      verdict: (r: 'pass' | 'fail') => {
+        markTest.mutate({ id: s.id, result: r });
+        // Needs work must never dead-end — it opens the diagnose card with
+        // the scenario context (cause picker + fix card), same path as the
+        // checklist row's Needs work / Fix it.
+        if (r === 'fail' && replyText) {
+          setCorrectTarget({ agentText: replyText, customerText, scenarioId: s.id });
+        }
+      },
     };
   };
   const tryChips = (target: 'try' | 'dock') => {
-    const list = scenarios.filter((s) => scenarioPrompt(s)).slice(0, 6);
+    // Safety first — CAT_ORDER puts it ahead, so an elevated-risk agent's
+    // hard cases never fall off the visible slice.
+    const list = [...scenarios.filter((s) => scenarioPrompt(s))]
+      .sort((a, b) => CAT_ORDER.indexOf(a.category) - CAT_ORDER.indexOf(b.category))
+      .slice(0, 6);
     return (list.length > 0 || (builder?.suggested_questions?.length ?? 0) > 0) && (
       <div className="try-chips">
         <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>
@@ -673,8 +723,18 @@ export default function AgentBuilder() {
                   ? 'pass'
                   : s.human_result === 'fail'
                     ? 'fail'
-                    : '';
-              const mark = s.stale ? '◷' : s.human_result === 'pass' ? '✓' : s.human_result === 'fail' ? '⚑' : null;
+                    : s.human_result === 'fixed_recheck'
+                      ? 'fixed'
+                      : '';
+              const mark = s.stale
+                ? '◷'
+                : s.human_result === 'pass'
+                  ? '✓'
+                  : s.human_result === 'fail'
+                    ? '⚑'
+                    : s.human_result === 'fixed_recheck'
+                      ? '↺'
+                      : null;
               return (
                 <button
                   key={s.id}
@@ -686,7 +746,9 @@ export default function AgentBuilder() {
                         ? ' — looks right'
                         : s.human_result === 'fail'
                           ? ' — needs work'
-                          : ''
+                          : s.human_result === 'fixed_recheck'
+                            ? ' — fix applied, re-running'
+                            : ''
                   }`}
                   onClick={() => runScenario(s)}
                 >
@@ -708,11 +770,32 @@ export default function AgentBuilder() {
       </div>
     );
   };
+  // A fix save flips the scenario to fixed_recheck (the card PATCHes it)
+  // and re-runs it here — fresh conversation, verdict still human. Other
+  // scenarios go stale automatically: the config version moved under them.
+  const rerunFixed = (scenarioId: string) => {
+    const s = scenarios.find((x) => x.id === scenarioId);
+    if (!s) return;
+    setTestNotice('Fix saved — re-running. Other verdicts are now stale — Run all to re-check.');
+    runScenario(s);
+  };
   const correctCard = correctTarget && agent && (
     <CorrectThisCard
       agentId={agent.id}
       cfg={cfg}
-      target={correctTarget}
+      target={{
+        agentText: correctTarget.agentText,
+        customerText: correctTarget.customerText,
+        ...(correctTarget.scenarioId
+          ? {
+              scenario: {
+                id: correctTarget.scenarioId,
+                expectation:
+                  scenarios.find((x) => x.id === correctTarget.scenarioId)?.expectation ?? '',
+              },
+            }
+          : {}),
+      }}
       onClose={() => setCorrectTarget(null)}
       onSaved={(config) => {
         setCfg(config);
@@ -720,7 +803,12 @@ export default function AgentBuilder() {
         setTimeout(() => setSaved(false), 2000);
         markDrift();
       }}
+      onFixed={rerunFixed}
       onSendToCopilot={(t) => railBus.copilotDraft(t)}
+      onGoStep={(s) => {
+        setCorrectTarget(null);
+        goStep(s);
+      }}
     />
   );
   // Customer region — optional; saved to builder.region on blur and
@@ -1135,7 +1223,7 @@ export default function AgentBuilder() {
                   {briefMutation.isPending ? 'Saving…' : 'Save brief'}
                 </button>
                 {next && (
-                  <button className="btn primary" onClick={() => goStep(next.key)}>
+                  <button className="btn primary" onClick={nextClick}>
                     {nextLabel} →
                   </button>
                 )}
@@ -1947,10 +2035,18 @@ export default function AgentBuilder() {
                       .filter((s) => s.category === cat)
                       .map((s) => {
                         const prompt = scenarioPrompt(s);
+                        // Verdicts judge THIS panel run's reply only — a
+                        // recorded replay/original would mark a pass/fail
+                        // against a response nobody just saw.
                         const reply = replyRef.current.get(s.id);
+                        // Fix it only diagnoses — any known reply (this run,
+                        // the last replay, the original transcript) works,
+                        // so the button survives a reload.
+                        const fixReply =
+                          reply ?? s.last_run?.reply ?? s.original_reply ?? null;
                         const running = runningId === s.id;
                         return (
-                          <div key={s.id} className="scenario-row">
+                          <div key={s.id} id={`sc-${s.id}`} className="scenario-row">
                             <div className="grow" style={{ minWidth: 0 }}>
                               <div style={{ fontSize: 13 }}>“{prompt}”</div>
                               {s.expectation && (
@@ -1980,7 +2076,15 @@ export default function AgentBuilder() {
                                 <span className="scenario-badge pass">looks right</span>
                               )}
                               {s.human_result === 'fail' && !s.stale && (
-                                <span className="scenario-badge fail">needs work</span>
+                                <span className="scenario-badge fail">
+                                  needs work
+                                  {s.fail_cause ? ` · ${s.fail_cause}` : ''}
+                                </span>
+                              )}
+                              {s.human_result === 'fixed_recheck' && !s.stale && (
+                                <span className="scenario-badge fixed">
+                                  fix applied — re-run to confirm
+                                </span>
                               )}
                               {s.human_result === 'unreviewed' && !s.stale && (
                                 <span className="scenario-badge">unreviewed</span>
@@ -1988,8 +2092,11 @@ export default function AgentBuilder() {
                             </div>
                             {reply && s.human_result === 'unreviewed' && (
                               <div className="row" style={{ gap: 6 }}>
+                                {/* Equal weight — a filled Looks right
+                                    nudges rubber-stamping; the verdict is
+                                    earned by judgment, not button color. */}
                                 <button
-                                  className="btn sm primary"
+                                  className="btn sm"
                                   disabled={markTest.isPending}
                                   onClick={() =>
                                     markTest.mutate({ id: s.id, result: 'pass' })
@@ -2003,7 +2110,11 @@ export default function AgentBuilder() {
                                   onClick={() => {
                                     markTest.mutate({ id: s.id, result: 'fail' });
                                     setDockOpen(true);
-                                    setCorrectTarget({ agentText: reply, customerText: prompt });
+                                    setCorrectTarget({
+                                      agentText: reply,
+                                      customerText: prompt,
+                                      scenarioId: s.id,
+                                    });
                                   }}
                                 >
                                   Needs work
@@ -2011,15 +2122,19 @@ export default function AgentBuilder() {
                               </div>
                             )}
                             {/* A failed run isn't the end — re-open the
-                                correction card so "needs work" has a next
+                                diagnose card so "needs work" has a next
                                 step, not just a badge. */}
-                            {reply && s.human_result === 'fail' && (
+                            {fixReply && s.human_result === 'fail' && (
                               <button
                                 className="btn sm"
-                                title="Open the fix path — knowledge gap or instruction rule"
+                                title="Diagnose the miss — knowledge, behavior, ability, or a wrong expectation"
                                 onClick={() => {
                                   setDockOpen(true);
-                                  setCorrectTarget({ agentText: reply, customerText: prompt });
+                                  setCorrectTarget({
+                                    agentText: fixReply,
+                                    customerText: prompt,
+                                    scenarioId: s.id,
+                                  });
                                 }}
                               >
                                 Fix it
@@ -2080,7 +2195,9 @@ export default function AgentBuilder() {
                             t.failing
                               ? ` · ${t.failing} need${t.failing > 1 ? '' : 's'} work`
                               : ''
-                          }${t.stale ? ` · ${t.stale} stale after a config change` : ''}`,
+                          }${t.fixed ? ` · ${t.fixed} fixed — re-run to confirm` : ''}${
+                            t.stale ? ` · ${t.stale} stale after a config change` : ''
+                          }`,
                       to: stepLink('try'),
                     },
                     {
@@ -2217,14 +2334,14 @@ export default function AgentBuilder() {
       )}
       {agent && hosted && (step === 'abilities' || step === 'try') && next && (
         <div className="row" style={{ marginTop: 14 }}>
-          <button className="btn" onClick={() => goStep(next.key)}>
+          <button className="btn" onClick={nextClick}>
             {nextLabel} →
           </button>
         </div>
       )}
       {agent && !hosted && step !== 'create' && next && (
         <div className="row" style={{ marginTop: 14 }}>
-          <button className="btn" onClick={() => goStep(next.key)}>{nextLabel} →</button>
+          <button className="btn" onClick={nextClick}>{nextLabel} →</button>
         </div>
       )}
       {/* Test-tab content — portaled into the shared dock's slot. The

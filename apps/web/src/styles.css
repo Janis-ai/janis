@@ -579,6 +579,27 @@ button, input, select, textarea { font: inherit; }
   border-color: var(--warn, #f59e0b);
 }
 .scenario-badge.stale { border-style: dashed; }
+.scenario-badge.fixed {
+  color: var(--accent);
+  border-color: var(--accent);
+  border-style: dashed;
+}
+/* Diagnose flow — "What went wrong?" cause picker inside Correct this. */
+.cause-picker { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.cause-row {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: transparent; color: var(--ink); cursor: pointer; text-align: left;
+  font: inherit; width: 100%;
+}
+.cause-row:hover { border-color: var(--accent); }
+.cause-row.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.cause-title { font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.cause-hint { font-size: 11px; color: var(--muted); }
+.cause-guess {
+  font-size: 10px; padding: 0 6px; border-radius: 999px;
+  color: var(--accent); border: 1px solid var(--accent); white-space: nowrap;
+}
 /* Test-dock status strip — which config the chat exercises. */
 .test-dock-status {
   padding: 6px 14px; font-size: 11px; color: var(--muted);
@@ -642,6 +663,8 @@ button, input, select, textarea { font: inherit; }
 .try-chip.fail { border-color: #c0392b; }
 .try-chip.fail .try-chip-mark { color: #c0392b; }
 .try-chip.stale { border-style: dashed; }
+.try-chip.fixed { border-color: var(--accent); border-style: dashed; }
+.try-chip.fixed .try-chip-mark { color: var(--accent); }
 .try-chip:hover { border-color: var(--accent); }
 .ask-chip {
   display: inline-flex; align-items: center; gap: 4px;

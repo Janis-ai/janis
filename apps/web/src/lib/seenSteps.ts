@@ -114,6 +114,7 @@ export function stepSubtitle(key: string, status: BuildStatus): string {
         const bits = [
           `${t.checked} of ${t.total} checked`,
           ...(t.failing ? [`${t.failing} need${t.failing > 1 ? '' : 's'} work`] : []),
+          ...(t.fixed ? [`${t.fixed} fixed — re-run to confirm`] : []),
           ...(t.stale ? [`${t.stale} stale`] : []),
         ];
         // Safety can't hide inside a healthy-sounding total — an elevated

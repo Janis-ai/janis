@@ -865,10 +865,14 @@ export const agentTests = pgTable(
      *  test chat), correction (Correct this), transcript (a rescued or
      *  imported conversation — the pre-scenario default). */
     source: text('source').notNull().default('transcript'),
-    /** The Try-it panel verdict — 'pass' | 'fail' | 'unreviewed' once a
-     *  scenario has been run and judged by a human. Distinct from lastRun:
-     *  the judge's machine verdict, not the operator's. */
+    /** The Try-it panel verdict — 'pass' | 'fail' | 'unreviewed' |
+     *  'fixed_recheck' (a fix was applied and the scenario re-ran, awaiting
+     *  the re-verdict). Distinct from lastRun: the judge's machine verdict,
+     *  not the operator's. */
     humanResult: text('human_result'),
+    /** Why a failed scenario was judged wrong — knowledge | behavior |
+     *  ability | expectation. Drives which fix card the rescue flow shows. */
+    failCause: text('fail_cause'),
     humanRunAt: timestamp('human_run_at', { withTimezone: true }),
     /** Fingerprint of the config at the last panel run — a config edit
      *  since makes the verdict stale ("Run all again"). */
