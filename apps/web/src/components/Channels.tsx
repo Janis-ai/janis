@@ -860,7 +860,17 @@ function WebchatBranding({
   // An agent-level external help link shows the button even with no
   // published articles — the preview should reflect that.
   const { data: agents } = useAgents();
-  const externalHelp = agents?.agents.find((a) => a.id === channel.agent_id)?.config?.help_url;
+  const agentCfg = agents?.agents.find((a) => a.id === channel.agent_id)?.config;
+  const externalHelp = agentCfg?.help_url;
+  // Placeholder hints come from the draft's suggested questions — real
+  // things customers would ask THIS agent, which is exactly what a quick
+  // reply sends when tapped. Generic fallback for agents without a draft.
+  const replyHints =
+    (agentCfg?.builder?.suggested_questions ?? [])
+      .slice(0, 3)
+      .map((q) => q.trim().slice(0, 40))
+      .filter(Boolean)
+      .join(', ') || 'Hours, Location, Contact';
   const [msg, setMsg] = useState('');
   const uploadLogo = async (file: File) => {
     setMsg('Uploading…');
@@ -957,7 +967,7 @@ function WebchatBranding({
             </BubField>
             <BubField label="Quick replies" hint="Comma-separated — tappable prompts under the greeting">
               <input
-                placeholder="Hours, Location, Contact"
+                placeholder={replyHints}
                 value={f.quick_replies}
                 onChange={(e) => setF({ ...f, quick_replies: e.target.value })}
               />
