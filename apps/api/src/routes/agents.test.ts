@@ -1042,9 +1042,10 @@ describe('agent bootstrap (guided builder)', () => {
     expect(agent.config.greeting).toContain('How can I help');
     expect(agent.config.greeting_enabled).toBe(true);
     expect(agent.config.purpose).toContain('ecommerce');
-    // hallucinated template id dropped; the real one kept with reason+name
-    expect(agent.config.builder.suggested_templates).toHaveLength(1);
-    expect(agent.config.builder.suggested_templates[0].id).toBe('shopify');
+    // hallucinated template id dropped; the real one kept with reason+name —
+    // plus the Brave live-search floor every knowledge-needing agent gets
+    expect(agent.config.builder.suggested_templates.map((t: { id: string }) => t.id))
+      .toEqual(['shopify', 'brave']);
     expect(agent.config.builder.suggested_approvals).toContain('issue refund');
     expect(agent.config.builder.suggested_knowledge).toHaveLength(2);
   });

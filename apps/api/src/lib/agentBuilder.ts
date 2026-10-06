@@ -123,7 +123,9 @@ Integration catalog (id: name — blurb):
  *  failure — creation never blocks on the model. */
 export async function generateDraft(description: string): Promise<BuilderDraft | null> {
   if (!env.llmApiKey || !description.trim()) return null;
-  const llm = meteredSettingsFor(env.llmModel);
+  // temperature 0 — a suggestion list is a classification task, not
+  // creative writing; "refresh" should re-evaluate, not re-roll.
+  const llm = { ...meteredSettingsFor(env.llmModel), temperature: 0 };
   const completion = await complete(
     llm,
     BUILDER_SYSTEM + catalogBrief(),
@@ -135,5 +137,19 @@ export async function generateDraft(description: string): Promise<BuilderDraft |
   if (!parsed) return null;
   const draft = validateDraft(parsed);
   if (!draft.system_prompt && !draft.suggested_knowledge.length) return null;
+  // Deterministic floor — an agent that needs knowledge always gets the
+  // generic live-search fallback suggested; whether Brave makes the
+  // model's top-4 is luck otherwise.
+  if (
+    draft.suggested_knowledge.length > 0 &&
+    !draft.suggested_templates.some((t) => t.id === 'brave') &&
+    TOOL_TEMPLATES.some((t) => t.id === 'brave')
+  ) {
+    draft.suggested_templates.push({
+      id: 'brave',
+      name: templateInfo(TOOL_TEMPLATES.find((t) => t.id === 'brave')!).name,
+      reason: 'live web answers for facts the knowledge base does not cover',
+    });
+  }
   return { ...draft, generated: true };
 }

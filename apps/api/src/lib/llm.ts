@@ -17,6 +17,10 @@ export interface LlmSettings {
   /** Reasoning effort from agent config — sent as the provider's effort
    *  param when the serving model supports it (see effortFor). */
   effort?: string;
+  /** Sampling temperature override — unset uses the provider default.
+   *  Deterministic callers (draft/suggestion generation) set 0 so a
+   *  "refresh" re-evaluates instead of re-rolling the dice. */
+  temperature?: number;
   /** True when the agent runs on its own credentials/endpoint — tokens are
    *  paid to their provider, so Janis must not meter them at cost+margin. */
   byok: boolean;

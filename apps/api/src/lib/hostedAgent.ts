@@ -1469,6 +1469,7 @@ export async function complete(
               model: cand.model,
               max_tokens: 400,
               messages: msgs,
+              ...(cand.temperature != null ? { temperature: cand.temperature } : {}),
               ...(toolsSchema ? { tools: toolsSchema } : {}),
               ...effortField,
             }),
