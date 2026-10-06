@@ -9,6 +9,7 @@ import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { AskJanis } from '../components/AskJanis';
 import { AgentChannels } from '../components/AgentChannels';
+import { HelpCenter } from '../components/HelpCenter';
 import {
   GreetingSection,
   InstructionsSection,
@@ -654,10 +655,7 @@ export default function AgentBuilder() {
               <KnowledgeTextSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
               <KnowledgeFiles agentId={agent.id} variant="files" />
               <KnowledgeFiles agentId={agent.id} variant="websites" />
-              <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-                Have an existing help center?{' '}
-                <Link to={`/agents/${agent.id}/knowledge?sub=help`}>Connect it in Knowledge → Help center</Link>
-              </div>
+              <HelpCenter agent={agent} />
             </>
           )}
         </>
