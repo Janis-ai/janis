@@ -850,6 +850,17 @@ export default function Layout() {
               <strong>{t.title}</strong>
               <span>{t.body}</span>
             </span>
+            <span
+              className="toast-x"
+              role="button"
+              aria-label="Dismiss"
+              onClick={(e) => {
+                e.stopPropagation();
+                dismiss(t.id);
+              }}
+            >
+              <X size={13} />
+            </span>
           </button>
         ))}
       </div>

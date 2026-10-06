@@ -1044,6 +1044,8 @@ details summary:hover { color: var(--text); }
 .toast-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .toast .toast-body > span { color: var(--muted); font-size: 13px; }
 .toast:hover { border-color: var(--accent); }
+.toast-x { flex-shrink: 0; color: var(--muted); padding: 2px; border-radius: 4px; line-height: 0; }
+.toast-x:hover { color: var(--text); background: var(--border); }
 @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } }
 
 /* desktop-notification banner — bottom bar above the main column */
