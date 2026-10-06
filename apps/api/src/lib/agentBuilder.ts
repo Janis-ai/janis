@@ -17,7 +17,6 @@ export interface BuilderDraft {
   suggested_templates: { id: string; name?: string; reason?: string }[];
   suggested_approvals: string[];
   suggested_rules: string[];
-  knowledge_need?: 'required' | 'helpful' | 'unnecessary';
   generated: boolean;
   note?: string;
 }
@@ -96,12 +95,6 @@ export function validateDraft(
     suggested_templates: templates,
     suggested_approvals: clampList(parsed.suggested_approvals, 80, 30),
     suggested_rules: clampList(parsed.suggested_rules, 300, 20),
-    // Bias to 'helpful' — a wrong 'unnecessary' hides a step the operator
-    // needed; a wrong 'helpful' costs one glance at an extra surface.
-    knowledge_need:
-      parsed.knowledge_need === 'required' || parsed.knowledge_need === 'unnecessary'
-        ? parsed.knowledge_need
-        : 'helpful',
   };
 }
 
@@ -118,8 +111,7 @@ Given the operator's description of the agent they want, return ONE JSON object 
   "suggested_knowledge": ["topics of information the operator must supply, phrased as what to add — e.g. 'shipping times and costs', 'return window', 'current coupon policy'. These are TOPICS, not content: you don't know the operator's real facts, so never invent values. Behavior rules ('always…', 'never…', 'remind customers…', 'prioritize…') do NOT go here — fold those into system_prompt. Max 12, one line each."],
   "suggested_templates": [{"id": "<an id from the integration catalog below>", "reason": "<why this agent needs it, <= 120 chars>"}],
   "suggested_approvals": ["action descriptions that should wait for a human's approval before running — e.g. 'issue refund', 'cancel order' — max 10"],
-  "suggested_rules": ["escalation or routing rules worth configuring, plain English, max 6"],
-  "knowledge_need": "does this agent need knowledge only the operator can supply? 'required' = it answers from private business data (prices, policies, inventory, the operator's own docs or product); 'unnecessary' = it answers from well-known public knowledge the model already has (history, famous people/topics, general how-tos); 'helpful' = sources would improve accuracy or coverage but aren't strictly required. Anything in the description referencing the operator's own business, inventory, prices, or documents is at least 'helpful' — when unsure between required and unnecessary, answer 'helpful'."
+  "suggested_rules": ["escalation or routing rules worth configuring, plain English, max 6"]
 }
 
 Rules: pick at most 4 catalog entries, only ones the description genuinely needs; a read action (look up, track, search) never needs approval while a mutating one (refund, cancel, edit) usually does; behavioral requirements in the description (reminders, priorities, prohibitions) belong in system_prompt, not suggested_knowledge; omit a key entirely rather than invent content.
