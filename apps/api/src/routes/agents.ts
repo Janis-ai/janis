@@ -246,6 +246,10 @@ export function agentRoutes(db: Db) {
             ? { suggested_approvals: draft.suggested_approvals }
             : {}),
           ...(draft?.suggested_rules.length ? { suggested_rules: draft.suggested_rules } : {}),
+          ...(draft?.knowledge_need ? { knowledge_need: draft.knowledge_need } : {}),
+          ...(draft?.knowledge_need_reason
+            ? { knowledge_need_reason: draft.knowledge_need_reason }
+            : {}),
           generated_at: new Date().toISOString(),
         },
       };
@@ -704,7 +708,15 @@ export function agentRoutes(db: Db) {
       steps: {
         create: 'done',
         teach:
-          sources > 0 ? 'done' : drafted && !suggestedKnowledge ? 'na' : 'pending',
+          sources > 0
+            ? 'done'
+            : // skipped is 'na' like not-needed — but distinct: the user
+              // chose it, so teach_skipped rides along for the subtitle.
+              cfg.builder?.teach_skipped ||
+                cfg.builder?.knowledge_need === 'unnecessary' ||
+                (drafted && !suggestedKnowledge)
+              ? 'na'
+              : 'pending',
         guide: cfg.system_prompt?.trim()
           ? cfg.builder?.guide_confirmed
             ? 'done'
@@ -727,6 +739,7 @@ export function agentRoutes(db: Db) {
         deploy: publicCount > 0 ? 'done' : 'pending',
       },
       knowledge: { sources, updated_at: updatedAt?.toISOString() ?? null },
+      teach_skipped: !!cfg.builder?.teach_skipped,
       abilities,
       channels: publicCount,
       test_conversations: testConversations,

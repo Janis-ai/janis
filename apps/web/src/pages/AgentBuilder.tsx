@@ -36,6 +36,8 @@ interface BuilderDraft {
   suggested_templates?: { id: string; name?: string; reason?: string }[];
   suggested_approvals?: string[];
   suggested_rules?: string[];
+  knowledge_need?: 'required' | 'helpful' | 'unnecessary';
+  knowledge_need_reason?: string;
 }
 
 const STEPS = [
@@ -161,13 +163,14 @@ export default function AgentBuilder() {
     },
     onError: (e) => setError(e.message),
   });
-  // One-flag confirms — "Looks good" on Guide it, "none needed" on
-  // Abilities. These are what turn ◐ into ✓.
+  // One-flag writes — "Looks good" on Guide it, "none needed" on
+  // Abilities, "Skip" on Teach it. These are what turn ◐ into ✓ (or the
+  // muted ✓ of a deliberate skip).
   const confirmFlag = useMutation({
-    mutationFn: (flag: 'guide_confirmed' | 'abilities_confirmed') => {
+    mutationFn: (patch: Partial<NonNullable<AgentConfig['builder']>>) => {
       const config: AgentConfig = {
         ...cfg,
-        builder: { ...cfg.builder, [flag]: true },
+        builder: { ...cfg.builder, ...patch },
       };
       return api(`/api/agents/${agent?.id}`, {
         method: 'PATCH',
@@ -230,6 +233,8 @@ export default function AgentBuilder() {
     gaps: openGaps.length,
     help: articlesData?.articles?.length ?? 0,
   };
+  const totalSources =
+    teachSubCount.websites + teachSubCount.files + teachSubCount.text + teachSubCount.help;
   // Gaps only earns a tab once real conversations produce them — on a
   // fresh agent it would be a cryptic empty panel.
   const visibleTeachSubs = TEACH_SUBS.filter((t) => t.key !== 'gaps' || openGaps.length > 0);
@@ -361,6 +366,13 @@ export default function AgentBuilder() {
           suggested_templates: d.suggested_templates ?? [],
           suggested_approvals: d.suggested_approvals ?? [],
           suggested_rules: d.suggested_rules ?? [],
+          ...(d.knowledge_need ? { knowledge_need: d.knowledge_need } : {}),
+          ...(d.knowledge_need_reason
+            ? { knowledge_need_reason: d.knowledge_need_reason }
+            : {}),
+          // A re-draft that now says 'required' clears a stale skip — the
+          // classification changed, hiding the step would bury a real need.
+          ...(d.knowledge_need === 'required' ? { teach_skipped: false } : {}),
           generated_at: new Date().toISOString(),
         },
       };
@@ -411,6 +423,11 @@ export default function AgentBuilder() {
           suggested_templates: d.suggested_templates ?? [],
           suggested_approvals: d.suggested_approvals ?? [],
           suggested_rules: d.suggested_rules ?? [],
+          ...(d.knowledge_need ? { knowledge_need: d.knowledge_need } : {}),
+          ...(d.knowledge_need_reason
+            ? { knowledge_need_reason: d.knowledge_need_reason }
+            : {}),
+          ...(d.knowledge_need === 'required' ? { teach_skipped: false } : {}),
         },
       };
       await api(`/api/agents/${agent?.id}`, {
@@ -780,20 +797,51 @@ export default function AgentBuilder() {
           {hosted && (
             <>
               <div className="muted" style={{ fontSize: 13, marginTop: 12 }}>
-                What should your agent know? Add the information it needs to do
-                its job — files, websites, pasted text, or a help center. These
-                are all just sources of knowledge.
+                Add trusted sources for the things your agent shouldn't guess
+                at. Paste a link, upload a document, or write it in.
               </div>
-              {builder?.suggested_knowledge?.length ? (
-                <div className="card" style={{ marginTop: 12 }}>
-                  <strong>Suggested knowledge topics</strong>
-                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    From your description — fill each in below with the real
-                    details (a line, a document, or a website).
+              {builder?.teach_skipped ? (
+                <div className="card muted" style={{ marginTop: 10, fontSize: 13 }}>
+                  Skipped — your agent answers without extra sources.{' '}
+                  <button
+                    className="link small"
+                    disabled={confirmFlag.isPending}
+                    onClick={() => confirmFlag.mutate({ teach_skipped: false })}
+                  >
+                    Mark as needed after all
+                  </button>
+                </div>
+              ) : builder?.knowledge_need === 'required' && totalSources === 0 ? (
+                <div
+                  className="card"
+                  style={{ marginTop: 10, borderColor: 'var(--warn, #f59e0b)' }}
+                >
+                  <strong>Your agent has no knowledge of your business yet.</strong>
+                  <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                    Add at least one source before going live.
                   </div>
-                  <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 13 }}>
-                    {builder.suggested_knowledge.map((k, i) => <li key={i}>{k}</li>)}
-                  </ul>
+                </div>
+              ) : builder?.knowledge_need === 'helpful' && totalSources === 0 ? (
+                <div className="card muted" style={{ marginTop: 10, fontSize: 13 }}>
+                  {builder.knowledge_need_reason
+                    ? <>The model knows the broad strokes — {builder.knowledge_need_reason} </>
+                    : 'The model already knows the broad strokes, but specifics vary — '}
+                  adding a trusted source makes answers more reliable.
+                </div>
+              ) : builder?.knowledge_need === 'unnecessary' ? (
+                <div className="card" style={{ marginTop: 10 }}>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    The model already knows this topic — add sources only for
+                    things it couldn't know.
+                  </div>
+                  <button
+                    className="btn sm"
+                    style={{ marginTop: 8 }}
+                    disabled={confirmFlag.isPending}
+                    onClick={() => confirmFlag.mutate({ teach_skipped: true })}
+                  >
+                    Skip — it doesn't need extra knowledge
+                  </button>
                 </div>
               ) : null}
               <div className="tabs" style={{ marginTop: 12 }}>
@@ -808,6 +856,17 @@ export default function AgentBuilder() {
                   </button>
                 ))}
               </div>
+              {builder?.suggested_knowledge?.length ? (
+                <div className="card" style={{ marginTop: 12 }}>
+                  <strong>Suggested knowledge topics</strong>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    Your agent will answer these best with a source for each.
+                  </div>
+                  <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 13 }}>
+                    {builder.suggested_knowledge.map((k, i) => <li key={i}>{k}</li>)}
+                  </ul>
+                </div>
+              ) : null}
               {teachSub === 'text' && (
                 <KnowledgeTextSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
               )}
@@ -867,7 +926,7 @@ export default function AgentBuilder() {
                   <button
                     className="btn sm"
                     disabled={confirmFlag.isPending}
-                    onClick={() => confirmFlag.mutate('guide_confirmed')}
+                    onClick={() => confirmFlag.mutate({ guide_confirmed: true })}
                   >
                     Looks good
                   </button>
@@ -949,7 +1008,7 @@ export default function AgentBuilder() {
                   <button
                     className="link small"
                     disabled={confirmFlag.isPending}
-                    onClick={() => confirmFlag.mutate('abilities_confirmed')}
+                    onClick={() => confirmFlag.mutate({ abilities_confirmed: true })}
                   >
                     Mark none needed
                   </button>
@@ -1018,7 +1077,9 @@ export default function AgentBuilder() {
               {status.knowledge.sources
                 ? `${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
                 : status.steps.teach === 'na'
-                  ? 'not needed for this agent'
+                  ? status.teach_skipped
+                    ? 'skipped'
+                    : 'not needed for this agent'
                   : 'nothing added'}
               {' · '}tested:{' '}
               {status.test_conversations

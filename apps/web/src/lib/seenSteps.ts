@@ -90,7 +90,9 @@ export function stepSubtitle(key: string, status: BuildStatus): string {
       return status.knowledge.sources
         ? `${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
         : st === 'na'
-          ? 'not needed'
+          ? status.teach_skipped
+            ? 'skipped'
+            : 'not needed'
           : 'no sources yet';
     case 'guide':
       return st === 'done' ? 'reviewed' : st === 'partial' ? 'drafted — take a look' : 'nothing yet';

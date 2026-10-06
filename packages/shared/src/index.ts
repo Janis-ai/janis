@@ -345,6 +345,17 @@ export const AgentConfig = z.object({
       // or clicked "Looks good"; Abilities ✓ on connect or "none needed".
       guide_confirmed: z.boolean().optional(),
       abilities_confirmed: z.boolean().optional(),
+      // The draft's call on whether this agent needs operator-supplied
+      // knowledge at all — drives Teach it's banner and whether an empty
+      // knowledge base reads as a gap or as correct. Classification is
+      // biased to 'helpful': a wrong 'required'/'unnecessary' misleads,
+      // 'helpful' just costs a glance. 'skipped' is deliberately not a
+      // knowledge_need value — it's the user's decision, not the model's.
+      knowledge_need: z.enum(['required', 'helpful', 'unnecessary']).optional(),
+      knowledge_need_reason: z.string().max(300).optional(),
+      // The user read the "doesn't need extra knowledge" banner and chose
+      // to skip Teach it — distinct from empty ('nothing added').
+      teach_skipped: z.boolean().optional(),
       generated_at: z.string().max(40).optional(),
     })
     .optional(),

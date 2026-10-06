@@ -17,6 +17,8 @@ export interface BuilderDraft {
   suggested_templates: { id: string; name?: string; reason?: string }[];
   suggested_approvals: string[];
   suggested_rules: string[];
+  knowledge_need?: 'required' | 'helpful' | 'unnecessary';
+  knowledge_need_reason?: string;
   generated: boolean;
   note?: string;
 }
@@ -95,6 +97,13 @@ export function validateDraft(
     suggested_templates: templates,
     suggested_approvals: clampList(parsed.suggested_approvals, 80, 30),
     suggested_rules: clampList(parsed.suggested_rules, 300, 20),
+    knowledge_need:
+      parsed.knowledge_need === 'required' ||
+      parsed.knowledge_need === 'helpful' ||
+      parsed.knowledge_need === 'unnecessary'
+        ? parsed.knowledge_need
+        : undefined,
+    knowledge_need_reason: clamp(parsed.knowledge_need_reason, 300),
   };
 }
 
@@ -111,7 +120,9 @@ Given the operator's description of the agent they want, return ONE JSON object 
   "suggested_knowledge": ["topics of information the operator must supply, phrased as what to add — e.g. 'shipping times and costs', 'return window', 'current coupon policy'. These are TOPICS, not content: you don't know the operator's real facts, so never invent values. Behavior rules ('always…', 'never…', 'remind customers…', 'prioritize…') do NOT go here — fold those into system_prompt. Max 12, one line each."],
   "suggested_templates": [{"id": "<an id from the integration catalog below>", "reason": "<why this agent needs it, <= 120 chars>"}],
   "suggested_approvals": ["action descriptions that should wait for a human's approval before running — e.g. 'issue refund', 'cancel order' — max 10"],
-  "suggested_rules": ["escalation or routing rules worth configuring, plain English, max 6"]
+  "suggested_rules": ["escalation or routing rules worth configuring, plain English, max 6"],
+  "knowledge_need": "required|helpful|unnecessary — does answering well need information only the operator can supply? required = private business data (prices, inventory, account lookups, shop-specific policies); helpful = the model knows the broad domain but operator sources improve accuracy or authority; unnecessary = purely public-domain knowledge the model already knows. When unsure, choose helpful.",
+  "knowledge_need_reason": "one sentence naming what varies or is private, e.g. 'health and schedule details vary by region and breed' — <= 120 chars; only when knowledge_need is 'helpful'"
 }
 
 Rules: pick at most 4 catalog entries, only ones the description genuinely needs; a read action (look up, track, search) never needs approval while a mutating one (refund, cancel, edit) usually does; behavioral requirements in the description (reminders, priorities, prohibitions) belong in system_prompt, not suggested_knowledge; omit a key entirely rather than invent content.
