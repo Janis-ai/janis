@@ -2258,6 +2258,9 @@ function IntegrationCards({
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['agents'] });
     void qc.invalidateQueries({ queryKey: ['secrets', agentId] });
+    // Installs/removals change the Abilities mark — "suggested — none
+    // connected" can't linger after a tool lands.
+    void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
   };
 
   const install = useMutation({
