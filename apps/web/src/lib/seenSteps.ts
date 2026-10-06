@@ -57,31 +57,22 @@ export function useSeenSteps(agentId?: string): Set<string> {
   );
 }
 
-/** Steps that can never be "finished" — knowledge and abilities grow
- *  forever, so they mark engagement (⊙) rather than completion (✓). */
-export const OPEN_ENDED_STEPS = new Set(['teach', 'abilities']);
-/** "Done" only counts once the user has actually seen the generated
- *  work — the draft writes instructions at create time, but Guide it's
- *  ✓ should mean the human reviewed them, not that a draft exists. */
-export const SEEN_GATED_STEPS = new Set(['guide']);
+export type StepGlyph = 'check' | 'check-muted' | 'half' | 'circle';
 
-export type StepGlyph = 'check' | 'dot-ok' | 'dot' | 'circle';
-
-/** Resolves the mark for a build step. Marks are status only — no "next"
- *  arrow, no "+", no expandable-nav lookalikes; the Overview CTA and the
- *  Next button carry guidance instead.
- *  done    → ✓, ⊙ for open-ended steps, ○ for done-but-unseen (guide)
- *  pending → ⊙ if seen, else ○
- *  na      → same as pending */
+/** Marks carry meaning, not visited-ness — one rule across every step:
+ *  done    → ✓  a human confirmed or acted
+ *  na      → ✓  muted — explicitly not needed (skip/not needed)
+ *  partial → ◐  something exists but is unconfirmed or needs a look
+ *              (Janis draft not reviewed, suggestions not connected,
+ *              tested but open gaps)
+ *  pending → ○  nothing exists yet
+ *  "Seen" no longer feeds the mark — it still drives the Next button. */
 export function stepGlyph(
-  key: string,
-  state: 'done' | 'pending' | 'na' | undefined,
-  opts: { seen: boolean },
+  _key: string,
+  state: 'done' | 'partial' | 'pending' | 'na' | undefined,
 ): StepGlyph {
-  if (state === 'done') {
-    if (OPEN_ENDED_STEPS.has(key)) return 'dot-ok';
-    if (SEEN_GATED_STEPS.has(key) && !opts.seen) return 'circle';
-    return 'check';
-  }
-  return opts.seen ? 'dot' : 'circle';
+  if (state === 'done') return 'check';
+  if (state === 'na') return 'check-muted';
+  if (state === 'partial') return 'half';
+  return 'circle';
 }

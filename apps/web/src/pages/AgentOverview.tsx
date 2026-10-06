@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import { useAgents, useBuildStatus, useChannels } from '../api/hooks';
 import { KIND_LABEL } from '../components/Channels';
 import { janisBrain } from '../lib/agentContext';
-import { stepGlyph, useSeenSteps } from '../lib/seenSteps';
+import { stepGlyph } from '../lib/seenSteps';
 import { railBus } from '../lib/railBus';
 import { timeAgo } from '../components/bits';
 import { usePageTitle } from '../lib/title';
@@ -149,9 +149,13 @@ export default function AgentOverview() {
     ? actionable.filter((s) => buildStatus.steps[s.key] === 'done').length
     : 0;
   const nextStep = buildStatus
-    ? actionable.find((s) => buildStatus.steps[s.key] === 'pending')
+    ? actionable.find(
+        (s) =>
+          buildStatus.steps[s.key] === 'pending' ||
+          buildStatus.steps[s.key] === 'partial',
+      )
     : undefined;
-  const seenSteps = useSeenSteps(agent?.id);
+
   // Ready = every actionable step is done except possibly deploy itself.
   const allBuilt =
     buildStatus &&
@@ -251,18 +255,18 @@ export default function AgentOverview() {
         {hosted && (
           <div className="build-progress">
             {BUILD_STEPS.map((s) => {
-              // Same marks as the sidebar/boxes: ✓ completed, ⊙ engaged
-              // (configured or seen), ○ untouched.
-              const g = stepGlyph(s.key, buildStatus?.steps[s.key], {
-                seen: seenSteps.has(s.key),
-              });
+              // Marks carry meaning: ✓ human-confirmed, ◐ drafted or needs
+              // a look, ○ nothing yet — same rule as the builder strip.
+              const g = stepGlyph(s.key, buildStatus?.steps[s.key]);
               const caption =
                 s.key === 'teach' && buildStatus?.knowledge.sources
                   ? `${buildStatus.knowledge.sources} source${buildStatus.knowledge.sources > 1 ? 's' : ''}`
                   : s.key === 'abilities' && buildStatus?.abilities
                     ? `${buildStatus.abilities} tool${buildStatus.abilities > 1 ? 's' : ''}`
                   : s.key === 'try' && buildStatus?.test_conversations
-                    ? `${buildStatus.test_conversations} test chat${buildStatus.test_conversations > 1 ? 's' : ''}`
+                    ? buildStatus.open_gaps
+                      ? `${buildStatus.open_gaps} open gap${buildStatus.open_gaps > 1 ? 's' : ''}`
+                      : `${buildStatus.test_conversations} test chat${buildStatus.test_conversations > 1 ? 's' : ''}`
                     : s.key === 'deploy' && buildStatus?.channels
                       ? `${buildStatus.channels} channel${buildStatus.channels > 1 ? 's' : ''}`
                       : null;
@@ -270,9 +274,11 @@ export default function AgentOverview() {
                 <Link
                   key={s.key}
                   to={buildStepLink(id!, s.key)}
-                  className={`bp-item${g === 'check' ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}`}
+                  className={`bp-item${g === 'check' ? ' done' : ''}${g === 'half' ? ' partial' : ''}`}
                 >
-                  <span className="bp-mark">{g === 'check' ? '✓' : g === 'dot-ok' || g === 'dot' ? '⊙' : '○'}</span>
+                  <span className={`bp-mark${g === 'check-muted' ? ' muted' : ''}`}>
+                    {g === 'check' || g === 'check-muted' ? '✓' : g === 'half' ? '◐' : '○'}
+                  </span>
                   {s.label}
                   {caption && <span className="muted"> · {caption}</span>}
                 </Link>

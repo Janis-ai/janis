@@ -689,21 +689,48 @@ export function agentRoutes(db: Db) {
       (cfg.builder?.suggested_templates?.length ?? 0) +
         (cfg.builder?.suggested_approvals?.length ?? 0) >
       0;
+    // Cached gaps only — build-status must never trigger a detection run.
+    const gapCache = readGapsCache(cfg);
+    const openGaps = gapCache
+      ? markGapsAdded(
+          filterDismissedGaps(gapCache.gaps, cfg),
+          cfg.knowledge ?? [],
+        ).filter((g) => !g.added).length
+      : 0;
+    // Marks carry meaning, not visited-ness: done = a human confirmed or
+    // acted, partial = something exists but is unconfirmed/needs a look
+    // (Janis draft, unreviewed suggestions, open gaps), pending = nothing.
     return c.json({
       steps: {
         create: 'done',
         teach:
           sources > 0 ? 'done' : drafted && !suggestedKnowledge ? 'na' : 'pending',
-        guide: cfg.system_prompt?.trim() ? 'done' : 'pending',
+        guide: cfg.system_prompt?.trim()
+          ? cfg.builder?.guide_confirmed
+            ? 'done'
+            : 'partial'
+          : 'pending',
         abilities:
-          abilities > 0 ? 'done' : drafted && !suggestedAbilities ? 'na' : 'pending',
-        try: testConversations > 0 ? 'done' : 'pending',
+          abilities > 0 || cfg.builder?.abilities_confirmed
+            ? 'done'
+            : suggestedAbilities
+              ? 'partial'
+              : drafted
+                ? 'na'
+                : 'pending',
+        try:
+          testConversations > 0
+            ? openGaps > 0
+              ? 'partial'
+              : 'done'
+            : 'pending',
         deploy: publicCount > 0 ? 'done' : 'pending',
       },
       knowledge: { sources, updated_at: updatedAt?.toISOString() ?? null },
       abilities,
       channels: publicCount,
       test_conversations: testConversations,
+      open_gaps: openGaps,
     });
   });
 

@@ -340,6 +340,11 @@ export const AgentConfig = z.object({
         .optional(),
       suggested_approvals: z.array(z.string().max(80)).max(30).optional(),
       suggested_rules: z.array(z.string().max(300)).max(20).optional(),
+      // Human-reviewed flags — a Janis draft and a confirmed one look
+      // identical without these. Guide it is ✓ only once a human has saved
+      // or clicked "Looks good"; Abilities ✓ on connect or "none needed".
+      guide_confirmed: z.boolean().optional(),
+      abilities_confirmed: z.boolean().optional(),
       generated_at: z.string().max(40).optional(),
     })
     .optional(),

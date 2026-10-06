@@ -114,7 +114,7 @@ export function useAgents() {
  *  'pending' = available but untouched, 'na' = this agent doesn't need it
  *  (create-draft suggested nothing and nothing was added). na is only
  *  trusted when a draft ran. */
-export type BuildStepState = 'done' | 'pending' | 'na';
+export type BuildStepState = 'done' | 'partial' | 'pending' | 'na';
 
 export interface BuildStatus {
   steps: {
@@ -129,6 +129,7 @@ export interface BuildStatus {
   channels: number;
   abilities: number;
   test_conversations: number;
+  open_gaps: number;
 }
 
 export function useBuildStatus(agentId: string | undefined) {

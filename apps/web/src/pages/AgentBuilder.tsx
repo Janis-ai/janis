@@ -136,20 +136,51 @@ export default function AgentBuilder() {
   // Shared config draft — the same {config} PATCH the agent editor uses.
   const [cfg, setCfg] = useState<AgentConfig>({});
   const [saved, setSaved] = useState(false);
+  const [legendSeen, setLegendSeen] = useState(() => {
+    try { return localStorage.getItem('janis.step-legend.v1') === '1'; } catch { return true; }
+  });
   useEffect(() => {
     setCfg(agent?.config ?? {});
   }, [agent?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const saveCfg = useMutation({
-    mutationFn: () =>
-      api(`/api/agents/${agent?.id}`, {
+    mutationFn: () => {
+      // Saving on Guide it counts as review — a human looked at the draft
+      // and kept it, so the step marks confirmed, not "drafted by Janis".
+      const config: AgentConfig =
+        step === 'guide'
+          ? { ...cfg, builder: { ...cfg.builder, guide_confirmed: true } }
+          : cfg;
+      return api(`/api/agents/${agent?.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ config: cfg }),
-      }),
-    onSuccess: () => {
+        body: JSON.stringify({ config }),
+      }).then(() => config);
+    },
+    onSuccess: (config) => {
+      setCfg(config);
       void qc.invalidateQueries({ queryKey: ['agents'] });
       void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    },
+    onError: (e) => setError(e.message),
+  });
+  // One-flag confirms — "Looks good" on Guide it, "none needed" on
+  // Abilities. These are what turn ◐ into ✓.
+  const confirmFlag = useMutation({
+    mutationFn: (flag: 'guide_confirmed' | 'abilities_confirmed') => {
+      const config: AgentConfig = {
+        ...cfg,
+        builder: { ...cfg.builder, [flag]: true },
+      };
+      return api(`/api/agents/${agent?.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ config }),
+      }).then(() => config);
+    },
+    onSuccess: (config) => {
+      setCfg(config);
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
     },
     onError: (e) => setError(e.message),
   });
@@ -327,39 +358,78 @@ export default function AgentBuilder() {
       </div>
 
       {step !== 'start' && step !== 'bring' && (
+      <>
       <div className="builder-steps">
         {STEPS.map((s, i) => {
           const locked = !agent && i > 0;
-          // Marks: ✓ for steps that can genuinely complete (guide's ✓ only
-          // once the user has actually seen the generated instructions);
-          // ● for engaged steps (configured or opened); step number
-          // while untouched.
+          // Marks carry meaning, not visited-ness: ✓ human confirmed or
+          // acted, ◐ something exists but needs a look (Janis draft,
+          // unreviewed suggestions, open gaps), ○ nothing yet. The
+          // subtitle reports live state so the mark never needs a tooltip.
           const st = status?.steps[s.key];
-          const g = status
-            ? stepGlyph(s.key, st, {
-                seen: seenSteps.has(s.key) || step === s.key,
-              })
-            : null;
+          const g = status ? stepGlyph(s.key, st) : null;
           const done = st === 'done' || Boolean(agent && i < idx && !status);
+          const subtitle = !status
+            ? s.hint
+            : s.key === 'create'
+              ? 'brief saved'
+              : s.key === 'teach'
+                ? status.knowledge.sources
+                  ? `${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
+                  : st === 'na' ? 'not needed' : 'no sources yet'
+                : s.key === 'guide'
+                  ? st === 'done' ? 'reviewed'
+                    : st === 'partial' ? 'drafted — take a look'
+                    : 'nothing yet'
+                  : s.key === 'abilities'
+                    ? status.abilities
+                      ? `${status.abilities} tool${status.abilities > 1 ? 's' : ''}`
+                      : st === 'partial' ? 'suggested — none connected'
+                      : st === 'na' ? 'none needed'
+                      : 'nothing connected'
+                    : s.key === 'try'
+                      ? status.test_conversations
+                        ? status.open_gaps
+                          ? `${status.open_gaps} open gap${status.open_gaps > 1 ? 's' : ''}`
+                          : 'tested'
+                        : 'not tested yet'
+                      : status.channels
+                        ? `${status.channels} channel${status.channels > 1 ? 's' : ''} live`
+                        : 'no channels yet';
           return (
             <button
               key={s.key}
-              className={`builder-step${step === s.key ? ' active' : ''}${g === 'check' || (done && !status) ? ' done' : ''}${g === 'dot-ok' ? ' engaged' : ''}${g === 'dot' ? ' seen' : ''}`}
+              className={`builder-step${step === s.key ? ' active' : ''}${g === 'check' || (done && !status) ? ' done' : ''}${g === 'half' ? ' partial' : ''}`}
               disabled={locked}
               title={locked ? 'Create the agent first' : s.hint}
               onClick={() => goStep(s.key)}
             >
-              <span className="builder-step-n">{
-                g === 'check' ? '✓'
-                : g === 'dot-ok' || g === 'dot' ? '●'
-                : i + 1
+              <span className={`builder-step-n${g === 'check-muted' ? ' muted' : ''}`}>{
+                g === 'check' || g === 'check-muted' ? '✓'
+                : g === 'half' ? '◐'
+                : '○'
               }</span>
               <span className="builder-step-label">{s.label}</span>
-              <span className="builder-step-hint">{s.hint}</span>
+              <span className="builder-step-hint">{subtitle}</span>
             </button>
           );
         })}
       </div>
+      {!legendSeen && (
+        <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+          ✓ confirmed by you · ◐ drafted — take a look · ○ nothing yet{' '}
+          <button
+            className="link small"
+            onClick={() => {
+              try { localStorage.setItem('janis.step-legend.v1', '1'); } catch { /* private mode */ }
+              setLegendSeen(true);
+            }}
+          >
+            dismiss
+          </button>
+        </div>
+      )}
+      </>
       )}
 
       {error && <div className="error">{error}</div>}
@@ -733,6 +803,20 @@ export default function AgentBuilder() {
                     " Couldn't draft suggestions — try again in a moment."}
                 </div>
               )}
+              {isAdmin && status?.steps.guide === 'partial' && (
+                <div className="row" style={{ marginTop: 10, gap: 8, alignItems: 'center' }}>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    Janis drafted this — happy with it?
+                  </span>
+                  <button
+                    className="btn sm"
+                    disabled={confirmFlag.isPending}
+                    onClick={() => confirmFlag.mutate('guide_confirmed')}
+                  >
+                    Looks good
+                  </button>
+                </div>
+              )}
             </>
           )}
         </>
@@ -803,6 +887,18 @@ export default function AgentBuilder() {
                 </div>
               )}
               <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />
+              {isAdmin && status && status.steps.abilities !== 'done' && (
+                <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                  This agent doesn&rsquo;t take actions?{' '}
+                  <button
+                    className="link small"
+                    disabled={confirmFlag.isPending}
+                    onClick={() => confirmFlag.mutate('abilities_confirmed')}
+                  >
+                    Mark none needed
+                  </button>
+                </div>
+              )}
             </>
           )}
         </>

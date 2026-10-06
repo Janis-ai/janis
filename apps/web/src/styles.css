@@ -321,6 +321,9 @@ button, input, select, textarea { font: inherit; }
 }
 .builder-step.active .builder-step-n { border-color: var(--accent); color: var(--accent); }
 .builder-step.done .builder-step-n { border-color: var(--ok); color: var(--ok); }
+/* ◐ partial — exists but unconfirmed or needs a look. */
+.builder-step.partial .builder-step-n { border-color: var(--warn, #f59e0b); color: var(--warn, #f59e0b); }
+.builder-step-n.muted { opacity: .55; }
 .builder-step-label { font-weight: 600; font-size: 13px; }
 .builder-step-hint { color: var(--muted); font-size: 11px; }
 .builder-chat { height: 62vh; display: flex; flex-direction: column; overflow: hidden; }
@@ -347,6 +350,7 @@ button, input, select, textarea { font: inherit; }
 /* 'na' steps are optional capabilities — dimmed, dashed edge, still
    clickable; never read as an unchecked task. */
 .bp-item.engaged .bp-mark { color: var(--ok); }
+.bp-item.partial:not(.next) .bp-mark { color: var(--warn, #f59e0b); opacity: 1; }
 .builder-path {
   flex: 1; min-width: 220px; padding: 18px; text-align: left; cursor: pointer;
   display: flex; flex-direction: column; gap: 6px;
