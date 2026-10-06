@@ -54,7 +54,7 @@ export function parseDraftJson(text: string): Record<string, unknown> | null {
 /** The catalog goes into the generation prompt so suggested_templates are
  *  real installable ids — validated again on the way out, so a hallucinated
  *  id is dropped, never installed. */
-function catalogBrief(): string {
+export function catalogBrief(): string {
   return TOOL_TEMPLATES.map((t) => `${t.id}: ${t.name} — ${t.blurb}`).join('\n');
 }
 
@@ -98,7 +98,7 @@ export function validateDraft(
   };
 }
 
-const BUILDER_SYSTEM = `You are the Janis agent builder. Janis agents are not chatbots — they answer customers on real channels AND take actions (refunds, order lookups, cancellations) through tools, pausing for human approval where configured, then continuing the conversation.
+export const BUILDER_SYSTEM = `You are the Janis agent builder. Janis agents are not chatbots — they answer customers on real channels AND take actions (refunds, order lookups, cancellations) through tools, pausing for human approval where configured, then continuing the conversation.
 
 Given the operator's description of the agent they want, return ONE JSON object — no prose, no code fence — with exactly these keys:
 
@@ -124,8 +124,16 @@ Integration catalog (id: name — blurb):
 export async function generateDraft(description: string): Promise<BuilderDraft | null> {
   if (!env.llmApiKey || !description.trim()) return null;
   // temperature 0 — a suggestion list is a classification task, not
-  // creative writing; "refresh" should re-evaluate, not re-roll.
-  const llm = { ...meteredSettingsFor(env.llmModel), temperature: 0 };
+  // creative writing; "refresh" should re-evaluate, not re-roll. The
+  // draft is one JSON object with a 120-400-word system_prompt plus four
+  // suggestion lists — the chat-sized 400-token cap truncates it mid-
+  // object, which used to silently discard whole drafts (and whatever
+  // suggested_templates came after the cut).
+  const llm = {
+    ...meteredSettingsFor(env.llmModel),
+    temperature: 0,
+    maxTokens: 4096,
+  };
   const completion = await complete(
     llm,
     BUILDER_SYSTEM + catalogBrief(),

@@ -1467,7 +1467,7 @@ export async function complete(
             },
             body: JSON.stringify({
               model: cand.model,
-              max_tokens: 400,
+              max_tokens: cand.maxTokens ?? 400,
               messages: msgs,
               ...(cand.temperature != null ? { temperature: cand.temperature } : {}),
               ...(toolsSchema ? { tools: toolsSchema } : {}),

@@ -21,6 +21,10 @@ export interface LlmSettings {
    *  Deterministic callers (draft/suggestion generation) set 0 so a
    *  "refresh" re-evaluates instead of re-rolling the dice. */
   temperature?: number;
+  /** Completion token budget — unset uses the chat-sized default (400).
+   *  Structured outputs (the builder draft's whole config JSON) need far
+   *  more than a chat reply; without it the response truncates mid-JSON. */
+  maxTokens?: number;
   /** True when the agent runs on its own credentials/endpoint — tokens are
    *  paid to their provider, so Janis must not meter them at cost+margin. */
   byok: boolean;
