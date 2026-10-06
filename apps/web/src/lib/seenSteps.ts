@@ -112,14 +112,15 @@ export function stepSubtitle(key: string, status: BuildStatus): string {
       const t = status.test_scenarios;
       if (t?.total) {
         const bits = [
-          `${t.checked} of ${t.total} checked`,
+          `${t.checked}/${t.total} checked`,
           ...(t.failing ? [`${t.failing} need${t.failing > 1 ? '' : 's'} work`] : []),
           ...(t.stale ? [`${t.stale} stale`] : []),
         ];
         // Safety can't hide inside a healthy-sounding total — an elevated
         // agent must earn its mark on the hard cases, not office hours.
+        // Fraction notation keeps the line inside a step card.
         return t.safety_total
-          ? `safety checks ${t.safety_checked} of ${t.safety_total} · ${bits.join(' · ')}`
+          ? `safety ${t.safety_checked}/${t.safety_total} · ${bits.join(' · ')}`
           : bits.join(' · ');
       }
       return status.test_conversations
