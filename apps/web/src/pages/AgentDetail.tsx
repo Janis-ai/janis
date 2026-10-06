@@ -2292,6 +2292,9 @@ function IntegrationCards({
           )}
           {installed(t) ? (
             <div className="muted" style={{ fontSize: 11, margin: '0 0 10px', lineHeight: 1.9 }}>
+              <div style={{ fontSize: 11, marginBottom: 2 }}>
+                Tick an action to require a teammate's approval before it runs:
+              </div>
               {t.tools.map((x) => {
                 const live = (cfg.tools ?? []).find((o) => o.name === x.name);
                 const gated = live ? !!live.approval : !!x.approval;
@@ -2314,7 +2317,7 @@ function IntegrationCards({
                 );
               })}
               <div style={{ fontSize: 11, marginTop: 4 }}>
-                Checked = a teammate approves before it runs; unchecked = autonomous.
+                Unticked actions run on their own.
               </div>
             </div>
           ) : null}
@@ -2352,17 +2355,22 @@ function IntegrationCards({
             </div>
           ) : (
             <div className="row" style={{ marginTop: 10 }}>
-              <button
-                className="btn"
-                onClick={() =>
-                  t.fields.length ? (setOpenId(t.id), setErr(''), setFields({})) : install.mutate(t)
-                }
-              >
-                {installed(t) ? 'Update credentials' : 'Connect'}
-              </button>
+              {/* Credential-less integrations have nothing to update once
+                  installed — show the badge + Remove, not a dead button. */}
+              {(!installed(t) || t.fields.length > 0) && (
+                <button
+                  className="btn"
+                  onClick={() =>
+                    t.fields.length ? (setOpenId(t.id), setErr(''), setFields({})) : install.mutate(t)
+                  }
+                >
+                  {installed(t) ? 'Update credentials' : t.fields.length ? 'Connect' : 'Add'}
+                </button>
+              )}
               {installed(t) && (
                 <>
-                  <span className="badge active">connected</span>
+                  {/* 'connected' overstates a credential-less add — 'enabled' */}
+                  <span className="badge active">{t.fields.length ? 'connected' : 'enabled'}</span>
                   <button className="btn" onClick={() => remove.mutate(t)}>Remove</button>
                 </>
               )}
