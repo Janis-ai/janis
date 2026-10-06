@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAgents, useBuildStatus, useMe } from '../api/hooks';
 import { janisBrain, setLastAgent } from '../lib/agentContext';
+import { useDock } from '../lib/dockContext';
+import { railBus } from '../lib/railBus';
 import { stepGlyph, stepSubtitle, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
-import { ChevronDown, MessageSquare, PanelRightClose } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { AskJanis } from '../components/AskJanis';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { AgentChannels } from '../components/AgentChannels';
@@ -66,6 +69,12 @@ const teachSubKey = (agentId: string) => `janis.teach-sub.${agentId}`;
 // Try-it scenario categories — safety leads so an elevated-risk agent
 // can't look tested on office-hours questions alone.
 const CAT_ORDER = ['safety', 'knowledge', 'actions', 'out_of_scope', 'tone', 'general'];
+/** "Change the greeting", "add a booking tool", "update your instructions"
+ *  — typed into the test chat these read as setup requests meant for
+ *  Copilot. Loose on purpose: it only nudges, never blocks. */
+const CONFIG_HINT_RE =
+  /\b(change|update|edit|rename|add|remove|delete|enable|disable|turn (?:on|off)|connect|configure|set up|make)\b[^.!?]{0,80}\b(agent|greeting|prompt|instruction|rule|knowledge|article|tool|abilit|channel|name|color|tone|widget|handoff|booking|calendar|setting|config|reply|answer|personality|voice)/i;
+
 const CAT_LABELS: Record<string, string> = {
   safety: 'Safety & escalation',
   knowledge: 'Knowledge',
@@ -227,43 +236,31 @@ export default function AgentBuilder() {
   // Docked test panel — the same private channel Try it uses, openable
   // from any build step so feedback is never a rail-jump away. Lazy:
   // the channel row is created on first open (or on Try it), not load.
-  const [testOpen, setTestOpen] = useState(false);
-  // Per-agent open/closed memory — the user's choice survives navigation;
-  // the first encounter auto-opens (wide screens) or shows a one-time
-  // callout on the strip (narrow ones), then never intrudes again.
-  const dockKey = (id: string) => `janis.test-dock.v1.${id}`;
-  const [dockCallout, setDockCallout] = useState(false);
+  // The unified dock owns the strip/panel chrome — this page registers as
+  // the Test tab's provider and portals its wired panel into the slot.
+  const dock = useDock();
+  const testOpen = Boolean(dock?.open && dock.tab === 'test');
   const setDockOpen = (open: boolean) => {
-    setTestOpen(open);
-    setDockCallout(false);
-    if (agent)
-      try {
-        localStorage.setItem(dockKey(agent.id), open ? 'open' : 'closed');
-      } catch {
-        /* private mode */
-      }
+    if (open) dock?.openTab('test');
+    else dock?.setOpen(false);
   };
+  // "This page provides the Test tab's content" — Layout hides its fallback
+  // chat while a wired panel can be portaled in.
+  const dockAvailableForReg = !!agent && hosted;
   useEffect(() => {
-    if (!agent || !hosted) return;
-    let saved: string | null = null;
-    try {
-      saved = localStorage.getItem(dockKey(agent.id));
-    } catch {
-      /* private mode */
-    }
-    if (saved) {
-      setTestOpen(saved === 'open');
-      return;
-    }
-    const wide = window.innerWidth >= 1440;
-    setTestOpen(wide);
-    if (!wide) setDockCallout(true);
-    try {
-      localStorage.setItem(dockKey(agent.id), wide ? 'open' : 'closed');
-    } catch {
-      /* private mode */
-    }
-  }, [agent?.id, hosted]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!dock || !dockAvailableForReg) return;
+    dock.setTestProvided(true);
+    return () => dock.setTestProvided(false);
+  }, [dock, dockAvailableForReg]);
+  // ?rail=test&agent=<id>&q=<prompt> deeplinks (and concierge "run this"
+  // links) land as a seed on the shared dock state.
+  useEffect(() => {
+    if (!dock?.testSeed) return;
+    setSeed({ text: dock.testSeed.text, nonce: dock.testSeed.nonce, target: 'dock' });
+    dock.openTab('test');
+    dock.clearTestSeed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dock?.testSeed]);
   useEffect(() => {
     if ((step === 'try' || testOpen) && agent && hosted && !testChannel.data && !testChannel.isPending) {
       testChannel.mutate();
@@ -284,15 +281,14 @@ export default function AgentBuilder() {
     setChatActive(false);
     setCfgDrifted(false);
   };
-  // Push or overlay — at ≥1440px the main column shrinks to make room for
-  // strip + panel; below that the dock is a drawer over dimmed content
-  // (click-outside closes it). The strip itself reserves its 48px whenever
-  // it's on screen so it can never cover content.
+  // The Test tab's content comes from this page — the dock chrome (strip,
+  // tabs, push/overlay behavior) is Layout's. The slot only exists while
+  // the dock is open.
   const dockAvailable = !!agent && hosted && step !== 'start' && step !== 'bring';
-  // On the Try step the dock IS the surface — open it by default once per
-  // agent; after that, the operator's open/closed choice wins.
+  // On the Try step the dock IS the surface — open it on the Test tab once
+  // per agent; after that, the operator's open/closed choice wins.
   useEffect(() => {
-    if (step !== 'try' || !agent || !hosted) return;
+    if (step !== 'try' || !agent || !hosted || !dock) return;
     const k = `janis.try-dock.${agent.id}`;
     try {
       if (localStorage.getItem(k)) return;
@@ -300,17 +296,10 @@ export default function AgentBuilder() {
     } catch {
       /* private mode */
     }
-    setDockOpen(true);
+    dock.openTab('test');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, agent?.id, hosted]);
-  useEffect(() => {
-    document.body.classList.toggle('test-dock-open', dockAvailable && testOpen);
-    document.body.classList.toggle('test-dock-available', dockAvailable);
-    return () => {
-      document.body.classList.remove('test-dock-open');
-      document.body.classList.remove('test-dock-available');
-    };
-  }, [dockAvailable, testOpen]);
+  }, [step, agent?.id, hosted, dock]);
+
   const { data: gapData } = useQuery({
     queryKey: ['knowledge-gaps', agent?.id],
     queryFn: () =>
@@ -498,6 +487,10 @@ export default function AgentBuilder() {
     target: 'try' | 'dock';
   } | null>(null);
   const [testNotice, setTestNotice] = useState('');
+  // Setup-shaped requests typed into the test chat (the owner forgets it
+  // talks TO the agent) get a hint to move them to Copilot — heuristic,
+  // not a block; dismissible.
+  const [copilotHint, setCopilotHint] = useState<string | null>(null);
   // ── Try-it scenario runner ──────────────────────────────────────────
   // Scenarios are agent_tests rows — the same suite that runs post-launch
   // regression. Try it is the human-judgment layer: Run sends the prompt
@@ -683,6 +676,7 @@ export default function AgentBuilder() {
         setTimeout(() => setSaved(false), 2000);
         markDrift();
       }}
+      onSendToCopilot={(t) => railBus.copilotDraft(t)}
     />
   );
   // Customer region — optional; saved to builder.region on blur and
@@ -2084,154 +2078,114 @@ export default function AgentBuilder() {
           <button className="btn" onClick={() => goStep(next.key)}>{nextLabel} →</button>
         </div>
       )}
-      {/* Docked test panel — Try it's full-screen chat lives on its own
-          step; everywhere else the same private channel rides along in a
-          drawer so an edit gets feedback immediately. */}
-      {dockAvailable && (
-        <>
-          {testOpen && (
-            <>
-              {/* Under the reflow breakpoint the dock is a drawer — the dim
-                  reads "content is covered, not broken" and catches
-                  click-outside-to-close. Hidden when CSS pushes the column. */}
-              <button
-                className="test-dock-dim"
-                aria-label="Close test panel"
-                onClick={() => setDockOpen(false)}
-              />
-              <div className="test-dock">
-              {/* One header — the pane's own header stays hidden so the two
-                  don't stack. One name everywhere: "Test your agent" is the
-                  surface, "Try it" is the setup step. */}
-              <div className="test-dock-head">
-                <strong className="grow" style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  Test your agent
-                </strong>
-                <span
-                  className="badge"
-                  title={`Private channel, same pipeline as production${builder?.include_drafts_in_test ? ' — includes drafts' : ''}`}
-                >
-                  TEST
-                </span>
-                <button
-                  className="btn sm"
-                  title="Start a fresh test conversation — earlier chats stay in the inbox"
-                  onClick={newChat}
-                >
-                  New chat
-                </button>
-              </div>
-              <div className="test-dock-status">
+      {/* Test-tab content — portaled into the shared dock's slot. The
+          strip, tabs, dim and push/overlay behavior all live in Layout;
+          this page provides the wired panel: status, scenario hooks,
+          corrections, chips. */}
+      {dockAvailable && dock?.testSlot &&
+        createPortal(
+          <>
+            <div
+              className="test-dock-status"
+              style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+            >
+              <span
+                className="badge"
+                title={`Private channel, same pipeline as production${builder?.include_drafts_in_test ? ' — includes drafts' : ''}`}
+              >
+                TEST
+              </span>
+              <span>
                 Testing saved version
                 {builder?.include_drafts_in_test ? ' + drafts' : ''}
                 {runningLabel ? ` · running: ${runningLabel}` : ''}
-              </div>
-              {cfgDrifted && (
-                <div className="test-dock-notice">
-                  Config changed since this chat started — replies may mix old
-                  and new behavior.{' '}
-                  <button className="link small" onClick={newChat}>
-                    Start new chat
-                  </button>
-                </div>
-              )}
-              <div className="test-dock-body">
-                {tryChips('dock')}
-                {testChannel.isPending && (
-                  <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
-                )}
-                {testChannel.isError && (
-                  <div className="error" style={{ margin: 14 }}>
-                    {(testChannel.error as Error).message}
-                  </div>
-                )}
-                {testChannel.data && (
-                  <AskJanis
-                    key={chatVisitor ?? 'base'}
-                    visitorOverride={chatVisitor ?? undefined}
-                    channelId={testChannel.data.channel_id}
-                    asCustomer
-                    hideHeader
-                    focusSignal={chatFocus}
-                    onCustomerMessage={() => setChatActive(true)}
-                    onCorrect={(ctx) => {
-                      setCorrectTarget(ctx);
-                    }}
-                    onAgentReply={onAgentReply}
-                    onSaveTest={(ctx) => {
-                      // A reply to a checklist prompt IS that scenario —
-                      // saving it again would duplicate the row.
-                      if (
-                        ctx.customerText &&
-                        scenarios.some(
-                          (s) =>
-                            scenarioPrompt(s).trim().toLowerCase() ===
-                            ctx.customerText!.trim().toLowerCase(),
-                        )
-                      ) {
-                        setTestNotice('That prompt is already a scenario');
-                        return;
-                      }
-                      saveTest.mutate(ctx);
-                    }}
-                    seedMessage={seed?.target === 'dock' ? seed.text : undefined}
-                    seedNonce={seed?.nonce}
-                  />
-                )}
-                {correctCard}
-              </div>
-            </div>
-            </>
-          )}
-          {/* Right-edge strip — the dock's always-visible handle. It claims
-              its own 48px (content reserves it via body.test-dock-available)
-              so it can never cover anything, and the panel slides out from
-              beside it so strip and panel read as one control. The dot
-              pulses until the first test conversation exists. */}
-          {/* The strip merges INTO the open panel — it becomes the dock's
-              edge handle (collapse chevron) rather than a second green bar
-              beside it. Closed: chat icon + vertical label + activity dot. */}
-          <button
-            className={`test-strip${testOpen ? ' open' : ''}`}
-            title={testOpen ? 'Collapse test panel' : 'Test your agent'}
-            aria-expanded={testOpen}
-            onClick={() => setDockOpen(!testOpen)}
-          >
-            {testOpen ? (
-              <PanelRightClose size={16} className="test-strip-icon" />
-            ) : (
-              <>
-                <MessageSquare size={16} className="test-strip-icon" />
-                <span className="test-strip-label">Test your agent</span>
-                {(status?.test_conversations ?? 0) === 0 && (
-                  <span className="test-strip-dot" />
-                )}
-              </>
-            )}
-          </button>
-          {dockCallout && !testOpen && (
-            <div className="test-callout">
-              <button className="grow" onClick={() => setDockOpen(true)}>
-                Chat with your draft agent →
-              </button>
+              </span>
+              <span className="grow" />
               <button
-                aria-label="Dismiss"
-                onClick={() => {
-                  setDockCallout(false);
-                  if (agent)
-                    try {
-                      localStorage.setItem(dockKey(agent.id), 'closed');
-                    } catch {
-                      /* private mode */
-                    }
-                }}
+                className="link small"
+                title="Start a fresh test conversation — earlier chats stay in the inbox"
+                onClick={newChat}
               >
-                ×
+                New chat
               </button>
             </div>
-          )}
-        </>
-      )}
+            {copilotHint && (
+              <div className="test-dock-notice">
+                That sounds like a setup change — Copilot can change the
+                agent directly.{' '}
+                <button
+                  className="link small"
+                  onClick={() => {
+                    railBus.copilotDraft(copilotHint);
+                    setCopilotHint(null);
+                  }}
+                >
+                  Send to Copilot
+                </button>{' '}
+                <button className="link small" onClick={() => setCopilotHint(null)}>
+                  dismiss
+                </button>
+              </div>
+            )}
+            {cfgDrifted && (
+              <div className="test-dock-notice">
+                Config changed since this chat started — replies may mix old
+                and new behavior.{' '}
+                <button className="link small" onClick={newChat}>
+                  Start new chat
+                </button>
+              </div>
+            )}
+            {tryChips('dock')}
+            {testChannel.isPending && (
+              <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
+            )}
+            {testChannel.isError && (
+              <div className="error" style={{ margin: 14 }}>
+                {(testChannel.error as Error).message}
+              </div>
+            )}
+            {testChannel.data && (
+              <AskJanis
+                key={chatVisitor ?? 'base'}
+                visitorOverride={chatVisitor ?? undefined}
+                channelId={testChannel.data.channel_id}
+                asCustomer
+                hideHeader
+                placeholder="You're chatting as a customer…"
+                focusSignal={chatFocus}
+                onCustomerMessage={(t) => {
+                  setChatActive(true);
+                  if (CONFIG_HINT_RE.test(t)) setCopilotHint(t);
+                }}
+                onCorrect={(ctx) => {
+                  setCorrectTarget(ctx);
+                }}
+                onAgentReply={onAgentReply}
+                onSaveTest={(ctx) => {
+                  // A reply to a checklist prompt IS that scenario —
+                  // saving it again would duplicate the row.
+                  if (
+                    ctx.customerText &&
+                    scenarios.some(
+                      (s) =>
+                        scenarioPrompt(s).trim().toLowerCase() ===
+                        ctx.customerText!.trim().toLowerCase(),
+                    )
+                  ) {
+                    setTestNotice('That prompt is already a scenario');
+                    return;
+                  }
+                  saveTest.mutate(ctx);
+                }}
+                seedMessage={seed?.target === 'dock' ? seed.text : undefined}
+                seedNonce={seed?.nonce}
+              />
+            )}
+            {correctCard}
+          </>,
+          dock.testSlot,
+        )}
     </>
   );
 }

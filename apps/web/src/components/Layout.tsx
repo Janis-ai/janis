@@ -13,11 +13,12 @@ import PushBanner from './PushBanner';
 import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
+import { DockContext, type DockTab } from '../lib/dockContext';
 import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
-  Compass, CreditCard, FlaskConical, Gauge, Inbox, Megaphone,
-  PenLine, Rocket, Settings, Sparkles, Users, Wrench, X,
+  Columns2, Compass, CreditCard, FlaskConical, Gauge, Inbox, Maximize2, Megaphone,
+  Minimize2, PenLine, Rocket, Settings, Sparkles, Users, Wrench, X,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
 import { CommandPalette } from './CommandPalette';
@@ -288,29 +289,44 @@ export default function Layout() {
       trackOnce(`sign_up:${data!.user.id}`, 'sign_up');
     }
   }, [data?.user?.created_at, data?.user?.id]);
-  // The right rail is one slot with tabs: Ask Janis (concierge) and an agent
-  // test chat. Both stay mounted while the rail is open — the inactive pane
-  // is hidden so scroll position and drafts survive tab switches.
+  // The right dock is one slot with tabs: Copilot (the concierge) and the
+  // agent's test chat. Both stay mounted while the dock is open — the
+  // inactive pane is hidden so scroll position and drafts survive switches.
+  // Layout owns the strip/panel chrome; a page (the builder) can portal a
+  // fully-wired test panel into the Test slot, else a plain chat renders.
   const [railOpen, setRailOpen] = useState(false);
   const [railTab, setRailTab] = useState<'ask' | 'test'>('ask');
   const [testRail, setTestRail] = useState<RailRequest | null>(null);
-  const [askSeed, setAskSeed] = useState<string | null>(null);
+  const [askSeed, setAskSeed] = useState<{ text: string; nonce: number } | null>(null);
+  const [copilotDraft, setCopilotDraft] = useState<{ text: string; nonce: number } | null>(null);
+  const [testSeed, setTestSeed] = useState<{ text: string; nonce: number } | null>(null);
+  const [fallbackSeed, setFallbackSeed] = useState<{ text: string; nonce: number } | null>(null);
+  const [testSlot, setTestSlot] = useState<HTMLElement | null>(null);
+  const [testProvided, setTestProvided] = useState(false);
+  const [dockCallout, setDockCallout] = useState(false);
+  const [dockExpanded, setDockExpanded] = useState(false);
+  const [dockSplit, setDockSplit] = useState(() => {
+    try { return localStorage.getItem('janis.dock-split') === '1'; } catch { return false; }
+  });
   useEffect(
     () =>
       railBus.subscribe((r) => {
-        if (r.seed) {
-          setAskSeed(r.seed);
+        if (r.draft) {
+          setCopilotDraft({ text: r.draft, nonce: Date.now() });
+          setRailTab('ask');
+        } else if (r.seed) {
+          setAskSeed({ text: r.seed, nonce: Date.now() });
           setRailTab('ask');
         } else {
           setTestRail(r);
           setRailTab('test');
+          if (r.q) setTestSeed({ text: r.q, nonce: Date.now() });
         }
         setRailOpen(true);
       }),
     [],
   );
   const hasAsk = Boolean(data?.support_channel_id);
-  const hasBoth = hasAsk && Boolean(testRail);
 
   // Agent context: explicit on /agents/:id/* URLs, persisted elsewhere so
   // the shared pages keep defaulting to the selected agent. The sidebar's
@@ -342,9 +358,97 @@ export default function Layout() {
     if (!isAskPage) lastNonAsk.current = location.pathname + location.search;
   }, [location.pathname, location.search, isAskPage]);
 
+  // ── Unified dock ──────────────────────────────────────────────────────
+  // Tabs are scoped by location: agent pages offer Test (a hosted agent to
+  // exercise) alongside Copilot; workspace pages offer Copilot only. The
+  // builder signals it's portaling a wired panel via setTestProvided, which
+  // itself proves a testable agent is in context.
+  const testAvail =
+    testProvided ||
+    Boolean(currentAgent && janisBrain(currentAgent)) ||
+    Boolean(testRail && (!ctxAgent || testRail.agentId === ctxAgent));
+  const bothTabs = hasAsk && testAvail;
+  const dockScope = ctxAgent ?? 'ws';
+  const onBuilderPage = /^\/agents\/new\//.test(location.pathname);
+
+  // Per-scope memory: last tab + open/closed survive navigation. A ?rail=
+  // deeplink wins over the saved state.
+  const restoredFor = useRef('');
+  useEffect(() => {
+    if (data === undefined || restoredFor.current === dockScope) return;
+    restoredFor.current = dockScope;
+    if (searchParams.get('rail')) return;
+    try {
+      const t = localStorage.getItem(`janis.dock-tab.${dockScope}`);
+      const o = localStorage.getItem(`janis.dock-open.${dockScope}`);
+      if (t === 'test' && testAvail) setRailTab('test');
+      else if (t === 'copilot') setRailTab('ask');
+      if (o === 'open' && (hasAsk || testAvail)) setRailOpen(true);
+    } catch {
+      /* private mode */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dockScope, data, testAvail, hasAsk]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(`janis.dock-tab.${dockScope}`, railTab === 'ask' ? 'copilot' : 'test');
+      localStorage.setItem(`janis.dock-open.${dockScope}`, railOpen ? 'open' : 'closed');
+    } catch {
+      /* private mode */
+    }
+  }, [railTab, railOpen, dockScope]);
+
+  // First encounter with a testable agent on the builder — the dock opens
+  // once on wide screens, or the strip earns a callout on narrow ones.
+  // After that the saved open/closed choice rules.
+  useEffect(() => {
+    if (!onBuilderPage || !testAvail || !ctxAgent) return;
+    const k = `janis.dock-intro.${ctxAgent}`;
+    try {
+      if (localStorage.getItem(k)) return;
+      localStorage.setItem(k, '1');
+    } catch {
+      /* private mode */
+    }
+    if (window.innerWidth >= 1440) {
+      setRailTab('test');
+      setRailOpen(true);
+    } else {
+      setDockCallout(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onBuilderPage, testAvail, ctxAgent]);
+
+  // Test-tab fallback — a plain chat when no page is portaling a wired
+  // panel (agent pages other than the builder). Resolves the test channel
+  // lazily; on builder pages the builder's own panel owns the slot.
+  useEffect(() => {
+    if (!(railOpen && railTab === 'test') || testProvided || onBuilderPage) return;
+    if (!ctxAgent || !currentAgent || !janisBrain(currentAgent)) return;
+    if (testRail?.agentId === ctxAgent) return;
+    void api<{ channel_id: string }>(`/api/agents/${ctxAgent}/test-channel`, { method: 'POST' })
+      .then((r) =>
+        setTestRail({ channelId: r.channel_id, label: currentAgent.name ?? '', agentId: ctxAgent }),
+      )
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [railOpen, railTab, testProvided, onBuilderPage, ctxAgent, currentAgent]);
+
+  // A queued test seed goes to the portaled panel when a page provides one;
+  // on other agent pages it seeds the fallback chat (cleared so a later
+  // portaling page doesn't replay it).
+  useEffect(() => {
+    if (!testSeed || testProvided || !(railOpen && railTab === 'test')) return;
+    setFallbackSeed(testSeed);
+    setTestSeed(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testSeed, testProvided, railTab, railOpen]);
+
   const railVisible =
-    (railOpen && ((railTab === 'ask' && hasAsk) || (railTab === 'test' && testRail))) ||
+    (railOpen && ((railTab === 'ask' && hasAsk) || (railTab === 'test' && testAvail))) ||
     (isAskPage && hasAsk);
+  // Split panes only off /ask — the expanded concierge page is Copilot alone.
+  const splitActive = dockSplit && bothTabs && !isAskPage;
 
   // On /ask the rail must be open on the ask tab; a workspace with no
   // concierge has nothing to show there — bounce back to the last page.
@@ -359,7 +463,7 @@ export default function Layout() {
     setRailOpen(true);
     const q = searchParams.get('q');
     if (q) {
-      setAskSeed(q);
+      setAskSeed({ text: q, nonce: Date.now() });
       const p = new URLSearchParams(searchParams);
       p.delete('q');
       setSearchParams(p, { replace: true });
@@ -411,18 +515,32 @@ export default function Layout() {
         }
       }
     } else if (railParam === 'test' && railAgentParam) {
+      const q = searchParams.get('q');
       void api<{ channel_id: string; agent_name?: string }>(
         `/api/agents/${railAgentParam}/test-channel`,
         { method: 'POST' },
       )
         .then((r) => {
           setTestRail({ channelId: r.channel_id, label: r.agent_name ?? '', agentId: railAgentParam });
+          if (q) {
+            setTestSeed({ text: q, nonce: Date.now() });
+            const p = new URLSearchParams(searchParams);
+            p.delete('q');
+            setSearchParams(p, { replace: true });
+          }
           setRailTab('test');
           setRailOpen(true);
         })
         .catch(() => {});
       consumedRail.current = key;
-    } else if (railParam === 'test' && testRail) {
+    } else if (railParam === 'test' && testAvail) {
+      const q = searchParams.get('q');
+      if (q) {
+        setTestSeed({ text: q, nonce: Date.now() });
+        const p = new URLSearchParams(searchParams);
+        p.delete('q');
+        setSearchParams(p, { replace: true });
+      }
       setRailTab('test');
       setRailOpen(true);
       consumedRail.current = key;
@@ -446,9 +564,9 @@ export default function Layout() {
     } else if (railOpen && railTab === 'ask' && hasAsk) {
       p.set('rail', 'ask');
       p.delete('agent');
-    } else if (railOpen && railTab === 'test' && testRail?.agentId) {
+    } else if (railOpen && railTab === 'test' && (testRail?.agentId ?? ctxAgent)) {
       p.set('rail', 'test');
-      p.set('agent', testRail.agentId);
+      p.set('agent', testRail?.agentId ?? ctxAgent!);
     } else {
       p.delete('rail');
       p.delete('agent');
@@ -526,6 +644,22 @@ export default function Layout() {
     if (isAskPage) navigate(lastNonAsk.current);
   };
   const qc = useQueryClient();
+  const dockCtx = {
+    open: railOpen,
+    tab: (railTab === 'ask' ? 'copilot' : 'test') as DockTab,
+    testAvailable: testAvail,
+    testProvided,
+    testSlot,
+    setOpen: setRailOpen,
+    openTab: (t: DockTab) => {
+      setRailTab(t === 'copilot' ? 'ask' : 'test');
+      setRailOpen(true);
+      setDockCallout(false);
+    },
+    setTestProvided,
+    testSeed,
+    clearTestSeed: () => setTestSeed(null),
+  };
   const [toasts, setToasts] = useState<Toast[]>([]);
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const soundOn = data?.user.notify.sound !== false;
@@ -634,7 +768,14 @@ export default function Layout() {
   };
 
   return (
-    <div className={`layout${railVisible ? ' ask-open' : ''}${isAskPage ? ' ask-page' : ''}`}>
+    <DockContext.Provider value={dockCtx}>
+    <div
+      className={`layout${railOpen && !isAskPage ? ' dock-open' : ''}${
+        (hasAsk || testAvail) && !isAskPage ? ' dock-available' : ''
+      }${testAvail && onBuilderPage && !isAskPage ? ' dock-testable' : ''}${
+        railOpen && splitActive ? ' dock-split' : ''
+      }${railOpen && dockExpanded && !isAskPage ? ' dock-wide' : ''}${isAskPage ? ' ask-page' : ''}`}
+    >
       {promptEl}
       <CommandPalette />
       <a className="skip-link" href="#main-content">Skip to content</a>
@@ -823,52 +964,204 @@ export default function Layout() {
           <Outlet />
         )}
       </main>
-      {railVisible && (
-        <aside className={`ask-rail${isAskPage ? ' expanded' : ''}`}>
-          {hasBoth && (
-            <div className="ask-tabs">
-              <button
-                className={`ask-tab${railTab === 'ask' ? ' active' : ''}`}
-                onClick={() => setRailTab('ask')}
-              >
-                Ask Janis
-              </button>
-              <button
-                className={`ask-tab${railTab === 'test' ? ' active' : ''}`}
-                onClick={() => setRailTab('test')}
-              >
-                Test{testRail!.label ? ` — ${testRail!.label}` : ''}
-              </button>
-              <span className="grow" />
-              <button className="btn" onClick={closeRail} title="Close" aria-label="Close panel"><X size={14} /></button>
-            </div>
+      {/* Right-edge strip — the dock's permanent handle, present whenever
+          there's anything to dock. Two stacked icons: Test (agent pages)
+          above Copilot. Clicking an icon opens the dock on that tab;
+          clicking the active one closes it. It claims its own 48px (the
+          layout reserves it via .dock-available) so nothing hides under it. */}
+      {!isAskPage && (hasAsk || testAvail) && (
+        <div className="dock-strip" role="toolbar" aria-label="Dock">
+          {testAvail && (
+            <button
+              className={`dock-strip-btn dock-strip-test${railOpen && railTab === 'test' ? ' active' : ''}`}
+              title={railOpen && railTab === 'test' ? 'Close panel' : 'Test your agent'}
+              aria-expanded={railOpen && railTab === 'test'}
+              onClick={() =>
+                railOpen && railTab === 'test'
+                  ? setRailOpen(false)
+                  : (setRailTab('test'), setRailOpen(true), setDockCallout(false))
+              }
+            >
+              <FlaskConical size={16} />
+              {(agentStatus?.test_conversations ?? 0) === 0 && (
+                <span className="test-strip-dot" />
+              )}
+            </button>
           )}
           {hasAsk && (
-            <div style={{ display: railTab === 'ask' ? 'contents' : 'none' }}>
-              <AskJanis
-                channelId={data!.support_channel_id!}
-                agentId={ctxAgent ?? undefined}
-                seedMessage={askSeed ?? undefined}
-                expanded={isAskPage}
-                onToggleExpand={() => navigate(isAskPage ? lastNonAsk.current : '/ask')}
-                onClose={hasBoth ? undefined : closeRail}
-              />
-            </div>
-          )}
-          {testRail && (
-            <div
-              key={testRail.channelId}
-              style={{ display: railTab === 'test' ? 'contents' : 'none' }}
+            <button
+              className={`dock-strip-btn dock-strip-copilot${railOpen && railTab === 'ask' ? ' active' : ''}`}
+              title={railOpen && railTab === 'ask' ? 'Close panel' : 'Copilot — ask Janis'}
+              aria-expanded={railOpen && railTab === 'ask'}
+              onClick={() =>
+                railOpen && railTab === 'ask'
+                  ? setRailOpen(false)
+                  : (setRailTab('ask'), setRailOpen(true))
+              }
             >
-              <AskJanis
-                channelId={testRail.channelId}
-                badge="TEST"
-                asCustomer
-                onClose={hasBoth ? undefined : closeRail}
-              />
-            </div>
+              <Sparkles size={16} />
+            </button>
           )}
-        </aside>
+        </div>
+      )}
+      {/* One-time nudge when there's a draft agent but no room to auto-open */}
+      {dockCallout && !railOpen && testAvail && (
+        <div className="test-callout">
+          <button
+            onClick={() => {
+              setDockCallout(false);
+              setRailTab('test');
+              setRailOpen(true);
+            }}
+          >
+            Chat with your draft agent →
+          </button>
+          <button aria-label="Dismiss" onClick={() => setDockCallout(false)}>
+            <X size={13} />
+          </button>
+        </div>
+      )}
+      {railVisible && (
+        <>
+          {/* Under the reflow breakpoint the dock is a drawer — the dim
+              reads "content is covered" and catches click-outside-close. */}
+          {!isAskPage && railOpen && (
+            <button
+              className="test-dock-dim"
+              aria-label="Close panel"
+              onClick={() => setRailOpen(false)}
+            />
+          )}
+          <aside
+            className={`dock${isAskPage ? ' expanded' : ''}${splitActive ? ' split' : ''}${dockExpanded ? ' wide' : ''}`}
+          >
+            <div className="dock-head">
+              {bothTabs && !isAskPage ? (
+                <div className="dock-tabs" role="tablist">
+                  <button
+                    role="tab"
+                    aria-selected={railTab === 'test'}
+                    className={`dock-tab dock-tab-test${railTab === 'test' ? ' active' : ''}`}
+                    onClick={() => setRailTab('test')}
+                  >
+                    <FlaskConical size={13} /> Test
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={railTab === 'ask'}
+                    className={`dock-tab dock-tab-copilot${railTab === 'ask' ? ' active' : ''}`}
+                    onClick={() => setRailTab('ask')}
+                  >
+                    <Sparkles size={13} /> Copilot
+                  </button>
+                </div>
+              ) : (
+                <strong className="test-dock-title">
+                  {railTab === 'ask'
+                    ? 'Copilot'
+                    : `Test your agent${testRail?.label ? ` — ${testRail.label}` : ''}`}
+                </strong>
+              )}
+              <span className="grow" />
+              {/* Split — both tabs side by side. Wide screens only (hidden
+                  below ~1800px via CSS). */}
+              {bothTabs && !isAskPage && (
+                <button
+                  className="btn dock-split-btn"
+                  title={dockSplit ? 'One panel' : 'Show both tabs side by side'}
+                  onClick={() =>
+                    setDockSplit((v) => {
+                      const nv = !v;
+                      try {
+                        localStorage.setItem('janis.dock-split', nv ? '1' : '0');
+                      } catch {
+                        /* private mode */
+                      }
+                      return nv;
+                    })
+                  }
+                >
+                  <Columns2 size={14} />
+                </button>
+              )}
+              {railTab === 'ask' || isAskPage ? (
+                <button
+                  className="btn"
+                  title={isAskPage ? 'Dock panel' : 'Expand'}
+                  onClick={() => navigate(isAskPage ? lastNonAsk.current : '/ask')}
+                >
+                  {isAskPage ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                </button>
+              ) : (
+                <button
+                  className="btn"
+                  title={dockExpanded ? 'Dock panel' : 'Expand'}
+                  onClick={() => setDockExpanded((v) => !v)}
+                >
+                  {dockExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                </button>
+              )}
+              {!isAskPage && (
+                <button className="btn" onClick={closeRail} title="Close" aria-label="Close dock">
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+            <div className="dock-bodies">
+              {hasAsk && (
+                <div
+                  className="dock-page"
+                  style={{ display: splitActive || railTab === 'ask' ? 'flex' : 'none' }}
+                >
+                  {/* Marker: Janis avatar, no badge — you're the owner
+                      talking to Janis about your workspace. */}
+                  <div className="test-dock-status" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <BrandImg mark className="dock-copilot-mark" alt="" />
+                    Janis · workspace copilot
+                  </div>
+                  <AskJanis
+                    channelId={data!.support_channel_id!}
+                    agentId={ctxAgent ?? undefined}
+                    seedMessage={askSeed?.text}
+                    seedNonce={askSeed?.nonce}
+                    draftMessage={copilotDraft?.text}
+                    draftNonce={copilotDraft?.nonce}
+                    placeholder="Ask Janis to change or explain your setup…"
+                    hideHeader
+                  />
+                </div>
+              )}
+              {testAvail && (
+                <div
+                  className="dock-page"
+                  style={{ display: splitActive || railTab === 'test' ? 'flex' : 'none' }}
+                >
+                  {/* The builder (or any page wiring scenarios/corrections)
+                      portals its test panel into this slot; elsewhere a
+                      plain customer-role chat renders. */}
+                  <div ref={setTestSlot} className="test-dock-body">
+                    {!testProvided &&
+                      (testRail ? (
+                        <AskJanis
+                          key={testRail.channelId}
+                          channelId={testRail.channelId}
+                          asCustomer
+                          hideHeader
+                          placeholder="You're chatting as a customer…"
+                          seedMessage={fallbackSeed?.text}
+                          seedNonce={fallbackSeed?.nonce}
+                        />
+                      ) : (
+                        <div className="muted" style={{ padding: 14 }}>
+                          Opening test channel…
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </aside>
+        </>
       )}
       <PushBanner />
       <div className="toast-stack">
@@ -901,6 +1194,7 @@ export default function Layout() {
         ))}
       </div>
     </div>
+    </DockContext.Provider>
   );
 }
 

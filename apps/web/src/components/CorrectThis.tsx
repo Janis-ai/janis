@@ -20,6 +20,7 @@ export function CorrectThisCard({
   target,
   onClose,
   onSaved,
+  onSendToCopilot,
 }: {
   agentId: string;
   cfg: AgentConfig;
@@ -29,6 +30,10 @@ export function CorrectThisCard({
    *  draft copy to sync; other callers just get the server truth back via
    *  the agents-query invalidation. */
   onSaved?: (config: AgentConfig) => void;
+  /** Behavior branch — "Send to Copilot" drops the correction into the
+   *  concierge tab as a draft the owner reviews, where the concierge turns
+   *  it into an instructions edit they approve (the draft→approve path). */
+  onSendToCopilot?: (draft: string) => void;
 }) {
   const qc = useQueryClient();
   const [correction, setCorrection] = useState('');
@@ -229,6 +234,28 @@ export function CorrectThisCard({
             >
               {applyInstruction.isPending ? 'Saving…' : 'Add to instructions'}
             </button>
+            {onSendToCopilot && (
+              <button
+                className="btn sm"
+                disabled={!instrEdit.trim()}
+                title="Opens Copilot with this fix drafted — the concierge turns it into an instruction you approve"
+                onClick={() =>
+                  onSendToCopilot(
+                    [
+                      'A correction from testing my agent:',
+                      target.customerText ? `The customer said: "${target.customerText.slice(0, 200)}"` : '',
+                      `It replied: "${target.agentText.slice(0, 200)}"`,
+                      `The fix: ${instrEdit.trim()}`,
+                      'Please draft this as an instruction update for my approval.',
+                    ]
+                      .filter(Boolean)
+                      .join('\n'),
+                  )
+                }
+              >
+                Send to Copilot
+              </button>
+            )}
             <button className="link small" onClick={() => setBranch('knowledge')}>
               it's a fact instead
             </button>

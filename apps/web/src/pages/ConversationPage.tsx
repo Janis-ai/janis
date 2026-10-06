@@ -9,6 +9,7 @@ import { ArgsRows, Avatar, channelLabel, displayName, fmtTime } from '../compone
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
+import { railBus } from '../lib/railBus';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
@@ -1184,6 +1185,7 @@ export default function ConversationPage() {
                       cfg={agent.config}
                       target={correctFor}
                       onClose={() => setCorrectFor(null)}
+                      onSendToCopilot={(t) => railBus.copilotDraft(t)}
                     />
                   </div>
                 )}

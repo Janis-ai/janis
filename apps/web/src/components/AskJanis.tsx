@@ -289,6 +289,9 @@ export function AskJanis({
   hideHeader,
   visitorOverride,
   focusSignal,
+  draftMessage,
+  draftNonce,
+  placeholder,
 }: {
   channelId: string;
   badge?: string;
@@ -334,6 +337,14 @@ export function AskJanis({
   /** Bump to focus the composer — "Save & test" opens the panel and lands
    *  the cursor ready to type. */
   focusSignal?: number;
+  /** Prefill the composer WITHOUT sending — "Send to Copilot" drops a
+   *  drafted correction in for the owner to review/edit first. Nonce bumps
+   *  a repeated draft through like seedNonce does for seeds. */
+  draftMessage?: string;
+  draftNonce?: number;
+  /** Composer placeholder override — the docked tabs hint at their role
+   *  ("You're chatting as a customer" / "Ask Janis to change your setup"). */
+  placeholder?: string;
 }) {
   const navigate = useNavigate();
   const visitor = useRef(
@@ -770,6 +781,21 @@ export function AskJanis({
     if (focusSignal) inputRef.current?.focus();
   }, [focusSignal]);
 
+  // "Send to Copilot" — a drafted message lands in the composer for the
+  // owner to review before it goes anywhere. Nonce-keyed like seeds.
+  const draftedFor = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${draftNonce ?? 0}:${draftMessage}`;
+    if (!draftMessage || !loaded || key === draftedFor.current) return;
+    draftedFor.current = key;
+    setText(draftMessage);
+    requestAnimationFrame(() => {
+      autoresize();
+      inputRef.current?.focus();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftMessage, draftNonce, loaded]);
+
   // Rail closing mid-dictation shouldn't keep the mic live.
   useEffect(
     () => () => {
@@ -1197,7 +1223,7 @@ export function AskJanis({
           rows={1}
           value={text}
           disabled={!loaded}
-          placeholder={dictNote ?? `Message ${cfg?.agent_name ?? 'Janis'}…`}
+          placeholder={dictNote ?? placeholder ?? `Message ${cfg?.agent_name ?? 'Janis'}…`}
           onChange={(e) => {
             setText(e.target.value);
             autoresize();

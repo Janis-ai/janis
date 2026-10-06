@@ -14,7 +14,7 @@ Janis is built for teams that want AI deflection with a human safety net — aut
 
 ---
 
-You can test an agent without connecting any channel: the Test rail in the console chats with your agent end-to-end — including buttons and contact fields — exactly as a customer would see them.
+You can test an agent without connecting any channel: the Test tab in the right-hand dock chats with your agent end-to-end — including buttons and contact fields — exactly as a customer would see them. To open it pre-loaded with a prompt, link [run this test](https://app.janis.ai/agents/<id>?rail=test&agent=<id>&q=<url-encoded prompt>) — the dock opens on the Test tab and sends the prompt as the customer. Offer this when the user asks you to try the agent or check how it answers something.
 
 ---
 
@@ -434,4 +434,4 @@ Bubble custom domains: claim a host like chat.acme.com on the channel's page, po
 
 ---
 
-Operators can summon the Janis concierge inside the console via the Copilot rail — the sparkle icon in the left nav — for product answers and workspace actions it proposes as approvable cards.
+Operators can summon the Janis concierge inside the console via the Copilot tab of the right-hand dock — the sparkle icon in the left nav or the dock's right-edge strip — for product answers and workspace actions it proposes as approvable cards.

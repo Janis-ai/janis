@@ -204,17 +204,11 @@ button, input, select, textarea { font: inherit; }
 }
 
 /* Ask Janis rail — flex sibling of .main: docks beside content, never over it */
-.ask-rail {
-  width: 340px; flex-shrink: 0; display: flex; flex-direction: column;
-  border-left: 1px solid var(--border); background: var(--panel);
-  /* above the bottom push banner (z-80), below alert toasts (z-100) */
-  position: relative; z-index: 81;
-}
-/* /ask — the concierge IS the page: hide the outlet, rail takes the row.
-   The same mounted rail flexes open, so drafts and scroll survive the
-   expand ↔ dock round-trip. */
+/* /ask — the concierge IS the page: hide the outlet, the dock's copilot
+   pane takes the row. The same mounted dock flexes open, so drafts and
+   scroll survive the expand ↔ dock round-trip. */
 .layout.ask-page .main { display: none; }
-.layout.ask-page .ask-rail { flex: 1; width: auto; }
+.layout.ask-page .dock { position: static; flex: 1; width: auto; max-width: none; box-shadow: none; border-left: none; animation: none; }
 /* keep the chat column readable at desktop widths — centre like a chat page */
 .layout.ask-page .ask-pane { max-width: 820px; width: 100%; margin: 0 auto; }
 
@@ -223,17 +217,23 @@ button, input, select, textarea { font: inherit; }
   padding: 12px 14px; border-bottom: 1px solid var(--border);
 }
 .ask-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.ask-tabs {
+/* The dock's tab row — two different relationships sharing one column:
+   Test = you're a customer talking to your agent (green accent); Copilot =
+   you're the owner talking to Janis (violet accent). The accent carries
+   through to the strip icon so a glance says which surface is open. */
+.dock-tabs {
   display: flex; align-items: center; gap: 4px;
-  padding: 8px 10px; border-bottom: 1px solid var(--border);
 }
-.ask-tab {
+.dock-tab {
+  display: inline-flex; align-items: center; gap: 5px;
   background: none; border: none; color: var(--muted); font: inherit;
-  font-size: 12.5px; font-weight: 600; padding: 4px 8px; border-radius: 6px;
+  font-size: 12.5px; font-weight: 600; padding: 5px 10px; border-radius: 7px;
   cursor: pointer; white-space: nowrap;
+  border-bottom: 2px solid transparent; border-radius: 7px 7px 0 0;
 }
-.ask-tab:hover { color: var(--text); }
-.ask-tab.active { color: var(--text); background: var(--panel-2); }
+.dock-tab:hover { color: var(--text); }
+.dock-tab-test.active { color: var(--accent); background: var(--accent-dim); border-bottom-color: var(--accent); }
+.dock-tab-copilot.active { color: var(--copilot, #7c6cf0); background: rgba(124, 108, 240, .12); border-bottom-color: var(--copilot, #7c6cf0); }
 .ask-scroll { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .ask-msg {
   max-width: 85%; padding: 8px 11px; border-radius: 10px; font-size: 14px;
@@ -361,25 +361,26 @@ button, input, select, textarea { font: inherit; }
    cover anything; the accent tint and green icon make it the one visible
    test affordance on the page. The dot pulses until the agent has been
    chatted with once, then goes quiet for good. */
-.test-strip {
+/* One strip on the right edge — stacked icons, one per dock tab. */
+.dock-strip {
   position: fixed; right: 0; top: 0; bottom: 0; width: 48px; z-index: 41;
   display: flex; flex-direction: column; align-items: center;
-  padding: 16px 0; gap: 10px; border: 0; font-family: inherit;
+  padding: 14px 0; gap: 6px;
   border-left: 1px solid var(--border);
-  background: var(--accent-dim); cursor: pointer;
+  background: var(--panel);
 }
-.test-strip:hover { background: var(--accent-dim); filter: brightness(1.15); }
-/* Open: the strip reads as the dock's edge handle — panel background, no
-   border between strip and dock, just the collapse chevron. */
-.test-strip.open { background: var(--panel); border-left-color: transparent; }
-.test-strip.open .test-strip-icon { color: var(--muted); }
-.test-strip.open:hover .test-strip-icon { color: var(--accent); }
-.test-strip-icon { color: var(--accent); flex-shrink: 0; }
-.test-strip-label {
-  writing-mode: vertical-rl; font-size: 11px; letter-spacing: .1em;
-  text-transform: uppercase; color: var(--text); white-space: nowrap;
-  opacity: .8;
+.dock-strip-btn {
+  position: relative; width: 36px; height: 36px; border-radius: 9px;
+  border: 0; background: none; cursor: pointer; font-family: inherit;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted);
 }
+.dock-strip-btn:hover { background: var(--panel-2); }
+.dock-strip-test { color: var(--accent); }
+.dock-strip-test.active { background: var(--accent-dim); color: var(--accent); }
+.dock-strip-copilot { color: var(--copilot, #7c6cf0); }
+.dock-strip-copilot.active { background: rgba(124, 108, 240, .12); color: var(--copilot, #7c6cf0); }
+.dock-strip-btn .test-strip-dot { position: absolute; right: 4px; top: 4px; }
 .test-strip-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
   animation: strip-pulse 1.6s ease-in-out infinite;
@@ -399,21 +400,31 @@ button, input, select, textarea { font: inherit; }
   font-size: 13px; padding: 0 2px; font-family: inherit;
 }
 .test-callout button:hover { color: var(--accent); }
-/* When the concierge rail is docked it owns the right edge — the strip,
-   callout and panel slide left of it so nothing overlaps. */
-.layout.ask-open .test-strip { right: 340px; }
-.layout.ask-open .test-dock { right: 388px; }
-.layout.ask-open .test-callout { right: 396px; }
-/* Docked test panel — slides out from the strip so the two read as one
-   control. Full-height minus the strip's 48px on the right. */
-.test-dock {
+/* The dock — one column shared by Test and Copilot. Slides out from the
+   strip so the two read as one control. */
+.dock {
   position: fixed; right: 48px; top: 0; bottom: 0; width: 400px; max-width: 92vw;
   z-index: 40; display: flex; flex-direction: column;
   background: var(--panel); border-left: 1px solid var(--border);
   box-shadow: -4px 0 16px rgba(0,0,0,.14);
   animation: dock-in .16s ease;
 }
+.dock.wide { width: min(780px, 94vw); }
+.dock.split { width: min(840px, 94vw); }
 @keyframes dock-in { from { transform: translateX(56px); opacity: .6; } }
+.dock-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 12px 0; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.dock-head .test-dock-title { padding-bottom: 8px; font-size: 13px; }
+.dock-head .btn { padding: 5px 8px; margin-bottom: 4px; }
+.dock-bodies { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.dock-page { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.dock.split .dock-bodies { flex-direction: row; }
+.dock.split .dock-page + .dock-page { border-left: 1px solid var(--border); }
+.dock-copilot-mark { width: 15px; height: 15px; border-radius: 4px; }
+/* Split is a ≥1800px luxury — below that the toggle hides. */
+@media (max-width: 1799px) { .dock-split-btn { display: none; } }
 .test-dock-head {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 10px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0;
@@ -428,18 +439,21 @@ button, input, select, textarea { font: inherit; }
   display: block; background: rgba(8, 10, 14, .35); cursor: default;
 }
 :root[data-theme='light'] .test-dock-dim { background: rgba(30, 35, 50, .22); }
-/* The strip always owns its 48px — content never hides under it. And on
-   builder pages the column caps at ~880px so the space the docked panel
-   takes is space that was empty anyway. */
-body.test-dock-available .main { margin-right: 48px; max-width: 880px; }
+/* The strip always owns its 48px — content never hides under it. On
+   builder pages the column also caps at ~880px so the space the docked
+   panel takes is space that was empty anyway. */
+.layout.dock-available .main { margin-right: 48px; }
+.layout.dock-testable .main { max-width: 880px; }
 /* With room to spare, push the column instead — reflow beats overlay. */
 @media (min-width: 1440px) {
   .test-dock-dim { display: none; }
-  body.test-dock-open .main { margin-right: 448px; }
+  .layout.dock-open .main { margin-right: 448px; }
+  .layout.dock-split.dock-open .main { margin-right: 888px; }
+  .layout.dock-wide.dock-open .main { margin-right: 828px; }
 }
 .main { transition: margin-right .15s ease; }
 @media (max-width: 640px) {
-  .test-dock { left: 0; width: auto; border-left: none; }
+  .dock { left: 0; width: auto; border-left: none; }
 }
 /* Per-topic "Add source" popover — four affordances behind one control. */
 .src-menu-wrap { position: relative; display: inline-block; }
@@ -1025,38 +1039,38 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    collapses to icons and the details panel stacks under the transcript in the
    middle column. The rail stays docked — other pages are unaffected. */
 @media (max-width: 1400px) {
-  .layout.ask-open:has(.conv-layout) .sidebar { width: 60px; }
-  .layout.ask-open:has(.conv-layout) .sidebar .brand, .layout.ask-open:has(.conv-layout) .sidebar a { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
-  .layout.ask-open:has(.conv-layout) .sidebar .brand .brand-wide { display: none; }
-  .layout.ask-open:has(.conv-layout) .sidebar .brand .brand-mark { display: block; margin: 0 auto; }
-  .layout.ask-open:has(.conv-layout) .sidebar a .label, .layout.ask-open:has(.conv-layout) .sidebar .user, .layout.ask-open:has(.conv-layout) .sidebar .ask-toggle .label { display: none; }
-  .layout.ask-open:has(.conv-layout) .sidebar a .icon, .layout.ask-open:has(.conv-layout) .sidebar .ask-toggle .icon { display: inline-flex; }
+  .layout.dock-open:has(.conv-layout) .sidebar { width: 60px; }
+  .layout.dock-open:has(.conv-layout) .sidebar .brand, .layout.dock-open:has(.conv-layout) .sidebar a { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
+  .layout.dock-open:has(.conv-layout) .sidebar .brand .brand-wide { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar .brand .brand-mark { display: block; margin: 0 auto; }
+  .layout.dock-open:has(.conv-layout) .sidebar a .label, .layout.dock-open:has(.conv-layout) .sidebar .user, .layout.dock-open:has(.conv-layout) .sidebar .ask-toggle .label { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar a .icon, .layout.dock-open:has(.conv-layout) .sidebar .ask-toggle .icon { display: inline-flex; }
   /* icon rail: no indent — icons centre like every other row; the agent
      label collapses to its bot glyph */
-  .layout.ask-open:has(.conv-layout) .sidebar a.nav-indent { padding-left: 0; }
-  .layout.ask-open:has(.conv-layout) .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
-  .layout.ask-open:has(.conv-layout) .sidebar .nav-sec span { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar a.nav-indent { padding-left: 0; }
+  .layout.dock-open:has(.conv-layout) .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
+  .layout.dock-open:has(.conv-layout) .sidebar .nav-sec span { display: none; }
   /* the plain-text BUILD/CONFIGURE headers have no icon representation —
      drop them; the agent-name row keeps its Bot glyph */
-  .layout.ask-open:has(.conv-layout) .sidebar .nav-sec:not(:has(svg)) { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar .nav-sec:not(:has(svg)) { display: none; }
   /* badge overlays the icon's top-right so the icon itself stays centred
      and aligned with the rows below */
-  .layout.ask-open:has(.conv-layout) .sidebar a { position: relative; }
-  .layout.ask-open:has(.conv-layout) .sidebar a .nav-badge {
+  .layout.dock-open:has(.conv-layout) .sidebar a { position: relative; }
+  .layout.dock-open:has(.conv-layout) .sidebar a .nav-badge {
     position: absolute; top: 1px; left: 50%; margin: 0 0 0 7px;
     font-size: 9px; line-height: 13px; min-width: 13px; padding: 0 3px;
     border-radius: 8px;
   }
   /* step marks badge the icon when the label is gone */
-  .layout.ask-open:has(.conv-layout) .sidebar a .step-mark {
+  .layout.dock-open:has(.conv-layout) .sidebar a .step-mark {
     position: absolute; top: 2px; left: 50%; margin: 0 0 0 6px; font-size: 10px;
   }
-  .layout.ask-open:has(.conv-layout) .sidebar .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
-  .layout.ask-open .conv-layout { flex-direction: column; height: auto; }
-  .layout.ask-open .conv-side { width: 100%; }
+  .layout.dock-open:has(.conv-layout) .sidebar .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
+  .layout.dock-open .conv-layout { flex-direction: column; height: auto; }
+  .layout.dock-open .conv-side { width: 100%; }
   /* stacked mode: keep the transcript internally scrollable so the composer
      stays adjacent instead of dropping below a page-length of messages */
-  .layout.ask-open .transcript { max-height: 55vh; min-height: 220px; }
+  .layout.dock-open .transcript { max-height: 55vh; min-height: 220px; }
 }
 @media (max-width: 900px) {
   .conv-layout { flex-direction: column; height: auto; }
