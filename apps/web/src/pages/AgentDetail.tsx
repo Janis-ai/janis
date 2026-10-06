@@ -49,7 +49,7 @@ const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
 const SECTIONS = {
   behavior: 'Experience',
   knowledge: 'Knowledge',
-  channels: 'Deploy',
+  channels: 'Channels',
   integrations: 'Actions',
   components: 'Chat components',
   tests: 'Test',
@@ -325,7 +325,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
             title="Channels, widget, embed — put this agent to work"
             onClick={() => navigate(`/agents/${agent.id}/channels`)}
           >
-            Deploy
+            Channels
           </button>
         </div>
         <div className="muted" style={{ marginTop: 10 }}>

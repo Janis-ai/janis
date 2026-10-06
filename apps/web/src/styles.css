@@ -132,6 +132,14 @@ button, input, select, textarea { font: inherit; }
    never disabled. Only the trailing + mark hints at it. */
 /* Rule separating the workspace layer from the Copilot toggle below it. */
 .sidebar .nav-divider { border-top: 1px solid var(--border); margin: 6px 0; }
+/* Step marks in the sidebar — the same ✓/◐/○ semantics as the builder
+   rail, driven by the same build-status model. In expanded mode the mark
+   sits at the row's right edge; collapsed it badges the icon (media rules
+   below). */
+.sidebar a .step-mark { margin-left: auto; font-size: 11px; color: var(--muted); }
+.sidebar a .step-mark.done { color: var(--ok); }
+.sidebar a .step-mark.muted { opacity: .55; }
+.sidebar a .step-mark.half { color: var(--warn, #f59e0b); }
 /* "Ask Janis" toggle — looks like a nav link but toggles the docked rail */
 .sidebar .ask-toggle {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 20px;
@@ -874,6 +882,10 @@ textarea:disabled { opacity: .55; }
     font-size: 9px; line-height: 13px; min-width: 13px; padding: 0 3px;
     border-radius: 8px;
   }
+  /* step marks badge the icon when the label is gone */
+  .layout.ask-open:has(.conv-layout) .sidebar a .step-mark {
+    position: absolute; top: 2px; left: 50%; margin: 0 0 0 6px; font-size: 10px;
+  }
   .layout.ask-open:has(.conv-layout) .sidebar .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
   .layout.ask-open .conv-layout { flex-direction: column; height: auto; }
   .layout.ask-open .conv-side { width: 100%; }
@@ -1007,6 +1019,10 @@ details summary:hover { color: var(--text); }
     position: absolute; top: 1px; left: 50%; margin: 0 0 0 7px;
     font-size: 9px; line-height: 13px; min-width: 13px; padding: 0 3px;
     border-radius: 8px;
+  }
+  /* step marks badge the icon when the label is gone */
+  .sidebar a .step-mark {
+    position: absolute; top: 2px; left: 50%; margin: 0 0 0 6px; font-size: 10px;
   }
   /* the rail goes full-screen on mobile rather than squeezing the main column */
   .ask-rail { position: fixed; left: 60px; right: 0; top: 0; bottom: 0; width: auto; z-index: 85; }

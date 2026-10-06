@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAgents, useBuildStatus, useMe } from '../api/hooks';
 import { janisBrain, setLastAgent } from '../lib/agentContext';
-import { stepGlyph, useSeenSteps } from '../lib/seenSteps';
+import { stepGlyph, stepSubtitle, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { AskJanis } from '../components/AskJanis';
@@ -401,33 +401,7 @@ export default function AgentBuilder() {
           const st = status?.steps[s.key];
           const g = status ? stepGlyph(s.key, st) : null;
           const done = st === 'done' || Boolean(agent && i < idx && !status);
-          const subtitle = !status
-            ? s.hint
-            : s.key === 'create'
-              ? 'brief saved'
-              : s.key === 'teach'
-                ? status.knowledge.sources
-                  ? `${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
-                  : st === 'na' ? 'not needed' : 'no sources yet'
-                : s.key === 'guide'
-                  ? st === 'done' ? 'reviewed'
-                    : st === 'partial' ? 'drafted — take a look'
-                    : 'nothing yet'
-                  : s.key === 'abilities'
-                    ? status.abilities
-                      ? `${status.abilities} tool${status.abilities > 1 ? 's' : ''}`
-                      : st === 'partial' ? 'suggested — none connected'
-                      : st === 'na' ? 'none needed'
-                      : 'nothing connected'
-                    : s.key === 'try'
-                      ? status.test_conversations
-                        ? status.open_gaps
-                          ? `${status.open_gaps} open gap${status.open_gaps > 1 ? 's' : ''}`
-                          : 'tested'
-                        : 'not tested yet'
-                      : status.channels
-                        ? `${status.channels} channel${status.channels > 1 ? 's' : ''} live`
-                        : 'no channels yet';
+          const subtitle = !status ? s.hint : stepSubtitle(s.key, status);
           return (
             <button
               key={s.key}

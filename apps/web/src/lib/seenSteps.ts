@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import type { BuildStatus } from '../api/hooks';
 
 /** Per-agent "has the user opened this build step" — UI-only state kept in
  *  localStorage. Powers the ⊙ mark: Teach it and Abilities are open-ended
@@ -75,4 +76,43 @@ export function stepGlyph(
   if (state === 'na') return 'check-muted';
   if (state === 'partial') return 'half';
   return 'circle';
+}
+
+/** The live state line under a step mark — the same text the builder
+ *  rail shows as its subtitle and the nav carries in its tooltips, so
+ *  both surfaces answer "what state is this step in" identically. */
+export function stepSubtitle(key: string, status: BuildStatus): string {
+  const st = status.steps[key as keyof BuildStatus['steps']];
+  switch (key) {
+    case 'create':
+      return 'brief saved';
+    case 'teach':
+      return status.knowledge.sources
+        ? `${status.knowledge.sources} source${status.knowledge.sources > 1 ? 's' : ''}`
+        : st === 'na'
+          ? 'not needed'
+          : 'no sources yet';
+    case 'guide':
+      return st === 'done' ? 'reviewed' : st === 'partial' ? 'drafted — take a look' : 'nothing yet';
+    case 'abilities':
+      return status.abilities
+        ? `${status.abilities} tool${status.abilities > 1 ? 's' : ''}`
+        : st === 'partial'
+          ? 'suggested — none connected'
+          : st === 'na'
+            ? 'none needed'
+            : 'nothing connected';
+    case 'try':
+      return status.test_conversations
+        ? status.open_gaps
+          ? `${status.open_gaps} open gap${status.open_gaps > 1 ? 's' : ''}`
+          : 'tested'
+        : 'not tested yet';
+    case 'deploy':
+      return status.channels
+        ? `${status.channels} channel${status.channels > 1 ? 's' : ''} live`
+        : 'no channels yet';
+    default:
+      return '';
+  }
 }

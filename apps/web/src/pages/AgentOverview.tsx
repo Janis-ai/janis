@@ -200,7 +200,7 @@ export default function AgentOverview() {
           title="Channels, widget, embed — put this agent to work"
           onClick={() => navigate(`/agents/${id}/channels`)}
         >
-          Deploy
+          Channels
         </button>
         <button className="btn" onClick={() => navigate(`/agents/${id}/settings`)}>
           Agent settings
@@ -254,7 +254,16 @@ export default function AgentOverview() {
         </div>
         {hosted && (
           <div className="build-progress">
-            {BUILD_STEPS.map((s) => {
+            {(status === 'live'
+              ? /* Once live the strip is a checklist, not a map — only the
+                   steps that still need a look, plus a way back into the
+                   guided view. */
+                BUILD_STEPS.filter((s) => {
+                  const st = buildStatus?.steps[s.key];
+                  return st === 'pending' || st === 'partial';
+                })
+              : BUILD_STEPS
+            ).map((s) => {
               // Marks carry meaning: ✓ human-confirmed, ◐ drafted or needs
               // a look, ○ nothing yet — same rule as the builder strip.
               const g = stepGlyph(s.key, buildStatus?.steps[s.key]);
@@ -284,6 +293,11 @@ export default function AgentOverview() {
                 </Link>
               );
             })}
+            {status === 'live' && (
+              <Link to={buildStepLink(id!, 'create')} className="bp-item" style={{ borderStyle: 'dashed' }}>
+                Setup guide
+              </Link>
+            )}
           </div>
         )}
       </div>

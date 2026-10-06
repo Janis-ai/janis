@@ -3,7 +3,7 @@ import type { Agent } from '@janis/shared';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { useAgents, useMe } from '../api/hooks';
+import { useAgents, useBuildStatus, useMe } from '../api/hooks';
 import { useStream, type StreamAlert } from '../lib/useStream';
 import { clearLastAgent, janisBrain, useContextAgent } from '../lib/agentContext';
 import { trackOnce } from '../lib/analytics';
@@ -13,7 +13,7 @@ import PushBanner from './PushBanner';
 import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
 import { railBus, type RailRequest } from '../lib/railBus';
-import { markStepSeen } from '../lib/seenSteps';
+import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
   Compass, CreditCard, FlaskConical, Gauge, Inbox, Megaphone,
@@ -58,10 +58,24 @@ const SECTION_TO_STEP: Record<BuildStepKey, string> = {
   deploy: 'channels',
 };
 
-/** Sidebar build nav — hosted agents get all six steps (each opens the
- *  builder stage for it); external-webhook agents only have a deploy
- *  surface, which links straight to the channels list. */
-function buildNav(agent: Agent, agentId: string) {
+/** Post-launch nav vocabulary — the same capabilities as the setup
+ *  steps, but named for what an owner does day to day and linked to the
+ *  persistent section surfaces rather than the guided builder. 'Create'
+ *  has no live counterpart: editing the brief stays in the guided view
+ *  (reopened from Overview) and agent details live under settings. */
+const LIVE_NAV: Record<Exclude<BuildStepKey, 'create'>, { label: string; section: string }> = {
+  teach: { label: 'Knowledge', section: 'knowledge' },
+  guide: { label: 'Experience', section: 'behavior' },
+  abilities: { label: 'Actions', section: 'integrations' },
+  try: { label: 'Test', section: 'tests' },
+  deploy: { label: 'Channels', section: 'channels' },
+};
+
+/** Sidebar agent nav — setup mode shows the six guided steps, each
+ *  opening its builder stage; once a channel is live the same items
+ *  become the persistent section surfaces with day-to-day names.
+ *  External-webhook agents only have a channels surface either way. */
+function buildNav(agent: Agent, agentId: string, live: boolean) {
   const steps: {
     key: BuildStepKey;
     label: string;
@@ -75,9 +89,13 @@ function buildNav(agent: Agent, agentId: string) {
     { key: 'try', label: 'Try it', to: `/agents/new/${agentId}?step=try`, Icon: FlaskConical },
     { key: 'deploy', label: 'Deploy', to: `/agents/new/${agentId}?step=deploy`, Icon: Rocket },
   ];
-  return janisBrain(agent)
-    ? steps
-    : [{ key: 'deploy' as const, label: 'Deploy', to: `/agents/${agentId}/channels`, Icon: Rocket }];
+  if (janisBrain(agent)) {
+    if (!live) return steps;
+    return steps
+      .filter((s) => s.key !== 'create')
+      .map((s) => ({ ...s, label: LIVE_NAV[s.key as keyof typeof LIVE_NAV].label, to: `/agents/${agentId}/${LIVE_NAV[s.key as keyof typeof LIVE_NAV].section}` }));
+  }
+  return [{ key: 'deploy' as const, label: live ? 'Channels' : 'Deploy', to: `/agents/${agentId}/channels`, Icon: Rocket }];
 }
 
 interface MeData {
@@ -300,6 +318,11 @@ export default function Layout() {
   const ctxAgent = useContextAgent();
   const { data: agentsData } = useAgents();
   const currentAgent = agentsData?.agents.find((a) => a.id === ctxAgent);
+  // Build status drives both the nav marks and the setup→live switch:
+  // the first live channel turns the guided steps into their section
+  // surfaces (same model the builder rail and Overview read).
+  const { data: agentStatus } = useBuildStatus(ctxAgent ?? undefined);
+  const agentLive = agentStatus?.steps.deploy === 'done';
 
   // /ask — the concierge rail as a full page. The same mounted rail fills the
   // content column so drafts/scroll survive expand ↔ dock round-trips.
@@ -662,18 +685,31 @@ export default function Layout() {
               <span>{currentAgent.name}</span>
             </div>
             <NavLink className="nav-indent" end to={`/agents/${ctxAgent}`}><span className="icon"><Gauge size={18} /></span><span className="label">Overview</span></NavLink>
-            <div className="nav-sec"><span>Build</span></div>
-            {buildNav(currentAgent, ctxAgent!).map((s) => (
-              <Link
-                key={s.key}
-                className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}`}
-                to={s.to}
-                title={s.label}
-              >
-                <span className="icon"><s.Icon size={18} /></span>
-                <span className="label">{s.label}</span>
-              </Link>
-            ))}
+            {!agentLive && <div className="nav-sec"><span>Build</span></div>}
+            {buildNav(currentAgent, ctxAgent!, agentLive ?? false).map((s) => {
+              const st = agentStatus?.steps[s.key];
+              const g = agentStatus ? stepGlyph(s.key, st) : null;
+              // Post-launch a permanent ✓ on every row is noise — marks
+              // only flag steps that still need a look. Setup mode shows
+              // every mark so progress is visible without the rail.
+              const showMark = g && (!agentLive || g === 'half' || g === 'circle');
+              return (
+                <Link
+                  key={s.key}
+                  className={`nav-indent build-step${buildNavActive(s.key) ? ' active' : ''}`}
+                  to={s.to}
+                  title={`${s.label}${agentStatus ? ` · ${stepSubtitle(s.key, agentStatus)}` : ''}`}
+                >
+                  <span className="icon"><s.Icon size={18} /></span>
+                  <span className="label">{s.label}</span>
+                  {showMark && (
+                    <span className={`step-mark${g === 'check' ? ' done' : g === 'check-muted' ? ' muted' : g === 'half' ? ' half' : ''}`}>
+                      {g === 'check' || g === 'check-muted' ? '✓' : g === 'half' ? '◐' : '○'}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
             <div className="nav-sec"><span>Configure</span></div>
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="icon"><Settings size={18} /></span><span className="label">Agent settings</span></NavLink>
           </div>
