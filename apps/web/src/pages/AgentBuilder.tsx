@@ -2010,6 +2010,21 @@ export default function AgentBuilder() {
                                 </button>
                               </div>
                             )}
+                            {/* A failed run isn't the end — re-open the
+                                correction card so "needs work" has a next
+                                step, not just a badge. */}
+                            {reply && s.human_result === 'fail' && (
+                              <button
+                                className="btn sm"
+                                title="Open the fix path — knowledge gap or instruction rule"
+                                onClick={() => {
+                                  setDockOpen(true);
+                                  setCorrectTarget({ agentText: reply, customerText: prompt });
+                                }}
+                              >
+                                Fix it
+                              </button>
+                            )}
                             <button
                               className="btn sm"
                               disabled={running}
