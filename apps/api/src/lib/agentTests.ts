@@ -13,6 +13,7 @@ import {
   llmFor,
   knowledgeQueryFor,
   loadKnowledgeDocs,
+  notesReserved,
   systemPrompt,
   type AgentRunContext,
   type InspectorToolCall,
@@ -251,7 +252,9 @@ export async function runAgentTest(
   }));
   // Retrieve against the test's customer turns — evals should see the same
   // knowledge slice a live conversation would.
-  const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history));
+  const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history), {
+    reservedChars: notesReserved(agent),
+  });
   // same grounding summary the "why this reply" inspector stamps
   const acfg = (agent.config ?? {}) as { knowledge?: unknown; system_prompt?: string };
   const context = {

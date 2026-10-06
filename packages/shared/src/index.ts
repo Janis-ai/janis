@@ -380,6 +380,9 @@ export const AgentConfig = z.object({
       // vary by region. Injected into the runtime prompt rather than
       // baked into the authored instructions.
       region: z.string().max(120).optional(),
+      // Draft help-center articles join the prompt on internal test
+      // channels only — production always injects published-only.
+      include_drafts_in_test: z.boolean().optional(),
       // The user read the "doesn't need extra knowledge" banner and chose
       // to skip Teach it — distinct from empty ('nothing added').
       teach_skipped: z.boolean().optional(),

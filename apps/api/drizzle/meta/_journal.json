@@ -638,6 +638,13 @@
       "when": 1791295336763,
       "tag": "0090_knowledge_topic",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1791298243701,
+      "tag": "0091_knowledge_enabled",
+      "breakpoints": true
     }
   ]
 }

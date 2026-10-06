@@ -17,6 +17,7 @@ import {
   KnowledgeGaps,
   KnowledgeTextSection,
   ToolsTab,
+  type KnowledgeBudget,
 } from './AgentDetail';
 
 /** Guided agent builder — Create → Teach it → Guide it → Abilities →
@@ -235,9 +236,10 @@ export default function AgentBuilder() {
   const { data: knowledgeData } = useQuery({
     queryKey: ['knowledge', agent?.id],
     queryFn: () =>
-      api<{ files: { source_url: string | null; topic: string | null }[] }>(
-        `/api/agents/${agent?.id}/knowledge`,
-      ),
+      api<{
+        files: { source_url: string | null; topic: string | null }[];
+        budget: KnowledgeBudget;
+      }>(`/api/agents/${agent?.id}/knowledge`),
     enabled: Boolean(agent && hosted && step === 'teach'),
   });
   const { data: articlesData } = useQuery({
@@ -953,6 +955,30 @@ export default function AgentBuilder() {
                 Add trusted sources for the things your agent shouldn't guess
                 at. Paste a link, upload a document, or write it in.
               </div>
+              {(() => {
+                const b = knowledgeData?.budget;
+                if (!b || b.used_chars === 0) return null;
+                const pct = Math.round((b.used_chars / b.limit) * 100);
+                const tok =
+                  b.used_chars >= 40_000
+                    ? `${Math.round(b.used_chars / 4000)}k`
+                    : Math.round(b.used_chars / 4).toLocaleString();
+                return (
+                  <div
+                    className="muted"
+                    style={{ fontSize: 12, marginTop: 8 }}
+                  >
+                    Knowledge: ~{tok} tokens · {pct}% of capacity
+                    {b.notes_chars > b.notes_limit
+                      ? ' — notes alone exceed their share; trim the Text tab'
+                      : pct > 100
+                        ? ` — over budget by ~${Math.round((b.used_chars - b.limit) / 4000)}k; on each reply, the least-relevant sources are left out`
+                        : pct >= 60
+                          ? ' — large knowledge sets can slow replies and make answers less focused'
+                          : ''}
+                  </div>
+                );
+              })()}
               {builder?.teach_skipped ? (
                 <div className="card muted" style={{ marginTop: 10, fontSize: 13 }}>
                   Skipped — your agent answers without extra sources.{' '}
@@ -1225,7 +1251,26 @@ export default function AgentBuilder() {
                 />
               )}
               {teachSub === 'gaps' && <KnowledgeGaps agentId={agent.id} config={cfg} />}
-              {teachSub === 'help' && <HelpCenter agent={agent} />}
+              {teachSub === 'help' && (
+                <>
+                  <label
+                    className="row muted"
+                    style={{ fontSize: 12, marginTop: 10, gap: 6, cursor: 'pointer' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!builder?.include_drafts_in_test}
+                      disabled={confirmFlag.isPending}
+                      onChange={(e) =>
+                        confirmFlag.mutate({ include_drafts_in_test: e.target.checked })
+                      }
+                    />
+                    Include draft articles in test chats — production always
+                    injects published only
+                  </label>
+                  <HelpCenter agent={agent} />
+                </>
+              )}
             </>
           )}
         </>
@@ -1453,6 +1498,7 @@ export default function AgentBuilder() {
                 ? `${status.test_conversations} chat${status.test_conversations > 1 ? 's' : ''}${status.open_gaps ? `, ${status.open_gaps} open gap${status.open_gaps > 1 ? 's' : ''}` : ''}`
                 : 'not yet'}
               {status.steps.guide === 'partial' && ' · instructions unreviewed'}
+              {status.knowledge.over_budget && ' · knowledge over budget'}
               {status.test_conversations === 0 && ' — worth a test first'}
             </div>
           )}
@@ -1518,7 +1564,7 @@ export default function AgentBuilder() {
           <div className="test-dock">
             <div className="test-dock-head">
               <strong style={{ fontSize: 13 }}>
-                Test it <span className="muted" style={{ fontWeight: 400 }}>— private channel, same pipeline as production</span>
+                Test it <span className="muted" style={{ fontWeight: 400 }}>— private channel, same pipeline as production{builder?.include_drafts_in_test ? ' · includes drafts' : ''}</span>
               </strong>
               {step === 'teach' && lastTestQuestion ? (
                 <button

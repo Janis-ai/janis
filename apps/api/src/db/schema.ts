@@ -740,6 +740,9 @@ export const knowledgeFiles = pgTable(
     // Suggested-knowledge topic this source was added for (builder.topic id)
     // — untagged for sources added straight from the tabs.
     topic: text('topic'),
+    // Excluded sources stay stored but don't inject — how an over-budget
+    // knowledge base shrinks without losing content.
+    enabled: boolean('enabled').notNull().default(true),
     refreshHours: integer('refresh_hours'),
     lastFetchedAt: timestamp('last_fetched_at', { withTimezone: true }),
     nextFetchAt: timestamp('next_fetch_at', { withTimezone: true }),

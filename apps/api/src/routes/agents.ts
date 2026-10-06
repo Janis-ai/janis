@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { AgentConfig, friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, channelBindings, channels, conversations, evalSuggestions, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, channelBindings, channels, conversations, evalSuggestions, helpArticles, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import { WidgetComponent, WidgetState, WidgetToolBinding } from '../lib/widgets.js';
 import { toolsFor } from '../lib/toolExec.js';
 import {
@@ -32,7 +32,7 @@ import {
   recheckGaps,
 } from '../services/knowledgeGaps.js';
 import { encryptSecret, loadSecretsMap } from '../lib/secrets.js';
-import { llmFor } from '../lib/hostedAgent.js';
+import { llmFor, MAX_KNOWLEDGE_CHARS, MAX_NOTES_CHARS } from '../lib/hostedAgent.js';
 import { checkpointIndices, draftExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { enqueueJob, runJobs } from '../lib/jobs.js';
@@ -625,13 +625,38 @@ export function agentRoutes(db: Db) {
 
   // Knowledge files — uploaded docs whose extracted text feeds the agent's prompt
   app.get('/:id/knowledge', agentMember, async (c) => {
-    if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
-    const rows = await db
-      .select()
-      .from(knowledgeFiles)
-      .where(eq(knowledgeFiles.agentId, c.req.param('id')))
-      .orderBy(desc(knowledgeFiles.createdAt));
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const [rows, [art]] = await Promise.all([
+      db
+        .select()
+        .from(knowledgeFiles)
+        .where(eq(knowledgeFiles.agentId, agent.id))
+        .orderBy(desc(knowledgeFiles.createdAt)),
+      db
+        .select({ total: sql<number>`coalesce(sum(length(${helpArticles.body})),0)::int` })
+        .from(helpArticles)
+        .where(and(eq(helpArticles.agentId, agent.id), eq(helpArticles.status, 'published'))),
+    ]);
+    // The same budget the injector enforces — enabled docs + published
+    // articles + notes against MAX_KNOWLEDGE_CHARS (notes reserve
+    // MAX_NOTES_CHARS first). The meter reads exactly this.
+    const cfg = (agent.config ?? {}) as AgentConfig;
+    const notesChars = (cfg.knowledge ?? []).reduce((n, k) => n + k.length, 0);
+    // Same filter the injector applies — only enabled, extracted ('ready')
+    // text reaches the prompt.
+    const docsChars =
+      rows
+        .filter((r) => r.enabled && r.status === 'ready')
+        .reduce((n, r) => n + r.text.length, 0) + (art?.total ?? 0);
     return c.json({
+      budget: {
+        limit: MAX_KNOWLEDGE_CHARS,
+        notes_limit: MAX_NOTES_CHARS,
+        notes_chars: notesChars,
+        docs_chars: docsChars,
+        used_chars: notesChars + docsChars,
+      },
       files: rows.map((r) => ({
         id: r.id,
         name: r.name,
@@ -642,6 +667,7 @@ export function agentRoutes(db: Db) {
         error: r.error,
         source_url: r.sourceUrl,
         topic: r.topic,
+        enabled: r.enabled,
         refresh_hours: r.refreshHours,
         last_fetched_at: r.lastFetchedAt?.toISOString() ?? null,
         next_fetch_at: r.nextFetchAt?.toISOString() ?? null,
@@ -649,6 +675,26 @@ export function agentRoutes(db: Db) {
       })),
     });
   });
+
+  // Include/exclude — the over-budget escape that keeps the content.
+  app.patch(
+    '/:id/knowledge/:fileId',
+    agentAdmin,
+    zValidator('json', z.object({ enabled: z.boolean() })),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const [row] = await db
+        .update(knowledgeFiles)
+        .set({ enabled: c.req.valid('json').enabled })
+        .where(
+          and(eq(knowledgeFiles.id, c.req.param('fileId')), eq(knowledgeFiles.agentId, agent.id)),
+        )
+        .returning({ id: knowledgeFiles.id });
+      if (!row) return c.json({ error: 'not found' }, 404);
+      return c.json({ ok: true });
+    },
+  );
 
   /** Build-status snapshot — the six build steps as CAPABILITIES, not a
    *  checklist. Per step: 'done' = configured, 'pending' = available but
@@ -662,7 +708,7 @@ export function agentRoutes(db: Db) {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const cfg = (agent.config ?? {}) as AgentConfig;
-    const [files, chans] = await Promise.all([
+    const [files, chans, [docChars], [artChars]] = await Promise.all([
       db
         .select({ createdAt: knowledgeFiles.createdAt, fetchedAt: knowledgeFiles.lastFetchedAt })
         .from(knowledgeFiles)
@@ -671,6 +717,20 @@ export function agentRoutes(db: Db) {
         .select({ id: channels.id, credentials: channels.credentials })
         .from(channels)
         .where(eq(channels.agentId, agent.id)),
+      db
+        .select({ total: sql<number>`coalesce(sum(length(${knowledgeFiles.text})),0)::int` })
+        .from(knowledgeFiles)
+        .where(
+          and(
+            eq(knowledgeFiles.agentId, agent.id),
+            eq(knowledgeFiles.enabled, true),
+            eq(knowledgeFiles.status, 'ready'),
+          ),
+        ),
+      db
+        .select({ total: sql<number>`coalesce(sum(length(${helpArticles.body})),0)::int` })
+        .from(helpArticles)
+        .where(and(eq(helpArticles.agentId, agent.id), eq(helpArticles.status, 'published'))),
     ]);
     const internalIds = chans
       .filter((ch) => (ch.credentials as { internal?: boolean }).internal === true)
@@ -740,7 +800,17 @@ export function agentRoutes(db: Db) {
             : 'pending',
         deploy: publicCount > 0 ? 'done' : 'pending',
       },
-      knowledge: { sources, updated_at: updatedAt?.toISOString() ?? null },
+      knowledge: {
+        sources,
+        updated_at: updatedAt?.toISOString() ?? null,
+        // Notes + enabled docs + published articles vs the injection cap —
+        // same math the Teach it meter reads from GET /knowledge.
+        over_budget:
+          (cfg.knowledge ?? []).reduce((n, k) => n + k.length, 0) +
+            (docChars?.total ?? 0) +
+            (artChars?.total ?? 0) >
+          MAX_KNOWLEDGE_CHARS,
+      },
       teach_skipped: !!cfg.builder?.teach_skipped,
       abilities,
       channels: publicCount,

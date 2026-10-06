@@ -388,7 +388,34 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
           {sub === 'files' && <KnowledgeFiles agentId={agent.id} variant="files" />}
           {sub === 'websites' && <KnowledgeFiles agentId={agent.id} variant="websites" />}
           {sub === 'gaps' && <KnowledgeGaps agentId={agent.id} config={agent.config ?? {}} />}
-          {sub === 'help' && <HelpCenter agent={agent} />}
+          {sub === 'help' && (
+            <>
+              <label
+                className="row muted"
+                style={{ fontSize: 12, marginTop: 10, gap: 6, cursor: 'pointer' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!cfg.builder?.include_drafts_in_test}
+                  disabled={update.isPending}
+                  onChange={(e) => {
+                    const config: AgentConfig = {
+                      ...cfg,
+                      builder: {
+                        ...cfg.builder,
+                        include_drafts_in_test: e.target.checked,
+                      },
+                    };
+                    setCfg(config);
+                    update.mutate({ config });
+                  }}
+                />
+                Include draft articles in test chats — production always
+                injects published only
+              </label>
+              <HelpCenter agent={agent} />
+            </>
+          )}
         </>
       )}
       {section === 'settings' && (
@@ -2733,10 +2760,19 @@ interface KnowledgeFile {
   error: string | null;
   source_url: string | null;
   topic: string | null;
+  enabled: boolean;
   refresh_hours: number | null;
   last_fetched_at: string | null;
   next_fetch_at: string | null;
   created_at: string;
+}
+
+export interface KnowledgeBudget {
+  limit: number;
+  notes_limit: number;
+  notes_chars: number;
+  docs_chars: number;
+  used_chars: number;
 }
 
 export function KnowledgeFiles({
@@ -2755,7 +2791,10 @@ export function KnowledgeFiles({
   const qc = useQueryClient();
   const { data } = useQuery({
     queryKey: ['knowledge', agentId],
-    queryFn: () => api<{ files: KnowledgeFile[] }>(`/api/agents/${agentId}/knowledge`),
+    queryFn: () =>
+      api<{ files: KnowledgeFile[]; budget: KnowledgeBudget }>(
+        `/api/agents/${agentId}/knowledge`,
+      ),
   });
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -2848,8 +2887,25 @@ export function KnowledgeFiles({
     },
   });
 
+  const toggle = useMutation({
+    mutationFn: ({ fileId, enabled }: { fileId: string; enabled: boolean }) =>
+      api(`/api/agents/${agentId}/knowledge/${fileId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
+    },
+  });
+
   const showWebsites = variant === 'websites';
-  const rows = (data?.files ?? []).filter((f) => (showWebsites ? Boolean(f.source_url) : !f.source_url));
+  const overBudget = (data?.budget.used_chars ?? 0) > (data?.budget.limit ?? Infinity);
+  // Over budget, the biggest row is the likeliest fix — sort by size so
+  // the thing to disable or trim floats to the top.
+  const rows = (data?.files ?? [])
+    .filter((f) => (showWebsites ? Boolean(f.source_url) : !f.source_url))
+    .sort((a, b) => (overBudget ? b.chars - a.chars : 0));
   return (
     <div>
       {forTopic && (
@@ -2859,12 +2915,25 @@ export function KnowledgeFiles({
         </div>
       )}
       {rows.map((f) => (
-        <div key={f.id} className="row muted" style={{ marginTop: 6 }}>
+        <div key={f.id} className="row muted" style={{ marginTop: 6, opacity: f.enabled ? 1 : 0.55 }}>
+          <input
+            type="checkbox"
+            checked={f.enabled}
+            disabled={toggle.isPending}
+            title={f.enabled ? 'Included in the agent — uncheck to exclude it without deleting' : 'Excluded — the agent never sees this source'}
+            onChange={(e) => toggle.mutate({ fileId: f.id, enabled: e.target.checked })}
+          />
           <span className="grow">
             {f.source_url ? '🔗' : '📄'} {f.name}
             <span className="muted">
-              {' '}— {Math.max(1, Math.round(f.size_bytes / 1024))}KB → {f.chars.toLocaleString()} chars
+              {' '}— {Math.max(1, Math.round(f.size_bytes / 1024))}KB → {f.chars.toLocaleString()} chars (~{Math.round(f.chars / 4).toLocaleString()} tok)
             </span>
+            {!f.enabled && <span className="muted"> · excluded</span>}
+            {f.enabled &&
+              data?.budget &&
+              f.chars > data.budget.limit && (
+                <span className="error"> · larger than the whole budget — always truncated</span>
+              )}
             {f.source_url && (
               <span className="muted">
                 {' '}· fetched {f.last_fetched_at ? timeAgo(f.last_fetched_at) : 'never'}
