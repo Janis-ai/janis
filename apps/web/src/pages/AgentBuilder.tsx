@@ -652,6 +652,21 @@ export default function AgentBuilder() {
     advanceRun();
   };
   const runAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A seed that never delivered can't produce a reply — bail the run now
+  // rather than sitting on "Running…" for the 90s stall guard.
+  const onSeedFailed = () => {
+    if (!runningId) return;
+    if (runTimeoutRef.current) {
+      clearTimeout(runTimeoutRef.current);
+      runTimeoutRef.current = null;
+    }
+    if (runAdvanceTimer.current) {
+      clearTimeout(runAdvanceTimer.current);
+      runAdvanceTimer.current = null;
+    }
+    setTestNotice('The seeded message didn’t deliver — skipping this run');
+    advanceRun();
+  };
   const onAgentReply = (text: string) => {
     if (!runningId) return;
     // Reply landed — the stall guard's job is done for this scenario.
@@ -2428,6 +2443,7 @@ export default function AgentBuilder() {
                   setCorrectTarget(ctx);
                 }}
                 onAgentReply={onAgentReply}
+                onSendFailed={onSeedFailed}
                 verdictFor={verdictFor}
                 onSaveTest={(ctx) => {
                   // A reply to a checklist prompt IS that scenario —

@@ -286,6 +286,7 @@ export function AskJanis({
   onCorrect,
   verdictFor,
   onAgentReply,
+  onSendFailed,
   onSaveTest,
   hideHeader,
   visitorOverride,
@@ -324,6 +325,10 @@ export function AskJanis({
    *  history backfill) reports its text so the parent can attach a
    *  verdict to the scenario that was run. */
   onAgentReply?: (text: string) => void;
+  /** An outbound message's POST threw or its echo never arrived — the
+   *  scenario runner uses this to bail a seeded run instead of sitting
+   *  out the stall guard. */
+  onSendFailed?: () => void;
   /** Try-it free chat — "Save as scenario" next to Correct this under
    *  replies, turning an ad-hoc exchange into a scenario. The parent
    *  dedupes against scenarios that were run from the checklist itself. */
@@ -857,6 +862,23 @@ export function AskJanis({
     }
   };
 
+  // pending→failed transitions — outboxRef is already the truth post-setOb,
+  // so a pre-check here catches the flip exactly once; the runner treats a
+  // dead seed as "no reply" instead of sitting out the stall guard.
+  const flagFailed = (entry: OutEntry) => {
+    const dead = outboxRef.current.some(
+      (o) => o.localId === entry.localId && o.status === 'pending',
+    );
+    setOb((ob) =>
+      ob.map((o) =>
+        o.localId === entry.localId && o.status === 'pending'
+          ? { ...o, status: 'failed' as const }
+          : o,
+      ),
+    );
+    if (dead) onSendFailed?.();
+  };
+
   const send = async (body: string, atts: Attachment[], retryOf?: OutEntry, tap?: { of?: string }) => {
     const t = body.trim();
     if ((!t && !atts.length) || sending || !loaded) return;
@@ -910,16 +932,14 @@ export function AskJanis({
       // if the echo never arrived (e.g. plan cap dropped the message).
       setTimeout(async () => {
         await poll();
-        setOb((ob) =>
-          ob.map((o) => (o.localId === entry.localId && o.status === 'pending' ? { ...o, status: 'failed' as const } : o)),
-        );
+        flagFailed(entry);
       }, 1500);
     } catch {
       // The write may have landed even though the response was lost — poll
       // once so a stored echo reconciles the entry to delivered before we
       // call it failed.
       await poll();
-      setOb((ob) => ob.map((o) => (o.localId === entry.localId && o.status === 'pending' ? { ...o, status: 'failed' as const } : o)));
+      flagFailed(entry);
       hideTyping();
     } finally {
       setSending(false);
