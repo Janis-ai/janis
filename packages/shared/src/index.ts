@@ -372,6 +372,14 @@ export const AgentConfig = z.object({
       // knowledge_need value — it's the user's decision, not the model's.
       knowledge_need: z.enum(['required', 'helpful', 'unnecessary']).optional(),
       knowledge_need_reason: z.string().max(300).optional(),
+      // The draft's harm classification — 'elevated' when wrong answers
+      // hurt a person or animal (health, dosing, safety). Drives the
+      // drafted safety stance in Guide it and its review flag.
+      domain_risk: z.enum(['low', 'elevated']).optional(),
+      // Where the agent's customers are — schedules, units, and guidance
+      // vary by region. Injected into the runtime prompt rather than
+      // baked into the authored instructions.
+      region: z.string().max(120).optional(),
       // The user read the "doesn't need extra knowledge" banner and chose
       // to skip Teach it — distinct from empty ('nothing added').
       teach_skipped: z.boolean().optional(),

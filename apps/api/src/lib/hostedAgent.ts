@@ -367,6 +367,7 @@ export function systemPrompt(
     knowledge?: string[];
     tone?: string;
     auto_archive?: boolean;
+    builder?: { region?: string };
   };
   const parts = [
     cfg.system_prompt || defaultPersona(agent.name, opts),
@@ -382,6 +383,13 @@ export function systemPrompt(
     );
   }
   if (cfg.tone) parts.push(`\nTone: ${cfg.tone}`);
+  // Region is runtime context, not authored instruction — schedules,
+  // units, and guidance vary by where customers are.
+  if (cfg.builder?.region?.trim()) {
+    parts.push(
+      `\nCustomers are typically in ${cfg.builder.region.trim()} — prefer schedules, units, terminology, and guidance appropriate to that region, and say so when a recommendation varies by location.`,
+    );
+  }
   if (conv) parts.push(conversationContext(conv, agent.name, opts.forSuggestion, opts.pendingOffer, opts.offerMade));
   if (conv?.agentSummary) {
     parts.push(

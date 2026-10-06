@@ -19,6 +19,7 @@ export interface BuilderDraft {
   suggested_rules: string[];
   knowledge_need?: 'required' | 'helpful' | 'unnecessary';
   knowledge_need_reason?: string;
+  domain_risk?: 'low' | 'elevated';
   generated: boolean;
   note?: string;
 }
@@ -140,6 +141,10 @@ export function validateDraft(
         ? parsed.knowledge_need
         : undefined,
     knowledge_need_reason: clamp(parsed.knowledge_need_reason, 300),
+    domain_risk:
+      parsed.domain_risk === 'elevated' || parsed.domain_risk === 'low'
+        ? parsed.domain_risk
+        : undefined,
   };
 }
 
@@ -158,7 +163,8 @@ Given the operator's description of the agent they want, return ONE JSON object 
   "suggested_approvals": ["action descriptions that should wait for a human's approval before running — e.g. 'issue refund', 'cancel order' — max 10"],
   "suggested_rules": ["escalation or routing rules worth configuring, plain English, max 6"],
   "knowledge_need": "required|helpful|unnecessary — does answering well need information only the operator can supply? required = private business data (prices, inventory, account lookups, shop-specific policies); helpful = the model knows the broad domain but operator sources improve accuracy or authority; unnecessary = purely public-domain knowledge the model already knows. When unsure, choose helpful.",
-  "knowledge_need_reason": "one sentence naming what varies or is private, e.g. 'health and schedule details vary by region and breed' — <= 120 chars; only when knowledge_need is 'helpful'"
+  "knowledge_need_reason": "one sentence naming what varies or is private, e.g. 'health and schedule details vary by region and breed' — <= 120 chars; only when knowledge_need is 'helpful'",
+  "domain_risk": "low|elevated — 'elevated' when wrong answers could hurt a person or animal: health, dosing, safety, dangerous mistakes. When elevated, system_prompt MUST include a safety stance — not a substitute for a veterinarian/doctor, the urgent signs that need escalation named for this domain, and an offer of a human for those"
 }
 
 Rules: pick at most 4 catalog entries, only ones the description genuinely needs; a read action (look up, track, search) never needs approval while a mutating one (refund, cancel, edit) usually does; behavioral requirements in the description (reminders, priorities, prohibitions) belong in system_prompt, not suggested_knowledge; omit a key entirely rather than invent content.
@@ -205,6 +211,24 @@ export async function generateDraft(description: string): Promise<BuilderDraft |
       name: templateInfo(TOOL_TEMPLATES.find((t) => t.id === 'brave')!).name,
       reason: 'live web answers for facts the knowledge base does not cover',
     });
+  }
+  // Elevated-risk floor — a harm-capable domain never ships instructions
+  // that forgot the safety stance, whether the model wrote it or not.
+  if (draft.domain_risk === 'elevated') {
+    if (
+      draft.system_prompt &&
+      !/veterinarian|doctor|medical|emergency|urgent|poison|safety/i.test(draft.system_prompt)
+    ) {
+      draft.system_prompt +=
+        ' You are not a substitute for professional care — when a question involves health, dosing, or safety, give general guidance and say so plainly, name the urgent signs that need immediate professional attention for this domain, and offer a human.';
+    }
+    if (
+      !draft.suggested_rules.some((r) => /urgent|health|safety|emergency|human/i.test(r))
+    ) {
+      draft.suggested_rules.unshift(
+        'escalate to a human when the customer describes urgent health or safety signs',
+      );
+    }
   }
   return { ...draft, generated: true };
 }

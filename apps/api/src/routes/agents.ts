@@ -31,7 +31,7 @@ import {
   readGapsCache,
   recheckGaps,
 } from '../services/knowledgeGaps.js';
-import { encryptSecret } from '../lib/secrets.js';
+import { encryptSecret, loadSecretsMap } from '../lib/secrets.js';
 import { llmFor } from '../lib/hostedAgent.js';
 import { checkpointIndices, draftExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
@@ -250,6 +250,7 @@ export function agentRoutes(db: Db) {
           ...(draft?.knowledge_need_reason
             ? { knowledge_need_reason: draft.knowledge_need_reason }
             : {}),
+          ...(draft?.domain_risk ? { domain_risk: draft.domain_risk } : {}),
           generated_at: new Date().toISOString(),
         },
       };
@@ -899,6 +900,59 @@ export function agentRoutes(db: Db) {
     const ok = await refreshKnowledgeSource(db, file);
     return c.json({ ok });
   });
+
+  // Source discovery for the builder's topic checklist — uses the agent's
+  // OWN connected Brave integration (template 'brave' → BRAVE_API_KEY in
+  // agent secrets), never a platform key: the operator's search budget,
+  // their feature. Candidates come from the live response only — the
+  // endpoint never composes or invents URLs. Returns
+  // configured:false when Brave isn't connected so the UI can explain
+  // rather than silently failing.
+  app.post(
+    '/:id/source-search',
+    agentAdmin,
+    zValidator('json', z.object({ query: z.string().min(2).max(300) })),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const cfg = (agent.config ?? {}) as AgentConfig;
+      const connected = (cfg.tools ?? []).some((t) => t.template === 'brave');
+      const key = connected ? (await loadSecretsMap(db, agent.id)).BRAVE_API_KEY : undefined;
+      if (!key) return c.json({ configured: false, candidates: [] });
+      const q = c.req.valid('json').query;
+      const res = await fetch(
+        `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=5`,
+        {
+          headers: { 'X-Subscription-Token': key, accept: 'application/json' },
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!res.ok) return c.json({ error: `search failed (${res.status})` }, 502);
+      const data = (await res.json()) as {
+        web?: { results?: { title?: string; url?: string; description?: string }[] };
+      };
+      const candidates = (data.web?.results ?? [])
+        .slice(0, 5)
+        .flatMap((r) => {
+          if (!r.url) return [];
+          let domain = '';
+          try {
+            domain = new URL(r.url).hostname;
+          } catch {
+            return [];
+          }
+          return [
+            {
+              title: r.title ?? domain,
+              url: r.url,
+              domain,
+              summary: r.description ?? '',
+            },
+          ];
+        });
+      return c.json({ configured: true, candidates });
+    },
+  );
 
   // Knowledge-gap loop: clusters of conversations where the agent asked for a
   // human — the recurring questions it's failing on. Operator drafts → edits →

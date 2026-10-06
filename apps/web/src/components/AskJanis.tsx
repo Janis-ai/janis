@@ -281,6 +281,7 @@ export function AskJanis({
   seedMessage,
   agentId,
   asCustomer,
+  onCustomerMessage,
 }: {
   channelId: string;
   badge?: string;
@@ -298,6 +299,9 @@ export function AskJanis({
    *  identity — the agent sees a real customer (handoff/escalation work)
    *  and the sim thread stays separate from the operator's test thread. */
   asCustomer?: boolean;
+  /** Fires with each sent customer message — the builder's docked test
+   *  panel uses it for "Teach it this" on the last question asked. */
+  onCustomerMessage?: (text: string) => void;
 }) {
   const navigate = useNavigate();
   const visitor = useRef((asCustomer ? 'cust_' : '') + visitorId()).current;
@@ -764,6 +768,7 @@ export function AskJanis({
   const send = async (body: string, atts: Attachment[], retryOf?: OutEntry, tap?: { of?: string }) => {
     const t = body.trim();
     if ((!t && !atts.length) || sending || !loaded) return;
+    if (t) onCustomerMessage?.(t);
     setSending(true);
     setText('');
     requestAnimationFrame(autoresize);

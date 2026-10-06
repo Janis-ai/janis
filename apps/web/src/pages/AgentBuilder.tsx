@@ -38,6 +38,7 @@ interface BuilderDraft {
   suggested_rules?: string[];
   knowledge_need?: 'required' | 'helpful' | 'unnecessary';
   knowledge_need_reason?: string;
+  domain_risk?: 'low' | 'elevated';
 }
 
 const STEPS = [
@@ -365,6 +366,78 @@ export default function AgentBuilder() {
   };
   const markCovered = (t: Topic) =>
     confirmFlag.mutate({ covered_topics: [...new Set([...coveredSet, t.id])] });
+  // Last question asked in the docked test panel — powers "Teach it
+  // this": a weak answer becomes a Text-tab write with the question as
+  // context, which is exactly the rescue loop Try it formalizes later.
+  const [lastTestQuestion, setLastTestQuestion] = useState('');
+  // Customer region — optional; saved to builder.region on blur and
+  // injected into the runtime prompt (hostedAgent), not the authored one.
+  const [region, setRegion] = useState('');
+  useEffect(() => {
+    setRegion(agent?.config?.builder?.region ?? '');
+  }, [agent?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Find sources — Brave-gated source discovery. The API returns
+  // configured:false when the agent hasn't connected its own Brave
+  // integration; every candidate URL comes from the live response, so
+  // nothing here can invent a link. Import is explicit, tagged to the
+  // topic the user searched for.
+  type Candidate = { title: string; url: string; domain: string; summary: string };
+  const [findTopic, setFindTopic] = useState<Topic | null>(null);
+  const [candidates, setCandidates] = useState<Candidate[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [findNote, setFindNote] = useState('');
+  const findSources = useMutation({
+    mutationFn: (t: Topic) => {
+      const q = `${t.text}${builder?.region ? ` ${builder.region}` : ''}`;
+      return api<{ configured: boolean; candidates: Candidate[] }>(
+        `/api/agents/${agent?.id}/source-search`,
+        { method: 'POST', body: JSON.stringify({ query: q }) },
+      );
+    },
+    onMutate: (t) => {
+      setFindTopic(t);
+      setCandidates(null);
+      setFindNote('');
+    },
+    onSuccess: (r, t) => {
+      setFindTopic(t);
+      setFindNote(r.configured ? '' : 'connect-brave');
+      setCandidates(r.candidates);
+      setPicked(new Set()); // nothing imports without explicit ticks
+    },
+    onError: (e) => {
+      setFindTopic(null);
+      setCandidates(null);
+      setFindNote(e.message);
+    },
+  });
+  const importSources = useMutation({
+    mutationFn: async () => {
+      if (!findTopic || !candidates) return 0;
+      const chosen = candidates.filter((c) => picked.has(c.url));
+      let added = 0;
+      for (const cand of chosen) {
+        await api(`/api/agents/${agent?.id}/knowledge-url`, {
+          method: 'POST',
+          body: JSON.stringify({
+            url: cand.url,
+            refresh_hours: 24,
+            topic: findTopic.id,
+          }),
+        });
+        added += 1;
+      }
+      return added;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['knowledge', agent?.id] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+      setFindTopic(null);
+      setCandidates(null);
+      setPicked(new Set());
+    },
+    onError: (e) => setFindNote(e.message),
+  });
   // Text-tab placeholder comes from the draft's own topics — "Parasite
   // control and vaccination: …" — so non-support agents never see the
   // support-template refund copy. Neutral stems when no draft exists.
@@ -441,6 +514,7 @@ export default function AgentBuilder() {
           ...(d.knowledge_need_reason
             ? { knowledge_need_reason: d.knowledge_need_reason }
             : {}),
+          ...(d.domain_risk ? { domain_risk: d.domain_risk } : {}),
           // A re-draft that now says 'required' clears a stale skip — the
           // classification changed, hiding the step would bury a real need.
           ...(d.knowledge_need === 'required' ? { teach_skipped: false } : {}),
@@ -499,6 +573,7 @@ export default function AgentBuilder() {
             ? { knowledge_need_reason: d.knowledge_need_reason }
             : {}),
           ...(d.knowledge_need === 'required' ? { teach_skipped: false } : {}),
+          ...(d.domain_risk ? { domain_risk: d.domain_risk } : {}),
         },
       };
       await api(`/api/agents/${agent?.id}`, {
@@ -934,6 +1009,33 @@ export default function AgentBuilder() {
                 ))}
               </div>
               {rankedTopics.length ? (
+                <div style={{ marginTop: 12 }}>
+                  <label
+                    className="muted"
+                    style={{ fontSize: 12 }}
+                    htmlFor="teach-region"
+                  >
+                    Where will people be asking from? Schedules and
+                    guidelines vary by region. (e.g. "UK", "Ontario, Canada")
+                  </label>
+                  <input
+                    id="teach-region"
+                    className="input"
+                    style={{ width: 260, marginTop: 4 }}
+                    placeholder="optional"
+                    value={region}
+                    disabled={!isAdmin || confirmFlag.isPending}
+                    onChange={(e) => setRegion(e.target.value)}
+                    onBlur={() => {
+                      const v = region.trim();
+                      if (v !== (builder?.region ?? '')) {
+                        confirmFlag.mutate({ region: v });
+                      }
+                    }}
+                  />
+                </div>
+              ) : null}
+              {rankedTopics.length ? (
                 <div className="card" style={{ marginTop: 12 }}>
                   <strong>Suggested topics</strong>
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
@@ -980,6 +1082,16 @@ export default function AgentBuilder() {
                             </button>
                             <span className="muted"> · </span>
                             <button
+                              className="link small"
+                              disabled={findSources.isPending}
+                              onClick={() => findSources.mutate(t)}
+                            >
+                              {findSources.isPending && findTopic?.id === t.id
+                                ? 'Searching…'
+                                : 'Find sources'}
+                            </button>
+                            <span className="muted"> · </span>
+                            <button
                               className="link small muted"
                               title="An existing source already covers this"
                               disabled={confirmFlag.isPending}
@@ -1001,6 +1113,88 @@ export default function AgentBuilder() {
                       {showAllTopics ? 'Show less' : `Show ${rankedTopics.length - 4} more`}
                     </button>
                   ) : null}
+                </div>
+              ) : null}
+              {findTopic ? (
+                <div className="card" style={{ marginTop: 10 }}>
+                  <strong>Source candidates — {findTopic.text}</strong>
+                  {findNote === 'connect-brave' ? (
+                    <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                      Janis can find sources for you once{' '}
+                      <button className="link small" onClick={() => goStep('abilities')}>
+                        Brave Search is connected
+                      </button>{' '}
+                      — it searches with your own Brave key, so connect it on
+                      the Abilities step first.
+                    </div>
+                  ) : findSources.isPending ? (
+                    <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                      Searching…
+                    </div>
+                  ) : candidates?.length ? (
+                    <>
+                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                        Tick the ones worth importing — check the domain; weak
+                        sources are worse than none.
+                      </div>
+                      {candidates.map((cand) => (
+                        <label
+                          key={cand.url}
+                          className="row"
+                          style={{
+                            marginTop: 8,
+                            gap: 8,
+                            alignItems: 'baseline',
+                            cursor: 'pointer',
+                            fontSize: 13,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={picked.has(cand.url)}
+                            onChange={(e) => {
+                              const next = new Set(picked);
+                              if (e.target.checked) next.add(cand.url);
+                              else next.delete(cand.url);
+                              setPicked(next);
+                            }}
+                          />
+                          <span>
+                            <strong>{cand.domain}</strong> — {cand.title}
+                            <div className="muted" style={{ fontSize: 12 }}>{cand.summary}</div>
+                          </span>
+                        </label>
+                      ))}
+                      {findNote && findNote !== 'connect-brave' ? (
+                        <div className="error" style={{ fontSize: 13, marginTop: 6 }}>{findNote}</div>
+                      ) : null}
+                      <div className="row" style={{ marginTop: 10, gap: 8 }}>
+                        <button
+                          className="btn sm primary"
+                          disabled={!picked.size || importSources.isPending}
+                          onClick={() => importSources.mutate()}
+                        >
+                          {importSources.isPending
+                            ? 'Importing…'
+                            : `Import ${picked.size} source${picked.size === 1 ? '' : 's'}`}
+                        </button>
+                        <button
+                          className="btn sm"
+                          onClick={() => {
+                            setFindTopic(null);
+                            setCandidates(null);
+                            setPicked(new Set());
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                      No candidates found{findNote ? ` — ${findNote}` : ''}.
+                    </div>
+                  )}
                 </div>
               ) : null}
               {teachSub === 'text' && (
@@ -1048,6 +1242,21 @@ export default function AgentBuilder() {
                 before refunds over $100". Janis drafted these from your
                 description.
               </div>
+              {builder?.domain_risk === 'elevated' && !builder?.guide_confirmed ? (
+                <div
+                  className="card"
+                  style={{ marginTop: 10, borderColor: 'var(--warn, #f59e0b)' }}
+                >
+                  <div style={{ fontSize: 13 }}>
+                    <strong>Elevated-risk domain.</strong>{' '}
+                    <span className="muted">
+                      Wrong answers here could hurt a person or animal, so Janis
+                      drafted a safety stance and a human-escalation rule —
+                      check they're right for your situation before confirming.
+                    </span>
+                  </div>
+                </div>
+              ) : null}
               <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
               <GreetingSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
               {isAdmin && (storedBrief || cfg.system_prompt) && (
@@ -1310,6 +1519,26 @@ export default function AgentBuilder() {
               <strong style={{ fontSize: 13 }}>
                 Test it <span className="muted" style={{ fontWeight: 400 }}>— private channel, same pipeline as production</span>
               </strong>
+              {step === 'teach' && lastTestQuestion ? (
+                <button
+                  className="link small"
+                  title={`Write the answer to: ${lastTestQuestion}`}
+                  onClick={() => {
+                    goTeachSub('text');
+                    setActiveTopic({
+                      id: topicSlug(lastTestQuestion) || 'test-question',
+                      text: lastTestQuestion,
+                    });
+                    setTestOpen(false);
+                  }}
+                >
+                  Teach it this →
+                </button>
+              ) : step === 'teach' && rankedTopics[0] ? (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  try asking about: {rankedTopics[0].text}
+                </span>
+              ) : null}
               <button className="link small" onClick={() => setTestOpen(false)}>close</button>
             </div>
             <div className="test-dock-body">
@@ -1322,7 +1551,12 @@ export default function AgentBuilder() {
                 </div>
               )}
               {testChannel.data && (
-                <AskJanis channelId={testChannel.data.channel_id} badge="TEST" asCustomer />
+                <AskJanis
+                  channelId={testChannel.data.channel_id}
+                  badge="TEST"
+                  asCustomer
+                  onCustomerMessage={setLastTestQuestion}
+                />
               )}
             </div>
           </div>
