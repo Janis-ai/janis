@@ -561,18 +561,24 @@ export default function AgentBuilder() {
     },
   });
   const saveTest = useMutation({
-    mutationFn: (ctx: { agentText: string; customerText?: string }) =>
-      api(`/api/agents/${agent?.id}/tests`, {
+    mutationFn: (ctx: { agentText: string; customerText?: string }) => {
+      // A scenario is prompt + expected reply — with no customer text there
+      // is no prompt, and falling back to the reply itself produces a
+      // nonsense row that "asks" the agent its own answer.
+      if (!ctx.customerText)
+        throw new Error('No customer message to pair this reply with');
+      return api(`/api/agents/${agent?.id}/tests`, {
         method: 'POST',
         body: JSON.stringify({
-          prompt: (ctx.customerText ?? ctx.agentText).slice(0, 400),
+          prompt: ctx.customerText.slice(0, 400),
           // The reply it gave IS the expectation — save-as-test means
           // "this was right, keep it that way".
           expectation: ctx.agentText.slice(0, 600),
           category: 'general',
           source: 'user',
         }),
-      }),
+      });
+    },
     onSuccess: () => {
       setTestNotice('Added to the scenario list');
       void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });

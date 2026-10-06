@@ -983,6 +983,25 @@ export function AskJanis({
             // same sender don't each need the name/avatar. Human replies get
             // the operator's identity; agent replies get the agent's.
             const prev = arr[idx - 1];
+            // The customer message this reply answers — the prompt half of a
+            // scenario/correction pair. Outbox entries (kind:'out') count: a
+            // send still awaiting its inbound echo is invisible to a
+            // msgs-only scan, and without it the agent's own reply gets
+            // saved as the prompt.
+            const prevCustomerItem = [...arr]
+              .slice(0, idx)
+              .reverse()
+              .find(
+                (x) =>
+                  x.kind === 'out' ||
+                  (x.kind === 'msg' && x.m.direction === 'in'),
+              );
+            const prevCustomerText =
+              prevCustomerItem?.kind === 'out'
+                ? prevCustomerItem.o.text
+                : prevCustomerItem?.kind === 'msg'
+                  ? prevCustomerItem.m.text
+                  : undefined;
             const sameRun =
               item.kind === 'msg' &&
               prev?.kind === 'msg' &&
@@ -1060,36 +1079,26 @@ export function AskJanis({
                       <button
                         className="correct-this"
                         title="Tell Janis what it should have said — saves as a note or a draft article"
-                        onClick={() => {
-                          const prevCustomer = [...arr]
-                            .slice(0, idx)
-                            .reverse()
-                            .find((x) => x.kind === 'msg' && x.m.direction === 'in');
+                        onClick={() =>
                           onCorrect({
                             agentText: item.m.text,
-                            customerText:
-                              prevCustomer?.kind === 'msg' ? prevCustomer.m.text : undefined,
-                          });
-                        }}
+                            customerText: prevCustomerText,
+                          })
+                        }
                       >
                         Correct this
                       </button>
                     )}
-                    {onSaveTest && (
+                    {onSaveTest && prevCustomerText && (
                       <button
                         className="correct-this"
                         title="Keep this exchange as a scenario — re-run it after config changes"
-                        onClick={() => {
-                          const prevCustomer = [...arr]
-                            .slice(0, idx)
-                            .reverse()
-                            .find((x) => x.kind === 'msg' && x.m.direction === 'in');
+                        onClick={() =>
                           onSaveTest({
                             agentText: item.m.text,
-                            customerText:
-                              prevCustomer?.kind === 'msg' ? prevCustomer.m.text : undefined,
-                          });
-                        }}
+                            customerText: prevCustomerText,
+                          })
+                        }
                       >
                         Save as test
                       </button>
