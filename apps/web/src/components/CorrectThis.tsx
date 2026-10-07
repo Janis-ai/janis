@@ -37,7 +37,7 @@ const CAUSE_LABELS: Record<FailCause, { title: string; hint: string }> = {
 /** The one wrong-reply path — inbox "Correct this" and scenario "Needs work"
  *  both land here. Without a scenario the operator writes what it should
  *  have said, Janis diagnoses the cause, and the fix lands as a knowledge
- *  note/article or an instruction rule. With a scenario the card leads with
+ *  note or an instruction rule. With a scenario the card leads with
  *  the cause picker (Janis's guess preselected), the fix is applied, and the
  *  builder marks the scenario fixed_recheck and re-runs it in a fresh chat —
  *  diagnose → fix → re-run → confirm, never a dead end. */
@@ -48,7 +48,6 @@ export function CorrectThisCard({
   onClose,
   onSaved,
   onFixed,
-  onSendToCopilot,
   onGoStep,
 }: {
   agentId: string;
@@ -62,10 +61,6 @@ export function CorrectThisCard({
   /** A fix was applied and the scenario row was marked fixed_recheck —
    *  the builder re-runs the scenario in a fresh conversation. */
   onFixed?: (scenarioId: string) => void;
-  /** Behavior branch — "Send to Copilot" drops the correction into the
-   *  concierge tab as a draft the owner reviews, where the concierge turns
-   *  it into an instructions edit they approve (the draft→approve path). */
-  onSendToCopilot?: (draft: string) => void;
   /** Navigate to a builder step (Teach it / Abilities) — the fix card for
    *  ability suggests connecting a tool rather than fixing in place. */
   onGoStep?: (step: 'teach' | 'abilities') => void;
@@ -125,46 +120,27 @@ export function CorrectThisCard({
     onFixed?.(scenario.id);
   };
 
+  // A correction lands as a knowledge note — corrections are too short
+  // to be articles (no title/category/long-form fields here), and notes
+  // teach this agent directly.
   const saveCorrection = useMutation({
-    mutationFn: ({ mode, text }: { mode: 'note' | 'article'; text: string }) =>
-      mode === 'note'
-        ? api(`/api/agents/${agentId}`, {
-            method: 'PATCH',
-            body: JSON.stringify({
-              config: { ...cfg, knowledge: [...(cfg.knowledge ?? []), text] },
-            }),
-          })
-        : api('/api/articles', {
-            method: 'POST',
-            body: JSON.stringify({
-              agent_id: agentId,
-              // The customer's question is the article title — help pages
-              // answer questions.
-              title: (target.customerText ?? text).slice(0, 80),
-              body: text,
-              category: 'General',
-              status: 'draft',
-            }),
-          }),
-    onSuccess: (_r, v) => {
-      const next =
-        v.mode === 'note'
-          ? { ...cfg, knowledge: [...(cfg.knowledge ?? []), v.text] }
-          : cfg;
-      onSaved?.(next);
+    mutationFn: (text: string) =>
+      api(`/api/agents/${agentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          config: { ...cfg, knowledge: [...(cfg.knowledge ?? []), text] },
+        }),
+      }),
+    onSuccess: (_r, text) => {
+      onSaved?.({ ...cfg, knowledge: [...(cfg.knowledge ?? []), text] });
       void qc.invalidateQueries({ queryKey: ['knowledge', agentId] });
-      void qc.invalidateQueries({ queryKey: ['articles', agentId] });
       void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
       void qc.invalidateQueries({ queryKey: ['agents'] });
       if (scenario) {
         void markFixed('knowledge').catch((e) => setError(e.message));
         onClose();
       } else {
-        setSavedFix(
-          v.mode === 'note'
-            ? 'Fact saved as a note — it teaches this agent only.'
-            : 'Draft article saved — publish it from Teach it → Articles.',
-        );
+        setSavedFix('Fact saved as a note — it teaches this agent only.');
       }
     },
     onError: (e) => setError(e.message),
@@ -298,7 +274,7 @@ export function CorrectThisCard({
   // "Add to tests" — the correction becomes a regression scenario (the
   // customer's prompt is the trigger, the fix is the expectation) so a
   // later config change can't silently regress it. Doesn't close the
-  // card — the correction itself still lands as a note/article/rule.
+  // card — the correction itself still lands as a note/rule.
   // Pointless on an existing scenario — non-scenario callers only.
   const addTest = useMutation({
     mutationFn: () =>
@@ -419,17 +395,9 @@ export function CorrectThisCard({
                 <button
                   className="btn sm primary"
                   disabled={!noteEdit.trim() || busy}
-                  onClick={() => saveCorrection.mutate({ mode: 'note', text: noteEdit.trim() })}
+                  onClick={() => saveCorrection.mutate(noteEdit.trim())}
                 >
                   {saveCorrection.isPending ? 'Saving…' : 'Save as note'}
-                </button>
-                <button
-                  className="btn sm"
-                  disabled={!noteEdit.trim() || busy}
-                  title="Creates an unpublished draft — review it under Teach it → Articles"
-                  onClick={() => saveCorrection.mutate({ mode: 'article', text: noteEdit.trim() })}
-                >
-                  Draft article
                 </button>
                 {onGoStep && (
                   <button className="link small" onClick={() => onGoStep('teach')}>
@@ -463,28 +431,6 @@ export function CorrectThisCard({
                 >
                   {applyInstruction.isPending ? 'Saving…' : 'Add to instructions'}
                 </button>
-                {onSendToCopilot && (
-                  <button
-                    className="btn sm"
-                    disabled={!instrEdit.trim() || busy}
-                    title="Opens Copilot with this fix drafted — the concierge turns it into an instruction you approve"
-                    onClick={() =>
-                      onSendToCopilot(
-                        [
-                          'A correction from testing my agent:',
-                          target.customerText ? `The customer said: "${target.customerText.slice(0, 200)}"` : '',
-                          `It replied: "${target.agentText.slice(0, 200)}"`,
-                          `The fix: ${instrEdit.trim()}`,
-                          'Please draft this as an instruction update for my approval.',
-                        ]
-                          .filter(Boolean)
-                          .join('\n'),
-                      )
-                    }
-                  >
-                    Send to Copilot
-                  </button>
-                )}
                 <button className="btn sm" onClick={onClose}>
                   Cancel
                 </button>
@@ -660,28 +606,6 @@ export function CorrectThisCard({
                 >
                   {applyInstruction.isPending ? 'Saving…' : 'Add to instructions'}
                 </button>
-                {onSendToCopilot && (
-                  <button
-                    className="btn sm"
-                    disabled={!instrEdit.trim()}
-                    title="Opens Copilot with this fix drafted — the concierge turns it into an instruction you approve"
-                    onClick={() =>
-                      onSendToCopilot(
-                        [
-                          'A correction from a live conversation:',
-                          target.customerText ? `The customer said: "${target.customerText.slice(0, 200)}"` : '',
-                          `It replied: "${target.agentText.slice(0, 200)}"`,
-                          `The fix: ${instrEdit.trim()}`,
-                          'Please draft this as an instruction update for my approval.',
-                        ]
-                          .filter(Boolean)
-                          .join('\n'),
-                      )
-                    }
-                  >
-                    Send to Copilot
-                  </button>
-                )}
               </div>
               <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
                 The rule is appended to the instructions — review it any time on
@@ -707,22 +631,13 @@ export function CorrectThisCard({
                 <button
                   className="btn sm primary"
                   disabled={saveCorrection.isPending}
-                  onClick={() => saveCorrection.mutate({ mode: 'note', text: correction.trim() })}
+                  onClick={() => saveCorrection.mutate(correction.trim())}
                 >
                   {saveCorrection.isPending ? 'Saving…' : 'Add to notes'}
                 </button>
-                <button
-                  className="btn sm"
-                  disabled={saveCorrection.isPending}
-                  title="Creates an unpublished draft — review it under Teach it → Articles"
-                  onClick={() => saveCorrection.mutate({ mode: 'article', text: correction.trim() })}
-                >
-                  Draft article
-                </button>
               </div>
               <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
-                A note teaches this agent only. An article also becomes a public
-                help page — saved as a draft until you publish it.
+                A note teaches this agent only — review it any time on Teach it.
               </div>
             </>
           )}

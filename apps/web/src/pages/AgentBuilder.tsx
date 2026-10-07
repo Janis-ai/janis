@@ -767,7 +767,6 @@ export default function AgentBuilder() {
         markDrift();
       }}
       onFixed={rerunFixed}
-      onSendToCopilot={(t) => railBus.copilotDraft(t)}
       onGoStep={(s) => {
         setCorrectTarget(null);
         goStep(s);

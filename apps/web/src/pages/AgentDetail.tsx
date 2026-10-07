@@ -3936,7 +3936,6 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                 setRunning(scenarioId);
                 runOne.mutate(scenarioId);
               }}
-              onSendToCopilot={(t) => railBus.copilotDraft(t)}
               onGoStep={(s) => navigate(`/agents/new/${agentId}?step=${s}`)}
             />
           </div>
