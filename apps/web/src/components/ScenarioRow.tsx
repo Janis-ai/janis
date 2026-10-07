@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Trash2 } from 'lucide-react';
+import { Play, RotateCcw, ThumbsDown, ThumbsUp, Trash2, Wrench } from 'lucide-react';
 
 /** One scenario, one card — shared by the builder's Try-it checklist and
  *  the deployed agent's regression suite. Same data (agent_tests), same
@@ -360,35 +360,42 @@ export function ScenarioRow({
           {showLooksRight && (
             <button
               className="btn sm"
+              title="Looks right — this reply passes"
               disabled={verdict.pending}
               onClick={verdict.onPass}
             >
-              Looks right
+              <ThumbsUp size={12} /> <span className="scenario-btn-text">Looks right</span>
             </button>
           )}
           {showNeedsWork && (
             <button
               className="btn sm"
+              title="Needs work — flag this reply"
               disabled={verdict.pending}
               onClick={verdict.onFail}
             >
-              Needs work
+              <ThumbsDown size={12} /> <span className="scenario-btn-text">Needs work</span>
             </button>
           )}
           <button
             className="btn sm"
+            title={run || hr ? 'Run again' : 'Run'}
             disabled={running || disabled}
             onClick={onRun}
           >
-            {running ? 'Running…' : run || hr ? 'Run again' : '▶ Run'}
+            {run || hr ? <RotateCcw size={12} /> : <Play size={12} />}
+            <span className="scenario-btn-text">
+              {' '}
+              {running ? 'Running…' : run || hr ? 'Run again' : 'Run'}
+            </span>
           </button>
           {onFix && fixReply && (status === 'failed' || status === 'needs work') && (
             <button
               className="btn primary sm"
-              title="Diagnose the miss — knowledge, behavior, ability, or a wrong expectation"
+              title="Fix it — diagnose the miss: knowledge, behavior, ability, or a wrong expectation"
               onClick={() => onFix(fixReply, prompt)}
             >
-              Fix it
+              <Wrench size={12} /> <span className="scenario-btn-text">Fix it</span>
             </button>
           )}
           {onDelete && (
