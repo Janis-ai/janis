@@ -190,7 +190,7 @@ export function ScenarioRow({
         <span className="grow" style={{ fontSize: 13, minWidth: 0 }}>
           “{test.name}”
         </span>
-        <span className="scenario-badge pass">passed</span>
+        <span className="scenario-badge pass">{status}</span>
         <button
           className="btn ghost sm"
           aria-label="Expand"
