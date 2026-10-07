@@ -593,7 +593,10 @@ export function AskJanis({
     } else if (stick.current) {
       el.scrollTo({ top: el.scrollHeight });
     }
-  }, [msgs.length, outbox.length, typing]);
+    // Every commit, not just message/typing changes: the verdict box and
+    // reply-expansion controls grow the bubble a render after the text
+    // lands, and the scroll must account for that height while pinned.
+  });
 
   const autoresize = () => {
     const el = inputRef.current;
