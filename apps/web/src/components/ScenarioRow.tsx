@@ -390,7 +390,7 @@ export function ScenarioRow({
             {run || hr ? <RotateCcw size={12} /> : <Play size={12} />}
             <span className="scenario-btn-text">
               {' '}
-              {running ? 'Running…' : run || hr ? 'Run again' : 'Run'}
+              {running ? 'Running' : run || hr ? 'Run again' : 'Run'}
             </span>
           </button>
           {onTryInChat && (

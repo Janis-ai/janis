@@ -561,6 +561,7 @@ export default function AgentBuilder() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [testsQ.data, builder, agent?.id, hosted]);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [batchRunning, setBatchRunning] = useState(false);
   const runQueueRef = useRef<string[]>([]);
   const replyRef = useRef<Map<string, string>>(new Map());
   const [repliesTick, bumpReplies] = useState(0);
@@ -648,6 +649,7 @@ export default function AgentBuilder() {
     const s = id ? scenarios.find((x) => x.id === id) : undefined;
     if (!s) {
       setRunningId(null);
+      setBatchRunning(false);
       return;
     }
     setRunningId(s.id);
@@ -681,6 +683,7 @@ export default function AgentBuilder() {
   };
   const runAll = () => {
     runQueueRef.current = scenarios.map((s) => s.id);
+    setBatchRunning(true);
     advanceRun();
   };
   // "Running: safety #2" — category + its ordinal within the group.
@@ -1933,14 +1936,19 @@ export default function AgentBuilder() {
                 {scenarios.length > 0 && (
                   <button
                     className="btn sm"
+                    disabled={runningId !== null}
                     title={
                       scenarios.some((s) => s.stale)
                         ? 'Config changed since some results — re-run the list'
-                        : 'Run every scenario through the panel, one at a time'
+                        : 'Run every check, one at a time'
                     }
                     onClick={runAll}
                   >
-                    {scenarios.some((s) => s.stale) ? 'Run all again' : 'Run all'}
+                    {batchRunning
+                      ? 'Running all'
+                      : scenarios.some((s) => s.stale)
+                        ? 'Run all again'
+                        : 'Run all'}
                   </button>
                 )}
               </div>
