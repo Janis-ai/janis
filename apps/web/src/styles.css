@@ -596,10 +596,10 @@ button, input, select, textarea { font: inherit; }
 }
 .scenario-judge .scenario-section-label { color: var(--danger); }
 /* Mechanical clamp — max-height + overflow, reliable everywhere
-   (-webkit-line-clamp doesn't bite consistently inside modals). 2lh is
-   exactly two rendered lines at whatever line-height applies; the em
-   value is the fallback, tuned to never peek into line three. */
-.scenario-reply-clamp { max-height: 2.6em; max-height: 2lh; overflow: hidden; }
+   (-webkit-line-clamp doesn't bite consistently inside modals). 3lh is
+   exactly three rendered lines at whatever line-height applies; the em
+   value is the fallback, tuned to never peek into the next line. */
+.scenario-reply-clamp { max-height: 3.9em; max-height: 3lh; overflow: hidden; }
 .scenario-badge {
   font-size: 11px; padding: 1px 8px; border-radius: 999px;
   color: var(--muted); border: 1px solid var(--border); white-space: nowrap;
