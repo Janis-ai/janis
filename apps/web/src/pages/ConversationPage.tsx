@@ -1174,6 +1174,11 @@ export default function ConversationPage() {
             </div>
             {m.direction === 'out' && !isSystem && (
               <div className="inspector-wrap">
+                {/* One inline row under the bubble — why-this-reply, the
+                    correction affordance, and save-as-scenario — matching
+                    the test chat's single correct-row instead of three
+                    stacked rows. */}
+                <div className="inspector-btns">
                 {!!m.payload.inspector && (
                   <button
                     className="inspector-toggle"
@@ -1202,7 +1207,7 @@ export default function ConversationPage() {
                   </button>
                 )}
                 {m.text?.trim() ? (
-                  <div className="correct-row" style={{ marginTop: 4 }}>
+                  <div className="correct-row">
                     <button
                       className="correct-this"
                       title="Tell Janis what it should have said — opens the correction dialog"
@@ -1241,6 +1246,7 @@ export default function ConversationPage() {
                       ))}
                   </div>
                 ) : null}
+                </div>
                 {inspectorFor === m.id && !!m.payload.inspector && (
                   <InspectorPanel data={m.payload.inspector} />
                 )}
