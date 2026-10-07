@@ -608,6 +608,11 @@ button, input, select, textarea { font: inherit; }
   color: var(--warn, #f59e0b);
   border-color: var(--warn, #f59e0b);
 }
+/* needs work = owner-confirmed miss — red; machine 'failed' stays amber. */
+.scenario-badge.needs-work {
+  color: var(--danger);
+  border-color: var(--danger);
+}
 .scenario-badge.stale { border-style: dashed; }
 .scenario-badge.fixed {
   color: var(--accent);

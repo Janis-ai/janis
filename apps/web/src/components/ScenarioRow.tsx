@@ -139,14 +139,34 @@ export function ScenarioRow({
   const fixReply = reply ?? test.original_reply ?? null;
   const hr = test.human_result;
 
-  /** One status, one badge — the machine judge and the human verdict are
-   *  the same outcome at two confidences; the human's say wins. */
-  const failed = hr === 'fail' || run?.passed === false;
-  const passed = !failed && (hr === 'pass' || run?.passed === true);
-  const recheck = !failed && !passed && hr === 'fixed_recheck';
-  const canVerdict = verdict && reply && hr === 'unreviewed';
-  const isCollapsed =
-    collapsed && !editing && !test.stale && (hr === 'pass' || (hr == null && run?.passed === true));
+  /** One status, one badge. 'needs work' is the HUMAN flag — distinct
+   *  from 'failed' (the machine judge's verdict) so a row the owner
+   *  overrode doesn't masquerade as a judge failure. The judge's
+   *  explanation and cause hint only apply to a machine fail. */
+  const status = editing
+    ? 'editing'
+    : test.stale
+      ? 'stale'
+      : hr === 'fail'
+        ? 'needs work'
+        : run?.passed === false
+          ? 'failed'
+          : hr === 'pass' || run?.passed === true
+            ? 'passed'
+            : hr === 'fixed_recheck'
+              ? 'recheck'
+              : reply
+                ? 'unreviewed'
+                : 'none';
+  // Verdict buttons are the flip, not the echo — 'Needs work' only on a
+  // passing (or unjudged) reply, 'Looks right' only on a failing one.
+  const showNeedsWork =
+    verdict && reply && (status === 'passed' || status === 'unreviewed');
+  const showLooksRight =
+    verdict &&
+    reply &&
+    (status === 'failed' || status === 'needs work' || status === 'unreviewed');
+  const isCollapsed = collapsed && status === 'passed';
 
   if (isCollapsed) {
     return (
@@ -174,19 +194,21 @@ export function ScenarioRow({
           “{test.name}”
         </div>
         {/* One badge, one verdict. */}
-        {editing ? (
+        {status === 'editing' ? (
           <span className="scenario-badge">editing</span>
-        ) : test.stale ? (
+        ) : status === 'stale' ? (
           <span className="scenario-badge stale" title="Config changed since this ran">
             stale
           </span>
-        ) : failed ? (
+        ) : status === 'needs work' ? (
+          <span className="scenario-badge needs-work">needs work</span>
+        ) : status === 'failed' ? (
           <span className="scenario-badge fail">failed</span>
-        ) : passed ? (
+        ) : status === 'passed' ? (
           <span className="scenario-badge pass">passed</span>
-        ) : recheck ? (
+        ) : status === 'recheck' ? (
           <span className="scenario-badge fixed">fix applied — re-run to confirm</span>
-        ) : reply ? (
+        ) : status === 'unreviewed' ? (
           <span className="scenario-badge">unreviewed</span>
         ) : null}
         {onDelete && (
@@ -317,9 +339,9 @@ export function ScenarioRow({
         />
       )}
 
-      {/* The judge's reason follows the reply it evaluated — labeled and
-          ruled so it reads as the judge's voice, not part of the reply. */}
-      {failed && run?.reason && !editing && (
+      {/* The judge's reason follows the reply it evaluated — machine
+          failures only; a human 'needs work' flag has no judge behind it. */}
+      {status === 'failed' && run?.reason && !editing && (
         <div className="scenario-judge">
           <div className="scenario-section-label">Why it failed</div>
           {run.reason}
@@ -358,29 +380,27 @@ export function ScenarioRow({
       {!editing && (
         <div className="row" style={{ marginTop: 10, alignItems: 'center', gap: 8 }}>
           <span className="grow muted" style={{ fontSize: 12 }}>
-            {failed && test.fail_cause && CAUSE_HINT[test.fail_cause]
+            {status === 'failed' && test.fail_cause && CAUSE_HINT[test.fail_cause]
               ? `Likely cause: ${test.fail_cause}. ${CAUSE_HINT[test.fail_cause]}.`
               : ''}
           </span>
-          {canVerdict && (
-            <>
-              {/* Equal weight — a filled Looks right nudges rubber-stamping;
-                  the verdict is earned by judgment, not button color. */}
-              <button
-                className="btn sm"
-                disabled={verdict.pending}
-                onClick={verdict.onPass}
-              >
-                Looks right
-              </button>
-              <button
-                className="btn sm"
-                disabled={verdict.pending}
-                onClick={verdict.onFail}
-              >
-                Needs work
-              </button>
-            </>
+          {showLooksRight && (
+            <button
+              className="btn sm"
+              disabled={verdict.pending}
+              onClick={verdict.onPass}
+            >
+              Looks right
+            </button>
+          )}
+          {showNeedsWork && (
+            <button
+              className="btn sm"
+              disabled={verdict.pending}
+              onClick={verdict.onFail}
+            >
+              Needs work
+            </button>
           )}
           <button
             className="btn sm"
@@ -389,7 +409,7 @@ export function ScenarioRow({
           >
             {running ? 'Running…' : run || hr ? 'Run again' : '▶ Run'}
           </button>
-          {onFix && fixReply && failed && (
+          {onFix && fixReply && (status === 'failed' || status === 'needs work') && (
             <button
               className="btn primary sm"
               title="Diagnose the miss — knowledge, behavior, ability, or a wrong expectation"
