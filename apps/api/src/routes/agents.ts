@@ -2134,6 +2134,10 @@ export function agentRoutes(db: Db) {
         // Why a fail was judged wrong — set by the diagnose flow; null
         // clears it (e.g. a fresh pass).
         fail_cause: z.enum(['knowledge', 'behavior', 'ability', 'expectation']).nullable().optional(),
+        // The reply a panel run just produced — merged into last_run so the
+        // scenario row can show "what Janis answered" after a reload (panel
+        // runs don't write last_run the way server replays do).
+        last_reply: z.string().max(4000).optional(),
       }),
     ),
     async (c) => {
@@ -2144,6 +2148,15 @@ export function agentRoutes(db: Db) {
         .where(eq(agents.id, c.req.param('id')))
         .limit(1);
       if (!agent) return c.json({ error: 'not found' }, 404);
+      const [prev] = b.last_reply !== undefined
+        ? await db
+            .select({ lastRun: agentTests.lastRun })
+            .from(agentTests)
+            .where(
+              and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, agent.id)),
+            )
+            .limit(1)
+        : [];
       const [row] = await db
         .update(agentTests)
         .set({
@@ -2165,6 +2178,15 @@ export function agentRoutes(db: Db) {
               }
             : {}),
           ...(b.fail_cause !== undefined ? { failCause: b.fail_cause } : {}),
+          ...(b.last_reply !== undefined
+            ? {
+                lastRun: {
+                  ...((prev?.lastRun as Record<string, unknown> | null) ?? {}),
+                  reply: b.last_reply,
+                  at: new Date().toISOString(),
+                } as never,
+              }
+            : {}),
         })
         .where(and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, c.req.param('id'))))
         .returning();

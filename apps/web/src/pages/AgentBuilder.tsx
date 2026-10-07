@@ -574,14 +574,20 @@ export default function AgentBuilder() {
       id,
       result,
       cause,
+      lastReply,
     }: {
       id: string;
       result: 'pass' | 'fail' | 'unreviewed' | 'fixed_recheck';
       cause?: 'knowledge' | 'behavior' | 'ability' | 'expectation';
+      lastReply?: string;
     }) =>
       api(`/api/agents/${agent?.id}/tests/${id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ human_result: result, ...(cause ? { fail_cause: cause } : {}) }),
+        body: JSON.stringify({
+          human_result: result,
+          ...(cause ? { fail_cause: cause } : {}),
+          ...(lastReply !== undefined ? { last_reply: lastReply } : {}),
+        }),
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });
@@ -674,12 +680,11 @@ export default function AgentBuilder() {
       clearTimeout(runTimeoutRef.current);
       runTimeoutRef.current = null;
     }
-    replyRef.current.set(
-      runningId,
-      (replyRef.current.get(runningId) ? `${replyRef.current.get(runningId)}\n` : '') + text,
-    );
+    const accumulated =
+      (replyRef.current.get(runningId) ? `${replyRef.current.get(runningId)}\n` : '') + text;
+    replyRef.current.set(runningId, accumulated);
     bumpReplies((n) => n + 1);
-    markTest.mutate({ id: runningId, result: 'unreviewed' });
+    markTest.mutate({ id: runningId, result: 'unreviewed', lastReply: accumulated });
     if (runAdvanceTimer.current) return; // already scheduled — keep gathering
     runAdvanceTimer.current = setTimeout(() => {
       runAdvanceTimer.current = null;
@@ -2067,6 +2072,24 @@ export default function AgentBuilder() {
                               {s.expectation && (
                                 <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
                                   expected: {s.expectation}
+                                </div>
+                              )}
+                              {/* Every run lands in its own test
+                                  conversation, so the panel can't stay on
+                                  all of them — the reply lives here on the
+                                  row instead. Provenance labels keep a
+                                  recorded/original reply from reading as a
+                                  fresh run. */}
+                              {fixReply && (
+                                <div className="scenario-reply" title={fixReply}>
+                                  <span className="scenario-reply-label">
+                                    {reply
+                                      ? 'Janis answered'
+                                      : s.last_run?.reply
+                                        ? 'Last replay'
+                                        : 'Original reply'}
+                                  </span>
+                                  {fixReply}
                                 </div>
                               )}
                               {s.category === 'actions' && (
