@@ -177,7 +177,9 @@ export function CorrectThisCard({
             : p.cause,
       );
       setInstrEdit(p.instruction ?? '');
-      if (p.knowledge_shape) setNoteEdit(p.knowledge_shape);
+      // Knowledge fix — Janis's drafted shape when she has one, else the
+      // correction itself (it's already fact-shaped: they wrote it).
+      setNoteEdit(p.knowledge_shape ?? correction.trim());
     },
     onError: (e) => setError(e.message),
   });
@@ -589,7 +591,12 @@ export function CorrectThisCard({
                 —{' '}
                 <button
                   className="link small"
-                  onClick={() => setCause('knowledge')}
+                  onClick={() => {
+                    setCause('knowledge');
+                    // Owner overrode Janis's read — their correction is
+                    // still the fact; carry it into the note field.
+                    if (!noteEdit.trim()) setNoteEdit(correction.trim());
+                  }}
                 >
                   enter a fact instead
                 </button>

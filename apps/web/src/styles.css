@@ -935,6 +935,8 @@ input, select, textarea {
 }
 /* vertical-only — a horizontal drag can push the box under the rail */
 textarea { resize: vertical; }
+/* Placeholders are hints, not content — a step down from the input font. */
+input::placeholder, textarea::placeholder { font-size: .85em; }
 input:focus, select:focus { outline: none; border-color: var(--accent); }
 /* Keyboard focus needs a visible ring everywhere — a border-color change
    alone is invisible on buttons and links. :focus-visible keeps mouse
