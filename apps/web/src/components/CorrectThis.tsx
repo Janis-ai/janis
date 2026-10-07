@@ -334,11 +334,9 @@ export function CorrectThisCard({
       {/* Who said what, in order — the agent's words clamp to two lines
           with the same measured show-full toggle the scenario row uses. */}
       {target.customerText && (
-        <div style={{ fontSize: 13, marginTop: 6, whiteSpace: 'pre-wrap' }}>
-          <span className="muted">User:</span> {target.customerText}
-        </div>
+        <ReplyBlock label="User" text={target.customerText} inline />
       )}
-      <ReplyBlock label="Agent" text={target.agentText} />
+      <ReplyBlock label="Agent" text={target.agentText} inline />
       {scenario?.expectation && (
         <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
           Expected: {scenario.expectation}

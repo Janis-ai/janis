@@ -54,7 +54,17 @@ const CAUSE_HINT: Record<string, string> = {
  *  renders when the text actually overflows the clamp — measured on the
  *  element, not guessed from length. Exported for CorrectThis, which
  *  quotes the same reply the row shows. */
-export function ReplyBlock({ label, text }: { label: string; text: string }) {
+export function ReplyBlock({
+  label,
+  text,
+  inline,
+}: {
+  label: string;
+  text: string;
+  /** Label sits on the text's first line ('Agent: …') instead of a
+   *  small-caps header above it — the CorrectThis quote style. */
+  inline?: boolean;
+}) {
   const el = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
@@ -69,12 +79,14 @@ export function ReplyBlock({ label, text }: { label: string; text: string }) {
   }, [text]);
   return (
     <div style={{ marginTop: 8 }}>
-      <div className="scenario-section-label">{label}</div>
+      {!inline && <div className="scenario-section-label">{label}</div>}
       <div
         ref={el}
         className={expanded ? '' : 'scenario-reply-clamp'}
-        style={{ fontSize: 13, marginTop: 2, whiteSpace: 'pre-wrap' }}
+        style={{ fontSize: 13, marginTop: inline ? 0 : 2, whiteSpace: 'pre-wrap' }}
       >
+        {inline && <span className="muted">{label}:</span>}
+        {inline ? ' ' : ''}
         {text}
       </div>
       {(overflows || expanded) && (
