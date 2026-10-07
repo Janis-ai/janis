@@ -14,7 +14,7 @@ import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
 import { CorrectThisCard, type CorrectTarget } from './CorrectThis';
 import { TestChatHistory } from './TestChatHistory';
-import { type ScenarioTest } from './ScenarioRow';
+import { type ScenarioTest, type ScenarioTurn } from './ScenarioRow';
 import { useScenarioMatch } from '../lib/scenarioMatch';
 import { freshTestVisitor, readTestVisitor, storeTestVisitor } from '../lib/testChat';
 import { railBus, type RailRequest } from '../lib/railBus';
@@ -549,15 +549,24 @@ export default function Layout() {
       },
     };
   };
-  const fallbackOnCorrect = (ctx: { agentText: string; customerText?: string }) => {
+  const fallbackOnCorrect = (ctx: {
+    agentText: string;
+    customerText?: string;
+    turns?: ScenarioTurn[];
+  }) => {
     const s = fallbackScenario(ctx.customerText);
     setFallbackCorrect({
       agentText: ctx.agentText,
       customerText: ctx.customerText,
+      turns: ctx.turns,
       ...(s ? { scenario: { id: s.id, expectation: s.expectation } } : {}),
     });
   };
-  const fallbackOnSaveTest = (ctx: { agentText: string; customerText?: string }) => {
+  const fallbackOnSaveTest = (ctx: {
+    agentText: string;
+    customerText?: string;
+    turns?: ScenarioTurn[];
+  }) => {
     if (!ctx.customerText || !chatAgentId) return;
     if (fallbackScenario(ctx.customerText)) {
       setFallbackNotice('That prompt is already a scenario');
@@ -566,7 +575,9 @@ export default function Layout() {
     void api(`/api/agents/${chatAgentId}/tests`, {
       method: 'POST',
       body: JSON.stringify({
-        prompt: ctx.customerText.slice(0, 400),
+        ...((ctx.turns?.length ?? 0) > 1
+          ? { turns: ctx.turns, original_reply: ctx.agentText.slice(0, 4000) }
+          : { prompt: ctx.customerText.slice(0, 400) }),
         expectation: ctx.agentText.slice(0, 600),
         category: 'general',
         source: 'user',

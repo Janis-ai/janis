@@ -15,7 +15,7 @@ import { ChevronDown, MessageSquarePlus, Play } from 'lucide-react';
 import { freshTestVisitor } from '../lib/testChat';
 import { useScenarioMatch } from '../lib/scenarioMatch';
 import { CorrectThisCard } from '../components/CorrectThis';
-import { ScenarioRow, scenarioPrompt, type ScenarioTest } from '../components/ScenarioRow';
+import { ScenarioRow, scenarioPrompt, type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 import { AgentChannels } from '../components/AgentChannels';
 import { SourceList, type KnowledgeBudget } from '../components/SourceList';
 import {
@@ -507,6 +507,9 @@ export default function AgentBuilder() {
   const [correctTarget, setCorrectTarget] = useState<{
     agentText: string;
     customerText?: string;
+    /** Exchange context from the chat — saved with the scenario when the
+     *  fix becomes a re-runnable check. */
+    turns?: ScenarioTurn[];
     /** Set when the card opens from a failed scenario — switches the card
      *  to diagnose-first and enables the ability/expectation branches. */
     scenarioId?: string;
@@ -599,7 +602,7 @@ export default function AgentBuilder() {
     },
   });
   const saveTest = useMutation({
-    mutationFn: (ctx: { agentText: string; customerText?: string }) => {
+    mutationFn: (ctx: { agentText: string; customerText?: string; turns?: ScenarioTurn[] }) => {
       // A scenario is prompt + expected reply — with no customer text there
       // is no prompt, and falling back to the reply itself produces a
       // nonsense row that "asks" the agent its own answer.
@@ -608,7 +611,11 @@ export default function AgentBuilder() {
       return api<{ test: ScenarioTest; deduped?: boolean }>(`/api/agents/${agent?.id}/tests`, {
         method: 'POST',
         body: JSON.stringify({
-          prompt: ctx.customerText.slice(0, 400),
+          // With exchange context the scenario replays the setup turns;
+          // bare-prompt saves stay single-turn.
+          ...((ctx.turns?.length ?? 0) > 1
+            ? { turns: ctx.turns, original_reply: ctx.agentText.slice(0, 4000) }
+            : { prompt: ctx.customerText.slice(0, 400) }),
           // The reply it gave IS the expectation — save-as-test means
           // "this was right, keep it that way".
           expectation: ctx.agentText.slice(0, 600),
@@ -811,6 +818,7 @@ export default function AgentBuilder() {
       target={{
         agentText: correctTarget.agentText,
         customerText: correctTarget.customerText,
+        turns: correctTarget.turns,
         ...(correctTarget.scenarioId
           ? {
               scenario: {

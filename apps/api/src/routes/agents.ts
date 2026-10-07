@@ -2024,6 +2024,9 @@ export function agentRoutes(db: Db) {
     // Try-it scenario shorthand — a single-turn case saved from the panel
     // or a correction: prompt is the customer message that triggers it.
     prompt: z.string().min(1).max(400).optional(),
+    // The reply that actually followed — inline saves carry it so the row
+    // can show "what it said" like transcript checkpoints do.
+    original_reply: z.string().max(4000).optional(),
     category: z.enum(TEST_CATEGORIES).optional(),
     source: z.enum(TEST_SOURCES).optional(),
   });
@@ -2153,10 +2156,11 @@ export function agentRoutes(db: Db) {
       .values({
         workspaceId: c.get('workspaceId'),
         agentId,
-        name: (b.name ?? b.prompt ?? 'test').slice(0, 120),
+        name: (b.name ?? b.prompt ?? trigger ?? 'test').slice(0, 120),
         expectation: b.expectation,
         turns: turns as never,
         sourceConversationId,
+        originalReply: b.original_reply ?? null,
         ...(b.category ? { category: b.category } : {}),
         ...(b.source ? { source: b.source } : {}),
       })

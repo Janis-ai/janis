@@ -9,7 +9,7 @@ import { ArgsRows, Avatar, channelLabel, displayName, fmtTime } from '../compone
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
-import { type ScenarioTest } from '../components/ScenarioRow';
+import { type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 import { useScenarioMatch } from '../lib/scenarioMatch';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { janisBrain } from '../lib/agentContext';
@@ -228,6 +228,7 @@ export default function ConversationPage() {
     id: string;
     agentText: string;
     customerText?: string;
+    turns?: ScenarioTurn[];
     scenario?: { id: string; expectation: string };
   } | null>(null);
   // Per-reply "Save as scenario" — message ids saved this session get a
@@ -544,12 +545,20 @@ export default function ConversationPage() {
       }),
   });
   const saveScenario = useMutation({
-    mutationFn: (ctx: { msgId: string; agentText: string; customerText: string }) =>
+    mutationFn: (ctx: {
+      msgId: string;
+      agentText: string;
+      customerText: string;
+      turns?: ScenarioTurn[];
+    }) =>
       api(`/api/agents/${data!.conversation.agent_id}/tests`, {
         method: 'POST',
         body: JSON.stringify({
           // The inbound is the trigger; the reply it gave is the bar.
-          prompt: ctx.customerText.slice(0, 400),
+          // With exchange context the scenario replays the setup turns.
+          ...((ctx.turns?.length ?? 0) > 1
+            ? { turns: ctx.turns, original_reply: ctx.agentText.slice(0, 4000) }
+            : { prompt: ctx.customerText.slice(0, 400) }),
           expectation: ctx.agentText.slice(0, 600),
           category: 'general',
           source: 'inbox',
@@ -1042,6 +1051,22 @@ export default function ConversationPage() {
               .find((x) => x.kind === 'msg' && x.m.direction === 'in');
             const prevPrompt =
               prevIn?.kind === 'msg' ? (prevIn.m.text ?? undefined) : undefined;
+            // The exchange leading to this reply — a scenario saved from
+            // the inbox replays the setup, not just the bare ask. Internal
+            // notes are operator-only, never scenario context.
+            const ctxTurns: ScenarioTurn[] = items
+              .slice(0, i)
+              .flatMap((x): ScenarioTurn[] => {
+                // Outbox entries are the operator's pending sends — the
+                // agent side of the exchange, same as a human reply.
+                if (x.kind === 'out' && x.o.text) return [{ role: 'agent', text: x.o.text }];
+                if (x.kind !== 'msg' || !x.m.text || x.m.payload.internal === true) return [];
+                if (x.m.direction === 'in') return [{ role: 'customer', text: x.m.text }];
+                if (x.m.direction === 'out' || x.m.direction === 'human')
+                  return [{ role: 'agent', text: x.m.text }];
+                return [];
+              })
+              .slice(-8);
             const isInternal = m.payload.internal === true;
             const isSystem = m.flags.failure || m.flags.help_requested || m.flags.custom_alert || m.flags.handoff_offer || m.flags.handoff_cancelled || m.flags.resolved || isInternal;
             const authorUser =
@@ -1219,6 +1244,7 @@ export default function ConversationPage() {
                                 id: m.id,
                                 agentText: m.text ?? '',
                                 customerText: prevPrompt,
+                                turns: ctxTurns,
                                 scenario: { id: sc.id, expectation: sc.expectation ?? '' },
                               });
                             }}
@@ -1238,6 +1264,7 @@ export default function ConversationPage() {
                             id: m.id,
                             agentText: m.text ?? '',
                             customerText: prevPrompt,
+                            turns: ctxTurns,
                             scenario: sc ? { id: sc.id, expectation: sc.expectation ?? '' } : undefined,
                           })
                         }
@@ -1254,6 +1281,7 @@ export default function ConversationPage() {
                               msgId: m.id,
                               agentText: m.text!,
                               customerText: prevPrompt,
+                              turns: ctxTurns,
                             })
                           }
                         >

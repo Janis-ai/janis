@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { ReplyBlock } from './ScenarioRow';
+import { ReplyBlock, type ScenarioTurn } from './ScenarioRow';
 import type { AgentConfig } from '@janis/shared';
 
 type FailCause = 'knowledge' | 'behavior' | 'ability' | 'expectation';
@@ -9,6 +9,9 @@ type FailCause = 'knowledge' | 'behavior' | 'ability' | 'expectation';
 export interface CorrectTarget {
   agentText: string;
   customerText?: string;
+  /** The exchange leading to the trigger — "Save as scenario" replays
+   *  the setup turns, not just the bare ask. */
+  turns?: ScenarioTurn[];
   /** Scenario context — set when the card opens from a failed Try-it run.
    *  The card leads with "What went wrong?" (no correction text needed),
    *  and the ability + expectation branches become available. */
@@ -287,7 +290,11 @@ export function CorrectThisCard({
       api(`/api/agents/${agentId}/tests`, {
         method: 'POST',
         body: JSON.stringify({
-          prompt: target.customerText ?? target.agentText.slice(0, 200),
+          // Multi-turn when the chat carried context — the scenario
+          // replays the setup exchange, not just the bare prompt.
+          ...((target.turns?.length ?? 0) > 1
+            ? { turns: target.turns, original_reply: target.agentText.slice(0, 4000) }
+            : { prompt: target.customerText ?? target.agentText.slice(0, 200) }),
           expectation:
             correction.trim() || instrEdit.trim() || 'the reply should answer this correctly',
           category: 'general',

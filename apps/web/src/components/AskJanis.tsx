@@ -13,6 +13,7 @@ import { Loader2, Maximize2, Mic, MicOff, Minimize2, Paperclip, Smile, ThumbsDow
 import { EmojiPicker } from './EmojiPicker';
 import { ArgsRows } from './bits';
 import { Widgets, type ChatWidget } from './ChatWidgets';
+import type { ScenarioTurn } from './ScenarioRow';
 import { splitBlocks, splitEmphasis } from '../lib/richText';
 
 interface ChatConfig {
@@ -323,7 +324,13 @@ export function AskJanis({
   /** Test surfaces only — adds a "Correct this" affordance under every
    *  agent reply; the parent decides where the correction lands (note,
    *  draft article). Omitted elsewhere (inbox, concierge, widget). */
-  onCorrect?: (ctx: { agentText: string; customerText?: string }) => void;
+  onCorrect?: (ctx: {
+    agentText: string;
+    customerText?: string;
+    /** The exchange leading to the trigger — multi-turn scenarios replay
+     *  the setup, not just the ask. */
+    turns?: ScenarioTurn[];
+  }) => void;
   /** Try-it runner — every new agent reply (incremental polls only, never
    *  history backfill) reports its text so the parent can attach a
    *  verdict to the scenario that was run. */
@@ -335,7 +342,11 @@ export function AskJanis({
   /** Try-it free chat — "Save as scenario" next to Correct this under
    *  replies, turning an ad-hoc exchange into a scenario. The parent
    *  dedupes against scenarios that were run from the checklist itself. */
-  onSaveTest?: (ctx: { agentText: string; customerText?: string }) => void;
+  onSaveTest?: (ctx: {
+    agentText: string;
+    customerText?: string;
+    turns?: ScenarioTurn[];
+  }) => void;
   /** Try-it scenario verdicts — called with the customer prompt a reply
    *  answers; on a match the reply renders the scenario's expected bar and
    *  Looks right / Needs work in place, so the reviewer judges against the
@@ -1075,6 +1086,20 @@ export function AskJanis({
                 : prevCustomerItem?.kind === 'msg'
                   ? prevCustomerItem.m.text
                   : undefined;
+            // The exchange leading to this reply, ending at the trigger —
+            // a scenario saved here replays the setup, not just the ask.
+            const ctxTurns: ScenarioTurn[] = arr
+              .slice(0, idx)
+              .flatMap((x): ScenarioTurn[] => {
+                if (x.kind === 'out' && x.o.text)
+                  return [{ role: 'customer', text: x.o.text }];
+                if (x.kind !== 'msg' || !x.m.text) return [];
+                if (x.m.direction === 'in') return [{ role: 'customer', text: x.m.text }];
+                if (x.m.direction === 'out' || x.m.direction === 'human')
+                  return [{ role: 'agent', text: x.m.text }];
+                return [];
+              })
+              .slice(-8);
             const sameRun =
               item.kind === 'msg' &&
               prev?.kind === 'msg' &&
@@ -1194,6 +1219,7 @@ export function AskJanis({
                                   onCorrect({
                                     agentText: item.m.text,
                                     customerText: prevCustomerText,
+                                    turns: ctxTurns,
                                   })
                                 }
                               >
@@ -1210,6 +1236,7 @@ export function AskJanis({
                                   onSaveTest({
                                     agentText: item.m.text,
                                     customerText: prevCustomerText,
+                                    turns: ctxTurns,
                                   })
                                 }
                               >

@@ -19,6 +19,10 @@ export interface ScenarioRun {
   context?: { prompt: 'custom' | 'default'; kb: string[]; knowledge: string[] };
 }
 
+/** One turn of a saved exchange — inline scenario saves capture the
+ *  chat's recent turns with this shape (no mid — that's transcript-only). */
+export type ScenarioTurn = { role: 'customer' | 'agent'; text: string };
+
 export interface ScenarioTest {
   id: string;
   name: string;
