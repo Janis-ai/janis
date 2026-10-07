@@ -331,14 +331,20 @@ export function CorrectThisCard({
         {scenario ? 'What went wrong?' : 'Correct this answer'}
       </strong>
       <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+        {target.customerText && (
+          <>
+            The customer asked: “
+            {target.customerText.length > 90
+              ? `${target.customerText.slice(0, 90)}…`
+              : target.customerText}
+            ”{' '}
+          </>
+        )}
         It said: “
         {target.agentText.length > 140
           ? `${target.agentText.slice(0, 140)}…`
           : target.agentText}
         ”
-        {target.customerText
-          ? ` — the customer asked “${target.customerText.slice(0, 80)}”`
-          : ''}
       </div>
       {scenario?.expectation && (
         <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
