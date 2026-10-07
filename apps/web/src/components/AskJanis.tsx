@@ -464,7 +464,7 @@ export function AskJanis({
         has_more?: boolean;
         operator_typing?: { name: string | null } | null;
         agent_typing?: boolean;
-      }>(url);
+      }>(url, { signal: AbortSignal.timeout(15_000) });
       // The first fetch usually lands in <100ms — without a floor the loading
       // row never paints and history reads as popping in with no indicator.
       const delay = Math.max(0, 500 - (Date.now() - loadStart.current));
@@ -908,6 +908,10 @@ export function AskJanis({
     try {
       await api(`/chat/${channelId}/messages`, {
         method: 'POST',
+        // The POST can block on upstream work server-side — without a
+        // timeout a hung request leaves `sending` true and the composer
+        // dead until a remount.
+        signal: AbortSignal.timeout(45_000),
         body: JSON.stringify({
           visitor_id: visitor,
           text: t,
