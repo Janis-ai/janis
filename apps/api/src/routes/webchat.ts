@@ -592,7 +592,11 @@ export function webchatRoutes(db: Db) {
         if (dup) return c.json({ ok: true });
       }
     }
-    await handleChannelMessage(db, channel, {
+    // Ingress includes awaited side-paths (sync greeting generation on a
+    // fresh test conversation, rule notifications) that can stretch past a
+    // client timeout. Bound the wait — the pipeline keeps running after the
+    // ack either way, and the transcript poll reconciles whatever landed.
+    const ingress = handleChannelMessage(db, channel, {
       objectId: '',
       senderId: visitor_id,
       text,
@@ -603,7 +607,10 @@ export function webchatRoutes(db: Db) {
         ...(client_id ? { client_id } : {}),
         ...(tap ? { tap: true, ...(tap_of ? { tap_of } : {}) } : {}),
       },
+    }).catch((err) => {
+      console.error('[webchat] message ingress failed:', err);
     });
+    await Promise.race([ingress, new Promise((r) => setTimeout(r, 20_000))]);
     return c.json({ ok: true });
   });
 
