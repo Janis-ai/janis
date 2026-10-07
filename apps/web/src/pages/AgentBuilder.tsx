@@ -228,15 +228,6 @@ export default function AgentBuilder() {
     onError: (e) => setError(e.message),
   });
 
-  // Try stage — the agent's test channel drives a real conversation (same
-  // AskJanis pane the right rail uses); knowledge gaps the agent hits while
-  // testing surface alongside it (SSE invalidates the query live).
-  const testChannel = useMutation({
-    mutationFn: () =>
-      api<{ channel_id: string }>(`/api/agents/${agent?.id}/test-channel`, {
-        method: 'POST',
-      }),
-  });
   // Docked test panel — the same private channel Try it uses, openable
   // from any build step so feedback is never a rail-jump away. Lazy:
   // the channel row is created on first open (or on Try it), not load.
@@ -248,6 +239,21 @@ export default function AgentBuilder() {
     if (open) dock?.openTab('test');
     else dock?.setOpen(false);
   };
+  // Try stage — the agent's test channel drives a real conversation (same
+  // AskJanis pane the right rail uses); knowledge gaps the agent hits while
+  // testing surface alongside it (SSE invalidates the query live).
+  const testChannel = useQuery({
+    queryKey: ['test-channel', agent?.id],
+    queryFn: () =>
+      api<{ channel_id: string }>(`/api/agents/${agent?.id}/test-channel`, {
+        method: 'POST',
+      }),
+    enabled: Boolean((step === 'try' || testOpen) && agent && hosted),
+    // The channel row is permanent — one POST per agent per session. A
+    // mutation's data dies with the page: remounting /new/ re-POSTed and
+    // flashed "Opening test channel…" over an already-live chat.
+    staleTime: Infinity,
+  });
   // "This page provides the Test tab's chrome + wiring" — Layout owns the
   // one mounted test chat; this registers the header portal and the wiring
   // the shared instance runs on while the builder is on screen.
@@ -271,11 +277,6 @@ export default function AgentBuilder() {
     dock.clearTestSeed();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dock?.testSeed]);
-  useEffect(() => {
-    if ((step === 'try' || testOpen) && agent && hosted && !testChannel.data && !testChannel.isPending) {
-      testChannel.mutate();
-    }
-  }, [step, testOpen, agent?.id, hosted]); // eslint-disable-line react-hooks/exhaustive-deps
   // "Save & test" focuses the composer once the panel is open.
   const [chatFocus, setChatFocus] = useState(0);
   // Layout owns the shared test chat AND its visitor key — New chat
