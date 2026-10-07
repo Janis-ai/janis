@@ -1345,7 +1345,10 @@ export default function Layout() {
                       navigation, only its handlers swap. */}
                   <div className="test-dock-body">
                     <div ref={setTestSlot} style={{ display: 'contents' }} />
-                    {!testProvided && chatChannelId && (
+                    {/* One header row, always Layout's — a page's extra
+                        status arrives via wiring.statusText, so the
+                        builder ↔ page handoff changes text, not DOM. */}
+                    {chatChannelId && (
                       <div
                         className="test-dock-status"
                         style={{
@@ -1356,6 +1359,12 @@ export default function Layout() {
                         }}
                       >
                         <span
+                          className="badge"
+                          title="Private channel, same pipeline as production"
+                        >
+                          TEST
+                        </span>
+                        <span
                           className="muted grow"
                           style={{
                             fontSize: 11,
@@ -1364,18 +1373,31 @@ export default function Layout() {
                             whiteSpace: 'nowrap',
                           }}
                         >
-                          {fallbackNotice || `Testing ${testRail?.label || currentAgent?.name || 'agent'}`}
+                          {(!testProvided && fallbackNotice) ||
+                            `Testing ${
+                              agentsData?.agents.find((a) => a.id === chatAgentId)?.name ||
+                              testRail?.label ||
+                              'agent'
+                            }` +
+                              (testWiring?.statusText ? ` · ${testWiring.statusText}` : '')}
                         </span>
                         <TestChatHistory
                           agentId={chatAgentId!}
                           channelId={chatChannelId}
                           currentVisitor={testVisitor ?? undefined}
-                          onPick={setChatVisitor}
+                          onPick={(v) => {
+                            setChatVisitor(v);
+                            testWiring?.handlers.current.onVisitorChange?.(v, false);
+                          }}
                         />
                         <button
                           className="link small"
                           title="Start a fresh test conversation"
-                          onClick={() => setChatVisitor(freshTestVisitor())}
+                          onClick={() => {
+                            const v = freshTestVisitor();
+                            setChatVisitor(v);
+                            testWiring?.handlers.current.onVisitorChange?.(v, true);
+                          }}
                         >
                           <MessageSquarePlus
                             size={11}

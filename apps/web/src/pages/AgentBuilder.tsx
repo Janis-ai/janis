@@ -11,8 +11,8 @@ import { stepGlyph, stepSubtitle, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { ChevronDown, MessageSquarePlus, Play } from 'lucide-react';
-import { TestChatHistory } from '../components/TestChatHistory';
-import { freshTestVisitor, readTestVisitor } from '../lib/testChat';
+
+import { freshTestVisitor } from '../lib/testChat';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow, scenarioPrompt, type ScenarioTest } from '../components/ScenarioRow';
 import { AgentChannels } from '../components/AgentChannels';
@@ -277,18 +277,9 @@ export default function AgentBuilder() {
   }, [step, testOpen, agent?.id, hosted]); // eslint-disable-line react-hooks/exhaustive-deps
   // "Save & test" focuses the composer once the panel is open.
   const [chatFocus, setChatFocus] = useState(0);
-  // Layout owns the shared test chat AND its visitor key — New chat and
-  // the history picker write through dock.setTestVisitor (Layout persists
-  // per agent), so the thread survives builder ↔ page navigation. The
-  // readTestVisitor fallback covers the first render before Layout's
-  // effect has settled.
-  const activeVisitor =
-    dock?.testVisitor ?? (agent ? readTestVisitor(agent.id) : null);
-  const pickTestChat = (v: string) => {
-    dock?.setTestVisitor(v);
-    setChatActive(true);
-    setCfgDrifted(false);
-  };
+  // Layout owns the shared test chat AND its visitor key — New chat
+  // writes through dock.setTestVisitor (Layout persists per agent), so
+  // the thread survives builder ↔ page navigation.
   const newChat = () => {
     dock?.setTestVisitor(freshTestVisitor());
     setChatActive(false);
@@ -776,6 +767,12 @@ export default function AgentBuilder() {
       setChatActive(true);
       if (CONFIG_HINT_RE.test(t)) setCopilotHint(t);
     },
+    // Header history/new-chat switched threads — reset the drift tracking
+    // the way the old pickTestChat/newChat did.
+    onVisitorChange: (_v, fresh) => {
+      setChatActive(!fresh);
+      setCfgDrifted(false);
+    },
   };
   const setTestWiring = dock?.setTestWiring;
   useEffect(() => {
@@ -784,11 +781,14 @@ export default function AgentBuilder() {
       channelId: testChannel.data?.channel_id,
       focusSignal: chatFocus,
       seed: seed?.target === 'dock' ? { text: seed.text, nonce: seed.nonce } : null,
+      statusText:
+        `saved version${builder?.include_drafts_in_test ? ' + drafts' : ''}` +
+        (runningLabel ? ` · running: ${runningLabel}` : ''),
       handlers: testHandlers,
     });
     return () => setTestWiring(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setTestWiring, dockAvailableForReg, testChannel.data?.channel_id, chatFocus, seed]);
+  }, [setTestWiring, dockAvailableForReg, testChannel.data?.channel_id, chatFocus, seed, builder?.include_drafts_in_test, runningLabel]);
   // A fix save flips the scenario to fixed_recheck (the card PATCHes it)
   // and re-runs it here — fresh conversation, verdict still human. Other
   // scenarios go stale automatically: the config version moved under them.
@@ -2316,42 +2316,10 @@ export default function AgentBuilder() {
       {dockAvailable && dock?.testSlot &&
         createPortal(
           <>
-            <div
-              className="test-dock-status"
-              style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-            >
-              <span
-                className="badge"
-                title={`Private channel, same pipeline as production${builder?.include_drafts_in_test ? ' — includes drafts' : ''}`}
-              >
-                TEST
-              </span>
-              <span>
-                Testing saved version
-                {builder?.include_drafts_in_test ? ' + drafts' : ''}
-                {runningLabel ? ` · running: ${runningLabel}` : ''}
-              </span>
-              <span className="grow" />
-              {testChannel.data && (
-                <TestChatHistory
-                  agentId={agent!.id}
-                  channelId={testChannel.data.channel_id}
-                  currentVisitor={activeVisitor ?? undefined}
-                  onPick={pickTestChat}
-                />
-              )}
-              <button
-                className="link small"
-                title="Start a fresh test conversation — earlier chats stay in the inbox"
-                onClick={newChat}
-              >
-                <MessageSquarePlus
-                  size={11}
-                  style={{ verticalAlign: -1, marginRight: 3 }}
-                />
-                New chat
-              </button>
-            </div>
+            {/* Header row is Layout's (same DOM whether a page provides
+                wiring or not — the builder's "saved version / running" text
+                arrives via wiring.statusText); this portal is only for
+                builder-specific notices. */}
             {copilotHint && (
               <div className="test-dock-notice">
                 That sounds like a setup change — Copilot can change the

@@ -20,6 +20,10 @@ export interface TestHandlers {
   onCorrect?(ctx: { agentText: string; customerText?: string }): void;
   onSaveTest?(ctx: { agentText: string; customerText?: string }): void;
   onCustomerMessage?(text: string): void;
+  /** The header's history/new-chat controls switched test conversations —
+   *  the builder uses it to reset its config-drift notice. `fresh` is true
+   *  for a brand-new visitor, false when resuming a saved thread. */
+  onVisitorChange?(visitor: string, fresh: boolean): void;
 }
 
 /** Everything a page contributes to the shared test chat. `handlers` is a
@@ -29,6 +33,9 @@ export interface TestWiring {
   channelId?: string;
   focusSignal?: number;
   seed?: { text: string; nonce: number } | null;
+  /** Extra text after "Testing <agent>" in the dock header — the builder's
+   *  "saved version · running: X" detail. */
+  statusText?: string;
   handlers: { current: TestHandlers };
 }
 
