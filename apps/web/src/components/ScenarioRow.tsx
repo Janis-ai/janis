@@ -136,34 +136,39 @@ export function ScenarioRow({
   const fixReply = reply ?? test.original_reply ?? null;
   const hr = test.human_result;
 
-  /** One status, one badge. 'needs work' is the HUMAN flag — distinct
-   *  from 'failed' (the machine judge's verdict) so a row the owner
-   *  overrode doesn't masquerade as a judge failure. The judge's
+  /** One status, one badge. 'approved'/'rejected' are the HUMAN verdict —
+   *  distinct words from the machine's 'passed'/'failed' so a row the
+   *  owner judged doesn't masquerade as a judge result. The judge's
    *  explanation and cause hint only apply to a machine fail. */
   const status = editing
     ? 'editing'
     : test.stale
       ? 'stale'
       : hr === 'fail'
-        ? 'needs work'
-        : run?.passed === false
-          ? 'failed'
-          : hr === 'pass' || run?.passed === true
-            ? 'passed'
-            : hr === 'fixed_recheck'
-              ? 'recheck'
-              : reply
-                ? 'unreviewed'
-                : 'none';
+        ? 'rejected'
+        : hr === 'pass'
+          ? 'approved'
+          : run?.passed === false
+            ? 'failed'
+            : run?.passed === true
+              ? 'passed'
+              : hr === 'fixed_recheck'
+                ? 'recheck'
+                : reply
+                  ? 'unreviewed'
+                  : 'none';
   // Verdict buttons are the flip, not the echo — 'Needs work' only on a
   // passing (or unjudged) reply, 'Looks right' only on a failing one.
   const showNeedsWork =
-    verdict && reply && (status === 'passed' || status === 'unreviewed');
+    verdict &&
+    reply &&
+    (status === 'passed' || status === 'approved' || status === 'unreviewed');
   const showLooksRight =
     verdict &&
     reply &&
-    (status === 'failed' || status === 'needs work' || status === 'unreviewed');
-  const isCollapsed = collapsed && status === 'passed';
+    (status === 'failed' || status === 'rejected' || status === 'unreviewed');
+  const isCollapsed =
+    collapsed && (status === 'passed' || status === 'approved');
 
   if (isCollapsed) {
     return (
@@ -197,10 +202,12 @@ export function ScenarioRow({
           <span className="scenario-badge stale" title="Config changed since this ran">
             stale
           </span>
-        ) : status === 'needs work' ? (
-          <span className="scenario-badge needs-work">needs work</span>
+        ) : status === 'rejected' ? (
+          <span className="scenario-badge rejected">rejected</span>
         ) : status === 'failed' ? (
           <span className="scenario-badge fail">failed</span>
+        ) : status === 'approved' ? (
+          <span className="scenario-badge pass">approved</span>
         ) : status === 'passed' ? (
           <span className="scenario-badge pass">passed</span>
         ) : status === 'recheck' ? (
@@ -208,7 +215,7 @@ export function ScenarioRow({
         ) : status === 'unreviewed' ? (
           <span className="scenario-badge">unreviewed</span>
         ) : null}
-        {status === 'passed' && (
+        {(status === 'passed' || status === 'approved') && (
           <button
             className="btn ghost sm"
             aria-label="Collapse"
@@ -317,7 +324,7 @@ export function ScenarioRow({
       )}
 
       {/* The judge's reason follows the reply it evaluated — machine
-          failures only; a human 'needs work' flag has no judge behind it. */}
+          failures only; a human 'rejected' verdict has no judge behind it. */}
       {status === 'failed' && run?.reason && !editing && (
         <div className="scenario-judge">
           <div className="scenario-section-label">Why it failed</div>
@@ -404,7 +411,7 @@ export function ScenarioRow({
               <span className="scenario-btn-text">Try in chat</span>
             </button>
           )}
-          {onFix && fixReply && (status === 'failed' || status === 'needs work') && (
+          {onFix && fixReply && (status === 'failed' || status === 'rejected') && (
             <button
               className="btn primary sm"
               title="Fix it — diagnose the miss: knowledge, behavior, ability, or a wrong expectation"
