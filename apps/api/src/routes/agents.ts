@@ -34,8 +34,9 @@ import {
 } from '../services/knowledgeGaps.js';
 import { encryptSecret, loadSecretsMap } from '../lib/secrets.js';
 import { llmFor, MAX_KNOWLEDGE_CHARS, MAX_NOTES_CHARS } from '../lib/hostedAgent.js';
-import { checkpointIndices, draftExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
+import { checkpointIndices, draftExpectation, judgeExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
+import { recordLlmUsage } from '../lib/usage.js';
 import { enqueueJob, runJobs } from '../lib/jobs.js';
 import { applySuggestion, type SuggestionPatch } from '../lib/evalTriage.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -2144,6 +2145,10 @@ export function agentRoutes(db: Db) {
         // scenario row can show "what Janis answered" after a reload (panel
         // runs don't write last_run the way server replays do).
         last_reply: z.string().max(4000).optional(),
+        // Save-and-re-check: judge the STORED reply against the (new)
+        // expectation — deterministic and cheap; no fresh run means no
+        // new random reply sneaks in to change the verdict.
+        rejudge: z.boolean().optional(),
       }),
     ),
     async (c) => {
@@ -2154,15 +2159,53 @@ export function agentRoutes(db: Db) {
         .where(eq(agents.id, c.req.param('id')))
         .limit(1);
       if (!agent) return c.json({ error: 'not found' }, 404);
-      const [prev] = b.last_reply !== undefined
+      const [prev] = b.last_reply !== undefined || b.rejudge
         ? await db
-            .select({ lastRun: agentTests.lastRun })
+            .select()
             .from(agentTests)
             .where(
               and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, agent.id)),
             )
             .limit(1)
         : [];
+      // Re-check: the stored reply stands trial under the moved bar.
+      let rejudged: { passed: boolean; reason: string } | undefined;
+      const lastRun = prev?.lastRun as { reply?: string | null } | null | undefined;
+      if (b.rejudge && lastRun?.reply) {
+        const expectation = b.expectation ?? prev!.expectation ?? '';
+        if (expectation.trim()) {
+          const transcript = ((prev!.turns ?? []) as { role: string; text: string }[])
+            .map((t) => `${t.role}: ${t.text}`)
+            .join('\n');
+          // A judge/LLM outage must not lose the expectation save — the
+          // verdict just stays as it was.
+          try {
+            const llm = await llmFor(db, agent);
+            const verdict = await judgeExpectation(llm, {
+              transcript,
+              reply: lastRun.reply,
+              expectation,
+            });
+            if (verdict) {
+              rejudged = { passed: verdict.pass, reason: verdict.reason };
+              if (verdict.promptTokens || verdict.completionTokens) {
+                await recordLlmUsage(db, {
+                  workspaceId: agent.workspaceId,
+                  agentId: agent.id,
+                  conversationId: prev!.sourceConversationId,
+                  model: verdict.model,
+                  capModel: llm.model,
+                  promptTokens: verdict.promptTokens,
+                  completionTokens: verdict.completionTokens,
+                  byok: llm.byok,
+                });
+              }
+            }
+          } catch {
+            /* judged stays whatever it was */
+          }
+        }
+      }
       const [row] = await db
         .update(agentTests)
         .set({
@@ -2184,11 +2227,14 @@ export function agentRoutes(db: Db) {
               }
             : {}),
           ...(b.fail_cause !== undefined ? { failCause: b.fail_cause } : {}),
-          ...(b.last_reply !== undefined
+          ...(b.last_reply !== undefined || rejudged
             ? {
                 lastRun: {
                   ...((prev?.lastRun as Record<string, unknown> | null) ?? {}),
-                  reply: b.last_reply,
+                  ...(b.last_reply !== undefined ? { reply: b.last_reply } : {}),
+                  ...(rejudged
+                    ? { passed: rejudged.passed, reason: rejudged.reason }
+                    : {}),
                   at: new Date().toISOString(),
                 } as never,
               }

@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentConnections, agents, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
+import { agentConnections, agents, agentTests, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { env } from '../env.js';
@@ -1219,5 +1219,47 @@ describe('try-it scenarios', () => {
     await patchTest(id, b.test.id, { human_result: 'fail' });
     expect((await buildStatus(id)).steps.try).toBe('partial');
     expect((await buildStatus(id)).test_scenarios.failing).toBe(1);
+  });
+
+  it('re-judges the stored reply on expectation save — never a fresh run', async () => {
+    const id = await mkAgent();
+    const created = await (
+      await postTest(id, { prompt: 'my baby has a fever', expectation: 'old bar' })
+    ).json();
+    const tid = created.test.id as string;
+    // A previous run's verdict + reply on the row.
+    await db
+      .update(agentTests)
+      .set({
+        lastRun: {
+          at: new Date(Date.now() - 60_000).toISOString(),
+          passed: false,
+          reason: 'missed the old bar',
+          reply: 'go to the emergency room now',
+          model: 'm',
+        },
+      })
+      .where(eq(agentTests.id, tid));
+    const res = await patchTest(id, tid, {
+      expectation: 'advise emergency care AND offer a human',
+      rejudge: true,
+    });
+    expect(res.status).toBe(200);
+    const [row] = await db.select().from(agentTests).where(eq(agentTests.id, tid));
+    expect(row.expectation).toBe('advise emergency care AND offer a human');
+    expect(row.expectationDraft).toBe(false);
+    const lr = row.lastRun as { reply?: string; passed?: boolean; at?: string };
+    // Judge outcome aside (no LLM in tests → verdict untouched), the stored
+    // reply is the same string — re-checking never generates a new reply.
+    expect(lr.reply).toBe('go to the emergency room now');
+    // A rejudge without a stored reply is a plain save — nothing 500s.
+    const empty = await (
+      await postTest(id, { prompt: 'hi', expectation: 'e' })
+    ).json();
+    const res2 = await patchTest(id, empty.test.id, {
+      expectation: 'e2',
+      rejudge: true,
+    });
+    expect(res2.status).toBe(200);
   });
 });

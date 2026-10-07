@@ -626,12 +626,13 @@ export default function AgentBuilder() {
     onError: (e) => setTestNotice(e.message),
   });
   // Same expectation edit the regression suite's rows get — the bar is
-  // the row's, so the row is where it edits.
+  // the row's, so the row is where it edits. rejudge re-checks the stored
+  // reply against the new bar instead of spending a fresh run.
   const saveExp = useMutation({
     mutationFn: (b: { id: string; text: string }) =>
       api(`/api/agents/${agent?.id}/tests/${b.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ expectation: b.text }),
+        body: JSON.stringify({ expectation: b.text, rejudge: true }),
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });

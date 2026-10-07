@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Trash2 } from 'lucide-react';
+import { MoreHorizontal, Trash2 } from 'lucide-react';
 
-/** One scenario, one row — shared by the builder's Try-it checklist and
+/** One scenario, one card — shared by the builder's Try-it checklist and
  *  the deployed agent's regression suite. Same data (agent_tests), same
- *  anatomy: prompt → expectation → reply → verdict. What differs by
- *  surface is the action column, not the shape. */
+ *  anatomy and reading order: prompt → expectation → why it failed →
+ *  agent reply → cause → actions. What differs by surface is which
+ *  actions appear, not the shape. */
 
 export interface ScenarioRun {
   at?: string;
@@ -41,6 +42,14 @@ export interface ScenarioTest {
 export const scenarioPrompt = (t: ScenarioTest) =>
   [...(t.turns ?? [])].reverse().find((x) => x.role === 'customer')?.text ?? t.name;
 
+/** fail_cause → the suggested fix path, shown in the card footer. */
+const CAUSE_HINT: Record<string, string> = {
+  knowledge: 'Janis suggests teaching the fact (Teach it)',
+  behavior: 'Janis suggests adding an instruction rule (Guide it)',
+  ability: 'Janis suggests connecting a tool (Abilities)',
+  expectation: 'Janis suggests editing the expectation',
+};
+
 export function ScenarioRow({
   test,
   running,
@@ -61,7 +70,8 @@ export function ScenarioRow({
   /** A reply produced this session that isn't persisted in last_run yet —
    *  labeled "Janis answered" so it reads as fresh, not recorded. */
   replyOverride?: string | null;
-  /** Enables the inline expectation editor — same PATCH both pages make. */
+  /** Saves the expectation AND re-judges the stored reply against it —
+   *  no new run, so no new random reply sneaks in to move the verdict. */
   onSaveExpectation?: (text: string) => void;
   expectationSaving?: boolean;
   /** Human-verdict controls (builder pre-launch judging). Shown when the
@@ -70,16 +80,17 @@ export function ScenarioRow({
   /** Diagnose path — Fix it opens the same card on both surfaces. */
   onFix?: (reply: string, prompt: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(false);      // replay transcript
+  const [replyOpen, setReplyOpen] = useState(false); // full reply
   const [editing, setEditing] = useState(false);
   const [expText, setExpText] = useState('');
+  const [menu, setMenu] = useState(false);
+  // Passed rows collapse to one line — the failures stand out and the
+  // list stays scannable. Expansion state lives per mounted row.
+  const [collapsed, setCollapsed] = useState(true);
 
   const run = test.last_run;
   const prompt = scenarioPrompt(test);
-  // A name that restates the prompt doesn't earn a second line.
-  const sameLine =
-    prompt.trim().toLowerCase().replace(/["'“”]/g, '') ===
-    test.name.trim().toLowerCase().replace(/["'“”]/g, '');
   const reply = replyOverride ?? run?.reply ?? null;
   const replyLabel = replyOverride
     ? 'Janis answered'
@@ -90,56 +101,136 @@ export function ScenarioRow({
   // the original transcript) works, so the button survives a reload.
   const fixReply = reply ?? test.original_reply ?? null;
   const hr = test.human_result;
+
+  /** One status, one badge — the machine judge and the human verdict are
+   *  the same outcome at two confidences; the human's say wins. */
+  const failed = hr === 'fail' || run?.passed === false;
+  const passed = !failed && (hr === 'pass' || run?.passed === true);
+  const recheck = !failed && !passed && hr === 'fixed_recheck';
   const canVerdict = verdict && reply && hr === 'unreviewed';
+  const isCollapsed =
+    collapsed && !editing && !test.stale && (hr === 'pass' || (hr == null && run?.passed === true));
+
+  if (isCollapsed) {
+    return (
+      <div className="scenario-row scenario-collapsed" id={`sc-${test.id}`}>
+        <span className="scenario-check" style={{ color: 'var(--accent)' }}>✓</span>
+        <span className="grow" style={{ fontSize: 13, minWidth: 0 }}>
+          “{test.name}”
+        </span>
+        <span className="scenario-badge pass">passed</span>
+        <button
+          className="btn ghost sm"
+          aria-label="Expand"
+          onClick={() => setCollapsed(false)}
+        >
+          ▾
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <div className="scenario-row" id={`sc-${test.id}`}>
-      <div className="grow" style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>“{test.name}”</div>
-        {!sameLine && (
-          <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-            responds to: "{prompt.length > 90 ? `${prompt.slice(0, 90)}…` : prompt}"
-          </div>
-        )}
-
+    <div className="scenario-row scenario-card" id={`sc-${test.id}`}>
+      <div className="row" style={{ alignItems: 'flex-start' }}>
+        <div className="grow" style={{ fontSize: 13, fontWeight: 600, minWidth: 0 }}>
+          “{test.name}”
+        </div>
+        {/* One badge, one verdict. */}
         {editing ? (
-          <div style={{ marginTop: 6 }}>
-            {/* 'expects:' keeps its seat while the text edits — the row's
-                shape doesn't change under you. */}
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-              <span className="muted" style={{ fontSize: 12, paddingTop: 7 }}>
-                expects:
-              </span>
-              <textarea
-                rows={2}
-                autoFocus
-                style={{ flex: 1, fontSize: 12 }}
-                value={expText}
-                onChange={(e) => setExpText(e.target.value)}
-              />
-            </div>
-            <div className="row" style={{ marginTop: 4 }}>
-              <button
-                className="btn primary sm"
-                disabled={expectationSaving}
-                onClick={() => {
-                  onSaveExpectation?.(expText.trim());
-                  setEditing(false);
-                }}
-              >
-                {expectationSaving ? 'Saving…' : 'Save expectation'}
-              </button>
-              <button className="btn sm" onClick={() => setEditing(false)}>
-                Cancel
-              </button>
-            </div>
+          <span className="scenario-badge">editing</span>
+        ) : test.stale ? (
+          <span className="scenario-badge stale" title="Config changed since this ran">
+            stale
+          </span>
+        ) : failed ? (
+          <span className="scenario-badge fail">failed</span>
+        ) : passed ? (
+          <span className="scenario-badge pass">passed</span>
+        ) : recheck ? (
+          <span className="scenario-badge fixed">fix applied — re-run to confirm</span>
+        ) : reply ? (
+          <span className="scenario-badge">unreviewed</span>
+        ) : null}
+        {onDelete && (
+          <span style={{ position: 'relative' }}>
+            <button
+              className="btn ghost sm"
+              title="More actions"
+              aria-label="More actions"
+              onClick={() => setMenu(!menu)}
+              onBlur={() => setTimeout(() => setMenu(false), 150)}
+            >
+              <MoreHorizontal size={13} />
+            </button>
+            {menu && (
+              <div className="scenario-menu">
+                <button
+                  className="scenario-menu-item danger"
+                  onClick={() => {
+                    setMenu(false);
+                    onDelete();
+                  }}
+                >
+                  <Trash2 size={12} /> Delete test
+                </button>
+              </div>
+            )}
+          </span>
+        )}
+      </div>
+
+      {/* Expected — the bar. Edit keeps 'expects' inline beside the field. */}
+      {editing ? (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <span className="muted" style={{ fontSize: 12, paddingTop: 7 }}>
+              expects:
+            </span>
+            <textarea
+              rows={2}
+              autoFocus
+              style={{ flex: 1, fontSize: 12 }}
+              value={expText}
+              onChange={(e) => setExpText(e.target.value)}
+            />
           </div>
-        ) : (
-          <>
-            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          <div className="row" style={{ marginTop: 6, justifyContent: 'flex-end', gap: 8 }}>
+            <button className="btn sm" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+            <button
+              className="btn primary sm"
+              disabled={expectationSaving}
+              onClick={() => {
+                onSaveExpectation?.(expText.trim());
+                setEditing(false);
+              }}
+            >
+              {expectationSaving
+                ? 'Saving…'
+                : reply
+                  ? 'Save and re-check'
+                  : 'Save expectation'}
+            </button>
+          </div>
+          {reply && (
+            <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+              Last result is from the old expectation — saving re-checks the
+              same reply without a new run.
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ marginTop: 8 }}>
+          <div className="muted" style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}>
+            Expected
+          </div>
+          <div className="row" style={{ alignItems: 'flex-start', gap: 8 }}>
+            <div className="grow" style={{ fontSize: 13, marginTop: 2 }}>
               {test.expectation ? (
                 <>
-                  expects: {test.expectation}
+                  {test.expectation}
                   {test.expectation_draft && (
                     <span
                       className="badge warn"
@@ -155,245 +246,219 @@ export function ScenarioRow({
                   no expectation written — verdicts judge this by eye
                 </span>
               ) : (
-                "no expectation — runs aren't judged"
+                <span className="muted">no expectation — runs aren't judged</span>
               )}
             </div>
             {onSaveExpectation && (
               <button
                 className="btn ghost sm"
-                style={{ marginTop: 4 }}
                 onClick={() => {
                   setExpText(test.expectation);
                   setEditing(true);
                 }}
               >
-                {test.expectation ? 'Edit expectation' : 'Add an expectation'}
+                Edit
               </button>
             )}
-          </>
-        )}
+          </div>
+        </div>
+      )}
 
-        {/* The run's reply quoted on the row — provenance labels keep a
-            recorded/original reply from reading as a fresh run. */}
-        {reply && (
-          <div className="scenario-reply" title={reply}>
-            <span className="scenario-reply-label">{replyLabel}</span>
+      {/* The judge's reason is an evaluation, not part of the reply —
+          labeled and ruled so it reads as the judge's voice. */}
+      {failed && run?.reason && !editing && (
+        <div className="scenario-judge">
+          <div className="scenario-section-label">Why it failed</div>
+          {run.reason}
+        </div>
+      )}
+
+      {/* What the agent said — clamped, expandable. */}
+      {reply && !editing && (
+        <div style={{ marginTop: 8 }}>
+          <div className="scenario-section-label">Agent replied</div>
+          <div
+            className={replyOpen ? '' : 'scenario-reply-clamp'}
+            style={{ fontSize: 13, marginTop: 2, whiteSpace: 'pre-wrap' }}
+            title={reply}
+          >
+            {replyLabel === 'Janis answered' ? null : null}
             {reply}
           </div>
-        )}
-
-        {test.category === 'actions' && (
-          <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-            runs the live pipeline — gated actions pause on an approval card,
-            nothing executes silently
+          <button
+            className="inspector-toggle"
+            style={{ marginTop: 4 }}
+            onClick={() => setReplyOpen(!replyOpen)}
+          >
+            {replyOpen ? '▾ show less' : '▸ show full reply'}
+          </button>
+        </div>
+      )}
+      {/* No fresh reply but an original transcript exists — show it under
+          its own label so it never reads as a run result. */}
+      {!reply && test.original_reply && !editing && (
+        <div style={{ marginTop: 8 }}>
+          <div className="scenario-section-label">
+            Original reply — what the agent did then
           </div>
-        )}
-        {test.source === 'correction' && (
-          <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-            saved from a Correct this fix
+          <div
+            className={replyOpen ? '' : 'scenario-reply-clamp'}
+            style={{ fontSize: 13, marginTop: 2, whiteSpace: 'pre-wrap' }}
+          >
+            {test.original_reply}
           </div>
-        )}
+          <button
+            className="inspector-toggle"
+            style={{ marginTop: 4 }}
+            onClick={() => setReplyOpen(!replyOpen)}
+          >
+            {replyOpen ? '▾ show less' : '▸ show full reply'}
+          </button>
+        </div>
+      )}
 
-        {run && (
-          <div style={{ fontSize: 12, marginTop: 6 }}>
-            {run.reason && <div className="muted">{run.reason}</div>}
-            {(run.reply || test.original_reply || (run.tools?.length ?? 0) > 0 || test.turns.length > 1) && (
-              <>
-                <button
-                  className="inspector-toggle"
-                  style={{ marginTop: 4 }}
-                  onClick={() => setOpen(!open)}
-                >
-                  {open ? '▾ hide replay' : '▸ show replay'}
-                </button>
-                {open && (
-                  <div
-                    className="inspector-panel"
-                    style={{ maxWidth: '100%', marginTop: 6 }}
-                  >
-                    {/* The replay answers the last customer turn — show the
-                        transcript tail so the reply has visible context. */}
-                    {(() => {
-                      const shown = test.turns.slice(-4);
-                      const omitted = test.turns.length - shown.length;
+      {test.category === 'actions' && !editing && (
+        <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+          runs the live pipeline — gated actions pause on an approval card,
+          nothing executes silently
+        </div>
+      )}
+      {test.source === 'correction' && !editing && (
+        <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+          saved from a Correct this fix
+        </div>
+      )}
+
+      {/* Full replay transcript — the turns + provenance footer. */}
+      {run && !editing && (test.turns.length > 1 || run.control || run.tools?.length || run.model || run.context) && (
+        <div style={{ fontSize: 12, marginTop: 8 }}>
+          <button
+            className="inspector-toggle"
+            onClick={() => setOpen(!open)}
+          >
+            {open ? '▾ hide replay transcript' : '▸ show replay transcript'}
+          </button>
+          {open && (
+            <div className="inspector-panel" style={{ maxWidth: '100%', marginTop: 6 }}>
+              {(() => {
+                const shown = test.turns.slice(-4);
+                const omitted = test.turns.length - shown.length;
+                return (
+                  <>
+                    {omitted > 0 && (
+                      <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
+                        …{omitted} earlier turn{omitted === 1 ? '' : 's'} in the
+                        replayed transcript
+                      </div>
+                    )}
+                    {shown.map((turn, i) => {
+                      const trigger = i === shown.length - 1 && turn.role === 'customer';
+                      const linked = turn.mid && test.source_conversation_id;
                       return (
-                        <>
-                          {omitted > 0 && (
-                            <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
-                              …{omitted} earlier turn{omitted === 1 ? '' : 's'} in the
-                              replayed transcript
-                            </div>
-                          )}
-                          {shown.map((turn, i) => {
-                            const trigger =
-                              i === shown.length - 1 && turn.role === 'customer';
-                            const linked = turn.mid && test.source_conversation_id;
-                            return (
-                              <div
-                                key={i}
-                                style={{ display: 'flex', gap: 8, marginBottom: 3, fontSize: 12 }}
-                              >
-                                <span
-                                  className="mono muted"
-                                  style={{ minWidth: 58, flexShrink: 0, fontSize: 11 }}
-                                >
-                                  {turn.role}
-                                </span>
-                                {linked ? (
-                                  <Link
-                                    to={`/conversations/${test.source_conversation_id}?msg=${turn.mid}`}
-                                    className={trigger ? '' : 'muted'}
-                                    style={{
-                                      ...(trigger ? { fontWeight: 600 } : {}),
-                                      textDecoration: 'underline',
-                                      textDecorationStyle: 'dotted',
-                                      textUnderlineOffset: 3,
-                                      whiteSpace: 'pre-wrap',
-                                    }}
-                                    title="Open this message in the conversation"
-                                  >
-                                    {turn.text}
-                                  </Link>
-                                ) : (
-                                  <span
-                                    className={trigger ? '' : 'muted'}
-                                    style={{
-                                      whiteSpace: 'pre-wrap',
-                                      ...(trigger ? { fontWeight: 600 } : {}),
-                                    }}
-                                  >
-                                    {turn.text}
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })}
-                          {test.original_reply && (
-                            <>
-                              <div className="muted" style={{ fontSize: 11, margin: '6px 0 3px' }}>
-                                ↳ original reply — what the agent actually did then:
-                              </div>
-                              <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>
-                                {test.original_reply}
-                              </div>
-                            </>
-                          )}
-                          <div className="muted" style={{ fontSize: 11, margin: '6px 0 3px' }}>
-                            ↳ replayed now — current setup (never sent, tools stubbed):
-                          </div>
-                          {run.reply ? (
-                            <div style={{ whiteSpace: 'pre-wrap' }}>{run.reply}</div>
+                        <div
+                          key={i}
+                          style={{ display: 'flex', gap: 8, marginBottom: 3, fontSize: 12 }}
+                        >
+                          <span
+                            className="mono muted"
+                            style={{ minWidth: 58, flexShrink: 0, fontSize: 11 }}
+                          >
+                            {turn.role}
+                          </span>
+                          {linked ? (
+                            <Link
+                              to={`/conversations/${test.source_conversation_id}?msg=${turn.mid}`}
+                              className={trigger ? '' : 'muted'}
+                              style={{
+                                ...(trigger ? { fontWeight: 600 } : {}),
+                                textDecoration: 'underline',
+                                textDecorationStyle: 'dotted',
+                                textUnderlineOffset: 3,
+                                whiteSpace: 'pre-wrap',
+                              }}
+                              title="Open this message in the conversation"
+                            >
+                              {turn.text}
+                            </Link>
                           ) : (
-                            <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>
-                              (no text reply — the replay ended on tool calls, above)
-                            </div>
+                            <span
+                              className={trigger ? '' : 'muted'}
+                              style={{
+                                whiteSpace: 'pre-wrap',
+                                ...(trigger ? { fontWeight: 600 } : {}),
+                              }}
+                            >
+                              {turn.text}
+                            </span>
                           )}
-                        </>
+                        </div>
                       );
-                    })()}
-                    {run.control && (
-                      <div className="muted" style={{ marginTop: 6 }}>
-                        ended with [
-                        {run.control === 'handoff'
-                          ? 'HANDOFF'
-                          : run.control === 'offer'
-                            ? 'OFFER_HUMAN'
-                            : 'CANCEL_HANDOFF'}
-                        ]
-                      </div>
+                    })}
+                    {test.original_reply && (
+                      <>
+                        <div className="muted" style={{ fontSize: 11, margin: '6px 0 3px' }}>
+                          ↳ original reply — what the agent actually did then:
+                        </div>
+                        <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>
+                          {test.original_reply}
+                        </div>
+                      </>
                     )}
-                    {run.tools?.length ? (
-                      <div className="muted" style={{ marginTop: 6 }}>
-                        tools: {run.tools.map((x) => `${x.name} (${x.outcome})`).join(', ')}
-                      </div>
-                    ) : null}
-                    {run.model && (
-                      <div className="muted" style={{ marginTop: 6 }}>model: {run.model}</div>
-                    )}
-                    {run.context && (
-                      <div className="muted" style={{ marginTop: 6 }}>
-                        grounded on: {run.context.prompt} prompt
-                        {run.context.knowledge.length > 0 &&
-                          ` · ${run.context.knowledge.length} knowledge snippet${run.context.knowledge.length === 1 ? '' : 's'}`}
-                        {run.context.kb.length > 0 && ` · ${run.context.kb.join(', ')}`}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
-        {/* No persisted run but a session reply exists — the preview above
-            carries it; nothing else to expand. */}
-        {!run && test.original_reply && (
-          <div style={{ fontSize: 12, marginTop: 6 }}>
-            <button
-              className="inspector-toggle"
-              style={{ marginTop: 4 }}
-              onClick={() => setOpen(!open)}
-            >
-              {open ? '▾ hide original reply' : '▸ show original reply'}
-            </button>
-            {open && (
-              <div className="inspector-panel" style={{ maxWidth: '100%', marginTop: 6 }}>
-                <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>
-                  {test.original_reply}
+                  </>
+                );
+              })()}
+              {run.control && (
+                <div className="muted" style={{ marginTop: 6 }}>
+                  ended with [
+                  {run.control === 'handoff'
+                    ? 'HANDOFF'
+                    : run.control === 'offer'
+                      ? 'OFFER_HUMAN'
+                      : 'CANCEL_HANDOFF'}
+                  ]
                 </div>
-              </div>
-            )}
-          </div>
-        )}
-        {test.source_conversation_id && (
-          <div style={{ marginTop: 6 }}>
-            <Link
-              to={`/conversations/${test.source_conversation_id}${test.source_message_id ? `?msg=${test.source_message_id}` : ''}`}
-              className="muted"
-              style={{ fontSize: 12 }}
-            >
-              view source conversation →
-            </Link>
-          </div>
-        )}
-      </div>
+              )}
+              {run.tools?.length ? (
+                <div className="muted" style={{ marginTop: 6 }}>
+                  tools: {run.tools.map((x) => `${x.name} (${x.outcome})`).join(', ')}
+                </div>
+              ) : null}
+              {run.model && (
+                <div className="muted" style={{ marginTop: 6 }}>model: {run.model}</div>
+              )}
+              {run.context && (
+                <div className="muted" style={{ marginTop: 6 }}>
+                  grounded on: {run.context.prompt} prompt
+                  {run.context.knowledge.length > 0 &&
+                    ` · ${run.context.knowledge.length} knowledge snippet${run.context.knowledge.length === 1 ? '' : 's'}`}
+                  {run.context.kb.length > 0 && ` · ${run.context.kb.join(', ')}`}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {test.source_conversation_id && !editing && (
+        <div style={{ marginTop: 6 }}>
+          <Link
+            to={`/conversations/${test.source_conversation_id}${test.source_message_id ? `?msg=${test.source_message_id}` : ''}`}
+            className="muted"
+            style={{ fontSize: 12 }}
+          >
+            view source conversation →
+          </Link>
+        </div>
+      )}
 
-      {/* Right column — status labels on top, action buttons below.
-          Badges report state, they never do work. */}
-      <div className="scenario-verdict">
-        {(test.stale || run || (hr && hr !== 'unreviewed' && !test.stale)) && (
-          <div className="scenario-badges">
-            {test.stale && (
-              <span
-                className="scenario-badge stale"
-                title="Config changed since this ran"
-              >
-                stale
-              </span>
-            )}
-            {run?.passed === true && (
-              <span className="scenario-badge pass">✓ pass</span>
-            )}
-            {run?.passed === false && (
-              <span className="scenario-badge fail" title={run.reason}>
-                ✗ fail
-              </span>
-            )}
-            {hr === 'pass' && !test.stale && (
-              <span className="scenario-badge pass">looks right</span>
-            )}
-            {hr === 'fail' && !test.stale && (
-              <span className="scenario-badge fail">
-                needs work{test.fail_cause ? ` · ${test.fail_cause}` : ''}
-              </span>
-            )}
-            {hr === 'fixed_recheck' && !test.stale && (
-              <span className="scenario-badge fixed">
-                fix applied — re-run to confirm
-              </span>
-            )}
-          </div>
-        )}
-        <div className="scenario-actions">
+      {/* Footer — the cause hint and the one action row. Fix it is the
+          primary on a failure: fixing is the next step, not re-running. */}
+      {!editing && (
+        <div className="row" style={{ marginTop: 10, alignItems: 'center', gap: 8 }}>
+          <span className="grow muted" style={{ fontSize: 12 }}>
+            {failed && test.fail_cause && CAUSE_HINT[test.fail_cause]
+              ? `Likely cause: ${test.fail_cause}. ${CAUSE_HINT[test.fail_cause]}.`
+              : ''}
+          </span>
           {canVerdict && (
             <>
               {/* Equal weight — a filled Looks right nudges rubber-stamping;
@@ -414,36 +479,24 @@ export function ScenarioRow({
               </button>
             </>
           )}
-          {/* One repair verb — "needs work"/"fail" are statuses, Fix it is
-              the only button that opens the diagnose card. */}
-          {onFix && fixReply && (hr === 'fail' || run?.passed === false) && (
+          <button
+            className="btn sm"
+            disabled={running || disabled}
+            onClick={onRun}
+          >
+            {running ? 'Running…' : run || hr ? 'Run again' : '▶ Run'}
+          </button>
+          {onFix && fixReply && failed && (
             <button
-              className="btn sm"
+              className="btn primary sm"
               title="Diagnose the miss — knowledge, behavior, ability, or a wrong expectation"
               onClick={() => onFix(fixReply, prompt)}
             >
               Fix it
             </button>
           )}
-          <button className="btn sm" disabled={running || disabled} onClick={onRun}>
-            {running
-              ? 'Running…'
-              : run || hr
-                ? 'Run again'
-                : '▶ Run'}
-          </button>
-          {onDelete && (
-            <button
-              className="btn sm"
-              title="Delete test"
-              aria-label="Delete test"
-              onClick={onDelete}
-            >
-              <Trash2 size={13} />
-            </button>
-          )}
         </div>
-      </div>
+      )}
     </div>
   );
 }

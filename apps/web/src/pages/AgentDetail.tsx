@@ -3348,7 +3348,9 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     mutationFn: (b: { id: string; text: string }) =>
       api(`/api/agents/${agentId}/tests/${b.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ expectation: b.text }),
+        // Re-judge the stored reply under the new bar — a fresh run would
+        // produce a different reply and change what's being measured.
+        body: JSON.stringify({ expectation: b.text, rejudge: true }),
       }),
     onSuccess: invalidate,
     onError: (e) => setErr(e.message),

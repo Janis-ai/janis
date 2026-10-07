@@ -568,11 +568,37 @@ button, input, select, textarea { font: inherit; }
   border-radius: 10px; margin-bottom: 6px; background: var(--panel);
   flex-wrap: wrap;
 }
-/* Right column — status labels stacked over action buttons; badges
-   report state, buttons do the work. */
-.scenario-verdict { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
-.scenario-badges { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-.scenario-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+/* Scenario card — the unified test row. Reading order is fixed:
+   prompt → expectation → why it failed → reply → actions; status is one
+   badge top-right, actions sit on the bottom row. */
+.scenario-card { flex-direction: column; align-items: stretch; flex-wrap: nowrap; }
+.scenario-collapsed { padding: 6px 12px; }
+.scenario-section-label {
+  font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted);
+}
+.scenario-judge {
+  border-left: 2px solid var(--danger); padding-left: 8px;
+  margin-top: 8px; font-size: 12px; color: var(--muted);
+}
+.scenario-judge .scenario-section-label { color: var(--danger); }
+.scenario-reply-clamp {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.scenario-menu {
+  position: absolute; right: 0; top: 100%; z-index: 30;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px; min-width: 130px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.3);
+}
+.scenario-menu-item {
+  display: flex; gap: 6px; align-items: center; width: 100%;
+  padding: 6px 8px; border: 0; background: none; color: var(--text);
+  font-size: 12px; border-radius: 6px; cursor: pointer; font-family: inherit;
+}
+.scenario-menu-item:hover { background: var(--panel-2); }
+.scenario-menu-item.danger { color: var(--danger); }
 .scenario-badge {
   font-size: 11px; padding: 1px 8px; border-radius: 999px;
   color: var(--muted); border: 1px solid var(--border); white-space: nowrap;
