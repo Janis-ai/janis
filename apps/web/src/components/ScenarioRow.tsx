@@ -80,7 +80,6 @@ export function ScenarioRow({
   /** Diagnose path — Fix it opens the same card on both surfaces. */
   onFix?: (reply: string, prompt: string) => void;
 }) {
-  const [open, setOpen] = useState(false);      // replay transcript
   const [replyOpen, setReplyOpen] = useState(false); // full reply
   const [editing, setEditing] = useState(false);
   const [expText, setExpText] = useState('');
@@ -276,13 +275,14 @@ export function ScenarioRow({
       {/* What the agent said — clamped, expandable. */}
       {reply && !editing && (
         <div style={{ marginTop: 8 }}>
-          <div className="scenario-section-label">Agent replied</div>
+          <div className="scenario-section-label">
+            Agent replied{replyLabel ? ` — ${replyLabel.toLowerCase()}` : ''}
+          </div>
           <div
             className={replyOpen ? '' : 'scenario-reply-clamp'}
             style={{ fontSize: 13, marginTop: 2, whiteSpace: 'pre-wrap' }}
             title={reply}
           >
-            {replyLabel === 'Janis answered' ? null : null}
             {reply}
           </div>
           <button
@@ -329,115 +329,9 @@ export function ScenarioRow({
         </div>
       )}
 
-      {/* Full replay transcript — the turns + provenance footer. */}
-      {run && !editing && (test.turns.length > 1 || run.control || run.tools?.length || run.model || run.context) && (
-        <div style={{ fontSize: 12, marginTop: 8 }}>
-          <button
-            className="inspector-toggle"
-            onClick={() => setOpen(!open)}
-          >
-            {open ? '▾ hide replay transcript' : '▸ show replay transcript'}
-          </button>
-          {open && (
-            <div className="inspector-panel" style={{ maxWidth: '100%', marginTop: 6 }}>
-              {(() => {
-                const shown = test.turns.slice(-4);
-                const omitted = test.turns.length - shown.length;
-                return (
-                  <>
-                    {omitted > 0 && (
-                      <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
-                        …{omitted} earlier turn{omitted === 1 ? '' : 's'} in the
-                        replayed transcript
-                      </div>
-                    )}
-                    {shown.map((turn, i) => {
-                      const trigger = i === shown.length - 1 && turn.role === 'customer';
-                      const linked = turn.mid && test.source_conversation_id;
-                      return (
-                        <div
-                          key={i}
-                          style={{ display: 'flex', gap: 8, marginBottom: 3, fontSize: 12 }}
-                        >
-                          <span
-                            className="mono muted"
-                            style={{ minWidth: 58, flexShrink: 0, fontSize: 11 }}
-                          >
-                            {turn.role}
-                          </span>
-                          {linked ? (
-                            <Link
-                              to={`/conversations/${test.source_conversation_id}?msg=${turn.mid}`}
-                              className={trigger ? '' : 'muted'}
-                              style={{
-                                ...(trigger ? { fontWeight: 600 } : {}),
-                                textDecoration: 'underline',
-                                textDecorationStyle: 'dotted',
-                                textUnderlineOffset: 3,
-                                whiteSpace: 'pre-wrap',
-                              }}
-                              title="Open this message in the conversation"
-                            >
-                              {turn.text}
-                            </Link>
-                          ) : (
-                            <span
-                              className={trigger ? '' : 'muted'}
-                              style={{
-                                whiteSpace: 'pre-wrap',
-                                ...(trigger ? { fontWeight: 600 } : {}),
-                              }}
-                            >
-                              {turn.text}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {test.original_reply && (
-                      <>
-                        <div className="muted" style={{ fontSize: 11, margin: '6px 0 3px' }}>
-                          ↳ original reply — what the agent actually did then:
-                        </div>
-                        <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>
-                          {test.original_reply}
-                        </div>
-                      </>
-                    )}
-                  </>
-                );
-              })()}
-              {run.control && (
-                <div className="muted" style={{ marginTop: 6 }}>
-                  ended with [
-                  {run.control === 'handoff'
-                    ? 'HANDOFF'
-                    : run.control === 'offer'
-                      ? 'OFFER_HUMAN'
-                      : 'CANCEL_HANDOFF'}
-                  ]
-                </div>
-              )}
-              {run.tools?.length ? (
-                <div className="muted" style={{ marginTop: 6 }}>
-                  tools: {run.tools.map((x) => `${x.name} (${x.outcome})`).join(', ')}
-                </div>
-              ) : null}
-              {run.model && (
-                <div className="muted" style={{ marginTop: 6 }}>model: {run.model}</div>
-              )}
-              {run.context && (
-                <div className="muted" style={{ marginTop: 6 }}>
-                  grounded on: {run.context.prompt} prompt
-                  {run.context.knowledge.length > 0 &&
-                    ` · ${run.context.knowledge.length} knowledge snippet${run.context.knowledge.length === 1 ? '' : 's'}`}
-                  {run.context.kb.length > 0 && ` · ${run.context.kb.join(', ')}`}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      {/* No replay transcript — a test is a prompt, a bar, a reply, a
+          verdict. Turns/provenance still exist on the row's data for the
+          run itself; the card just doesn't render a fake chat. */}
       {test.source_conversation_id && !editing && (
         <div style={{ marginTop: 6 }}>
           <Link
