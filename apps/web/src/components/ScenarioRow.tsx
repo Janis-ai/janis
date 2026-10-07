@@ -183,6 +183,18 @@ export function ScenarioRow({
                 : reply
                   ? 'unreviewed'
                   : 'none';
+  // Auto-fold is for rows that ARRIVE already passed — a pass landing on
+  // an open row (you had it open when the run began) must not fold it out
+  // from under you. Layout effect so the reopen lands before paint — no
+  // one-frame collapse flash.
+  const prevStatus = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const was = prevStatus.current;
+    prevStatus.current = status;
+    if (was !== null && was !== 'passed' && status === 'passed' && !folded) {
+      setCollapsed(false);
+    }
+  });
   // Verdict buttons are the flip, not the echo — 'Needs work' only on a
   // passing (or unjudged) reply, 'Looks right' only on a failing one.
   const showNeedsWork =
