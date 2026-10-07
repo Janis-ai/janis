@@ -44,10 +44,10 @@ export const scenarioPrompt = (t: ScenarioTest) =>
 
 /** fail_cause → the suggested fix path, shown in the card footer. */
 const CAUSE_HINT: Record<string, string> = {
-  knowledge: 'Janis suggests teaching the fact (Teach it)',
-  behavior: 'Janis suggests adding an instruction rule (Guide it)',
-  ability: 'Janis suggests connecting a tool (Abilities)',
-  expectation: 'Janis suggests editing the expectation',
+  knowledge: 'Try teaching the fact (Teach it)',
+  behavior: 'Try adding an instruction rule (Guide it)',
+  ability: 'Try connecting a tool (Abilities)',
+  expectation: 'Try editing the expectation',
 };
 
 /** A reply clamped to two lines; the "show full reply" toggle only
@@ -301,15 +301,6 @@ export function ScenarioRow({
         </div>
       )}
 
-      {/* The judge's reason is an evaluation, not part of the reply —
-          labeled and ruled so it reads as the judge's voice. */}
-      {failed && run?.reason && !editing && (
-        <div className="scenario-judge">
-          <div className="scenario-section-label">Why it failed</div>
-          {run.reason}
-        </div>
-      )}
-
       {/* What the agent said — clamped, expandable only when it overflows. */}
       {reply && !editing && (
         <ReplyBlock
@@ -324,6 +315,15 @@ export function ScenarioRow({
           label="Original reply — what the agent did then"
           text={test.original_reply}
         />
+      )}
+
+      {/* The judge's reason follows the reply it evaluated — labeled and
+          ruled so it reads as the judge's voice, not part of the reply. */}
+      {failed && run?.reason && !editing && (
+        <div className="scenario-judge">
+          <div className="scenario-section-label">Why it failed</div>
+          {run.reason}
+        </div>
       )}
 
       {test.category === 'actions' && !editing && (
