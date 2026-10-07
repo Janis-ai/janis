@@ -247,6 +247,7 @@ export function AskJanis({
   onCustomerMessage,
   onCorrect,
   verdictFor,
+  onShowScenario,
   onAgentReply,
   onSendFailed,
   onSaveTest,
@@ -317,10 +318,15 @@ export function AskJanis({
      *  same-intent scenarios saved from different flows. */
     turns?: ScenarioTurn[],
   ) => {
+    /** The matched scenario row — enables the "see matched scenario" link. */
+    scenarioId?: string;
     expectation?: string | null;
     result: 'pass' | 'fail' | 'unreviewed' | 'fixed_recheck' | null;
     verdict(r: 'pass' | 'fail'): void;
   } | null;
+  /** "see matched scenario" — jumps to the scenario row a reply matched.
+   *  The parent owns where that list lives. */
+  onShowScenario?: (testId: string) => void;
   /** The parent renders its own merged header (builder test dock) — the
    *  pane header stays off so the two don't stack. */
   hideHeader?: boolean;
@@ -1186,6 +1192,17 @@ export function AskJanis({
                                 }
                               >
                                 Correct this
+                              </button>
+                            )}
+                            {/* The Aim box asserts a match — this shows
+                                WHICH scenario it is. */}
+                            {verdictCtx?.scenarioId && onShowScenario && (
+                              <button
+                                className="correct-this"
+                                title="Open the scenario this reply matched"
+                                onClick={() => onShowScenario(verdictCtx.scenarioId!)}
+                              >
+                                see matched scenario
                               </button>
                             )}
                             {/* A reply answering a scenario prompt IS that

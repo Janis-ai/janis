@@ -720,6 +720,7 @@ export default function AgentBuilder() {
     const s = matchScenario(customerText, turns);
     if (!s) return null;
     return {
+      scenarioId: s.id,
       expectation: s.expectation,
       result: s.human_result ?? null,
       verdict: (r: 'pass' | 'fail') => {
@@ -767,6 +768,20 @@ export default function AgentBuilder() {
     onCustomerMessage: (t) => {
       setChatActive(true);
       if (CONFIG_HINT_RE.test(t)) setCopilotHint(t);
+    },
+    // "see matched scenario" — the checklist lives on the try step, so hop
+    // there if needed, then scroll the row into view after it mounts. The
+    // hash gives it the :target ring.
+    onShowScenario: (id) => {
+      if (step !== 'try') goStep('try');
+      // An overlay dock would hide the row it just scrolled to.
+      if (window.matchMedia('(max-width: 1199px)').matches) dock?.setOpen(false);
+      requestAnimationFrame(() => {
+        navigate(`#sc-${id}`, { replace: true });
+        document
+          .getElementById(`sc-${id}`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
     },
     // Header history/new-chat switched threads — reset the drift tracking
     // the way the old pickTestChat/newChat did. The seed clears too: a

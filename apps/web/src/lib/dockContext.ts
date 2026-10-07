@@ -4,6 +4,8 @@ export type DockTab = 'copilot' | 'test';
 
 /** A scenario verdict — matches AskJanis's verdictFor contract. */
 export interface TestVerdict {
+  /** The matched scenario — enables the "see matched scenario" link. */
+  scenarioId?: string;
   expectation?: string | null;
   result: 'pass' | 'fail' | 'unreviewed' | 'fixed_recheck' | null;
   verdict(r: 'pass' | 'fail'): void;
@@ -29,6 +31,10 @@ export interface TestHandlers {
     turns?: { role: 'customer' | 'agent'; text: string }[];
   }): void;
   onCustomerMessage?(text: string): void;
+  /** Jump to the matched scenario row — each surface knows where its
+   *  scenario list lives (builder scrolls on-page, others route to
+   *  /agents/:id/tests#sc-<id>). */
+  onShowScenario?(testId: string): void;
   /** The header's history/new-chat controls switched test conversations —
    *  the builder uses it to reset its config-drift notice. `fresh` is true
    *  for a brand-new visitor, false when resuming a saved thread. */

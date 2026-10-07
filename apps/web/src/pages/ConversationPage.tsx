@@ -1283,6 +1283,17 @@ export default function ConversationPage() {
                       >
                         Correct this
                       </button>
+                      {sc && (
+                        <button
+                          className="correct-this"
+                          title="Open the scenario this reply matched"
+                          onClick={() =>
+                            navigate(`/agents/${c.agent_id}/tests#sc-${sc.id}`)
+                          }
+                        >
+                          see matched scenario
+                        </button>
+                      )}
                       {!sc && prevPrompt && !scenarioSavedFor.has(m.id) && (
                         <button
                           className="correct-this"

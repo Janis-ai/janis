@@ -534,6 +534,7 @@ export default function Layout() {
     const s = fallbackScenario(customerText, turns);
     if (!s || !chatAgentId) return null;
     return {
+      scenarioId: s.id,
       expectation: s.expectation,
       result: s.human_result ?? null,
       verdict: (r: 'pass' | 'fail') => {
@@ -566,6 +567,11 @@ export default function Layout() {
       turns: ctx.turns,
       ...(s ? { scenario: { id: s.id, expectation: s.expectation } } : {}),
     });
+  };
+  // "see matched scenario" off-builder — the regression rows live on the
+  // agent's tests section, hash-anchored per row.
+  const fallbackShowScenario = (id: string) => {
+    if (chatAgentId) navigate(`/agents/${chatAgentId}/tests#sc-${id}`);
   };
   const fallbackOnSaveTest = (ctx: {
     agentText: string;
@@ -1443,6 +1449,9 @@ export default function Layout() {
                             reply,
                             turns,
                           )
+                        }
+                        onShowScenario={(id) =>
+                          (testWiring?.handlers.current.onShowScenario ?? fallbackShowScenario)(id)
                         }
                         onCorrect={(ctx) =>
                           (testWiring?.handlers.current.onCorrect ?? fallbackOnCorrect)(ctx)
