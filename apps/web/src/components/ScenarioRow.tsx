@@ -182,7 +182,7 @@ export function ScenarioRow({
 
   return (
     <div className="scenario-row scenario-card" id={`sc-${test.id}`}>
-      <div className="row" style={{ alignItems: 'flex-start' }}>
+      <div className="row" style={{ alignItems: 'center' }}>
         <div className="grow" style={{ fontSize: 13, fontWeight: 600, minWidth: 0 }}>
           “{test.name}”
         </div>
