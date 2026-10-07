@@ -317,9 +317,15 @@ export function CorrectThisCard({
   // When Janis has no drafted rule, the placeholder should still belong to
   // THIS agent's domain — a generic example teaches the wrong pattern.
   const agentTopic = cfg.builder?.summary?.split('.')[0]?.trim();
-  const rulePlaceholder = agentTopic
-    ? `e.g. "Answer casual questions briefly, then steer back to ${agentTopic.charAt(0).toLowerCase()}${agentTopic.slice(1)}"`
+  const topic = agentTopic
+    ? `${agentTopic.charAt(0).toLowerCase()}${agentTopic.slice(1)}`
+    : null;
+  const rulePlaceholder = topic
+    ? `e.g. "Answer casual questions briefly, then steer back to ${topic}"`
     : 'e.g. "When the customer defers, choose and proceed"';
+  const notePlaceholder = topic
+    ? `Provide missing knowledge — e.g. the facts it needed about ${topic}: hours, prices, eligibility`
+    : 'Provide missing knowledge — e.g. "Hours: Tue–Sat 9–5"';
   const HANDOFF_RULE =
     'When asked to take an action the agent cannot perform, collect the relevant details and say a teammate will follow up — never promise the action itself.';
   const busy =
@@ -581,7 +587,10 @@ export function CorrectThisCard({
                   ? 'Janis reads this as a behavior fix'
                   : 'Provide a behavior fix'}{' '}
                 —{' '}
-                <button className="link small" onClick={() => setCause('knowledge')}>
+                <button
+                  className="link small"
+                  onClick={() => setCause('knowledge')}
+                >
                   enter a fact instead
                 </button>
               </div>
@@ -624,14 +633,28 @@ export function CorrectThisCard({
                   enter a behavior fix instead
                 </button>
               </div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                Note:
+              </div>
+              <textarea
+                rows={2}
+                style={{ width: '100%', marginTop: 4, boxSizing: 'border-box' }}
+                placeholder={notePlaceholder}
+                value={noteEdit}
+                onChange={(e) => setNoteEdit(e.target.value)}
+              />
               <div className="row" style={{ marginTop: 8, gap: 8 }}>
                 <button className="btn sm" onClick={onClose}>
                   Cancel
                 </button>
                 <button
                   className="btn sm primary"
-                  disabled={saveCorrection.isPending}
-                  onClick={() => saveCorrection.mutate(correction.trim())}
+                  disabled={
+                    !(noteEdit.trim() || correction.trim()) || saveCorrection.isPending
+                  }
+                  onClick={() =>
+                    saveCorrection.mutate(noteEdit.trim() || correction.trim())
+                  }
                 >
                   {saveCorrection.isPending ? 'Saving…' : 'Add to notes'}
                 </button>
