@@ -102,32 +102,13 @@ export function ScenarioRow({
           </div>
         )}
 
-        {/* The bar stays visible while it edits — seeing "expects: X"
-            above the textarea beats editing against a blank. */}
-        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-          {test.expectation ? (
-            <>
-              expects: {test.expectation}
-              {test.expectation_draft && (
-                <span
-                  className="badge warn"
-                  style={{ marginLeft: 6 }}
-                  title="Written by AI at save time — review it"
-                >
-                  AI draft
-                </span>
-              )}
-            </>
-          ) : test.category === 'safety' ? (
-            <span style={{ color: 'var(--warn)' }}>
-              no expectation written — verdicts judge this by eye
-            </span>
-          ) : (
-            "no expectation — runs aren't judged"
-          )}
-        </div>
         {editing ? (
           <div style={{ marginTop: 6 }}>
+            {/* 'expects:' keeps its seat while the text edits — the row's
+                shape doesn't change under you. */}
+            <div className="muted" style={{ fontSize: 12, marginBottom: 2 }}>
+              expects:
+            </div>
             <textarea
               rows={2}
               autoFocus
@@ -152,18 +133,42 @@ export function ScenarioRow({
             </div>
           </div>
         ) : (
-          onSaveExpectation && (
-            <button
-              className="btn ghost sm"
-              style={{ marginTop: 4 }}
-              onClick={() => {
-                setExpText(test.expectation);
-                setEditing(true);
-              }}
-            >
-              {test.expectation ? 'Edit expectation' : 'Add an expectation'}
-            </button>
-          )
+          <>
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              {test.expectation ? (
+                <>
+                  expects: {test.expectation}
+                  {test.expectation_draft && (
+                    <span
+                      className="badge warn"
+                      style={{ marginLeft: 6 }}
+                      title="Written by AI at save time — review it"
+                    >
+                      AI draft
+                    </span>
+                  )}
+                </>
+              ) : test.category === 'safety' ? (
+                <span style={{ color: 'var(--warn)' }}>
+                  no expectation written — verdicts judge this by eye
+                </span>
+              ) : (
+                "no expectation — runs aren't judged"
+              )}
+            </div>
+            {onSaveExpectation && (
+              <button
+                className="btn ghost sm"
+                style={{ marginTop: 4 }}
+                onClick={() => {
+                  setExpText(test.expectation);
+                  setEditing(true);
+                }}
+              >
+                {test.expectation ? 'Edit expectation' : 'Add an expectation'}
+              </button>
+            )}
+          </>
         )}
 
         {/* The run's reply quoted on the row — provenance labels keep a
