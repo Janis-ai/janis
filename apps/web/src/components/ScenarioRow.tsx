@@ -137,9 +137,11 @@ export function ScenarioRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [expText, setExpText] = useState('');
-  // Passed rows collapse to one line — the failures stand out and the
-  // list stays scannable. Expansion state lives per mounted row.
+  // Two ways a row folds: machine 'passed' auto-collapses on load, and
+  // ANY status can be folded manually via the chevron — including
+  // failed/rejected rows the owner wants out of the way.
   const [collapsed, setCollapsed] = useState(true);
+  const [folded, setFolded] = useState(false);
 
   const run = test.last_run;
   const prompt = scenarioPrompt(test);
@@ -180,22 +182,50 @@ export function ScenarioRow({
     verdict &&
     reply &&
     (status === 'failed' || status === 'rejected' || status === 'unreviewed');
-  // Machine-passes fold away; the owner's 'approved' verdict stays open —
-   // a human judgment is the one result worth keeping visible.
-  const isCollapsed = collapsed && status === 'passed';
+  // Machine-passes fold away on their own; everything else folds only
+  // when the owner asks. 'editing' can never fold — you can't hide the
+  // thing you're changing.
+  const isCollapsed =
+    status !== 'editing' && (folded || (collapsed && status === 'passed'));
 
   if (isCollapsed) {
+    const ok = status === 'passed' || status === 'approved';
+    const bad = status === 'failed' || status === 'rejected';
+    const badgeClass =
+      status === 'approved' || status === 'passed'
+        ? 'pass'
+        : status === 'failed'
+          ? 'fail'
+          : status === 'rejected'
+            ? 'rejected'
+            : status === 'stale'
+              ? 'stale'
+              : status === 'recheck'
+                ? 'fixed'
+                : '';
     return (
       <div className="scenario-row scenario-collapsed" id={`sc-${test.id}`}>
-        <span className="scenario-check" style={{ color: 'var(--accent)' }}>✓</span>
+        {ok && (
+          <span className="scenario-check" style={{ color: 'var(--accent)' }}>✓</span>
+        )}
+        {bad && (
+          <span className="scenario-check" style={{ color: 'var(--danger)' }}>✗</span>
+        )}
         <span className="grow" style={{ fontSize: 13, minWidth: 0 }}>
           “{test.name}”
         </span>
-        <span className="scenario-badge pass">{status}</span>
+        {status !== 'none' && (
+          <span className={`scenario-badge ${badgeClass}`}>
+            {status === 'recheck' ? 'fix applied — re-run to confirm' : status}
+          </span>
+        )}
         <button
           className="btn ghost sm"
           aria-label="Expand"
-          onClick={() => setCollapsed(false)}
+          onClick={() => {
+            setFolded(false);
+            setCollapsed(false);
+          }}
         >
           ▸
         </button>
@@ -229,11 +259,11 @@ export function ScenarioRow({
         ) : status === 'unreviewed' ? (
           <span className="scenario-badge">unreviewed</span>
         ) : null}
-        {(status === 'passed' || status === 'approved') && (
+        {!editing && (
           <button
             className="btn ghost sm"
             aria-label="Collapse"
-            onClick={() => setCollapsed(true)}
+            onClick={() => setFolded(true)}
           >
             ▾
           </button>
