@@ -568,11 +568,14 @@ button, input, select, textarea { font: inherit; }
   border-radius: 10px; margin-bottom: 6px; background: var(--panel);
   flex-wrap: wrap;
 }
-.scenario-verdict { display: flex; gap: 4px; align-items: center; }
+/* Right column — status labels stacked over action buttons; badges
+   report state, buttons do the work. */
+.scenario-verdict { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.scenario-badges { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.scenario-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .scenario-badge {
   font-size: 11px; padding: 1px 8px; border-radius: 999px;
   color: var(--muted); border: 1px solid var(--border); white-space: nowrap;
-  background: none; font-family: inherit; cursor: default;
 }
 .scenario-badge.pass { color: var(--accent); border-color: var(--accent); }
 .scenario-badge.fail {

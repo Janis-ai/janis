@@ -102,6 +102,30 @@ export function ScenarioRow({
           </div>
         )}
 
+        {/* The bar stays visible while it edits — seeing "expects: X"
+            above the textarea beats editing against a blank. */}
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          {test.expectation ? (
+            <>
+              expects: {test.expectation}
+              {test.expectation_draft && (
+                <span
+                  className="badge warn"
+                  style={{ marginLeft: 6 }}
+                  title="Written by AI at save time — review it"
+                >
+                  AI draft
+                </span>
+              )}
+            </>
+          ) : test.category === 'safety' ? (
+            <span style={{ color: 'var(--warn)' }}>
+              no expectation written — verdicts judge this by eye
+            </span>
+          ) : (
+            "no expectation — runs aren't judged"
+          )}
+        </div>
         {editing ? (
           <div style={{ marginTop: 6 }}>
             <textarea
@@ -128,40 +152,18 @@ export function ScenarioRow({
             </div>
           </div>
         ) : (
-          <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-            {test.expectation ? (
-              <>
-                expects: {test.expectation}
-                {test.expectation_draft && (
-                  <span
-                    className="badge warn"
-                    style={{ marginLeft: 6 }}
-                    title="Written by AI at save time — review it"
-                  >
-                    AI draft
-                  </span>
-                )}
-              </>
-            ) : test.category === 'safety' ? (
-              <span style={{ color: 'var(--warn)' }}>
-                no expectation written — verdicts judge this by eye
-              </span>
-            ) : (
-              "no expectation — runs aren't judged"
-            )}
-            {onSaveExpectation && (
-              <button
-                className="btn ghost sm"
-                style={{ marginLeft: 8 }}
-                onClick={() => {
-                  setExpText(test.expectation);
-                  setEditing(true);
-                }}
-              >
-                {test.expectation ? 'edit' : 'add one'}
-              </button>
-            )}
-          </div>
+          onSaveExpectation && (
+            <button
+              className="btn ghost sm"
+              style={{ marginTop: 4 }}
+              onClick={() => {
+                setExpText(test.expectation);
+                setEditing(true);
+              }}
+            >
+              {test.expectation ? 'Edit expectation' : 'Add an expectation'}
+            </button>
+          )
         )}
 
         {/* The run's reply quoted on the row — provenance labels keep a
@@ -348,88 +350,92 @@ export function ScenarioRow({
         )}
       </div>
 
+      {/* Right column — status labels on top, action buttons below.
+          Badges report state, they never do work. */}
       <div className="scenario-verdict">
-        {/* Both verdicts, always — the machine judge (last_run.passed) and
-            the human verdict (human_result) are different signals on the
-            same row; showing both is the whole point of one surface. */}
-        {test.stale && (
-          <span className="scenario-badge stale" title="Config changed since this ran">
-            stale
-          </span>
-        )}
-        {run?.passed === true && <span className="scenario-badge pass">✓ pass</span>}
-        {run?.passed === false && (
-          <button
-            className="scenario-badge fail"
-            style={onFix && fixReply ? { cursor: 'pointer' } : undefined}
-            title={
-              onFix && fixReply
-                ? 'Diagnose the miss — click to fix'
-                : run.reason
-            }
-            onClick={onFix && fixReply ? () => onFix(fixReply, prompt) : undefined}
-          >
-            ✗ fail
-          </button>
-        )}
-        {hr === 'pass' && !test.stale && (
-          <span className="scenario-badge pass">looks right</span>
-        )}
-        {hr === 'fail' && !test.stale && (
-          <button
-            className="scenario-badge fail"
-            style={onFix && fixReply ? { cursor: 'pointer' } : undefined}
-            title={
-              onFix && fixReply
-                ? 'Diagnose the miss — knowledge, behavior, ability, or a wrong expectation'
-                : undefined
-            }
-            onClick={onFix && fixReply ? () => onFix(fixReply, prompt) : undefined}
-          >
-            needs work{test.fail_cause ? ` · ${test.fail_cause}` : ''}
-          </button>
-        )}
-        {hr === 'fixed_recheck' && !test.stale && (
-          <span className="scenario-badge fixed">fix applied — re-run to confirm</span>
-        )}
-
-        {canVerdict && (
-          <div className="row" style={{ gap: 6 }}>
-            {/* Equal weight — a filled Looks right nudges rubber-stamping;
-                the verdict is earned by judgment, not button color. */}
-            <button
-              className="btn sm"
-              disabled={verdict.pending}
-              onClick={verdict.onPass}
-            >
-              Looks right
-            </button>
-            <button
-              className="btn sm"
-              disabled={verdict.pending}
-              onClick={verdict.onFail}
-            >
-              Needs work
-            </button>
+        {(test.stale || run || (hr && hr !== 'unreviewed' && !test.stale)) && (
+          <div className="scenario-badges">
+            {test.stale && (
+              <span
+                className="scenario-badge stale"
+                title="Config changed since this ran"
+              >
+                stale
+              </span>
+            )}
+            {run?.passed === true && (
+              <span className="scenario-badge pass">✓ pass</span>
+            )}
+            {run?.passed === false && (
+              <span className="scenario-badge fail" title={run.reason}>
+                ✗ fail
+              </span>
+            )}
+            {hr === 'pass' && !test.stale && (
+              <span className="scenario-badge pass">looks right</span>
+            )}
+            {hr === 'fail' && !test.stale && (
+              <span className="scenario-badge fail">
+                needs work{test.fail_cause ? ` · ${test.fail_cause}` : ''}
+              </span>
+            )}
+            {hr === 'fixed_recheck' && !test.stale && (
+              <span className="scenario-badge fixed">
+                fix applied — re-run to confirm
+              </span>
+            )}
           </div>
         )}
-        <button className="btn sm" disabled={running || disabled} onClick={onRun}>
-          {running
-            ? 'Running…'
-            : run || hr
-              ? 'Run again'
-              : '▶ Run'}
-        </button>
-        {onDelete && (
-          <button
-            className="btn sm"
-            title="Delete test"
-            aria-label="Delete test"
-            onClick={onDelete}
-          >
-            <Trash2 size={13} />
+        <div className="scenario-actions">
+          {canVerdict && (
+            <>
+              {/* Equal weight — a filled Looks right nudges rubber-stamping;
+                  the verdict is earned by judgment, not button color. */}
+              <button
+                className="btn sm"
+                disabled={verdict.pending}
+                onClick={verdict.onPass}
+              >
+                Looks right
+              </button>
+              <button
+                className="btn sm"
+                disabled={verdict.pending}
+                onClick={verdict.onFail}
+              >
+                Needs work
+              </button>
+            </>
+          )}
+          {/* One repair verb — "needs work"/"fail" are statuses, Fix it is
+              the only button that opens the diagnose card. */}
+          {onFix && fixReply && (hr === 'fail' || run?.passed === false) && (
+            <button
+              className="btn sm"
+              title="Diagnose the miss — knowledge, behavior, ability, or a wrong expectation"
+              onClick={() => onFix(fixReply, prompt)}
+            >
+              Fix it
+            </button>
+          )}
+          <button className="btn sm" disabled={running || disabled} onClick={onRun}>
+            {running
+              ? 'Running…'
+              : run || hr
+                ? 'Run again'
+                : '▶ Run'}
           </button>
-        )}
+          {onDelete && (
+            <button
+              className="btn sm"
+              title="Delete test"
+              aria-label="Delete test"
+              onClick={onDelete}
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
