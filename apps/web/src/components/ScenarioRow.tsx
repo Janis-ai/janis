@@ -106,8 +106,7 @@ export function ScenarioRow({
   disabled?: boolean;
   onRun: () => void;
   onDelete?: () => void;
-  /** A reply produced this session that isn't persisted in last_run yet —
-   *  labeled "just now" so it reads as fresh, not recorded. */
+  /** A reply produced this session that isn't persisted in last_run yet. */
   replyOverride?: string | null;
   /** Saves the expectation AND re-judges the stored reply against it —
    *  no new run, so no new random reply sneaks in to move the verdict. */
@@ -128,11 +127,6 @@ export function ScenarioRow({
   const run = test.last_run;
   const prompt = scenarioPrompt(test);
   const reply = replyOverride ?? run?.reply ?? null;
-  const replyLabel = replyOverride
-    ? 'just now'
-    : run?.reply
-      ? 'last replay'
-      : null;
   // Fix it only diagnoses — any known reply (this run, the last replay,
   // the original transcript) works, so the button survives a reload.
   const fixReply = reply ?? test.original_reply ?? null;
@@ -307,10 +301,7 @@ export function ScenarioRow({
 
       {/* What the agent said — clamped, expandable only when it overflows. */}
       {reply && !editing && (
-        <ReplyBlock
-          label={`Agent replied${replyLabel ? ` — ${replyLabel.toLowerCase()}` : ''}`}
-          text={reply}
-        />
+        <ReplyBlock label="Agent replied" text={reply} />
       )}
       {/* No fresh reply but an original transcript exists — show it under
           its own label so it never reads as a run result. */}
