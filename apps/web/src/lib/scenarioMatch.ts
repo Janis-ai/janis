@@ -7,7 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
-import { scenarioPrompt, type ScenarioTest } from '../components/ScenarioRow';
+import { scenarioPrompt, type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 
 const STOPWORDS = new Set(
   (
@@ -76,13 +76,70 @@ export function promptsSimilar(a: string, b: string): boolean {
   return ta.size > 0 && tb.size > 0 && jaccard(ta, tb) >= 0.6;
 }
 
-/** Local-only match — instant, covers typos and light rewording. */
+// Context-aware matching — mirrors the server helpers in
+// apps/api/lib/promptMatch.ts (keep in sync). A query's `turns` end at the
+// trigger customer message; everything before it is the context.
+
+/** Everything before the trigger (last customer turn). */
+function contextOf(turns: ScenarioTurn[]): ScenarioTurn[] {
+  let last = -1;
+  for (let i = 0; i < turns.length; i++) {
+    if (turns[i].role === 'customer') last = i;
+  }
+  return turns.slice(0, Math.max(0, last));
+}
+
+/** 1 for identical/absent contexts, 0 when one side is bare, else Jaccard
+ *  over content words — reorders count, different topics don't. */
+function contextScore(a: ScenarioTurn[], b: ScenarioTurn[]): number {
+  if (!a.length && !b.length) return 1;
+  if (!a.length || !b.length) return 0;
+  const na = normalizePrompt(a.map((t) => t.text).join(' '));
+  const nb = normalizePrompt(b.map((t) => t.text).join(' '));
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const ta = contentTokens(na);
+  const tb = contentTokens(nb);
+  return ta.size && tb.size ? jaccard(ta, tb) : 0;
+}
+
+/** Cache key — prompt alone for bare queries, prompt+context signature
+ *  when the query carries a setup, so the same trigger in two flows can
+ *  resolve to different rows. */
+function querySig(prompt: string, turns?: ScenarioTurn[]): string {
+  return `${normalizePrompt(prompt)}|${normalizePrompt(
+    contextOf(turns ?? [])
+      .map((t) => t.text)
+      .join(' '),
+  )}`;
+}
+
+/** Local match — instant. Single trigger hit attaches regardless of
+ *  context (the hybrid: no per-message veto); several same-trigger
+ *  scenarios get disambiguated by context word-overlap. Returns null when
+ *  nothing resolves locally — the caller queues the semantic pass. */
 export function findScenario(
   prompt: string | undefined,
   tests: ScenarioTest[],
+  turns?: ScenarioTurn[],
 ): ScenarioTest | undefined {
   if (!prompt) return undefined;
-  return tests.find((t) => promptsSimilar(prompt, scenarioPrompt(t)));
+  const hits = tests.filter((t) => promptsSimilar(prompt, scenarioPrompt(t)));
+  if (hits.length === 1) return hits[0];
+  if (hits.length < 2) return undefined;
+  const ctx = contextOf(turns ?? []);
+  let best: ScenarioTest | undefined;
+  let bestScore = 0.3;
+  let tie = false;
+  for (const t of hits) {
+    const s = ctx.length ? contextScore(ctx, contextOf(t.turns ?? [])) : 1;
+    if (s > bestScore) {
+      best = t;
+      bestScore = s;
+      tie = false;
+    } else if (s === bestScore) tie = true;
+  }
+  return best && !tie ? best : undefined;
 }
 
 // Semantic results are per-agent module state — shared by every mounted
@@ -90,29 +147,31 @@ export function findScenario(
 // Without this, each section switch re-asked /tests/match for prompts it
 // already resolved, and a paraphrase's Aim/verdict box visibly hid then
 // reappeared on every handoff.
-const SEMANTIC_HITS = new Map<string, Map<string, string>>(); // agentId → normPrompt → scenarioId | ''
+const SEMANTIC_HITS = new Map<string, Map<string, string>>(); // agentId → querySig → scenarioId | ''
 const SEMANTIC_FP = new Map<string, string>(); // agentId → tests id fingerprint
-const SEMANTIC_PENDING = new Map<string, Set<string>>(); // agentId → normPrompts awaiting a batch
+const SEMANTIC_PENDING = new Map<string, Map<string, { prompt: string; turns?: ScenarioTurn[] }>>(); // agentId → sig → query
 const MATCH_LISTENERS = new Set<() => void>();
 
-function recordHits(agentId: string, batch: string[], matches: Record<string, string>) {
+function recordHits(agentId: string, batch: [string, string | null][]) {
   let m = SEMANTIC_HITS.get(agentId);
   if (!m) SEMANTIC_HITS.set(agentId, (m = new Map()));
-  for (const p of batch) m.set(p, matches[p] ?? '');
+  for (const [sig, id] of batch) m.set(sig, id ?? '');
   for (const l of MATCH_LISTENERS) l();
 }
 
 function flushSemantic(agentId: string) {
-  const set = SEMANTIC_PENDING.get(agentId);
-  if (!set?.size) return;
-  const batch = [...set];
-  set.clear();
-  api<{ matches: Record<string, string> }>(`/api/agents/${agentId}/tests/match`, {
+  const map = SEMANTIC_PENDING.get(agentId);
+  if (!map?.size) return;
+  const batch = [...map];
+  map.clear();
+  api<{ matches: (string | null)[] }>(`/api/agents/${agentId}/tests/match`, {
     method: 'POST',
-    body: JSON.stringify({ prompts: batch }),
+    body: JSON.stringify({ queries: batch.map(([, q]) => q) }),
   })
-    .then((r) => recordHits(agentId, batch, r.matches))
-    .catch(() => recordHits(agentId, batch, {})) // endpoint failed — record misses, retry on next fp change
+    .then((r) =>
+      recordHits(agentId, batch.map(([sig], i) => [sig, r.matches[i] ?? null])),
+    )
+    .catch(() => recordHits(agentId, batch.map(([sig]) => [sig, null]))) // endpoint failed — record misses, retry on next fp change
     .finally(() => flushSemantic(agentId)); // prompts queued mid-flight chain one more batch
 }
 
@@ -145,19 +204,19 @@ export function useScenarioMatch(agentId: string | undefined, tests: ScenarioTes
     SEMANTIC_PENDING.delete(agentId);
   }, [agentId, fingerprint]);
 
-  return (prompt?: string): ScenarioTest | undefined => {
+  return (prompt?: string, turns?: ScenarioTurn[]): ScenarioTest | undefined => {
     if (!prompt) return undefined;
-    const local = findScenario(prompt, tests);
+    const local = findScenario(prompt, tests, turns);
     if (local) return local;
-    const n = normalizePrompt(prompt);
+    const sig = querySig(prompt, turns);
     const hits = agentId ? SEMANTIC_HITS.get(agentId) : undefined;
-    const id = hits?.get(n);
+    const id = hits?.get(sig);
     if (id) return tests.find((t) => t.id === id);
-    if (agentId && !hits?.has(n)) {
-      let set = SEMANTIC_PENDING.get(agentId);
-      if (!set) SEMANTIC_PENDING.set(agentId, (set = new Set()));
-      if (!set.has(n)) {
-        set.add(n);
+    if (agentId && !hits?.has(sig)) {
+      let map = SEMANTIC_PENDING.get(agentId);
+      if (!map) SEMANTIC_PENDING.set(agentId, (map = new Map()));
+      if (!map.has(sig)) {
+        map.set(sig, { prompt, turns });
         // Microtask so every prompt queued in this render batch rides
         // one POST instead of one request per render call.
         queueMicrotask(() => flushSemantic(agentId));

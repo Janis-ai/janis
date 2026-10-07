@@ -1214,7 +1214,7 @@ export default function ConversationPage() {
                   reply bubble: a matched scenario gets the Aim/thumbs box;
                   otherwise the prompt can be saved as a new one. */}
               {m.direction === 'out' && !isSystem && m.text?.trim() ? (() => {
-                const sc = matchScenario(prevPrompt);
+                const sc = matchScenario(prevPrompt, ctxTurns);
                 return (
                   <>
                     {sc && (

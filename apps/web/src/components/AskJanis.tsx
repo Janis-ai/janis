@@ -352,7 +352,13 @@ export function AskJanis({
    *  Looks right / Needs work in place, so the reviewer judges against the
    *  written expectation instead of a feeling (and never returns to the
    *  checklist just to record a verdict). */
-  verdictFor?: (customerText: string | undefined, replyText?: string) => {
+  verdictFor?: (
+    customerText: string | undefined,
+    replyText?: string,
+    /** The exchange ending at the trigger — context disambiguates between
+     *  same-intent scenarios saved from different flows. */
+    turns?: ScenarioTurn[],
+  ) => {
     expectation?: string | null;
     result: 'pass' | 'fail' | 'unreviewed' | 'fixed_recheck' | null;
     verdict(r: 'pass' | 'fail'): void;
@@ -1174,7 +1180,7 @@ export function AskJanis({
                 {(() => {
                   const verdictCtx =
                     item.m.direction === 'out' && item.m.text
-                      ? verdictFor?.(prevCustomerText, item.m.text)
+                      ? verdictFor?.(prevCustomerText, item.m.text, ctxTurns)
                       : null;
                   return (
                     <>

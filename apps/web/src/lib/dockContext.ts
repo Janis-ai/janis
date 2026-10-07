@@ -16,9 +16,18 @@ export interface TestHandlers {
   verdictFor?(
     customerText: string | undefined,
     replyText?: string,
+    turns?: { role: 'customer' | 'agent'; text: string }[],
   ): TestVerdict | null;
-  onCorrect?(ctx: { agentText: string; customerText?: string }): void;
-  onSaveTest?(ctx: { agentText: string; customerText?: string }): void;
+  onCorrect?(ctx: {
+    agentText: string;
+    customerText?: string;
+    turns?: { role: 'customer' | 'agent'; text: string }[];
+  }): void;
+  onSaveTest?(ctx: {
+    agentText: string;
+    customerText?: string;
+    turns?: { role: 'customer' | 'agent'; text: string }[];
+  }): void;
   onCustomerMessage?(text: string): void;
   /** The header's history/new-chat controls switched test conversations —
    *  the builder uses it to reset its config-drift notice. `fresh` is true

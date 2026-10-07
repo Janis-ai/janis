@@ -524,9 +524,14 @@ export default function Layout() {
   // Meaning-based lookup — fuzzy locally, semantic via the server queue,
   // so a paraphrased or typo'd prompt still finds its scenario.
   const matchScenario = useScenarioMatch(chatAgentId ?? undefined, fallbackScenarios);
-  const fallbackScenario = (customerText?: string) => matchScenario(customerText);
-  const fallbackVerdictFor = (customerText?: string, replyText?: string) => {
-    const s = fallbackScenario(customerText);
+  const fallbackScenario = (customerText?: string, turns?: ScenarioTurn[]) =>
+    matchScenario(customerText, turns);
+  const fallbackVerdictFor = (
+    customerText?: string,
+    replyText?: string,
+    turns?: ScenarioTurn[],
+  ) => {
+    const s = fallbackScenario(customerText, turns);
     if (!s || !chatAgentId) return null;
     return {
       expectation: s.expectation,
@@ -554,7 +559,7 @@ export default function Layout() {
     customerText?: string;
     turns?: ScenarioTurn[];
   }) => {
-    const s = fallbackScenario(ctx.customerText);
+    const s = fallbackScenario(ctx.customerText, ctx.turns);
     setFallbackCorrect({
       agentText: ctx.agentText,
       customerText: ctx.customerText,
@@ -568,7 +573,7 @@ export default function Layout() {
     turns?: ScenarioTurn[];
   }) => {
     if (!ctx.customerText || !chatAgentId) return;
-    if (fallbackScenario(ctx.customerText)) {
+    if (fallbackScenario(ctx.customerText, ctx.turns)) {
       setFallbackNotice('That prompt is already a scenario');
       return;
     }

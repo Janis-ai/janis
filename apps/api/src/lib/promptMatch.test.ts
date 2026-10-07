@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { matchPromptsSemantically, normalizePrompt, promptsSimilar } from './promptMatch.js';
+import {
+  contextOf,
+  contextScore,
+  formatExchange,
+  matchPromptsSemantically,
+  normalizePrompt,
+  promptsSimilar,
+  triggerOf,
+} from './promptMatch.js';
 
 const g = globalThis as Record<string, unknown>;
 
@@ -48,6 +56,63 @@ describe('promptsSimilar', () => {
   it('rejects empty input', () => {
     expect(promptsSimilar('', 'anything')).toBe(false);
     expect(promptsSimilar('   ', '   ')).toBe(false);
+  });
+});
+
+describe('context helpers', () => {
+  const ex = [
+    { role: 'customer' as const, text: 'hi, do you deliver to Brooklyn?' },
+    { role: 'agent' as const, text: 'yes — Brooklyn is in our zone.' },
+    { role: 'customer' as const, text: 'what about tonight?' },
+    { role: 'agent' as const, text: 'we deliver until 10pm.' },
+    { role: 'customer' as const, text: 'do you deliver to Queens too?' },
+  ];
+
+  it('triggerOf picks the last customer turn', () => {
+    expect(triggerOf(ex)).toBe('do you deliver to Queens too?');
+    expect(triggerOf([{ role: 'customer', text: 'hi' }])).toBe('hi');
+    expect(triggerOf([])).toBe('');
+  });
+
+  it('contextOf returns everything before the trigger', () => {
+    expect(contextOf(ex).map((t) => t.text)).toEqual([
+      'hi, do you deliver to Brooklyn?',
+      'yes — Brooklyn is in our zone.',
+      'what about tonight?',
+      'we deliver until 10pm.',
+    ]);
+    expect(contextOf([{ role: 'customer', text: 'hi' }])).toEqual([]);
+  });
+
+  it('contextScore is 1 for identical or both-absent setups', () => {
+    expect(contextScore(contextOf(ex), contextOf(ex))).toBe(1);
+    expect(contextScore([], [])).toBe(1);
+  });
+
+  it('contextScore is 0 when only one side has context', () => {
+    expect(contextScore([], contextOf(ex))).toBe(0);
+    expect(contextScore(contextOf(ex), [])).toBe(0);
+  });
+
+  it('contextScore distinguishes same-topic from different-topic setups', () => {
+    const similar = [
+      { role: 'customer' as const, text: 'can you deliver to Brooklyn?' },
+      { role: 'agent' as const, text: 'yes, Brooklyn is covered.' },
+      { role: 'customer' as const, text: 'and late tonight?' },
+      { role: 'agent' as const, text: 'until 10pm.' },
+    ];
+    const different = [
+      { role: 'customer' as const, text: 'what is your refund policy?' },
+      { role: 'agent' as const, text: '30 days, receipt required.' },
+    ];
+    expect(contextScore(contextOf(ex), similar)).toBeGreaterThan(0.3);
+    expect(contextScore(contextOf(ex), different)).toBe(0);
+  });
+
+  it('formatExchange renders turns as role-prefixed lines', () => {
+    expect(formatExchange(ex.slice(-2))).toBe(
+      'agent: we deliver until 10pm.\ncustomer: do you deliver to Queens too?',
+    );
   });
 });
 

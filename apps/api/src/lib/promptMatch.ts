@@ -86,17 +86,64 @@ export function promptsSimilar(a: string, b: string): boolean {
   return false;
 }
 
+// ── Context-aware matching ─────────────────────────────────────────────
+
+export interface MatchTurn {
+  role: 'customer' | 'agent';
+  text: string;
+}
+
+/** The setup turns — everything before the trigger (last customer turn).
+ *  A scenario's context is what makes "do you deliver?" after a Brooklyn
+ *  exchange a different check than after a Boston one. */
+export function contextOf(turns: MatchTurn[]): MatchTurn[] {
+  let last = -1;
+  for (let i = 0; i < turns.length; i++) {
+    if (turns[i].role === 'customer') last = i;
+  }
+  return turns.slice(0, Math.max(0, last));
+}
+
+/** The trigger — last customer turn; bare prompts count as their own. */
+export function triggerOf(turns: MatchTurn[]): string {
+  return [...turns].reverse().find((t) => t.role === 'customer')?.text ?? '';
+}
+
+/** How alike two setups are: 1 identical/both absent, 0 one-side-bare or
+ *  no shared content. Jaccard on content words — reorders and light
+ *  rewording count, wholesale different topics don't. */
+export function contextScore(a: MatchTurn[], b: MatchTurn[]): number {
+  if (!a.length && !b.length) return 1;
+  if (!a.length || !b.length) return 0;
+  const na = normalizePrompt(a.map((t) => t.text).join(' '));
+  const nb = normalizePrompt(b.map((t) => t.text).join(' '));
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const ta = contentTokens(na);
+  const tb = contentTokens(nb);
+  return ta.size && tb.size ? jaccard(ta, tb) : 0;
+}
+
+/** Render an exchange for the semantic judge — single-turn prompts just
+ *  show the prompt. */
+export function formatExchange(turns: MatchTurn[]): string {
+  return turns.map((t) => `${t.role}: ${t.text}`).join('\n');
+}
+
 // ── Tier 3: semantic (LLM) ─────────────────────────────────────────────
 
 import { complete, type LlmSettings } from './hostedAgent.js';
 
 const MATCH_SYSTEM =
-  'You match customer messages to a list of saved scenario prompts. For each ' +
-  'numbered INPUT, decide which numbered SCENARIO asks for essentially the ' +
-  'same thing — the same intent, needing the same answer. Paraphrases, ' +
-  'reworded questions, and typos count as the same; merely related topics do ' +
-  'NOT. Reply with ONLY a JSON object mapping each input number to a scenario ' +
-  'number or null, e.g. {"1": 2, "2": null}.';
+  'You match customer exchanges to saved scenario exchanges. Items may be ' +
+  'a bare prompt or a multi-turn exchange formatted as "customer:"/"agent:" ' +
+  'lines ending at the trigger question. For each numbered INPUT, decide ' +
+  'which numbered SCENARIO captures the same check — the same trigger ' +
+  'intent needing the same answer, and when the input carries context, in ' +
+  'an essentially similar setup. Paraphrases, rewording, and typos count as ' +
+  'the same; merely related topics, or the same question in a clearly ' +
+  'different context, do NOT. Reply with ONLY a JSON object mapping each ' +
+  'input number to a scenario number or null, e.g. {"1": 2, "2": null}.';
 
 /** Batched paraphrase check — returns {inputIndex → candidateIndex}. Only
  *  call for prompts the fuzzy matcher missed; caps keep the call cheap. */

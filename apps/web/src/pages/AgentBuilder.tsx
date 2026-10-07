@@ -715,9 +715,9 @@ export default function AgentBuilder() {
   })();
   /** Match a reply's customer prompt back to its scenario — the docked
    *  panel renders the expectation + verdict buttons in place. */
-  const verdictFor = (customerText?: string, replyText?: string) => {
+  const verdictFor = (customerText?: string, replyText?: string, turns?: ScenarioTurn[]) => {
     if (!customerText) return null;
-    const s = matchScenario(customerText);
+    const s = matchScenario(customerText, turns);
     if (!s) return null;
     return {
       expectation: s.expectation,
@@ -751,14 +751,14 @@ export default function AgentBuilder() {
       // One correction path: correcting a reply to a scenario prompt opens
       // the same diagnose-first card the row's Needs work button does —
       // not the weaker generic card.
-      const s = matchScenario(ctx.customerText);
+      const s = matchScenario(ctx.customerText, ctx.turns);
       setCorrectTarget({ ...ctx, scenarioId: s?.id });
     },
     onSaveTest: (ctx) => {
       // A reply to a checklist prompt IS that scenario — saving it again
       // would duplicate the row. Server-side the same check runs
       // semantically, catching paraphrases local matching missed.
-      if (ctx.customerText && matchScenario(ctx.customerText)) {
+      if (ctx.customerText && matchScenario(ctx.customerText, ctx.turns)) {
         setTestNotice('That prompt is already a scenario');
         return;
       }
