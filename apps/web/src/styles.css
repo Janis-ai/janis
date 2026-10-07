@@ -586,19 +586,6 @@ button, input, select, textarea { font: inherit; }
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.scenario-menu {
-  position: absolute; right: 0; top: 100%; z-index: 30;
-  background: var(--panel); border: 1px solid var(--border);
-  border-radius: 8px; padding: 4px; min-width: 130px;
-  box-shadow: 0 8px 24px rgba(0,0,0,.3);
-}
-.scenario-menu-item {
-  display: flex; gap: 6px; align-items: center; width: 100%;
-  padding: 6px 8px; border: 0; background: none; color: var(--text);
-  font-size: 12px; border-radius: 6px; cursor: pointer; font-family: inherit;
-}
-.scenario-menu-item:hover { background: var(--panel-2); }
-.scenario-menu-item.danger { color: var(--danger); }
 .scenario-badge {
   font-size: 11px; padding: 1px 8px; border-radius: 999px;
   color: var(--muted); border: 1px solid var(--border); white-space: nowrap;

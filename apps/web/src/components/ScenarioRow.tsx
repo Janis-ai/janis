@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { MoreHorizontal, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 
 /** One scenario, one card — shared by the builder's Try-it checklist and
  *  the deployed agent's regression suite. Same data (agent_tests), same
@@ -121,7 +121,6 @@ export function ScenarioRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [expText, setExpText] = useState('');
-  const [menu, setMenu] = useState(false);
   // Passed rows collapse to one line — the failures stand out and the
   // list stays scannable. Expansion state lives per mounted row.
   const [collapsed, setCollapsed] = useState(true);
@@ -181,7 +180,7 @@ export function ScenarioRow({
           aria-label="Expand"
           onClick={() => setCollapsed(false)}
         >
-          ▾
+          ▸
         </button>
       </div>
     );
@@ -211,31 +210,14 @@ export function ScenarioRow({
         ) : status === 'unreviewed' ? (
           <span className="scenario-badge">unreviewed</span>
         ) : null}
-        {onDelete && (
-          <span style={{ position: 'relative' }}>
-            <button
-              className="btn ghost sm"
-              title="More actions"
-              aria-label="More actions"
-              onClick={() => setMenu(!menu)}
-              onBlur={() => setTimeout(() => setMenu(false), 150)}
-            >
-              <MoreHorizontal size={13} />
-            </button>
-            {menu && (
-              <div className="scenario-menu">
-                <button
-                  className="scenario-menu-item danger"
-                  onClick={() => {
-                    setMenu(false);
-                    onDelete();
-                  }}
-                >
-                  <Trash2 size={12} /> Delete test
-                </button>
-              </div>
-            )}
-          </span>
+        {status === 'passed' && (
+          <button
+            className="btn ghost sm"
+            aria-label="Collapse"
+            onClick={() => setCollapsed(true)}
+          >
+            ▾
+          </button>
         )}
       </div>
 
@@ -416,6 +398,15 @@ export function ScenarioRow({
               onClick={() => onFix(fixReply, prompt)}
             >
               Fix it
+            </button>
+          )}
+          {onDelete && (
+            <button
+              className="btn sm"
+              title="Delete test"
+              onClick={onDelete}
+            >
+              <Trash2 size={12} />
             </button>
           )}
         </div>
