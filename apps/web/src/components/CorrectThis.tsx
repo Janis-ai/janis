@@ -227,20 +227,22 @@ export function CorrectThisCard({
   });
 
   // Expectation branch — the test itself is wrong: fix the bar or delete it.
+  // No re-run on save: the reply was fine, the bar moved. The existing reply
+  // stays on the row and the owner verdicts it against the new expectation
+  // directly — re-running would produce a *different* reply to judge.
   const saveExpectation = useMutation({
     mutationFn: () =>
       api(`/api/agents/${agentId}/tests/${scenario!.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
           expectation: expEdit.trim(),
-          human_result: 'fixed_recheck',
+          human_result: 'unreviewed',
           fail_cause: 'expectation',
         }),
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
       void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
-      if (scenario) onFixed?.(scenario.id);
       onClose();
     },
     onError: (e) => setError(e.message),

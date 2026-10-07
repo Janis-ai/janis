@@ -885,6 +885,12 @@ export function agentRoutes(db: Db) {
       (cfg.builder?.suggested_templates?.length ?? 0) +
         (cfg.builder?.suggested_approvals?.length ?? 0) >
       0;
+    // Suggested templates the owner never installed — a builtin tool like
+    // web_search must not mask these or the step lies ✓ while the brief's
+    // integrations sit unconnected.
+    const unmetTemplates = (cfg.builder?.suggested_templates ?? []).filter(
+      (t) => !(cfg.tools ?? []).some((x) => x.template === t.id),
+    ).length;
     // Cached gaps only — build-status must never trigger a detection run.
     const gapCache = readGapsCache(cfg);
     const openGaps = gapCache
@@ -915,10 +921,10 @@ export function agentRoutes(db: Db) {
             : 'partial'
           : 'pending',
         abilities:
-          abilities > 0 || cfg.builder?.abilities_confirmed
-            ? 'done'
-            : suggestedAbilities
-              ? 'partial'
+          unmetTemplates > 0 || (abilities === 0 && suggestedAbilities)
+            ? 'partial'
+            : abilities > 0 || cfg.builder?.abilities_confirmed
+              ? 'done'
               : drafted
                 ? 'na'
                 : 'pending',

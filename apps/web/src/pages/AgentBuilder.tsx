@@ -388,8 +388,13 @@ export default function AgentBuilder() {
   // build-status query is still loading. Failures outrank step-order:
   // a failing scenario is THE next action even from inside Try it.
   const failing = status?.test_scenarios?.failing ?? 0;
+  // Elevated-risk agents with an unreviewed safety scenario: that row is
+  // the next action even with zero failures — same urgency as a miss.
+  const safetyUnchecked =
+    status?.domain_risk === 'elevated' &&
+    (status.test_scenarios?.safety_total ?? 0) > (status.test_scenarios?.safety_checked ?? 0);
   const next = status
-    ? failing > 0
+    ? failing > 0 || safetyUnchecked
       ? STEPS.find((s) => s.key === 'try')
       : STEPS.find(
           (s) =>
@@ -420,13 +425,22 @@ export default function AgentBuilder() {
   const nextLabel = next
     ? failing > 0
       ? `Fix ${failing} item${failing > 1 ? 's' : ''}`
-      : `Next: ${next.label}${nextReason ? ` · ${nextReason}` : ''}`
+      : safetyUnchecked
+        ? 'Review the safety scenario'
+        : `Next: ${next.label}${nextReason ? ` · ${nextReason}` : ''}`
     : '';
-  // Already on Try it — "Fix N items" can't navigate; it scrolls to the
-  // first failing row instead.
+  // Already on Try it — "Fix N items"/safety can't navigate; it scrolls to
+  // the row instead.
   const nextClick = () => {
-    if (failing > 0 && step === 'try') {
-      const first = scenarios.find((s) => s.human_result === 'fail');
+    if ((failing > 0 || safetyUnchecked) && step === 'try') {
+      const first =
+        scenarios.find((s) => s.human_result === 'fail') ??
+        scenarios.find(
+          (s) =>
+            s.category === 'safety' &&
+            s.human_result !== 'pass' &&
+            s.human_result !== 'fail',
+        );
       document
         .getElementById(`sc-${first?.id}`)
         ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2061,11 +2075,19 @@ export default function AgentBuilder() {
                           <div key={s.id} id={`sc-${s.id}`} className="scenario-row">
                             <div className="grow" style={{ minWidth: 0 }}>
                               <div style={{ fontSize: 13 }}>“{prompt}”</div>
-                              {s.expectation && (
+                              {s.expectation ? (
                                 <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
                                   expected: {s.expectation}
                                 </div>
-                              )}
+                              ) : s.category === 'safety' ? (
+                                <div
+                                  className="muted"
+                                  style={{ fontSize: 12, marginTop: 2, color: 'var(--warn)' }}
+                                >
+                                  no expectation written — verdicts judge this by
+                                  eye; Fix it → “the expectation is wrong” adds one
+                                </div>
+                              ) : null}
                               {/* Every run lands in its own test
                                   conversation, so the panel can't stay on
                                   all of them — the reply lives here on the
@@ -2489,7 +2511,17 @@ export default function AgentBuilder() {
                   if (CONFIG_HINT_RE.test(t)) setCopilotHint(t);
                 }}
                 onCorrect={(ctx) => {
-                  setCorrectTarget(ctx);
+                  // One correction path: correcting a reply to a scenario
+                  // prompt opens the same diagnose-first card the row's
+                  // Needs work button does — not the weaker generic card.
+                  const s = ctx.customerText
+                    ? scenarios.find(
+                        (x) =>
+                          scenarioPrompt(x).trim().toLowerCase() ===
+                          ctx.customerText!.trim().toLowerCase(),
+                      )
+                    : undefined;
+                  setCorrectTarget({ ...ctx, scenarioId: s?.id });
                 }}
                 verdictFor={verdictFor}
                 onSaveTest={(ctx) => {
