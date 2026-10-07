@@ -1270,8 +1270,24 @@ export default function Layout() {
                     {!testProvided &&
                       (testRail ? (
                         <>
-                          <div className="test-dock-status">
-                            <span className="muted grow" style={{ fontSize: 11 }}>
+                          <div
+                            className="test-dock-status"
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              flexWrap: 'nowrap',
+                            }}
+                          >
+                            <span
+                              className="muted grow"
+                              style={{
+                                fontSize: 11,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
                               {fallbackNotice || `Testing ${testRail.label}`}
                             </span>
                             <TestChatHistory

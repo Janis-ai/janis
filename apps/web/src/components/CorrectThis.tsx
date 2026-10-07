@@ -411,11 +411,6 @@ export function CorrectThisCard({
                 >
                   {saveCorrection.isPending ? 'Saving…' : 'Save as note'}
                 </button>
-                {onGoStep && (
-                  <button className="link small" onClick={() => onGoStep('teach')}>
-                    or find a source →
-                  </button>
-                )}
                 <button className="btn sm" onClick={onClose}>
                   Cancel
                 </button>
