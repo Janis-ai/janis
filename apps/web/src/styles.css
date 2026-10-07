@@ -597,6 +597,22 @@ button, input, select, textarea { font: inherit; }
   display: block; font-size: 10px; font-weight: 700;
   letter-spacing: .06em; text-transform: uppercase; margin-bottom: 1px;
 }
+/* Dock run transcript — server replays never touch the live test
+   conversation, so results stream here as prompt/reply bubbles. */
+.run-log { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.run-log-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 12px; border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--muted); flex-shrink: 0;
+}
+.run-log-body { padding-top: 8px; }
+.run-log-run {
+  display: flex; flex-direction: column; gap: 8px;
+  padding-bottom: 10px; margin-bottom: 10px;
+  border-bottom: 1px dashed var(--border);
+}
+.run-log-run:last-child { border-bottom: 0; }
+.run-log-chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* Diagnose flow — "What went wrong?" cause picker inside Correct this. */
 .cause-picker { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
 .cause-row {

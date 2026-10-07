@@ -567,6 +567,13 @@ export default function AgentBuilder() {
   const [runningId, setRunningId] = useState<string | null>(null);
   const runQueueRef = useRef<string[]>([]);
   const replyRef = useRef<Map<string, string>>(new Map());
+  // The dock's run transcript — server replays never touch the live test
+  // conversation, so this log is how the owner watches results arrive:
+  // prompt bubble → dots → reply bubble, one exchange per scenario.
+  const [runLog, setRunLog] = useState<
+    { id: string; prompt: string; reply: string | null; state: 'running' | 'done' | 'failed' }[]
+  >([]);
+  const [logDismissed, setLogDismissed] = useState(false);
   const [repliesTick, bumpReplies] = useState(0);
   void repliesTick;
   const markTest = useMutation({
@@ -631,10 +638,15 @@ export default function AgentBuilder() {
       return;
     }
     setRunningId(s.id);
+    setLogDismissed(false);
+    setRunLog((l) => [
+      ...l.filter((e) => e.id !== s.id),
+      { id: s.id, prompt: scenarioPrompt(s), reply: null, state: 'running' },
+    ]);
     // Server-side replay: the scenario's turns run through the real
     // pipeline in test mode (gated actions proposed, not executed). No
     // panel conversation hops per scenario — the reply lands on the row
-    // via last_run and stays there.
+    // via last_run and in the dock's run transcript.
     void api<{ run: { reply: string | null } }>(
       `/api/agents/${agent?.id}/tests/${s.id}/run`,
       { method: 'POST', signal: AbortSignal.timeout(120_000) },
@@ -644,6 +656,9 @@ export default function AgentBuilder() {
           replyRef.current.set(s.id, run.reply);
           bumpReplies((n) => n + 1);
         }
+        setRunLog((l) =>
+          l.map((e) => (e.id === s.id ? { ...e, reply: run.reply, state: 'done' } : e)),
+        );
         // A fresh run voids the prior verdict — the owner re-judges the
         // new reply, not the old one.
         markTest.mutate({ id: s.id, result: 'unreviewed' });
@@ -651,6 +666,7 @@ export default function AgentBuilder() {
         advanceRun();
       })
       .catch(() => {
+        setRunLog((l) => l.map((e) => (e.id === s.id ? { ...e, state: 'failed' } : e)));
         setTestNotice('Run failed — skipped this scenario');
         advanceRun();
       });
@@ -661,6 +677,7 @@ export default function AgentBuilder() {
   };
   const runAll = () => {
     runQueueRef.current = scenarios.map((s) => s.id);
+    setRunLog([]);
     advanceRun();
   };
   // "Running: safety #2" — category + its ordinal within the group.
@@ -2416,6 +2433,40 @@ export default function AgentBuilder() {
               </div>
             )}
             {tryChips('dock')}
+            {runLog.length > 0 && !logDismissed && (
+              <div className="run-log">
+                <div className="run-log-head">
+                  <span>
+                    {runningId && runningLabel ? `Running — ${runningLabel}` : 'Run results'}
+                  </span>
+                  <button className="link small" onClick={() => setLogDismissed(true)}>
+                    Back to test chat
+                  </button>
+                </div>
+                <div className="ask-scroll run-log-body">
+                  {runLog.map((e) => (
+                    <div key={e.id} className="run-log-run">
+                      <div className="ask-msg me">{e.prompt}</div>
+                      {e.state === 'running' && (
+                        <div className="ask-msg them ask-typing">
+                          <span className="ask-dots">
+                            <span className="ask-dot" /><span className="ask-dot" /><span className="ask-dot" />
+                          </span>
+                        </div>
+                      )}
+                      {e.state === 'failed' && (
+                        <div className="ask-msg them muted">run failed — no reply</div>
+                      )}
+                      {e.reply && <div className="ask-msg them">{e.reply}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div
+              className="run-log-chat"
+              style={runLog.length > 0 && !logDismissed ? { display: 'none' } : undefined}
+            >
             {testChannel.isPending && (
               <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
             )}
@@ -2461,6 +2512,7 @@ export default function AgentBuilder() {
                 seedNonce={seed?.nonce}
               />
             )}
+            </div>
             {correctCard}
           </>,
           dock.testSlot,
