@@ -1977,9 +1977,9 @@ export default function AgentBuilder() {
             <>
               <div className="row" style={{ marginTop: 12, alignItems: 'center', gap: 10 }}>
                 <div className="muted grow" style={{ fontSize: 13 }}>
-                  Deliberate checks, not a second chat — Run replays the
-                  prompt against the agent and judges the reply here.
-                  This list becomes the agent's regression suite after launch.
+                  Run a check to see what your agent would say — mark
+                  anything that needs work. After launch, these keep
+                  testing it for you.
                 </div>
                 <button
                   className="btn sm"
