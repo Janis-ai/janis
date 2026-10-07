@@ -493,10 +493,11 @@ button, input, select, textarea { font: inherit; }
 .msg:hover .correct-this,
 .msg:focus-within .correct-this,
 .correct-this:focus-visible { opacity: 1; }
-/* In the test dock the affordance is the point — keep it discoverable at
-   rest, full opacity on hover/focus. */
-.dock .correct-this { opacity: .55; }
-.dock .correct-this:hover, .dock .correct-this:focus-visible { opacity: 1; }
+/* In the test dock and inbox the affordance is the point — keep it
+   discoverable at rest, full opacity on hover/focus. */
+.dock .correct-this, .msg .correct-this { opacity: .55; }
+.dock .correct-this:hover, .dock .correct-this:focus-visible,
+.msg .correct-this:hover, .msg .correct-this:focus-visible { opacity: 1; }
 @media (hover: none) {
   .correct-this { opacity: .55; }
 }
