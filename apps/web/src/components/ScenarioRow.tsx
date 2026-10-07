@@ -359,23 +359,38 @@ export function ScenarioRow({
         )}
         {run?.passed === true && <span className="scenario-badge pass">✓ pass</span>}
         {run?.passed === false && (
-          <span className="scenario-badge fail" title={run.reason}>
+          <button
+            className="scenario-badge fail"
+            style={onFix && fixReply ? { cursor: 'pointer' } : undefined}
+            title={
+              onFix && fixReply
+                ? 'Diagnose the miss — click to fix'
+                : run.reason
+            }
+            onClick={onFix && fixReply ? () => onFix(fixReply, prompt) : undefined}
+          >
             ✗ fail
-          </span>
+          </button>
         )}
         {hr === 'pass' && !test.stale && (
           <span className="scenario-badge pass">looks right</span>
         )}
         {hr === 'fail' && !test.stale && (
-          <span className="scenario-badge fail">
+          <button
+            className="scenario-badge fail"
+            style={onFix && fixReply ? { cursor: 'pointer' } : undefined}
+            title={
+              onFix && fixReply
+                ? 'Diagnose the miss — knowledge, behavior, ability, or a wrong expectation'
+                : undefined
+            }
+            onClick={onFix && fixReply ? () => onFix(fixReply, prompt) : undefined}
+          >
             needs work{test.fail_cause ? ` · ${test.fail_cause}` : ''}
-          </span>
+          </button>
         )}
         {hr === 'fixed_recheck' && !test.stale && (
           <span className="scenario-badge fixed">fix applied — re-run to confirm</span>
-        )}
-        {hr === 'unreviewed' && !test.stale && (
-          <span className="scenario-badge">unreviewed</span>
         )}
 
         {canVerdict && (
@@ -397,15 +412,6 @@ export function ScenarioRow({
               Needs work
             </button>
           </div>
-        )}
-        {onFix && fixReply && (hr === 'fail' || run?.passed === false) && (
-          <button
-            className="btn sm"
-            title="Diagnose the miss — knowledge, behavior, ability, or a wrong expectation"
-            onClick={() => onFix(fixReply, prompt)}
-          >
-            Fix it
-          </button>
         )}
         <button className="btn sm" disabled={running || disabled} onClick={onRun}>
           {running

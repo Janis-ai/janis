@@ -572,6 +572,7 @@ button, input, select, textarea { font: inherit; }
 .scenario-badge {
   font-size: 11px; padding: 1px 8px; border-radius: 999px;
   color: var(--muted); border: 1px solid var(--border); white-space: nowrap;
+  background: none; font-family: inherit; cursor: default;
 }
 .scenario-badge.pass { color: var(--accent); border-color: var(--accent); }
 .scenario-badge.fail {
