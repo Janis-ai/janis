@@ -251,11 +251,15 @@ export default function AgentBuilder() {
   // one mounted test chat; this registers the header portal and the wiring
   // the shared instance runs on while the builder is on screen.
   const dockAvailableForReg = !!agent && hosted;
+  // Dep on the STABLE setter, not the dock object — the context value is
+  // rebuilt each Layout render, so depending on `dock` re-fires this
+  // effect forever (setTestWiring → new object → rerender → re-fire).
+  const setTestProvided = dock?.setTestProvided;
   useEffect(() => {
-    if (!dock || !dockAvailableForReg) return;
-    dock.setTestProvided(true);
-    return () => dock.setTestProvided(false);
-  }, [dock, dockAvailableForReg]);
+    if (!setTestProvided || !dockAvailableForReg) return;
+    setTestProvided(true);
+    return () => setTestProvided(false);
+  }, [setTestProvided, dockAvailableForReg]);
 
   // ?rail=test&agent=<id>&q=<prompt> deeplinks (and concierge "run this"
   // links) land as a seed on the shared dock state.
@@ -773,17 +777,18 @@ export default function AgentBuilder() {
       if (CONFIG_HINT_RE.test(t)) setCopilotHint(t);
     },
   };
+  const setTestWiring = dock?.setTestWiring;
   useEffect(() => {
-    if (!dock || !dockAvailableForReg) return;
-    dock.setTestWiring({
+    if (!setTestWiring || !dockAvailableForReg) return;
+    setTestWiring({
       channelId: testChannel.data?.channel_id,
       focusSignal: chatFocus,
       seed: seed?.target === 'dock' ? { text: seed.text, nonce: seed.nonce } : null,
       handlers: testHandlers,
     });
-    return () => dock.setTestWiring(null);
+    return () => setTestWiring(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dock, dockAvailableForReg, testChannel.data?.channel_id, chatFocus, seed]);
+  }, [setTestWiring, dockAvailableForReg, testChannel.data?.channel_id, chatFocus, seed]);
   // A fix save flips the scenario to fixed_recheck (the card PATCHes it)
   // and re-runs it here — fresh conversation, verdict still human. Other
   // scenarios go stale automatically: the config version moved under them.

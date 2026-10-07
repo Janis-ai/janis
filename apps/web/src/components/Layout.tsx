@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Agent } from '@janis/shared';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -501,10 +501,13 @@ export default function Layout() {
     // testProvided flip IS the handoff moment — the builder may have just
     // written a fresh visitor before unmounting, so re-read then too.
   }, [chatAgentId, testProvided]);
-  const setChatVisitor = (v: string) => {
-    setTestVisitor(v);
-    if (chatAgentId) storeTestVisitor(chatAgentId, v);
-  };
+  const setChatVisitor = useCallback(
+    (v: string) => {
+      setTestVisitor(v);
+      if (chatAgentId) storeTestVisitor(chatAgentId, v);
+    },
+    [chatAgentId],
+  );
 
   // Try-it affordances for the fallback wiring — the same scenario
   // matching + verdict writes the builder registers on its pages.
@@ -819,26 +822,37 @@ export default function Layout() {
     if (isAskPage) navigate(lastNonAsk.current);
   };
   const qc = useQueryClient();
-  const dockCtx = {
-    open: railOpen,
-    tab: (railTab === 'ask' ? 'copilot' : 'test') as DockTab,
-    testAvailable: testAvail,
-    testProvided,
-    testSlot,
-    setOpen: setRailOpen,
-    openTab: (t: DockTab) => {
-      setRailTab(t === 'copilot' ? 'ask' : 'test');
-      setRailOpen(true);
-      setDockCallout(false);
-    },
-    setTestProvided,
-    testWiring,
-    setTestWiring,
-    testVisitor,
-    setTestVisitor: setChatVisitor,
-    testSeed,
-    clearTestSeed: () => setTestSeed(null),
-  };
+  const openTab = useCallback((t: DockTab) => {
+    setRailTab(t === 'copilot' ? 'ask' : 'test');
+    setRailOpen(true);
+    setDockCallout(false);
+  }, []);
+  const clearTestSeed = useCallback(() => setTestSeed(null), []);
+  // Memoized — a fresh object per render makes every consumer's
+  // dock-depending effect re-fire (setTestWiring in a loop is how this
+  // file once froze navigation).
+  const dockCtx = useMemo(
+    () => ({
+      open: railOpen,
+      tab: (railTab === 'ask' ? 'copilot' : 'test') as DockTab,
+      testAvailable: testAvail,
+      testProvided,
+      testSlot,
+      setOpen: setRailOpen,
+      openTab,
+      setTestProvided,
+      testWiring,
+      setTestWiring,
+      testVisitor,
+      setTestVisitor: setChatVisitor,
+      testSeed,
+      clearTestSeed,
+    }),
+    [
+      railOpen, railTab, testAvail, testProvided, testSlot, openTab,
+      testWiring, testVisitor, setChatVisitor, testSeed, clearTestSeed,
+    ],
+  );
   const [toasts, setToasts] = useState<Toast[]>([]);
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const soundOn = data?.user.notify.sound !== false;
