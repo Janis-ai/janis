@@ -85,6 +85,9 @@ export function CorrectThisCard({
   const [expEdit, setExpEdit] = useState(scenario?.expectation ?? '');
   const [error, setError] = useState('');
   const [addedTest, setAddedTest] = useState(false);
+  // Post-fix summary line — replaces the close-on-save for non-scenario
+  // corrections so the owner sees what landed before leaving.
+  const [savedFix, setSavedFix] = useState<string | null>(null);
   // Diagnose fires once per scenario target — a re-render must not spam it.
   const diagTried = useRef(false);
 
@@ -103,6 +106,7 @@ export function CorrectThisCard({
     setExpEdit(scenario?.expectation ?? '');
     setError('');
     setAddedTest(false);
+    setSavedFix(null);
     diagTried.current = false;
   }
 
@@ -148,8 +152,16 @@ export function CorrectThisCard({
       void qc.invalidateQueries({ queryKey: ['articles', agentId] });
       void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
       void qc.invalidateQueries({ queryKey: ['agents'] });
-      if (scenario) void markFixed('knowledge').catch((e) => setError(e.message));
-      onClose();
+      if (scenario) {
+        void markFixed('knowledge').catch((e) => setError(e.message));
+        onClose();
+      } else {
+        setSavedFix(
+          v.mode === 'note'
+            ? 'Fact saved as a note — it teaches this agent only.'
+            : 'Draft article saved — publish it from Teach it → Articles.',
+        );
+      }
     },
     onError: (e) => setError(e.message),
   });
@@ -221,8 +233,12 @@ export function CorrectThisCard({
       onSaved?.(config);
       void qc.invalidateQueries({ queryKey: ['agents'] });
       void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
-      if (scenario) void markFixed(fixedCause ?? 'behavior').catch((e) => setError(e.message));
-      onClose();
+      if (scenario) {
+        void markFixed(fixedCause ?? 'behavior').catch((e) => setError(e.message));
+        onClose();
+      } else {
+        setSavedFix('Rule added to the instructions.');
+      }
     },
     onError: (e) => setError(e.message),
   });
@@ -312,11 +328,17 @@ export function CorrectThisCard({
         title="Save the customer's prompt + this fix as a re-runnable scenario on Try it"
         onClick={() => addTest.mutate()}
       >
-        ＋ Add to tests
+        ＋ Save as scenario
       </button>
     );
 
   const suggestedTools = (cfg.builder?.suggested_templates ?? []).map((t) => t.name || t.id);
+  // When Janis has no drafted rule, the placeholder should still belong to
+  // THIS agent's domain — a generic example teaches the wrong pattern.
+  const agentTopic = cfg.builder?.summary?.split('.')[0]?.trim();
+  const rulePlaceholder = agentTopic
+    ? `e.g. "Answer casual questions briefly, then steer back to ${agentTopic.charAt(0).toLowerCase()}${agentTopic.slice(1)}"`
+    : 'e.g. "When the customer defers, choose and proceed"';
   const HANDOFF_RULE =
     'When asked to take an action the agent cannot perform, collect the relevant details and say a teammate will follow up — never promise the action itself.';
   const busy =
@@ -547,10 +569,23 @@ export function CorrectThisCard({
             </>
           )}
         </>
+      ) : savedFix ? (
+        <>
+          {/* Post-fix summary — the owner sees what landed before leaving;
+              the regression hook is offered only now that a fix exists. */}
+          <div style={{ fontSize: 13, marginTop: 10 }}>✓ {savedFix}</div>
+          <div className="row" style={{ marginTop: 8, gap: 8 }}>
+            {addTestBtn}
+            <button className="btn sm primary" onClick={onClose}>
+              Done
+            </button>
+          </div>
+        </>
       ) : (
         <>
           {/* Non-scenario path — owner writes the correction, Janis classifies
-              it knowledge vs behavior, same as before. */}
+              it knowledge vs behavior. The field stays editable after the
+              diagnosis; Update re-reads the new wording. */}
           <textarea
             rows={3}
             style={{ width: '100%', marginTop: 8, boxSizing: 'border-box' }}
@@ -559,21 +594,55 @@ export function CorrectThisCard({
             autoFocus
             onChange={(e) => setCorrection(e.target.value)}
           />
-          {cause === 'behavior' ? (
+          {cause === null ? (
+            <div className="row" style={{ marginTop: 8, gap: 8 }}>
+              <button
+                className="btn sm primary"
+                disabled={!correction.trim() || diagnose.isPending}
+                onClick={() => diagnose.mutate()}
+              >
+                {diagnose.isPending ? 'Checking…' : 'Continue →'}
+              </button>
+              <button className="btn sm" onClick={onClose}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              className="btn sm"
+              style={{ marginTop: 6 }}
+              disabled={!correction.trim() || diagnose.isPending}
+              title="Re-diagnose with the updated correction"
+              onClick={() => diagnose.mutate()}
+            >
+              {diagnose.isPending ? 'Checking…' : 'Update'}
+            </button>
+          )}
+          {cause === 'behavior' && (
             <>
               <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-                {plan?.classified
-                  ? 'Janis reads this as a behavior fix — it becomes a rule in the instructions:'
-                  : 'A behavior fix becomes a rule in the instructions:'}
+                {plan?.classified && plan.cause === 'behavior'
+                  ? 'Janis reads this as a behavior fix'
+                  : 'Provide a behavior fix'}{' '}
+                —{' '}
+                <button className="link small" onClick={() => setCause('knowledge')}>
+                  enter a fact instead
+                </button>
+              </div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                Rule:
               </div>
               <textarea
                 rows={2}
-                style={{ width: '100%', marginTop: 6, boxSizing: 'border-box' }}
-                placeholder={'e.g. "When the customer defers, choose and proceed"'}
+                style={{ width: '100%', marginTop: 4, boxSizing: 'border-box' }}
+                placeholder={rulePlaceholder}
                 value={instrEdit}
                 onChange={(e) => setInstrEdit(e.target.value)}
               />
               <div className="row" style={{ marginTop: 8, gap: 8 }}>
+                <button className="btn sm" onClick={onClose}>
+                  Cancel
+                </button>
                 <button
                   className="btn sm primary"
                   disabled={!instrEdit.trim() || applyInstruction.isPending}
@@ -603,33 +672,34 @@ export function CorrectThisCard({
                     Send to Copilot
                   </button>
                 )}
-                <button className="link small" onClick={() => setCause('knowledge')}>
-                  it’s a fact instead
-                </button>
-                {addTestBtn}
-                <button className="btn sm" onClick={onClose}>
-                  Cancel
-                </button>
               </div>
               <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
                 The rule is appended to the instructions — review it any time on
                 Guide it.
               </div>
             </>
-          ) : cause === 'knowledge' ? (
+          )}
+          {cause === 'knowledge' && (
             <>
               <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-                {plan?.classified
-                  ? 'Janis reads this as missing knowledge — where should it live?'
-                  : 'Where should this fix live?'}
+                {plan?.classified && plan.cause === 'knowledge'
+                  ? 'Janis reads this as missing knowledge'
+                  : 'Provide the missing knowledge'}{' '}
+                —{' '}
+                <button className="link small" onClick={() => setCause('behavior')}>
+                  enter a behavior fix instead
+                </button>
               </div>
               <div className="row" style={{ marginTop: 8, gap: 8 }}>
+                <button className="btn sm" onClick={onClose}>
+                  Cancel
+                </button>
                 <button
                   className="btn sm primary"
                   disabled={saveCorrection.isPending}
                   onClick={() => saveCorrection.mutate({ mode: 'note', text: correction.trim() })}
                 >
-                  {saveCorrection.isPending ? 'Saving…' : 'Save as note'}
+                  {saveCorrection.isPending ? 'Saving…' : 'Add to notes'}
                 </button>
                 <button
                   className="btn sm"
@@ -639,33 +709,12 @@ export function CorrectThisCard({
                 >
                   Draft article
                 </button>
-                <button className="link small" onClick={() => setCause('behavior')}>
-                  it’s about behavior
-                </button>
-                {addTestBtn}
-                <button className="btn sm" onClick={onClose}>
-                  Cancel
-                </button>
               </div>
               <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
                 A note teaches this agent only. An article also becomes a public
                 help page — saved as a draft until you publish it.
               </div>
             </>
-          ) : (
-            <div className="row" style={{ marginTop: 8, gap: 8 }}>
-              <button
-                className="btn sm primary"
-                disabled={!correction.trim() || diagnose.isPending}
-                onClick={() => diagnose.mutate()}
-              >
-                {diagnose.isPending ? 'Checking…' : 'Continue →'}
-              </button>
-              {addTestBtn}
-              <button className="btn sm" onClick={onClose}>
-                Cancel
-              </button>
-            </div>
           )}
         </>
       )}
