@@ -180,8 +180,9 @@ export function ScenarioRow({
     verdict &&
     reply &&
     (status === 'failed' || status === 'rejected' || status === 'unreviewed');
-  const isCollapsed =
-    collapsed && (status === 'passed' || status === 'approved');
+  // Machine-passes fold away; the owner's 'approved' verdict stays open —
+   // a human judgment is the one result worth keeping visible.
+  const isCollapsed = collapsed && status === 'passed';
 
   if (isCollapsed) {
     return (
