@@ -321,6 +321,26 @@ export default function Layout() {
   const [dockSplit, setDockSplit] = useState(() => {
     try { return localStorage.getItem('janis.dock-split') === '1'; } catch { return false; }
   });
+  // Below the push breakpoint the dock is a drawer — two columns or an
+  // 840px panel can't fit. CSS already hides the split toggle under
+  // 1800px but never unlatches a split latched wide; this does, settling
+  // on Copilot (the pane that still works cramped). The split pref is
+  // left alone — widening the window restores it.
+  const [narrowWin, setNarrowWin] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 1200,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1199px)');
+    const on = (e: MediaQueryListEvent) => {
+      setNarrowWin(e.matches);
+      if (e.matches) {
+        if (dockSplit) setRailTab('ask');
+        setDockExpanded(false);
+      }
+    };
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, [dockSplit]);
   useEffect(
     () =>
       railBus.subscribe((r) => {
@@ -515,7 +535,7 @@ export default function Layout() {
     (railOpen && ((railTab === 'ask' && hasAsk) || (railTab === 'test' && testAvail))) ||
     (isAskPage && hasAsk);
   // Split panes only off /ask — the expanded concierge page is Copilot alone.
-  const splitActive = dockSplit && bothTabs && !isAskPage;
+  const splitActive = dockSplit && bothTabs && !isAskPage && !narrowWin;
 
   // The copilot surface is visible on /ask, or in the dock when the dock
   // is open on the ask tab (or split shows both). Anything arriving while
@@ -1131,7 +1151,7 @@ export default function Layout() {
             />
           )}
           <aside
-            className={`dock${isAskPage ? ' expanded' : ''}${splitActive ? ' split' : ''}${dockExpanded ? ' wide' : ''}`}
+            className={`dock${isAskPage ? ' expanded' : ''}${splitActive ? ' split' : ''}${dockExpanded && !narrowWin ? ' wide' : ''}`}
           >
             <div className="dock-head">
               {bothTabs && !isAskPage ? (
@@ -1167,7 +1187,7 @@ export default function Layout() {
               <span className="grow" />
               {/* Split — both tabs side by side. Wide screens only (hidden
                   below ~1800px via CSS). */}
-              {bothTabs && !isAskPage && (
+              {bothTabs && !isAskPage && !narrowWin && (
                 <button
                   className="btn dock-split-btn"
                   title={dockSplit ? 'One panel' : 'Show both tabs side by side'}
@@ -1195,13 +1215,17 @@ export default function Layout() {
                   {isAskPage ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
                 </button>
               ) : (
-                <button
-                  className="btn"
-                  title={dockExpanded ? 'Dock panel' : 'Expand'}
-                  onClick={() => setDockExpanded((v) => !v)}
-                >
-                  {dockExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                </button>
+                // No expand in drawer mode — there's no room for the
+                // wide panel to mean anything.
+                !narrowWin && (
+                  <button
+                    className="btn"
+                    title={dockExpanded ? 'Dock panel' : 'Expand'}
+                    onClick={() => setDockExpanded((v) => !v)}
+                  >
+                    {dockExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                  </button>
+                )
               )}
               {!isAskPage && (
                 <button className="btn" onClick={closeRail} title="Close" aria-label="Close dock">
