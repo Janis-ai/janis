@@ -10,7 +10,7 @@ import { railBus } from '../lib/railBus';
 import { stepGlyph, stepSubtitle, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, MessageSquarePlus, Play } from 'lucide-react';
 import { AskJanis } from '../components/AskJanis';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow, scenarioPrompt, type ScenarioTest } from '../components/ScenarioRow';
@@ -1924,19 +1924,25 @@ export default function AgentBuilder() {
                 </div>
                 <button
                   className="btn sm"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
                   title="Start a fresh test conversation — earlier chats stay in the inbox"
                   onClick={() => {
                     newChat();
                     setDockOpen(true);
                   }}
                 >
-                  New chat
+                  <MessageSquarePlus size={13} /> New chat
                 </button>
                 {scenarios.length > 0 && (
                   <button
                     className="btn sm"
                     disabled={runningId !== null}
-                    style={runningId !== null ? { fontStyle: 'italic' } : undefined}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      ...(runningId !== null ? { fontStyle: 'italic' as const } : {}),
+                    }}
                     title={
                       scenarios.some((s) => s.stale)
                         ? 'Config changed since some results — re-run the list'
@@ -1944,7 +1950,7 @@ export default function AgentBuilder() {
                     }
                     onClick={runAll}
                   >
-                    {batchRunning
+                    <Play size={13} /> {batchRunning
                       ? 'Running all'
                       : scenarios.some((s) => s.stale)
                         ? 'Run all again'
