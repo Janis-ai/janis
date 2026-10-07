@@ -553,7 +553,7 @@ button, input, select, textarea { font: inherit; }
 }
 .verdict-expect { font-size: 12px; font-style: italic; margin-bottom: 6px; }
 .verdict-btns { display: flex; gap: 6px; flex-wrap: wrap; }
-.verdict-btns .btn { margin-left: 0; }
+.verdict-btns .btn { margin-left: 0; display: inline-flex; align-items: center; gap: 5px; }
 .verdict-on { border-color: var(--accent); color: var(--accent); }
 .verdict-fail.verdict-on { border-color: #c0392b; color: #c0392b; }
 /* Try-it scenario checklist — the step page is the runner's list; the

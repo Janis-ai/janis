@@ -9,7 +9,7 @@ import {
   type ChatMsg,
   type OutEntry,
 } from '../lib/chatTimeline';
-import { Loader2, Maximize2, Mic, MicOff, Minimize2, Paperclip, Smile, X } from 'lucide-react';
+import { Loader2, Maximize2, Mic, MicOff, Minimize2, Paperclip, Smile, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 import { ArgsRows } from './bits';
 import { Widgets, type ChatWidget } from './ChatWidgets';
@@ -1161,13 +1161,13 @@ export function AskJanis({
                               className={`btn sm${verdictCtx.result === 'pass' ? ' verdict-on' : ''}`}
                               onClick={() => verdictCtx.verdict('pass')}
                             >
-                              ✓ Looks right
+                              <ThumbsUp size={12} /> Looks right
                             </button>
                             <button
                               className={`btn sm${verdictCtx.result === 'fail' ? ' verdict-on verdict-fail' : ''}`}
                               onClick={() => verdictCtx.verdict('fail')}
                             >
-                              ⚑ Needs work
+                              <ThumbsDown size={12} /> Needs work
                             </button>
                           </div>
                         </div>
