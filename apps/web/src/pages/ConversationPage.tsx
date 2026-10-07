@@ -9,7 +9,8 @@ import { ArgsRows, Avatar, channelLabel, displayName, fmtTime } from '../compone
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
-import { scenarioPrompt, type ScenarioTest } from '../components/ScenarioRow';
+import { type ScenarioTest } from '../components/ScenarioRow';
+import { useScenarioMatch } from '../lib/scenarioMatch';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
@@ -522,13 +523,12 @@ export default function ConversationPage() {
       ),
     enabled: Boolean(data?.conversation.agent_id),
   });
-  const matchScenario = (prompt?: string) =>
-    prompt
-      ? (convTests.data?.tests ?? []).find(
-          (t) =>
-            scenarioPrompt(t).trim().toLowerCase() === prompt.trim().toLowerCase(),
-        )
-      : undefined;
+  // Meaning-based lookup — fuzzy locally, semantic via the server queue,
+  // so a paraphrased or typo'd prompt still finds its scenario.
+  const matchScenario = useScenarioMatch(
+    data?.conversation.agent_id,
+    convTests.data?.tests ?? [],
+  );
   // Owner verdict on a matched scenario — same human_result write the test
   // chat's thumbs make. 'Needs work' also opens the correction card with
   // the scenario context, like the test chat does.
@@ -851,10 +851,10 @@ export default function ConversationPage() {
           {janisBrain(agent) && (
             <button
               className="btn"
-              title="Save this transcript as a regression test — replay it after prompt or knowledge changes"
+              title="Save this transcript as a scenario — replay it after prompt or knowledge changes"
               onClick={() => setTestSaveOpen((v) => !v)}
             >
-              Save as test
+              Save as scenario
             </button>
           )}
         </div>
@@ -880,12 +880,12 @@ export default function ConversationPage() {
           <div className="card" style={{ marginTop: 8 }}>
             {testSaved ? (
               <>
-                <label>{testSaved > 1 ? `${testSaved} tests saved` : 'Test saved'}</label>
+                <label>{testSaved > 1 ? `${testSaved} scenarios saved` : 'Scenario saved'}</label>
                 <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
                   {testSaved > 1
                     ? 'One per point where a human had to step in — each replays the conversation up to that prompt. '
                     : 'It replays the conversation up to the customer\u2019s last message. '}
-                  Run them from the agent's Tests tab after a prompt or knowledge
+                  Run them from the agent's Test tab after a prompt or knowledge
                   change — replays never message the customer or call your APIs.
                 </div>
                 <div className="row" style={{ marginTop: 4 }}>
@@ -893,7 +893,7 @@ export default function ConversationPage() {
                     className="btn primary sm"
                     to={`/agents/${c.agent_id}/tests`}
                   >
-                    Open Tests tab →
+                    Open Test tab →
                   </Link>
                   <button
                     className="btn sm"
@@ -908,14 +908,14 @@ export default function ConversationPage() {
               </>
             ) : (
               <>
-                <label>Save this conversation as a regression test</label>
+                <label>Save this conversation as a scenario</label>
                 <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
                   The transcript (up to the customer's last message) is replayed against the agent's
                   current setup — no customer sees it, no action runs. Use it to prove a prompt or
                   knowledge fix works, or to catch a regression later.
                 </div>
                 <input
-                  placeholder="Test name — e.g. refund request must hand off"
+                  placeholder="Scenario name — e.g. refund request must hand off"
                   value={testName}
                   onChange={(e) => setTestName(e.target.value)}
                   style={{ width: '100%', marginBottom: 8 }}
@@ -933,7 +933,7 @@ export default function ConversationPage() {
                     disabled={!testName.trim() || saveTest.isPending}
                     onClick={() => saveTest.mutate()}
                   >
-                    {saveTest.isPending ? 'Saving…' : 'Save test'}
+                    {saveTest.isPending ? 'Saving…' : 'Save scenario'}
                   </button>
                   <button className="btn sm" onClick={() => setTestSaveOpen(false)}>Cancel</button>
                 </div>

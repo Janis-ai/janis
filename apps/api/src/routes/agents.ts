@@ -34,6 +34,7 @@ import {
 } from '../services/knowledgeGaps.js';
 import { encryptSecret, loadSecretsMap } from '../lib/secrets.js';
 import { llmFor, MAX_KNOWLEDGE_CHARS, MAX_NOTES_CHARS } from '../lib/hostedAgent.js';
+import { matchPromptsSemantically, promptsSimilar } from '../lib/promptMatch.js';
 import { checkpointIndices, draftExpectation, judgeExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { recordLlmUsage } from '../lib/usage.js';
@@ -2010,7 +2011,7 @@ export function agentRoutes(db: Db) {
   });
 
   const TEST_CATEGORIES = ['safety', 'knowledge', 'actions', 'out_of_scope', 'tone', 'general'] as const;
-  const TEST_SOURCES = ['generated', 'user', 'correction', 'transcript'] as const;
+  const TEST_SOURCES = ['generated', 'user', 'correction', 'transcript', 'inbox'] as const;
   const testBody = z.object({
     // Optional for the prompt shorthand — the trigger becomes the name.
     name: z.string().min(1).max(120).optional(),
@@ -2110,6 +2111,43 @@ export function agentRoutes(db: Db) {
       turns = [{ role: 'customer' as const, text: b.prompt }];
     }
     if (!turns.length) return c.json({ error: 'no turns — supply turns or a conversation_id' }, 400);
+    // Dedupe by meaning, not verbatim text: "are you a fan of cheese" IS
+    // the "do you like cheese" scenario — fuzzy first, then one semantic
+    // call when wording differs completely. A match returns the existing
+    // row instead of adding a second checklist line for the same check.
+    const trigger = [...turns].reverse().find((t) => t.role === 'customer')?.text;
+    if (trigger && !sourceConversationId) {
+      const [agent, existing] = await Promise.all([
+        db.select().from(agents).where(eq(agents.id, agentId)).limit(1).then((r) => r[0]),
+        db
+          .select()
+          .from(agentTests)
+          .where(eq(agentTests.agentId, agentId))
+          .orderBy(desc(agentTests.createdAt)),
+      ]);
+      const promptOf = (t: (typeof existing)[number]) =>
+        ([...((t.turns ?? []) as { role: string; text: string }[])])
+          .reverse()
+          .find((x) => x.role === 'customer')?.text ?? t.name;
+      let hit = existing.find((t) => promptsSimilar(trigger, promptOf(t)));
+      if (!hit && agent && existing.length) {
+        try {
+          const idx = await matchPromptsSemantically(
+            await llmFor(db, agent),
+            [trigger],
+            existing.map(promptOf),
+          );
+          const j = idx[0];
+          if (j != null) hit = existing[j];
+        } catch {
+          /* LLM unavailable — fall through to insert */
+        }
+      }
+      if (hit) {
+        const version = agent ? configVersion((agent.config ?? {}) as AgentConfig) : undefined;
+        return c.json({ test: toTest(hit, version), deduped: true }, 200);
+      }
+    }
     const [row] = await db
       .insert(agentTests)
       .values({
@@ -2125,6 +2163,52 @@ export function agentRoutes(db: Db) {
       .returning();
     return c.json({ test: toTest(row) }, 201);
   });
+
+  // Which saved scenario (if any) each prompt hits — fuzzy resolves the
+  // near-verbatim cases synchronously; the stragglers get one batched
+  // semantic call. UI uses it to attach verdict/correct controls to a
+  // reply whose prompt was a paraphrase or typo of a saved scenario.
+  app.post(
+    '/:id/tests/match',
+    agentMember,
+    zValidator('json', z.object({ prompts: z.array(z.string().min(1).max(400)).max(30) })),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const { prompts } = c.req.valid('json');
+      const rows = await db
+        .select()
+        .from(agentTests)
+        .where(eq(agentTests.agentId, agent.id))
+        .orderBy(desc(agentTests.createdAt));
+      const promptOf = (t: (typeof rows)[number]) =>
+        ([...((t.turns ?? []) as { role: string; text: string }[])])
+          .reverse()
+          .find((x) => x.role === 'customer')?.text ?? t.name;
+      const matches: Record<string, string> = {};
+      const stragglers: string[] = [];
+      for (const p of prompts) {
+        const hit = rows.find((t) => promptsSimilar(p, promptOf(t)));
+        if (hit) matches[p] = hit.id;
+        else stragglers.push(p);
+      }
+      if (stragglers.length && rows.length) {
+        try {
+          const byIdx = await matchPromptsSemantically(
+            await llmFor(db, agent),
+            stragglers,
+            rows.map(promptOf),
+          );
+          for (const [i, j] of Object.entries(byIdx)) {
+            if (j != null) matches[stragglers[Number(i)]] = rows[j].id;
+          }
+        } catch {
+          /* fuzzy results still returned */
+        }
+      }
+      return c.json({ matches });
+    },
+  );
 
   app.patch(
     '/:id/tests/:testId',

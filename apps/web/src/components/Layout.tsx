@@ -14,7 +14,8 @@ import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
 import { CorrectThisCard, type CorrectTarget } from './CorrectThis';
 import { TestChatHistory } from './TestChatHistory';
-import { scenarioPrompt, type ScenarioTest } from './ScenarioRow';
+import { type ScenarioTest } from './ScenarioRow';
+import { useScenarioMatch } from '../lib/scenarioMatch';
 import { freshTestVisitor, readTestVisitor, storeTestVisitor } from '../lib/testChat';
 import { railBus, type RailRequest } from '../lib/railBus';
 import { DockContext, type DockTab, type TestWiring } from '../lib/dockContext';
@@ -520,14 +521,10 @@ export default function Layout() {
     enabled: fallbackActive,
   });
   const fallbackScenarios = fallbackTests.data?.tests ?? [];
-  const fallbackScenario = (customerText?: string) =>
-    customerText
-      ? fallbackScenarios.find(
-          (x) =>
-            scenarioPrompt(x).trim().toLowerCase() ===
-            customerText.trim().toLowerCase(),
-        )
-      : undefined;
+  // Meaning-based lookup — fuzzy locally, semantic via the server queue,
+  // so a paraphrased or typo'd prompt still finds its scenario.
+  const matchScenario = useScenarioMatch(chatAgentId ?? undefined, fallbackScenarios);
+  const fallbackScenario = (customerText?: string) => matchScenario(customerText);
   const fallbackVerdictFor = (customerText?: string, replyText?: string) => {
     const s = fallbackScenario(customerText);
     if (!s || !chatAgentId) return null;

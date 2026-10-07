@@ -30,7 +30,7 @@ const CAUSE_LABELS: Record<FailCause, { title: string; hint: string }> = {
   },
   expectation: {
     title: 'The expectation is wrong',
-    hint: 'the reply was fine — the test is off',
+    hint: 'the reply was fine — the scenario is off',
   },
 };
 
@@ -306,7 +306,7 @@ export function CorrectThisCard({
   const addTestBtn =
     scenario || !target.customerText ? null : addedTest ? (
       <span className="muted" style={{ fontSize: 12 }}>
-        ✓ in tests
+        ✓ in scenarios
       </span>
     ) : (
       <button
@@ -448,7 +448,7 @@ export function CorrectThisCard({
           {cause === 'ability' && (
             <>
               <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-                This test expects an action
+                This scenario expects an action
                 {suggestedTools.length
                   ? ` — suggested at Create: ${suggestedTools.slice(0, 3).join(', ')}`
                   : ''}
@@ -494,7 +494,7 @@ export function CorrectThisCard({
           {cause === 'expectation' && (
             <>
               <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-                The reply may be fine — fix what the test expects, or drop it.
+                The reply may be fine — fix what the scenario expects, or drop it.
               </div>
               <textarea
                 rows={2}

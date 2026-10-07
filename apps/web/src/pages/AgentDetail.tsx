@@ -344,7 +344,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
           {janisBrain(agent) && (
             <>
               {' · '}
-              <Link to={`/agents/${agent.id}/tests`}>test suites</Link>
+              <Link to={`/agents/${agent.id}/tests`}>scenarios</Link>
             </>
           )}
         </div>
@@ -3447,7 +3447,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       <ReadOnly off={!isAdmin}>
       <div className="row">
         <label className="grow" style={{ margin: 0 }}>
-          Regression tests — saved conversations replayed against this agent's current setup
+          Scenarios — saved conversations replayed against this agent's current setup
         </label>
         {tests.length > 0 && (
           <button
@@ -3471,7 +3471,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           Import CSV
         </button>
         <button className="btn sm" onClick={() => setNewOpen((v) => !v)}>
-          + New test
+          + New scenario
         </button>
         {tests.length > 0 && (
           <label
@@ -3494,8 +3494,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
         )}
       </div>
       <div className="muted" style={{ fontSize: 12 }}>
-        Save a transcript from any conversation ("Save as test") — each point where a
-        human had to step in becomes its own test — then replay after prompt,
+        Save a transcript from any conversation ("Save as scenario") — each point where a
+        human had to step in becomes its own scenario — then replay after prompt,
         knowledge, or tool changes. Replays never message customers and never execute tools —
         gated actions are only proposed. Add an expectation and each run is judged against it.
         {tests.length > 0 && (
@@ -3515,7 +3515,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             const KIND_LABEL: Record<string, string> = {
               knowledge_gap: 'knowledge gap',
               prompt_drift: 'prompt fix',
-              test_stale: 'stale test',
+              test_stale: 'stale scenario',
               hypothesis: 'hypothesis',
             };
             const patchPreview =
@@ -3604,7 +3604,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       {suggestions.length > 0 && (
         <div className="card" style={{ padding: '12px 16px' }}>
           <div className="section-label" style={{ marginBottom: 4 }}>
-            Rescued — not yet covered by a test
+            Rescued — not yet covered by a scenario
           </div>
           {suggestions.map((s) => (
             <div
@@ -3668,8 +3668,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       {importOpen && (
         <div className="card" style={{ background: 'var(--panel-2)' }}>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-            One test per line: <code>name, customer message, expectation</code>. Paste from a
-            spreadsheet or export. Multi-turn tests still come from "Save as test" on a conversation.
+            One scenario per line: <code>name, customer message, expectation</code>. Paste from a
+            spreadsheet or export. Multi-turn scenarios still come from "Save as scenario" on a conversation.
           </div>
           <textarea
             rows={6}
@@ -3684,7 +3684,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               disabled={!csvText.trim() || importCsv.isPending}
               onClick={() => importCsv.mutate()}
             >
-              {importCsv.isPending ? 'Importing…' : 'Import tests'}
+              {importCsv.isPending ? 'Importing…' : 'Import scenarios'}
             </button>
             <button className="btn sm" onClick={() => setImportOpen(false)}>Cancel</button>
           </div>
@@ -3741,7 +3741,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       {newOpen && (
         <div className="card" style={{ background: 'var(--panel-2)' }}>
           <input
-            placeholder="Test name — e.g. angry refund request"
+            placeholder="Scenario name — e.g. angry refund request"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             style={{ width: '100%', marginBottom: 8 }}
@@ -3766,7 +3766,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               disabled={!newName.trim() || !newMsg.trim() || create.isPending}
               onClick={() => create.mutate()}
             >
-              {create.isPending ? 'Saving…' : 'Create test'}
+              {create.isPending ? 'Saving…' : 'Create scenario'}
             </button>
             <button className="btn sm" onClick={() => setNewOpen(false)}>Cancel</button>
           </div>
@@ -3775,8 +3775,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
 
       {tests.length === 0 && !newOpen && (
         <div className="muted" style={{ fontSize: 13 }}>
-          No tests yet. Open a conversation — especially one a human had to rescue — and hit
-          "Save as test" to lock in what a good reply looks like.
+          No scenarios yet. Open a conversation — especially one a human had to rescue — and hit
+          "Save as scenario" to lock in what a good reply looks like.
         </div>
       )}
 

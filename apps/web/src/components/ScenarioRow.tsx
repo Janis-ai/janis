@@ -467,7 +467,7 @@ export function ScenarioRow({
           {onDelete && (
             <button
               className="btn sm"
-              title="Delete test"
+              title="Delete scenario"
               onClick={onDelete}
             >
               <Trash2 size={12} />

@@ -13,6 +13,7 @@ import type { Agent, AgentConfig } from '@janis/shared';
 import { ChevronDown, MessageSquarePlus, Play } from 'lucide-react';
 
 import { freshTestVisitor } from '../lib/testChat';
+import { useScenarioMatch } from '../lib/scenarioMatch';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow, scenarioPrompt, type ScenarioTest } from '../components/ScenarioRow';
 import { AgentChannels } from '../components/AgentChannels';
@@ -546,6 +547,9 @@ export default function AgentBuilder() {
     refetchInterval: 30_000,
   });
   const scenarios = testsQ.data?.tests ?? [];
+  // Scenario lookup by meaning — local fuzzy first, then the server's
+  // semantic match queued async so a paraphrased reply still gets the box.
+  const matchScenario = useScenarioMatch(agent?.id, scenarios);
   // First visit to the checklist materializes the draft's suggested
   // scenarios (bootstrap already seeds; this catches agents created
   // before suggestions existed or a regenerate that added new ones).
@@ -600,7 +604,7 @@ export default function AgentBuilder() {
       // nonsense row that "asks" the agent its own answer.
       if (!ctx.customerText)
         throw new Error('No customer message to pair this reply with');
-      return api(`/api/agents/${agent?.id}/tests`, {
+      return api<{ test: ScenarioTest; deduped?: boolean }>(`/api/agents/${agent?.id}/tests`, {
         method: 'POST',
         body: JSON.stringify({
           prompt: ctx.customerText.slice(0, 400),
@@ -612,8 +616,12 @@ export default function AgentBuilder() {
         }),
       });
     },
-    onSuccess: () => {
-      setTestNotice('Added to the scenario list');
+    onSuccess: (r) => {
+      setTestNotice(
+        r.deduped
+          ? 'Already covered — the scenario with that meaning exists'
+          : 'Added to the scenario list',
+      );
       void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });
       void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
     },
@@ -701,10 +709,7 @@ export default function AgentBuilder() {
    *  panel renders the expectation + verdict buttons in place. */
   const verdictFor = (customerText?: string, replyText?: string) => {
     if (!customerText) return null;
-    const s = scenarios.find(
-      (x) =>
-        scenarioPrompt(x).trim().toLowerCase() === customerText.trim().toLowerCase(),
-    );
+    const s = matchScenario(customerText);
     if (!s) return null;
     return {
       expectation: s.expectation,
@@ -738,26 +743,14 @@ export default function AgentBuilder() {
       // One correction path: correcting a reply to a scenario prompt opens
       // the same diagnose-first card the row's Needs work button does —
       // not the weaker generic card.
-      const s = ctx.customerText
-        ? scenarios.find(
-            (x) =>
-              scenarioPrompt(x).trim().toLowerCase() ===
-              ctx.customerText!.trim().toLowerCase(),
-          )
-        : undefined;
+      const s = matchScenario(ctx.customerText);
       setCorrectTarget({ ...ctx, scenarioId: s?.id });
     },
     onSaveTest: (ctx) => {
       // A reply to a checklist prompt IS that scenario — saving it again
-      // would duplicate the row.
-      if (
-        ctx.customerText &&
-        scenarios.some(
-          (s) =>
-            scenarioPrompt(s).trim().toLowerCase() ===
-            ctx.customerText!.trim().toLowerCase(),
-        )
-      ) {
+      // would duplicate the row. Server-side the same check runs
+      // semantically, catching paraphrases local matching missed.
+      if (ctx.customerText && matchScenario(ctx.customerText)) {
         setTestNotice('That prompt is already a scenario');
         return;
       }
@@ -2062,7 +2055,7 @@ export default function AgentBuilder() {
                   <strong>No scenarios yet</strong>
                   <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
                     Chat in the test panel — every agent reply offers
-                    "Save as test", and "Correct this → Add to tests" turns a
+                    "Save as scenario", and "Correct this" can turn a
                     fix into a re-runnable check.
                   </div>
                 </div>
@@ -2155,7 +2148,7 @@ export default function AgentBuilder() {
                             ? 'ok'
                             : 'todo',
                       text: !t?.total
-                        ? 'No test scenarios yet — add one in Try it'
+                        ? 'No scenarios yet — add one in Try it'
                         : `Tests: ${t.checked} of ${t.total} scenario${t.total > 1 ? 's' : ''} checked${
                             t.failing
                               ? ` · ${t.failing} need${t.failing > 1 ? '' : 's'} work`
