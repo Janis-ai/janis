@@ -52,8 +52,9 @@ const CAUSE_HINT: Record<string, string> = {
 
 /** A reply clamped to two lines; the "show full reply" toggle only
  *  renders when the text actually overflows the clamp — measured on the
- *  element, not guessed from length. */
-function ReplyBlock({ label, text }: { label: string; text: string }) {
+ *  element, not guessed from length. Exported for CorrectThis, which
+ *  quotes the same reply the row shows. */
+export function ReplyBlock({ label, text }: { label: string; text: string }) {
   const el = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);

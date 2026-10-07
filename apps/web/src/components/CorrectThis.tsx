@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
+import { ReplyBlock } from './ScenarioRow';
 import type { AgentConfig } from '@janis/shared';
 
 type FailCause = 'knowledge' | 'behavior' | 'ability' | 'expectation';
@@ -328,24 +329,16 @@ export function CorrectThisCard({
   return (
     <div className="card" style={{ margin: '10px 0' }}>
       <strong style={{ fontSize: 13 }}>
-        {scenario ? 'What went wrong?' : 'Correct this answer'}
+        {scenario ? 'What went wrong?' : 'Correct this reply'}
       </strong>
-      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-        {target.customerText && (
-          <>
-            The customer asked: “
-            {target.customerText.length > 90
-              ? `${target.customerText.slice(0, 90)}…`
-              : target.customerText}
-            ”{' '}
-          </>
-        )}
-        It said: “
-        {target.agentText.length > 140
-          ? `${target.agentText.slice(0, 140)}…`
-          : target.agentText}
-        ”
-      </div>
+      {/* Who said what, in order — the agent's words clamp to two lines
+          with the same measured show-full toggle the scenario row uses. */}
+      {target.customerText && (
+        <div style={{ fontSize: 13, marginTop: 6, whiteSpace: 'pre-wrap' }}>
+          <span className="muted">User:</span> {target.customerText}
+        </div>
+      )}
+      <ReplyBlock label="Agent" text={target.agentText} />
       {scenario?.expectation && (
         <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
           Expected: {scenario.expectation}
