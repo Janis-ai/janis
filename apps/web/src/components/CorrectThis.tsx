@@ -605,7 +605,7 @@ export function CorrectThisCard({
                 Rule:
               </div>
               <textarea
-                rows={2}
+                rows={4}
                 style={{ width: '100%', marginTop: 4, boxSizing: 'border-box' }}
                 placeholder={rulePlaceholder}
                 value={instrEdit}
@@ -644,7 +644,7 @@ export function CorrectThisCard({
                 Note:
               </div>
               <textarea
-                rows={2}
+                rows={4}
                 style={{ width: '100%', marginTop: 4, boxSizing: 'border-box' }}
                 placeholder={notePlaceholder}
                 value={noteEdit}
