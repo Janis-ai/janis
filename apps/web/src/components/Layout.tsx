@@ -17,7 +17,7 @@ import { TestChatHistory } from './TestChatHistory';
 import { scenarioPrompt, type ScenarioTest } from './ScenarioRow';
 import { freshTestVisitor, readTestVisitor, storeTestVisitor } from '../lib/testChat';
 import { railBus, type RailRequest } from '../lib/railBus';
-import { DockContext, type DockTab } from '../lib/dockContext';
+import { DockContext, type DockTab, type TestWiring } from '../lib/dockContext';
 import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
@@ -308,10 +308,18 @@ export default function Layout() {
   const [fallbackSeed, setFallbackSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [testSlot, setTestSlot] = useState<HTMLElement | null>(null);
   const [testProvided, setTestProvided] = useState(false);
-  // Fallback test panel (agent pages that aren't the builder): which test
-  // conversation the chat is keyed to, plus its notice/correction state —
-  // the same Try-it affordances the builder wires in its portaled panel.
-  const [fallbackVisitor, setFallbackVisitor] = useState<string | null>(null);
+  // ONE mounted test chat lives here — pages swap its wiring via
+  // setTestWiring instead of mounting their own AskJanis, so builder →
+  // Inbox navigation never remounts (and refetches) the conversation.
+  const [testWiring, setTestWiring] = useState<TestWiring | null>(null);
+  // Per-agent channel ids survive provider handoffs: the builder's resolved
+  // test channel stays cached so the chat's `key` doesn't change while the
+  // fallback's lazy resolution catches up.
+  const testChannelIds = useRef<Record<string, string>>({});
+  // Which test conversation the shared chat is keyed to, plus the
+  // fallback's notice/correction state — the Try-it affordances used when
+  // no page supplies wiring.
+  const [testVisitor, setTestVisitor] = useState<string | null>(null);
   const [fallbackNotice, setFallbackNotice] = useState('');
   const [fallbackCorrect, setFallbackCorrect] = useState<CorrectTarget | null>(null);
   const [dockCallout, setDockCallout] = useState(false);
@@ -456,36 +464,56 @@ export default function Layout() {
   // Test-tab fallback — a plain chat when no page is portaling a wired
   // panel (agent pages other than the builder). Resolves the test channel
   // lazily; on builder pages the builder's own panel owns the slot.
+  // The agent the shared test chat serves — the builder's agent wins while
+  // it provides wiring (its testRail may be stale from another agent).
+  const chatAgentId =
+    testProvided && ctxAgent ? ctxAgent : testRail?.agentId ?? ctxAgent;
+  // Channel resolution: the provider's resolved channel, else the rail's,
+  // else the per-agent cache populated by either — the cache is what makes
+  // the builder → agent-page handoff a prop swap instead of a remount.
+  useEffect(() => {
+    const cid =
+      (testProvided ? testWiring?.channelId : undefined) ??
+      (testRail && testRail.agentId === chatAgentId ? testRail.channelId : undefined);
+    if (chatAgentId && cid) testChannelIds.current[chatAgentId] = cid;
+  }, [chatAgentId, testProvided, testWiring?.channelId, testRail]);
+  const chatChannelId = chatAgentId
+    ? testChannelIds.current[chatAgentId]
+    : undefined;
   useEffect(() => {
     if (!(railOpen && railTab === 'test') || testProvided || onBuilderPage) return;
     if (!ctxAgent || !currentAgent || !janisBrain(currentAgent)) return;
-    if (testRail?.agentId === ctxAgent) return;
+    if (testChannelIds.current[ctxAgent] || testRail?.agentId === ctxAgent) return;
     void api<{ channel_id: string }>(`/api/agents/${ctxAgent}/test-channel`, { method: 'POST' })
-      .then((r) =>
-        setTestRail({ channelId: r.channel_id, label: currentAgent.name ?? '', agentId: ctxAgent }),
-      )
+      .then((r) => {
+        testChannelIds.current[ctxAgent] = r.channel_id;
+        setTestRail({ channelId: r.channel_id, label: currentAgent.name ?? '', agentId: ctxAgent });
+      })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [railOpen, railTab, testProvided, onBuilderPage, ctxAgent, currentAgent]);
 
-  // The fallback chat keys to the same persisted visitor the builder
-  // uses — navigating builder → Inbox keeps the thread you were just on.
-  const fallbackAgentId = testRail?.agentId ?? ctxAgent;
+  // The shared chat keys to the same persisted visitor everywhere —
+  // navigating builder → Inbox keeps the thread you were just on.
   useEffect(() => {
-    setFallbackVisitor(fallbackAgentId ? readTestVisitor(fallbackAgentId) : null);
+    setTestVisitor(chatAgentId ? readTestVisitor(chatAgentId) : null);
     setFallbackCorrect(null);
     // testProvided flip IS the handoff moment — the builder may have just
     // written a fresh visitor before unmounting, so re-read then too.
-  }, [fallbackAgentId, testProvided]);
+  }, [chatAgentId, testProvided]);
+  const setChatVisitor = (v: string) => {
+    setTestVisitor(v);
+    if (chatAgentId) storeTestVisitor(chatAgentId, v);
+  };
 
-  // Try-it affordances for the fallback panel — the same scenario
-  // matching + verdict writes the builder's portaled panel does.
+  // Try-it affordances for the fallback wiring — the same scenario
+  // matching + verdict writes the builder registers on its pages.
   const fallbackActive =
-    railOpen && railTab === 'test' && !testProvided && Boolean(fallbackAgentId);
+    railOpen && railTab === 'test' && !testProvided && Boolean(chatAgentId);
   const fallbackTests = useQuery({
-    queryKey: ['agent-tests', fallbackAgentId],
+    queryKey: ['agent-tests', chatAgentId],
     queryFn: () =>
-      api<{ tests: ScenarioTest[] }>(`/api/agents/${fallbackAgentId}/tests`),
+      api<{ tests: ScenarioTest[] }>(`/api/agents/${chatAgentId}/tests`),
     enabled: fallbackActive,
   });
   const fallbackScenarios = fallbackTests.data?.tests ?? [];
@@ -499,17 +527,17 @@ export default function Layout() {
       : undefined;
   const fallbackVerdictFor = (customerText?: string, replyText?: string) => {
     const s = fallbackScenario(customerText);
-    if (!s || !fallbackAgentId) return null;
+    if (!s || !chatAgentId) return null;
     return {
       expectation: s.expectation,
       result: s.human_result ?? null,
       verdict: (r: 'pass' | 'fail') => {
-        void api(`/api/agents/${fallbackAgentId}/tests/${s.id}`, {
+        void api(`/api/agents/${chatAgentId}/tests/${s.id}`, {
           method: 'PATCH',
           body: JSON.stringify({ human_result: r }),
         }).then(() => {
-          void qc.invalidateQueries({ queryKey: ['agent-tests', fallbackAgentId] });
-          void qc.invalidateQueries({ queryKey: ['build-status', fallbackAgentId] });
+          void qc.invalidateQueries({ queryKey: ['agent-tests', chatAgentId] });
+          void qc.invalidateQueries({ queryKey: ['build-status', chatAgentId] });
         });
         if (r === 'fail' && replyText) {
           setFallbackCorrect({
@@ -520,6 +548,35 @@ export default function Layout() {
         }
       },
     };
+  };
+  const fallbackOnCorrect = (ctx: { agentText: string; customerText?: string }) => {
+    const s = fallbackScenario(ctx.customerText);
+    setFallbackCorrect({
+      agentText: ctx.agentText,
+      customerText: ctx.customerText,
+      ...(s ? { scenario: { id: s.id, expectation: s.expectation } } : {}),
+    });
+  };
+  const fallbackOnSaveTest = (ctx: { agentText: string; customerText?: string }) => {
+    if (!ctx.customerText || !chatAgentId) return;
+    if (fallbackScenario(ctx.customerText)) {
+      setFallbackNotice('That prompt is already a scenario');
+      return;
+    }
+    void api(`/api/agents/${chatAgentId}/tests`, {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt: ctx.customerText.slice(0, 400),
+        expectation: ctx.agentText.slice(0, 600),
+        category: 'general',
+        source: 'user',
+      }),
+    })
+      .then(() => {
+        setFallbackNotice('Added to the scenario list');
+        void qc.invalidateQueries({ queryKey: ['agent-tests', chatAgentId] });
+      })
+      .catch((e) => setFallbackNotice(e.message));
   };
 
   // A queued test seed goes to the portaled panel when a page provides one;
@@ -775,6 +832,10 @@ export default function Layout() {
       setDockCallout(false);
     },
     setTestProvided,
+    testWiring,
+    setTestWiring,
+    testVisitor,
+    setTestVisitor: setChatVisitor,
     testSeed,
     clearTestSeed: () => setTestSeed(null),
   };
@@ -1264,108 +1325,90 @@ export default function Layout() {
                   className="dock-page"
                   style={{ display: splitActive || railTab === 'test' ? 'flex' : 'none' }}
                 >
-                  {/* The builder (or any page wiring scenarios/corrections)
-                      portals its test panel into this slot; elsewhere a
-                      plain customer-role chat renders. */}
-                  <div ref={setTestSlot} className="test-dock-body">
-                    {!testProvided &&
-                      (testRail ? (
-                        <>
-                          <div
-                            className="test-dock-status"
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 8,
-                              flexWrap: 'nowrap',
-                            }}
-                          >
-                            <span
-                              className="muted grow"
-                              style={{
-                                fontSize: 11,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {fallbackNotice || `Testing ${testRail.label}`}
-                            </span>
-                            <TestChatHistory
-                              agentId={fallbackAgentId!}
-                              channelId={testRail.channelId}
-                              currentVisitor={fallbackVisitor ?? undefined}
-                              onPick={(v) => {
-                                setFallbackVisitor(v);
-                                if (fallbackAgentId) storeTestVisitor(fallbackAgentId, v);
-                              }}
-                            />
-                            <button
-                              className="link small"
-                              title="Start a fresh test conversation"
-                              onClick={() => {
-                                const v = freshTestVisitor();
-                                setFallbackVisitor(v);
-                                if (fallbackAgentId) storeTestVisitor(fallbackAgentId, v);
-                              }}
-                            >
-                              <MessageSquarePlus
-                                size={11}
-                                style={{ verticalAlign: -1, marginRight: 3 }}
-                              />
-                              New chat
-                            </button>
-                          </div>
-                          <AskJanis
-                            key={`${testRail.channelId}:${fallbackVisitor ?? 'base'}`}
-                            channelId={testRail.channelId}
-                            visitorOverride={fallbackVisitor ?? undefined}
-                            asCustomer
-                            hideHeader
-                            placeholder="You're chatting as a customer…"
-                            seedMessage={fallbackSeed?.text}
-                            seedNonce={fallbackSeed?.nonce}
-                            verdictFor={fallbackVerdictFor}
-                            onCorrect={(ctx) => {
-                              const s = fallbackScenario(ctx.customerText);
-                              setFallbackCorrect({
-                                agentText: ctx.agentText,
-                                customerText: ctx.customerText,
-                                ...(s
-                                  ? { scenario: { id: s.id, expectation: s.expectation } }
-                                  : {}),
-                              });
-                            }}
-                            onSaveTest={(ctx) => {
-                              if (!ctx.customerText || !fallbackAgentId) return;
-                              if (fallbackScenario(ctx.customerText)) {
-                                setFallbackNotice('That prompt is already a scenario');
-                                return;
-                              }
-                              void api(`/api/agents/${fallbackAgentId}/tests`, {
-                                method: 'POST',
-                                body: JSON.stringify({
-                                  prompt: ctx.customerText.slice(0, 400),
-                                  expectation: ctx.agentText.slice(0, 600),
-                                  category: 'general',
-                                  source: 'user',
-                                }),
-                              })
-                                .then(() => {
-                                  setFallbackNotice('Added to the scenario list');
-                                  void qc.invalidateQueries({
-                                    queryKey: ['agent-tests', fallbackAgentId],
-                                  });
-                                })
-                                .catch((e) => setFallbackNotice(e.message));
-                            }}
+                  {/* Pages with wired test chrome (the builder) portal a
+                      status row + notices into this slot; the chat itself is
+                      Layout's single instance — it never remounts across
+                      navigation, only its handlers swap. */}
+                  <div className="test-dock-body">
+                    <div ref={setTestSlot} style={{ display: 'contents' }} />
+                    {!testProvided && chatChannelId && (
+                      <div
+                        className="test-dock-status"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          flexWrap: 'nowrap',
+                        }}
+                      >
+                        <span
+                          className="muted grow"
+                          style={{
+                            fontSize: 11,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {fallbackNotice || `Testing ${testRail?.label || currentAgent?.name || 'agent'}`}
+                        </span>
+                        <TestChatHistory
+                          agentId={chatAgentId!}
+                          channelId={chatChannelId}
+                          currentVisitor={testVisitor ?? undefined}
+                          onPick={setChatVisitor}
+                        />
+                        <button
+                          className="link small"
+                          title="Start a fresh test conversation"
+                          onClick={() => setChatVisitor(freshTestVisitor())}
+                        >
+                          <MessageSquarePlus
+                            size={11}
+                            style={{ verticalAlign: -1, marginRight: 3 }}
                           />
-                        </>
-                      ) : (
+                          New chat
+                        </button>
+                      </div>
+                    )}
+                    {chatChannelId ? (
+                      <AskJanis
+                        key={`${chatChannelId}:${testVisitor ?? 'base'}`}
+                        channelId={chatChannelId}
+                        visitorOverride={testVisitor ?? undefined}
+                        asCustomer
+                        hideHeader
+                        placeholder="You're chatting as a customer…"
+                        seedMessage={
+                          testProvided
+                            ? (testWiring?.seed?.text ?? undefined)
+                            : fallbackSeed?.text
+                        }
+                        seedNonce={
+                          testProvided ? testWiring?.seed?.nonce : fallbackSeed?.nonce
+                        }
+                        focusSignal={testWiring?.focusSignal}
+                        onCustomerMessage={testWiring?.handlers.current.onCustomerMessage}
+                        verdictFor={(cust, reply) =>
+                          (testWiring?.handlers.current.verdictFor ?? fallbackVerdictFor)(
+                            cust,
+                            reply,
+                          )
+                        }
+                        onCorrect={(ctx) =>
+                          (testWiring?.handlers.current.onCorrect ?? fallbackOnCorrect)(ctx)
+                        }
+                        onSaveTest={(ctx) =>
+                          (testWiring?.handlers.current.onSaveTest ?? fallbackOnSaveTest)(ctx)
+                        }
+                      />
+                    ) : (
+                      !testProvided && (
                         <div className="muted" style={{ padding: 14 }}>
                           Opening test channel…
                         </div>
-                      ))}
+                      )
+                    )}
                   </div>
                 </div>
               )}
@@ -1376,9 +1419,9 @@ export default function Layout() {
       {/* Fallback-panel correction card — same modal the builder uses;
           re-running the fixed scenario is left to the test surface. */}
       {fallbackCorrect &&
-        fallbackAgentId &&
+        chatAgentId &&
         (() => {
-          const fixAgent = agentsData?.agents.find((a) => a.id === fallbackAgentId);
+          const fixAgent = agentsData?.agents.find((a) => a.id === chatAgentId);
           if (!fixAgent) return null;
           return (
             <div className="modal-backdrop" onClick={() => setFallbackCorrect(null)}>
@@ -1388,19 +1431,19 @@ export default function Layout() {
                 onClick={(e) => e.stopPropagation()}
               >
                 <CorrectThisCard
-                  agentId={fallbackAgentId}
+                  agentId={chatAgentId}
                   cfg={fixAgent.config}
                   target={fallbackCorrect}
                   onClose={() => setFallbackCorrect(null)}
                   onSaved={() => {
                     void qc.invalidateQueries({ queryKey: ['agents'] });
                     void qc.invalidateQueries({
-                      queryKey: ['build-status', fallbackAgentId],
+                      queryKey: ['build-status', chatAgentId],
                     });
                   }}
                   onFixed={() => {
                     void qc.invalidateQueries({
-                      queryKey: ['agent-tests', fallbackAgentId],
+                      queryKey: ['agent-tests', chatAgentId],
                     });
                   }}
                 />

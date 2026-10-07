@@ -5,15 +5,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAgents, useBuildStatus, useMe } from '../api/hooks';
 import { janisBrain, setLastAgent } from '../lib/agentContext';
-import { useDock } from '../lib/dockContext';
+import { useDock, type TestHandlers } from '../lib/dockContext';
 import { railBus } from '../lib/railBus';
 import { stepGlyph, stepSubtitle, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { ChevronDown, MessageSquarePlus, Play } from 'lucide-react';
 import { TestChatHistory } from '../components/TestChatHistory';
-import { freshTestVisitor, readTestVisitor, storeTestVisitor } from '../lib/testChat';
-import { AskJanis } from '../components/AskJanis';
+import { freshTestVisitor, readTestVisitor } from '../lib/testChat';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow, scenarioPrompt, type ScenarioTest } from '../components/ScenarioRow';
 import { AgentChannels } from '../components/AgentChannels';
@@ -248,14 +247,16 @@ export default function AgentBuilder() {
     if (open) dock?.openTab('test');
     else dock?.setOpen(false);
   };
-  // "This page provides the Test tab's content" — Layout hides its fallback
-  // chat while a wired panel can be portaled in.
+  // "This page provides the Test tab's chrome + wiring" — Layout owns the
+  // one mounted test chat; this registers the header portal and the wiring
+  // the shared instance runs on while the builder is on screen.
   const dockAvailableForReg = !!agent && hosted;
   useEffect(() => {
     if (!dock || !dockAvailableForReg) return;
     dock.setTestProvided(true);
     return () => dock.setTestProvided(false);
   }, [dock, dockAvailableForReg]);
+
   // ?rail=test&agent=<id>&q=<prompt> deeplinks (and concierge "run this"
   // links) land as a seed on the shared dock state.
   useEffect(() => {
@@ -272,25 +273,20 @@ export default function AgentBuilder() {
   }, [step, testOpen, agent?.id, hosted]); // eslint-disable-line react-hooks/exhaustive-deps
   // "Save & test" focuses the composer once the panel is open.
   const [chatFocus, setChatFocus] = useState(0);
-  // New chat — a fresh cust_ visitor starts a NEW persistent conversation
-  // on the internal channel; earlier threads stay in the inbox where they
-  // remain useful for alert and takeover testing.
-  const [chatVisitor, setChatVisitor] = useState<string | null>(null);
-  // Last-used test conversation wins — the visitor id persists per agent
-  // so the dock's fallback panel (Inbox, Overview, …) resolves the SAME
-  // thread the builder was just on instead of the base console thread.
+  // Layout owns the shared test chat AND its visitor key — New chat and
+  // the history picker write through dock.setTestVisitor (Layout persists
+  // per agent), so the thread survives builder ↔ page navigation. The
+  // readTestVisitor fallback covers the first render before Layout's
+  // effect has settled.
   const activeVisitor =
-    chatVisitor ?? (agent ? readTestVisitor(agent.id) : null);
+    dock?.testVisitor ?? (agent ? readTestVisitor(agent.id) : null);
   const pickTestChat = (v: string) => {
-    setChatVisitor(v);
-    if (agent) storeTestVisitor(agent.id, v);
+    dock?.setTestVisitor(v);
     setChatActive(true);
     setCfgDrifted(false);
   };
   const newChat = () => {
-    const v = freshTestVisitor();
-    setChatVisitor(v);
-    if (agent) storeTestVisitor(agent.id, v);
+    dock?.setTestVisitor(freshTestVisitor());
     setChatActive(false);
     setCfgDrifted(false);
   };
@@ -736,6 +732,58 @@ export default function AgentBuilder() {
     setSeed({ text: prompt, nonce: Date.now(), target: 'dock' });
     setDockOpen(true);
   };
+  // The shared test chat is Layout's mounted instance — this page hands it
+  // the builder's wiring. Handlers go through a ref rewritten every render
+  // so the closures (scenarios, markTest, correctTarget…) never go stale;
+  // render-affecting values go through setTestWiring.
+  const testHandlers = useRef<TestHandlers>({});
+  testHandlers.current = {
+    verdictFor,
+    onCorrect: (ctx) => {
+      // One correction path: correcting a reply to a scenario prompt opens
+      // the same diagnose-first card the row's Needs work button does —
+      // not the weaker generic card.
+      const s = ctx.customerText
+        ? scenarios.find(
+            (x) =>
+              scenarioPrompt(x).trim().toLowerCase() ===
+              ctx.customerText!.trim().toLowerCase(),
+          )
+        : undefined;
+      setCorrectTarget({ ...ctx, scenarioId: s?.id });
+    },
+    onSaveTest: (ctx) => {
+      // A reply to a checklist prompt IS that scenario — saving it again
+      // would duplicate the row.
+      if (
+        ctx.customerText &&
+        scenarios.some(
+          (s) =>
+            scenarioPrompt(s).trim().toLowerCase() ===
+            ctx.customerText!.trim().toLowerCase(),
+        )
+      ) {
+        setTestNotice('That prompt is already a scenario');
+        return;
+      }
+      saveTest.mutate(ctx);
+    },
+    onCustomerMessage: (t) => {
+      setChatActive(true);
+      if (CONFIG_HINT_RE.test(t)) setCopilotHint(t);
+    },
+  };
+  useEffect(() => {
+    if (!dock || !dockAvailableForReg) return;
+    dock.setTestWiring({
+      channelId: testChannel.data?.channel_id,
+      focusSignal: chatFocus,
+      seed: seed?.target === 'dock' ? { text: seed.text, nonce: seed.nonce } : null,
+      handlers: testHandlers,
+    });
+    return () => dock.setTestWiring(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dock, dockAvailableForReg, testChannel.data?.channel_id, chatFocus, seed]);
   // A fix save flips the scenario to fixed_recheck (the card PATCHes it)
   // and re-runs it here — fresh conversation, verdict still human. Other
   // scenarios go stale automatically: the config version moved under them.
@@ -2334,53 +2382,9 @@ export default function AgentBuilder() {
                 {(testChannel.error as Error).message}
               </div>
             )}
-            {testChannel.data && (
-              <AskJanis
-                key={activeVisitor ?? 'base'}
-                visitorOverride={activeVisitor ?? undefined}
-                channelId={testChannel.data.channel_id}
-                asCustomer
-                hideHeader
-                placeholder="You're chatting as a customer…"
-                focusSignal={chatFocus}
-                onCustomerMessage={(t) => {
-                  setChatActive(true);
-                  if (CONFIG_HINT_RE.test(t)) setCopilotHint(t);
-                }}
-                onCorrect={(ctx) => {
-                  // One correction path: correcting a reply to a scenario
-                  // prompt opens the same diagnose-first card the row's
-                  // Needs work button does — not the weaker generic card.
-                  const s = ctx.customerText
-                    ? scenarios.find(
-                        (x) =>
-                          scenarioPrompt(x).trim().toLowerCase() ===
-                          ctx.customerText!.trim().toLowerCase(),
-                      )
-                    : undefined;
-                  setCorrectTarget({ ...ctx, scenarioId: s?.id });
-                }}
-                verdictFor={verdictFor}
-                onSaveTest={(ctx) => {
-                  // A reply to a checklist prompt IS that scenario —
-                  // saving it again would duplicate the row.
-                  if (
-                    ctx.customerText &&
-                    scenarios.some(
-                      (s) =>
-                        scenarioPrompt(s).trim().toLowerCase() ===
-                        ctx.customerText!.trim().toLowerCase(),
-                    )
-                  ) {
-                    setTestNotice('That prompt is already a scenario');
-                    return;
-                  }
-                  saveTest.mutate(ctx);
-                }}
-                seedMessage={seed?.target === 'dock' ? seed.text : undefined}
-                seedNonce={seed?.nonce}
-              />
-            )}
+            {/* The chat itself is Layout's one mounted AskJanis — this page
+                only supplies the header chrome above it and the wiring
+                registered in testHandlers, so navigation never remounts. */}
           </>,
           dock.testSlot,
         )}
