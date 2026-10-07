@@ -596,8 +596,10 @@ button, input, select, textarea { font: inherit; }
 }
 .scenario-judge .scenario-section-label { color: var(--danger); }
 /* Mechanical clamp — max-height + overflow, reliable everywhere
-   (-webkit-line-clamp doesn't bite consistently inside modals). */
-.scenario-reply-clamp { max-height: 2.8em; overflow: hidden; }
+   (-webkit-line-clamp doesn't bite consistently inside modals). 2lh is
+   exactly two rendered lines at whatever line-height applies; the em
+   value is the fallback, tuned to never peek into line three. */
+.scenario-reply-clamp { max-height: 2.6em; max-height: 2lh; overflow: hidden; }
 .scenario-badge {
   font-size: 11px; padding: 1px 8px; border-radius: 999px;
   color: var(--muted); border: 1px solid var(--border); white-space: nowrap;
@@ -618,19 +620,7 @@ button, input, select, textarea { font: inherit; }
   border-color: var(--accent);
   border-style: dashed;
 }
-/* The run's reply quoted on the row — each scenario runs in its own test
-   conversation, so this is where results are reviewed, not the panel. */
-.scenario-reply {
-  margin-top: 6px; font-size: 12px; color: var(--muted);
-  border-left: 2px solid var(--border); padding-left: 8px;
-  white-space: pre-wrap;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.scenario-reply-label {
-  display: block; font-size: 10px; font-weight: 700;
-  letter-spacing: .06em; text-transform: uppercase; margin-bottom: 1px;
-}
+/* (reply rendering lives in ReplyBlock — .scenario-reply-clamp above) */
 /* Diagnose flow — "What went wrong?" cause picker inside Correct this. */
 .cause-picker { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
 .cause-row {
