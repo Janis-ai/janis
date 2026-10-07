@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Play, RotateCcw, ThumbsDown, ThumbsUp, Trash2, Wrench } from 'lucide-react';
+import { MessageSquare, Play, RotateCcw, ThumbsDown, ThumbsUp, Trash2, Wrench } from 'lucide-react';
 
 /** One scenario, one card — shared by the builder's Try-it checklist and
  *  the deployed agent's regression suite. Same data (agent_tests), same
@@ -100,6 +100,7 @@ export function ScenarioRow({
   expectationSaving,
   verdict,
   onFix,
+  onTryInChat,
 }: {
   test: ScenarioTest;
   running: boolean;
@@ -117,6 +118,9 @@ export function ScenarioRow({
   verdict?: { pending: boolean; onPass: () => void; onFail: () => void };
   /** Diagnose path — Fix it opens the same card on both surfaces. */
   onFix?: (reply: string, prompt: string) => void;
+  /** Sends the prompt into the real test chat — builder-only bridge from
+   *  the checklist to a live visitor conversation. */
+  onTryInChat?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [expText, setExpText] = useState('');
@@ -389,6 +393,16 @@ export function ScenarioRow({
               {running ? 'Running…' : run || hr ? 'Run again' : 'Run'}
             </span>
           </button>
+          {onTryInChat && (
+            <button
+              className="btn sm"
+              title="Try in chat — send this prompt as a real test message"
+              onClick={onTryInChat}
+            >
+              <MessageSquare size={12} />{' '}
+              <span className="scenario-btn-text">Try in chat</span>
+            </button>
+          )}
           {onFix && fixReply && (status === 'failed' || status === 'needs work') && (
             <button
               className="btn primary sm"

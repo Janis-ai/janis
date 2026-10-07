@@ -686,29 +686,6 @@ button, input, select, textarea { font: inherit; }
 .builder-path:hover { border-color: var(--accent); }
 
 .ask-attach { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }
-/* Try-asking chips — draft-generated questions that seed the test chat */
-.try-chips { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px; align-items: center; padding: 8px 12px 0; }
-.try-chip {
-  display: inline-flex; align-items: flex-start; gap: 4px;
-  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
-  border-radius: 12px; padding: 4px 10px; font-size: 12px; cursor: pointer;
-  max-width: 240px; text-align: left; line-height: 1.3;
-}
-/* Two lines instead of an ellipsis — a truncated prompt can't be judged
-   or re-run with confidence. */
-.try-chip-text {
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.try-chip-mark { flex-shrink: 0; }
-.try-chip.pass { border-color: var(--accent); }
-.try-chip.pass .try-chip-mark { color: var(--accent); }
-.try-chip.fail { border-color: #c0392b; }
-.try-chip.fail .try-chip-mark { color: #c0392b; }
-.try-chip.stale { border-style: dashed; }
-.try-chip.fixed { border-color: var(--accent); border-style: dashed; }
-.try-chip.fixed .try-chip-mark { color: var(--accent); }
-.try-chip:hover { border-color: var(--accent); }
 .ask-chip {
   display: inline-flex; align-items: center; gap: 4px;
   background: var(--panel-2); border: 1px solid var(--border);

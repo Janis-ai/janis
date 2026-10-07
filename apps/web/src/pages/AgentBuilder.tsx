@@ -715,73 +715,12 @@ export default function AgentBuilder() {
       },
     };
   };
-  const tryChips = (target: 'try' | 'dock') => {
-    // Safety first — CAT_ORDER puts it ahead, so an elevated-risk agent's
-    // hard cases never fall off the visible slice.
-    const list = [...scenarios.filter((s) => scenarioPrompt(s))]
-      .sort((a, b) => CAT_ORDER.indexOf(a.category ?? 'general') - CAT_ORDER.indexOf(b.category ?? 'general'))
-      .slice(0, 6);
-    return (list.length > 0 || (builder?.suggested_questions?.length ?? 0) > 0) && (
-      <div className="try-chips">
-        <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>
-          Try asking:
-        </span>
-        {list.length
-          ? list.map((s) => {
-              // Scenario chips run through the runner — the reply pairs,
-              // the run is recorded, and the verdict shows on the chip.
-              const state = s.stale
-                ? 'stale'
-                : s.human_result === 'pass'
-                  ? 'pass'
-                  : s.human_result === 'fail'
-                    ? 'fail'
-                    : s.human_result === 'fixed_recheck'
-                      ? 'fixed'
-                      : '';
-              const mark = s.stale
-                ? '◷'
-                : s.human_result === 'pass'
-                  ? '✓'
-                  : s.human_result === 'fail'
-                    ? '⚑'
-                    : s.human_result === 'fixed_recheck'
-                      ? '↺'
-                      : null;
-              return (
-                <button
-                  key={s.id}
-                  className={`try-chip${state ? ` ${state}` : ''}`}
-                  title={`${scenarioPrompt(s)}${
-                    s.stale
-                      ? ' — verdict stale, re-run'
-                      : s.human_result === 'pass'
-                        ? ' — looks right'
-                        : s.human_result === 'fail'
-                          ? ' — needs work'
-                          : s.human_result === 'fixed_recheck'
-                            ? ' — fix applied, re-running'
-                            : ''
-                  }`}
-                  onClick={() => runScenario(s)}
-                >
-                  {mark && <span className="try-chip-mark">{mark}</span>}
-                  <span className="try-chip-text">{scenarioPrompt(s)}</span>
-                </button>
-              );
-            })
-          : (builder?.suggested_questions ?? []).map((q) => (
-              <button
-                key={q}
-                className="try-chip"
-                title={q}
-                onClick={() => setSeed({ text: q, nonce: Date.now(), target })}
-              >
-                <span className="try-chip-text">{q}</span>
-              </button>
-            ))}
-      </div>
-    );
+  // A scenario's "Try in chat" — seeds the prompt into the real test
+  // conversation (same mechanism the ?rail=test deeplinks use) so the
+  // owner can probe it as a live visitor, not replay it headlessly.
+  const tryInChat = (prompt: string) => {
+    setSeed({ text: prompt, nonce: Date.now(), target: 'dock' });
+    setDockOpen(true);
   };
   // A fix save flips the scenario to fixed_recheck (the card PATCHes it)
   // and re-runs it here — fresh conversation, verdict still human. Other
@@ -2087,6 +2026,7 @@ export default function AgentBuilder() {
                                 });
                               },
                             }}
+                            onTryInChat={() => tryInChat(prompt)}
                             onFix={(r, p) =>
                               setCorrectTarget({
                                 agentText: r,
@@ -2349,7 +2289,6 @@ export default function AgentBuilder() {
                 </button>
               </div>
             )}
-            {tryChips('dock')}
             {testChannel.isPending && (
               <div className="muted" style={{ padding: 14 }}>Opening test channel…</div>
             )}
