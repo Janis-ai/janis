@@ -559,8 +559,16 @@ button, input, select, textarea { font: inherit; }
 @container (max-width: 240px) {
   .verdict-btns .verdict-btn-text { display: none; }
 }
-.verdict-on { border-color: var(--accent); color: var(--accent); }
-.verdict-fail.verdict-on { border-color: #c0392b; color: #c0392b; }
+/* Selected verdict = the status color it records: approved is accent-green,
+   rejected is danger-red — the same tokens the scenario badges use. */
+.verdict-on {
+  border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.verdict-fail.verdict-on {
+  border-color: var(--danger); color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
 /* Try-it scenario checklist — the step page is the runner's list; the
    docked panel is the chat. */
 .scenario-cat {
