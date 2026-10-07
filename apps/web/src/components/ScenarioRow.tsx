@@ -107,7 +107,7 @@ export function ScenarioRow({
   onRun: () => void;
   onDelete?: () => void;
   /** A reply produced this session that isn't persisted in last_run yet —
-   *  labeled "Janis answered" so it reads as fresh, not recorded. */
+   *  labeled "just now" so it reads as fresh, not recorded. */
   replyOverride?: string | null;
   /** Saves the expectation AND re-judges the stored reply against it —
    *  no new run, so no new random reply sneaks in to move the verdict. */
@@ -130,9 +130,9 @@ export function ScenarioRow({
   const prompt = scenarioPrompt(test);
   const reply = replyOverride ?? run?.reply ?? null;
   const replyLabel = replyOverride
-    ? 'Janis answered'
+    ? 'just now'
     : run?.reply
-      ? 'Last replay'
+      ? 'last replay'
       : null;
   // Fix it only diagnoses — any known reply (this run, the last replay,
   // the original transcript) works, so the button survives a reload.
