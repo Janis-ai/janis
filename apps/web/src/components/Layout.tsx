@@ -1394,6 +1394,10 @@ export default function Layout() {
                           currentVisitor={testVisitor ?? undefined}
                           onPick={(v) => {
                             setChatVisitor(v);
+                            // A pending "Try in chat" seed belongs to the
+                            // thread it was fired into — don't let the
+                            // remount re-send it here.
+                            setFallbackSeed(null);
                             testWiring?.handlers.current.onVisitorChange?.(v, false);
                           }}
                         />
@@ -1403,6 +1407,7 @@ export default function Layout() {
                           onClick={() => {
                             const v = freshTestVisitor();
                             setChatVisitor(v);
+                            setFallbackSeed(null);
                             testWiring?.handlers.current.onVisitorChange?.(v, true);
                           }}
                         >
@@ -1432,10 +1437,11 @@ export default function Layout() {
                         }
                         focusSignal={testWiring?.focusSignal}
                         onCustomerMessage={testWiring?.handlers.current.onCustomerMessage}
-                        verdictFor={(cust, reply) =>
+                        verdictFor={(cust, reply, turns) =>
                           (testWiring?.handlers.current.verdictFor ?? fallbackVerdictFor)(
                             cust,
                             reply,
+                            turns,
                           )
                         }
                         onCorrect={(ctx) =>

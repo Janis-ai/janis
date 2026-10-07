@@ -769,10 +769,14 @@ export default function AgentBuilder() {
       if (CONFIG_HINT_RE.test(t)) setCopilotHint(t);
     },
     // Header history/new-chat switched threads — reset the drift tracking
-    // the way the old pickTestChat/newChat did.
+    // the way the old pickTestChat/newChat did. The seed clears too: a
+    // "Try in chat" prompt belongs to the thread it was fired into —
+    // keeping it would re-send the last scenario into the new chat on
+    // remount (the in-chat nonce guard resets with the instance).
     onVisitorChange: (_v, fresh) => {
       setChatActive(!fresh);
       setCfgDrifted(false);
+      setSeed(null);
     },
   };
   const setTestWiring = dock?.setTestWiring;
