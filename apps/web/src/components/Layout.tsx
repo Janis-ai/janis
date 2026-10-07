@@ -1356,12 +1356,6 @@ export default function Layout() {
                         }}
                       >
                         <span
-                          className="badge"
-                          title="Private channel, same pipeline as production"
-                        >
-                          TEST
-                        </span>
-                        <span
                           className="muted grow"
                           style={{
                             fontSize: 11,
