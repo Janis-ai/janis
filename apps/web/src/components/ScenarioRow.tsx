@@ -106,16 +106,18 @@ export function ScenarioRow({
           <div style={{ marginTop: 6 }}>
             {/* 'expects:' keeps its seat while the text edits — the row's
                 shape doesn't change under you. */}
-            <div className="muted" style={{ fontSize: 12, marginBottom: 2 }}>
-              expects:
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <span className="muted" style={{ fontSize: 12, paddingTop: 7 }}>
+                expects:
+              </span>
+              <textarea
+                rows={2}
+                autoFocus
+                style={{ flex: 1, fontSize: 12 }}
+                value={expText}
+                onChange={(e) => setExpText(e.target.value)}
+              />
             </div>
-            <textarea
-              rows={2}
-              autoFocus
-              style={{ width: '100%', fontSize: 12 }}
-              value={expText}
-              onChange={(e) => setExpText(e.target.value)}
-            />
             <div className="row" style={{ marginTop: 4 }}>
               <button
                 className="btn primary sm"
