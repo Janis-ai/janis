@@ -623,73 +623,45 @@ export default function AgentBuilder() {
   // Sequential runner — one prompt in flight at a time so replies pair
   // unambiguously. A multi-bubble answer attaches to the running scenario;
   // the queue advances on a short delay after the first reply lands.
-  const runTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const advanceRun = (queue = runQueueRef.current) => {
     const id = queue.shift();
     const s = id ? scenarios.find((x) => x.id === id) : undefined;
     if (!s) {
       setRunningId(null);
-      if (runTimeoutRef.current) clearTimeout(runTimeoutRef.current);
       return;
     }
     setRunningId(s.id);
-    // Each scenario runs in its OWN test conversation — a fresh cust_
-    // visitor remounts the panel so a prior scenario's context (the
-    // "healed eardrum" leak) can never contaminate the next reply.
-    setChatVisitor(freshVisitor());
-    setSeed({ text: scenarioPrompt(s), nonce: Date.now(), target: 'dock' });
-    // Stall guard — a reply that never comes (agent error, dropped send)
-    // must not wedge the checklist on "Running…" forever.
-    if (runTimeoutRef.current) clearTimeout(runTimeoutRef.current);
-    runTimeoutRef.current = setTimeout(() => {
-      runTimeoutRef.current = null;
-      setTestNotice('No reply — marked unreviewed');
-      advanceRun();
-    }, 90_000);
+    // Server-side replay: the scenario's turns run through the real
+    // pipeline in test mode (gated actions proposed, not executed). No
+    // panel conversation hops per scenario — the reply lands on the row
+    // via last_run and stays there.
+    void api<{ run: { reply: string | null } }>(
+      `/api/agents/${agent?.id}/tests/${s.id}/run`,
+      { method: 'POST', signal: AbortSignal.timeout(120_000) },
+    )
+      .then(({ run }) => {
+        if (run.reply) {
+          replyRef.current.set(s.id, run.reply);
+          bumpReplies((n) => n + 1);
+        }
+        // A fresh run voids the prior verdict — the owner re-judges the
+        // new reply, not the old one.
+        markTest.mutate({ id: s.id, result: 'unreviewed' });
+        void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });
+        advanceRun();
+      })
+      .catch(() => {
+        setTestNotice('Run failed — skipped this scenario');
+        advanceRun();
+      });
   };
   const runScenario = (s: ScenarioRow) => {
     runQueueRef.current = [s.id];
-    setDockOpen(true);
     advanceRun();
   };
   const runAll = () => {
     runQueueRef.current = scenarios.map((s) => s.id);
-    setDockOpen(true);
     advanceRun();
-  };
-  const runAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // A seed that never delivered can't produce a reply — bail the run now
-  // rather than sitting on "Running…" for the 90s stall guard.
-  const onSeedFailed = () => {
-    if (!runningId) return;
-    if (runTimeoutRef.current) {
-      clearTimeout(runTimeoutRef.current);
-      runTimeoutRef.current = null;
-    }
-    if (runAdvanceTimer.current) {
-      clearTimeout(runAdvanceTimer.current);
-      runAdvanceTimer.current = null;
-    }
-    setTestNotice('The seeded message didn’t deliver — skipping this run');
-    advanceRun();
-  };
-  const onAgentReply = (text: string) => {
-    if (!runningId) return;
-    // Reply landed — the stall guard's job is done for this scenario.
-    if (runTimeoutRef.current) {
-      clearTimeout(runTimeoutRef.current);
-      runTimeoutRef.current = null;
-    }
-    const accumulated =
-      (replyRef.current.get(runningId) ? `${replyRef.current.get(runningId)}\n` : '') + text;
-    replyRef.current.set(runningId, accumulated);
-    bumpReplies((n) => n + 1);
-    markTest.mutate({ id: runningId, result: 'unreviewed', lastReply: accumulated });
-    if (runAdvanceTimer.current) return; // already scheduled — keep gathering
-    runAdvanceTimer.current = setTimeout(() => {
-      runAdvanceTimer.current = null;
-      advanceRun();
-    }, 1500);
   };
   // "Running: safety #2" — category + its ordinal within the group.
   const runningLabel = (() => {
@@ -2055,10 +2027,13 @@ export default function AgentBuilder() {
                       .filter((s) => s.category === cat)
                       .map((s) => {
                         const prompt = scenarioPrompt(s);
-                        // Verdicts judge THIS panel run's reply only — a
-                        // recorded replay/original would mark a pass/fail
-                        // against a response nobody just saw.
+                        // Verdicts judge a reply the run produced — this
+                        // session's live reply or the recorded replay.
+                        // original_reply is the transcript the scenario was
+                        // saved FROM, not a run — judging it would verdict
+                        // history, not the agent's current behavior.
                         const reply = replyRef.current.get(s.id);
+                        const verdictReply = reply ?? s.last_run?.reply ?? null;
                         // Fix it only diagnoses — any known reply (this run,
                         // the last replay, the original transcript) works,
                         // so the button survives a reload.
@@ -2128,7 +2103,7 @@ export default function AgentBuilder() {
                                 <span className="scenario-badge">unreviewed</span>
                               )}
                             </div>
-                            {reply && s.human_result === 'unreviewed' && (
+                            {verdictReply && s.human_result === 'unreviewed' && (
                               <div className="row" style={{ gap: 6 }}>
                                 {/* Equal weight — a filled Looks right
                                     nudges rubber-stamping; the verdict is
@@ -2149,7 +2124,7 @@ export default function AgentBuilder() {
                                     markTest.mutate({ id: s.id, result: 'fail' });
                                     setDockOpen(true);
                                     setCorrectTarget({
-                                      agentText: reply,
+                                      agentText: verdictReply,
                                       customerText: prompt,
                                       scenarioId: s.id,
                                     });
@@ -2465,8 +2440,6 @@ export default function AgentBuilder() {
                 onCorrect={(ctx) => {
                   setCorrectTarget(ctx);
                 }}
-                onAgentReply={onAgentReply}
-                onSendFailed={onSeedFailed}
                 verdictFor={verdictFor}
                 onSaveTest={(ctx) => {
                   // A reply to a checklist prompt IS that scenario —
