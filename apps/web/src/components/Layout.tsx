@@ -18,7 +18,7 @@ import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
   Columns2, Compass, CreditCard, FlaskConical, Gauge, Inbox, Maximize2, Megaphone,
-  Minimize2, PenLine, Rocket, Settings, Sparkles, Users, Wrench, X,
+  Minimize2, PenLine, Rocket, Settings, Sparkles, Users, Wrench, X, Zap,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
 import { CommandPalette } from './CommandPalette';
@@ -86,7 +86,7 @@ function buildNav(agent: Agent, agentId: string, live: boolean) {
     { key: 'create', label: 'Create', to: `/agents/new/${agentId}?step=create`, Icon: PenLine },
     { key: 'teach', label: 'Teach it', to: `/agents/new/${agentId}?step=teach`, Icon: BookOpen },
     { key: 'guide', label: 'Guide it', to: `/agents/new/${agentId}?step=guide`, Icon: Compass },
-    { key: 'abilities', label: 'Abilities', to: `/agents/new/${agentId}?step=abilities`, Icon: Wrench },
+    { key: 'abilities', label: 'Abilities', to: `/agents/new/${agentId}?step=abilities`, Icon: Zap },
     { key: 'try', label: 'Try it', to: `/agents/new/${agentId}?step=try`, Icon: FlaskConical },
     { key: 'deploy', label: 'Deploy', to: `/agents/new/${agentId}?step=deploy`, Icon: Rocket },
   ];
