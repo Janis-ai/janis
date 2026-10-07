@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MoreHorizontal, Trash2 } from 'lucide-react';
 
@@ -50,6 +50,45 @@ const CAUSE_HINT: Record<string, string> = {
   expectation: 'Janis suggests editing the expectation',
 };
 
+/** A reply clamped to two lines; the "show full reply" toggle only
+ *  renders when the text actually overflows the clamp — measured on the
+ *  element, not guessed from length. */
+function ReplyBlock({ label, text }: { label: string; text: string }) {
+  const el = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const node = el.current;
+    if (!node) return;
+    const check = () => setOverflows(node.scrollHeight > node.clientHeight + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [text]);
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="scenario-section-label">{label}</div>
+      <div
+        ref={el}
+        className={expanded ? '' : 'scenario-reply-clamp'}
+        style={{ fontSize: 13, marginTop: 2, whiteSpace: 'pre-wrap' }}
+      >
+        {text}
+      </div>
+      {(overflows || expanded) && (
+        <button
+          className="inspector-toggle"
+          style={{ marginTop: 4 }}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? '▾ show less' : '▸ show full reply'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function ScenarioRow({
   test,
   running,
@@ -80,7 +119,6 @@ export function ScenarioRow({
   /** Diagnose path — Fix it opens the same card on both surfaces. */
   onFix?: (reply: string, prompt: string) => void;
 }) {
-  const [replyOpen, setReplyOpen] = useState(false); // full reply
   const [editing, setEditing] = useState(false);
   const [expText, setExpText] = useState('');
   const [menu, setMenu] = useState(false);
@@ -272,49 +310,20 @@ export function ScenarioRow({
         </div>
       )}
 
-      {/* What the agent said — clamped, expandable. */}
+      {/* What the agent said — clamped, expandable only when it overflows. */}
       {reply && !editing && (
-        <div style={{ marginTop: 8 }}>
-          <div className="scenario-section-label">
-            Agent replied{replyLabel ? ` — ${replyLabel.toLowerCase()}` : ''}
-          </div>
-          <div
-            className={replyOpen ? '' : 'scenario-reply-clamp'}
-            style={{ fontSize: 13, marginTop: 2, whiteSpace: 'pre-wrap' }}
-            title={reply}
-          >
-            {reply}
-          </div>
-          <button
-            className="inspector-toggle"
-            style={{ marginTop: 4 }}
-            onClick={() => setReplyOpen(!replyOpen)}
-          >
-            {replyOpen ? '▾ show less' : '▸ show full reply'}
-          </button>
-        </div>
+        <ReplyBlock
+          label={`Agent replied${replyLabel ? ` — ${replyLabel.toLowerCase()}` : ''}`}
+          text={reply}
+        />
       )}
       {/* No fresh reply but an original transcript exists — show it under
           its own label so it never reads as a run result. */}
       {!reply && test.original_reply && !editing && (
-        <div style={{ marginTop: 8 }}>
-          <div className="scenario-section-label">
-            Original reply — what the agent did then
-          </div>
-          <div
-            className={replyOpen ? '' : 'scenario-reply-clamp'}
-            style={{ fontSize: 13, marginTop: 2, whiteSpace: 'pre-wrap' }}
-          >
-            {test.original_reply}
-          </div>
-          <button
-            className="inspector-toggle"
-            style={{ marginTop: 4 }}
-            onClick={() => setReplyOpen(!replyOpen)}
-          >
-            {replyOpen ? '▾ show less' : '▸ show full reply'}
-          </button>
-        </div>
+        <ReplyBlock
+          label="Original reply — what the agent did then"
+          text={test.original_reply}
+        />
       )}
 
       {test.category === 'actions' && !editing && (
