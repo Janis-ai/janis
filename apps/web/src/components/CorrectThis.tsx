@@ -177,9 +177,13 @@ export function CorrectThisCard({
             : p.cause,
       );
       setInstrEdit(p.instruction ?? '');
-      // Knowledge fix — Janis's drafted shape when she has one, else the
-      // correction itself (it's already fact-shaped: they wrote it).
-      setNoteEdit(p.knowledge_shape ?? correction.trim());
+      // Knowledge fix — Janis's drafted shape when she has one; else the
+      // correction itself, but only when she read it AS a fact. A
+      // behavior-shaped correction ("be happy") doesn't belong in the
+      // note box — leave the placeholder to teach the right shape.
+      setNoteEdit(
+        p.knowledge_shape ?? (p.cause === 'knowledge' ? correction.trim() : ''),
+      );
     },
     onError: (e) => setError(e.message),
   });
@@ -591,12 +595,7 @@ export function CorrectThisCard({
                 —{' '}
                 <button
                   className="link small"
-                  onClick={() => {
-                    setCause('knowledge');
-                    // Owner overrode Janis's read — their correction is
-                    // still the fact; carry it into the note field.
-                    if (!noteEdit.trim()) setNoteEdit(correction.trim());
-                  }}
+                  onClick={() => setCause('knowledge')}
                 >
                   enter a fact instead
                 </button>
@@ -656,12 +655,9 @@ export function CorrectThisCard({
                 </button>
                 <button
                   className="btn sm primary"
-                  disabled={
-                    !(noteEdit.trim() || correction.trim()) || saveCorrection.isPending
-                  }
-                  onClick={() =>
-                    saveCorrection.mutate(noteEdit.trim() || correction.trim())
-                  }
+                  disabled={!noteEdit.trim() || saveCorrection.isPending}
+                  title="Saves this text as a knowledge note"
+                  onClick={() => saveCorrection.mutate(noteEdit.trim())}
                 >
                   {saveCorrection.isPending ? 'Saving…' : 'Add to notes'}
                 </button>
