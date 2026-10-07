@@ -22,7 +22,8 @@ import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
   Columns2, Compass, CreditCard, FlaskConical, Gauge, Inbox, Maximize2, Megaphone,
-  Minimize2, PenLine, Rocket, Settings, Sparkles, Users, Wrench, X, Zap,
+  MessageSquarePlus, Minimize2, PenLine, Rocket, Settings, Sparkles, Users, Wrench,
+  X, Zap,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
 import { CommandPalette } from './CommandPalette';
@@ -1308,6 +1309,10 @@ export default function Layout() {
                                 if (fallbackAgentId) storeTestVisitor(fallbackAgentId, v);
                               }}
                             >
+                              <MessageSquarePlus
+                                size={11}
+                                style={{ verticalAlign: -1, marginRight: 3 }}
+                              />
                               New chat
                             </button>
                           </div>

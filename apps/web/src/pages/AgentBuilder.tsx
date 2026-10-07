@@ -2292,6 +2292,10 @@ export default function AgentBuilder() {
                 title="Start a fresh test conversation — earlier chats stay in the inbox"
                 onClick={newChat}
               >
+                <MessageSquarePlus
+                  size={11}
+                  style={{ verticalAlign: -1, marginRight: 3 }}
+                />
                 New chat
               </button>
             </div>
