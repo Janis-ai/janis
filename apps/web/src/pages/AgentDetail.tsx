@@ -22,6 +22,8 @@ import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { SavedWidgets } from '../components/WidgetComposer';
 import { janisBrain } from '../lib/agentContext';
 import { railBus } from '../lib/railBus';
+import { CorrectThisCard } from '../components/CorrectThis';
+import { ScenarioRow } from '../components/ScenarioRow';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
 import { Pencil, Trash2, Upload, X } from 'lucide-react';
@@ -3183,6 +3185,7 @@ interface EvalBatch {
 
 function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; isAdmin: boolean }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [batch, setBatch] = useState<{
     batchId: string;
     total: number;
@@ -3239,7 +3242,11 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       }>(`/api/agents/${agentId}/eval-suggestions`),
   });
   const [running, setRunning] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [correctTarget, setCorrectTarget] = useState<{
+    agentText: string;
+    customerText?: string;
+    scenarioId?: string;
+  } | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newMsg, setNewMsg] = useState('');
@@ -3337,18 +3344,13 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     onSuccess: invalidate,
     onError: (e) => setErr(e.message),
   });
-  // Edit state for the inline expectation textarea on each test card.
-  const [editExp, setEditExp] = useState<{ id: string; text: string } | null>(null);
   const saveExp = useMutation({
     mutationFn: (b: { id: string; text: string }) =>
       api(`/api/agents/${agentId}/tests/${b.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ expectation: b.text }),
       }),
-    onSuccess: () => {
-      setEditExp(null);
-      invalidate();
-    },
+    onSuccess: invalidate,
     onError: (e) => setErr(e.message),
   });
   const create = useMutation({
@@ -3777,225 +3779,27 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       )}
 
       {(() => {
-        const renderTest = (t: AgentTest) => {
-          const run = t.last_run;
-          const open = expanded === t.id;
-          return (
-          <div key={t.id} className="card" style={{ background: 'var(--panel-2)', padding: 12 }}>
-            <div className="row">
-              <button
-                className="btn sm"
-                disabled={running !== null || batch !== null}
-                onClick={() => { setRunning(t.id); runOne.mutate(t.id); }}
-              >
-                {running === t.id ? 'Running…' : '▶ Run'}
-              </button>
-              <span className="grow" style={{ fontWeight: 600 }}>{t.name}</span>
-              {run && (
-                <span
-                  className={`badge ${run.passed === true ? 'active' : run.passed === false ? 'warn' : ''}`}
-                  title={run.reason}
-                >
-                  {run.passed === true ? '✓ pass' : run.passed === false ? '✗ fail' : 'ran'}
-                </span>
-              )}
-              {isAdmin && (
-                <button
-                  className="btn sm"
-                  title="Delete test"
-                  aria-label="Delete test"
-                  onClick={() => del.mutate(t.id)}
-                >
-                  <Trash2 size={13} />
-                </button>
-              )}
-            </div>
-            {(() => {
-              const lastCustomer = [...t.turns].reverse().find((x) => x.role === 'customer');
-              return lastCustomer ? (
-                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                  responds to: "{lastCustomer.text.length > 90 ? `${lastCustomer.text.slice(0, 90)}…` : lastCustomer.text}"
-                </div>
-              ) : null;
-            })()}
-            {editExp?.id === t.id ? (
-              <div style={{ marginTop: 6 }}>
-                <textarea
-                  rows={2}
-                  autoFocus
-                  style={{ width: '100%', fontSize: 12 }}
-                  value={editExp.text}
-                  onChange={(e) => setEditExp({ id: t.id, text: e.target.value })}
-                />
-                <div className="row" style={{ marginTop: 4 }}>
-                  <button
-                    className="btn primary sm"
-                    disabled={saveExp.isPending}
-                    onClick={() => saveExp.mutate({ id: t.id, text: editExp.text.trim() })}
-                  >
-                    {saveExp.isPending ? 'Saving…' : 'Save expectation'}
-                  </button>
-                  <button className="btn sm" onClick={() => setEditExp(null)}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                {t.expectation ? (
-                  <>
-                    expects: {t.expectation}
-                    {t.expectation_draft && (
-                      <span className="badge warn" style={{ marginLeft: 6 }} title="Written by AI at save time — review it">
-                        AI draft
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  "no expectation — runs aren't judged"
-                )}
-                {isAdmin && (
-                  <button
-                    className="btn ghost sm"
-                    style={{ marginLeft: 8 }}
-                    onClick={() => setEditExp({ id: t.id, text: t.expectation })}
-                  >
-                    {t.expectation ? 'edit' : 'add one'}
-                  </button>
-                )}
-              </div>
-            )}
-            {run && (
-              <div style={{ fontSize: 12, marginTop: 6 }}>
-                {run.reason && <div className="muted">{run.reason}</div>}
-                {(run.reply || (run.tools?.length ?? 0) > 0) && (
-                  <>
-                    <button
-                      className="inspector-toggle"
-                      style={{ marginTop: 4 }}
-                      onClick={() => setExpanded(open ? null : t.id)}
-                    >
-                      {open ? '▾ hide replay' : '▸ show replay'}
-                    </button>
-                    {open && (
-                      <div className="inspector-panel" style={{ maxWidth: '100%', marginTop: 6 }}>
-                        {/* The replay answers the last customer turn — show the
-                            transcript tail so the reply has visible context. */}
-                        {(() => {
-                          const shown = t.turns.slice(-4);
-                          const omitted = t.turns.length - shown.length;
-                          return (
-                            <>
-                              {omitted > 0 && (
-                                <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
-                                  …{omitted} earlier turn{omitted === 1 ? '' : 's'} in the replayed transcript
-                                </div>
-                              )}
-                              {shown.map((turn, i) => {
-                                const trigger = i === shown.length - 1 && turn.role === 'customer';
-                                const linked = turn.mid && t.source_conversation_id;
-                                return (
-                                  <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 3, fontSize: 12 }}>
-                                    <span
-                                      className="mono muted"
-                                      style={{ minWidth: 58, flexShrink: 0, fontSize: 11 }}
-                                    >
-                                      {turn.role}
-                                    </span>
-                                    {linked ? (
-                                      <Link
-                                        to={`/conversations/${t.source_conversation_id}?msg=${turn.mid}`}
-                                        className={trigger ? '' : 'muted'}
-                                        style={{
-                                          ...(trigger ? { fontWeight: 600 } : {}),
-                                          textDecoration: 'underline',
-                                          textDecorationStyle: 'dotted',
-                                          textUnderlineOffset: 3,
-                                          whiteSpace: 'pre-wrap',
-                                        }}
-                                        title="Open this message in the conversation"
-                                      >
-                                        {turn.text}
-                                      </Link>
-                                    ) : (
-                                      <span
-                                        className={trigger ? '' : 'muted'}
-                                        style={{ whiteSpace: 'pre-wrap', ...(trigger ? { fontWeight: 600 } : {}) }}
-                                      >
-                                        {turn.text}
-                                      </span>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                              {t.original_reply && (
-                                <>
-                                  <div
-                                    className="muted"
-                                    style={{ fontSize: 11, margin: '6px 0 3px' }}
-                                  >
-                                    ↳ original reply — what the agent actually did then:
-                                  </div>
-                                  <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>
-                                    {t.original_reply}
-                                  </div>
-                                </>
-                              )}
-                              <div
-                                className="muted"
-                                style={{ fontSize: 11, margin: '6px 0 3px' }}
-                              >
-                                ↳ replayed now — current setup (never sent, tools stubbed):
-                              </div>
-                              {run.reply ? (
-                                <div style={{ whiteSpace: 'pre-wrap' }}>{run.reply}</div>
-                              ) : (
-                                <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>
-                                  (no text reply — the replay ended on tool calls, above)
-                                </div>
-                              )}
-                            </>
-                          );
-                        })()}
-                        {run.control && (
-                          <div className="muted" style={{ marginTop: 6 }}>
-                            ended with [{run.control === 'handoff' ? 'HANDOFF' : run.control === 'offer' ? 'OFFER_HUMAN' : 'CANCEL_HANDOFF'}]
-                          </div>
-                        )}
-                        {run.tools?.length ? (
-                          <div className="muted" style={{ marginTop: 6 }}>
-                            tools: {run.tools.map((x) => `${x.name} (${x.outcome})`).join(', ')}
-                          </div>
-                        ) : null}
-                        {run.model && (
-                          <div className="muted" style={{ marginTop: 6 }}>model: {run.model}</div>
-                        )}
-                        {run.context && (
-                          <div className="muted" style={{ marginTop: 6 }}>
-                            grounded on: {run.context.prompt} prompt
-                            {run.context.knowledge.length > 0 &&
-                              ` · ${run.context.knowledge.length} knowledge snippet${run.context.knowledge.length === 1 ? '' : 's'}`}
-                            {run.context.kb.length > 0 && ` · ${run.context.kb.join(', ')}`}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-            {t.source_conversation_id && (
-              <div style={{ marginTop: 6 }}>
-                <Link
-                  to={`/conversations/${t.source_conversation_id}${t.source_message_id ? `?msg=${t.source_message_id}` : ''}`}
-                  className="muted"
-                  style={{ fontSize: 12 }}
-                >
-                  view source conversation →
-                </Link>
-              </div>
-            )}
-          </div>
-          );
-        };
+        const renderTest = (t: AgentTest) => (
+          <ScenarioRow
+            key={t.id}
+            test={t}
+            running={running === t.id}
+            disabled={running !== null || batch !== null}
+            onRun={() => { setRunning(t.id); runOne.mutate(t.id); }}
+            onDelete={isAdmin ? () => del.mutate(t.id) : undefined}
+            onSaveExpectation={
+              isAdmin ? (text) => saveExp.mutate({ id: t.id, text }) : undefined
+            }
+            expectationSaving={saveExp.isPending}
+            onFix={(reply, prompt) =>
+              setCorrectTarget({
+                agentText: reply,
+                customerText: prompt,
+                scenarioId: t.id,
+              })
+            }
+          />
+        );
         // Tests split from one conversation group under a collapsible card —
         // a rescued transcript can yield a batch that would otherwise flood
         // the list (and can only be deleted one at a time).
@@ -4092,6 +3896,47 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                 </div>
               </details>
             ))}
+          </div>
+        </div>
+      )}
+      {/* A failed regression has the same repair path a Try-it miss does —
+          the diagnose card, as a modal, same component. */}
+      {correctTarget && (
+        <div className="modal-backdrop" onClick={() => setCorrectTarget(null)}>
+          <div
+            className="modal"
+            style={{ width: 560, maxHeight: '78vh', overflowY: 'auto' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <CorrectThisCard
+              agentId={agentId}
+              cfg={(agent.config ?? {}) as AgentConfig}
+              target={{
+                agentText: correctTarget.agentText,
+                customerText: correctTarget.customerText,
+                ...(correctTarget.scenarioId
+                  ? {
+                      scenario: {
+                        id: correctTarget.scenarioId,
+                        expectation:
+                          tests.find((x) => x.id === correctTarget.scenarioId)
+                            ?.expectation ?? '',
+                      },
+                    }
+                  : {}),
+              }}
+              onClose={() => setCorrectTarget(null)}
+              onSaved={() => {
+                invalidate();
+                void qc.invalidateQueries({ queryKey: ['agents'] });
+              }}
+              onFixed={(scenarioId) => {
+                setRunning(scenarioId);
+                runOne.mutate(scenarioId);
+              }}
+              onSendToCopilot={(t) => railBus.copilotDraft(t)}
+              onGoStep={(s) => navigate(`/agents/new/${agentId}?step=${s}`)}
+            />
           </div>
         </div>
       )}

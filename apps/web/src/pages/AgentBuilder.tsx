@@ -13,6 +13,7 @@ import type { Agent, AgentConfig } from '@janis/shared';
 import { ChevronDown } from 'lucide-react';
 import { AskJanis } from '../components/AskJanis';
 import { CorrectThisCard } from '../components/CorrectThis';
+import { ScenarioRow, scenarioPrompt, type ScenarioTest } from '../components/ScenarioRow';
 import { AgentChannels } from '../components/AgentChannels';
 import { SourceList, type KnowledgeBudget } from '../components/SourceList';
 import {
@@ -532,22 +533,7 @@ export default function AgentBuilder() {
   // regression. Try it is the human-judgment layer: Run sends the prompt
   // into the docked panel on the real test pipeline, the reply comes back
   // through onAgentReply, and the operator marks Looks right / Needs work.
-  interface ScenarioRow {
-    id: string;
-    name: string;
-    turns: { role: 'customer' | 'agent'; text: string }[];
-    expectation: string;
-    category: string;
-    source: string;
-    human_result: 'pass' | 'fail' | 'unreviewed' | 'fixed_recheck' | null;
-    fail_cause: 'knowledge' | 'behavior' | 'ability' | 'expectation' | null;
-    human_run_at: string | null;
-    /** Last replay outcome — carries the reply text for rows judged after
-     *  a reload, when the live replyRef map is empty. */
-    last_run?: { reply?: string | null } | null;
-    original_reply?: string | null;
-    stale: boolean;
-  }
+  type ScenarioRow = ScenarioTest;
   const testsQ = useQuery({
     queryKey: ['agent-tests', agent?.id],
     queryFn: () =>
@@ -574,10 +560,6 @@ export default function AgentBuilder() {
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [testsQ.data, builder, agent?.id, hosted]);
-  /** The customer message a scenario replays — last inbound turn for
-   *  multi-turn transcript cases, the single turn for scenarios. */
-  const scenarioPrompt = (s: ScenarioRow) =>
-    [...(s.turns ?? [])].reverse().find((t) => t.role === 'customer')?.text ?? s.name;
   const [runningId, setRunningId] = useState<string | null>(null);
   const runQueueRef = useRef<string[]>([]);
   const replyRef = useRef<Map<string, string>>(new Map());
@@ -636,6 +618,29 @@ export default function AgentBuilder() {
     },
     onSuccess: () => {
       setTestNotice('Added to the scenario list');
+      void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+    },
+    onError: (e) => setTestNotice(e.message),
+  });
+  const delTest = useMutation({
+    mutationFn: (id: string) =>
+      api(`/api/agents/${agent?.id}/tests/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+    },
+    onError: (e) => setTestNotice(e.message),
+  });
+  // Same expectation edit the regression suite's rows get — the bar is
+  // the row's, so the row is where it edits.
+  const saveExp = useMutation({
+    mutationFn: (b: { id: string; text: string }) =>
+      api(`/api/agents/${agent?.id}/tests/${b.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ expectation: b.text }),
+      }),
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });
       void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
     },
@@ -700,7 +705,8 @@ export default function AgentBuilder() {
     const s = scenarios.find((x) => x.id === runningId);
     if (!s) return 'scenario';
     const sameCat = scenarios.filter((x) => x.category === s.category);
-    return `${CAT_LABELS[s.category] ?? s.category} #${sameCat.indexOf(s) + 1}`;
+    const cat = s.category ?? 'general';
+    return `${CAT_LABELS[cat] ?? cat} #${sameCat.indexOf(s) + 1}`;
   })();
   /** Match a reply's customer prompt back to its scenario — the docked
    *  panel renders the expectation + verdict buttons in place. */
@@ -713,7 +719,7 @@ export default function AgentBuilder() {
     if (!s) return null;
     return {
       expectation: s.expectation,
-      result: s.human_result,
+      result: s.human_result ?? null,
       verdict: (r: 'pass' | 'fail') => {
         markTest.mutate({ id: s.id, result: r });
         // Needs work must never dead-end — it opens the diagnose card with
@@ -729,7 +735,7 @@ export default function AgentBuilder() {
     // Safety first — CAT_ORDER puts it ahead, so an elevated-risk agent's
     // hard cases never fall off the visible slice.
     const list = [...scenarios.filter((s) => scenarioPrompt(s))]
-      .sort((a, b) => CAT_ORDER.indexOf(a.category) - CAT_ORDER.indexOf(b.category))
+      .sort((a, b) => CAT_ORDER.indexOf(a.category ?? 'general') - CAT_ORDER.indexOf(b.category ?? 'general'))
       .slice(0, 6);
     return (list.length > 0 || (builder?.suggested_questions?.length ?? 0) > 0) && (
       <div className="try-chips">
@@ -802,8 +808,16 @@ export default function AgentBuilder() {
     setTestNotice('Fix saved — re-running. Other verdicts are now stale — Run all to re-check.');
     runScenario(s);
   };
+  // The diagnose card is a decision dialog — a modal, not dock furniture.
+  // Stacking it under the composer was the worst of the Try-it clutter.
   const correctCard = correctTarget && agent && (
-    <CorrectThisCard
+    <div className="modal-backdrop" onClick={() => setCorrectTarget(null)}>
+      <div
+        className="modal"
+        style={{ width: 560, maxHeight: '78vh', overflowY: 'auto' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <CorrectThisCard
       agentId={agent.id}
       cfg={cfg}
       target={{
@@ -832,7 +846,9 @@ export default function AgentBuilder() {
         setCorrectTarget(null);
         goStep(s);
       }}
-    />
+        />
+      </div>
+    </div>
   );
   // Customer region — optional; saved to builder.region on blur and
   // injected into the runtime prompt (hostedAgent), not the authored one.
@@ -2060,146 +2076,41 @@ export default function AgentBuilder() {
                         const prompt = scenarioPrompt(s);
                         // Verdicts judge a reply the run produced — this
                         // session's live reply or the recorded replay.
-                        // original_reply is the transcript the scenario was
-                        // saved FROM, not a run — judging it would verdict
-                        // history, not the agent's current behavior.
                         const reply = replyRef.current.get(s.id);
                         const verdictReply = reply ?? s.last_run?.reply ?? null;
-                        // Fix it only diagnoses — any known reply (this run,
-                        // the last replay, the original transcript) works,
-                        // so the button survives a reload.
-                        const fixReply =
-                          reply ?? s.last_run?.reply ?? s.original_reply ?? null;
-                        const running = runningId === s.id;
                         return (
-                          <div key={s.id} id={`sc-${s.id}`} className="scenario-row">
-                            <div className="grow" style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: 13 }}>“{prompt}”</div>
-                              {s.expectation ? (
-                                <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                                  expected: {s.expectation}
-                                </div>
-                              ) : s.category === 'safety' ? (
-                                <div
-                                  className="muted"
-                                  style={{ fontSize: 12, marginTop: 2, color: 'var(--warn)' }}
-                                >
-                                  no expectation written — verdicts judge this by
-                                  eye; Fix it → “the expectation is wrong” adds one
-                                </div>
-                              ) : null}
-                              {/* Every run lands in its own test
-                                  conversation, so the panel can't stay on
-                                  all of them — the reply lives here on the
-                                  row instead. Provenance labels keep a
-                                  recorded/original reply from reading as a
-                                  fresh run. */}
-                              {fixReply && (
-                                <div className="scenario-reply" title={fixReply}>
-                                  <span className="scenario-reply-label">
-                                    {reply
-                                      ? 'Janis answered'
-                                      : s.last_run?.reply
-                                        ? 'Last replay'
-                                        : 'Original reply'}
-                                  </span>
-                                  {fixReply}
-                                </div>
-                              )}
-                              {s.category === 'actions' && (
-                                <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-                                  runs the live pipeline — gated actions pause on an
-                                  approval card, nothing executes silently
-                                </div>
-                              )}
-                              {s.source === 'correction' && (
-                                <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-                                  saved from a Correct this fix
-                                </div>
-                              )}
-                            </div>
-                            <div className="scenario-verdict">
-                              {s.stale && (
-                                <span className="scenario-badge stale" title="Config changed since this ran">
-                                  stale
-                                </span>
-                              )}
-                              {s.human_result === 'pass' && !s.stale && (
-                                <span className="scenario-badge pass">looks right</span>
-                              )}
-                              {s.human_result === 'fail' && !s.stale && (
-                                <span className="scenario-badge fail">
-                                  needs work
-                                  {s.fail_cause ? ` · ${s.fail_cause}` : ''}
-                                </span>
-                              )}
-                              {s.human_result === 'fixed_recheck' && !s.stale && (
-                                <span className="scenario-badge fixed">
-                                  fix applied — re-run to confirm
-                                </span>
-                              )}
-                              {s.human_result === 'unreviewed' && !s.stale && (
-                                <span className="scenario-badge">unreviewed</span>
-                              )}
-                            </div>
-                            {verdictReply && s.human_result === 'unreviewed' && (
-                              <div className="row" style={{ gap: 6 }}>
-                                {/* Equal weight — a filled Looks right
-                                    nudges rubber-stamping; the verdict is
-                                    earned by judgment, not button color. */}
-                                <button
-                                  className="btn sm"
-                                  disabled={markTest.isPending}
-                                  onClick={() =>
-                                    markTest.mutate({ id: s.id, result: 'pass' })
-                                  }
-                                >
-                                  Looks right
-                                </button>
-                                <button
-                                  className="btn sm"
-                                  disabled={markTest.isPending}
-                                  onClick={() => {
-                                    markTest.mutate({ id: s.id, result: 'fail' });
-                                    setDockOpen(true);
-                                    setCorrectTarget({
-                                      agentText: verdictReply,
-                                      customerText: prompt,
-                                      scenarioId: s.id,
-                                    });
-                                  }}
-                                >
-                                  Needs work
-                                </button>
-                              </div>
-                            )}
-                            {/* A failed run isn't the end — re-open the
-                                diagnose card so "needs work" has a next
-                                step, not just a badge. */}
-                            {fixReply && s.human_result === 'fail' && (
-                              <button
-                                className="btn sm"
-                                title="Diagnose the miss — knowledge, behavior, ability, or a wrong expectation"
-                                onClick={() => {
-                                  setDockOpen(true);
-                                  setCorrectTarget({
-                                    agentText: fixReply,
-                                    customerText: prompt,
-                                    scenarioId: s.id,
-                                  });
-                                }}
-                              >
-                                Fix it
-                              </button>
-                            )}
-                            <button
-                              className="btn sm"
-                              disabled={running}
-                              onClick={() => runScenario(s)}
-                            >
-                              {running ? 'Running…' : s.human_result ? 'Run again' : 'Run'}
-                            </button>
-                          </div>
+                          <ScenarioRow
+                            key={s.id}
+                            test={s}
+                            running={runningId === s.id}
+                            disabled={runningId !== null}
+                            onRun={() => runScenario(s)}
+                            onDelete={() => delTest.mutate(s.id)}
+                            replyOverride={reply}
+                            onSaveExpectation={(text) =>
+                              saveExp.mutate({ id: s.id, text })
+                            }
+                            expectationSaving={saveExp.isPending}
+                            verdict={{
+                              pending: markTest.isPending,
+                              onPass: () => markTest.mutate({ id: s.id, result: 'pass' }),
+                              onFail: () => {
+                                markTest.mutate({ id: s.id, result: 'fail' });
+                                setCorrectTarget({
+                                  agentText: verdictReply ?? '',
+                                  customerText: prompt,
+                                  scenarioId: s.id,
+                                });
+                              },
+                            }}
+                            onFix={(r, p) =>
+                              setCorrectTarget({
+                                agentText: r,
+                                customerText: p,
+                                scenarioId: s.id,
+                              })
+                            }
+                          />
                         );
                       })}
                   </div>
@@ -2545,10 +2456,10 @@ export default function AgentBuilder() {
               />
             )}
             </div>
-            {correctCard}
           </>,
           dock.testSlot,
         )}
+      {correctCard}
     </>
   );
 }
