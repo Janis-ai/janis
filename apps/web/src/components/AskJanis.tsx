@@ -14,7 +14,7 @@ import { EmojiPicker } from './EmojiPicker';
 import { ArgsRows } from './bits';
 import { Widgets, type ChatWidget } from './ChatWidgets';
 import type { ScenarioTurn } from './ScenarioRow';
-import { splitBlocks, splitEmphasis } from '../lib/richText';
+import { linkifyParts, splitBlocks, splitEmphasis } from '../lib/richText';
 
 interface ChatConfig {
   agent_name: string;
@@ -70,52 +70,10 @@ export function consoleVisitorId(): string {
   return v;
 }
 
-/** Render [label](url) markdown links and bare https:// URLs as anchors —
- * same rules as the public widget, DOM-only so text can't inject markup.
- * Links on this origin (or app.janis.ai in dev) go through the SPA router so
- * the rail stays open; everything else opens in a new tab. */
-/** Sentence punctuation glued to a URL — "see https://x.com/a." should link
- * the URL, not the period. Closers are only stripped when unbalanced, so
- * https://x.com/f_(b) keeps its parens while "(see https://x.com)" doesn't
- * eat the bracket. Returns [cleanUrl, trailingText]. */
-function splitTrail(u: string): [string, string] {
-  let trail = '';
-  const pairs: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
-  while (u.length) {
-    const c = u[u.length - 1];
-    if ('.,;:!?\'"'.includes(c)) {
-      trail = c + trail;
-      u = u.slice(0, -1);
-      continue;
-    }
-    const open = pairs[c];
-    if (open && u.split(c).length - 1 > u.split(open).length - 1) {
-      trail = c + trail;
-      u = u.slice(0, -1);
-      continue;
-    }
-    break;
-  }
-  return [u, trail];
-}
-
+/** Links on this origin (or app.janis.ai in dev) go through the SPA router
+ *  so the rail stays open; everything else opens in a new tab. */
 function linkify(text: string, onNav: (to: string) => void) {
-  const parts: (string | { label: string; href: string })[] = [];
-  const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>"']+)/g;
-  let last = 0;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    const [href, trail] = splitTrail(m[2] ?? m[3]!);
-    if (!href) {
-      parts.push(m[0]); // nothing left after trimming — emit the raw match
-    } else {
-      parts.push({ label: m[1] ?? href, href });
-      if (trail) parts.push(trail);
-    }
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts.map((p, i) => {
+  return linkifyParts(text).map((p, i) => {
     if (typeof p === 'string') return p;
     let internal: string | null = null;
     try {
@@ -1200,7 +1158,6 @@ export function AskJanis({
                               onClick={() => verdictCtx.verdict('pass')}
                             >
                               <ThumbsUp size={12} />
-                              <span className="verdict-btn-text">Looks right</span>
                             </button>
                             <button
                               className={`btn sm verdict-fail${verdictCtx.result === 'fail' ? ' verdict-on' : ''}`}
@@ -1208,7 +1165,6 @@ export function AskJanis({
                               onClick={() => verdictCtx.verdict('fail')}
                             >
                               <ThumbsDown size={12} />
-                              <span className="verdict-btn-text">Needs work</span>
                             </button>
                           </div>
                         </div>

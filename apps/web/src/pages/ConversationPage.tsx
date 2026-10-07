@@ -14,7 +14,7 @@ import { useScenarioMatch } from '../lib/scenarioMatch';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
-import { splitBlocks, splitEmphasis } from '../lib/richText';
+import { linkifyParts, splitBlocks, splitEmphasis } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { Paperclip, RefreshCw, Star, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 
@@ -25,10 +25,24 @@ const WHO: Record<Message['direction'], string> = {
 };
 
 /** Canonical agent text is markdown-ish — **bold**, *italic*, ~~strike~~ and
- *  `code` (lists are handled one level up by splitBlocks). */
+ *  `code`, plus real links (lists are handled one level up by splitBlocks). */
 function mdSpans(text: string, keyBase = 0) {
-  return splitEmphasis(text).map((seg, i) => {
-    if (seg.kind === 'text') return seg.text;
+  return splitEmphasis(text).flatMap((seg, i) => {
+    const inner = linkifyParts(seg.text).map((p, j) =>
+      typeof p === 'string' ? (
+        p
+      ) : (
+        <a
+          key={keyBase * 1000 + i * 100 + j}
+          href={p.href}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {p.label}
+        </a>
+      ),
+    );
+    if (seg.kind === 'text') return inner;
     const Tag =
       seg.kind === 'bold'
         ? 'b'
@@ -37,11 +51,11 @@ function mdSpans(text: string, keyBase = 0) {
           : seg.kind === 'strike'
             ? 's'
             : 'code';
-    return (
+    return [
       <Tag key={keyBase * 1000 + i} className={seg.kind === 'code' ? 'md-code' : undefined}>
-        {seg.text}
-      </Tag>
-    );
+        {inner}
+      </Tag>,
+    ];
   });
 }
 
@@ -1232,7 +1246,6 @@ export default function ConversationPage() {
                             onClick={() => verdictTest.mutate({ testId: sc.id, result: 'pass' })}
                           >
                             <ThumbsUp size={12} />
-                            <span className="verdict-btn-text">Looks right</span>
                           </button>
                           <button
                             className={`btn sm verdict-fail${sc.human_result === 'fail' ? ' verdict-on' : ''}`}

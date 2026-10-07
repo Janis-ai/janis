@@ -37,6 +37,58 @@ export function plainText(text: string): string {
     .join('');
 }
 
+export interface LinkSeg {
+  label: string;
+  href: string;
+}
+
+/** Sentence punctuation glued to a URL — "see https://x.com/a." should link
+ *  the URL, not the period. Closers are only stripped when unbalanced, so
+ *  https://x.com/f_(b) keeps its parens while "(see https://x.com)" doesn't
+ *  eat the bracket. Returns [cleanUrl, trailingText]. */
+function splitTrail(u: string): [string, string] {
+  let trail = '';
+  const pairs: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
+  while (u.length) {
+    const c = u[u.length - 1];
+    if ('.,;:!?\'"'.includes(c)) {
+      trail = c + trail;
+      u = u.slice(0, -1);
+      continue;
+    }
+    const open = pairs[c];
+    if (open && u.split(c).length - 1 > u.split(open).length - 1) {
+      trail = c + trail;
+      u = u.slice(0, -1);
+      continue;
+    }
+    break;
+  }
+  return [u, trail];
+}
+
+/** Render [label](url) markdown links and bare https:// URLs as link
+ *  segments — the caller renders the anchors (widget, chat, inbox each
+ *  style them differently). DOM-only upstream so text can't inject markup. */
+export function linkifyParts(text: string): (string | LinkSeg)[] {
+  const parts: (string | LinkSeg)[] = [];
+  const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>"']+)/g;
+  let last = 0;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const [href, trail] = splitTrail(m[2] ?? m[3]!);
+    if (!href) {
+      parts.push(m[0]); // nothing left after trimming — emit the raw match
+    } else {
+      parts.push({ label: m[1] ?? href, href });
+      if (trail) parts.push(trail);
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
 export interface RichBlock {
   kind: 'para' | 'list';
   /** para */

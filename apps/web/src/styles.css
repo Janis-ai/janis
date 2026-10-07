@@ -552,15 +552,18 @@ button, input, select, textarea { font: inherit; }
 .verdict-box {
   margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border);
   border-radius: 10px; background: var(--panel-2);
-  container-type: inline-size;
 }
 .verdict-expect { font-size: 12px; font-style: italic; margin-bottom: 6px; }
 .verdict-btns { display: flex; gap: 6px; flex-wrap: nowrap; }
 .verdict-btns .btn { margin-left: 0; display: inline-flex; align-items: center; gap: 4px; }
-/* Narrow verdict boxes: never wrap — drop the labels, keep icons + tooltips. */
-@container (max-width: 240px) {
-  .verdict-btns .verdict-btn-text { display: none; }
+/* Inside an inbox bubble the box blends into the message tint — a
+   translucent wash like the test chat's panel-on-panel, not a pasted card. */
+.msg .verdict-box {
+  background: color-mix(in srgb, var(--panel-2) 45%, transparent);
+  border-color: color-mix(in srgb, var(--border) 60%, transparent);
 }
+.msg a { color: var(--accent); text-decoration: underline; }
+:root[data-theme='light'] .msg.out a { color: #1d4ed8; }
 /* Selected verdict = the status color it records: approved is accent-green,
    rejected is danger-red — the same tokens the scenario badges use.
    .btn is defined later in this file, so these need the .btn.* form to
