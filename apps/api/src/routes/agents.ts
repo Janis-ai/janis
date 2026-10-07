@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { AgentConfig, friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, channelBindings, channels, conversations, evalSuggestions, helpArticles, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, campaignSends, campaigns, channelBindings, channels, contactIdentities, conversations, evalSuggestions, helpArticles, helpSearchLog, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import { WidgetComponent, WidgetState, WidgetToolBinding } from '../lib/widgets.js';
 import { toolsFor } from '../lib/toolExec.js';
 import {
@@ -1697,8 +1697,15 @@ export function agentRoutes(db: Db) {
       }
       if (chanIds.length) {
         await tx.delete(channelBindings).where(inArray(channelBindings.channelId, chanIds));
+        // Channel-keyed dependents without cascade — campaign sends before
+        // campaigns (send rows reference their campaign).
+        await tx.delete(campaignSends).where(inArray(campaignSends.channelId, chanIds));
+        await tx.delete(campaigns).where(inArray(campaigns.channelId, chanIds));
+        await tx.delete(contactIdentities).where(inArray(contactIdentities.channelId, chanIds));
         await tx.delete(channels).where(inArray(channels.id, chanIds));
       }
+      await tx.delete(helpSearchLog).where(eq(helpSearchLog.agentId, agentId));
+      await tx.delete(helpArticles).where(eq(helpArticles.agentId, agentId));
       await tx.delete(agentTests).where(eq(agentTests.agentId, agentId));
       await tx.delete(knowledgeFiles).where(eq(knowledgeFiles.agentId, agentId));
       await tx.delete(savedReplies).where(eq(savedReplies.agentId, agentId));
