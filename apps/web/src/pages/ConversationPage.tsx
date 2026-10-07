@@ -15,7 +15,7 @@ import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks, splitEmphasis } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
-import { Paperclip, RefreshCw, Star, X } from 'lucide-react';
+import { Paperclip, RefreshCw, Star, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -227,6 +227,7 @@ export default function ConversationPage() {
     id: string;
     agentText: string;
     customerText?: string;
+    scenario?: { id: string; expectation: string };
   } | null>(null);
   // Per-reply "Save as scenario" — message ids saved this session get a
   // "✓ in tests" marker instead of the button.
@@ -521,14 +522,27 @@ export default function ConversationPage() {
       ),
     enabled: Boolean(data?.conversation.agent_id),
   });
-  const scenarioExists = (prompt?: string) =>
-    Boolean(
-      prompt &&
-        (convTests.data?.tests ?? []).some(
+  const matchScenario = (prompt?: string) =>
+    prompt
+      ? (convTests.data?.tests ?? []).find(
           (t) =>
             scenarioPrompt(t).trim().toLowerCase() === prompt.trim().toLowerCase(),
-        ),
-    );
+        )
+      : undefined;
+  // Owner verdict on a matched scenario — same human_result write the test
+  // chat's thumbs make. 'Needs work' also opens the correction card with
+  // the scenario context, like the test chat does.
+  const verdictTest = useMutation({
+    mutationFn: (b: { testId: string; result: 'pass' | 'fail' }) =>
+      api(`/api/agents/${data!.conversation.agent_id}/tests/${b.testId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ human_result: b.result }),
+      }),
+    onSuccess: () =>
+      void qc.invalidateQueries({
+        queryKey: ['agent-tests', data?.conversation.agent_id],
+      }),
+  });
   const saveScenario = useMutation({
     mutationFn: (ctx: { msgId: string; agentText: string; customerText: string }) =>
       api(`/api/agents/${data!.conversation.agent_id}/tests`, {
@@ -1171,64 +1185,66 @@ export default function ConversationPage() {
                   ))}
                 </div>
               )}
-            </div>
-            {m.direction === 'out' && !isSystem && (
-              <div className="inspector-wrap">
-                {/* One inline row under the bubble — why-this-reply, the
-                    correction affordance, and save-as-scenario — matching
-                    the test chat's single correct-row instead of three
-                    stacked rows. */}
-                <div className="inspector-btns">
-                {!!m.payload.inspector && (
-                  <button
-                    className="inspector-toggle"
-                    onClick={() => {
-                      const opening = inspectorFor !== m.id;
-                      setInspectorFor(opening ? m.id : null);
-                      if (!opening) return;
-                      // Reveal the panel: bottom-anchored when it fits the
-                      // viewport, top-pinned when it's taller.
-                      requestAnimationFrame(() => {
-                        const el = transcriptRef.current;
-                        const panel = el?.querySelector<HTMLElement>('.inspector-panel');
-                        if (!el || !panel) return;
-                        const elRect = el.getBoundingClientRect();
-                        const pRect = panel.getBoundingClientRect();
-                        const pTop = pRect.top - elRect.top + el.scrollTop;
-                        const pBottom = pRect.bottom - elRect.top + el.scrollTop;
-                        el.scrollTo({
-                          top: pRect.height <= el.clientHeight ? pBottom - el.clientHeight : pTop - 12,
-                          behavior: 'smooth',
-                        });
-                      });
-                    }}
-                  >
-                    ✦ why this reply
-                  </button>
-                )}
-                {m.text?.trim() ? (
-                  <div className="correct-row">
-                    <button
-                      className="correct-this"
-                      title="Tell Janis what it should have said — opens the correction dialog"
-                      onClick={() =>
-                        setCorrectFor({
-                          id: m.id,
-                          agentText: m.text ?? '',
-                          customerText: prevPrompt,
-                        })
-                      }
-                    >
-                      Correct this
-                    </button>
-                    {/* Same affordance as the test chat — hidden when the
-                        prompt is already a scenario (that's the row's job). */}
-                    {prevPrompt &&
-                      (scenarioSavedFor.has(m.id) || scenarioExists(prevPrompt) ? (
-                        <span className="muted" style={{ fontSize: 12, alignSelf: 'center' }}>
-                          ✓ in tests
-                        </span>
-                      ) : (
+              {/* The test chat's verdict + correction affordances, inside the
+                  reply bubble: a matched scenario gets the Aim/thumbs box;
+                  otherwise the prompt can be saved as a new one. */}
+              {m.direction === 'out' && !isSystem && m.text?.trim() ? (() => {
+                const sc = matchScenario(prevPrompt);
+                return (
+                  <>
+                    {sc && (
+                      <div className="verdict-box">
+                        {sc.expectation ? (
+                          <div className="verdict-expect muted" title={sc.expectation}>
+                            Aim: {sc.expectation}
+                          </div>
+                        ) : null}
+                        <div className="verdict-btns">
+                          <button
+                            className={`btn sm${sc.human_result === 'pass' ? ' verdict-on' : ''}`}
+                            title="Looks right — this reply passes"
+                            disabled={verdictTest.isPending}
+                            onClick={() => verdictTest.mutate({ testId: sc.id, result: 'pass' })}
+                          >
+                            <ThumbsUp size={12} />
+                            <span className="verdict-btn-text">Looks right</span>
+                          </button>
+                          <button
+                            className={`btn sm verdict-fail${sc.human_result === 'fail' ? ' verdict-on' : ''}`}
+                            title="Needs work — flag this reply and open the correction dialog"
+                            disabled={verdictTest.isPending}
+                            onClick={() => {
+                              verdictTest.mutate({ testId: sc.id, result: 'fail' });
+                              setCorrectFor({
+                                id: m.id,
+                                agentText: m.text ?? '',
+                                customerText: prevPrompt,
+                                scenario: { id: sc.id, expectation: sc.expectation ?? '' },
+                              });
+                            }}
+                          >
+                            <ThumbsDown size={12} />
+                            <span className="verdict-btn-text">Needs work</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <div className="correct-row">
+                      <button
+                        className="correct-this"
+                        title="Tell Janis what it should have said — opens the correction dialog"
+                        onClick={() =>
+                          setCorrectFor({
+                            id: m.id,
+                            agentText: m.text ?? '',
+                            customerText: prevPrompt,
+                            scenario: sc ? { id: sc.id, expectation: sc.expectation ?? '' } : undefined,
+                          })
+                        }
+                      >
+                        Correct this
+                      </button>
+                      {!sc && prevPrompt && !scenarioSavedFor.has(m.id) && (
                         <button
                           className="correct-this"
                           title="Keep this exchange as a scenario — re-run it after config changes"
@@ -1243,11 +1259,40 @@ export default function ConversationPage() {
                         >
                           Save as scenario
                         </button>
-                      ))}
-                  </div>
-                ) : null}
-                </div>
-                {inspectorFor === m.id && !!m.payload.inspector && (
+                      )}
+                    </div>
+                  </>
+                );
+              })() : null}
+            </div>
+            {m.direction === 'out' && !isSystem && !!m.payload.inspector && (
+              <div className="inspector-wrap">
+                <button
+                  className="inspector-toggle"
+                  onClick={() => {
+                    const opening = inspectorFor !== m.id;
+                    setInspectorFor(opening ? m.id : null);
+                    if (!opening) return;
+                    // Reveal the panel: bottom-anchored when it fits the
+                    // viewport, top-pinned when it's taller.
+                    requestAnimationFrame(() => {
+                      const el = transcriptRef.current;
+                      const panel = el?.querySelector<HTMLElement>('.inspector-panel');
+                      if (!el || !panel) return;
+                      const elRect = el.getBoundingClientRect();
+                      const pRect = panel.getBoundingClientRect();
+                      const pTop = pRect.top - elRect.top + el.scrollTop;
+                      const pBottom = pRect.bottom - elRect.top + el.scrollTop;
+                      el.scrollTo({
+                        top: pRect.height <= el.clientHeight ? pBottom - el.clientHeight : pTop - 12,
+                        behavior: 'smooth',
+                      });
+                    });
+                  }}
+                >
+                  ✦ why this reply
+                </button>
+                {inspectorFor === m.id && (
                   <InspectorPanel data={m.payload.inspector} />
                 )}
               </div>

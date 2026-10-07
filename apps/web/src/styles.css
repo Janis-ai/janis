@@ -490,9 +490,8 @@ button, input, select, textarea { font: inherit; }
 }
 .ask-msg:hover .correct-this,
 .ask-msg:focus-within .correct-this,
-.msg:hover + .inspector-wrap .correct-this,
-.inspector-wrap:hover .correct-this,
-.inspector-wrap:focus-within .correct-this,
+.msg:hover .correct-this,
+.msg:focus-within .correct-this,
 .correct-this:focus-visible { opacity: 1; }
 /* In the test dock the affordance is the point — keep it discoverable at
    rest, full opacity on hover/focus. */
@@ -503,6 +502,8 @@ button, input, select, textarea { font: inherit; }
 }
 .correct-this:hover { color: var(--text); border-color: var(--muted); }
 .correct-row { display: flex; gap: 6px; }
+/* Inbox replies carry the test chat's correct-row inside the bubble. */
+.msg .correct-row { margin-top: 6px; }
 /* Per-channel requirement + sorter highlight on the Deploy cards */
 .needs-line { font-size: 12px; color: var(--muted); margin-top: 6px; }
 .card.recommended { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -992,10 +993,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 
 /* per-message "why did it say that" inspector */
 .inspector-wrap { align-self: flex-end; display: flex; flex-direction: column; align-items: flex-end; margin-top: -6px; padding: 0 4px; }
-/* The affordance row under an outbound bubble — why-this-reply, Correct
-   this, Save as scenario on one line like the test chat's correct-row. */
-.inspector-btns { display: flex; align-items: center; gap: 8px; }
-.inspector-btns .correct-this, .inspector-btns .inspector-toggle { margin-top: 0; }
+
 .inspector-toggle {
   background: none; border: none; padding: 0; font-size: 11px;
   color: var(--muted); cursor: pointer;
