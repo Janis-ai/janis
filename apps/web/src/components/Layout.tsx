@@ -12,6 +12,10 @@ import { setTabBadge } from '../lib/tabBadge';
 import PushBanner from './PushBanner';
 import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
+import { CorrectThisCard, type CorrectTarget } from './CorrectThis';
+import { TestChatHistory } from './TestChatHistory';
+import { scenarioPrompt, type ScenarioTest } from './ScenarioRow';
+import { freshTestVisitor, readTestVisitor, storeTestVisitor } from '../lib/testChat';
 import { railBus, type RailRequest } from '../lib/railBus';
 import { DockContext, type DockTab } from '../lib/dockContext';
 import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
@@ -303,6 +307,12 @@ export default function Layout() {
   const [fallbackSeed, setFallbackSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [testSlot, setTestSlot] = useState<HTMLElement | null>(null);
   const [testProvided, setTestProvided] = useState(false);
+  // Fallback test panel (agent pages that aren't the builder): which test
+  // conversation the chat is keyed to, plus its notice/correction state —
+  // the same Try-it affordances the builder wires in its portaled panel.
+  const [fallbackVisitor, setFallbackVisitor] = useState<string | null>(null);
+  const [fallbackNotice, setFallbackNotice] = useState('');
+  const [fallbackCorrect, setFallbackCorrect] = useState<CorrectTarget | null>(null);
   const [dockCallout, setDockCallout] = useState(false);
   // A Copilot reply while its pane isn't visible lights the strip icon and
   // header tab — cleared the moment the copilot surface is showing.
@@ -436,6 +446,60 @@ export default function Layout() {
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [railOpen, railTab, testProvided, onBuilderPage, ctxAgent, currentAgent]);
+
+  // The fallback chat keys to the same persisted visitor the builder
+  // uses — navigating builder → Inbox keeps the thread you were just on.
+  const fallbackAgentId = testRail?.agentId ?? ctxAgent;
+  useEffect(() => {
+    setFallbackVisitor(fallbackAgentId ? readTestVisitor(fallbackAgentId) : null);
+    setFallbackCorrect(null);
+    // testProvided flip IS the handoff moment — the builder may have just
+    // written a fresh visitor before unmounting, so re-read then too.
+  }, [fallbackAgentId, testProvided]);
+
+  // Try-it affordances for the fallback panel — the same scenario
+  // matching + verdict writes the builder's portaled panel does.
+  const fallbackActive =
+    railOpen && railTab === 'test' && !testProvided && Boolean(fallbackAgentId);
+  const fallbackTests = useQuery({
+    queryKey: ['agent-tests', fallbackAgentId],
+    queryFn: () =>
+      api<{ tests: ScenarioTest[] }>(`/api/agents/${fallbackAgentId}/tests`),
+    enabled: fallbackActive,
+  });
+  const fallbackScenarios = fallbackTests.data?.tests ?? [];
+  const fallbackScenario = (customerText?: string) =>
+    customerText
+      ? fallbackScenarios.find(
+          (x) =>
+            scenarioPrompt(x).trim().toLowerCase() ===
+            customerText.trim().toLowerCase(),
+        )
+      : undefined;
+  const fallbackVerdictFor = (customerText?: string, replyText?: string) => {
+    const s = fallbackScenario(customerText);
+    if (!s || !fallbackAgentId) return null;
+    return {
+      expectation: s.expectation,
+      result: s.human_result ?? null,
+      verdict: (r: 'pass' | 'fail') => {
+        void api(`/api/agents/${fallbackAgentId}/tests/${s.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ human_result: r }),
+        }).then(() => {
+          void qc.invalidateQueries({ queryKey: ['agent-tests', fallbackAgentId] });
+          void qc.invalidateQueries({ queryKey: ['build-status', fallbackAgentId] });
+        });
+        if (r === 'fail' && replyText) {
+          setFallbackCorrect({
+            agentText: replyText,
+            customerText,
+            scenario: { id: s.id, expectation: s.expectation },
+          });
+        }
+      },
+    };
+  };
 
   // A queued test seed goes to the portaled panel when a page provides one;
   // on other agent pages it seeds the fallback chat (cleared so a later
@@ -1181,15 +1245,77 @@ export default function Layout() {
                   <div ref={setTestSlot} className="test-dock-body">
                     {!testProvided &&
                       (testRail ? (
-                        <AskJanis
-                          key={testRail.channelId}
-                          channelId={testRail.channelId}
-                          asCustomer
-                          hideHeader
-                          placeholder="You're chatting as a customer…"
-                          seedMessage={fallbackSeed?.text}
-                          seedNonce={fallbackSeed?.nonce}
-                        />
+                        <>
+                          <div className="test-dock-status">
+                            <span className="muted grow" style={{ fontSize: 11 }}>
+                              {fallbackNotice || `Testing ${testRail.label}`}
+                            </span>
+                            <TestChatHistory
+                              agentId={fallbackAgentId!}
+                              channelId={testRail.channelId}
+                              currentVisitor={fallbackVisitor ?? undefined}
+                              onPick={(v) => {
+                                setFallbackVisitor(v);
+                                if (fallbackAgentId) storeTestVisitor(fallbackAgentId, v);
+                              }}
+                            />
+                            <button
+                              className="link small"
+                              title="Start a fresh test conversation"
+                              onClick={() => {
+                                const v = freshTestVisitor();
+                                setFallbackVisitor(v);
+                                if (fallbackAgentId) storeTestVisitor(fallbackAgentId, v);
+                              }}
+                            >
+                              New chat
+                            </button>
+                          </div>
+                          <AskJanis
+                            key={`${testRail.channelId}:${fallbackVisitor ?? 'base'}`}
+                            channelId={testRail.channelId}
+                            visitorOverride={fallbackVisitor ?? undefined}
+                            asCustomer
+                            hideHeader
+                            placeholder="You're chatting as a customer…"
+                            seedMessage={fallbackSeed?.text}
+                            seedNonce={fallbackSeed?.nonce}
+                            verdictFor={fallbackVerdictFor}
+                            onCorrect={(ctx) => {
+                              const s = fallbackScenario(ctx.customerText);
+                              setFallbackCorrect({
+                                agentText: ctx.agentText,
+                                customerText: ctx.customerText,
+                                ...(s
+                                  ? { scenario: { id: s.id, expectation: s.expectation } }
+                                  : {}),
+                              });
+                            }}
+                            onSaveTest={(ctx) => {
+                              if (!ctx.customerText || !fallbackAgentId) return;
+                              if (fallbackScenario(ctx.customerText)) {
+                                setFallbackNotice('That prompt is already a scenario');
+                                return;
+                              }
+                              void api(`/api/agents/${fallbackAgentId}/tests`, {
+                                method: 'POST',
+                                body: JSON.stringify({
+                                  prompt: ctx.customerText.slice(0, 400),
+                                  expectation: ctx.agentText.slice(0, 600),
+                                  category: 'general',
+                                  source: 'user',
+                                }),
+                              })
+                                .then(() => {
+                                  setFallbackNotice('Added to the scenario list');
+                                  void qc.invalidateQueries({
+                                    queryKey: ['agent-tests', fallbackAgentId],
+                                  });
+                                })
+                                .catch((e) => setFallbackNotice(e.message));
+                            }}
+                          />
+                        </>
                       ) : (
                         <div className="muted" style={{ padding: 14 }}>
                           Opening test channel…
@@ -1202,6 +1328,41 @@ export default function Layout() {
           </aside>
         </>
       )}
+      {/* Fallback-panel correction card — same modal the builder uses;
+          re-running the fixed scenario is left to the test surface. */}
+      {fallbackCorrect &&
+        fallbackAgentId &&
+        (() => {
+          const fixAgent = agentsData?.agents.find((a) => a.id === fallbackAgentId);
+          if (!fixAgent) return null;
+          return (
+            <div className="modal-backdrop" onClick={() => setFallbackCorrect(null)}>
+              <div
+                className="modal"
+                style={{ width: 560, maxHeight: '78vh', overflowY: 'auto' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <CorrectThisCard
+                  agentId={fallbackAgentId}
+                  cfg={fixAgent.config}
+                  target={fallbackCorrect}
+                  onClose={() => setFallbackCorrect(null)}
+                  onSaved={() => {
+                    void qc.invalidateQueries({ queryKey: ['agents'] });
+                    void qc.invalidateQueries({
+                      queryKey: ['build-status', fallbackAgentId],
+                    });
+                  }}
+                  onFixed={() => {
+                    void qc.invalidateQueries({
+                      queryKey: ['agent-tests', fallbackAgentId],
+                    });
+                  }}
+                />
+              </div>
+            </div>
+          );
+        })()}
       <PushBanner />
       <div className="toast-stack">
         {toasts.map((t) => (

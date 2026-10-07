@@ -56,7 +56,10 @@ interface PendingFile {
 
 
 
-function visitorId(): string {
+/** The stable per-browser console visitor — the "base" test thread's key
+ *  when no override is in play. Exported so the test-chat history picker
+ *  can tell which listed conversation is the current one. */
+export function consoleVisitorId(): string {
   const k = 'janis_console_visitor';
   let v = localStorage.getItem(k);
   if (!v) {
@@ -364,7 +367,7 @@ export function AskJanis({
 }) {
   const navigate = useNavigate();
   const visitor = useRef(
-    (asCustomer ? 'cust_' : '') + (visitorOverride ?? visitorId()),
+    (asCustomer ? 'cust_' : '') + (visitorOverride ?? consoleVisitorId()),
   ).current;
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [outbox, setOutbox] = useState<OutEntry[]>([]);

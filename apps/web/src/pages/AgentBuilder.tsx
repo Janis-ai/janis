@@ -11,6 +11,8 @@ import { stepGlyph, stepSubtitle, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { ChevronDown, MessageSquarePlus, Play } from 'lucide-react';
+import { TestChatHistory } from '../components/TestChatHistory';
+import { freshTestVisitor, readTestVisitor, storeTestVisitor } from '../lib/testChat';
 import { AskJanis } from '../components/AskJanis';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow, scenarioPrompt, type ScenarioTest } from '../components/ScenarioRow';
@@ -274,12 +276,21 @@ export default function AgentBuilder() {
   // on the internal channel; earlier threads stay in the inbox where they
   // remain useful for alert and takeover testing.
   const [chatVisitor, setChatVisitor] = useState<string | null>(null);
-  const freshVisitor = () =>
-    (crypto.randomUUID?.() ??
-      `v${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`
-    ).replace(/-/g, '');
+  // Last-used test conversation wins — the visitor id persists per agent
+  // so the dock's fallback panel (Inbox, Overview, …) resolves the SAME
+  // thread the builder was just on instead of the base console thread.
+  const activeVisitor =
+    chatVisitor ?? (agent ? readTestVisitor(agent.id) : null);
+  const pickTestChat = (v: string) => {
+    setChatVisitor(v);
+    if (agent) storeTestVisitor(agent.id, v);
+    setChatActive(true);
+    setCfgDrifted(false);
+  };
   const newChat = () => {
-    setChatVisitor(freshVisitor());
+    const v = freshTestVisitor();
+    setChatVisitor(v);
+    if (agent) storeTestVisitor(agent.id, v);
     setChatActive(false);
     setCfgDrifted(false);
   };
@@ -2268,6 +2279,14 @@ export default function AgentBuilder() {
                 {runningLabel ? ` · running: ${runningLabel}` : ''}
               </span>
               <span className="grow" />
+              {testChannel.data && (
+                <TestChatHistory
+                  agentId={agent!.id}
+                  channelId={testChannel.data.channel_id}
+                  currentVisitor={activeVisitor ?? undefined}
+                  onPick={pickTestChat}
+                />
+              )}
               <button
                 className="link small"
                 title="Start a fresh test conversation — earlier chats stay in the inbox"
@@ -2313,8 +2332,8 @@ export default function AgentBuilder() {
             )}
             {testChannel.data && (
               <AskJanis
-                key={chatVisitor ?? 'base'}
-                visitorOverride={chatVisitor ?? undefined}
+                key={activeVisitor ?? 'base'}
+                visitorOverride={activeVisitor ?? undefined}
                 channelId={testChannel.data.channel_id}
                 asCustomer
                 hideHeader

@@ -1714,3 +1714,23 @@ input.bub-switch:disabled { cursor: default; }
 .drop-zone.busy { cursor: progress; }
 .drop-zone .drop-zone-hint { display: block; font-size: 12.5px; margin-top: 1px; }
 .drop-zone .drop-zone-types { display: block; font-size: 11px; margin-top: 3px; letter-spacing: 0.2px; }
+
+/* Test-chat history dropdown — previous test conversations loadable
+   into the dock's chat. */
+.test-chat-history {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20;
+  width: 240px; max-height: 260px; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+.test-chat-history-row {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  border: none; background: none; color: var(--text);
+  font: inherit; font-size: 12px; padding: 6px 8px; border-radius: 6px;
+  cursor: pointer; text-align: left;
+}
+.test-chat-history-row:hover:not(:disabled) { background: var(--panel-2); }
+.test-chat-history-row:disabled { cursor: default; }
+.test-chat-history-row .grow {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
