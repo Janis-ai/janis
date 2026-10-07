@@ -149,6 +149,13 @@ export function ScenarioRow({
 
   const run = test.last_run;
   const prompt = scenarioPrompt(test);
+  // Setup turns — everything before the trigger. Saved inline or from a
+  // transcript, a multi-turn scenario replays this exchange, so the card
+  // shows it; the trigger itself is the last customer turn.
+  const triggerIdx = [...(test.turns ?? [])]
+    .map((t, i) => (t.role === 'customer' ? i : -1))
+    .reduce((a, b) => Math.max(a, b), -1);
+  const setupTurns = (test.turns ?? []).slice(0, Math.max(0, triggerIdx));
   const reply = replyOverride ?? run?.reply ?? null;
   // Fix it only diagnoses — any known reply (this run, the last replay,
   // the original transcript) works, so the button survives a reload.
@@ -217,6 +224,11 @@ export function ScenarioRow({
         )}
         <span className="grow" style={{ fontSize: 13, minWidth: 0 }}>
           “{test.name}”
+          {setupTurns.length > 0 && (
+            <span className="muted" style={{ fontSize: 11 }}>
+              {' '}· {setupTurns.length + 1} turns
+            </span>
+          )}
         </span>
         {status !== 'none' && (
           <span className={`scenario-badge ${badgeClass}`}>
@@ -273,6 +285,31 @@ export function ScenarioRow({
           </button>
         )}
       </div>
+
+      {/* The exchange that set up the trigger — inline saves carry it,
+          so the row shows it rather than asking you to guess what "it"
+          referred to. */}
+      {setupTurns.length > 0 && !editing && (
+        <details className="scenario-context">
+          <summary>
+            Exchange context — {setupTurns.length} turn{setupTurns.length > 1 ? 's' : ''}
+          </summary>
+          {setupTurns.map((t, i) => (
+            <div key={i} className="scenario-turn">
+              <span className="scenario-turn-who">
+                {t.role === 'customer' ? 'customer' : 'agent'}
+              </span>
+              <span>{t.text}</span>
+            </div>
+          ))}
+          <div className="scenario-turn">
+            <span className="scenario-turn-who">customer</span>
+            <span>
+              {prompt} <em className="muted">— the trigger</em>
+            </span>
+          </div>
+        </details>
+      )}
 
       {/* Expected — the bar. Edit keeps 'expects' inline beside the field. */}
       {editing ? (

@@ -650,6 +650,15 @@ button, input, select, textarea { font: inherit; }
   color: var(--accent); border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
+/* Saved exchange context — the setup turns behind a multi-turn scenario,
+   folded under a details so single-turn rows stay clean. */
+.scenario-context { margin-top: 8px; font-size: 12px; }
+.scenario-context summary { cursor: pointer; color: var(--muted); }
+.scenario-turn { display: flex; gap: 8px; padding: 3px 0 3px 14px; }
+.scenario-turn-who {
+  color: var(--muted); min-width: 54px; flex-shrink: 0;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding-top: 2px;
+}
 /* (reply rendering lives in ReplyBlock — .scenario-reply-clamp above) */
 /* Diagnose flow — "What went wrong?" cause picker inside Correct this. */
 .cause-picker { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
