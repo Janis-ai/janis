@@ -85,7 +85,7 @@ export function CorrectThisCard({
   const [addedTest, setAddedTest] = useState(false);
   // Post-fix summary line — replaces the close-on-save for non-scenario
   // corrections so the owner sees what landed before leaving.
-  const [savedFix, setSavedFix] = useState<string | null>(null);
+  const [savedFix, setSavedFix] = useState<{ title: string; text: string } | null>(null);
   // Diagnose fires once per scenario target — a re-render must not spam it.
   const diagTried = useRef(false);
 
@@ -140,7 +140,7 @@ export function CorrectThisCard({
         void markFixed('knowledge').catch((e) => setError(e.message));
         onClose();
       } else {
-        setSavedFix('Fact saved as a note — it teaches this agent only.');
+        setSavedFix({ title: 'Fact saved as a note', text });
       }
     },
     onError: (e) => setError(e.message),
@@ -216,7 +216,7 @@ export function CorrectThisCard({
         body: JSON.stringify({ config }),
       }).then(() => ({ config: config as AgentConfig, fixedCause }));
     },
-    onSuccess: ({ config, fixedCause }) => {
+    onSuccess: ({ config, fixedCause }, vars) => {
       onSaved?.(config);
       void qc.invalidateQueries({ queryKey: ['agents'] });
       void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
@@ -224,7 +224,7 @@ export function CorrectThisCard({
         void markFixed(fixedCause ?? 'behavior').catch((e) => setError(e.message));
         onClose();
       } else {
-        setSavedFix('Rule added to the instructions.');
+        setSavedFix({ title: 'Rule added to the instructions', text: vars.text });
       }
     },
     onError: (e) => setError(e.message),
@@ -536,7 +536,13 @@ export function CorrectThisCard({
         <>
           {/* Post-fix summary — the owner sees what landed before leaving;
               the regression hook is offered only now that a fix exists. */}
-          <div style={{ fontSize: 13, marginTop: 10 }}>✓ {savedFix}</div>
+          <div style={{ fontSize: 13, marginTop: 10 }}>✓ {savedFix.title}.</div>
+          <div
+            className="muted"
+            style={{ fontSize: 12, fontStyle: 'italic', marginTop: 4 }}
+          >
+            “{savedFix.text}”
+          </div>
           <div className="row" style={{ marginTop: 8, gap: 8 }}>
             {addTestBtn}
             <button className="btn sm primary" onClick={onClose}>
