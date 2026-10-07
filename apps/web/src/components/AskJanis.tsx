@@ -1166,7 +1166,7 @@ export function AskJanis({
                               <span className="verdict-btn-text">Looks right</span>
                             </button>
                             <button
-                              className={`btn sm${verdictCtx.result === 'fail' ? ' verdict-on verdict-fail' : ''}`}
+                              className={`btn sm verdict-fail${verdictCtx.result === 'fail' ? ' verdict-on' : ''}`}
                               title="Needs work — flag this reply"
                               onClick={() => verdictCtx.verdict('fail')}
                             >

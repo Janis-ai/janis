@@ -560,14 +560,21 @@ button, input, select, textarea { font: inherit; }
   .verdict-btns .verdict-btn-text { display: none; }
 }
 /* Selected verdict = the status color it records: approved is accent-green,
-   rejected is danger-red — the same tokens the scenario badges use. */
-.verdict-on {
+   rejected is danger-red — the same tokens the scenario badges use.
+   .btn is defined later in this file, so these need the .btn.* form to
+   out-specify it. */
+.btn.verdict-on {
   border-color: var(--accent); color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
-.verdict-fail.verdict-on {
+.btn.verdict-fail.verdict-on {
   border-color: var(--danger); color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+/* Reject hover previews the verdict color — Looks right already hovers
+   accent via .btn:hover, this keeps the pair symmetric. */
+.btn.verdict-fail:hover {
+  border-color: var(--danger); color: var(--danger);
 }
 /* Try-it scenario checklist — the step page is the runner's list; the
    docked panel is the chat. */
