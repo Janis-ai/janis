@@ -1263,7 +1263,6 @@ export default function ConversationPage() {
                             }}
                           >
                             <ThumbsDown size={12} />
-                            <span className="verdict-btn-text">Needs work</span>
                           </button>
                         </div>
                       </div>
