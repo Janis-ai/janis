@@ -34,8 +34,8 @@ export interface TestWiring {
   focusSignal?: number;
   seed?: { text: string; nonce: number } | null;
   /** Extra text after "Testing <agent>" in the dock header — the builder's
-   *  "saved version · running: X" detail. */
-  statusText?: string;
+   *  "includes drafts · running: X" detail, when either applies. */
+  statusText?: string | null;
   handlers: { current: TestHandlers };
 }
 

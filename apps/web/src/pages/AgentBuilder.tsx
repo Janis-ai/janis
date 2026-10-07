@@ -776,8 +776,12 @@ export default function AgentBuilder() {
       focusSignal: chatFocus,
       seed: seed?.target === 'dock' ? { text: seed.text, nonce: seed.nonce } : null,
       statusText:
-        `saved version${builder?.include_drafts_in_test ? ' + drafts' : ''}` +
-        (runningLabel ? ` · running: ${runningLabel}` : ''),
+        [
+          builder?.include_drafts_in_test ? 'includes drafts' : '',
+          runningLabel ? `running: ${runningLabel}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · ') || null,
       handlers: testHandlers,
     });
     return () => setTestWiring(null);
@@ -2311,8 +2315,8 @@ export default function AgentBuilder() {
         createPortal(
           <>
             {/* Header row is Layout's (same DOM whether a page provides
-                wiring or not — the builder's "saved version / running" text
-                arrives via wiring.statusText); this portal is only for
+                wiring or not — the builder's drafts/running detail arrives
+                via wiring.statusText); this portal is only for
                 builder-specific notices. */}
             {copilotHint && (
               <div className="test-dock-notice">
