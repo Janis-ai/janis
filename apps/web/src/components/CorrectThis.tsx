@@ -80,6 +80,9 @@ export function CorrectThisCard({
     classified: boolean;
   } | null>(null);
   const [cause, setCause] = useState<FailCause | null>(null);
+  // The correction text Janis last diagnosed — Update re-classifies only
+  // when the wording actually changed (or fills in once Continue ran).
+  const [diagText, setDiagText] = useState<string | null>(null);
   const [instrEdit, setInstrEdit] = useState('');
   const [noteEdit, setNoteEdit] = useState('');
   const [expEdit, setExpEdit] = useState(scenario?.expectation ?? '');
@@ -101,6 +104,7 @@ export function CorrectThisCard({
     setCorrection('');
     setPlan(null);
     setCause(null);
+    setDiagText(null);
     setInstrEdit('');
     setNoteEdit('');
     setExpEdit(scenario?.expectation ?? '');
@@ -184,6 +188,7 @@ export function CorrectThisCard({
       }),
     onSuccess: (p) => {
       setPlan(p);
+      setDiagText(correction.trim());
       // The guess preselects — the owner confirms or overrides below.
       // Outside scenario mode, ability/expectation have no fix surface:
       // ability folds into the drafted handoff instruction, expectation
@@ -608,15 +613,20 @@ export function CorrectThisCard({
               </button>
             </div>
           ) : (
-            <button
-              className="btn sm"
-              style={{ marginTop: 6 }}
-              disabled={!correction.trim() || diagnose.isPending}
-              title="Re-diagnose with the updated correction"
-              onClick={() => diagnose.mutate()}
-            >
-              {diagnose.isPending ? 'Checking…' : 'Update'}
-            </button>
+            <div className="row" style={{ marginTop: 6, justifyContent: 'flex-end' }}>
+              <button
+                className="btn sm"
+                disabled={
+                  !correction.trim() ||
+                  diagnose.isPending ||
+                  correction.trim() === diagText
+                }
+                title="Re-diagnose with the updated correction"
+                onClick={() => diagnose.mutate()}
+              >
+                {diagnose.isPending ? 'Checking…' : 'Update'}
+              </button>
+            </div>
           )}
           {cause === 'behavior' && (
             <>
