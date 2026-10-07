@@ -385,6 +385,7 @@ export function ScenarioRow({
             className="btn sm"
             title={run || hr ? 'Run again' : 'Run'}
             disabled={running || disabled}
+            style={running || disabled ? { fontStyle: 'italic' } : undefined}
             onClick={onRun}
           >
             {run || hr ? <RotateCcw size={12} /> : <Play size={12} />}

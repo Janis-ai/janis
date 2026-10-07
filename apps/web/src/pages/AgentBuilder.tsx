@@ -1937,6 +1937,7 @@ export default function AgentBuilder() {
                   <button
                     className="btn sm"
                     disabled={runningId !== null}
+                    style={runningId !== null ? { fontStyle: 'italic' } : undefined}
                     title={
                       scenarios.some((s) => s.stale)
                         ? 'Config changed since some results — re-run the list'
