@@ -1159,15 +1159,19 @@ export function AskJanis({
                           <div className="verdict-btns">
                             <button
                               className={`btn sm${verdictCtx.result === 'pass' ? ' verdict-on' : ''}`}
+                              title="Looks right — this reply passes"
                               onClick={() => verdictCtx.verdict('pass')}
                             >
-                              <ThumbsUp size={12} /> Looks right
+                              <ThumbsUp size={12} />
+                              <span className="verdict-btn-text">Looks right</span>
                             </button>
                             <button
                               className={`btn sm${verdictCtx.result === 'fail' ? ' verdict-on verdict-fail' : ''}`}
+                              title="Needs work — flag this reply"
                               onClick={() => verdictCtx.verdict('fail')}
                             >
-                              <ThumbsDown size={12} /> Needs work
+                              <ThumbsDown size={12} />
+                              <span className="verdict-btn-text">Needs work</span>
                             </button>
                           </div>
                         </div>
