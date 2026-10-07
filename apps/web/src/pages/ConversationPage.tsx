@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
@@ -9,6 +9,7 @@ import { ArgsRows, Avatar, channelLabel, displayName, fmtTime } from '../compone
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
+import { scenarioPrompt, type ScenarioTest } from '../components/ScenarioRow';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
@@ -227,6 +228,9 @@ export default function ConversationPage() {
     agentText: string;
     customerText?: string;
   } | null>(null);
+  // Per-reply "Save as scenario" — message ids saved this session get a
+  // "✓ in tests" marker instead of the button.
+  const [scenarioSavedFor, setScenarioSavedFor] = useState<Set<string>>(new Set());
   const [testSaveOpen, setTestSaveOpen] = useState(false);
   const [testName, setTestName] = useState('');
   const [testExpectation, setTestExpectation] = useState('');
@@ -503,6 +507,45 @@ export default function ConversationPage() {
       setTestSaved(saved?.length ?? 1);
       setTestName('');
       setTestExpectation('');
+    },
+    onError: (e) => setError(e.message),
+  });
+
+  // Same suite the test dock reads — used to hide Save-as-scenario on a
+  // reply whose prompt is already a scenario (and to mark fresh saves).
+  const convTests = useQuery({
+    queryKey: ['agent-tests', data?.conversation.agent_id],
+    queryFn: () =>
+      api<{ tests: ScenarioTest[] }>(
+        `/api/agents/${data!.conversation.agent_id}/tests`,
+      ),
+    enabled: Boolean(data?.conversation.agent_id),
+  });
+  const scenarioExists = (prompt?: string) =>
+    Boolean(
+      prompt &&
+        (convTests.data?.tests ?? []).some(
+          (t) =>
+            scenarioPrompt(t).trim().toLowerCase() === prompt.trim().toLowerCase(),
+        ),
+    );
+  const saveScenario = useMutation({
+    mutationFn: (ctx: { msgId: string; agentText: string; customerText: string }) =>
+      api(`/api/agents/${data!.conversation.agent_id}/tests`, {
+        method: 'POST',
+        body: JSON.stringify({
+          // The inbound is the trigger; the reply it gave is the bar.
+          prompt: ctx.customerText.slice(0, 400),
+          expectation: ctx.agentText.slice(0, 600),
+          category: 'general',
+          source: 'inbox',
+        }),
+      }),
+    onSuccess: (_r, ctx) => {
+      setScenarioSavedFor((s) => new Set(s).add(ctx.msgId));
+      void qc.invalidateQueries({
+        queryKey: ['agent-tests', data?.conversation.agent_id],
+      });
     },
     onError: (e) => setError(e.message),
   });
@@ -977,6 +1020,14 @@ export default function ConversationPage() {
               );
             }
             const m = item.m;
+            // The customer's message this reply answers — pairs Correct
+            // this and Save as scenario the same way the test chat does.
+            const prevIn = items
+              .slice(0, i)
+              .reverse()
+              .find((x) => x.kind === 'msg' && x.m.direction === 'in');
+            const prevPrompt =
+              prevIn?.kind === 'msg' ? (prevIn.m.text ?? undefined) : undefined;
             const isInternal = m.payload.internal === true;
             const isSystem = m.flags.failure || m.flags.help_requested || m.flags.custom_alert || m.flags.handoff_offer || m.flags.handoff_cancelled || m.flags.resolved || isInternal;
             const authorUser =
@@ -1151,41 +1202,47 @@ export default function ConversationPage() {
                   </button>
                 )}
                 {m.text?.trim() ? (
-                  <button
-                    className="correct-this"
-                    title="Tell Janis what it should have said — the fix lands as a note, a draft article, or an instruction rule"
-                    onClick={() => {
-                      // The customer's prompt is the previous inbound row —
-                      // same pairing the test chat uses.
-                      const prevIn = items
-                        .slice(0, i)
-                        .reverse()
-                        .find((x) => x.kind === 'msg' && x.m.direction === 'in');
-                      setCorrectFor({
-                        id: m.id,
-                        agentText: m.text ?? '',
-                        customerText:
-                          prevIn?.kind === 'msg' ? (prevIn.m.text ?? undefined) : undefined,
-                      });
-                    }}
-                  >
-                    Correct this
-                  </button>
+                  <div className="correct-row" style={{ marginTop: 4 }}>
+                    <button
+                      className="correct-this"
+                      title="Tell Janis what it should have said — opens the correction dialog"
+                      onClick={() =>
+                        setCorrectFor({
+                          id: m.id,
+                          agentText: m.text ?? '',
+                          customerText: prevPrompt,
+                        })
+                      }
+                    >
+                      Correct this
+                    </button>
+                    {/* Same affordance as the test chat — hidden when the
+                        prompt is already a scenario (that's the row's job). */}
+                    {prevPrompt &&
+                      (scenarioSavedFor.has(m.id) || scenarioExists(prevPrompt) ? (
+                        <span className="muted" style={{ fontSize: 12, alignSelf: 'center' }}>
+                          ✓ in tests
+                        </span>
+                      ) : (
+                        <button
+                          className="correct-this"
+                          title="Keep this exchange as a scenario — re-run it after config changes"
+                          disabled={saveScenario.isPending}
+                          onClick={() =>
+                            saveScenario.mutate({
+                              msgId: m.id,
+                              agentText: m.text!,
+                              customerText: prevPrompt,
+                            })
+                          }
+                        >
+                          Save as scenario
+                        </button>
+                      ))}
+                  </div>
                 ) : null}
                 {inspectorFor === m.id && !!m.payload.inspector && (
                   <InspectorPanel data={m.payload.inspector} />
-                )}
-                {correctFor?.id === m.id && agent && (
-                  // Fixed width — the wrap is a shrink-to-fit column, so an
-                  // unsized card would collapse the composer.
-                  <div style={{ width: 380, maxWidth: '86vw' }}>
-                    <CorrectThisCard
-                      agentId={agent.id}
-                      cfg={agent.config}
-                      target={correctFor}
-                      onClose={() => setCorrectFor(null)}
-                    />
-                  </div>
                 )}
               </div>
             )}
@@ -1529,6 +1586,25 @@ export default function ConversationPage() {
         )}
 
       </aside>
+
+      {/* Correct-this is a decision dialog, not transcript furniture —
+          same modal the test dock uses instead of an inline card. */}
+      {correctFor && agent && (
+        <div className="modal-backdrop" onClick={() => setCorrectFor(null)}>
+          <div
+            className="modal"
+            style={{ width: 560, maxHeight: '78vh', overflowY: 'auto' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <CorrectThisCard
+              agentId={agent.id}
+              cfg={agent.config}
+              target={correctFor}
+              onClose={() => setCorrectFor(null)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
