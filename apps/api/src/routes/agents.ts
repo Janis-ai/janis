@@ -1,7 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { AgentConfig, friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, campaignSends, campaigns, channelBindings, channels, contactIdentities, conversations, evalSuggestions, helpArticles, helpSearchLog, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
@@ -1911,7 +1911,9 @@ export function agentRoutes(db: Db) {
         .update(agents)
         .set({ ownerUserId: targetId })
         .where(eq(agents.id, c.req.param('id')));
-      // a hidden row would contradict ownership — clear it back to inherit
+      // any stored member-row role contradicts ownership — owner wins
+      // regardless, so clear it back to inherit rather than leave a
+      // vestigial override badge
       await db
         .update(agentMembers)
         .set({ role: null })
@@ -1919,7 +1921,7 @@ export function agentRoutes(db: Db) {
           and(
             eq(agentMembers.agentId, c.req.param('id')),
             eq(agentMembers.userId, targetId),
-            eq(agentMembers.role, 'hidden'),
+            isNotNull(agentMembers.role),
           ),
         );
       const [u] = await db.select().from(users).where(eq(users.id, targetId)).limit(1);

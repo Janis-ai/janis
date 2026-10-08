@@ -2169,8 +2169,12 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
               <span className="grow">
                 {m.name} · {m.email}
                 {/* A member row can exist with no role — saved profile or
-                    notify prefs alone shouldn't badge it as overridden. */}
-                {m.role && <span className="badge" style={{ marginLeft: 8 }}>override</span>}
+                    notify prefs alone shouldn't badge it as overridden.
+                    Nor should the owner — their stored role is vestigial,
+                    owner_user_id wins regardless. */}
+                {m.role && m.user_id !== ownerId && (
+                  <span className="badge" style={{ marginLeft: 8 }}>override</span>
+                )}
               </span>
               {notifyToggle(m.user_id)}
               {roleSelect(m.user_id, m.role ?? 'inherit', wsById.get(m.user_id)?.role ?? 'member', true)}
