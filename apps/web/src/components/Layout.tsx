@@ -472,14 +472,17 @@ export default function Layout() {
   // Channel resolution: the provider's resolved channel, else the rail's,
   // else the per-agent cache populated by either — the cache is what makes
   // the builder → agent-page handoff a prop swap instead of a remount.
+  // Live sources are read at RENDER time: a cache-only read misses the same
+  // commit that delivers the channel (the ref write below can't re-render),
+  // leaving an empty dock until an unrelated render happens along.
+  const liveChannelId =
+    (testProvided ? testWiring?.channelId : undefined) ??
+    (testRail && testRail.agentId === chatAgentId ? testRail.channelId : undefined);
   useEffect(() => {
-    const cid =
-      (testProvided ? testWiring?.channelId : undefined) ??
-      (testRail && testRail.agentId === chatAgentId ? testRail.channelId : undefined);
-    if (chatAgentId && cid) testChannelIds.current[chatAgentId] = cid;
-  }, [chatAgentId, testProvided, testWiring?.channelId, testRail]);
+    if (chatAgentId && liveChannelId) testChannelIds.current[chatAgentId] = liveChannelId;
+  }, [chatAgentId, liveChannelId]);
   const chatChannelId = chatAgentId
-    ? testChannelIds.current[chatAgentId]
+    ? (liveChannelId ?? testChannelIds.current[chatAgentId])
     : undefined;
   useEffect(() => {
     if (!(railOpen && railTab === 'test') || testProvided || onBuilderPage) return;
