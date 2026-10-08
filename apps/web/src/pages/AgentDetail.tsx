@@ -1589,7 +1589,7 @@ function AgentProfileOverride({ agent }: { agent: Agent }) {
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState('');
   const [avatarUploading, setAvatarUploading] = useState(false);
-  const [show, setShow] = useState(true);
+  const [show, setShow] = useState<'inherit' | 'on' | 'off'>('inherit');
   const [msg, setMsg] = useState('');
 
   const hasOverride = Boolean(
@@ -1600,7 +1600,7 @@ function AgentProfileOverride({ agent }: { agent: Agent }) {
     setOn(hasOverride);
     setName(mine?.display_name ?? '');
     setAvatar(mine?.avatar_override ?? '');
-    setShow(mine?.show_identity ?? me?.user.show_identity ?? true);
+    setShow(mine?.show_identity == null ? 'inherit' : mine.show_identity ? 'on' : 'off');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [members]);
 
@@ -1632,12 +1632,16 @@ function AgentProfileOverride({ agent }: { agent: Agent }) {
   };
 
   const baseName = me?.user.display_name || me?.user.name.split(' ')[0] || 'your profile name';
+  // Workspace-level visibility the agent-side control inherits —
+  // users.show_identity, null/false = anonymous.
+  const wsShown = me?.user.show_identity !== false;
   return (
     <div className="card" style={{ marginTop: 12 }}>
       <strong>Profile override</strong>
       <div className="muted" style={{ margin: '4px 0 8px' }}>
         Your name &amp; avatar as customers see them on this agent's channels.
-        Off — inherits your workspace profile ({baseName}).
+        Off — inherits your workspace profile ({baseName},{' '}
+        {wsShown ? 'shown to customers' : 'kept anonymous'}).
       </div>
       <label className="check-label">
         <input
@@ -1684,14 +1688,22 @@ function AgentProfileOverride({ agent }: { agent: Agent }) {
               />
             )}
           </div>
-          <label className="check-label" style={{ marginTop: 8 }}>
-            <input
-              type="checkbox"
-              checked={show}
-              onChange={(e) => setShow(e.target.checked)}
-            />
-            Show my name &amp; avatar to customers on this agent
-          </label>
+          <div className="row" style={{ marginTop: 8 }}>
+            <span>Show my name &amp; avatar to customers</span>
+            <select
+              value={show}
+              onChange={(e) => setShow(e.target.value as 'inherit' | 'on' | 'off')}
+            >
+              <option value="inherit">
+                Inherit ({wsShown ? 'shown' : 'anonymous'})
+              </option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Hidden — your replies stay anonymous even on enabled channels.
+          </div>
           <div className="row" style={{ marginTop: 8 }}>
             <button
               className="btn"
@@ -1700,7 +1712,7 @@ function AgentProfileOverride({ agent }: { agent: Agent }) {
                 save.mutate({
                   display_name: name.trim() || null,
                   avatar_url: avatar || null,
-                  show_identity: show,
+                  show_identity: show === 'inherit' ? null : show === 'on',
                 })
               }
             >
