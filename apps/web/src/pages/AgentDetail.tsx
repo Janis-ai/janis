@@ -2164,7 +2164,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         The bell opens that person's notification overrides for this agent —
         anyone can open their own, admins can open anyone's.
       </div>
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 16, fontSize: 13 }}>
         <thead>
           <tr>
             <th style={th}>
@@ -2235,6 +2235,8 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         </tbody>
       </table>
       {isAdmin && (
+        <div style={{ borderTop: '1px solid var(--border)', marginTop: 18, paddingTop: 14 }}>
+        <strong style={{ fontSize: 13 }}>Invite teammate</strong>
         <form
           className="row"
           style={{ marginTop: 10 }}
@@ -2278,13 +2280,14 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
           </select>
           <button className="btn" disabled={add.isPending}>Invite</button>
         </form>
+        <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+          "This agent only" — just this inbox; they sign in with Google or
+          Slack, no workspace invite needed. "Whole workspace" — the same
+          invite as Settings → Team; a teammate who sees every agent.
+        </div>
+        {err && <div className="error">{err}</div>}
+        </div>
       )}
-      <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-        "This agent only" — just this inbox; they sign in with Google or
-        Slack, no workspace invite needed. "Whole workspace" — the same
-        invite as Settings → Team; a teammate who sees every agent.
-      </div>
-      {err && <div className="error">{err}</div>}
     </div>
   );
 }
