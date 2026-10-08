@@ -10,7 +10,8 @@ import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { MemberGroups } from '../components/MemberGroups';
 import { usePrompt, useConfirm } from '../components/Prompt';
-import { Shield, Trash2, Users } from 'lucide-react';
+import { Bell, Pencil, Shield, Trash2, Users, X } from 'lucide-react';
+import { NOTIFY_EVENT_LABELS } from '../lib/notifyEvents';
 import { AutosizeText, CodeBlock } from '../components/bits';
 import { currentTheme, setTheme } from '../lib/theme';
 import { usePageTitle } from '../lib/title';
@@ -55,6 +56,7 @@ export default function Settings() {
   const [confirmEl, confirm] = useConfirm();
   const [pushMsg, setPushMsg] = useState('');
   const [pushEnabled, setPushEnabled] = useState<boolean | null>(null);
+  const [notifyOpen, setNotifyOpen] = useState(false);
   const [theme, setThemeState] = useState<'dark' | 'light'>(currentTheme());
 
   useEffect(() => {
@@ -559,94 +561,6 @@ export default function Settings() {
         </label>
       </div>
 
-      <div className="card">
-        <strong>Notifications</strong>
-        <div className="muted" style={{ margin: '6px 0 10px' }}>
-          Get pushed when an agent needs a human — works on mobile once installed as an app.
-        </div>
-        <div className="row">
-          {pushEnabled ? (
-            <>
-              <span className="muted" style={{ alignSelf: 'center' }}>Enabled on this device</span>
-              <button className="btn" onClick={() => void disablePush()}>Disable</button>
-            </>
-          ) : (
-            <button className="btn" onClick={() => void togglePush()}>Enable push</button>
-          )}
-        </div>
-        {pushMsg && <div className="muted" style={{ marginTop: 8 }}>{pushMsg}</div>}
-        {me && (
-          <div style={{ display: 'flex', gap: 18, marginTop: 12, fontSize: 14 }}>
-            <label>
-              <input
-                type="checkbox"
-                checked={me.user.notify?.push !== false}
-                disabled={setNotify.isPending}
-                onChange={(e) => setNotify.mutate({ push: e.target.checked })}
-              />{' '}
-              Web push
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={me.user.notify?.email !== false}
-                disabled={setNotify.isPending}
-                onChange={(e) => setNotify.mutate({ email: e.target.checked })}
-              />{' '}
-              Email
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={me.user.notify?.sound !== false}
-                disabled={setNotify.isPending}
-                onChange={(e) => setNotify.mutate({ sound: e.target.checked })}
-              />{' '}
-              Alert sounds
-            </label>
-          </div>
-        )}
-        {me && (
-          <div style={{ marginTop: 14 }}>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
-              Notify me about
-            </div>
-            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 13 }}>
-              {(
-                [
-                  ['handoff', 'Needs human'],
-                  ['failure', 'Agent failures'],
-                  ['ops', 'Agent errors'],
-                  ['inactivity', 'Unanswered customers'],
-                  ['sentiment', 'Negative sentiment'],
-                  ['offer', 'Handoff offers'],
-                  ['sla', 'SLA breaches'],
-                  ['assigned', 'Assigned to me'],
-                  ['keyword', 'Keyword matches'],
-                  ['intent', 'Topic matches'],
-                  ['csat', 'Low CSAT scores'],
-                  ['custom', 'Custom alerts'],
-                  ['approval', 'Approvals'],
-                  ['mention', 'Mentions'],
-                  ['digest', 'Digests'],
-                  ['eval', 'Eval regressions'],
-                ] as const
-              ).map(([key, label]) => (
-                <label key={key}>
-                  <input
-                    type="checkbox"
-                    checked={me.user.notify?.events?.[key] !== false}
-                    disabled={setNotify.isPending}
-                    onChange={(e) => setNotify.mutate({ events: { [key]: e.target.checked } })}
-                  />{' '}
-                  {label}
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
       {providers?.password && (
       <div className="card">
         <strong>Password</strong>
@@ -826,6 +740,11 @@ export default function Settings() {
                   <Users size={12} /> Member
                 </span>
               </th>
+              <th style={{ ...teamTh, width: 50 }}>
+                <span className="row" style={{ gap: 6 }}>
+                  <Bell size={12} /> Alerts
+                </span>
+              </th>
               <th style={{ ...teamTh, width: 200 }}>
                 <span className="row" style={{ gap: 6 }}>
                   <Shield size={12} /> Role
@@ -848,6 +767,18 @@ export default function Settings() {
                     <span className="muted">· {u.email}</span>
                     {u.status === 'invited' && (
                       <span className="badge" style={{ marginLeft: 8 }}>invited</span>
+                    )}
+                  </td>
+                  <td style={teamTd}>
+                    {u.id === me?.user.id && (
+                      <button
+                        className="btn ghost"
+                        onClick={() => setNotifyOpen(true)}
+                        title="Your workspace notification settings"
+                        aria-label="Notification settings"
+                      >
+                        <Pencil size={14} />
+                      </button>
                     )}
                   </td>
                   <td style={teamTd}>
@@ -929,6 +860,101 @@ export default function Settings() {
           </div>
         )}
       </div>
+
+      {notifyOpen && me && (
+        <div className="modal-backdrop" onClick={() => setNotifyOpen(false)}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            style={{ width: 680 }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setNotifyOpen(false);
+            }}
+          >
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <strong>Notifications — {me.user.name}</strong>
+              <button className="btn ghost" onClick={() => setNotifyOpen(false)} aria-label="Close">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+              Your workspace-wide baseline — applies on every agent unless
+              overridden per-agent (Team tab → alerts).
+            </div>
+            <div className="row" style={{ marginTop: 12 }}>
+              <span className="muted" style={{ fontSize: 13, alignSelf: 'center' }}>
+                Web push on this device:
+              </span>
+              {pushEnabled ? (
+                <>
+                  <span style={{ fontSize: 13, alignSelf: 'center' }}>enabled</span>
+                  <button className="btn" onClick={() => void disablePush()}>Disable</button>
+                </>
+              ) : (
+                <button className="btn" onClick={() => void togglePush()}>Enable push</button>
+              )}
+            </div>
+            {pushMsg && <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{pushMsg}</div>}
+            <div className="row" style={{ marginTop: 12 }}>
+              {([['push', 'Web push'], ['email', 'Email'], ['sound', 'Alert sounds']] as const).map(([k, label]) => (
+                <span key={k} className="row" style={{ marginRight: 12, gap: 6 }}>
+                  <span>{label}</span>
+                  <select
+                    value={me.user.notify?.[k] !== false ? 'on' : 'off'}
+                    onChange={(e) => setNotify.mutate({ [k]: e.target.value === 'on' })}
+                    disabled={setNotify.isPending}
+                  >
+                    <option value="on">On</option>
+                    <option value="off">Off</option>
+                  </select>
+                </span>
+              ))}
+            </div>
+            <div className="row" style={{ justifyContent: 'space-between', marginTop: 12 }}>
+              <span className="muted" style={{ fontSize: 12 }}>Event types</span>
+              <select
+                value={(() => {
+                  const vals = NOTIFY_EVENT_LABELS.map(([k]) => me.user.notify?.events?.[k]);
+                  if (vals.every((v) => v === false)) return 'off';
+                  if (vals.every((v) => v !== false)) return 'on';
+                  return 'mixed';
+                })()}
+                onChange={(e) => {
+                  const on = e.target.value === 'on';
+                  const events: Record<string, boolean> = {};
+                  for (const [k] of NOTIFY_EVENT_LABELS) events[k] = on;
+                  setNotify.mutate({ events });
+                }}
+                disabled={setNotify.isPending}
+              >
+                {NOTIFY_EVENT_LABELS.some(([k]) => me.user.notify?.events?.[k] === false) &&
+                  NOTIFY_EVENT_LABELS.some(([k]) => me.user.notify?.events?.[k] !== false) && (
+                    <option value="mixed" disabled>mixed — set all:</option>
+                  )}
+                <option value="on">All on</option>
+                <option value="off">All off</option>
+              </select>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '4px 12px', fontSize: 13, marginTop: 6 }}>
+              {NOTIFY_EVENT_LABELS.map(([key, label]) => (
+                <div key={key} className="row" style={{ justifyContent: 'space-between' }}>
+                  <span>{label}</span>
+                  <select
+                    value={me.user.notify?.events?.[key] !== false ? 'on' : 'off'}
+                    onChange={(e) => setNotify.mutate({ events: { [key]: e.target.value === 'on' } })}
+                    disabled={setNotify.isPending}
+                  >
+                    <option value="on">On</option>
+                    <option value="off">Off</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <GroupsCard isAdmin={me?.user.role === 'admin'} />
 

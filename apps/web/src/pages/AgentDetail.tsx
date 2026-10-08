@@ -40,6 +40,7 @@ import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow, scenarioPrompt } from '../components/ScenarioRow';
 import { useDock } from '../lib/dockContext';
 import { usePageTitle } from '../lib/title';
+import { NOTIFY_EVENT_LABELS } from '../lib/notifyEvents';
 import { useConfirm } from '../components/Prompt';
 import { Bell, Pencil, Shield, Trash2, Upload, Users, X } from 'lucide-react';
 
@@ -1728,25 +1729,6 @@ function AgentProfileOverride({ agent }: { agent: Agent }) {
 
 /** Event keys where a per-agent override can differ from workspace prefs —
  *  same buckets as Settings → Notifications. */
-const NOTIFY_EVENT_LABELS: [string, string][] = [
-  ['handoff', 'Needs human'],
-  ['failure', 'Agent failures'],
-  ['ops', 'Agent errors'],
-  ['inactivity', 'Unanswered customers'],
-  ['sentiment', 'Negative sentiment'],
-  ['offer', 'Handoff offers'],
-  ['sla', 'SLA breaches'],
-  ['assigned', 'Assigned to me'],
-  ['keyword', 'Keyword matches'],
-  ['intent', 'Topic matches'],
-  ['csat', 'Low CSAT scores'],
-  ['custom', 'Custom alerts'],
-  ['approval', 'Approvals'],
-  ['mention', 'Mentions'],
-  ['digest', 'Digests'],
-  ['eval', 'Eval regressions'],
-];
-
 /** Per-member notification override editor — tri-state channels and events
  *  (inherit/on/off). Rendered inside a modal from the row's "alerts" button;
  *  self-service for the member's own row, admin-facing for anyone else's. */
@@ -2158,12 +2140,6 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         <li><strong>no privileges</strong> — hides the agent from a workspace member entirely</li>
         <li><strong>owner</strong> — fixed; transferable only by the owner</li>
       </ul>
-      <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-        Workspace members see every agent — a role here overrides theirs for
-        this agent only. Agent-only people see nothing but this agent.
-        The bell opens that person's notification overrides for this agent —
-        anyone can open their own, admins can open anyone's.
-      </div>
       <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 16, fontSize: 13 }}>
         <thead>
           <tr>
