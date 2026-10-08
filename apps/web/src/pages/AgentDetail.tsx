@@ -3272,6 +3272,18 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
 
+  // Human verdicts on rows — same PATCH the Try-step and test-chat thumbs
+  // write; a fail also opens the diagnose card on the stored reply.
+  const markTest = useMutation({
+    mutationFn: ({ id, result }: { id: string; result: 'pass' | 'fail' }) =>
+      api(`/api/agents/${agentId}/tests/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ human_result: result }),
+      }),
+    onSuccess: invalidate,
+    onError: (e) => setErr(e.message),
+  });
+
   const runOne = useMutation({
     mutationFn: (testId: string) =>
       api(`/api/agents/${agentId}/tests/${testId}/run`, { method: 'POST' }),
@@ -3892,6 +3904,22 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             onTryInChat={
               dock?.testAvailable
                 ? () => dock.sendTestSeed(scenarioPrompt(t))
+                : undefined
+            }
+            verdict={
+              isAdmin
+                ? {
+                    pending: markTest.isPending,
+                    onPass: () => markTest.mutate({ id: t.id, result: 'pass' }),
+                    onFail: () => {
+                      markTest.mutate({ id: t.id, result: 'fail' });
+                      setCorrectTarget({
+                        agentText: t.last_run?.reply ?? '',
+                        customerText: scenarioPrompt(t),
+                        scenarioId: t.id,
+                      });
+                    },
+                  }
                 : undefined
             }
           />
