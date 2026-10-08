@@ -112,8 +112,10 @@ export function stepSubtitle(key: string, status: BuildStatus): string {
       const t = status.test_scenarios;
       if (t?.total) {
         const bits = [
-          `${t.checked} of ${t.total} checked`,
-          ...(t.failing ? [`${t.failing} need${t.failing > 1 ? '' : 's'} work`] : []),
+          t.failing
+            ? `${t.failing} of ${t.total} failing`
+            : `${t.passing} of ${t.total} passing`,
+          ...(t.unrun ? [`${t.unrun} not run yet`] : []),
           ...(t.fixed ? [`${t.fixed} fixed — re-run to confirm`] : []),
           ...(t.stale ? [`${t.stale} stale`] : []),
         ];

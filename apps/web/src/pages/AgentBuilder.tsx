@@ -1144,10 +1144,11 @@ export default function AgentBuilder() {
                 locked
                   ? 'Create the agent first'
                   : // The full subtitle survives container-query truncation;
-                    // Try it also names what's still unchecked or stale.
+                    // Try it also names what isn't green — failing, never
+                    // run, or stale.
                     `${s.label} — ${subtitle}` +
                     (s.key === 'try' && status?.test_scenarios?.unchecked?.length
-                      ? `\nUnchecked: ${status.test_scenarios.unchecked.join(', ')}`
+                      ? `\nNot passing: ${status.test_scenarios.unchecked.join(', ')}`
                       : '')
               }
               onClick={() => goStep(s.key)}
@@ -2206,18 +2207,17 @@ export default function AgentBuilder() {
                         ? 'todo'
                         : t.failing || t.stale
                           ? 'warn'
-                          : t.checked === t.total
+                          : t.passing === t.total
                             ? 'ok'
                             : 'todo',
                       text: !t?.total
                         ? 'No scenarios yet — add one in Try it'
-                        : `Tests: ${t.checked} of ${t.total} scenario${t.total > 1 ? 's' : ''} checked${
-                            t.failing
-                              ? ` · ${t.failing} need${t.failing > 1 ? '' : 's'} work`
-                              : ''
-                          }${t.fixed ? ` · ${t.fixed} fixed — re-run to confirm` : ''}${
-                            t.stale ? ` · ${t.stale} stale after a config change` : ''
-                          }`,
+                        : t.failing
+                          ? `Tests: ${t.failing} of ${t.total} failing`
+                          : t.passing === t.total
+                            ? `Tests: all ${t.total} passing`
+                            : `Tests: ${t.passing} of ${t.total} passing` +
+                              (t.unrun ? ` · ${t.unrun} not run yet` : ''),
                       to: stepLink('try'),
                     },
                     {

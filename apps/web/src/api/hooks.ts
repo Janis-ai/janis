@@ -142,11 +142,17 @@ export interface BuildStatus {
   abilities: number;
   test_conversations: number;
   open_gaps: number;
-  // Try-it scenario checklist — verdicts from panel runs.
+  // Try-it scenario checklist — effective outcomes: a human verdict
+  // overrides the judge, machine passes count without approval.
   test_scenarios: {
     total: number;
+    /** Human pass/fail verdicts — the safety review still needs them. */
     checked: number;
+    /** Fresh pass outcomes — human-approved or machine-judged. */
+    passing: number;
     failing: number;
+    /** Fresh but no outcome — never run, unrunnable, or fix pending re-run. */
+    unrun: number;
     stale: number;
     safety_total: number;
     safety_checked: number;

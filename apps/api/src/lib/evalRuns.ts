@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { agents, agentTestRuns, agentTests } from '../db/schema.js';
 import { runAgentTest, type TestRunResult } from './agentTests.js';
+import { configVersion } from './configVersion.js';
+import type { AgentConfig } from '@janis/shared';
 import { notifyWorkspace } from './notify.js';
 import { opsAlert } from './opsAlert.js';
 import { enqueueJob } from './jobs.js';
@@ -170,8 +172,16 @@ export async function runTestSuite(
     })) satisfies TestRunResult;
     await recordRun(db, { agent, test, result, batchId: run.batchId, kind: run.kind });
     // Experiment runs are candidates — the baseline verdict stays put.
+    // Stamping the config fingerprint lets a machine pass go stale on the
+    // next config change, same as a human verdict does.
     if (run.kind !== 'ab') {
-      await db.update(agentTests).set({ lastRun: result as never }).where(eq(agentTests.id, test.id));
+      await db
+        .update(agentTests)
+        .set({
+          lastRun: result as never,
+          configVersion: configVersion((agent.config ?? {}) as AgentConfig),
+        })
+        .where(eq(agentTests.id, test.id));
     }
     await run.heartbeat?.();
   }
@@ -224,7 +234,13 @@ export async function runScheduledEval(
   const batchId = randomUUID();
   for (const test of tests) {
     const result = await runAgentTest(db, agent, test);
-    await db.update(agentTests).set({ lastRun: result as never }).where(eq(agentTests.id, test.id));
+    await db
+      .update(agentTests)
+      .set({
+        lastRun: result as never,
+        configVersion: configVersion((agent.config ?? {}) as AgentConfig),
+      })
+      .where(eq(agentTests.id, test.id));
     await recordRun(db, { agent, test, result, batchId, kind: 'scheduled' });
     await heartbeat?.();
   }

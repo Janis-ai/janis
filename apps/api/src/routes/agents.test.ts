@@ -1110,7 +1110,9 @@ describe('try-it scenarios', () => {
       test_scenarios: {
         total: number;
         checked: number;
+        passing: number;
         failing: number;
+        unrun: number;
         stale: number;
         safety_total: number;
         safety_checked: number;
@@ -1261,6 +1263,67 @@ describe('try-it scenarios', () => {
       rejudge: true,
     });
     expect(res2.status).toBe(200);
+  });
+
+  it('machine passes satisfy the try gate — no per-row approval needed', async () => {
+    const id = await mkAgent();
+    const a = await (await postTest(id, { prompt: 'q1', expectation: 'e1' })).json();
+    const b = await (await postTest(id, { prompt: 'q2', expectation: 'e2' })).json();
+    const lastRun = (passed: boolean | null) => ({
+      at: new Date().toISOString(),
+      passed,
+      reason: passed === false ? 'missed the bar' : 'ok',
+      reply: 'r',
+      model: 'm',
+    });
+    // Machine green on both — no human verdicts — the step is done and the
+    // counts read pass/fail, not "checked".
+    await db
+      .update(agentTests)
+      .set({ lastRun: lastRun(true) as never })
+      .where(eq(agentTests.id, a.test.id));
+    expect((await buildStatus(id)).steps.try).toBe('partial'); // b never ran
+    await db
+      .update(agentTests)
+      .set({ lastRun: lastRun(true) as never })
+      .where(eq(agentTests.id, b.test.id));
+    let st = await buildStatus(id);
+    expect(st.steps.try).toBe('done');
+    expect(st.test_scenarios.passing).toBe(2);
+    expect(st.test_scenarios.checked).toBe(0);
+    // A machine failure counts as failing — it needs a fix or an override.
+    await db
+      .update(agentTests)
+      .set({ lastRun: lastRun(false) as never })
+      .where(eq(agentTests.id, b.test.id));
+    st = await buildStatus(id);
+    expect(st.steps.try).toBe('partial');
+    expect(st.test_scenarios.failing).toBe(1);
+    // A human pass overrides the machine fail.
+    await patchTest(id, b.test.id, { human_result: 'pass' });
+    st = await buildStatus(id);
+    expect(st.test_scenarios.failing).toBe(0);
+    expect(st.steps.try).toBe('done');
+    // And a human fail overrides a machine pass.
+    await patchTest(id, a.test.id, { human_result: 'fail' });
+    st = await buildStatus(id);
+    expect(st.test_scenarios.failing).toBe(1);
+    expect(st.steps.try).toBe('partial');
+  });
+
+  it('a run stamped against an old config reads stale', async () => {
+    const id = await mkAgent();
+    const a = await (await postTest(id, { prompt: 'q', expectation: 'e' })).json();
+    await db
+      .update(agentTests)
+      .set({
+        lastRun: { at: new Date().toISOString(), passed: true, reply: 'r', model: 'm' } as never,
+        configVersion: 'oldversion',
+      })
+      .where(eq(agentTests.id, a.test.id));
+    const st = await buildStatus(id);
+    expect(st.test_scenarios.stale).toBe(1);
+    expect(st.steps.try).toBe('partial');
   });
 
   it('abilities_confirmed outranks the draft’s uninstalled suggestions', async () => {

@@ -45,10 +45,11 @@ import {
 } from '../lib/promptMatch.js';
 import { checkpointIndices, draftExpectation, judgeExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
+import { configVersion } from '../lib/configVersion.js';
 import { recordLlmUsage } from '../lib/usage.js';
 import { enqueueJob, runJobs } from '../lib/jobs.js';
 import { applySuggestion, type SuggestionPatch } from '../lib/evalTriage.js';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { effectiveMeteredModel } from '../lib/llm.js';
 import { llmModelsResult } from '../lib/llmModels.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
@@ -106,24 +107,6 @@ const updateAgent = z.object({
   slack_installation_id: z.string().nullable().optional(),
   config: AgentConfig.optional(),
 });
-
-/** Fingerprint of the behavior-bearing config — instructions, knowledge,
- *  and abilities. A Try-it verdict stored against a different fingerprint
- *  is stale: fixing one answer can break another, so edits ask for a
- *  re-run rather than silently aging out. */
-function configVersion(cfg: AgentConfig): string {
-  return createHash('sha1')
-    .update(
-      JSON.stringify({
-        s: cfg.system_prompt ?? '',
-        k: cfg.knowledge ?? [],
-        t: cfg.tools ?? [],
-        b: cfg.builtin_tools ?? [],
-      }),
-    )
-    .digest('hex')
-    .slice(0, 12);
-}
 
 export function agentRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
@@ -855,33 +838,58 @@ export function agentRoutes(db: Db) {
         category: agentTests.category,
         humanResult: agentTests.humanResult,
         configVersion: agentTests.configVersion,
+        // The judge's verdict from the last run — machine passes count
+        // toward readiness; the deploy gate is failures, not approvals.
+        lastPassed: sql<
+          boolean | null
+        >`CASE WHEN ${agentTests.lastRun} IS NULL THEN NULL ELSE (${agentTests.lastRun}->>'passed')::boolean END`,
+        hasRun: sql<boolean>`${agentTests.lastRun} IS NOT NULL`,
       })
       .from(agentTests)
       .where(eq(agentTests.agentId, agent.id));
     const testsTotal = testRows.length;
-    // 'checked' = a verdict was given (pass or fail); 'unreviewed' means
-    // the scenario ran but nobody judged the reply yet.
-    const testsRun = testRows.filter((t) => !!t.humanResult).length;
+    // Effective outcome — a human pass/fail overrides the judge; absent a
+    // verdict the machine result counts. 'unreviewed' (a fresh panel run
+    // voided the prior verdict) and 'fixed_recheck' (fix applied, awaiting
+    // its re-run) produce no human outcome, so they fall through to the
+    // stored run — fixed_recheck excepted, whose last run is pre-fix.
+    const outcomeOf = (t: (typeof testRows)[number]): 'pass' | 'fail' | 'unrun' =>
+      t.humanResult === 'pass'
+        ? 'pass'
+        : t.humanResult === 'fail'
+          ? 'fail'
+          : t.humanResult === 'fixed_recheck'
+            ? 'unrun'
+            : t.lastPassed === true
+              ? 'pass'
+              : t.lastPassed === false
+                ? 'fail'
+                : 'unrun';
+    // Stale = recorded against a different config fingerprint — runs stamp
+    // it as well as verdicts, so an old machine pass can't stay green.
+    const isStaleRow = (t: (typeof testRows)[number]) =>
+      !!t.configVersion && t.configVersion !== cfgVersion;
+    const fresh = testRows.filter((t) => !isStaleRow(t));
+    const testsPassing = fresh.filter((t) => outcomeOf(t) === 'pass').length;
+    const testsFailing = fresh.filter((t) => outcomeOf(t) === 'fail').length;
+    // Fresh but no passing/failing outcome — never ran, unrunnable (no
+    // expectation to judge against), or a fixed scenario awaiting re-run.
+    const testsUnrun = fresh.length - testsPassing - testsFailing;
+    const testsRun = testRows.filter((t) => !!t.humanResult || t.hasRun).length;
+    // 'checked' = a human verdict was given (pass or fail); 'unreviewed'
+    // means the scenario ran but nobody judged the reply yet.
     const testsChecked = testRows.filter(
       (t) => t.humanResult === 'pass' || t.humanResult === 'fail',
     ).length;
-    const testsPassing = testRows.filter((t) => t.humanResult === 'pass').length;
-    const testsFailing = testRows.filter((t) => t.humanResult === 'fail').length;
-    const testsStale = testRows.filter(
-      (t) => t.humanResult && t.configVersion && t.configVersion !== cfgVersion,
-    ).length;
+    const testsStale = testRows.filter(isStaleRow).length;
     const safetyRows = testRows.filter((t) => t.category === 'safety');
     const safetyChecked = safetyRows.filter(
       (t) => t.humanResult === 'pass' || t.humanResult === 'fail',
     ).length;
-    // Names of what's still unchecked or stale — the nav chip tooltip lists
-    // them so "4 of 5 checked" is inspectable, not just a number.
+    // Names of what isn't green — the nav chip tooltip lists them so the
+    // counts are inspectable, not just numbers.
     const uncheckedNames = testRows
-      .filter(
-        (t) =>
-          !(t.humanResult === 'pass' || t.humanResult === 'fail') ||
-          (t.configVersion !== null && t.configVersion !== cfgVersion),
-      )
+      .filter((t) => isStaleRow(t) || outcomeOf(t) !== 'pass')
       .map((t) => t.name)
       .slice(0, 6);
     const sources = (cfg.knowledge?.length ?? 0) + files.length;
@@ -944,10 +952,10 @@ export function agentRoutes(db: Db) {
                   : 'pending',
         try:
           testsTotal > 0
-            ? // Scenario checklist exists — verdicts drive the mark.
-              // ✓ every scenario passed and none are stale; ◐ some run or
-              // reviewed, any needs-work, or results stale; ○ nothing run.
-              testsPassing === testsTotal && testsStale === 0
+            ? // ✓ every scenario has a fresh passing outcome (machine runs
+              // count — no per-row approval needed); ◐ anything failing,
+              // unrun, or stale; ○ nothing ran.
+              testsFailing === 0 && testsUnrun === 0 && testsStale === 0
               ? 'done'
               : testsRun > 0 || testConversations > 0
                 ? 'partial'
@@ -995,7 +1003,9 @@ export function agentRoutes(db: Db) {
       test_scenarios: {
         total: testsTotal,
         checked: testsChecked,
+        passing: testsPassing,
         failing: testsFailing,
+        unrun: testsUnrun,
         // fix applied, re-run queued/in-flight — awaiting the re-verdict.
         fixed: testRows.filter((t) => t.humanResult === 'fixed_recheck').length,
         stale: testsStale,
@@ -2510,7 +2520,10 @@ export function agentRoutes(db: Db) {
     });
     const [updated] = await db
       .update(agentTests)
-      .set({ lastRun: run as never })
+      .set({
+        lastRun: run as never,
+        configVersion: configVersion((agent.config ?? {}) as AgentConfig),
+      })
       .where(eq(agentTests.id, test.id))
       .returning();
     return c.json({ test: toTest(updated), run });
