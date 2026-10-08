@@ -1260,50 +1260,7 @@ function EscalationTab({
   return (
     <>
     <ReadOnly off={!isAdmin}>
-      <div className="card" style={{ marginTop: 12 }}>
-        <strong>Human takeover</strong>
-        <div className="form-field" style={{ marginTop: 8 }}>
-          <label>Auto-resume — release a takeover back to the agent after N minutes</label>
-          <div className="row">
-            <input
-              type="number"
-              min={1}
-              className="num-input"
-              placeholder="minutes"
-              value={autoResume}
-              onChange={(e) => setAutoResume(e.target.value)}
-            />
-            <span className="muted">blank = never auto-resume</span>
-          </div>
-        </div>
-        <div className="form-field">
-          <label>Escalation SLA — re-alert when a handoff stays unclaimed</label>
-          <div className="row">
-            <input
-              type="number"
-              min={1}
-              className="num-input"
-              placeholder="minutes"
-              value={cfg.sla_minutes ?? ''}
-              onChange={(e) =>
-                setCfg({ ...cfg, sla_minutes: e.target.value ? Number(e.target.value) : undefined })
-              }
-            />
-            <span className="muted">blank = off</span>
-          </div>
-        </div>
-        <div className="form-field">
-          <label className="check-label">
-            <input
-              type="checkbox"
-              checked={cfg.auto_assign ?? false}
-              onChange={(e) => setCfg({ ...cfg, auto_assign: e.target.checked })}
-            />
-            Auto-assign handoffs to the least-loaded teammate
-          </label>
-        </div>
-        <div className="muted">Repeat breaches escalate to the Slack alert channel.</div>
-      </div>
+      <SlackAlerts agent={agent} isAdmin={isAdmin} />
     </ReadOnly>
 
       <div className="card" style={{ marginTop: 12 }}>
@@ -1539,20 +1496,65 @@ function EscalationTab({
       </div>
 
     <ReadOnly off={!isAdmin}>
-      <SlackAlerts agent={agent} isAdmin={isAdmin} />
+      <div className="card" style={{ marginTop: 12 }}>
+        <strong>Human takeover</strong>
+        <div className="form-field" style={{ marginTop: 8 }}>
+          <label>Auto-resume — release a takeover back to the agent after N minutes</label>
+          <div className="row">
+            <input
+              type="number"
+              min={1}
+              className="num-input"
+              placeholder="minutes"
+              value={autoResume}
+              onChange={(e) => setAutoResume(e.target.value)}
+            />
+            <span className="muted">blank = never auto-resume</span>
+          </div>
+        </div>
+        <div className="form-field">
+          <label>Escalation SLA — re-alert when a handoff stays unclaimed</label>
+          <div className="row">
+            <input
+              type="number"
+              min={1}
+              className="num-input"
+              placeholder="minutes"
+              value={cfg.sla_minutes ?? ''}
+              onChange={(e) =>
+                setCfg({ ...cfg, sla_minutes: e.target.value ? Number(e.target.value) : undefined })
+              }
+            />
+            <span className="muted">blank = off</span>
+          </div>
+        </div>
+        <div className="form-field">
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={cfg.auto_assign ?? false}
+              onChange={(e) => setCfg({ ...cfg, auto_assign: e.target.checked })}
+            />
+            Auto-assign handoffs to the least-loaded teammate
+          </label>
+        </div>
+        <div className="muted">Repeat breaches escalate to the Slack alert channel.</div>
+      </div>
     </ReadOnly>
+
+    <AgentProfileOverride agent={agent} />
     </>
   );
 }
 
-/** Settings → Team: per-agent membership + each operator's own identity
- *  overrides. Self-service pieces gate themselves, so no ReadOnly wrap. */
+/** Settings → Team: per-agent membership + roster groups. Profile overrides
+ *  live under Escalation (that's where a teammate's identity meets the
+ *  customer conversation). */
 function TeamSection({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
   return (
     <>
       <AgentTeamCard agent={agent} isAdmin={isAdmin} />
       <AgentGroups agent={agent} isAdmin={isAdmin} />
-      <AgentProfileOverride agent={agent} />
     </>
   );
 }
