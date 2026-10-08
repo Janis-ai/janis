@@ -2221,15 +2221,18 @@ export default function AgentBuilder() {
                       to: stepLink('try'),
                     },
                     {
-                      st:
-                        status.abilities > 0 || status.steps.abilities === 'na' ? 'ok' : 'todo',
+                      // 'done' with zero tools = the owner marked it none
+                      // needed — count it, but say so.
+                      st: ['done', 'na'].includes(status.steps.abilities) ? 'ok' : 'todo',
                       text: status.abilities
                         ? `Abilities: ${status.abilities} tool${status.abilities > 1 ? 's' : ''}`
                         : status.steps.abilities === 'na'
                           ? 'Abilities: none needed'
-                          : status.steps.abilities === 'partial'
-                            ? 'Abilities: suggested — none connected'
-                            : 'Abilities: none connected',
+                          : status.steps.abilities === 'done'
+                            ? 'Abilities: none connected (marked as not needed)'
+                            : status.steps.abilities === 'partial'
+                              ? 'Abilities: suggested — none connected'
+                              : 'Abilities: none connected',
                       to: stepLink('abilities'),
                     },
                     {

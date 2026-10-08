@@ -103,11 +103,14 @@ export function stepSubtitle(key: string, status: BuildStatus): string {
     case 'abilities':
       return status.abilities
         ? `${status.abilities} tool${status.abilities > 1 ? 's' : ''}`
-        : st === 'partial'
-          ? 'suggested — none connected'
-          : st === 'na'
-            ? 'none needed'
-            : 'nothing connected';
+        : st === 'done'
+          ? // 'done' with zero tools = marked none needed, say so.
+            'marked as not needed'
+          : st === 'partial'
+            ? 'suggested — none connected'
+            : st === 'na'
+              ? 'none needed'
+              : 'nothing connected';
     case 'try': {
       const t = status.test_scenarios;
       if (t?.total) {
