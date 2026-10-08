@@ -497,6 +497,15 @@ export function ScenarioRow({
               <ThumbsDown size={12} /> <span className="scenario-btn-text">Needs work</span>
             </button>
           )}
+          {onFix && fixReply && (status === 'failed' || status === 'rejected') && (
+            <button
+              className="btn primary sm"
+              title="Fix it — diagnose the miss: knowledge, behavior, ability, or a wrong expectation"
+              onClick={() => onFix(fixReply, prompt)}
+            >
+              <Wrench size={12} /> <span className="scenario-btn-text">Fix it</span>
+            </button>
+          )}
           <button
             className="btn sm"
             title={run || hr ? 'Run again' : 'Run'}
@@ -518,15 +527,6 @@ export function ScenarioRow({
             >
               <MessageSquare size={12} />{' '}
               <span className="scenario-btn-text">Try in chat</span>
-            </button>
-          )}
-          {onFix && fixReply && (status === 'failed' || status === 'rejected') && (
-            <button
-              className="btn primary sm"
-              title="Fix it — diagnose the miss: knowledge, behavior, ability, or a wrong expectation"
-              onClick={() => onFix(fixReply, prompt)}
-            >
-              <Wrench size={12} /> <span className="scenario-btn-text">Fix it</span>
             </button>
           )}
           {onDelete && (
