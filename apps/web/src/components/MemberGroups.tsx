@@ -53,6 +53,10 @@ export function MemberGroups({
     onSuccess: refresh,
   });
 
+  // Read-only members get nothing from this card — an unmanageable roster
+  // list is noise, so the whole section hides without manage rights.
+  if (!canManage) return null;
+
   const togglePick = (id: string) =>
     setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
 
