@@ -812,12 +812,12 @@ export default function Settings() {
         <>
       <div className="card">
         <strong>Team</strong>
-        <div className="muted" style={{ margin: '6px 0 4px', fontSize: 13 }}>
-          <strong>Admins</strong> manage agents, integrations, billing, and the team.{' '}
-          <strong>Members</strong> work the inbox — reply, take over, assign, and set
-          conversation status. The <strong>owner</strong> can't be removed — only they
-          can hand ownership to another member.
-        </div>
+        <ul className="muted" style={{ margin: '6px 0 4px', paddingLeft: 18, fontSize: 13 }}>
+          <li><strong>admin</strong> — manage agents, integrations, billing, and the team</li>
+          <li><strong>member</strong> — work the inbox: reply, take over, assign, set status</li>
+          <li><strong>viewer</strong> — read-only, no inbox actions</li>
+          <li><strong>owner</strong> — can't be removed; transferable only by the owner</li>
+        </ul>
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 16, fontSize: 13 }}>
           <thead>
             <tr>
