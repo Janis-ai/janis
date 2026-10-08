@@ -409,8 +409,21 @@ export default function AgentBuilder() {
   const safetyUnchecked =
     status?.domain_risk === 'elevated' &&
     (status.test_scenarios?.safety_total ?? 0) > (status.test_scenarios?.safety_checked ?? 0);
+  // …but the safety review waits until the rest of the build is done.
+  // Reviewing the refusal path before the agent is taught/guided means
+  // reviewing a reply that will change anyway — Teach it must not hand
+  // off to Try it just because a safety row lacks a verdict.
+  const buildIncomplete =
+    !!status &&
+    STEPS.some(
+      (s) =>
+        s.key !== 'create' &&
+        s.key !== 'try' &&
+        (status.steps[s.key] === 'pending' || status.steps[s.key] === 'partial'),
+    );
+  const safetyDue = safetyUnchecked && !buildIncomplete;
   const next = status
-    ? failing > 0 || safetyUnchecked
+    ? failing > 0 || safetyDue
       ? STEPS.find((s) => s.key === 'try')
       : STEPS.find(
           (s) =>
@@ -441,7 +454,7 @@ export default function AgentBuilder() {
   const nextLabel = next
     ? failing > 0
       ? `Fix ${failing} item${failing > 1 ? 's' : ''}`
-      : safetyUnchecked
+      : safetyDue
         ? 'Review the safety scenario'
         : `Next: ${next.label}${nextReason ? ` · ${nextReason}` : ''}`
     : '';
@@ -449,10 +462,10 @@ export default function AgentBuilder() {
   // the row instead. The safety path also rings every unchecked safety
   // row — the scroll shows the first, the ring marks the review set.
   const [safetyReview, setSafetyReview] = useState(0);
-  const isSafetyReview = !failing && safetyUnchecked;
+  const isSafetyReview = !failing && safetyDue;
   const nextClick = () => {
     if (isSafetyReview) setSafetyReview((v) => v + 1);
-    if ((failing > 0 || safetyUnchecked) && step === 'try') {
+    if ((failing > 0 || safetyDue) && step === 'try') {
       const first =
         scenarios.find((s) => s.human_result === 'fail') ??
         scenarios.find(
