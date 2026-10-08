@@ -713,10 +713,12 @@ export const AlertRule = z.object({
 });
 export type AlertRule = z.infer<typeof AlertRule>;
 
-/** A named teammate roster usable as a rule-assignment target. */
+/** A named teammate roster usable as a rule-assignment target.
+ *  agent_id null = workspace-wide; set = scoped to one agent's rules. */
 export const MemberGroup = z.object({
   id: z.string(),
   name: z.string(),
+  agent_id: z.string().nullable(),
   member_ids: z.array(z.string()),
   created_at: z.string(),
 });

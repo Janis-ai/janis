@@ -111,13 +111,16 @@ export const memberships = pgTable(
 );
 
 /** Named teammate rosters for routing rules — "Support Tier 1", "Weekend
- *  crew". Workspace-level so one group can feed rules on every agent;
- *  member_ids stays inline (a roster is tens of ids, read whole each time). */
+ *  crew". agent_id null = workspace-level (usable on every agent's rules);
+ *  set = scoped to one agent, so an agent's rules can't pull another
+ *  agent's private roster. member_ids stays inline (a roster is tens of
+ *  ids, read whole each time). */
 export const memberGroups = pgTable('member_groups', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id')
     .notNull()
     .references(() => workspaces.id),
+  agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   memberIds: jsonb('member_ids').notNull().default([]).$type<string[]>(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

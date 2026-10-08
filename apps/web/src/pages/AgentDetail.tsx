@@ -14,6 +14,7 @@ import { DEFAULT_INTENTS } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useGroups, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
 import { AgentChannels } from '../components/AgentChannels';
+import { MemberGroups } from '../components/MemberGroups';
 import { HelpCenter } from '../components/HelpCenter';
 import { SourceList } from '../components/SourceList';
 import { AutosizeText, timeAgo } from '../components/bits';
@@ -1106,7 +1107,11 @@ function EscalationTab({
   const { data: members } = useAgentMembers(agent.id);
   const { data: groupsData } = useGroups();
   const { data: users } = useUsers();
-  const groups = groupsData?.groups ?? [];
+  // Routable groups: workspace rosters plus this agent's own — another
+  // agent's scoped roster can't be pulled in.
+  const groups = (groupsData?.groups ?? []).filter(
+    (g) => !g.agent_id || g.agent_id === agent.id,
+  );
   // Assignable teammates = every active workspace member plus agent-scoped
   // users granted on this agent (agent_members rows alone miss the workspace
   // roster, which is why the picker rendered empty).
@@ -1480,7 +1485,7 @@ function EscalationTab({
               ))}
               {groups.length === 0 && teammates.length === 0 && (
                 <span className="muted" style={{ fontSize: 12 }}>
-                  No teammates or groups yet — invite people in Settings → Team.
+                  No teammates or groups yet — invite people or create a group in the Team tab.
                 </span>
               )}
             </div>
@@ -1546,10 +1551,29 @@ function TeamSection({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
   return (
     <>
       <AgentTeamCard agent={agent} isAdmin={isAdmin} />
+      <AgentGroups agent={agent} isAdmin={isAdmin} />
       <AgentProfileOverride agent={agent} />
       <AgentNotifyOverride agent={agent} />
     </>
   );
+}
+
+/** Agent-scoped groups — rosters only this agent's routing rules can use.
+ *  Eligible members: the workspace roster plus this agent's agent-only
+ *  members (the same union the rule editor's teammate picker shows). */
+function AgentGroups({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
+  const { data: members } = useAgentMembers(agent.id);
+  const { data: wsUsers } = useUsers();
+  const wsIds = new Set((wsUsers?.users ?? []).map((u) => u.id));
+  const roster = [
+    ...(wsUsers?.users ?? [])
+      .filter((u) => u.status === 'active')
+      .map((u) => ({ id: u.id, name: u.name })),
+    ...(members?.members ?? [])
+      .filter((m) => m.status === 'active' && !wsIds.has(m.user_id))
+      .map((m) => ({ id: m.user_id, name: m.name })),
+  ];
+  return <MemberGroups agentId={agent.id} roster={roster} canManage={isAdmin} />;
 }
 
 /** Profile override — the operator's identity on THIS agent's channels.

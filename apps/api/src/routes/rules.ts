@@ -2,9 +2,9 @@ import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alertRules } from '../db/schema.js';
+import { agents, alertRules, memberGroups } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import { selfAssignOnly, type RuleConfig } from '../lib/rules.js';
@@ -68,6 +68,27 @@ async function ruleAgentId(db: Db, workspaceId: string, ruleId: string) {
   return row?.agentId ?? null;
 }
 
+/** group_ids a rule may use: workspace rosters plus the rule's own agent's
+ *  groups — never another agent's private roster. */
+async function usableGroupIds(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  ids?: string[],
+) {
+  if (!ids?.length) return true;
+  const rows = await db
+    .select({ id: memberGroups.id, agentId: memberGroups.agentId })
+    .from(memberGroups)
+    .where(
+      and(eq(memberGroups.workspaceId, workspaceId), inArray(memberGroups.id, ids)),
+    );
+  return (
+    rows.length === new Set(ids).size &&
+    rows.every((g) => !g.agentId || g.agentId === agentId)
+  );
+}
+
 export function ruleRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
@@ -102,6 +123,13 @@ export function ruleRoutes(db: Db) {
     const body = c.req.valid('json');
     if (!(await ownsAgent(db, c.get('workspaceId'), body.agent_id))) {
       return c.json({ error: 'agent not found' }, 404);
+    }
+    if (
+      !(await usableGroupIds(
+        db, c.get('workspaceId'), body.agent_id, body.config.group_ids,
+      ))
+    ) {
+      return c.json({ error: 'unusable group' }, 400);
     }
     const [row] = await db
       .insert(alertRules)
@@ -141,6 +169,9 @@ export function ruleRoutes(db: Db) {
       if (!role || !selfAssignOnly(existing.config as RuleConfig, next, c.get('user').id)) {
         return c.json({ error: 'admin required' }, 403);
       }
+    }
+    if (!(await usableGroupIds(db, c.get('workspaceId'), agentId, next.group_ids))) {
+      return c.json({ error: 'unusable group' }, 400);
     }
     const [row] = await db
       .update(alertRules)

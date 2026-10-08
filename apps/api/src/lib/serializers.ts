@@ -187,6 +187,7 @@ export function toMemberGroup(row: Row<typeof memberGroups>): MemberGroup {
   return {
     id: row.id,
     name: row.name,
+    agent_id: row.agentId ?? null,
     member_ids: (row.memberIds ?? []) as string[],
     created_at: iso(row.createdAt)!,
   };
