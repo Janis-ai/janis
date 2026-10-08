@@ -19,6 +19,18 @@ import { SourceList } from '../components/SourceList';
 import { AutosizeText, timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
+import { ModelPicker } from '../components/ModelPicker';
+import {
+  METERED,
+  catalogOptions,
+  catalogRateFor,
+  detectProvider,
+  filterLiveModels,
+  modelsForProvider,
+  providerForVendor,
+  type ModelOption,
+} from '../lib/llmProviders';
+import type { LlmVendor } from '@janis/shared';
 import { SavedWidgets } from '../components/WidgetComposer';
 import { janisBrain } from '../lib/agentContext';
 import { railBus } from '../lib/railBus';
@@ -3295,12 +3307,67 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     onSuccess: (d) => setBatch({ batchId: d.batch_id, total: d.total, kind: 'manual', startedAt: Date.now() }),
     onError: (e) => setErr(e.message),
   });
-  // Prompt A/B — replay the whole suite against a candidate system prompt.
-  // Nothing saves back to the agent; the summary is compared to the baseline
-  // pass count shown on the tests list.
+  // Variant A/B — replay the whole suite against different instructions
+  // and/or a different model. Nothing saves back to the agent; the summary
+  // is compared to the baseline pass count shown on the tests list.
   const [abOpen, setAbOpen] = useState(false);
   const [candidatePrompt, setCandidatePrompt] = useState('');
   const [candidateModel, setCandidateModel] = useState('');
+  // Models the agent's endpoint can serve — the run merges the id over the
+  // saved llm config, so a hosted agent picks from the metered catalog and
+  // a BYOK agent from its own provider's list (null = still loading).
+  const [abModels, setAbModels] = useState<ModelOption[] | null>(null);
+  useEffect(() => {
+    if (!abOpen || abModels !== null) return;
+    let dead = false;
+    const llm = ((agent.config ?? {}) as AgentConfig).llm as LlmBlock | undefined;
+    const providerId = llm?.provider ?? detectProvider(llm) ?? METERED;
+    const hosted = providerId === METERED;
+    api<{
+      models?: string[];
+      accounts?: { vendor: string; base_url: string; models: string[]; error?: string }[];
+    }>(`/api/agents/${agentId}/llm-models`, {
+      method: 'POST',
+      // BYOK sends its base_url so the server applies the stored key;
+      // hosted asks for the metered provider accounts.
+      body: JSON.stringify(hosted ? { metered: true } : { base_url: llm?.base_url }),
+    })
+      .then((r) => {
+        if (dead) return;
+        const opts: ModelOption[] = [];
+        const push = (o: ModelOption) => {
+          if (!opts.some((x) => x.id === o.id)) opts.push(o);
+        };
+        if (hosted) {
+          // Mirror LlmEditor's hosted list — catalog + live ids, priced
+          // only (unpriced models can't be billed on the metered side).
+          const priced = (o: ModelOption) => catalogRateFor(o.id) != null;
+          for (const acc of r.accounts ?? []) {
+            if (acc.error) continue;
+            const vend =
+              acc.vendor === 'default' || acc.vendor === 'openrouter'
+                ? undefined
+                : (acc.vendor as LlmVendor);
+            for (const o of catalogOptions(vend ? [vend] : undefined).filter(priced)) push(o);
+            const liveProvider =
+              acc.vendor === 'openrouter' ? 'openrouter' : (providerForVendor(vend)?.id ?? 'custom');
+            for (const o of filterLiveModels(liveProvider, acc.models).filter(priced)) push(o);
+          }
+        } else {
+          // BYOK is unmetered — offer the provider's whole catalog + live list.
+          for (const o of modelsForProvider(providerId)) push(o);
+          for (const o of filterLiveModels(providerId, r.models ?? [])) push(o);
+        }
+        setAbModels(opts);
+      })
+      .catch(() => {
+        if (!dead) setAbModels([]);
+      });
+    return () => {
+      dead = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abOpen]);
   const [abResult, setAbResult] = useState<{
     summary: { passed: number; failed: number; unrunnable: number };
     results: { name: string; passed: boolean | null; reason: string }[];
@@ -3477,7 +3544,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             className="btn sm"
             disabled={running !== null || batch !== null}
             onClick={() => { setAbOpen((v) => !v); }}
-            title="Replay every scenario against a different prompt or model — before you change the real agent"
+            title="Replay every scenario against different instructions or a different model — before you change the real agent"
           >
             Try a variant
           </button>
@@ -3709,23 +3776,25 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       {abOpen && (
         <div className="card" style={{ background: 'var(--panel-2)' }}>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-            Thinking of changing the prompt or model? Try it here first — every
-            scenario re-runs against your version and reports pass/fail next to
-            today's results. Your agent is untouched; if the variant wins, adopt
-            it yourself in Behavior.
+            Thinking of changing the instructions or the model? Try it here
+            first — every scenario re-runs against your version and reports
+            pass/fail next to today's results. Your agent is untouched; if the
+            variant wins, adopt it yourself in Behavior.
           </div>
+          <label style={{ fontSize: 12 }}>Instructions</label>
           <textarea
             rows={6}
-            placeholder="New system prompt (optional — blank keeps today's)"
+            placeholder="New instructions (optional — blank keeps today's)"
             value={candidatePrompt}
             onChange={(e) => setCandidatePrompt(e.target.value)}
-            style={{ width: '100%', fontFamily: 'monospace' }}
+            style={{ width: '100%' }}
           />
-          <input
-            placeholder="New model id (optional) — e.g. gpt-4o-mini"
+          <label style={{ fontSize: 12, marginTop: 8, display: 'block' }}>Model</label>
+          <ModelPicker
             value={candidateModel}
-            onChange={(e) => setCandidateModel(e.target.value)}
-            style={{ marginTop: 8 }}
+            options={[{ id: '', name: 'Same as today' }, ...(abModels ?? [])]}
+            onChange={setCandidateModel}
+            disabled={abModels === null}
           />
           <div className="row" style={{ marginTop: 8 }}>
             <button
