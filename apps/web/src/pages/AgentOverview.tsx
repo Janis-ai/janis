@@ -22,7 +22,7 @@ const LEGACY_TAB_SECTION: Record<string, string> = {
   llm: 'settings',
 };
 const LEGACY_SUB: Record<string, string> = {
-  llm: 'llm',
+  llm: 'general',
   help: 'help',
   escalation: 'escalation',
   connection: 'general',

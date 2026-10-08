@@ -92,7 +92,6 @@ const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: b
   settings: [
     { key: 'general', label: 'General' },
     { key: 'escalation', label: 'Escalation' },
-    { key: 'llm', label: 'Language model', hosted: true },
     { key: 'team', label: 'Team' },
     { key: 'replies', label: 'Saved replies' },
   ],
@@ -482,25 +481,30 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
       {section === 'settings' && (
         <>
           {sub === 'general' && (
-            <ConnectionTab
-              agent={agent}
-              cfg={cfg}
-              setCfg={setCfg}
-              isAdmin={isAdmin}
-              name={name}
-              setName={setName}
-              webhookUrl={webhookUrl}
-              setWebhookUrl={setWebhookUrl}
-              onSaveHosted={(hosted) => update.mutate({ hosted })}
-              onTestWebhook={() => testWebhook.mutate()}
-              onRotateKey={() => rotateKey.mutate()}
-              onRotateSecret={() => rotateSecret.mutate()}
-              onRevealSecret={async () => {
-                const r = await api<{ webhook_secret: string }>(`/api/agents/${agent.id}/webhook-secret`);
-                setFreshSecret({ label: 'Webhook secret', value: r.webhook_secret });
-              }}
-              freshSecret={freshSecret}
-            />
+            <>
+              <ConnectionTab
+                agent={agent}
+                cfg={cfg}
+                setCfg={setCfg}
+                isAdmin={isAdmin}
+                name={name}
+                setName={setName}
+                webhookUrl={webhookUrl}
+                setWebhookUrl={setWebhookUrl}
+                onSaveHosted={(hosted) => update.mutate({ hosted })}
+                onTestWebhook={() => testWebhook.mutate()}
+                onRotateKey={() => rotateKey.mutate()}
+                onRotateSecret={() => rotateSecret.mutate()}
+                onRevealSecret={async () => {
+                  const r = await api<{ webhook_secret: string }>(`/api/agents/${agent.id}/webhook-secret`);
+                  setFreshSecret({ label: 'Webhook secret', value: r.webhook_secret });
+                }}
+                freshSecret={freshSecret}
+              />
+              {janisBrain(agent) && (
+                <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+              )}
+            </>
           )}
           {sub === 'escalation' && (
             <EscalationTab
@@ -515,9 +519,6 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
               onUpdateRule={(id, config) => updateRule.mutate({ id, config })}
               onDeleteRule={(rid) => deleteRule.mutate(rid)}
             />
-          )}
-          {sub === 'llm' && janisBrain(agent) && (
-            <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
           {sub === 'team' && <TeamSection agent={agent} isAdmin={isAdmin} />}
           {sub === 'replies' && (
@@ -2570,8 +2571,6 @@ function ConnectionTab({
   onRevealSecret: () => void;
   freshSecret: { label: string; value: string } | null;
 }) {
-  const navigate = useNavigate();
-  const [testMsg, setTestMsg] = useState('');
   const [showDeliveries, setShowDeliveries] = useState(false);
   const { data: deliveries } = useDeliveries(showDeliveries ? agent.id : null);
   const qcLocal = useQueryClient();
@@ -2580,13 +2579,6 @@ function ConnectionTab({
       api(`/api/agents/${agent.id}/deliveries/${deliveryId}/replay`, { method: 'POST' }),
     onSettled: () => void qcLocal.invalidateQueries({ queryKey: ['deliveries'] }),
   });
-  const onTestChat = async (text: string) => {
-    const r = await api<{ conversation_id: string | null }>(`/api/agents/${agent.id}/chat`, {
-      method: 'POST',
-      body: JSON.stringify({ text }),
-    });
-    if (r.conversation_id) navigate(`/conversations/${r.conversation_id}`);
-  };
 
   return (
     <>
@@ -2616,24 +2608,6 @@ function ConnectionTab({
           <div className="muted">
             Janis runs this agent in-process with the config below — replies go
             straight to the connected channel. No webhook, no deploy.
-            <form
-              className="row"
-              style={{ marginTop: 8 }}
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!testMsg.trim()) return;
-                void onTestChat(testMsg.trim());
-                setTestMsg('');
-              }}
-            >
-              <input
-                className="grow"
-                placeholder="Send a test message…"
-                value={testMsg}
-                onChange={(e) => setTestMsg(e.target.value)}
-              />
-              <button className="btn">Test</button>
-            </form>
           </div>
         ) : (
           <>
