@@ -3358,6 +3358,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             | { type: 'expectation'; test_id: string; expectation: string }
             | null;
           verified: { pass_rate: number | null; baseline_rate: number | null; broke: number } | null;
+          created_at: string;
         }[];
       }>(`/api/agents/${agentId}/eval-suggestions`),
   });
@@ -3824,29 +3825,22 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               test_stale: 'stale scenario',
               hypothesis: 'hypothesis',
             };
-            const patchPreview =
-              s.patch?.type === 'knowledge'
-                ? `+ Knowledge: ${s.patch.entry}`
-                : s.patch?.type === 'system_prompt'
-                  ? `+ Prompt: ${s.patch.append}`
-                  : s.patch?.type === 'expectation'
-                    ? `Expectation → ${s.patch.expectation}`
-                    : null;
             const pct = (v: number | null) =>
               v === null ? '—' : `${Math.round(v * 100)}%`;
+            const patchBlock = { borderLeft: '2px solid var(--border)', paddingLeft: 8, marginTop: 4, whiteSpace: 'pre-wrap' as const, color: 'var(--text)' };
             return (
               <div
                 key={s.id}
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
+                  alignItems: 'flex-start',
                   gap: 12,
                   padding: '8px 0',
                   borderBottom: '1px solid var(--border)',
                 }}
               >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>
+                <details style={{ flex: 1, minWidth: 0 }}>
+                  <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
                     <span
                       className="muted"
                       style={{
@@ -3860,31 +3854,64 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                     </span>
                     {s.test_name ? `${s.test_name} — ` : ''}
                     {s.summary}
-                  </div>
+                    {s.verified && (
+                      <span style={{ color: 'var(--accent)', fontSize: 11, fontWeight: 700 }}>
+                        {' '}✓ verified
+                      </span>
+                    )}
+                  </summary>
                   <div
                     className="muted"
                     style={{
+                      margin: '6px 0 4px 18px',
                       fontSize: 12,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
                     }}
                   >
-                    {s.verified ? (
-                      <span style={{ color: 'var(--accent)' }}>
-                        {s.kind === 'test_stale'
-                          ? 'verified — the stored reply passes under this expectation'
-                          : `verified — suite passes ${pct(s.verified.pass_rate)} (was ${pct(s.verified.baseline_rate)}), no breakage`}
-                      </span>
-                    ) : s.patch ? (
-                      <span style={{ color: 'var(--danger)' }}>unverified — replayed but didn't hold</span>
-                    ) : (
-                      'hypothesis — needs a human look'
+                    <div>
+                      {s.verified ? (
+                        <span style={{ color: 'var(--accent)' }}>
+                          {s.kind === 'test_stale'
+                            ? 'verified — the stored reply passes under this expectation'
+                            : `verified — replayed against the suite: passes ${pct(s.verified.pass_rate)} (was ${pct(s.verified.baseline_rate)}), no breakage`}
+                        </span>
+                      ) : s.patch ? (
+                        <span style={{ color: 'var(--danger)' }}>
+                          unverified — drafted, but the replay didn't confirm it helps
+                        </span>
+                      ) : (
+                        'hypothesis — a diagnosis to read, not a ready fix'
+                      )}
+                      {` · ${timeAgo(s.created_at)}`}
+                    </div>
+                    {s.patch?.type === 'knowledge' && (
+                      <div>
+                        Applying adds this to the knowledge base:
+                        <div style={patchBlock}>{s.patch.entry}</div>
+                      </div>
                     )}
-                    {patchPreview ? ` · ${patchPreview}` : ''}
+                    {s.patch?.type === 'system_prompt' && (
+                      <div>
+                        Applying appends this to the agent's instructions:
+                        <div style={patchBlock}>{s.patch.append}</div>
+                      </div>
+                    )}
+                    {s.patch?.type === 'expectation' && (
+                      <div>
+                        Applying rewrites the expectation on "{s.test_name ?? 'the scenario'}" to:
+                        <div style={patchBlock}>{s.patch.expectation}</div>
+                      </div>
+                    )}
+                    {!s.patch && (
+                      <div>No patch attached — dismiss it, or open the scenario to investigate.</div>
+                    )}
+                    <div>Dismiss just removes the suggestion — the agent doesn't change.</div>
                   </div>
-                </div>
+                </details>
                 <ReadOnly off={!isAdmin}>
+                  <div style={{ display: 'flex', gap: 8, flexShrink: 0, paddingTop: 2 }}>
                   {s.patch && (
                     <button
                       className="btn sm"
@@ -3896,11 +3923,13 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                   )}
                   <button
                     className="btn ghost sm"
+                    title="Remove the suggestion — nothing is applied"
                     onClick={() => decideEvalSug.mutate({ id: s.id, action: 'dismiss' })}
                     disabled={decideEvalSug.isPending}
                   >
                     dismiss
                   </button>
+                  </div>
                 </ReadOnly>
               </div>
             );
