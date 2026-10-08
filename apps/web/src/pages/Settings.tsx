@@ -811,7 +811,11 @@ export default function Settings() {
           can hand ownership to another member.
         </div>
         {[...(users?.users ?? [])]
-          .sort((a, b) => Number(b.id === me?.user.id) - Number(a.id === me?.user.id))
+          .sort(
+            (a, b) =>
+              Number(b.id === me?.user.id) - Number(a.id === me?.user.id) ||
+              a.name.localeCompare(b.name),
+          )
           .map((u) => (
           <div key={u.id} className="row muted" style={{ marginTop: 8 }}>
             <span className="grow">

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
@@ -41,7 +41,7 @@ import { ScenarioRow, scenarioPrompt } from '../components/ScenarioRow';
 import { useDock } from '../lib/dockContext';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { Pencil, Trash2, Upload, X } from 'lucide-react';
+import { Bell, Pencil, Trash2, Upload, X } from 'lucide-react';
 
 type RuleKind = AlertRule['kind'];
 /** `defaultOn` kinds page the workspace even with zero rules — a rule exists
@@ -2016,10 +2016,14 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
   const agentOnly = memberRows.filter((m) => !wsById.has(m.user_id));
   const wsWithOverride = new Set(memberRows.map((m) => m.user_id));
   const plainMembers = (wsUsers?.users ?? []).filter((u) => !wsWithOverride.has(u.id));
-  // Your own row first — it's the one you're most likely acting on.
+  // Your own row first, everyone else alphabetical.
   const selfId = me?.user.id;
-  const selfFirst = <T,>(rows: T[], id: (r: T) => string) =>
-    [...rows].sort((a, b) => Number(id(b) === selfId) - Number(id(a) === selfId));
+  const selfFirst = <T,>(rows: T[], id: (r: T) => string, name: (r: T) => string) =>
+    [...rows].sort(
+      (a, b) =>
+        Number(id(b) === selfId) - Number(id(a) === selfId) ||
+        name(a).localeCompare(name(b)),
+    );
   const youTag = (id: string) =>
     id === selfId ? <span className="muted"> (You)</span> : null;
   // Workspace members render as ONE list — plain members and members with
@@ -2047,6 +2051,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         })),
     ],
     (r) => r.id,
+    (r) => r.name,
   );
   const ownerId = agent.owner_user_id;
   const isOwner = me?.user.id === ownerId;
@@ -2060,12 +2065,12 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
   const notifyToggle = (userId: string) =>
     isAdmin || userId === me?.user.id ? (
       <button
-        className="btn"
-        style={{ marginLeft: 8, fontSize: 11 }}
+        className="btn ghost"
         onClick={() => setNotifyFor(notifyFor === userId ? null : userId)}
-        title="Edit notification overrides for this agent"
+        title="Alert overrides for this agent"
+        aria-label="Alert overrides"
       >
-        alerts
+        <Bell size={14} />
       </button>
     ) : null;
   const notifyEditor = (userId: string, notify: AgentMember['notify'], name: string) =>
@@ -2137,6 +2142,12 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
     );
   };
 
+  const th: CSSProperties = {
+    textAlign: 'left', fontSize: 11, fontWeight: 600, letterSpacing: '.05em',
+    textTransform: 'uppercase', color: 'var(--muted)', padding: '0 8px 6px 0',
+  };
+  const td: CSSProperties = { padding: '8px 8px 8px 0', verticalAlign: 'middle' };
+
   return (
     <div className="card" style={{ marginTop: 12 }}>
       {confirmEl}
@@ -2150,46 +2161,67 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
       <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
         Workspace members see every agent — a role here overrides theirs for
         this agent only. Agent-only people see nothing but this agent.
-        The alerts button edits that person's notification overrides for this
-        agent — anyone can open their own, admins can open anyone's.
+        The bell opens that person's notification overrides for this agent —
+        anyone can open their own, admins can open anyone's.
       </div>
-      {wsRows.map((r) => (
-        <div key={r.id}>
-          <div className="row" style={{ marginTop: 6 }}>
-            <span className="grow">
-              {r.name}{youTag(r.id)} <span className="muted">· {r.email}</span>
-              {/* A member row can exist with no role — saved profile or
-                  notify prefs alone shouldn't badge it as overridden.
-                  Nor should the owner — their stored role is vestigial,
-                  owner_user_id wins regardless. */}
-              {r.memberRole && r.id !== ownerId && (
-                <span className="badge" style={{ marginLeft: 8 }}>override</span>
-              )}
-            </span>
-            {notifyToggle(r.id)}
-            {roleSelect(r.id, r.memberRole ?? 'inherit', r.wsRole, true)}
-          </div>
-          {notifyEditor(r.id, r.notify, r.name)}
-        </div>
-      ))}
-      {selfFirst(agentOnly, (m) => m.user_id).map((m) => (
-        <div key={m.user_id}>
-          <div className="row" style={{ marginTop: 6 }}>
-            <span className="grow">
-              {m.name}{youTag(m.user_id)} <span className="muted">· {m.email}</span>
-              <span className="badge" style={{ marginLeft: 8 }}>this agent only</span>
-            </span>
-            {notifyToggle(m.user_id)}
-            {roleSelect(m.user_id, m.role ?? 'member', null, false)}
-            {isAdmin && m.user_id !== ownerId && (
-              <button className="btn danger" onClick={() => remove.mutate(m.user_id)} title="Remove access">
-                Remove
-              </button>
-            )}
-          </div>
-          {notifyEditor(m.user_id, m.notify, m.name)}
-        </div>
-      ))}
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
+        <thead>
+          <tr>
+            <th style={th}>Member</th>
+            <th style={{ ...th, width: 96 }}>Alert settings</th>
+            <th style={{ ...th, width: 200 }}>Role</th>
+            <th style={{ ...th, width: 34 }} />
+          </tr>
+        </thead>
+        <tbody>
+          {wsRows.map((r) => (
+            <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
+              <td style={td}>
+                {r.name}{youTag(r.id)} <span className="muted">· {r.email}</span>
+                {/* A member row can exist with no role — saved profile or
+                    notify prefs alone shouldn't badge it as overridden.
+                    Nor should the owner — their stored role is vestigial,
+                    owner_user_id wins regardless. */}
+                {r.memberRole && r.id !== ownerId && (
+                  <span className="badge" style={{ marginLeft: 8 }}>override</span>
+                )}
+              </td>
+              <td style={td}>
+                {notifyToggle(r.id)}
+                {notifyEditor(r.id, r.notify, r.name)}
+              </td>
+              <td style={td}>{roleSelect(r.id, r.memberRole ?? 'inherit', r.wsRole, true)}</td>
+              <td style={td} />
+            </tr>
+          ))}
+          {selfFirst(agentOnly, (m) => m.user_id, (m) => m.name).map((m) => (
+            <tr key={m.user_id} style={{ borderTop: '1px solid var(--border)' }}>
+              <td style={td}>
+                {m.name}{youTag(m.user_id)} <span className="muted">· {m.email}</span>
+                <span className="badge" style={{ marginLeft: 8 }}>this agent only</span>
+              </td>
+              <td style={td}>
+                {notifyToggle(m.user_id)}
+                {notifyEditor(m.user_id, m.notify, m.name)}
+              </td>
+              <td style={td}>{roleSelect(m.user_id, m.role ?? 'member', null, false)}</td>
+              <td style={td}>
+                {isAdmin && m.user_id !== ownerId && (
+                  <button
+                    className="btn ghost"
+                    style={{ color: 'var(--danger)' }}
+                    onClick={() => remove.mutate(m.user_id)}
+                    title="Remove access"
+                    aria-label="Remove access"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
       {isAdmin && (
         <form
           className="row"
