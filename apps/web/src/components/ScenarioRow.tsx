@@ -244,6 +244,16 @@ export function ScenarioRow({
                 : '';
     return (
       <div className="scenario-row scenario-collapsed" id={`sc-${test.id}`}>
+        <button
+          className="btn ghost sm"
+          aria-label="Expand"
+          onClick={() => {
+            setFolded(false);
+            setCollapsed(false);
+          }}
+        >
+          ▸
+        </button>
         {ok && (
           <span className="scenario-check" style={{ color: 'var(--accent)' }}>✓</span>
         )}
@@ -268,16 +278,6 @@ export function ScenarioRow({
             {status === 'recheck' ? 'fix applied — re-run to confirm' : status}
           </span>
         )}
-        <button
-          className="btn ghost sm"
-          aria-label="Expand"
-          onClick={() => {
-            setFolded(false);
-            setCollapsed(false);
-          }}
-        >
-          ▸
-        </button>
       </div>
     );
   }
@@ -285,6 +285,15 @@ export function ScenarioRow({
   return (
     <div className="scenario-row scenario-card" id={`sc-${test.id}`}>
       <div className="row" style={{ alignItems: 'center' }}>
+        {!editing && (
+          <button
+            className="btn ghost sm"
+            aria-label="Collapse"
+            onClick={() => setFolded(true)}
+          >
+            ▾
+          </button>
+        )}
         <div className="grow" style={{ fontSize: 13, fontWeight: 600, minWidth: 0 }}>
           “{test.name}”
         </div>
@@ -308,15 +317,6 @@ export function ScenarioRow({
         ) : status === 'unreviewed' ? (
           <span className="scenario-badge">unreviewed</span>
         ) : null}
-        {!editing && (
-          <button
-            className="btn ghost sm"
-            aria-label="Collapse"
-            onClick={() => setFolded(true)}
-          >
-            ▾
-          </button>
-        )}
       </div>
 
       {/* The exchange that set up the trigger — inline saves carry it,
