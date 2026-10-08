@@ -1869,6 +1869,10 @@ function MemberNotifyEditor({
 
   return (
     <div className="ruleset" style={{ marginTop: 4, marginBottom: 8 }}>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+        Per-agent overrides for this member — Inherit follows their own
+        workspace notification settings (their Settings → Me); unset is on.
+      </div>
       <div className="row">
         {(['push', 'email', 'sound'] as const).map((k) => (
           <label key={k} className="check-label" style={{ marginRight: 12 }}>
@@ -1988,18 +1992,41 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
   const { data: wsUsers } = useUsers();
   const qc = useQueryClient();
   const [confirmEl, confirm] = useConfirm();
-  const [form, setForm] = useState({ email: '', role: 'member' });
+  const [form, setForm] = useState<{
+    email: string;
+    name: string;
+    role: string;
+    scope: 'agent' | 'workspace';
+  }>({ email: '', name: '', role: 'member', scope: 'agent' });
   const [err, setErr] = useState('');
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['agentMembers', agent.id] });
     void qc.invalidateQueries({ queryKey: ['users'] });
   };
+  // One add row, two scopes — 'agent' grants just this inbox (auto-accepted
+  // on sign-in); 'workspace' sends the same invite Settings → Team sends.
   const add = useMutation({
     mutationFn: (b: typeof form) =>
-      api(`/api/agents/${agent.id}/members`, { method: 'POST', body: JSON.stringify(b) }),
+      b.scope === 'agent'
+        ? api(`/api/agents/${agent.id}/members`, {
+            method: 'POST',
+            body: JSON.stringify({
+              email: b.email,
+              ...(b.name ? { name: b.name } : {}),
+              role: b.role,
+            }),
+          })
+        : api('/api/users', {
+            method: 'POST',
+            body: JSON.stringify({
+              email: b.email,
+              ...(b.name ? { name: b.name } : {}),
+              role: b.role,
+            }),
+          }),
     onSuccess: () => {
-      setForm({ email: '', role: 'member' });
+      setForm({ email: '', name: '', role: 'member', scope: 'agent' });
       setErr('');
       refresh();
     },
@@ -2098,7 +2125,9 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         Workspace members can see every agent — a role set here overrides
         theirs for this agent only, and "no privileges" hides it from them
         entirely. People added with no workspace account become agent-only
-        users who see nothing but this agent.
+        users who see nothing but this agent. The alerts button edits that
+        person's notifications for this agent — anything left on Inherit
+        follows their own workspace notification settings (Settings → Me).
       </div>
       {plainMembers.map((u) => (
         <div key={u.id}>
@@ -2162,16 +2191,41 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
             onChange={(e) => setForm({ ...form, email: e.target.value })}
             required
           />
+          <input
+            placeholder="name (optional)"
+            style={{ width: 140 }}
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+          />
+          <select
+            value={form.scope}
+            onChange={(e) => {
+              const scope = e.target.value as 'agent' | 'workspace';
+              setForm({
+                ...form,
+                scope,
+                role: scope === 'agent' && form.role === 'viewer' ? 'member' : form.role,
+              });
+            }}
+          >
+            <option value="agent">this agent only</option>
+            <option value="workspace">whole workspace</option>
+          </select>
           <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
             <option value="member">member</option>
             <option value="admin">admin</option>
+            {form.scope === 'workspace' && <option value="viewer">viewer (read-only)</option>}
           </select>
-          <button className="btn" disabled={add.isPending}>Add</button>
+          <button className="btn" disabled={add.isPending}>
+            {form.scope === 'agent' ? 'Add' : 'Invite'}
+          </button>
         </form>
       )}
       <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>
-        New emails sign in with Google or Slack under that address — no
-        workspace invite needed for agent-only access.
+        "This agent only" shows them just this agent's inbox — a client
+        operator or VA; they sign in with Google or Slack, no workspace
+        invite needed. "Whole workspace" sends the same invite as Settings
+        → Team — a teammate who sees every agent.
       </div>
       {err && <div className="error">{err}</div>}
     </div>
