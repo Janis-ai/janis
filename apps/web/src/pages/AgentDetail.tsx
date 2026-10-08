@@ -1553,7 +1553,6 @@ function TeamSection({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
       <AgentTeamCard agent={agent} isAdmin={isAdmin} />
       <AgentGroups agent={agent} isAdmin={isAdmin} />
       <AgentProfileOverride agent={agent} />
-      <AgentNotifyOverride agent={agent} />
     </>
   );
 }
@@ -1734,153 +1733,9 @@ const NOTIFY_EVENT_LABELS: [string, string][] = [
   ['eval', 'Eval regressions'],
 ];
 
-/** Notifications override — this user's push/email/sound/event prefs for THIS
- *  agent, field-wise over their workspace prefs. Event keys are tri-state:
- *  present true = always notify, false = mute, absent = inherit workspace. */
-function AgentNotifyOverride({ agent }: { agent: Agent }) {
-  const { data: me } = useMe();
-  const { data: members } = useAgentMembers(agent.id);
-  const qc = useQueryClient();
-  const mine = members?.members.find((m) => m.user_id === me?.user.id);
-  const [on, setOn] = useState<boolean | null>(null);
-  // Tri-state like the admin editor: absent = inherit your own workspace
-  // prefs (seeded from the stored override only — not the effective value,
-  // so saving doesn't stamp explicit overrides over inherited keys).
-  const [prefs, setPrefs] = useState<{ push?: boolean; email?: boolean; sound?: boolean }>({});
-  const [events, setEvents] = useState<Record<string, boolean>>({});
-  const [msg, setMsg] = useState('');
-
-  useEffect(() => {
-    if (on !== null || !members) return;
-    setOn(mine?.notify != null);
-    const n = mine?.notify ?? {};
-    setPrefs({ push: n.push, email: n.email, sound: n.sound });
-    setEvents((n as { events?: Record<string, boolean> }).events ?? {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [members]);
-
-  const save = useMutation({
-    mutationFn: (notify: Record<string, unknown> | null) =>
-      api(`/api/agents/${agent.id}/members/${me?.user.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ notify }),
-      }),
-    onSuccess: () => {
-      setMsg('Saved.');
-      void qc.invalidateQueries({ queryKey: ['agentMembers', agent.id] });
-    },
-    onError: (e) => setMsg(e instanceof Error ? e.message : 'failed'),
-  });
-
-  const eventState = (key: string) =>
-    events[key] === true ? 'on' : events[key] === false ? 'off' : 'inherit';
-
-  const setEvent = (key: string, state: 'inherit' | 'on' | 'off') => {
-    const next = { ...events };
-    if (state === 'inherit') delete next[key];
-    else next[key] = state === 'on';
-    setEvents(next);
-    save.mutate({ ...prefs, events: next });
-  };
-  const bulkState = (() => {
-    const vals = NOTIFY_EVENT_LABELS.map(([k]) => events[k]);
-    if (vals.every((v) => v === true)) return 'on';
-    if (vals.every((v) => v === false)) return 'off';
-    if (vals.every((v) => v === undefined)) return 'inherit';
-    return 'mixed';
-  })();
-  const setAllEvents = (state: 'inherit' | 'on' | 'off') => {
-    const next: Record<string, boolean> = {};
-    if (state !== 'inherit')
-      for (const [k] of NOTIFY_EVENT_LABELS) next[k] = state === 'on';
-    setEvents(next);
-    save.mutate({ ...prefs, events: next });
-  };
-
-  return (
-    <div className="card" style={{ marginTop: 12 }}>
-      <strong>Notifications override</strong>
-      <div className="muted" style={{ margin: '4px 0 8px' }}>
-        Alert delivery for this agent only — off, your workspace notification
-        settings apply.
-      </div>
-      <label className="check-label">
-        <input
-          type="checkbox"
-          checked={on ?? false}
-          onChange={(e) => {
-            const next = e.target.checked;
-            setOn(next);
-            save.mutate(next ? { ...prefs, events } : null);
-          }}
-        />
-        Custom notifications for this agent
-      </label>
-      {on && (
-        <>
-        <div className="row" style={{ marginTop: 8 }}>
-          {([['push', 'Web push'], ['email', 'Email'], ['sound', 'Alert sounds']] as const).map(([k, label]) => (
-            <span key={k} className="row" style={{ marginRight: 12, gap: 6 }}>
-              <span>{label}</span>
-              <select
-                value={prefs[k] === true ? 'on' : prefs[k] === false ? 'off' : 'inherit'}
-                onChange={(e) => {
-                  const next = { ...prefs };
-                  const v = e.target.value;
-                  if (v === 'inherit') delete next[k];
-                  else next[k] = v === 'on';
-                  setPrefs(next);
-                  save.mutate({ ...next, events });
-                }}
-                disabled={save.isPending}
-              >
-                <option value="inherit">Inherit</option>
-                <option value="on">On</option>
-                <option value="off">Off</option>
-              </select>
-            </span>
-          ))}
-          {msg && <span className="muted">{msg}</span>}
-        </div>
-        <div className="row" style={{ justifyContent: 'space-between', margin: '10px 0 6px' }}>
-          <span className="muted" style={{ fontSize: 12 }}>
-            Event types — Inherit follows your workspace setting
-          </span>
-          <select
-            value={bulkState}
-            onChange={(e) => setAllEvents(e.target.value as 'inherit' | 'on' | 'off')}
-            disabled={save.isPending}
-          >
-            {bulkState === 'mixed' && <option value="mixed" disabled>mixed — set all:</option>}
-            <option value="inherit">All inherit</option>
-            <option value="on">All on</option>
-            <option value="off">All off</option>
-          </select>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '4px 12px', fontSize: 13 }}>
-          {NOTIFY_EVENT_LABELS.map(([key, label]) => (
-            <div key={key} className="row" style={{ justifyContent: 'space-between' }}>
-              <span>{label}</span>
-              <select
-                value={eventState(key)}
-                onChange={(e) => setEvent(key, e.target.value as 'inherit' | 'on' | 'off')}
-                disabled={save.isPending}
-              >
-                <option value="inherit">Inherit</option>
-                <option value="on">On</option>
-                <option value="off">Off</option>
-              </select>
-            </div>
-          ))}
-        </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Admin editor for ANOTHER member's per-agent notification override —
- *  channel toggles plus tri-state per-event (inherit/on/off). */
+/** Per-member notification override editor — tri-state channels and events
+ *  (inherit/on/off). Rendered inside a modal from the row's "alerts" button;
+ *  self-service for the member's own row, admin-facing for anyone else's. */
 function MemberNotifyEditor({
   agentId,
   userId,
@@ -1942,10 +1797,10 @@ function MemberNotifyEditor({
   };
 
   return (
-    <div className="ruleset" style={{ marginTop: 4, marginBottom: 8 }}>
+    <div style={{ marginTop: 10 }}>
       <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
-        Per-agent overrides for this member — Inherit follows their own
-        workspace notification settings (their Settings → Me); unset is on.
+        Per-agent overrides — Inherit follows the member's own workspace
+        notification settings (Settings → Me); unset is on.
       </div>
       <div className="row">
         {([['push', 'Web push'], ['email', 'Email'], ['sound', 'Alert sounds']] as const).map(([k, label]) => (
@@ -2154,25 +2009,50 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
     v === 'hidden' ? 'no privileges (hidden)' : v;
 
   const [notifyFor, setNotifyFor] = useState<string | null>(null);
+  // One editor per person: admins manage anyone's overrides; a member gets
+  // the button only on their own row (the API allows self-service PATCHes).
   const notifyToggle = (userId: string) =>
-    isAdmin ? (
+    isAdmin || userId === me?.user.id ? (
       <button
         className="btn"
         style={{ marginLeft: 8, fontSize: 11 }}
         onClick={() => setNotifyFor(notifyFor === userId ? null : userId)}
-        title="Edit this member's notification overrides for this agent"
+        title="Edit notification overrides for this agent"
       >
         alerts
       </button>
     ) : null;
-  const notifyEditor = (userId: string, notify: AgentMember['notify']) =>
+  const notifyEditor = (userId: string, notify: AgentMember['notify'], name: string) =>
     notifyFor === userId ? (
-      <MemberNotifyEditor
-        agentId={agent.id}
-        userId={userId}
-        notify={notify}
-        onSaved={refresh}
-      />
+      <div className="modal-backdrop" onClick={() => setNotifyFor(null)}>
+        <div
+          className="modal"
+          role="dialog"
+          aria-modal="true"
+          style={{ width: 680 }}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setNotifyFor(null);
+          }}
+        >
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <strong>Alert overrides — {name}</strong>
+            <button
+              className="btn ghost"
+              onClick={() => setNotifyFor(null)}
+              aria-label="Close"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <MemberNotifyEditor
+            agentId={agent.id}
+            userId={userId}
+            notify={notify}
+            onSaved={refresh}
+          />
+        </div>
+      </div>
     ) : null;
 
   const roleSelect = (
@@ -2224,6 +2104,8 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
       <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
         Workspace members see every agent — a role here overrides theirs for
         this agent only. Agent-only people see nothing but this agent.
+        The alerts button edits that person's notification overrides for this
+        agent — anyone can open their own, admins can open anyone's.
       </div>
       {plainMembers.map((u) => (
         <div key={u.id}>
@@ -2234,7 +2116,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
             {notifyToggle(u.id)}
             {roleSelect(u.id, 'inherit', u.role, true)}
           </div>
-          {notifyEditor(u.id, null)}
+          {notifyEditor(u.id, null, u.name)}
         </div>
       ))}
       {memberRows
@@ -2255,7 +2137,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
               {notifyToggle(m.user_id)}
               {roleSelect(m.user_id, m.role ?? 'inherit', wsById.get(m.user_id)?.role ?? 'member', true)}
             </div>
-            {notifyEditor(m.user_id, m.notify)}
+            {notifyEditor(m.user_id, m.notify, m.name)}
           </div>
         ))}
       {agentOnly.map((m) => (
@@ -2273,7 +2155,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
               </button>
             )}
           </div>
-          {notifyEditor(m.user_id, m.notify)}
+          {notifyEditor(m.user_id, m.notify, m.name)}
         </div>
       ))}
       {isAdmin && (
