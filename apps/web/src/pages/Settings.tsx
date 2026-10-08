@@ -17,12 +17,13 @@ import { AutosizeText, CodeBlock } from '../components/bits';
 import { currentTheme, setTheme } from '../lib/theme';
 import { usePageTitle } from '../lib/title';
 
-type Section = 'workspace' | 'me' | 'integrations' | 'deliverability' | 'team';
+type Section = 'workspace' | 'me' | 'integrations' | 'deliverability' | 'escalation' | 'team';
 const SECTIONS: { key: Section; label: string }[] = [
   { key: 'workspace', label: 'Workspace' },
   { key: 'me', label: 'Me' },
   { key: 'integrations', label: 'Integrations' },
   { key: 'deliverability', label: 'Sending' },
+  { key: 'escalation', label: 'Escalation' },
   { key: 'team', label: 'Team' },
 ];
 
@@ -488,9 +489,124 @@ export default function Settings() {
       {section === 'me' && (
         <>
       <div className="card">
+        <strong>Appearance</strong>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 14 }}>
+          <input
+            type="checkbox"
+            checked={theme === 'light'}
+            onChange={(e) => {
+              const t = e.target.checked ? 'light' : 'dark';
+              setTheme(t);
+              setThemeState(t);
+            }}
+          />
+          Light theme
+          <span className="muted" style={{ fontSize: 12 }}>— for demos and daylight; dark stays default</span>
+        </label>
+      </div>
+
+      {providers?.password && (
+      <div className="card">
+        <strong>Password</strong>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          Change the password you sign in with. If your account was created via Google/Slack
+          sign-in, leave the current password blank to set your first one.
+        </div>
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setPwMsg('');
+            setPassword.mutate({
+              ...(pw.current ? { current: pw.current } : {}),
+              new: pw.next,
+            });
+          }}
+        >
+          <input
+            type="password"
+            placeholder="current password"
+            autoComplete="current-password"
+            value={pw.current}
+            onChange={(e) => setPw({ ...pw, current: e.target.value })}
+          />
+          <input
+            type="password"
+            placeholder="new password (min 8)"
+            autoComplete="new-password"
+            minLength={8}
+            required
+            value={pw.next}
+            onChange={(e) => setPw({ ...pw, next: e.target.value })}
+          />
+          <button className="btn" disabled={setPassword.isPending}>Change</button>
+        </form>
+        {pwMsg && <div className="muted" style={{ marginTop: 8 }}>{pwMsg}</div>}
+      </div>
+      )}
+
+      <InstallCard />
+        </>
+      )}
+
+      {section === 'escalation' && (
+        <>
+      <div className="card">
+        <strong>Slack alerts</strong>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          Alerts post to a Slack channel with Take over / Resume buttons; replying in the thread
+          talks to the end user. Agents can pick a different channel under
+          Agent settings → Escalation.
+        </div>
+        {me?.user.role !== 'admin' ? (
+          <div className="muted">
+            {slack?.connected
+              ? `Connected — alerts post to ${slackChannels?.channels.find((ch) => ch.id === slack.alert_channel_id)?.name ? `#${slackChannels.channels.find((ch) => ch.id === slack.alert_channel_id)!.name}` : 'the alert channel'}. Managed by admins.`
+              : 'Not connected. Managed by workspace admins.'}
+          </div>
+        ) : slack?.connected ? (
+          <>
+            {(slack.installations ?? []).map((inst, i) => (
+              <SlackInstallEditor
+                key={inst.id}
+                inst={inst}
+                isDefault={i === 0}
+                alertChannelName={alertChannelName}
+                setAlertChannelName={setAlertChannelName}
+                busy={setSlackChannel.isPending || createChannel.isPending}
+                onPick={(channel_id) =>
+                  setSlackChannel.mutate({ installation_id: inst.id, channel_id })
+                }
+                onCreate={async (name) => {
+                  await createChannel.mutateAsync({ name, installation_id: inst.id });
+                }}
+                onTest={() => testSlack.mutate(inst.id)}
+                onDisconnect={() => disconnectSlack.mutate(inst.id)}
+              />
+            ))}
+            {slack.configured && (
+              <div style={{ marginTop: 10 }}>
+                <a className="btn" href="/api/slack/install">Connect another Slack workspace</a>
+              </div>
+            )}
+            {slackMsg && <div className="muted" style={{ marginTop: 8 }}>{slackMsg}</div>}
+          </>
+        ) : slack?.configured ? (
+          <a className="btn primary" href="/api/slack/install">Connect Slack</a>
+        ) : (
+          <div className="muted">
+            Set SLACK_CLIENT_ID / SLACK_CLIENT_SECRET / SLACK_SIGNING_SECRET on the API to enable
+            the Slack app.
+          </div>
+        )}
+      </div>
+
+      <div className="card">
         <strong>Profile</strong>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
-          Shown to customers on webchat channels that enable "show operator name". Leave the
+          Your customer-facing identity — the baseline every agent inherits.
+          Shown to customers on channels that enable "show operator name"; agents
+          can override it per-agent under Agent settings → Escalation. Leave the
           display name blank to use your first name ({me?.user.name.split(' ')[0] ?? '—'}).
         </div>
         <form
@@ -566,125 +682,15 @@ export default function Settings() {
             — unchecked, your replies stay anonymous even on enabled channels
           </span>
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 14 }}>
-          <input
-            type="checkbox"
-            checked={theme === 'light'}
-            onChange={(e) => {
-              const t = e.target.checked ? 'light' : 'dark';
-              setTheme(t);
-              setThemeState(t);
-            }}
-          />
-          Light theme
-          <span className="muted" style={{ fontSize: 12 }}>— for demos and daylight; dark stays default</span>
-        </label>
       </div>
 
-      {providers?.password && (
-      <div className="card">
-        <strong>Password</strong>
-        <div className="muted" style={{ margin: '6px 0 10px' }}>
-          Change the password you sign in with. If your account was created via Google/Slack
-          sign-in, leave the current password blank to set your first one.
-        </div>
-        <form
-          className="row"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setPwMsg('');
-            setPassword.mutate({
-              ...(pw.current ? { current: pw.current } : {}),
-              new: pw.next,
-            });
-          }}
-        >
-          <input
-            type="password"
-            placeholder="current password"
-            autoComplete="current-password"
-            value={pw.current}
-            onChange={(e) => setPw({ ...pw, current: e.target.value })}
-          />
-          <input
-            type="password"
-            placeholder="new password (min 8)"
-            autoComplete="new-password"
-            minLength={8}
-            required
-            value={pw.next}
-            onChange={(e) => setPw({ ...pw, next: e.target.value })}
-          />
-          <button className="btn" disabled={setPassword.isPending}>Change</button>
-        </form>
-        {pwMsg && <div className="muted" style={{ marginTop: 8 }}>{pwMsg}</div>}
-      </div>
-      )}
-
-      <InstallCard />
-        </>
-      )}
-
-      {section === 'integrations' && (
-        <>
-      <div className="card">
-        <strong>Slack</strong>
-        <div className="muted" style={{ margin: '6px 0 10px' }}>
-          Alerts post to a Slack channel with Take over / Resume buttons; replying in the thread
-          talks to the end user.
-        </div>
-        {me?.user.role !== 'admin' ? (
-          <div className="muted">
-            {slack?.connected
-              ? `Connected — alerts post to ${slackChannels?.channels.find((ch) => ch.id === slack.alert_channel_id)?.name ? `#${slackChannels.channels.find((ch) => ch.id === slack.alert_channel_id)!.name}` : 'the alert channel'}. Managed by admins.`
-              : 'Not connected. Managed by workspace admins.'}
-          </div>
-        ) : slack?.connected ? (
-          <>
-            {(slack.installations ?? []).map((inst, i) => (
-              <SlackInstallEditor
-                key={inst.id}
-                inst={inst}
-                isDefault={i === 0}
-                alertChannelName={alertChannelName}
-                setAlertChannelName={setAlertChannelName}
-                busy={setSlackChannel.isPending || createChannel.isPending}
-                onPick={(channel_id) =>
-                  setSlackChannel.mutate({ installation_id: inst.id, channel_id })
-                }
-                onCreate={async (name) => {
-                  await createChannel.mutateAsync({ name, installation_id: inst.id });
-                }}
-                onTest={() => testSlack.mutate(inst.id)}
-                onDisconnect={() => disconnectSlack.mutate(inst.id)}
-              />
-            ))}
-            {slack.configured && (
-              <div style={{ marginTop: 10 }}>
-                <a className="btn" href="/api/slack/install">Connect another Slack workspace</a>
-              </div>
-            )}
-            {slackMsg && <div className="muted" style={{ marginTop: 8 }}>{slackMsg}</div>}
-          </>
-        ) : slack?.configured ? (
-          <a className="btn primary" href="/api/slack/install">Connect Slack</a>
-        ) : (
-          <div className="muted">
-            Set SLACK_CLIENT_ID / SLACK_CLIENT_SECRET / SLACK_SIGNING_SECRET on the API to enable
-            the Slack app.
-          </div>
-        )}
-      </div>
-        </>
-      )}
-
-      {section === 'me' && (
       <div className="card">
         <strong>Saved replies</strong>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
-          Canned responses — available in the composer via 📑.
+          Canned responses — available in the composer via 📑 on every agent.
+          Agents can add agent-scoped replies under Agent settings → Escalation.
         </div>
-        {savedReplies?.saved_replies.map((r) => (
+        {savedReplies?.saved_replies.filter((r) => !r.agent_id).map((r) => (
           <div key={r.id} className="row muted" style={{ marginTop: 8 }}>
             <span className="grow"><strong>{r.title}</strong> — {r.body.slice(0, 80)}</span>
             <button
@@ -740,6 +746,7 @@ export default function Settings() {
           </div>
         </form>
       </div>
+        </>
       )}
 
       {section === 'team' && (
