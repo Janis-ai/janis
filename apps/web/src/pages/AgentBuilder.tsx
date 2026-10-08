@@ -14,6 +14,7 @@ import { ChevronDown, MessageSquarePlus, Play } from 'lucide-react';
 
 import { freshTestVisitor } from '../lib/testChat';
 import { useScenarioMatch } from '../lib/scenarioMatch';
+import { ringScenario } from '../lib/scenarioRing';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow, scenarioPrompt, type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 import { AgentChannels } from '../components/AgentChannels';
@@ -452,10 +453,7 @@ export default function AgentBuilder() {
         );
       const el = document.getElementById(`sc-${first?.id}`);
       if (el) {
-        document
-          .querySelectorAll('.scenario-hit')
-          .forEach((n) => n.classList.remove('scenario-hit'));
-        el.classList.add('scenario-hit');
+        ringScenario(el);
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
       return;
@@ -590,10 +588,7 @@ export default function AgentBuilder() {
     if (step !== 'try' || !scenarios.length) return;
     const el = document.getElementById(hash.slice(1));
     if (!el) return;
-    document
-      .querySelectorAll('.scenario-hit')
-      .forEach((n) => n.classList.remove('scenario-hit'));
-    el.classList.add('scenario-hit');
+    ringScenario(el);
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [hash, step, scenarios.length]);
   // First visit to the checklist materializes the draft's suggested

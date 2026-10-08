@@ -33,6 +33,7 @@ import {
 import type { LlmVendor } from '@janis/shared';
 import { SavedWidgets } from '../components/WidgetComposer';
 import { janisBrain } from '../lib/agentContext';
+import { ringScenario } from '../lib/scenarioRing';
 import { railBus } from '../lib/railBus';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow } from '../components/ScenarioRow';
@@ -3511,10 +3512,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     if (!tests.length || !hash.startsWith('#sc-')) return;
     const el = document.getElementById(hash.slice(1));
     if (!el) return;
-    document
-      .querySelectorAll('.scenario-hit')
-      .forEach((n) => n.classList.remove('scenario-hit'));
-    el.classList.add('scenario-hit');
+    ringScenario(el);
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [tests.length, hash]);
   const passed = tests.filter((t) => t.last_run?.passed === true).length;
