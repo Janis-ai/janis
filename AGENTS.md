@@ -1,5 +1,8 @@
 # Janis reboot — agent notes
 
+Fresh session? Read `HANDOFF.md` first — product mission, current
+architecture state, recently shipped work, and Mike's working preferences.
+
 ## Stack
 
 npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod),
