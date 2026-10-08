@@ -171,25 +171,11 @@ export default function AgentBuilder() {
     mutationFn: () => {
       // Saving on Guide it counts as review — a human looked at the draft
       // and kept it, so the step marks confirmed, not "drafted by Janis".
-      // On Teach it, facts written under a topic's "Writing for" context
-      // count it covered — text lines can't carry a tag like file rows.
-      const coverActive =
-        step === 'teach' &&
-        activeTopic &&
-        teachSub === 'sources' &&
-        (cfg.knowledge ?? []).some((l) => l.trim());
       const config: AgentConfig = {
         ...cfg,
         builder: {
           ...cfg.builder,
           ...(step === 'guide' ? { guide_confirmed: true } : {}),
-          ...(coverActive
-            ? {
-                covered_topics: [
-                  ...new Set([...(cfg.builder?.covered_topics ?? []), activeTopic!.id]),
-                ],
-              }
-            : {}),
         },
       };
       return api(`/api/agents/${agent?.id}`, {
@@ -2350,7 +2336,33 @@ export default function AgentBuilder() {
         </>
       )}
 
-      {agent && (step === 'teach' || step === 'guide') && hosted && (
+      {/* Teach it has no staged edits — every control on the step
+          persists on click (source/note writes, skip, region, covered),
+          so Save buttons here would PATCH an unchanged config. Guide it
+          still stages instructions/greeting into cfg — its saves stay. */}
+      {agent && step === 'teach' && hosted && (
+        <div className="row" style={{ marginTop: 14, gap: 8, alignItems: 'center' }}>
+          <button
+            className="btn"
+            title="Open the test chat"
+            onClick={() => {
+              setDockOpen(true);
+              setChatFocus(Date.now());
+            }}
+          >
+            Test it
+          </button>
+          {next && (
+            <button className="btn" onClick={nextClick}>
+              {nextLabel} →
+            </button>
+          )}
+          {totalSources === 0 && !builder?.teach_skipped ? (
+            <span className="muted" style={{ fontSize: 12 }}>Knowledge still empty</span>
+          ) : null}
+        </div>
+      )}
+      {agent && step === 'guide' && hosted && (
         <div className="row" style={{ marginTop: 14, gap: 8, alignItems: 'center' }}>
           <button
             className="btn primary"
@@ -2359,23 +2371,21 @@ export default function AgentBuilder() {
           >
             {saveCfg.isPending ? 'Saving…' : 'Save configuration'}
           </button>
-          {hosted && (
-            <button
-              className="btn"
-              disabled={saveCfg.isPending || !isAdmin}
-              title="Save, then open the test chat — so you're never testing the unsaved version"
-              onClick={() =>
-                saveCfg.mutate(undefined, {
-                  onSuccess: () => {
-                    setDockOpen(true);
-                    setChatFocus(Date.now());
-                  },
-                })
-              }
-            >
-              Save &amp; test
-            </button>
-          )}
+          <button
+            className="btn"
+            disabled={saveCfg.isPending || !isAdmin}
+            title="Save, then open the test chat — so you're never testing the unsaved version"
+            onClick={() =>
+              saveCfg.mutate(undefined, {
+                onSuccess: () => {
+                  setDockOpen(true);
+                  setChatFocus(Date.now());
+                },
+              })
+            }
+          >
+            Save &amp; test
+          </button>
           {next && (
             <button
               className="btn"
@@ -2388,9 +2398,6 @@ export default function AgentBuilder() {
               {nextLabel} →
             </button>
           )}
-          {step === 'teach' && totalSources === 0 && !builder?.teach_skipped ? (
-            <span className="muted" style={{ fontSize: 12 }}>Knowledge still empty</span>
-          ) : null}
         </div>
       )}
       {agent && hosted && (step === 'abilities' || step === 'try') && next && (
