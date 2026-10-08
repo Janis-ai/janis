@@ -46,7 +46,7 @@ import {
 import { checkpointIndices, draftExpectation, judgeExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { configVersion } from '../lib/configVersion.js';
-import { groupNameTaken } from '../lib/names.js';
+import { agentNameTaken, groupNameTaken } from '../lib/names.js';
 import { recordLlmUsage } from '../lib/usage.js';
 import { enqueueJob, runJobs } from '../lib/jobs.js';
 import { applySuggestion, type SuggestionPatch } from '../lib/evalTriage.js';
@@ -215,6 +215,9 @@ export function agentRoutes(db: Db) {
     if (await groupNameTaken(db, c.get('workspaceId'), body.name)) {
       return c.json({ error: `"${body.name}" is already a group's name` }, 409);
     }
+    if (await agentNameTaken(db, c.get('workspaceId'), body.name)) {
+      return c.json({ error: `"${body.name}" is already an agent's name` }, 409);
+    }
     const row = await insertAgent(c, {
       name: body.name,
       hosted: body.hosted ?? false,
@@ -240,6 +243,9 @@ export function agentRoutes(db: Db) {
     const name = (body.name?.trim() || draft?.name || 'New agent').slice(0, 120);
     if (await groupNameTaken(db, c.get('workspaceId'), name)) {
       return c.json({ error: `"${name}" is already a group's name` }, 409);
+    }
+    if (await agentNameTaken(db, c.get('workspaceId'), name)) {
+      return c.json({ error: `"${name}" is already an agent's name` }, 409);
     }
     const row = await insertAgent(c, {
       name,
@@ -415,8 +421,13 @@ export function agentRoutes(db: Db) {
         }
       }
     }
-    if (body.name !== undefined && (await groupNameTaken(db, workspaceId, body.name))) {
-      return c.json({ error: `"${body.name}" is already a group's name` }, 409);
+    if (body.name !== undefined) {
+      if (await groupNameTaken(db, workspaceId, body.name)) {
+        return c.json({ error: `"${body.name}" is already a group's name` }, 409);
+      }
+      if (await agentNameTaken(db, workspaceId, body.name, c.req.param('id'))) {
+        return c.json({ error: `"${body.name}" is already an agent's name` }, 409);
+      }
     }
     const [row] = await db
       .update(agents)

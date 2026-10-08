@@ -392,3 +392,25 @@ describe('agent↔group name uniqueness', () => {
     expect(res2.status).toBe(409);
   });
 });
+
+describe('same-type name uniqueness', () => {
+  it('rejects a group named after another group', async () => {
+    await req('/api/groups', 'POST', adminCookie, { name: 'Tier 1', member_ids: [] });
+    const res = await req('/api/groups', 'POST', adminCookie, { name: ' tier 1 ', member_ids: [] });
+    expect(res.status).toBe(409);
+    // renaming a different group onto it also fails — but self-rename passes
+    const r2 = await req('/api/groups', 'POST', adminCookie, { name: 'Tier 2', member_ids: [] });
+    const { group } = await r2.json();
+    const dup = await req(`/api/groups/${group.id}`, 'PATCH', adminCookie, { name: 'Tier 1' });
+    expect(dup.status).toBe(409);
+    const self = await req(`/api/groups/${group.id}`, 'PATCH', adminCookie, { name: 'Tier 2' });
+    expect(self.status).toBe(200);
+  });
+
+  it('rejects an agent named after another agent; self-rename passes', async () => {
+    const res = await req('/api/agents', 'POST', adminCookie, { name: 'A' });
+    expect(res.status).toBe(409);
+    const self = await req(`/api/agents/${agentId}`, 'PATCH', adminCookie, { name: 'a' });
+    expect(self.status).toBe(200);
+  });
+});

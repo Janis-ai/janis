@@ -17,11 +17,12 @@ let db: Db;
 let childCookie: string;
 let parentCookie: string;
 
+let botSeq = 0;
 const postAgent = (cookie: string) =>
   app.request('/api/agents', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', cookie },
-    body: JSON.stringify({ name: 'New Bot' }),
+    body: JSON.stringify({ name: `New Bot ${++botSeq}` }),
   });
 
 const cookieFor = async (workspaceId: string, email: string) => {

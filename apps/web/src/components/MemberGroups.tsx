@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Trash2, X } from 'lucide-react';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 import { useGroups } from '../api/hooks';
 
 /** Named teammate rosters. Routing rules reference groups so "rotate through
@@ -22,6 +22,8 @@ export function MemberGroups({
   const qc = useQueryClient();
   const [name, setName] = useState('');
   const [picked, setPicked] = useState<string[]>([]);
+  const [err, setErr] = useState('');
+  const onErr = (e: unknown) => setErr(e instanceof ApiError ? e.message : 'failed');
   const groups = (groupsData?.groups ?? []).filter((g) =>
     agentId ? g.agent_id === agentId : !g.agent_id,
   );
@@ -37,8 +39,10 @@ export function MemberGroups({
     onSuccess: () => {
       setName('');
       setPicked([]);
+      setErr('');
       refresh();
     },
+    onError: onErr,
   });
   const update = useMutation({
     mutationFn: (body: { id: string; member_ids: string[] }) =>
@@ -137,11 +141,15 @@ export function MemberGroups({
           <div className="row" style={{ marginTop: 8 }}>
             <button
               className="btn"
-              disabled={!name.trim() || picked.length === 0}
+              disabled={!name.trim() || picked.length === 0 || create.isPending}
               onClick={() => create.mutate({ name: name.trim(), member_ids: picked })}
             >
               Create group
             </button>
+          </div>
+          {err && <div className="error" style={{ marginTop: 8 }}>{err}</div>}
+          <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+            Group and agent names must be unique within the workspace.
           </div>
         </div>
       )}
