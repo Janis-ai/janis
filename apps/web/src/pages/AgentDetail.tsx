@@ -2216,9 +2216,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
             <option value="admin">admin</option>
             {form.scope === 'workspace' && <option value="viewer">viewer (read-only)</option>}
           </select>
-          <button className="btn" disabled={add.isPending}>
-            {form.scope === 'agent' ? 'Add' : 'Invite'}
-          </button>
+          <button className="btn" disabled={add.isPending}>Invite</button>
         </form>
       )}
       <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>

@@ -864,8 +864,8 @@ export default function Settings() {
           >
             <label>Invite teammate</label>
             <div className="row">
-              <input placeholder="name (optional)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <input placeholder="email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+              <input placeholder="name (optional)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                 <option value="member">member</option>
                 <option value="admin">admin</option>
