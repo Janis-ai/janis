@@ -2022,6 +2022,32 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
     [...rows].sort((a, b) => Number(id(b) === selfId) - Number(id(a) === selfId));
   const youTag = (id: string) =>
     id === selfId ? <span className="muted"> (You)</span> : null;
+  // Workspace members render as ONE list — plain members and members with
+  // an override row merged — so self-first actually floats you to the top
+  // regardless of which shape your row has.
+  const wsRows = selfFirst(
+    [
+      ...plainMembers.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        memberRole: null as string | null,
+        notify: null as AgentMember['notify'],
+        wsRole: u.role,
+      })),
+      ...memberRows
+        .filter((m) => wsById.has(m.user_id))
+        .map((m) => ({
+          id: m.user_id,
+          name: m.name,
+          email: m.email,
+          memberRole: m.role,
+          notify: m.notify,
+          wsRole: wsById.get(m.user_id)?.role ?? 'member',
+        })),
+    ],
+    (r) => r.id,
+  );
   const ownerId = agent.owner_user_id;
   const isOwner = me?.user.id === ownerId;
 
@@ -2127,40 +2153,25 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         The alerts button edits that person's notification overrides for this
         agent — anyone can open their own, admins can open anyone's.
       </div>
-      {selfFirst(plainMembers, (u) => u.id).map((u) => (
-        <div key={u.id}>
+      {wsRows.map((r) => (
+        <div key={r.id}>
           <div className="row" style={{ marginTop: 6 }}>
             <span className="grow">
-              {u.name}{youTag(u.id)} <span className="muted">· {u.email}</span>
+              {r.name}{youTag(r.id)} <span className="muted">· {r.email}</span>
+              {/* A member row can exist with no role — saved profile or
+                  notify prefs alone shouldn't badge it as overridden.
+                  Nor should the owner — their stored role is vestigial,
+                  owner_user_id wins regardless. */}
+              {r.memberRole && r.id !== ownerId && (
+                <span className="badge" style={{ marginLeft: 8 }}>override</span>
+              )}
             </span>
-            {notifyToggle(u.id)}
-            {roleSelect(u.id, 'inherit', u.role, true)}
+            {notifyToggle(r.id)}
+            {roleSelect(r.id, r.memberRole ?? 'inherit', r.wsRole, true)}
           </div>
-          {notifyEditor(u.id, null, u.name)}
+          {notifyEditor(r.id, r.notify, r.name)}
         </div>
       ))}
-      {selfFirst(
-        memberRows.filter((m) => wsById.has(m.user_id)),
-        (m) => m.user_id,
-      ).map((m) => (
-          <div key={m.user_id}>
-            <div className="row" style={{ marginTop: 6 }}>
-              <span className="grow">
-                {m.name}{youTag(m.user_id)} <span className="muted">· {m.email}</span>
-                {/* A member row can exist with no role — saved profile or
-                    notify prefs alone shouldn't badge it as overridden.
-                    Nor should the owner — their stored role is vestigial,
-                    owner_user_id wins regardless. */}
-                {m.role && m.user_id !== ownerId && (
-                  <span className="badge" style={{ marginLeft: 8 }}>override</span>
-                )}
-              </span>
-              {notifyToggle(m.user_id)}
-              {roleSelect(m.user_id, m.role ?? 'inherit', wsById.get(m.user_id)?.role ?? 'member', true)}
-            </div>
-            {notifyEditor(m.user_id, m.notify, m.name)}
-          </div>
-        ))}
       {selfFirst(agentOnly, (m) => m.user_id).map((m) => (
         <div key={m.user_id}>
           <div className="row" style={{ marginTop: 6 }}>
