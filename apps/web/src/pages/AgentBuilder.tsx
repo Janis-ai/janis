@@ -2022,19 +2022,24 @@ export default function AgentBuilder() {
                     )}
                 </div>
               )}
-              <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />
               {isAdmin && status && status.steps.abilities !== 'done' && (
-                <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-                  This agent doesn&rsquo;t take actions?{' '}
+                <div className="card" style={{ marginTop: 10 }}>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    If your agent only needs to answer questions — no lookups,
+                    bookings, or actions on the customer&apos;s behalf — you
+                    can skip this step.
+                  </div>
                   <button
-                    className="link small"
+                    className="btn sm"
+                    style={{ marginTop: 8 }}
                     disabled={confirmFlag.isPending}
                     onClick={() => confirmFlag.mutate({ abilities_confirmed: true })}
                   >
-                    Mark none needed
+                    Skip — it doesn&apos;t take actions
                   </button>
                 </div>
               )}
+              <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />
             </>
           )}
         </>
