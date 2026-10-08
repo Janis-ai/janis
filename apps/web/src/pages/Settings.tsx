@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceUser } from '@janis/shared';
@@ -10,9 +10,17 @@ import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { MemberGroups } from '../components/MemberGroups';
 import { usePrompt, useConfirm } from '../components/Prompt';
+import { Shield, Trash2, Users } from 'lucide-react';
 import { AutosizeText, CodeBlock } from '../components/bits';
 import { currentTheme, setTheme } from '../lib/theme';
 import { usePageTitle } from '../lib/title';
+
+// Team-table chrome — matches the agent Team card (AgentDetail).
+const teamTh: CSSProperties = {
+  textAlign: 'left', fontSize: 11, fontWeight: 600, letterSpacing: '.05em',
+  textTransform: 'uppercase', color: 'var(--muted)', padding: '0 8px 6px 0',
+};
+const teamTd: CSSProperties = { padding: '8px 8px 8px 0', verticalAlign: 'middle' };
 
 type Section = 'workspace' | 'me' | 'integrations' | 'deliverability' | 'team';
 const SECTIONS: { key: Section; label: string }[] = [
@@ -810,82 +818,116 @@ export default function Settings() {
           conversation status. The <strong>owner</strong> can't be removed — only they
           can hand ownership to another member.
         </div>
-        {[...(users?.users ?? [])]
-          .sort(
-            (a, b) =>
-              Number(b.id === me?.user.id) - Number(a.id === me?.user.id) ||
-              a.name.localeCompare(b.name),
-          )
-          .map((u) => (
-          <div key={u.id} className="row muted" style={{ marginTop: 8 }}>
-            <span className="grow">
-              {u.name}{u.id === me?.user.id && <span className="muted"> (You)</span>} · {u.email}
-              {u.status === 'invited' && (
-                <span className="badge" style={{ marginLeft: 8 }}>invited</span>
-              )}
-            </span>
-            {u.role === 'owner' ? (
-              <span className="badge active">owner</span>
-            ) : me?.user.role === 'admin' && u.id !== me.user.id ? (
-              <>
-                <select
-                  value={u.role}
-                  onChange={(e) => {
-                    const role = e.target.value;
-                    if (role !== 'owner') {
-                      setRole.mutate({ id: u.id, role });
-                      return;
-                    }
-                    void (async () => {
-                      if (await confirm(`Transfer ownership of this workspace to ${u.name}? You stay an admin but lose ownership.`, undefined, true))
-                        setRole.mutate({ id: u.id, role });
-                    })();
-                  }}
-                >
-                  <option value="member">member</option>
-                  <option value="admin">admin</option>
-                  <option value="viewer">viewer (read-only)</option>
-                  {me.user.id === me.workspace?.owner_id && (
-                    <option value="owner">owner (transfer)</option>
-                  )}
-                </select>
-                <button className="btn danger" onClick={() => removeUser.mutate(u.id)}>Remove</button>
-              </>
-            ) : (
-              <span className="badge active">{u.role}</span>
-            )}
-          </div>
-        ))}
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 16, fontSize: 13 }}>
+          <thead>
+            <tr>
+              <th style={teamTh}>
+                <span className="row" style={{ gap: 6 }}>
+                  <Users size={12} /> Member
+                </span>
+              </th>
+              <th style={{ ...teamTh, width: 200 }}>
+                <span className="row" style={{ gap: 6 }}>
+                  <Shield size={12} /> Role
+                </span>
+              </th>
+              <th style={{ ...teamTh, width: 34 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {[...(users?.users ?? [])]
+              .sort(
+                (a, b) =>
+                  Number(b.id === me?.user.id) - Number(a.id === me?.user.id) ||
+                  a.name.localeCompare(b.name),
+              )
+              .map((u) => (
+                <tr key={u.id} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={teamTd}>
+                    {u.name}{u.id === me?.user.id && <span className="muted"> (You)</span>}{' '}
+                    <span className="muted">· {u.email}</span>
+                    {u.status === 'invited' && (
+                      <span className="badge" style={{ marginLeft: 8 }}>invited</span>
+                    )}
+                  </td>
+                  <td style={teamTd}>
+                    {u.role === 'owner' ? (
+                      <span className="badge active">owner</span>
+                    ) : me?.user.role === 'admin' && u.id !== me.user.id ? (
+                      <select
+                        value={u.role}
+                        onChange={(e) => {
+                          const role = e.target.value;
+                          if (role !== 'owner') {
+                            setRole.mutate({ id: u.id, role });
+                            return;
+                          }
+                          void (async () => {
+                            if (await confirm(`Transfer ownership of this workspace to ${u.name}? You stay an admin but lose ownership.`, undefined, true))
+                              setRole.mutate({ id: u.id, role });
+                          })();
+                        }}
+                      >
+                        <option value="member">member</option>
+                        <option value="admin">admin</option>
+                        <option value="viewer">viewer (read-only)</option>
+                        {me.user.id === me.workspace?.owner_id && (
+                          <option value="owner">owner (transfer)</option>
+                        )}
+                      </select>
+                    ) : (
+                      <span className="badge active">{u.role}</span>
+                    )}
+                  </td>
+                  <td style={teamTd}>
+                    {me?.user.role === 'admin' && u.id !== me.user.id && u.role !== 'owner' && (
+                      <button
+                        className="btn ghost"
+                        style={{ color: 'var(--danger)' }}
+                        onClick={() => removeUser.mutate(u.id)}
+                        title="Remove member"
+                        aria-label="Remove member"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
 
         {me?.user.role === 'admin' && (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              addUser.mutate({
-                email: form.email,
-                ...(form.name ? { name: form.name } : {}),
-                role: form.role,
-              });
-            }}
-          >
-            <label>Invite teammate</label>
-            <div className="row">
-              <input placeholder="email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
-              <input placeholder="name (optional)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: 18, paddingTop: 14 }}>
+            <strong style={{ fontSize: 13 }}>Invite teammate</strong>
+            <form
+              className="row"
+              style={{ marginTop: 10 }}
+              onSubmit={(e) => {
+                e.preventDefault();
+                addUser.mutate({
+                  email: form.email,
+                  ...(form.name ? { name: form.name } : {}),
+                  role: form.role,
+                });
+              }}
+            >
+              <input className="grow" placeholder="teammate@email.com" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+              <input placeholder="name (optional)" style={{ width: 140 }} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                 <option value="member">member</option>
                 <option value="admin">admin</option>
                 <option value="viewer">viewer (read-only)</option>
               </select>
               <button className="btn">Invite</button>
-            </div>
-            <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>
+            </form>
+            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
               They sign in with Google or Slack using this email — the invite shows as an
               accept/decline banner when they land.
             </div>
-          </form>
+            {error && <div className="error">{error}</div>}
+          </div>
         )}
-        {error && <div className="error">{error}</div>}
       </div>
 
       <GroupsCard isAdmin={me?.user.role === 'admin'} />
