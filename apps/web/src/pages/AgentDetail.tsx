@@ -3438,12 +3438,17 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   const tests = data?.tests ?? [];
   const { hash } = useLocation();
   // Deep links land as #sc-<id> ("see matched scenario" from inbox/test
-  // chat) — scroll the row into view once the list has rendered.
+  // chat) — scroll the row into view once the list has rendered. :target
+  // doesn't re-evaluate on pushState — stamp the ring as a class.
   useEffect(() => {
     if (!tests.length || !hash.startsWith('#sc-')) return;
+    const el = document.getElementById(hash.slice(1));
+    if (!el) return;
     document
-      .getElementById(hash.slice(1))
-      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      .querySelectorAll('.scenario-hit')
+      .forEach((n) => n.classList.remove('scenario-hit'));
+    el.classList.add('scenario-hit');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [tests.length, hash]);
   const passed = tests.filter((t) => t.last_run?.passed === true).length;
   const failed = tests.filter((t) => t.last_run?.passed === false).length;

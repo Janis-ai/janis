@@ -557,11 +557,18 @@ export default function AgentBuilder() {
   const { hash } = useLocation();
   // "see matched scenario" lands as #sc-<id> — the try step gates the
   // checklist's mount, so scroll once the step and rows are both there.
+  // :target doesn't re-evaluate on pushState hash changes — the ring is
+  // a stamped class instead.
   useEffect(() => {
-    if (!hash.startsWith('#sc-') || step !== 'try' || !scenarios.length) return;
+    if (!hash.startsWith('#sc-')) return;
+    if (step !== 'try' || !scenarios.length) return;
+    const el = document.getElementById(hash.slice(1));
+    if (!el) return;
     document
-      .getElementById(hash.slice(1))
-      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      .querySelectorAll('.scenario-hit')
+      .forEach((n) => n.classList.remove('scenario-hit'));
+    el.classList.add('scenario-hit');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [hash, step, scenarios.length]);
   // First visit to the checklist materializes the draft's suggested
   // scenarios (bootstrap already seeds; this catches agents created
