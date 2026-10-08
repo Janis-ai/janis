@@ -2122,12 +2122,16 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
       {confirmEl}
       <strong>Team</strong>
       <div className="muted" style={{ margin: '4px 0 8px' }}>
-        Workspace members can see every agent — a role set here overrides
-        theirs for this agent only, and "no privileges" hides it from them
-        entirely. People added with no workspace account become agent-only
-        users who see nothing but this agent. The alerts button edits that
-        person's notifications for this agent — anything left on Inherit
-        follows their own workspace notification settings (Settings → Me).
+        <strong>Admins</strong> manage this agent's settings, team, and
+        rules; <strong>members</strong> work its inbox — reply, take over,
+        assign, set conversation status. <strong>No privileges</strong> hides
+        the agent from a workspace member entirely. The{' '}
+        <strong>owner</strong> can't be removed — only they can hand
+        ownership to another member. Workspace members can see every agent —
+        a role set here overrides theirs for this agent only, and people
+        added with no workspace account see nothing but this agent. The
+        alerts button edits that person's notifications for this agent —
+        anything left on Inherit follows their own Settings → Me.
       </div>
       {plainMembers.map((u) => (
         <div key={u.id}>
