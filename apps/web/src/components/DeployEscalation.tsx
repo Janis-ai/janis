@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { api } from '../api/client';
@@ -39,6 +39,12 @@ export function DeployEscalation({
     ...(handoffRule?.config.assignees ?? []),
   ];
   const routed = routedIds.length > 0 || (handoffRule?.config.group_ids?.length ?? 0) > 0;
+  // Mode override — the rule alone can't express "specific chosen, nobody
+  // checked yet", so selecting the radio sets intent first and the roster
+  // opens; a successful write re-derives from the rule.
+  const [specific, setSpecific] = useState<boolean | null>(null);
+  const specificMode = specific ?? routed;
+  useEffect(() => setSpecific(null), [agent.id]);
 
   // Roster — the same union the Escalation settings picker draws from:
   // workspace members (incl. pending invites) plus agent-scoped grants
@@ -91,7 +97,10 @@ export function DeployEscalation({
         }),
       });
     },
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['rules'] }),
+    onSuccess: () => {
+      setSpecific(null);
+      void qc.invalidateQueries({ queryKey: ['rules'] });
+    },
     onError: (e) => setErr(e.message),
   });
 
@@ -158,8 +167,11 @@ export function DeployEscalation({
             type="radio"
             name="esc-route"
             disabled={!isAdmin || saveRouting.isPending}
-            checked={!routed}
-            onChange={() => saveRouting.mutate([])}
+            checked={!specificMode}
+            onChange={() => {
+              setSpecific(null);
+              saveRouting.mutate([]);
+            }}
           />
           <span>
             <strong>Everyone</strong>
@@ -175,18 +187,15 @@ export function DeployEscalation({
             type="radio"
             name="esc-route"
             disabled={!isAdmin || saveRouting.isPending}
-            checked={routed}
-            onChange={() => {
-              // Switching modes needs at least one person — no-op until
-              // they check a name below.
-            }}
+            checked={specificMode}
+            onChange={() => setSpecific(true)}
           />
           <span>
             <strong>Specific people</strong>
             <span className="muted"> — pages just them (rotates when more than one)</span>
           </span>
         </label>
-        {routed && (
+        {specificMode && (
           <div style={{ margin: '6px 0 0 24px', display: 'flex', flexDirection: 'column', gap: 4 }}>
             {roster.map((p) => (
               <label key={p.id} className="check-label" style={{ display: 'flex', gap: 6 }}>
