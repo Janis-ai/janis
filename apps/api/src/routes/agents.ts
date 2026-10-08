@@ -2520,9 +2520,9 @@ export function agentRoutes(db: Db) {
   })), async (c) => {
     const agentId = c.req.param('id')!;
     const rows = parseCsv(c.req.valid('json').csv).filter(
-      (r) => r.length >= 2 && r[0].trim() && r[1].trim(),
+      (r) => r.length >= 2 && r[1].trim(),
     );
-    if (!rows.length) return c.json({ error: 'no rows — expected "name, prompt, expectation"' }, 400);
+    if (!rows.length) return c.json({ error: 'no rows — expected "name, prompt, expectation" (name optional)' }, 400);
     if (rows.length > 200) return c.json({ error: 'max 200 rows per import' }, 400);
     // Header row detection: skip it if the first cell looks like a header.
     if (['name', 'test', 'title'].includes(rows[0][0].trim().toLowerCase())) rows.shift();
@@ -2532,7 +2532,9 @@ export function agentRoutes(db: Db) {
         rows.map((r) => ({
           workspaceId: c.get('workspaceId'),
           agentId,
-          name: r[0].trim().slice(0, 120),
+          // Name is a display label only — blank falls back to the prompt,
+          // the same default inline scenario saves use.
+          name: (r[0].trim() || r[1].trim()).slice(0, 120),
           expectation: (r[2] ?? '').trim().slice(0, 4000),
           turns: [{ role: 'customer', text: r[1].trim() }] as never,
         })),

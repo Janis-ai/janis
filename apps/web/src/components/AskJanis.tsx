@@ -1154,7 +1154,7 @@ export function AskJanis({
                               "meets the expectation", not "feels fine". */}
                           {verdictCtx.expectation ? (
                             <div className="verdict-expect muted" title={verdictCtx.expectation}>
-                              Aim: {verdictCtx.expectation}
+                              Expected: {verdictCtx.expectation}
                             </div>
                           ) : null}
                           <div className="verdict-btns">

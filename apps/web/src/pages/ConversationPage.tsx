@@ -1235,7 +1235,7 @@ export default function ConversationPage() {
                       <div className="verdict-box">
                         {sc.expectation ? (
                           <div className="verdict-expect muted" title={sc.expectation}>
-                            Aim: {sc.expectation}
+                            Expected: {sc.expectation}
                           </div>
                         ) : null}
                         <div className="verdict-btns">

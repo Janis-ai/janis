@@ -236,6 +236,11 @@ export function ScenarioRow({
         )}
         <span className="grow" style={{ fontSize: 13, minWidth: 0 }}>
           “{test.name}”
+          {prompt !== test.name && (
+            <span className="muted" style={{ fontSize: 11 }}>
+              {' '}— {prompt}
+            </span>
+          )}
           {setupTurns.length > 0 && (
             <span className="muted" style={{ fontSize: 11 }}>
               {' '}· {setupTurns.length + 1} turns
@@ -321,6 +326,13 @@ export function ScenarioRow({
             </span>
           </div>
         </details>
+      )}
+
+      {/* The trigger — only rendered when the name is a separate label
+          (manual/CSV scenarios); chat-saved rows already title themselves
+          with it, and the exchange-context disclosure repeats it. */}
+      {prompt !== test.name && setupTurns.length === 0 && !editing && (
+        <ReplyBlock label="Customer" text={prompt} />
       )}
 
       {/* Expected — the bar. Edit keeps 'expects' inline beside the field. */}

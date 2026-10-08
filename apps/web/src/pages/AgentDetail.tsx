@@ -3428,7 +3428,9 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       api(`/api/agents/${agentId}/tests`, {
         method: 'POST',
         body: JSON.stringify({
-          name: newName.trim(),
+          // Blank name → the API titles the scenario from the trigger,
+          // the same default the chat/inbox saves use.
+          ...(newName.trim() ? { name: newName.trim() } : {}),
           expectation: newExpectation.trim(),
           turns: [{ role: 'customer', text: newMsg.trim() }],
         }),
@@ -3753,7 +3755,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           </div>
           <textarea
             rows={6}
-            placeholder={'name, prompt, expectation\nrefund request, "I want my money back", "Never promises a refund; offers human follow-up"'}
+            placeholder={'name (optional), prompt, expectation\nrefund request, "I want my money back", "Never promises a refund; offers human follow-up"'}
             value={csvText}
             onChange={(e) => setCsvText(e.target.value)}
             style={{ width: '100%', fontFamily: 'monospace' }}
@@ -3824,7 +3826,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       {newOpen && (
         <div className="card" style={{ background: 'var(--panel-2)' }}>
           <input
-            placeholder="Scenario name — e.g. angry refund request"
+            placeholder="Name (optional — defaults to the customer message)"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             style={{ width: '100%', marginBottom: 8 }}
@@ -3846,7 +3848,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           <div className="row" style={{ marginTop: 8 }}>
             <button
               className="btn primary sm"
-              disabled={!newName.trim() || !newMsg.trim() || create.isPending}
+              disabled={!newMsg.trim() || create.isPending}
               onClick={() => create.mutate()}
             >
               {create.isPending ? 'Saving…' : 'Create scenario'}
