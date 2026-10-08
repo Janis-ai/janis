@@ -17,11 +17,11 @@ import { AutosizeText, CodeBlock } from '../components/bits';
 import { currentTheme, setTheme } from '../lib/theme';
 import { usePageTitle } from '../lib/title';
 
-type Section = 'workspace' | 'me' | 'integrations' | 'deliverability' | 'escalation' | 'team';
+type Section = 'workspace' | 'me' | 'deliverability' | 'escalation' | 'team';
 const SECTIONS: { key: Section; label: string }[] = [
   { key: 'workspace', label: 'Workspace' },
   { key: 'me', label: 'Me' },
-  { key: 'integrations', label: 'Integrations' },
+
   { key: 'deliverability', label: 'Sending' },
   { key: 'escalation', label: 'Escalation' },
   { key: 'team', label: 'Team' },
@@ -472,6 +472,7 @@ export default function Settings() {
       </div>
 
       {me?.user.role === 'admin' && <DefaultLlmCard />}
+      {me?.user.role === 'admin' && <CrmCard />}
         </>
       )}
 
@@ -483,8 +484,6 @@ export default function Settings() {
       {me?.user.role === 'admin' && <EventTokenCard />}
         </>
       )}
-
-      {section === 'integrations' && me?.user.role === 'admin' && <CrmCard />}
 
       {section === 'me' && (
         <>
