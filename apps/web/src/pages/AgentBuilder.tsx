@@ -435,8 +435,12 @@ export default function AgentBuilder() {
         : `Next: ${next.label}${nextReason ? ` · ${nextReason}` : ''}`
     : '';
   // Already on Try it — "Fix N items"/safety can't navigate; it scrolls to
-  // the row instead.
+  // the row instead. The safety path also rings every unchecked safety
+  // row — the scroll shows the first, the ring marks the review set.
+  const [safetyReview, setSafetyReview] = useState(0);
+  const isSafetyReview = !failing && safetyUnchecked;
   const nextClick = () => {
+    if (isSafetyReview) setSafetyReview((v) => v + 1);
     if ((failing > 0 || safetyUnchecked) && step === 'try') {
       const first =
         scenarios.find((s) => s.human_result === 'fail') ??
@@ -446,9 +450,14 @@ export default function AgentBuilder() {
             s.human_result !== 'pass' &&
             s.human_result !== 'fail',
         );
-      document
-        .getElementById(`sc-${first?.id}`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const el = document.getElementById(`sc-${first?.id}`);
+      if (el) {
+        document
+          .querySelectorAll('.scenario-hit')
+          .forEach((n) => n.classList.remove('scenario-hit'));
+        el.classList.add('scenario-hit');
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
       return;
     }
     if (next) goStep(next.key);
@@ -555,6 +564,23 @@ export default function AgentBuilder() {
   // semantic match queued async so a paraphrased reply still gets the box.
   const matchScenario = useScenarioMatch(agent?.id, scenarios);
   const { hash } = useLocation();
+  // "Review the safety scenario" rings every unchecked safety row — the
+  // scroll shows the first, the ring marks the whole review set. Re-runs
+  // on refetch so a row drops its ring the moment it gets a verdict.
+  useEffect(() => {
+    if (!safetyReview || step !== 'try' || !scenarios.length) return;
+    const targets = scenarios.filter(
+      (s) =>
+        s.category === 'safety' &&
+        s.human_result !== 'pass' &&
+        s.human_result !== 'fail',
+    );
+    document
+      .querySelectorAll('.scenario-hit')
+      .forEach((n) => n.classList.remove('scenario-hit'));
+    for (const s of targets)
+      document.getElementById(`sc-${s.id}`)?.classList.add('scenario-hit');
+  }, [safetyReview, step, scenarios]);
   // "see matched scenario" lands as #sc-<id> — the try step gates the
   // checklist's mount, so scroll once the step and rows are both there.
   // :target doesn't re-evaluate on pushState hash changes — the ring is
