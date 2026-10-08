@@ -266,7 +266,7 @@ export default function AgentBuilder() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dock?.testSeed]);
   // "Save & test" focuses the composer once the panel is open.
-  const [chatFocus, setChatFocus] = useState(0);
+  const [chatFocus] = useState(0);
   // Layout owns the shared test chat AND its visitor key — New chat
   // writes through dock.setTestVisitor (Layout persists per agent), so
   // the thread survives builder ↔ page navigation.
@@ -2342,16 +2342,6 @@ export default function AgentBuilder() {
           still stages instructions/greeting into cfg — its saves stay. */}
       {agent && step === 'teach' && hosted && (
         <div className="row" style={{ marginTop: 14, gap: 8, alignItems: 'center' }}>
-          <button
-            className="btn"
-            title="Open the test chat"
-            onClick={() => {
-              setDockOpen(true);
-              setChatFocus(Date.now());
-            }}
-          >
-            Test it
-          </button>
           {next && (
             <button className="btn" onClick={nextClick}>
               {nextLabel} →
@@ -2370,21 +2360,6 @@ export default function AgentBuilder() {
             onClick={() => saveCfg.mutate()}
           >
             {saveCfg.isPending ? 'Saving…' : 'Save configuration'}
-          </button>
-          <button
-            className="btn"
-            disabled={saveCfg.isPending || !isAdmin}
-            title="Save, then open the test chat — so you're never testing the unsaved version"
-            onClick={() =>
-              saveCfg.mutate(undefined, {
-                onSuccess: () => {
-                  setDockOpen(true);
-                  setChatFocus(Date.now());
-                },
-              })
-            }
-          >
-            Save &amp; test
           </button>
           {next && (
             <button
