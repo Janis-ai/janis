@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import { createHmac } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, channels, conversations, helpArticles, memberships, messages, sessions, slackInstallations, slackThreads, usageEvents, users, workspaces } from '../db/schema.js';
+import { agentMembers, agents, channels, conversations, helpArticles, memberships, messages, sessions, slackInstallations, slackThreads, usageEvents, users, workspaces } from '../db/schema.js';
 import { generateApiKey, sha256 } from '../lib/crypto.js';
 import { markOperatorTyping } from '../lib/typingState.js';
 import { takeover, humanReply } from '../services/takeover.js';
@@ -489,6 +489,78 @@ describe('webchat widget endpoints', () => {
     expect(after.operator_typing).toBeNull();
     expect(after.messages.at(-1).text).toBe('on it');
     expect(after.messages.at(-1).direction).toBe('human');
+  });
+
+  // Regression: the transcript authors map read users.* only, so the
+  // per-agent profile override on agent_members never reached the widget —
+  // the workspace profile always won.
+  it('renders the per-agent profile override on human replies', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{"ok":true}', { status: 200 })));
+    const VIS = 'vis_identity00001';
+    await post('who am I talking to?', VIS);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, `webchat:${VIS}`));
+    const [ws] = await db.select().from(workspaces).limit(1);
+    const [op] = await db
+      .insert(users)
+      .values({
+        email: 'ident@x.test',
+        name: 'Ida Entity',
+        displayName: 'Global Ida',
+        avatarUrl: '/uploads/global.png',
+      })
+      .returning();
+    await db.insert(memberships).values({
+      userId: op.id,
+      workspaceId: ws.id,
+      role: 'admin',
+      acceptedAt: new Date(),
+    });
+    await takeover(db, ws.id, conv.id, op);
+    await humanReply(db, ws.id, conv.id, op, 'I can help');
+    const poll = async () =>
+      (await (
+        await app.request(`/chat/${channelId}/messages?visitor_id=${VIS}`)
+      ).json()) as { messages: { author?: { name: string; avatar: string | null } }[] };
+    const author = async () => (await poll()).messages.at(-1)!.author;
+
+    // No override row — the global profile renders.
+    expect(await author()).toEqual({ name: 'Global Ida', avatar: '/uploads/global.png' });
+
+    // Override wins on both fields.
+    await db.insert(agentMembers).values({
+      agentId: conv.agentId,
+      userId: op.id,
+      displayName: 'Agent Ida',
+      avatarUrl: '/uploads/agent.png',
+      acceptedAt: new Date(),
+    });
+    expect(await author()).toEqual({ name: 'Agent Ida', avatar: '/uploads/agent.png' });
+
+    // Null override fields fall back to the global profile.
+    await db
+      .update(agentMembers)
+      .set({ displayName: null, avatarUrl: null })
+      .where(eq(agentMembers.userId, op.id));
+    expect(await author()).toEqual({ name: 'Global Ida', avatar: '/uploads/global.png' });
+
+    // Per-agent opt-out anonymizes even when the global profile shows.
+    await db
+      .update(agentMembers)
+      .set({ showIdentity: false })
+      .where(eq(agentMembers.userId, op.id));
+    expect(await author()).toBeUndefined();
+
+    // …and an explicit per-agent opt-in still wins over a global opt-out.
+    await db.update(users).set({ showIdentity: false }).where(eq(users.id, op.id));
+    await db
+      .update(agentMembers)
+      .set({ showIdentity: true, displayName: 'Agent Ida' })
+      .where(eq(agentMembers.userId, op.id));
+    expect(await author()).toEqual({ name: 'Agent Ida', avatar: '/uploads/global.png' });
+    await db.update(users).set({ showIdentity: true }).where(eq(users.id, op.id));
   });
 
   it('rejects malformed visitor ids and empty text', async () => {

@@ -22,6 +22,7 @@ import { processEvents } from '../services/ingest.js';
 import { bus } from '../lib/bus.js';
 import { rateLimit, takeDbAllowance } from '../lib/rateLimit.js';
 import { agentWorking, operatorTyping } from '../lib/typingState.js';
+import { operatorIdentities } from '../lib/access.js';
 
 /**
  * Public web-chat widget endpoints, mounted at /chat (no session auth).
@@ -828,22 +829,20 @@ export function webchatRoutes(db: Db) {
       rows = fetched.slice(0, PAGE).reverse();
     }
 
-    // Operator identity on human replies — driven by each operator's
-    // show_identity setting. display_name wins, else first name.
+    // Operator identity on human replies — the per-agent override
+    // (agent_members display_name/avatar/show_identity) wins over the
+    // operator's global profile; an effective opt-out keeps the reply
+    // anonymous.
     const authors = new Map<string, { name: string; avatar: string | null }>();
     const ids = [...new Set(rows.filter((r) => r.direction === 'human' && r.author_id).map((r) => r.author_id!))];
     if (ids.length) {
       const us = await db
-        .select({ id: users.id, name: users.name, displayName: users.displayName, avatarUrl: users.avatarUrl, showIdentity: users.showIdentity })
+        .select()
         .from(users)
         .where(inArray(users.id, ids));
-      for (const u of us) {
-        // per-operator opt-out — their replies stay anonymous
-        if (u.showIdentity === false) continue;
-        authors.set(u.id, {
-          name: u.displayName || u.name.split(' ')[0] || u.name,
-          avatar: u.avatarUrl,
-        });
+      for (const [id, ident] of await operatorIdentities(db, us, conv.agentId)) {
+        if (ident.name == null) continue;
+        authors.set(id, { name: ident.name, avatar: ident.avatar });
       }
     }
 

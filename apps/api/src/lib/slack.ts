@@ -1098,10 +1098,17 @@ async function seedSlackThread(
       authorDisplayName: users.displayName,
       authorAvatarUrl: users.avatarUrl,
       authorShowIdentity: users.showIdentity,
+      ovDisplayName: agentMembers.displayName,
+      ovAvatarUrl: agentMembers.avatarUrl,
+      ovShowIdentity: agentMembers.showIdentity,
       flags: messages.flags,
     })
     .from(messages)
     .leftJoin(users, eq(messages.authorId, users.id))
+    .leftJoin(
+      agentMembers,
+      and(eq(agentMembers.userId, messages.authorId), eq(agentMembers.agentId, conv.agentId)),
+    )
     .where(eq(messages.conversationId, conv.id))
     .orderBy(desc(messages.createdAt))
     .limit(20);
@@ -1151,9 +1158,11 @@ async function seedSlackThread(
               agent.name,
               {
                 name: m.author,
-                displayName: m.authorDisplayName,
-                avatarUrl: m.authorAvatarUrl,
-                showIdentity: m.authorShowIdentity,
+                // Per-agent override (agent_members) wins over the global
+                // profile — same precedence the customer-facing widget uses.
+                displayName: m.ovDisplayName || m.authorDisplayName,
+                avatarUrl: m.ovAvatarUrl ?? m.authorAvatarUrl,
+                showIdentity: m.ovShowIdentity ?? m.authorShowIdentity,
               },
               agentIcon,
             )
@@ -1317,9 +1326,32 @@ export async function mirrorToSlack(
         // Operators who opted to show their identity appear as themselves;
         // the rest wear the agent's face — the same masquerade the
         // customer sees, so the thread reads like the customer transcript.
+        // Per-agent override (agent_members) wins over the global profile.
+        let op = opts.operator;
+        if (op) {
+          const [ov] = await db
+            .select({
+              displayName: agentMembers.displayName,
+              avatarUrl: agentMembers.avatarUrl,
+              showIdentity: agentMembers.showIdentity,
+            })
+            .from(agentMembers)
+            .where(
+              and(eq(agentMembers.agentId, row.agent.id), eq(agentMembers.userId, op.id)),
+            )
+            .limit(1);
+          if (ov) {
+            op = {
+              ...op,
+              displayName: ov.displayName || op.displayName,
+              avatarUrl: ov.avatarUrl ?? op.avatarUrl,
+              showIdentity: ov.showIdentity ?? op.showIdentity,
+            };
+          }
+        }
         identity = operatorIdentity(
           row.agent.name,
-          opts.operator,
+          op,
           await agentIconFor(db, conversationId),
         );
       }

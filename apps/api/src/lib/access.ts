@@ -119,10 +119,45 @@ export async function operatorIdentity(
     .from(agentMembers)
     .where(and(eq(agentMembers.agentId, agentId), eq(agentMembers.userId, user.id)))
     .limit(1);
+  return applyIdentityOverride(user, ov);
+}
+
+/** Shared precedence for the single and batch identity lookups above/below. */
+function applyIdentityOverride(
+  user: typeof users.$inferSelect,
+  ov:
+    | Pick<typeof agentMembers.$inferSelect, 'displayName' | 'avatarUrl' | 'showIdentity'>
+    | undefined,
+): { name: string | null; avatar: string | null } {
   const show = ov?.showIdentity ?? user.showIdentity;
   if (show === false) return { name: null, avatar: null };
   return {
     name: ov?.displayName || user.displayName || user.name.split(' ')[0] || user.name,
     avatar: ov?.avatarUrl ?? user.avatarUrl,
   };
+}
+
+/** Batch variant — one agent_members read for a whole transcript page. */
+export async function operatorIdentities(
+  db: Db,
+  us: (typeof users.$inferSelect)[],
+  agentId: string,
+): Promise<Map<string, { name: string | null; avatar: string | null }>> {
+  if (!us.length) return new Map();
+  const ovs = await db
+    .select({
+      userId: agentMembers.userId,
+      displayName: agentMembers.displayName,
+      avatarUrl: agentMembers.avatarUrl,
+      showIdentity: agentMembers.showIdentity,
+    })
+    .from(agentMembers)
+    .where(
+      and(
+        eq(agentMembers.agentId, agentId),
+        inArray(agentMembers.userId, us.map((u) => u.id)),
+      ),
+    );
+  const byUser = new Map(ovs.map((o) => [o.userId, o]));
+  return new Map(us.map((u) => [u.id, applyIdentityOverride(u, byUser.get(u.id))]));
 }
