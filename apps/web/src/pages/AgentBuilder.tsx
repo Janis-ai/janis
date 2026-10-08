@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAgents, useBuildStatus, useMe } from '../api/hooks';
@@ -554,6 +554,15 @@ export default function AgentBuilder() {
   // Scenario lookup by meaning — local fuzzy first, then the server's
   // semantic match queued async so a paraphrased reply still gets the box.
   const matchScenario = useScenarioMatch(agent?.id, scenarios);
+  const { hash } = useLocation();
+  // "see matched scenario" lands as #sc-<id> — the try step gates the
+  // checklist's mount, so scroll once the step and rows are both there.
+  useEffect(() => {
+    if (!hash.startsWith('#sc-') || step !== 'try' || !scenarios.length) return;
+    document
+      .getElementById(hash.slice(1))
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [hash, step, scenarios.length]);
   // First visit to the checklist materializes the draft's suggested
   // scenarios (bootstrap already seeds; this catches agents created
   // before suggestions existed or a regenerate that added new ones).
@@ -769,19 +778,12 @@ export default function AgentBuilder() {
       setChatActive(true);
       if (CONFIG_HINT_RE.test(t)) setCopilotHint(t);
     },
-    // "see matched scenario" — the checklist lives on the try step, so hop
-    // there if needed, then scroll the row into view after it mounts. The
-    // hash gives it the :target ring.
+    // "see matched scenario" — land on the try step with the row's hash;
+    // the hash-scroll effect below does the scrolling once rows render.
     onShowScenario: (id) => {
-      if (step !== 'try') goStep('try');
       // An overlay dock would hide the row it just scrolled to.
       if (window.matchMedia('(max-width: 1199px)').matches) dock?.setOpen(false);
-      requestAnimationFrame(() => {
-        navigate(`#sc-${id}`, { replace: true });
-        document
-          .getElementById(`sc-${id}`)
-          ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      });
+      navigate(`/agents/new/${agent?.id}?step=try#sc-${id}`, { replace: true });
     },
     // Header history/new-chat switched threads — reset the drift tracking
     // the way the old pickTestChat/newChat did. The seed clears too: a
