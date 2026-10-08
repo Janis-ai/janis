@@ -38,12 +38,13 @@ import { janisBrain } from '../lib/agentContext';
 import { ringScenario } from '../lib/scenarioRing';
 import { railBus } from '../lib/railBus';
 import { CorrectThisCard } from '../components/CorrectThis';
+import { Modal } from '../components/Modal';
 import { ScenarioRow, scenarioPrompt } from '../components/ScenarioRow';
 import { useDock } from '../lib/dockContext';
 import { usePageTitle } from '../lib/title';
 import { NOTIFY_EVENT_LABELS } from '../lib/notifyEvents';
 import { useConfirm } from '../components/Prompt';
-import { Pencil, Trash2, Upload, X } from 'lucide-react';
+import { FlaskConical, Pencil, Trash2, Upload, X } from 'lucide-react';
 
 type RuleKind = AlertRule['kind'];
 /** `defaultOn` kinds page the workspace even with zero rules — a rule exists
@@ -3644,39 +3645,25 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
       <ReadOnly off={!isAdmin}>
-      <div className="row">
-        <label className="grow" style={{ margin: 0 }}>
-          Scenarios — saved conversations replayed against this agent's current setup
-        </label>
-        {tests.length > 0 && (
-          <button
-            className="btn sm"
-            disabled={running !== null || batch !== null}
-            onClick={() => runAll.mutate()}
-          >
-            {batch ? `Running… ${batchDone}/${batch.total}` : 'Run all'}
-          </button>
-        )}
-        {tests.length > 0 && (
-          <button
-            className="btn sm"
-            disabled={running !== null || batch !== null}
-            onClick={() => { setAbOpen((v) => !v); }}
-            title="Replay every scenario against different instructions or a different model — before you change the real agent"
-          >
-            Try a variant
-          </button>
-        )}
-        <button className="btn sm" onClick={() => setImportOpen((v) => !v)}>
-          Import CSV
-        </button>
-        <button className="btn sm" onClick={() => setNewOpen((v) => !v)}>
-          + New scenario
-        </button>
+      <div className="row" style={{ alignItems: 'center', gap: 8 }}>
+        <div className="grow" style={{ minWidth: 0 }}>
+          <strong>Scenarios</strong>
+          <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>
+            saved conversations replayed against this agent's current setup
+          </span>
+          {tests.length > 0 && (
+            <span style={{ fontSize: 12, marginLeft: 8 }}>
+              <span style={{ color: 'var(--accent)' }}>{passed} passing</span>
+              {failed > 0 && (
+                <span style={{ color: 'var(--danger)' }}> · {failed} failing</span>
+              )}
+            </span>
+          )}
+        </div>
         {tests.length > 0 && (
           <label
             className="row"
-            style={{ gap: 6, marginLeft: 'auto', fontSize: 12, whiteSpace: 'nowrap' }}
+            style={{ gap: 4, fontSize: 12, whiteSpace: 'nowrap' }}
             title="Replay the suite on a schedule — the workspace is alerted when a run regresses"
           >
             <span className="muted">Auto-run</span>
@@ -3692,25 +3679,48 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             </select>
           </label>
         )}
-      </div>
-      <div className="muted" style={{ fontSize: 12 }}>
-        Save a transcript from any conversation ("Save as scenario") — each point where a
-        human had to step in becomes its own scenario — then replay after prompt,
-        knowledge, or tool changes. Replays never message customers and never execute tools —
-        gated actions are only proposed. Add an expectation and each run is judged against it.
         {tests.length > 0 && (
-          <span>
-            {' '}
-            · <span style={{ color: 'var(--accent)' }}>{passed} passing</span>
-            {failed > 0 && <span style={{ color: 'var(--danger)' }}> · {failed} failing</span>}
-          </span>
+          <button
+            className="btn icon sm"
+            disabled={running !== null || batch !== null}
+            onClick={() => setAbOpen(true)}
+            title="Try a variant — replay every scenario against different instructions or a different model, before you change the real agent"
+          >
+            <FlaskConical size={14} />
+          </button>
+        )}
+        <button
+          className="btn icon sm"
+          onClick={() => setImportOpen(true)}
+          title="Import scenarios from CSV"
+        >
+          <Upload size={14} />
+        </button>
+        <button className="btn sm" onClick={() => setNewOpen(true)}>
+          + New
+        </button>
+        {tests.length > 0 && (
+          <button
+            className="btn primary sm"
+            disabled={running !== null || batch !== null}
+            onClick={() => runAll.mutate()}
+          >
+            {batch ? `Running… ${batchDone}/${batch.total}` : 'Run all'}
+          </button>
         )}
       </div>
+      <div className="muted" style={{ fontSize: 12 }}>
+        Save a transcript from any conversation ("Save as scenario") — each point a human
+        stepped in becomes its own scenario. Replays never message customers or run tools;
+        add an expectation and each run is judged against it.
+      </div>
       {evalSuggestions.length > 0 && (
-        <div className="card" style={{ padding: '12px 16px' }}>
-          <div className="section-label" style={{ marginBottom: 4 }}>
-            Suggested fixes — drafted from the last regressed suite run
-          </div>
+        <details className="card" style={{ padding: '10px 16px' }}>
+          <summary style={{ cursor: 'pointer', fontSize: 13 }}>
+            {evalSuggestions.length} suggested fix{evalSuggestions.length === 1 ? '' : 'es'}
+            <span className="muted"> — drafted from the last regressed run</span>
+          </summary>
+          <div style={{ marginTop: 8 }}>
           {evalSuggestions.map((s) => {
             const KIND_LABEL: Record<string, string> = {
               knowledge_gap: 'knowledge gap',
@@ -3799,13 +3809,16 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               </div>
             );
           })}
-        </div>
+          </div>
+        </details>
       )}
       {suggestions.length > 0 && (
-        <div className="card" style={{ padding: '12px 16px' }}>
-          <div className="section-label" style={{ marginBottom: 4 }}>
-            Rescued — not yet covered by a scenario
-          </div>
+        <details className="card" style={{ padding: '10px 16px' }}>
+          <summary style={{ cursor: 'pointer', fontSize: 13 }}>
+            {suggestions.length} rescued conversation{suggestions.length === 1 ? '' : 's'}
+            <span className="muted"> — not yet covered by a scenario</span>
+          </summary>
+          <div style={{ marginTop: 8 }}>
           {suggestions.map((s) => (
             <div
               key={s.conversation_id}
@@ -3861,18 +3874,20 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               </ReadOnly>
             </div>
           ))}
-        </div>
+          </div>
+        </details>
       )}
       {err && <div className="error">{err}</div>}
 
       {importOpen && (
-        <div className="card" style={{ background: 'var(--panel-2)' }}>
+        <Modal title="Import scenarios" onClose={() => setImportOpen(false)}>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
             One scenario per line: <code>name, customer message, expectation</code>. Paste from a
             spreadsheet or export. Multi-turn scenarios still come from "Save as scenario" on a conversation.
           </div>
           <textarea
             rows={6}
+            autoFocus
             placeholder={'name (optional), prompt, expectation\nrefund request, "I want my money back", "Never promises a refund; offers human follow-up"'}
             value={csvText}
             onChange={(e) => setCsvText(e.target.value)}
@@ -3886,22 +3901,22 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             >
               {importCsv.isPending ? 'Importing…' : 'Import scenarios'}
             </button>
-            <button className="btn sm" onClick={() => setImportOpen(false)}>Cancel</button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {abOpen && (
-        <div className="card" style={{ background: 'var(--panel-2)' }}>
+        <Modal title="Try a variant" onClose={() => setAbOpen(false)} width={620}>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
             Thinking of changing the instructions or the model? Try it here
             first — every scenario re-runs against your version and reports
             pass/fail next to today's results. Your agent is untouched; if the
-            variant wins, adopt it yourself in Behavior.
+            variant wins, adopt it yourself in Experience.
           </div>
           <label style={{ fontSize: 12 }}>Instructions</label>
           <textarea
             rows={6}
+            autoFocus
             placeholder="New instructions (optional — blank keeps today's)"
             value={candidatePrompt}
             onChange={(e) => setCandidatePrompt(e.target.value)}
@@ -3922,7 +3937,6 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             >
               {batch ? `Running… ${batchDone}/${batch.total}` : 'Run scenarios vs this'}
             </button>
-            <button className="btn sm" onClick={() => setAbOpen(false)}>Close</button>
           </div>
           {abResult && (
             <div style={{ marginTop: 8, fontSize: 13 }}>
@@ -3938,11 +3952,11 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               ))}
             </div>
           )}
-        </div>
+        </Modal>
       )}
 
       {newOpen && (
-        <div className="card" style={{ background: 'var(--panel-2)' }}>
+        <Modal title="New scenario" onClose={() => setNewOpen(false)}>
           <input
             placeholder="Name (optional — defaults to the customer message)"
             value={newName}
@@ -3951,6 +3965,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           />
           <textarea
             rows={2}
+            autoFocus
             placeholder="Customer message — what the customer says"
             value={newMsg}
             onChange={(e) => setNewMsg(e.target.value)}
@@ -3971,9 +3986,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             >
               {create.isPending ? 'Saving…' : 'Create scenario'}
             </button>
-            <button className="btn sm" onClick={() => setNewOpen(false)}>Cancel</button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {tests.length === 0 && !newOpen && (
@@ -4089,11 +4103,11 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       })()}
 
       {batches.length > 0 && (
-        <div>
-          <div className="muted" style={{ fontSize: 12, fontWeight: 600, margin: '4px 0 6px' }}>
-            Run history
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <details>
+          <summary className="muted" style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+            Run history — {batches.length} suite{batches.length === 1 ? '' : 's'}
+          </summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
             {batches.map((b) => (
               <details key={b.batch_id} style={{ fontSize: 12 }}>
                 <summary style={{ cursor: 'pointer' }}>
@@ -4129,7 +4143,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               </details>
             ))}
           </div>
-        </div>
+        </details>
       )}
       {/* A failed regression has the same repair path a Try-it miss does —
           the diagnose card, as a modal, same component. */}

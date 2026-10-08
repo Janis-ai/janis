@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { X } from 'lucide-react';
 import { api, ApiError } from '../api/client';
 import { CodeBlock } from './bits';
+import { Modal } from './Modal';
 
 type SendPolicy = {
   quiet_enabled?: boolean;
@@ -17,36 +17,15 @@ type SuppressionRow = { id: string; address: string; kind: string; reason: strin
  *  webhook token. Lives behind the gear on the Campaigns page rather than
  *  workspace Settings so the knobs sit next to what they govern. */
 export function CampaignSettingsModal({ onClose }: { onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => ref.current?.focus(), []);
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        ref={ref}
-        tabIndex={-1}
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        style={{ width: 700, maxHeight: '78vh', overflowY: 'auto' }}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') onClose();
-        }}
-      >
-        <div className="row" style={{ justifyContent: 'space-between' }}>
-          <strong>Campaign settings</strong>
-          <button className="btn ghost" onClick={onClose} aria-label="Close">
-            <X size={14} />
-          </button>
-        </div>
-        <div className="muted" style={{ fontSize: 12, margin: '4px 0 12px' }}>
-          Workspace-wide — applies to every campaign, whichever agent's channel
-          it sends through.
-        </div>
-        <SendPolicyCard />
-        <EventTokenCard />
+    <Modal title="Campaign settings" onClose={onClose} width={700}>
+      <div className="muted" style={{ fontSize: 12, margin: '-4px 0 12px' }}>
+        Workspace-wide — applies to every campaign, whichever agent's channel
+        it sends through.
       </div>
-    </div>
+      <SendPolicyCard />
+      <EventTokenCard />
+    </Modal>
   );
 }
 
