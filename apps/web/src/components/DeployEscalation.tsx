@@ -111,21 +111,42 @@ export function DeployEscalation({
     saveRouting.mutate(next);
   };
 
-  // SLA + auto-assign are agent config — write through immediately (the
-  // deploy step has no Save button) and mirror into the shared draft so a
-  // later teach/guide save doesn't clobber them.
+  // SLA + auto-assign + CSAT are agent config — write through immediately
+  // (the deploy step has no Save button) and mirror into the shared draft
+  // so a later teach/guide save doesn't clobber them. csat is a nested
+  // block — merge so prompt/thanks overrides survive an enabled toggle.
   const saveEscConfig = useMutation({
-    mutationFn: (patch: Pick<AgentConfig, 'sla_minutes' | 'auto_assign'>) => {
-      const config = { ...agent.config, ...patch } as AgentConfig;
+    mutationFn: (patch: Pick<AgentConfig, 'sla_minutes' | 'auto_assign' | 'csat'>) => {
+      const config = {
+        ...agent.config,
+        ...patch,
+        ...(patch.csat ? { csat: { ...(agent.config?.csat ?? {}), ...patch.csat } } : {}),
+      } as AgentConfig;
       return api(`/api/agents/${agent.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ config }),
       }).then(() => patch);
     },
     onSuccess: (patch) => {
-      setCfg({ ...cfg, ...patch });
+      setCfg({
+        ...cfg,
+        ...patch,
+        ...(patch.csat ? { csat: { ...(cfg.csat ?? {}), ...patch.csat } } : {}),
+      });
       void qc.invalidateQueries({ queryKey: ['agents'] });
     },
+    onError: (e) => setErr(e.message),
+  });
+
+  // Auto-resume lives on the agents table, not inside config — same
+  // immediate-write pattern, different PATCH shape.
+  const saveAutoResume = useMutation({
+    mutationFn: (minutes: number | null) =>
+      api(`/api/agents/${agent.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ auto_resume_minutes: minutes }),
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['agents'] }),
     onError: (e) => setErr(e.message),
   });
 
@@ -154,6 +175,7 @@ export function DeployEscalation({
   });
 
   return (
+    <>
     <div className="card" style={{ marginTop: 12 }}>
       <strong>When the agent needs a human</strong>
       <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
@@ -247,6 +269,28 @@ export function DeployEscalation({
         />
         <span>Auto-assign each handoff to the least-loaded person</span>
       </label>
+      <div className="row" style={{ marginTop: 8, gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <label className="muted" style={{ fontSize: 13 }}>
+          Hand a picked-up conversation back to the agent after
+        </label>
+        <input
+          type="number"
+          min={1}
+          className="num-input"
+          style={{ width: 64 }}
+          placeholder="min"
+          disabled={!isAdmin || saveAutoResume.isPending}
+          defaultValue={agent.auto_resume_minutes ?? ''}
+          key={`resume-${agent.id}-${agent.auto_resume_minutes ?? 'x'}`}
+          onBlur={(e) => {
+            const v = e.target.value ? Number(e.target.value) : null;
+            if (v !== agent.auto_resume_minutes) saveAutoResume.mutate(v);
+          }}
+        />
+        <span className="muted" style={{ fontSize: 12 }}>
+          minutes idle — blank = the human keeps it until they close it
+        </span>
+      </div>
       {handoffRule?.config.enabled === false && (
         <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
           Heads up — the handoff alert is muted in Settings → Escalation.
@@ -307,5 +351,29 @@ export function DeployEscalation({
       </div>
       {err && <div className="error" style={{ marginTop: 8 }}>{err}</div>}
     </div>
+
+    <div className="card" style={{ marginTop: 12 }}>
+      <strong>After the conversation</strong>
+      <label className="check-label" style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+        <input
+          type="checkbox"
+          disabled={!isAdmin || saveEscConfig.isPending}
+          checked={cfg.csat?.enabled ?? true}
+          onChange={(e) => saveEscConfig.mutate({ csat: { enabled: e.target.checked } })}
+        />
+        <span>
+          Ask customers to rate the conversation (1–5) when it wraps up
+          <span className="muted">
+            {' '}
+            — scores feed Reports and can trip a low-score alert
+          </span>
+        </span>
+      </label>
+      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        The survey question and thank-you inherit your workspace defaults —
+        per-agent overrides live in Agent settings → Escalation.
+      </div>
+    </div>
+    </>
   );
 }
