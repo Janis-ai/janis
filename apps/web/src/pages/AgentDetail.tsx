@@ -972,6 +972,12 @@ function SatisfactionSection({
   );
 }
 
+// The stock fallbacks — mirrored from the API's csat.ts so the override
+// card can show the text the workspace is actually inheriting.
+const STOCK_CSAT_PROMPT =
+  'How was your experience? Reply with a rating from 1 (poor) to 5 (great).';
+const STOCK_CSAT_THANKS = 'Thanks for the feedback!';
+
 /** CSAT override card — shared between Settings/escalation history and the
  *  Behavior → Satisfaction tab. */
 function SatisfactionCard({
@@ -983,11 +989,25 @@ function SatisfactionCard({
   setCfg: (c: AgentConfig) => void;
   isAdmin: boolean;
 }) {
+  const { data: ws } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () =>
+      api<{ workspace: { csat?: { enabled?: boolean; prompt?: string; thanks?: string } | null } }>(
+        '/api/workspace',
+      ),
+  });
+  const wsCsat = ws?.workspace.csat ?? {};
+  const wsOn = wsCsat.enabled ?? true;
+  const wsPrompt = wsCsat.prompt ?? STOCK_CSAT_PROMPT;
+  const wsThanks = wsCsat.thanks ?? STOCK_CSAT_THANKS;
   return (
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Satisfaction survey</strong>
         <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-          Overrides the workspace survey for this agent — blank fields inherit.
+          Sent to the customer when a conversation is archived — they reply
+          with a 1–5 rating, scored in Reports. Overrides the workspace
+          survey for this agent (currently {wsOn ? 'on' : 'off'}); blank
+          fields inherit the workspace text shown as placeholders.
         </div>
         <ReadOnly off={!isAdmin}>
         <div className="form-field" style={{ marginTop: 8 }}>
@@ -1025,7 +1045,7 @@ function SatisfactionCard({
           <label>Survey question</label>
           <AutosizeText
             value={cfg.csat?.prompt ?? ''}
-            placeholder="Workspace default"
+            placeholder={wsPrompt}
             onChange={(v) =>
               setCfg({
                 ...cfg,
@@ -1038,7 +1058,7 @@ function SatisfactionCard({
           <label>Thank-you reply</label>
           <AutosizeText
             value={cfg.csat?.thanks ?? ''}
-            placeholder="Workspace default"
+            placeholder={wsThanks}
             onChange={(v) =>
               setCfg({ ...cfg, csat: { ...(cfg.csat ?? {}), thanks: v || undefined } })
             }
