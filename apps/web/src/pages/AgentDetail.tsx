@@ -484,8 +484,6 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
             <>
               <ConnectionTab
                 agent={agent}
-                cfg={cfg}
-                setCfg={setCfg}
                 isAdmin={isAdmin}
                 name={name}
                 setName={setName}
@@ -493,6 +491,13 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
                 setWebhookUrl={setWebhookUrl}
                 onSaveHosted={(hosted) => update.mutate({ hosted })}
                 onTestWebhook={() => testWebhook.mutate()}
+              />
+              {janisBrain(agent) && (
+                <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+              )}
+              <CredentialsCard
+                agent={agent}
+                isAdmin={isAdmin}
                 onRotateKey={() => rotateKey.mutate()}
                 onRotateSecret={() => rotateSecret.mutate()}
                 onRevealSecret={async () => {
@@ -501,9 +506,6 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
                 }}
                 freshSecret={freshSecret}
               />
-              {janisBrain(agent) && (
-                <LlmCard agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
-              )}
             </>
           )}
           {sub === 'escalation' && (
@@ -2542,8 +2544,6 @@ function FreshSecretCard({ label, value }: { label: string; value: string }) {
 
 function ConnectionTab({
   agent,
-  cfg,
-  setCfg,
   isAdmin,
   name,
   setName,
@@ -2551,14 +2551,8 @@ function ConnectionTab({
   setWebhookUrl,
   onSaveHosted,
   onTestWebhook,
-  onRotateKey,
-  onRotateSecret,
-  onRevealSecret,
-  freshSecret,
 }: {
   agent: Agent;
-  cfg: AgentConfig;
-  setCfg: (c: AgentConfig) => void;
   isAdmin: boolean;
   name: string;
   setName: (s: string) => void;
@@ -2566,22 +2560,8 @@ function ConnectionTab({
   setWebhookUrl: (s: string) => void;
   onSaveHosted: (hosted: boolean) => void;
   onTestWebhook: () => void;
-  onRotateKey: () => void;
-  onRotateSecret: () => void;
-  onRevealSecret: () => void;
-  freshSecret: { label: string; value: string } | null;
 }) {
-  const [showDeliveries, setShowDeliveries] = useState(false);
-  const { data: deliveries } = useDeliveries(showDeliveries ? agent.id : null);
-  const qcLocal = useQueryClient();
-  const replay = useMutation({
-    mutationFn: (deliveryId: string) =>
-      api(`/api/agents/${agent.id}/deliveries/${deliveryId}/replay`, { method: 'POST' }),
-    onSettled: () => void qcLocal.invalidateQueries({ queryKey: ['deliveries'] }),
-  });
-
   return (
-    <>
       <div className="card" style={{ marginTop: 12 }}>
         <div className="row" style={{ marginBottom: 10 }}>
           <label style={{ margin: 0 }}>Name</label>
@@ -2653,7 +2633,36 @@ function ConnectionTab({
           </>
         )}
       </div>
+    );
+}
 
+/** API key / webhook secret / deliveries — its own card so the General tab
+ *  can order it below the LLM override. */
+function CredentialsCard({
+  agent,
+  isAdmin,
+  onRotateKey,
+  onRotateSecret,
+  onRevealSecret,
+  freshSecret,
+}: {
+  agent: Agent;
+  isAdmin: boolean;
+  onRotateKey: () => void;
+  onRotateSecret: () => void;
+  onRevealSecret: () => void;
+  freshSecret: { label: string; value: string } | null;
+}) {
+  const [showDeliveries, setShowDeliveries] = useState(false);
+  const { data: deliveries } = useDeliveries(showDeliveries ? agent.id : null);
+  const qcLocal = useQueryClient();
+  const replay = useMutation({
+    mutationFn: (deliveryId: string) =>
+      api(`/api/agents/${agent.id}/deliveries/${deliveryId}/replay`, { method: 'POST' }),
+    onSettled: () => void qcLocal.invalidateQueries({ queryKey: ['deliveries'] }),
+  });
+
+  return (
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Credentials{agent.hosted ? '' : ' &amp; deliveries'}</strong>
         {freshSecret && (
@@ -2723,7 +2732,6 @@ function ConnectionTab({
           </div>
         )}
       </div>
-    </>
   );
 }
 
