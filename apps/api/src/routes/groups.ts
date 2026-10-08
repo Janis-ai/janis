@@ -6,6 +6,7 @@ import type { Db } from '../db/client.js';
 import { agentMembers, agents, memberGroups, memberships } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentRoleFor, isAdminRole } from '../lib/access.js';
+import { agentNameTaken } from '../lib/names.js';
 import { toMemberGroup } from '../lib/serializers.js';
 
 const groupBody = z.object({
@@ -99,6 +100,9 @@ export function groupRoutes(db: Db) {
     if (!(await canManage(db, c, agentId))) {
       return c.json({ error: 'admin required' }, 403);
     }
+    if (await agentNameTaken(db, c.get('workspaceId'), body.name)) {
+      return c.json({ error: `"${body.name}" is already an agent's name` }, 409);
+    }
     const memberIds = await existingMemberIds(
       db, c.get('workspaceId'), body.member_ids, agentId,
     );
@@ -120,6 +124,9 @@ export function groupRoutes(db: Db) {
     // an error, not a silent no-op.
     if (body.agent_id !== undefined && body.agent_id !== existing.agentId) {
       return c.json({ error: 'group scope is fixed' }, 400);
+    }
+    if (body.name !== undefined && (await agentNameTaken(db, c.get('workspaceId'), body.name))) {
+      return c.json({ error: `"${body.name}" is already an agent's name` }, 409);
     }
     const memberIds =
       body.member_ids !== undefined

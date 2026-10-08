@@ -46,6 +46,7 @@ import {
 import { checkpointIndices, draftExpectation, judgeExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { configVersion } from '../lib/configVersion.js';
+import { groupNameTaken } from '../lib/names.js';
 import { recordLlmUsage } from '../lib/usage.js';
 import { enqueueJob, runJobs } from '../lib/jobs.js';
 import { applySuggestion, type SuggestionPatch } from '../lib/evalTriage.js';
@@ -211,6 +212,9 @@ export function agentRoutes(db: Db) {
     const body = c.req.valid('json');
     const gate = await agencyGate(c);
     if (gate) return gate;
+    if (await groupNameTaken(db, c.get('workspaceId'), body.name)) {
+      return c.json({ error: `"${body.name}" is already a group's name` }, 409);
+    }
     const row = await insertAgent(c, {
       name: body.name,
       hosted: body.hosted ?? false,
@@ -234,6 +238,9 @@ export function agentRoutes(db: Db) {
     const purpose = body.purpose?.trim() ?? '';
     const draft = hosted && purpose ? await generateDraft(purpose).catch(() => null) : null;
     const name = (body.name?.trim() || draft?.name || 'New agent').slice(0, 120);
+    if (await groupNameTaken(db, c.get('workspaceId'), name)) {
+      return c.json({ error: `"${name}" is already a group's name` }, 409);
+    }
     const row = await insertAgent(c, {
       name,
       hosted,
@@ -407,6 +414,9 @@ export function agentRoutes(db: Db) {
           );
         }
       }
+    }
+    if (body.name !== undefined && (await groupNameTaken(db, workspaceId, body.name))) {
+      return c.json({ error: `"${body.name}" is already a group's name` }, 409);
     }
     const [row] = await db
       .update(agents)

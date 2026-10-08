@@ -21,6 +21,7 @@ import { generateSessionToken, hashPassword } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { groupRoutes } from './groups.js';
 import { ruleRoutes } from './rules.js';
+import { agentRoutes } from './agents.js';
 import { fireRuleAlert, resolveRuleRouting } from '../lib/ruleAlerts.js';
 import { alerts } from '../db/schema.js';
 
@@ -77,6 +78,7 @@ beforeAll(async () => {
   app = new Hono();
   app.route('/api/groups', groupRoutes(db));
   app.route('/api/rules', ruleRoutes(db));
+  app.route('/api/agents', agentRoutes(db));
 });
 
 describe('group routes', () => {
@@ -353,5 +355,40 @@ describe('rule routing through groups', () => {
     expect(
       (await db.select().from(alerts).where(eq(alerts.conversationId, conv.id))).length,
     ).toBe(1);
+  });
+});
+
+describe('agent↔group name uniqueness', () => {
+  it('rejects a group named after an agent, case-insensitive', async () => {
+    const res = await req('/api/groups', 'POST', adminCookie, {
+      name: 'a', // seeded agent is named 'A'
+      member_ids: [],
+    });
+    expect(res.status).toBe(409);
+  });
+
+  it('rejects renaming a group to an agent name', async () => {
+    const res = await req('/api/groups', 'POST', adminCookie, {
+      name: 'Roster X',
+      member_ids: [],
+    });
+    const { group } = await res.json();
+    const res2 = await req(`/api/groups/${group.id}`, 'PATCH', adminCookie, {
+      name: ' A ',
+    });
+    expect(res2.status).toBe(409);
+  });
+
+  it('rejects an agent named after a group, both create and rename', async () => {
+    await req('/api/groups', 'POST', adminCookie, {
+      name: 'Escalation Pod',
+      member_ids: [],
+    });
+    const res = await req('/api/agents', 'POST', adminCookie, { name: 'escalation pod' });
+    expect(res.status).toBe(409);
+    const res2 = await req(`/api/agents/${agentId}`, 'PATCH', adminCookie, {
+      name: 'ESCALATION POD',
+    });
+    expect(res2.status).toBe(409);
   });
 });
