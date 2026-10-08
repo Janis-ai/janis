@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
@@ -15,6 +15,7 @@ import { api } from '../api/client';
 import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useGroups, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
 import { AgentChannels } from '../components/AgentChannels';
 import { MemberGroups } from '../components/MemberGroups';
+import { MemberCell, TeamRow, TeamTable, teamTd } from '../components/TeamTable';
 import { HelpCenter } from '../components/HelpCenter';
 import { SourceList } from '../components/SourceList';
 import { AutosizeText, timeAgo } from '../components/bits';
@@ -42,7 +43,7 @@ import { useDock } from '../lib/dockContext';
 import { usePageTitle } from '../lib/title';
 import { NOTIFY_EVENT_LABELS } from '../lib/notifyEvents';
 import { useConfirm } from '../components/Prompt';
-import { Bell, Pencil, Shield, Trash2, Upload, Users, X } from 'lucide-react';
+import { Pencil, Trash2, Upload, X } from 'lucide-react';
 
 type RuleKind = AlertRule['kind'];
 /** `defaultOn` kinds page the workspace even with zero rules — a rule exists
@@ -2006,8 +2007,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         Number(id(b) === selfId) - Number(id(a) === selfId) ||
         name(a).localeCompare(name(b)),
     );
-  const youTag = (id: string) =>
-    id === selfId ? <span className="muted"> (You)</span> : null;
+
   // Workspace members render as ONE list — plain members and members with
   // an override row merged — so self-first actually floats you to the top
   // regardless of which shape your row has.
@@ -2124,12 +2124,6 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
     );
   };
 
-  const th: CSSProperties = {
-    textAlign: 'left', fontSize: 11, fontWeight: 600, letterSpacing: '.05em',
-    textTransform: 'uppercase', color: 'var(--muted)', padding: '0 8px 6px 0',
-  };
-  const td: CSSProperties = { padding: '8px 8px 8px 0', verticalAlign: 'middle' };
-
   return (
     <div className="card" style={{ marginTop: 12 }}>
       {confirmEl}
@@ -2140,76 +2134,52 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         <li><strong>no privileges</strong> — hides the agent from a workspace member entirely</li>
         <li><strong>owner</strong> — fixed; transferable only by the owner</li>
       </ul>
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 16, fontSize: 13 }}>
-        <thead>
-          <tr>
-            <th style={th}>
-              <span className="row" style={{ gap: 6 }}>
-                <Users size={12} /> Member
-              </span>
-            </th>
-            <th style={{ ...th, width: 96 }}>
-              <span className="row" style={{ gap: 6 }}>
-                <Bell size={12} /> Alerts
-              </span>
-            </th>
-            <th style={{ ...th, width: 200 }}>
-              <span className="row" style={{ gap: 6 }}>
-                <Shield size={12} /> Role
-              </span>
-            </th>
-            <th style={{ ...th, width: 34 }} />
-          </tr>
-        </thead>
-        <tbody>
-          {wsRows.map((r) => (
-            <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
-              <td style={td}>
-                {r.name}{youTag(r.id)} <span className="muted">· {r.email}</span>
-                {/* A member row can exist with no role — saved profile or
-                    notify prefs alone shouldn't badge it as overridden.
-                    Nor should the owner — their stored role is vestigial,
-                    owner_user_id wins regardless. */}
-                {r.memberRole && r.id !== ownerId && (
-                  <span className="badge" style={{ marginLeft: 8 }}>override</span>
-                )}
-              </td>
-              <td style={td}>
-                {notifyToggle(r.id)}
-                {notifyEditor(r.id, r.notify, r.name)}
-              </td>
-              <td style={td}>{roleSelect(r.id, r.memberRole ?? 'inherit', r.wsRole, true)}</td>
-              <td style={td} />
-            </tr>
-          ))}
-          {selfFirst(agentOnly, (m) => m.user_id, (m) => m.name).map((m) => (
-            <tr key={m.user_id} style={{ borderTop: '1px solid var(--border)' }}>
-              <td style={td}>
-                {m.name}{youTag(m.user_id)} <span className="muted">· {m.email}</span>
-                <span className="badge" style={{ marginLeft: 8 }}>this agent only</span>
-              </td>
-              <td style={td}>
-                {notifyToggle(m.user_id)}
-                {notifyEditor(m.user_id, m.notify, m.name)}
-              </td>
-              <td style={td}>{roleSelect(m.user_id, m.role ?? 'member', null, false)}</td>
-              <td style={td}>
-                {isAdmin && m.user_id !== ownerId && (
-                  <button
-                    className="btn ghost"
-                    style={{ color: 'var(--danger)' }}
-                    onClick={() => remove.mutate(m.user_id)}
-                    title="Remove access"
-                    aria-label="Remove access"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <TeamTable>
+        {wsRows.map((r) => (
+          <TeamRow key={r.id}>
+            <MemberCell name={r.name} email={r.email} isYou={r.id === selfId}>
+              {/* A member row can exist with no role — saved profile or
+                  notify prefs alone shouldn't badge it as overridden.
+                  Nor should the owner — their stored role is vestigial,
+                  owner_user_id wins regardless. */}
+              {r.memberRole && r.id !== ownerId && (
+                <span className="badge" style={{ marginLeft: 8 }}>override</span>
+              )}
+            </MemberCell>
+            <td style={teamTd}>
+              {notifyToggle(r.id)}
+              {notifyEditor(r.id, r.notify, r.name)}
+            </td>
+            <td style={teamTd}>{roleSelect(r.id, r.memberRole ?? 'inherit', r.wsRole, true)}</td>
+            <td style={teamTd} />
+          </TeamRow>
+        ))}
+        {selfFirst(agentOnly, (m) => m.user_id, (m) => m.name).map((m) => (
+          <TeamRow key={m.user_id}>
+            <MemberCell name={m.name} email={m.email} isYou={m.user_id === selfId}>
+              <span className="badge" style={{ marginLeft: 8 }}>this agent only</span>
+            </MemberCell>
+            <td style={teamTd}>
+              {notifyToggle(m.user_id)}
+              {notifyEditor(m.user_id, m.notify, m.name)}
+            </td>
+            <td style={teamTd}>{roleSelect(m.user_id, m.role ?? 'member', null, false)}</td>
+            <td style={teamTd}>
+              {isAdmin && m.user_id !== ownerId && (
+                <button
+                  className="btn ghost"
+                  style={{ color: 'var(--danger)' }}
+                  onClick={() => remove.mutate(m.user_id)}
+                  title="Remove access"
+                  aria-label="Remove access"
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </td>
+          </TeamRow>
+        ))}
+      </TeamTable>
       {isAdmin && (
         <div style={{ borderTop: '1px solid var(--border)', marginTop: 18, paddingTop: 14 }}>
         <strong style={{ fontSize: 13 }}>Invite teammate</strong>

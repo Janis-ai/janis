@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceUser } from '@janis/shared';
@@ -10,18 +10,12 @@ import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { MemberGroups } from '../components/MemberGroups';
 import { usePrompt, useConfirm } from '../components/Prompt';
-import { Bell, Pencil, Shield, Trash2, Users, X } from 'lucide-react';
+import { Pencil, Trash2, X } from 'lucide-react';
 import { NOTIFY_EVENT_LABELS } from '../lib/notifyEvents';
+import { MemberCell, TeamRow, TeamTable, teamTd } from '../components/TeamTable';
 import { AutosizeText, CodeBlock } from '../components/bits';
 import { currentTheme, setTheme } from '../lib/theme';
 import { usePageTitle } from '../lib/title';
-
-// Team-table chrome — matches the agent Team card (AgentDetail).
-const teamTh: CSSProperties = {
-  textAlign: 'left', fontSize: 11, fontWeight: 600, letterSpacing: '.05em',
-  textTransform: 'uppercase', color: 'var(--muted)', padding: '0 8px 6px 0',
-};
-const teamTd: CSSProperties = { padding: '8px 8px 8px 0', verticalAlign: 'middle' };
 
 type Section = 'workspace' | 'me' | 'integrations' | 'deliverability' | 'team';
 const SECTIONS: { key: Section; label: string }[] = [
@@ -758,43 +752,20 @@ export default function Settings() {
           <li><strong>viewer</strong> — read-only, no inbox actions</li>
           <li><strong>owner</strong> — can't be removed; transferable only by the owner</li>
         </ul>
-        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 16, fontSize: 13 }}>
-          <thead>
-            <tr>
-              <th style={teamTh}>
-                <span className="row" style={{ gap: 6 }}>
-                  <Users size={12} /> Member
-                </span>
-              </th>
-              <th style={{ ...teamTh, width: 50 }}>
-                <span className="row" style={{ gap: 6 }}>
-                  <Bell size={12} /> Alerts
-                </span>
-              </th>
-              <th style={{ ...teamTh, width: 200 }}>
-                <span className="row" style={{ gap: 6 }}>
-                  <Shield size={12} /> Role
-                </span>
-              </th>
-              <th style={{ ...teamTh, width: 34 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {[...(users?.users ?? [])]
-              .sort(
-                (a, b) =>
-                  Number(b.id === me?.user.id) - Number(a.id === me?.user.id) ||
-                  a.name.localeCompare(b.name),
-              )
-              .map((u) => (
-                <tr key={u.id} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={teamTd}>
-                    {u.name}{u.id === me?.user.id && <span className="muted"> (You)</span>}{' '}
-                    <span className="muted">· {u.email}</span>
-                    {u.status === 'invited' && (
-                      <span className="badge" style={{ marginLeft: 8 }}>invited</span>
-                    )}
-                  </td>
+        <TeamTable>
+          {[...(users?.users ?? [])]
+            .sort(
+              (a, b) =>
+                Number(b.id === me?.user.id) - Number(a.id === me?.user.id) ||
+                a.name.localeCompare(b.name),
+            )
+            .map((u) => (
+              <TeamRow key={u.id}>
+                <MemberCell name={u.name} email={u.email} isYou={u.id === me?.user.id}>
+                  {u.status === 'invited' && (
+                    <span className="badge" style={{ marginLeft: 8 }}>invited</span>
+                  )}
+                </MemberCell>
                   <td style={teamTd}>
                     {(u.id === me?.user.id || me?.user.role === 'admin') && (
                       <button
@@ -849,10 +820,9 @@ export default function Settings() {
                       </button>
                     )}
                   </td>
-                </tr>
-              ))}
-          </tbody>
-        </table>
+              </TeamRow>
+            ))}
+        </TeamTable>
 
         {me?.user.role === 'admin' && (
           <div style={{ borderTop: '1px solid var(--border)', marginTop: 18, paddingTop: 14 }}>
