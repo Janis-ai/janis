@@ -2,9 +2,9 @@ import { Hono } from 'hono';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, isNotNull } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, campaignSends, campaigns, channels, contactLists } from '../db/schema.js';
+import { agents, campaignSends, campaigns, channels, contactLists, conversionEvents } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { dispatchCampaign, resolveSegment } from '../lib/campaigns.js';
 import { channelReadiness } from '../lib/deliverability.js';
@@ -72,8 +72,9 @@ const createCampaign = z.object({
 });
 
 type SendStatus = { status: string; repliedAt?: Date | null; convertedAt?: Date | null };
+type ConvRow = { event: string; valueCents: number | null };
 
-function stats(rows: SendStatus[]) {
+function stats(rows: SendStatus[], conv: ConvRow[] = [], goal?: string | null) {
   return {
     total: rows.length,
     sent: rows.filter((r) => r.status === 'sent').length,
@@ -84,8 +85,39 @@ function stats(rows: SendStatus[]) {
     skipped_opted_out: rows.filter((r) => r.status === 'skipped_opted_out').length,
     skipped_suppressed: rows.filter((r) => r.status === 'skipped_suppressed').length,
     skipped_frequency_cap: rows.filter((r) => r.status === 'skipped_frequency_cap').length,
+    // Sends stamped converted — goal-matched events only (any event counts
+    // when the campaign declares no goal).
     converted: rows.filter((r) => r.convertedAt).length,
+    // Events attributed to this campaign that aren't its declared goal —
+    // recorded but not "conversions" (a signup on a purchase-goal blast).
+    other_conversions: goal ? conv.filter((e) => e.event !== goal).length : 0,
+    revenue_cents: conv.reduce((n, e) => n + (e.valueCents ?? 0), 0),
   };
+}
+
+/** conversion_events attributed to a set of campaigns, grouped by
+ *  campaignId — one query for the list endpoint. */
+async function conversionsByCampaign(db: Db, workspaceId: string) {
+  const rows = await db
+    .select({
+      campaignId: conversionEvents.campaignId,
+      event: conversionEvents.event,
+      valueCents: conversionEvents.valueCents,
+    })
+    .from(conversionEvents)
+    .where(
+      and(
+        eq(conversionEvents.workspaceId, workspaceId),
+        isNotNull(conversionEvents.campaignId),
+      ),
+    );
+  const by = new Map<string, ConvRow[]>();
+  for (const r of rows) {
+    const arr = by.get(r.campaignId!) ?? [];
+    arr.push({ event: r.event, valueCents: r.valueCents });
+    by.set(r.campaignId!, arr);
+  }
+  return by;
 }
 
 /** Campaigns — scheduled/segmented outbound across a channel's contacts.
@@ -116,6 +148,7 @@ export function campaignRoutes(db: Db) {
       )
       .orderBy(desc(campaigns.createdAt))
       .limit(100);
+    const convBy = await conversionsByCampaign(db, c.get('workspaceId'));
     const withStats = await Promise.all(
       rows.map(async ({ campaign, channelName, channelKind, agentName }) => {
         const sends = await db
@@ -141,7 +174,7 @@ export function campaignRoutes(db: Db) {
           status: campaign.status,
           scheduled_at: campaign.scheduledAt?.toISOString() ?? null,
           created_at: campaign.createdAt.toISOString(),
-          stats: stats(sends),
+          stats: stats(sends, convBy.get(campaign.id) ?? [], campaign.goal),
         };
       }),
     );
@@ -274,6 +307,10 @@ export function campaignRoutes(db: Db) {
       .where(eq(campaignSends.campaignId, campaign.id))
       .orderBy(desc(campaignSends.createdAt))
       .limit(500);
+    const conv = await db
+      .select({ event: conversionEvents.event, valueCents: conversionEvents.valueCents })
+      .from(conversionEvents)
+      .where(eq(conversionEvents.campaignId, campaign.id));
     return c.json({
       campaign: {
         id: campaign.id,
@@ -296,7 +333,7 @@ export function campaignRoutes(db: Db) {
         goal: campaign.goal,
         enroll_token: campaign.enrollToken,
       },
-      stats: stats(sends),
+      stats: stats(sends, conv, campaign.goal),
       sends: sends.map((s) => ({
         id: s.id,
         recipient: s.recipient,

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, asc, desc, eq, gte, inArray, lt, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, lt, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import { friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import {
@@ -11,6 +11,7 @@ import {
   channels,
   contacts,
   conversations,
+  conversionEvents,
   messages,
   pendingActions,
   usageEvents,
@@ -624,12 +625,33 @@ export function reportRoutes(db: Db) {
         ),
       );
 
+    // Conversion events land in the same window — attributed per campaign,
+    // split into goal hits vs. other events, with revenue summed.
+    const convRows = await db
+      .select({
+        campaignId: conversionEvents.campaignId,
+        event: conversionEvents.event,
+        valueCents: conversionEvents.valueCents,
+        goal: campaigns.goal,
+      })
+      .from(conversionEvents)
+      .innerJoin(campaigns, eq(conversionEvents.campaignId, campaigns.id))
+      .where(
+        and(
+          eq(conversionEvents.workspaceId, c.get('workspaceId')),
+          gte(conversionEvents.createdAt, cutoff),
+          lt(conversionEvents.createdAt, end),
+          isNotNull(conversionEvents.campaignId),
+        ),
+      );
+
     interface Agg {
       sends: number; sent: number; pending: number; failed: number;
       skipped: number; replied: number; converted: number;
+      other_conversions: number; revenue_cents: number;
     }
     const byCampaign = new Map<string, { name: string } & Agg>();
-    const totals: Agg = { sends: 0, sent: 0, pending: 0, failed: 0, skipped: 0, replied: 0, converted: 0 };
+    const totals: Agg = { sends: 0, sent: 0, pending: 0, failed: 0, skipped: 0, replied: 0, converted: 0, other_conversions: 0, revenue_cents: 0 };
     const bump = (a: Agg, r: { status: string; repliedAt: Date | null; convertedAt: Date | null }) => {
       a.sends++;
       if (r.status === 'sent') a.sent++;
@@ -641,9 +663,19 @@ export function reportRoutes(db: Db) {
     };
     for (const r of rows) {
       bump(totals, r);
-      const slot = byCampaign.get(r.campaignId) ?? { name: r.name, sends: 0, sent: 0, pending: 0, failed: 0, skipped: 0, replied: 0, converted: 0 };
+      const slot = byCampaign.get(r.campaignId) ?? { name: r.name, sends: 0, sent: 0, pending: 0, failed: 0, skipped: 0, replied: 0, converted: 0, other_conversions: 0, revenue_cents: 0 };
       bump(slot, r);
       byCampaign.set(r.campaignId, slot);
+    }
+    for (const r of convRows) {
+      if (!r.campaignId) continue;
+      const offGoal = !!r.goal && r.event !== r.goal;
+      totals.revenue_cents += r.valueCents ?? 0;
+      if (offGoal) totals.other_conversions++;
+      const slot = byCampaign.get(r.campaignId);
+      if (!slot) continue; // no sends in window — campaign isn't listed
+      slot.revenue_cents += r.valueCents ?? 0;
+      if (offGoal) slot.other_conversions++;
     }
     return c.json({
       days,

@@ -135,4 +135,105 @@ describe('conversion events', () => {
     const res = await post(TOKEN, { event: 'purchase' });
     expect(res.status).toBe(400);
   });
+
+  it('attributes to the goal-matched campaign over a newer mismatched send', async () => {
+    const [ch] = await db.select().from(channels).limit(1);
+    const [purchaseCamp] = await db
+      .insert(campaigns)
+      .values({ workspaceId: wsId, channelId: ch.id, name: 'Winback', text: 'x', status: 'sending', goal: 'purchase' })
+      .returning();
+    const [signupCamp] = await db
+      .insert(campaigns)
+      .values({ workspaceId: wsId, channelId: ch.id, name: 'Webinar', text: 'x', status: 'sending', goal: 'signup' })
+      .returning();
+    const [contact] = await db
+      .insert(contacts)
+      .values({ workspaceId: wsId, email: 'multi@shop.test' })
+      .returning();
+    const [purchaseSend] = await db
+      .insert(campaignSends)
+      .values({
+        workspaceId: wsId, campaignId: purchaseCamp.id, contactId: contact.id,
+        channelId: ch.id, recipient: 'multi@shop.test', status: 'sent',
+        sentAt: new Date(Date.now() - 86_400_000), // older
+      })
+      .returning();
+    const [signupSend] = await db
+      .insert(campaignSends)
+      .values({
+        workspaceId: wsId, campaignId: signupCamp.id, contactId: contact.id,
+        channelId: ch.id, recipient: 'multi@shop.test', status: 'sent',
+        sentAt: new Date(), // newer — plain last-touch would pick this one
+      })
+      .returning();
+
+    const res = await post(TOKEN, { event: 'purchase', email: 'multi@shop.test' });
+    expect(res.status).toBe(200);
+    const [evt] = await db
+      .select()
+      .from(conversionEvents)
+      .where(eq(conversionEvents.contactId, contact.id));
+    expect(evt.campaignSendId).toBe(purchaseSend.id);
+
+    const [ps] = await db.select().from(campaignSends).where(eq(campaignSends.id, purchaseSend.id));
+    expect(ps.convertedAt).toBeTruthy(); // goal hit — stamped
+    const [ss] = await db.select().from(campaignSends).where(eq(campaignSends.id, signupSend.id));
+    expect(ss.convertedAt).toBeNull(); // wrong goal — not stamped
+
+    // The matching event stamps its own campaign's send.
+    await post(TOKEN, { event: 'signup', email: 'multi@shop.test' });
+    const [ss2] = await db.select().from(campaignSends).where(eq(campaignSends.id, signupSend.id));
+    expect(ss2.convertedAt).toBeTruthy();
+  });
+
+  it('off-goal events attribute last-touch without stamping the send', async () => {
+    const [ch] = await db.select().from(channels).limit(1);
+    const [camp] = await db
+      .insert(campaigns)
+      .values({ workspaceId: wsId, channelId: ch.id, name: 'Signup push', text: 'x', status: 'sending', goal: 'signup' })
+      .returning();
+    const [contact] = await db
+      .insert(contacts)
+      .values({ workspaceId: wsId, email: 'offgoal@shop.test' })
+      .returning();
+    const [send] = await db
+      .insert(campaignSends)
+      .values({
+        workspaceId: wsId, campaignId: camp.id, contactId: contact.id,
+        channelId: ch.id, recipient: 'offgoal@shop.test', status: 'sent', sentAt: new Date(),
+      })
+      .returning();
+
+    await post(TOKEN, { event: 'purchase', email: 'offgoal@shop.test' });
+    const [evt] = await db
+      .select()
+      .from(conversionEvents)
+      .where(eq(conversionEvents.contactId, contact.id));
+    expect(evt.campaignSendId).toBe(send.id); // attributed — it's the last touch
+    const [s] = await db.select().from(campaignSends).where(eq(campaignSends.id, send.id));
+    expect(s.convertedAt).toBeNull(); // but not "converted" — wrong goal
+  });
+
+  it('goal-less campaigns stamp on any event', async () => {
+    const [ch] = await db.select().from(channels).limit(1);
+    const [camp] = await db
+      .insert(campaigns)
+      .values({ workspaceId: wsId, channelId: ch.id, name: 'Newsletter', text: 'x', status: 'sending' })
+      .returning();
+    const [contact] = await db
+      .insert(contacts)
+      .values({ workspaceId: wsId, email: 'nog@shop.test' })
+      .returning();
+    const [send] = await db
+      .insert(campaignSends)
+      .values({
+        workspaceId: wsId, campaignId: camp.id, contactId: contact.id,
+        channelId: ch.id, recipient: 'nog@shop.test', status: 'sent', sentAt: new Date(),
+      })
+      .returning();
+
+    await post(TOKEN, { event: 'anything', email: 'nog@shop.test' });
+    const [s] = await db.select().from(campaignSends).where(eq(campaignSends.id, send.id));
+    expect(s.convertedAt).toBeTruthy();
+  });
 });

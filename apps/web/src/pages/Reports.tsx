@@ -96,6 +96,8 @@ interface CampaignStats {
   skipped: number;
   replied: number;
   converted: number;
+  other_conversions: number;
+  revenue_cents: number;
   reply_rate: number | null;
 }
 
@@ -497,6 +499,9 @@ export default function Reports({ agentId: scopedAgentId }: { agentId?: string }
               <div className="metric"><div className="metric-num">{t.sent}</div><div className="muted">sent</div></div>
               <div className="metric"><div className="metric-num">{t.replied}</div><div className="muted">replied</div></div>
               <div className="metric"><div className="metric-num">{t.converted}</div><div className="muted">converted</div></div>
+              {t.revenue_cents > 0 && (
+                <div className="metric"><div className="metric-num">${(t.revenue_cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div><div className="muted">attributed</div></div>
+              )}
               <div className="metric"><div className="metric-num">{t.pending}</div><div className="muted">queued</div></div>
               <div className="metric"><div className="metric-num">{t.failed}</div><div className="muted">failed</div></div>
               <div className="metric"><div className="metric-num">{t.skipped}</div><div className="muted">skipped</div></div>
@@ -509,6 +514,7 @@ export default function Reports({ agentId: scopedAgentId }: { agentId?: string }
                   <th>Replied</th>
                   <th>Reply rate</th>
                   <th>Converted</th>
+                  <th>Revenue</th>
                   <th>Failed</th>
                   <th>Skipped</th>
                 </tr>
@@ -520,7 +526,8 @@ export default function Reports({ agentId: scopedAgentId }: { agentId?: string }
                     <td style={{ textAlign: 'center' }}>{cp.sent}</td>
                     <td style={{ textAlign: 'center' }}>{cp.replied}</td>
                     <td style={{ textAlign: 'center' }}>{cp.reply_rate === null ? '—' : `${cp.reply_rate}%`}</td>
-                    <td style={{ textAlign: 'center' }}>{cp.converted}</td>
+                    <td style={{ textAlign: 'center' }} title={cp.other_conversions ? `+${cp.other_conversions} events that weren't the goal` : undefined}>{cp.converted}</td>
+                    <td style={{ textAlign: 'center' }}>{cp.revenue_cents ? `$${(cp.revenue_cents / 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '—'}</td>
                     <td style={{ textAlign: 'center' }}>{cp.failed}</td>
                     <td style={{ textAlign: 'center' }}>{cp.skipped}</td>
                   </tr>

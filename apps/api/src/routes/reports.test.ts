@@ -11,6 +11,7 @@ import {
   campaigns,
   channels,
   conversations,
+  conversionEvents,
   memberships,
   messages,
   sessions,
@@ -90,6 +91,14 @@ beforeAll(async () => {
     recipient: '+1555',
     status: 'sent',
     sentAt: new Date(),
+    convertedAt: new Date(), // the conversion event below stamped it
+  });
+  await db.insert(conversionEvents).values({
+    workspaceId: ws.id,
+    campaignId: camp.id,
+    event: 'purchase',
+    valueCents: 5000,
+    source: 'test',
   });
 });
 
@@ -236,11 +245,15 @@ describe('GET /api/reports/campaigns', () => {
     const res = await app.request('/api/reports/campaigns?days=30', { headers: { Cookie: cookie } });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      totals: { sent: number; replied: number; converted: number };
-      campaigns: { name: string; sent: number; reply_rate: number | null }[];
+      totals: { sent: number; replied: number; converted: number; revenue_cents: number; other_conversions: number };
+      campaigns: { name: string; sent: number; reply_rate: number | null; converted: number; revenue_cents: number }[];
     };
     const blast = body.campaigns.find((c) => c.name === 'Blast');
     expect(blast?.sent).toBe(1);
+    expect(blast?.converted).toBe(1);
+    expect(blast?.revenue_cents).toBe(5000);
     expect(body.totals.sent).toBe(1);
+    expect(body.totals.converted).toBe(1);
+    expect(body.totals.revenue_cents).toBe(5000);
   });
 });

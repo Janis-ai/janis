@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { campaignSends, conversionEvents, workspaces } from '../db/schema.js';
+import { campaignSends, campaigns, conversionEvents, workspaces } from '../db/schema.js';
 import { upsertContactByAddress } from '../lib/contacts.js';
 import { queueCrmActivity } from '../lib/crm.js';
 import { dbRateLimit } from '../lib/rateLimit.js';
@@ -11,7 +11,8 @@ import { dbRateLimit } from '../lib/rateLimit.js';
 /** Public conversion-event webhook — POST /events/:token. One token per
  *  workspace (workspaces.config.event_token); the credential authorizes
  *  writing a business outcome against a contact. Attributes the event to
- *  the contact's most recent campaign send, so campaign stats distinguish
+ *  the contact's most recent campaign send — preferring a send whose
+ *  campaign's goal matches the event name — so campaign stats distinguish
  *  delivery/reply from actual conversion. Same generic-response policy as
  *  /enroll — no existence probing. */
 export function eventRoutes(db: Db) {
@@ -63,11 +64,14 @@ export function eventRoutes(db: Db) {
         external: body.external_id,
       });
 
-      // Attribute to the most recent *sent* campaign send for this contact —
-      // last-touch, which is what "the campaign converted them" means here.
-      const [send] = await db
-        .select()
+      // Last-touch attribution, goal-aware: prefer the most recent send
+      // whose campaign declares this event as its goal, then a goal-less
+      // campaign's send (any event counts for those), then last-touch
+      // overall. The event row records the attribution regardless.
+      const [hit] = await db
+        .select({ send: campaignSends, goal: campaigns.goal })
         .from(campaignSends)
+        .innerJoin(campaigns, eq(campaignSends.campaignId, campaigns.id))
         .where(
           and(
             eq(campaignSends.contactId, contactId),
@@ -75,8 +79,12 @@ export function eventRoutes(db: Db) {
             eq(campaignSends.status, 'sent'),
           ),
         )
-        .orderBy(desc(campaignSends.sentAt))
+        .orderBy(
+          sql`case when ${campaigns.goal} = ${body.event} then 0 when ${campaigns.goal} is null then 1 else 2 end`,
+          desc(campaignSends.sentAt),
+        )
         .limit(1);
+      const send = hit?.send;
 
       const [evt] = await db
         .insert(conversionEvents)
@@ -90,7 +98,11 @@ export function eventRoutes(db: Db) {
           source: body.source ?? 'api',
         })
         .returning();
-      if (send && !send.convertedAt) {
+      // convertedAt marks "this send converted" for drip if_converted steps
+      // and campaign stats — only stamp when the event IS the campaign's
+      // goal (or it declares none). An off-goal event still attributes, so
+      // a purchase doesn't mark a signup-goal campaign as converted.
+      if (send && !send.convertedAt && (!hit!.goal || hit!.goal === body.event)) {
         await db
           .update(campaignSends)
           .set({ convertedAt: new Date() })

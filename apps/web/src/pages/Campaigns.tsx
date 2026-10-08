@@ -2,16 +2,18 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { SlidersHorizontal } from 'lucide-react';
 import { api } from '../api/client';
 import { useConfirm } from '../components/Prompt';
 import { AgentScopePicker } from '../components/AgentScopePicker';
-import { useChannels } from '../api/hooks';
+import { CampaignSettingsModal } from '../components/CampaignSettings';
+import { useChannels, useMe } from '../api/hooks';
 import { useContextAgent } from '../lib/agentContext';
 import { usePageTitle } from '../lib/title';
 
 const SENDABLE = ['sms', 'whatsapp', 'email', 'gmail', 'outlook'];
 
-type Stats = { total: number; sent: number; replied: number; converted?: number; failed: number; pending: number; skipped: number };
+type Stats = { total: number; sent: number; replied: number; converted?: number; other_conversions?: number; revenue_cents?: number; failed: number; pending: number; skipped: number };
 type CampaignRow = {
   id: string;
   name: string;
@@ -21,10 +23,11 @@ type CampaignRow = {
   agent_name: string;
   enrollment?: string;
   enroll_token?: string | null;
+  goal?: string | null;
   scheduled_at: string | null;
   stats: Stats;
 };
-type SendRow = { id: string; recipient: string; step?: number; status: string; error: string | null; sent_at: string | null; replied_at?: string | null };
+type SendRow = { id: string; recipient: string; step?: number; status: string; error: string | null; sent_at: string | null; replied_at?: string | null; converted_at?: string | null };
 type StepDef = { delay_minutes: number; text?: string; subject?: string; condition?: string; whatsapp_template?: { name: string } };
 type CampaignDetail = {
   campaign: {
@@ -77,6 +80,7 @@ function stepStats(sends: SendRow[], step: number) {
     failed: rows.filter((s) => s.status === 'failed').length,
     skipped: rows.filter((s) => s.status.startsWith('skipped_')).length,
     replied: rows.filter((s) => s.replied_at).length,
+    converted: rows.filter((s) => s.converted_at).length,
   };
 }
 
@@ -85,6 +89,7 @@ function statChips(sends: SendRow[], step: number) {
   const bits = [`${s.sent} sent`];
   if (s.pending) bits.push(`${s.pending} queued`);
   if (s.replied) bits.push(`${s.replied} replied`);
+  if (s.converted) bits.push(`${s.converted} converted`);
   if (s.failed) bits.push(`${s.failed} failed`);
   if (s.skipped) bits.push(`${s.skipped} skipped`);
   return bits.join(' · ');
@@ -93,6 +98,8 @@ function statChips(sends: SendRow[], step: number) {
 export default function Campaigns({ agentId: routeAgent }: { agentId?: string } = {}) {
   usePageTitle('Campaigns');
   const qc = useQueryClient();
+  const { data: me } = useMe();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { data: chans } = useChannels();
   // Agent scoping is app context (URL agent or the persisted pick); the
   // scoped view sends through that agent's channels only.
@@ -224,11 +231,22 @@ export default function Campaigns({ agentId: routeAgent }: { agentId?: string } 
   return (
     <div className="page-pad" style={{ maxWidth: 900 }}>
       {confirmEl}
+      {settingsOpen && <CampaignSettingsModal onClose={() => setSettingsOpen(false)} />}
       <h1>
         Campaigns
         <span style={{ marginLeft: 8 }}>
           <AgentScopePicker slug="campaigns" value={agentId} />
         </span>
+        {me?.user.role === 'admin' && (
+          <button
+            className="btn icon"
+            style={{ marginLeft: 6 }}
+            title="Campaign settings — send rules, blocked senders, goal tracking"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <SlidersHorizontal size={15} />
+          </button>
+        )}
       </h1>
       <p className="muted">
         Proactive sends to contacts on a channel. SMS, email, Outlook and Gmail open new
@@ -281,7 +299,7 @@ export default function Campaigns({ agentId: routeAgent }: { agentId?: string } 
           {form.enrollment === 'continuous'
             ? 'Ongoing: new contacts matching the audience enroll automatically, and external tools can enroll via webhook.'
             : 'One-time: the audience is resolved when the campaign runs.'}
-          {' '}Max sends caps the total (blank = unlimited). Goal event is the conversion name reported to your events endpoint that marks this campaign a success.
+          {' '}Max sends caps the total (blank = unlimited). Goal event is the conversion name (e.g. purchase) reported to your events endpoint that marks this campaign a success — other event names still record and attribute, just don't count as conversions.
         </div>
         <div className="row wrap" style={{ gap: 10, marginTop: 10 }}>
           <select className="input" value={form.list_id}
@@ -432,7 +450,19 @@ export default function Campaigns({ agentId: routeAgent }: { agentId?: string } 
               <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
                 <span className="chip">{cp.stats.sent}/{cp.stats.total} sent</span>
                 {!!cp.stats.replied && <span className="chip">{cp.stats.replied} replied</span>}
-                {!!cp.stats.converted && <span className="chip">{cp.stats.converted} converted</span>}
+                {!!cp.stats.converted && (
+                  <span className="chip" title={cp.goal ? `hit the goal event: ${cp.goal}` : 'conversion events recorded'}>
+                    {cp.stats.converted} converted
+                  </span>
+                )}
+                {!!cp.stats.other_conversions && (
+                  <span className="chip" title="attributed events that aren't this campaign's goal">
+                    {cp.stats.other_conversions} other events
+                  </span>
+                )}
+                {!!cp.stats.revenue_cents && (
+                  <span className="chip">${(cp.stats.revenue_cents / 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                )}
                 {!!cp.stats.pending && <span className="chip">{cp.stats.pending} queued</span>}
                 {!!cp.stats.failed && <span className="chip" style={{ color: 'var(--danger)' }}>{cp.stats.failed} failed</span>}
                 {!!cp.stats.skipped && <span className="chip">{cp.stats.skipped} skipped (opted out/suppressed)</span>}
@@ -542,7 +572,7 @@ export default function Campaigns({ agentId: routeAgent }: { agentId?: string } 
                     {s.step ? `step ${s.step} · ` : ''}
                     {s.status === 'pending' && s.error?.startsWith('held')
                       ? s.error
-                      : `${SEND_STATUS[s.status] ?? s.status}${s.replied_at ? ' · replied' : ''}${s.error ? ` — ${s.error}` : ''}`}
+                      : `${SEND_STATUS[s.status] ?? s.status}${s.replied_at ? ' · replied' : ''}${s.converted_at ? ' · converted' : ''}${s.error ? ` — ${s.error}` : ''}`}
                   </span>
                 </div>
               ))}

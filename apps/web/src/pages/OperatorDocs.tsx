@@ -165,9 +165,9 @@ export default function OperatorDocs() {
       </p>
       <Table head={['Status', 'Meaning']} rows={SEND_STATUSES} />
       <p className="muted" style={{ lineHeight: 1.6 }}>
-        Quiet hours are set per workspace in Settings → Sending rules — they
-        <em>defer</em>, never drop. The frequency cap is global across all
-        campaigns so a contact in two drips doesn't get double-mailed.
+        Quiet hours are set per workspace in Campaigns → settings (the gear)
+        — they <em>defer</em>, never drop. The frequency cap is global across
+        all campaigns so a contact in two drips doesn't get double-mailed.
       </p>
 
       <h3>Suppressions and deliverability</h3>
