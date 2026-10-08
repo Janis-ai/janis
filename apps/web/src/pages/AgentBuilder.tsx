@@ -2356,7 +2356,13 @@ export default function AgentBuilder() {
         <div className="row" style={{ marginTop: 14, gap: 8, alignItems: 'center' }}>
           <button
             className="btn primary"
-            disabled={saveCfg.isPending || !isAdmin}
+            disabled={
+              saveCfg.isPending ||
+              !isAdmin ||
+              // Nothing staged — every other surface on this step writes
+              // on click, so a save with cfg === agent.config is a no-op.
+              JSON.stringify(cfg) === JSON.stringify(agent.config ?? {})
+            }
             onClick={() => saveCfg.mutate()}
           >
             {saveCfg.isPending ? 'Saving…' : 'Save configuration'}
