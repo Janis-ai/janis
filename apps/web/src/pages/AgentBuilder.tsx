@@ -18,6 +18,7 @@ import { ringScenario } from '../lib/scenarioRing';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow, scenarioPrompt, type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 import { AgentChannels } from '../components/AgentChannels';
+import { DeployEscalation } from '../components/DeployEscalation';
 import { SourceList, type KnowledgeBudget } from '../components/SourceList';
 import {
   GreetingSection,
@@ -2310,6 +2311,10 @@ export default function AgentBuilder() {
               </div>
             </div>
           )}
+          {/* Escalation baseline — who picks up when the agent can't. The
+              one place onboarding meets routing + the team invite; the full
+              rule engine stays in Settings → Escalation. */}
+          <DeployEscalation agent={agent} cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           {hosted ? (
             <AgentChannels agent={agent} />
           ) : (
