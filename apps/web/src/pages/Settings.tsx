@@ -56,7 +56,7 @@ export default function Settings() {
   const [confirmEl, confirm] = useConfirm();
   const [pushMsg, setPushMsg] = useState('');
   const [pushEnabled, setPushEnabled] = useState<boolean | null>(null);
-  const [notifyOpen, setNotifyOpen] = useState(false);
+  const [notifyFor, setNotifyFor] = useState<string | null>(null);
   const [theme, setThemeState] = useState<'dark' | 'light'>(currentTheme());
 
   useEffect(() => {
@@ -240,6 +240,32 @@ export default function Settings() {
         old ? { ...old, user: d.user } : old,
       ),
   });
+  // Admin writes another member's workspace notification baseline via
+  // PATCH /api/users/:id (notify is account-level — crosses workspaces).
+  const setMemberNotify = useMutation({
+    mutationFn: (vars: {
+      id: string;
+      notify: {
+        push?: boolean;
+        email?: boolean;
+        sound?: boolean;
+        events?: Record<string, boolean>;
+      };
+    }) =>
+      api<{ user: WorkspaceUser }>(`/api/users/${vars.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ notify: vars.notify }),
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+  const notifyMember = notifyFor
+    ? users?.users.find((u) => u.id === notifyFor) ?? null
+    : null;
+  const writeNotify = (id: string, notify: Parameters<typeof setNotify.mutate>[0]) =>
+    id === me?.user.id
+      ? setNotify.mutate(notify)
+      : setMemberNotify.mutate({ id, notify });
+  const notifying = setNotify.isPending || setMemberNotify.isPending;
 
   // Operator identity shown to customers on channels with "show operator
   // name" enabled — display name defaults to the first name when blank.
@@ -770,11 +796,11 @@ export default function Settings() {
                     )}
                   </td>
                   <td style={teamTd}>
-                    {u.id === me?.user.id && (
+                    {(u.id === me?.user.id || me?.user.role === 'admin') && (
                       <button
                         className="btn ghost"
-                        onClick={() => setNotifyOpen(true)}
-                        title="Your workspace notification settings"
+                        onClick={() => setNotifyFor(u.id)}
+                        title="Workspace notification settings"
                         aria-label="Notification settings"
                       >
                         <Pencil size={14} />
@@ -861,8 +887,8 @@ export default function Settings() {
         )}
       </div>
 
-      {notifyOpen && me && (
-        <div className="modal-backdrop" onClick={() => setNotifyOpen(false)}>
+      {notifyMember && me && (
+        <div className="modal-backdrop" onClick={() => setNotifyFor(null)}>
           <div
             className="modal"
             role="dialog"
@@ -870,41 +896,46 @@ export default function Settings() {
             style={{ width: 680 }}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') setNotifyOpen(false);
+              if (e.key === 'Escape') setNotifyFor(null);
             }}
           >
             <div className="row" style={{ justifyContent: 'space-between' }}>
-              <strong>Notifications — {me.user.name}</strong>
-              <button className="btn ghost" onClick={() => setNotifyOpen(false)} aria-label="Close">
+              <strong>Notifications — {notifyMember.name}</strong>
+              <button className="btn ghost" onClick={() => setNotifyFor(null)} aria-label="Close">
                 <X size={14} />
               </button>
             </div>
             <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-              Your workspace-wide baseline — applies on every agent unless
-              overridden per-agent (Team tab → alerts).
+              {notifyMember.id === me.user.id ? 'Your' : "This member's"} workspace-wide
+              baseline — applies on every agent unless overridden per-agent
+              (Team tab → alerts).
             </div>
-            <div className="row" style={{ marginTop: 12 }}>
-              <span className="muted" style={{ fontSize: 13, alignSelf: 'center' }}>
-                Web push on this device:
-              </span>
-              {pushEnabled ? (
-                <>
-                  <span style={{ fontSize: 13, alignSelf: 'center' }}>enabled</span>
-                  <button className="btn" onClick={() => void disablePush()}>Disable</button>
-                </>
-              ) : (
-                <button className="btn" onClick={() => void togglePush()}>Enable push</button>
-              )}
-            </div>
-            {pushMsg && <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{pushMsg}</div>}
+            {notifyMember.id === me.user.id && (
+              <>
+                <div className="row" style={{ marginTop: 12 }}>
+                  <span className="muted" style={{ fontSize: 13, alignSelf: 'center' }}>
+                    Web push on this device:
+                  </span>
+                  {pushEnabled ? (
+                    <>
+                      <span style={{ fontSize: 13, alignSelf: 'center' }}>enabled</span>
+                      <button className="btn" onClick={() => void disablePush()}>Disable</button>
+                    </>
+                  ) : (
+                    <button className="btn" onClick={() => void togglePush()}>Enable push</button>
+                  )}
+                </div>
+                {pushMsg && <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{pushMsg}</div>}
+              </>
+            )}
             <div className="row" style={{ marginTop: 12 }}>
               {([['push', 'Web push'], ['email', 'Email'], ['sound', 'Alert sounds']] as const).map(([k, label]) => (
                 <span key={k} className="row" style={{ marginRight: 12, gap: 6 }}>
                   <span>{label}</span>
                   <select
-                    value={me.user.notify?.[k] !== false ? 'on' : 'off'}
-                    onChange={(e) => setNotify.mutate({ [k]: e.target.value === 'on' })}
-                    disabled={setNotify.isPending}
+                    value={notifyMember.notify?.[k] !== false ? 'on' : 'off'}
+                    onChange={(e) => writeNotify(notifyMember.id, { [k]: e.target.value === 'on' })}
+                    disabled={notifying}
                   >
                     <option value="on">On</option>
                     <option value="off">Off</option>
@@ -916,7 +947,7 @@ export default function Settings() {
               <span className="muted" style={{ fontSize: 12 }}>Event types</span>
               <select
                 value={(() => {
-                  const vals = NOTIFY_EVENT_LABELS.map(([k]) => me.user.notify?.events?.[k]);
+                  const vals = NOTIFY_EVENT_LABELS.map(([k]) => notifyMember.notify?.events?.[k]);
                   if (vals.every((v) => v === false)) return 'off';
                   if (vals.every((v) => v !== false)) return 'on';
                   return 'mixed';
@@ -925,12 +956,12 @@ export default function Settings() {
                   const on = e.target.value === 'on';
                   const events: Record<string, boolean> = {};
                   for (const [k] of NOTIFY_EVENT_LABELS) events[k] = on;
-                  setNotify.mutate({ events });
+                  writeNotify(notifyMember.id, { events });
                 }}
-                disabled={setNotify.isPending}
+                disabled={notifying}
               >
-                {NOTIFY_EVENT_LABELS.some(([k]) => me.user.notify?.events?.[k] === false) &&
-                  NOTIFY_EVENT_LABELS.some(([k]) => me.user.notify?.events?.[k] !== false) && (
+                {NOTIFY_EVENT_LABELS.some(([k]) => notifyMember.notify?.events?.[k] === false) &&
+                  NOTIFY_EVENT_LABELS.some(([k]) => notifyMember.notify?.events?.[k] !== false) && (
                     <option value="mixed" disabled>mixed — set all:</option>
                   )}
                 <option value="on">All on</option>
@@ -942,9 +973,11 @@ export default function Settings() {
                 <div key={key} className="row" style={{ justifyContent: 'space-between' }}>
                   <span>{label}</span>
                   <select
-                    value={me.user.notify?.events?.[key] !== false ? 'on' : 'off'}
-                    onChange={(e) => setNotify.mutate({ events: { [key]: e.target.value === 'on' } })}
-                    disabled={setNotify.isPending}
+                    value={notifyMember.notify?.events?.[key] !== false ? 'on' : 'off'}
+                    onChange={(e) =>
+                      writeNotify(notifyMember.id, { events: { [key]: e.target.value === 'on' } })
+                    }
+                    disabled={notifying}
                   >
                     <option value="on">On</option>
                     <option value="off">Off</option>

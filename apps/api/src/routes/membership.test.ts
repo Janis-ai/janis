@@ -305,6 +305,50 @@ describe('operator profile', () => {
   });
 });
 
+describe('admin notify management', () => {
+  it("admin can patch a member's notification baseline", async () => {
+    const res = await app.request(`/api/users/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ notify: { email: false, events: { digest: false } } }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.user.notify.email).toBe(false);
+    expect(body.user.notify.events.digest).toBe(false);
+    // unset channels stay on
+    expect(body.user.notify.push).toBe(true);
+
+    // a second patch merges events instead of replacing them
+    const res2 = await app.request(`/api/users/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ notify: { events: { keyword: false } } }),
+    });
+    const body2 = await res2.json();
+    expect(body2.user.notify.events.digest).toBe(false);
+    expect(body2.user.notify.events.keyword).toBe(false);
+  });
+
+  it('member cannot patch another member or the prefs field', async () => {
+    const res = await app.request(`/api/users/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: memberCookie },
+      body: JSON.stringify({ notify: { push: false } }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects an empty patch body', async () => {
+    const res = await app.request(`/api/users/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('last workspace persistence', () => {
   const loginCookie = async (email: string) => {
     const res = await post('/auth/login', '', { email, password: 'password123' });

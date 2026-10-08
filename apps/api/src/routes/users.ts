@@ -228,14 +228,31 @@ export function userRoutes(db: Db) {
   // TRANSFERS ownership — only the current owner can do it (an admin may
   // claim it when no owner is recorded, e.g. a pre-migration workspace).
   // The owner can't be demoted except by handing ownership over.
+  // admin-only: change a member's role, or manage their notification
+  // baseline (same merge semantics as PATCH /me — note it's account-level,
+  // so it follows the member into other workspaces they belong to).
   app.patch(
     '/:id',
     adminOnly,
-    zValidator('json', z.object({ role: z.enum(['admin', 'member', 'viewer', 'owner']) })),
+    zValidator(
+      'json',
+      z.object({
+        role: z.enum(['admin', 'member', 'viewer', 'owner']).optional(),
+        notify: z
+          .object({
+            push: z.boolean().optional(),
+            email: z.boolean().optional(),
+            sound: z.boolean().optional(),
+            events: z.record(z.string(), z.boolean()).optional(),
+          })
+          .optional(),
+      }),
+    ),
     async (c) => {
       const me = c.get('user');
       const workspaceId = c.get('workspaceId');
-      const role = c.req.valid('json').role;
+      const body = c.req.valid('json');
+      if (!body.role && !body.notify) return c.json({ error: 'nothing to update' }, 400);
       const [mem] = await db
         .select()
         .from(memberships)
@@ -245,6 +262,43 @@ export function userRoutes(db: Db) {
         .limit(1);
       if (!mem) return c.json({ error: 'not found' }, 404);
       const ownerId = await workspaceOwner(workspaceId);
+
+      if (body.notify) {
+        const [target] = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, mem.userId))
+          .limit(1);
+        const current = (target.notifyPrefs ?? {}) as {
+          push?: boolean;
+          email?: boolean;
+          sound?: boolean;
+          events?: Record<string, boolean>;
+        };
+        await db
+          .update(users)
+          .set({
+            notifyPrefs: {
+              push: body.notify.push ?? current.push ?? true,
+              email: body.notify.email ?? current.email ?? true,
+              sound: body.notify.sound ?? current.sound ?? true,
+              // events merge per-key — a toggle updates one key without
+              // wiping the rest
+              ...(body.notify.events || current.events
+                ? { events: { ...current.events, ...body.notify.events } }
+                : {}),
+            },
+          })
+          .where(eq(users.id, mem.userId));
+      }
+
+      const role = body.role;
+      if (!role) {
+        const [u] = await db.select().from(users).where(eq(users.id, mem.userId)).limit(1);
+        return c.json({
+          user: toWorkspaceUser(u, mem.userId === ownerId ? 'owner' : mem.role),
+        });
+      }
 
       if (role === 'owner') {
         if (ownerId === c.req.param('id')) {
