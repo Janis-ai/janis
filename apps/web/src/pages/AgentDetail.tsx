@@ -41,7 +41,7 @@ import { ScenarioRow, scenarioPrompt } from '../components/ScenarioRow';
 import { useDock } from '../lib/dockContext';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { Bell, Pencil, Trash2, Upload, X } from 'lucide-react';
+import { Bell, Pencil, Shield, Trash2, Upload, Users, X } from 'lucide-react';
 
 type RuleKind = AlertRule['kind'];
 /** `defaultOn` kinds page the workspace even with zero rules — a rule exists
@@ -2070,7 +2070,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         title="Alert overrides for this agent"
         aria-label="Alert overrides"
       >
-        <Bell size={14} />
+        <Pencil size={14} />
       </button>
     ) : null;
   const notifyEditor = (userId: string, notify: AgentMember['notify'], name: string) =>
@@ -2167,9 +2167,21 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
       <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
         <thead>
           <tr>
-            <th style={th}>Member</th>
-            <th style={{ ...th, width: 96 }}>Alerts</th>
-            <th style={{ ...th, width: 200 }}>Role</th>
+            <th style={th}>
+              <span className="row" style={{ gap: 6 }}>
+                <Users size={12} /> Member
+              </span>
+            </th>
+            <th style={{ ...th, width: 96 }}>
+              <span className="row" style={{ gap: 6 }}>
+                <Bell size={12} /> Alerts
+              </span>
+            </th>
+            <th style={{ ...th, width: 200 }}>
+              <span className="row" style={{ gap: 6 }}>
+                <Shield size={12} /> Role
+              </span>
+            </th>
             <th style={{ ...th, width: 34 }} />
           </tr>
         </thead>
