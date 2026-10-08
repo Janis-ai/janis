@@ -2016,6 +2016,12 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
   const agentOnly = memberRows.filter((m) => !wsById.has(m.user_id));
   const wsWithOverride = new Set(memberRows.map((m) => m.user_id));
   const plainMembers = (wsUsers?.users ?? []).filter((u) => !wsWithOverride.has(u.id));
+  // Your own row first — it's the one you're most likely acting on.
+  const selfId = me?.user.id;
+  const selfFirst = <T,>(rows: T[], id: (r: T) => string) =>
+    [...rows].sort((a, b) => Number(id(b) === selfId) - Number(id(a) === selfId));
+  const youTag = (id: string) =>
+    id === selfId ? <span className="muted"> (You)</span> : null;
   const ownerId = agent.owner_user_id;
   const isOwner = me?.user.id === ownerId;
 
@@ -2121,11 +2127,11 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         The alerts button edits that person's notification overrides for this
         agent — anyone can open their own, admins can open anyone's.
       </div>
-      {plainMembers.map((u) => (
+      {selfFirst(plainMembers, (u) => u.id).map((u) => (
         <div key={u.id}>
           <div className="row" style={{ marginTop: 6 }}>
             <span className="grow">
-              {u.name} <span className="muted">· {u.email}</span>
+              {u.name}{youTag(u.id)} <span className="muted">· {u.email}</span>
             </span>
             {notifyToggle(u.id)}
             {roleSelect(u.id, 'inherit', u.role, true)}
@@ -2133,13 +2139,14 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
           {notifyEditor(u.id, null, u.name)}
         </div>
       ))}
-      {memberRows
-        .filter((m) => wsById.has(m.user_id))
-        .map((m) => (
+      {selfFirst(
+        memberRows.filter((m) => wsById.has(m.user_id)),
+        (m) => m.user_id,
+      ).map((m) => (
           <div key={m.user_id}>
             <div className="row" style={{ marginTop: 6 }}>
               <span className="grow">
-                {m.name} <span className="muted">· {m.email}</span>
+                {m.name}{youTag(m.user_id)} <span className="muted">· {m.email}</span>
                 {/* A member row can exist with no role — saved profile or
                     notify prefs alone shouldn't badge it as overridden.
                     Nor should the owner — their stored role is vestigial,
@@ -2154,11 +2161,11 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
             {notifyEditor(m.user_id, m.notify, m.name)}
           </div>
         ))}
-      {agentOnly.map((m) => (
+      {selfFirst(agentOnly, (m) => m.user_id).map((m) => (
         <div key={m.user_id}>
           <div className="row" style={{ marginTop: 6 }}>
             <span className="grow">
-              {m.name} <span className="muted">· {m.email}</span>
+              {m.name}{youTag(m.user_id)} <span className="muted">· {m.email}</span>
               <span className="badge" style={{ marginLeft: 8 }}>this agent only</span>
             </span>
             {notifyToggle(m.user_id)}

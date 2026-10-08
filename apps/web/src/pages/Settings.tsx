@@ -810,10 +810,12 @@ export default function Settings() {
           conversation status. The <strong>owner</strong> can't be removed — only they
           can hand ownership to another member.
         </div>
-        {users?.users.map((u) => (
+        {[...(users?.users ?? [])]
+          .sort((a, b) => Number(b.id === me?.user.id) - Number(a.id === me?.user.id))
+          .map((u) => (
           <div key={u.id} className="row muted" style={{ marginTop: 8 }}>
             <span className="grow">
-              {u.name} · {u.email}
+              {u.name}{u.id === me?.user.id && <span className="muted"> (You)</span>} · {u.email}
               {u.status === 'invited' && (
                 <span className="badge" style={{ marginLeft: 8 }}>invited</span>
               )}
