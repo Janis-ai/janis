@@ -19,8 +19,12 @@ After finishing a task, send Mike the summary:
 cd apps/api
 export DATABASE_URL="$(grep '^DATABASE_URL=' .env.production | cut -d= -f2-)"
 export RESEND_API_KEY="$(grep '^RESEND_API_KEY=' .env.production | cut -d= -f2-)"
+export JANIS_EMAIL_FROM="$(grep '^JANIS_EMAIL_FROM=' .env.production | cut -d= -f2- | tr -d '"')"
 npx tsx scripts/task-summary.ts "Title" "Body"
 ```
+The script doesn't load .env (only index.ts imports loadEnv), so without
+JANIS_EMAIL_FROM the notify leg falls back to alerts@janis.ai and Resend
+403s — janis.ai is NOT verified; inbound.janis.ai IS the verified domain.
 Emails michael.nathanson@gmail.com from janis@inbound.janis.ai and fires a
 'custom' alert on the concierge rail conversation (lands in the Janis Inbox,
 as a push notification, and on the workspace Slack alert channel).
