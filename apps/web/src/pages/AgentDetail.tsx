@@ -1758,6 +1758,20 @@ function AgentNotifyOverride({ agent }: { agent: Agent }) {
     setEvents(next);
     save.mutate({ ...prefs, events: next });
   };
+  const bulkState = (() => {
+    const vals = NOTIFY_EVENT_LABELS.map(([k]) => events[k]);
+    if (vals.every((v) => v === true)) return 'on';
+    if (vals.every((v) => v === false)) return 'off';
+    if (vals.every((v) => v === undefined)) return 'inherit';
+    return 'mixed';
+  })();
+  const setAllEvents = (state: 'inherit' | 'on' | 'off') => {
+    const next: Record<string, boolean> = {};
+    if (state !== 'inherit')
+      for (const [k] of NOTIFY_EVENT_LABELS) next[k] = state === 'on';
+    setEvents(next);
+    save.mutate({ ...prefs, events: next });
+  };
 
   return (
     <div className="card" style={{ marginTop: 12 }}>
@@ -1804,8 +1818,20 @@ function AgentNotifyOverride({ agent }: { agent: Agent }) {
           ))}
           {msg && <span className="muted">{msg}</span>}
         </div>
-        <div className="muted" style={{ margin: '10px 0 6px', fontSize: 12 }}>
-          Event types — Inherit follows your workspace setting for that type.
+        <div className="row" style={{ justifyContent: 'space-between', margin: '10px 0 6px' }}>
+          <span className="muted" style={{ fontSize: 12 }}>
+            Event types — Inherit follows your workspace setting
+          </span>
+          <select
+            value={bulkState}
+            onChange={(e) => setAllEvents(e.target.value as 'inherit' | 'on' | 'off')}
+            disabled={save.isPending}
+          >
+            {bulkState === 'mixed' && <option value="mixed" disabled>mixed — set all:</option>}
+            <option value="inherit">All inherit</option>
+            <option value="on">All on</option>
+            <option value="off">All off</option>
+          </select>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '4px 12px', fontSize: 13 }}>
           {NOTIFY_EVENT_LABELS.map(([key, label]) => (
@@ -1875,6 +1901,21 @@ function MemberNotifyEditor({
     setEvents(next);
     save.mutate({ ...prefs, events: next });
   };
+  // Bulk apply — 13 dropdowns is homework; one select stamps every event.
+  const bulkState = (() => {
+    const vals = NOTIFY_EVENT_LABELS.map(([k]) => events[k]);
+    if (vals.every((v) => v === true)) return 'on';
+    if (vals.every((v) => v === false)) return 'off';
+    if (vals.every((v) => v === undefined)) return 'inherit';
+    return 'mixed';
+  })();
+  const setAllEvents = (state: 'inherit' | 'on' | 'off') => {
+    const next: Record<string, boolean> = {};
+    if (state !== 'inherit')
+      for (const [k] of NOTIFY_EVENT_LABELS) next[k] = state === 'on';
+    setEvents(next);
+    save.mutate({ ...prefs, events: next });
+  };
 
   return (
     <div className="ruleset" style={{ marginTop: 4, marginBottom: 8 }}>
@@ -1905,6 +1946,19 @@ function MemberNotifyEditor({
           </span>
         ))}
         {msg && <span className="muted">{msg}</span>}
+      </div>
+      <div className="row" style={{ justifyContent: 'space-between', marginTop: 6 }}>
+        <span className="muted" style={{ fontSize: 12 }}>Event types</span>
+        <select
+          value={bulkState}
+          onChange={(e) => setAllEvents(e.target.value as 'inherit' | 'on' | 'off')}
+          disabled={save.isPending}
+        >
+          {bulkState === 'mixed' && <option value="mixed" disabled>mixed — set all:</option>}
+          <option value="inherit">All inherit</option>
+          <option value="on">All on</option>
+          <option value="off">All off</option>
+        </select>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '4px 12px', fontSize: 13, marginTop: 6 }}>
         {NOTIFY_EVENT_LABELS.map(([key, label]) => (
@@ -2137,23 +2191,21 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
     <div className="card" style={{ marginTop: 12 }}>
       {confirmEl}
       <strong>Team</strong>
-      <div className="muted" style={{ margin: '4px 0 8px' }}>
-        <strong>Admins</strong> manage this agent's settings, team, and
-        rules; <strong>members</strong> work its inbox — reply, take over,
-        assign, set conversation status. <strong>No privileges</strong> hides
-        the agent from a workspace member entirely. The{' '}
-        <strong>owner</strong> can't be removed — only they can hand
-        ownership to another member. Workspace members can see every agent —
-        a role set here overrides theirs for this agent only, and people
-        added with no workspace account see nothing but this agent. The
-        alerts button edits that person's notifications for this agent —
-        anything left on Inherit follows their own Settings → Me.
+      <ul className="muted" style={{ margin: '6px 0 4px', paddingLeft: 18, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <li><strong>admin</strong> — manages this agent's settings, team &amp; rules</li>
+        <li><strong>member</strong> — works the inbox: reply, take over, assign</li>
+        <li><strong>no privileges</strong> — hides the agent from a workspace member entirely</li>
+        <li><strong>owner</strong> — fixed; transferable only by the owner</li>
+      </ul>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+        Workspace members see every agent — a role here overrides theirs for
+        this agent only. Agent-only people see nothing but this agent.
       </div>
       {plainMembers.map((u) => (
         <div key={u.id}>
-          <div className="row muted" style={{ marginTop: 6 }}>
+          <div className="row" style={{ marginTop: 6 }}>
             <span className="grow">
-              {u.name} · {u.email}
+              {u.name} <span className="muted">· {u.email}</span>
             </span>
             {notifyToggle(u.id)}
             {roleSelect(u.id, 'inherit', u.role, true)}
@@ -2165,9 +2217,9 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         .filter((m) => wsById.has(m.user_id))
         .map((m) => (
           <div key={m.user_id}>
-            <div className="row muted" style={{ marginTop: 6 }}>
+            <div className="row" style={{ marginTop: 6 }}>
               <span className="grow">
-                {m.name} · {m.email}
+                {m.name} <span className="muted">· {m.email}</span>
                 {/* A member row can exist with no role — saved profile or
                     notify prefs alone shouldn't badge it as overridden.
                     Nor should the owner — their stored role is vestigial,
@@ -2184,9 +2236,9 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         ))}
       {agentOnly.map((m) => (
         <div key={m.user_id}>
-          <div className="row muted" style={{ marginTop: 6 }}>
+          <div className="row" style={{ marginTop: 6 }}>
             <span className="grow">
-              {m.name} · {m.email}
+              {m.name} <span className="muted">· {m.email}</span>
               <span className="badge" style={{ marginLeft: 8 }}>this agent only</span>
             </span>
             {notifyToggle(m.user_id)}
@@ -2245,11 +2297,10 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
           <button className="btn" disabled={add.isPending}>Invite</button>
         </form>
       )}
-      <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>
-        "This agent only" shows them just this agent's inbox — a client
-        operator or VA; they sign in with Google or Slack, no workspace
-        invite needed. "Whole workspace" sends the same invite as Settings
-        → Team — a teammate who sees every agent.
+      <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+        "This agent only" — just this inbox; they sign in with Google or
+        Slack, no workspace invite needed. "Whole workspace" — the same
+        invite as Settings → Team; a teammate who sees every agent.
       </div>
       {err && <div className="error">{err}</div>}
     </div>
