@@ -3477,8 +3477,9 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             className="btn sm"
             disabled={running !== null || batch !== null}
             onClick={() => { setAbOpen((v) => !v); }}
+            title="Replay every scenario against a different prompt or model — before you change the real agent"
           >
-            A/B prompt
+            Try a variant
           </button>
         )}
         <button className="btn sm" onClick={() => setImportOpen((v) => !v)}>
@@ -3708,19 +3709,20 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       {abOpen && (
         <div className="card" style={{ background: 'var(--panel-2)' }}>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-            Paste a candidate system prompt and/or model id — the whole suite replays
-            against it and reports pass/fail per test. Nothing changes until you copy
-            the winner into the Behavior section.
+            Thinking of changing the prompt or model? Try it here first — every
+            scenario re-runs against your version and reports pass/fail next to
+            today's results. Your agent is untouched; if the variant wins, adopt
+            it yourself in Behavior.
           </div>
           <textarea
             rows={6}
-            placeholder="Candidate system prompt… (optional)"
+            placeholder="New system prompt (optional — blank keeps today's)"
             value={candidatePrompt}
             onChange={(e) => setCandidatePrompt(e.target.value)}
             style={{ width: '100%', fontFamily: 'monospace' }}
           />
           <input
-            placeholder="Candidate model id — e.g. gpt-4o-mini (optional)"
+            placeholder="New model id (optional) — e.g. gpt-4o-mini"
             value={candidateModel}
             onChange={(e) => setCandidateModel(e.target.value)}
             style={{ marginTop: 8 }}
@@ -3731,17 +3733,17 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               disabled={(!candidatePrompt.trim() && !candidateModel.trim()) || running !== null || batch !== null}
               onClick={() => { setAbResult(null); abRun.mutate(); }}
             >
-              {batch ? `Running… ${batchDone}/${batch.total}` : 'Run suite vs candidate'}
+              {batch ? `Running… ${batchDone}/${batch.total}` : 'Run scenarios vs this'}
             </button>
             <button className="btn sm" onClick={() => setAbOpen(false)}>Close</button>
           </div>
           {abResult && (
             <div style={{ marginTop: 8, fontSize: 13 }}>
               <strong>
-                Candidate: {abResult.summary.passed} passed, {abResult.summary.failed} failed
+                Variant: {abResult.summary.passed} passed, {abResult.summary.failed} failed
                 {abResult.summary.unrunnable > 0 && `, ${abResult.summary.unrunnable} unrunnable`}
               </strong>
-              <span className="muted"> (baseline: {passed} passing)</span>
+              <span className="muted"> (today: {passed} passing)</span>
               {abResult.results.filter((r) => r.passed === false).map((r) => (
                 <div key={r.name} className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                   ✗ {r.name} — {r.reason}
