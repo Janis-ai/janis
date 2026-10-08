@@ -310,12 +310,21 @@ export default function AgentBuilder() {
   const { data: gapData } = useQuery({
     queryKey: ['knowledge-gaps', agent?.id],
     queryFn: () =>
-      api<{ gaps: { key: string; count: number; questions: string[]; added: boolean }[] }>(
-        `/api/agents/${agent?.id}/knowledge-gaps`,
-      ),
+      api<{
+        gaps: { key: string; count: number; questions: string[]; added: boolean }[];
+        learnings?: { key: string; text: string; added: boolean }[];
+      }>(`/api/agents/${agent?.id}/knowledge-gaps`),
     enabled: Boolean(agent && hosted && (step === 'try' || step === 'teach')),
   });
   const openGaps = (gapData?.gaps ?? []).filter((g) => !g.added);
+  // Self-reported learnings count as open gaps too — they're the same
+  // "teach it" work from a different detector. Already-added notes are
+  // resolved; dismissed keys hide like the gaps page.
+  const dismissedLearnKeys = new Set(cfg.dismissed_learnings ?? []);
+  const openLearnings = (gapData?.learnings ?? []).filter(
+    (l) => !l.added && !dismissedLearnKeys.has(l.key),
+  );
+  const openGapCount = openGaps.length + openLearnings.length;
   // Source counts for the Teach it tabs — same queries the sections use,
   // so numbers can't drift between builder and workspace surfaces.
   const { data: knowledgeData } = useQuery({
@@ -338,12 +347,12 @@ export default function AgentBuilder() {
     : 0;
   const teachSubCount: Record<TeachSub, number> = {
     sources: knowledgeFiles.length + noteLines + (articlesData?.articles?.length ?? 0),
-    gaps: openGaps.length,
+    gaps: openGapCount,
   };
   const totalSources = teachSubCount.sources;
   // Gaps only earns a tab once real conversations produce them — on a
   // fresh agent it would be a cryptic empty panel.
-  const visibleTeachSubs = TEACH_SUBS.filter((t) => t.key !== 'gaps' || openGaps.length > 0);
+  const visibleTeachSubs = TEACH_SUBS.filter((t) => t.key !== 'gaps' || openGapCount > 0);
   const LEGACY_SUBS: Record<string, TeachSub> = {
     websites: 'sources',
     files: 'sources',
@@ -2078,13 +2087,18 @@ export default function AgentBuilder() {
                   </button>
                 )}
               </div>
-              {openGaps.length > 0 && (
+              {openGapCount > 0 && (
                 <div className="card" style={{ marginTop: 10 }}>
                   <strong>Your agent doesn't know how to answer this</strong>
                   <ul style={{ margin: '6px 0', paddingLeft: 18, fontSize: 13 }}>
-                    {openGaps.slice(0, 3).flatMap((g) => g.questions.slice(0, 1)).map((q, i) => (
-                      <li key={i}>{q}</li>
-                    ))}
+                    {[
+                      ...openGaps.flatMap((g) => g.questions.slice(0, 1)),
+                      ...openLearnings.map((l) => l.text),
+                    ]
+                      .slice(0, 3)
+                      .map((q, i) => (
+                        <li key={i}>{q}</li>
+                      ))}
                   </ul>
                   <div className="row" style={{ gap: 8 }}>
                     <button className="btn" onClick={() => goStep('teach')}>Teach it →</button>

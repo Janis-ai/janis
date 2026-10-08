@@ -2905,7 +2905,12 @@ export function KnowledgeGaps({ agentId, config }: { agentId: string; config: Ag
     return Date.parse(g.last_seen) <= Math.max(...times);
   };
   const gaps = (data?.gaps ?? []).filter((g) => !gapDismissed(g));
-  const learnings = (data?.learnings ?? []).filter((l) => !dismissedL.has(l.key));
+  // An 'added' note's text already lives in the knowledge base — nothing
+  // left to do, and no action existed anyway. Drop it from the list; it
+  // resurfaces on its own if the covering entry is ever removed.
+  const learnings = (data?.learnings ?? []).filter(
+    (l) => !dismissedL.has(l.key) && !l.added,
+  );
   const [page, setPage] = useState(0);
   const PAGE = 5;
   const pageCount = Math.max(1, Math.ceil(gaps.length / PAGE));
@@ -3043,43 +3048,38 @@ export function KnowledgeGaps({ agentId, config }: { agentId: string; config: Ag
           <div key={l.key} className="card" style={{ marginBottom: 10, padding: 12 }}>
             <div className="row">
               <strong className="grow">{l.text}</strong>
-              {l.added && <span className="badge active">in knowledge base</span>}
             </div>
             <div className="muted" style={{ marginTop: 4 }}>
               self-reported · last seen {timeAgo(l.last_seen)}
             </div>
-            {!l.added && (
-              <>
-                <textarea
-                  rows={4}
-                  style={{ marginTop: 8, width: '100%', boxSizing: 'border-box' }}
-                  value={learnEdits[l.key] ?? l.text}
-                  onChange={(e) =>
-                    setLearnEdits((s) => ({ ...s, [l.key]: e.target.value }))
-                  }
-                />
-                <div className="row" style={{ marginTop: 8 }}>
-                  <button
-                    className="btn primary"
-                    disabled={approve.isPending || !(learnEdits[l.key] ?? l.text).trim()}
-                    onClick={() =>
-                      approve.mutate({ key: l.key, entry: (learnEdits[l.key] ?? l.text).trim() })
-                    }
-                  >
-                    Add to knowledge base
-                  </button>
-                  <button
-                    className="btn"
-                    disabled={dismiss.isPending}
-                    onClick={() =>
-                      dismiss.mutate({ field: 'dismissed_learnings', keys: [l.key] })
-                    }
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              </>
-            )}
+            <textarea
+              rows={4}
+              style={{ marginTop: 8, width: '100%', boxSizing: 'border-box' }}
+              value={learnEdits[l.key] ?? l.text}
+              onChange={(e) =>
+                setLearnEdits((s) => ({ ...s, [l.key]: e.target.value }))
+              }
+            />
+            <div className="row" style={{ marginTop: 8 }}>
+              <button
+                className="btn primary"
+                disabled={approve.isPending || !(learnEdits[l.key] ?? l.text).trim()}
+                onClick={() =>
+                  approve.mutate({ key: l.key, entry: (learnEdits[l.key] ?? l.text).trim() })
+                }
+              >
+                Add to knowledge base
+              </button>
+              <button
+                className="btn"
+                disabled={dismiss.isPending}
+                onClick={() =>
+                  dismiss.mutate({ field: 'dismissed_learnings', keys: [l.key] })
+                }
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         ))}
       </div>
