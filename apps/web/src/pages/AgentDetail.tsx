@@ -3196,6 +3196,8 @@ interface AgentTest {
   source_message_id?: string | null;
   original_reply?: string | null;
   last_run?: AgentTestRun | null;
+  category?: string | null;
+  human_result?: 'pass' | 'fail' | 'unreviewed' | 'fixed_recheck' | null;
   created_at: string;
 }
 
@@ -3917,6 +3919,12 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               dock?.testAvailable
                 ? () => dock.sendTestSeed(scenarioPrompt(t))
                 : undefined
+            }
+            reviewRequired={
+              ((agent.config ?? {}) as AgentConfig).builder?.domain_risk === 'elevated' &&
+              t.category === 'safety' &&
+              t.human_result !== 'pass' &&
+              t.human_result !== 'fail'
             }
             verdict={
               isAdmin

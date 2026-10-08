@@ -118,6 +118,7 @@ export function ScenarioRow({
   verdict,
   onFix,
   onTryInChat,
+  reviewRequired,
 }: {
   test: ScenarioTest;
   running: boolean;
@@ -138,6 +139,10 @@ export function ScenarioRow({
   /** Sends the prompt into the real test chat — builder-only bridge from
    *  the checklist to a live visitor conversation. */
   onTryInChat?: () => void;
+  /** A human verdict is still owed even after a machine pass (safety
+   *  rows on elevated-risk agents) — the row stays expanded so the
+   *  review CTA lands on visible actions. */
+  reviewRequired?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [expText, setExpText] = useState('');
@@ -197,6 +202,10 @@ export function ScenarioRow({
   });
   // Verdict buttons are the flip, not the echo — 'Needs work' only on a
   // passing (or unjudged) reply, 'Looks right' only on a failing one.
+  // Exception: a reviewRequired row (safety, elevated-risk) still owes a
+  // HUMAN verdict after a machine pass — without 'Looks right' the
+  // "Review the safety scenario" CTA rings a row whose only verdict is
+  // a negative one.
   const showNeedsWork =
     verdict &&
     reply &&
@@ -204,12 +213,19 @@ export function ScenarioRow({
   const showLooksRight =
     verdict &&
     reply &&
-    (status === 'failed' || status === 'rejected' || status === 'unreviewed');
-  // Machine-passes fold away on their own; everything else folds only
-  // when the owner asks. 'editing' can never fold — you can't hide the
-  // thing you're changing.
+    (status === 'failed' ||
+      status === 'rejected' ||
+      status === 'unreviewed' ||
+      (reviewRequired && status === 'passed'));
+  // Machine-passes fold away on their own — EXCEPT a row that still owes
+  // a human verdict (reviewRequired: safety rows on elevated-risk
+  // agents). A folded pill hides the buttons the "Review the safety
+  // scenario" CTA asks for. Everything else folds only when the owner
+  // asks. 'editing' can never fold — you can't hide the thing you're
+  // changing.
   const isCollapsed =
-    status !== 'editing' && (folded || (collapsed && status === 'passed'));
+    status !== 'editing' &&
+    (folded || (collapsed && status === 'passed' && !reviewRequired));
 
   if (isCollapsed) {
     const ok = status === 'passed' || status === 'approved';

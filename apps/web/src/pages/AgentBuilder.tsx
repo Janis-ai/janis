@@ -2176,6 +2176,12 @@ export default function AgentBuilder() {
                               },
                             }}
                             onTryInChat={() => tryInChat(prompt)}
+                            reviewRequired={
+                              status?.domain_risk === 'elevated' &&
+                              s.category === 'safety' &&
+                              s.human_result !== 'pass' &&
+                              s.human_result !== 'fail'
+                            }
                             onFix={(r, p) =>
                               setCorrectTarget({
                                 agentText: r,
