@@ -847,6 +847,14 @@ export default function Layout() {
     setDockCallout(false);
   }, []);
   const clearTestSeed = useCallback(() => setTestSeed(null), []);
+  // In-page "Try in chat" — same landing spot as the ?rail=test&q= deep
+  // link: the seed transfers to the fallback chat (or the builder's
+  // listener) once the dock is open on the Test tab.
+  const sendTestSeed = useCallback((text: string) => {
+    setTestSeed({ text, nonce: Date.now() });
+    setRailTab('test');
+    setRailOpen(true);
+  }, []);
   // Memoized — a fresh object per render makes every consumer's
   // dock-depending effect re-fire (setTestWiring in a loop is how this
   // file once froze navigation).
@@ -866,10 +874,12 @@ export default function Layout() {
       setTestVisitor: setChatVisitor,
       testSeed,
       clearTestSeed,
+      sendTestSeed,
     }),
     [
       railOpen, railTab, testAvail, testProvided, testSlot, openTab,
       testWiring, testVisitor, setChatVisitor, testSeed, clearTestSeed,
+      sendTestSeed,
     ],
   );
   const [toasts, setToasts] = useState<Toast[]>([]);

@@ -89,6 +89,9 @@ export interface DockCtx {
    *  concierge "run this" link) — the consumer clears it. */
   testSeed: { text: string; nonce: number } | null;
   clearTestSeed(): void;
+  /** Queue a prompt into the test chat and open the dock on the Test tab —
+   *  the "Try in chat" affordance any agent surface can call. */
+  sendTestSeed(text: string): void;
 }
 
 export const DockContext = createContext<DockCtx | null>(null);

@@ -36,7 +36,8 @@ import { janisBrain } from '../lib/agentContext';
 import { ringScenario } from '../lib/scenarioRing';
 import { railBus } from '../lib/railBus';
 import { CorrectThisCard } from '../components/CorrectThis';
-import { ScenarioRow } from '../components/ScenarioRow';
+import { ScenarioRow, scenarioPrompt } from '../components/ScenarioRow';
+import { useDock } from '../lib/dockContext';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
 import { Pencil, Trash2, Upload, X } from 'lucide-react';
@@ -3197,6 +3198,9 @@ interface EvalBatch {
 }
 
 function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; isAdmin: boolean }) {
+  // "Try in chat" seeds the shared docked test chat — the same loop the
+  // builder's Try step uses, available post-launch on this page too.
+  const dock = useDock();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [batch, setBatch] = useState<{
@@ -3884,6 +3888,11 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                 customerText: prompt,
                 scenarioId: t.id,
               })
+            }
+            onTryInChat={
+              dock?.testAvailable
+                ? () => dock.sendTestSeed(scenarioPrompt(t))
+                : undefined
             }
           />
         );
