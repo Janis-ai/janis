@@ -96,7 +96,6 @@ const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: b
     { key: 'general', label: 'General' },
     { key: 'escalation', label: 'Escalation' },
     { key: 'team', label: 'Team' },
-    { key: 'replies', label: 'Saved replies' },
   ],
 };
 
@@ -153,6 +152,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     files: 'sources',
     text: 'sources',
     help: 'articles',
+    replies: 'escalation',
   };
   const subKey = subParam ? (LEGACY_SUBS[subParam] ?? subParam) : subParam;
   const sub = subs.some((s) => s.key === subKey) ? subKey! : (subs[0]?.key ?? '');
@@ -526,11 +526,6 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
             />
           )}
           {sub === 'team' && <TeamSection agent={agent} isAdmin={isAdmin} />}
-          {sub === 'replies' && (
-            <ReadOnly off={!isAdmin}>
-              <AgentSavedRepliesCard agent={agent} />
-            </ReadOnly>
-          )}
         </>
       )}
 
@@ -1545,6 +1540,10 @@ function EscalationTab({
     </ReadOnly>
 
     <AgentProfileOverride agent={agent} />
+
+    <ReadOnly off={!isAdmin}>
+      <AgentSavedRepliesCard agent={agent} />
+    </ReadOnly>
     </>
   );
 }
