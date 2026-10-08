@@ -931,13 +931,17 @@ export function agentRoutes(db: Db) {
             : 'partial'
           : 'pending',
         abilities:
-          unmetTemplates > 0 || (abilities === 0 && suggestedAbilities)
-            ? 'partial'
-            : abilities > 0 || cfg.builder?.abilities_confirmed
-              ? 'done'
-              : drafted
-                ? 'na'
-                : 'pending',
+          // An explicit "none needed" outranks the draft's uninstalled
+          // suggestions — the owner reviewed them and decided.
+          cfg.builder?.abilities_confirmed
+            ? 'done'
+            : unmetTemplates > 0 || (abilities === 0 && suggestedAbilities)
+              ? 'partial'
+              : abilities > 0
+                ? 'done'
+                : drafted
+                  ? 'na'
+                  : 'pending',
         try:
           testsTotal > 0
             ? // Scenario checklist exists — verdicts drive the mark.

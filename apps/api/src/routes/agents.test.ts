@@ -1106,7 +1106,7 @@ describe('try-it scenarios', () => {
         })
       ).json()
     ) as {
-      steps: { try: string };
+      steps: { try: string; abilities: string };
       test_scenarios: {
         total: number;
         checked: number;
@@ -1261,5 +1261,27 @@ describe('try-it scenarios', () => {
       rejudge: true,
     });
     expect(res2.status).toBe(200);
+  });
+
+  it('abilities_confirmed outranks the draft’s uninstalled suggestions', async () => {
+    const id = await mkAgent();
+    // Draft suggested a tool the owner never installed — until the owner
+    // weighs in, unmet suggestions keep the step at partial.
+    await patchConfig(id, {
+      builder: {
+        suggested_templates: [{ id: 'shopify_orders', name: 'Shopify orders' }],
+      },
+    });
+    expect((await buildStatus(id)).steps.abilities).toBe('partial');
+    // "Mark none needed" IS the review of those suggestions — the step
+    // flips done instead of losing to the draft's list.
+    const res = await patchConfig(id, {
+      builder: {
+        suggested_templates: [{ id: 'shopify_orders', name: 'Shopify orders' }],
+        abilities_confirmed: true,
+      },
+    });
+    expect(res.status).toBe(200);
+    expect((await buildStatus(id)).steps.abilities).toBe('done');
   });
 });
