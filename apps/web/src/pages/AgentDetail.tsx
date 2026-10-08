@@ -3348,6 +3348,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       api<{
         suggestions: {
           id: string;
+          batch_id: string;
           test_id: string | null;
           test_name: string | null;
           kind: 'knowledge_gap' | 'prompt_drift' | 'test_stale' | 'hypothesis';
@@ -3828,6 +3829,11 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             const pct = (v: number | null) =>
               v === null ? '—' : `${Math.round(v * 100)}%`;
             const patchBlock = { borderLeft: '2px solid var(--border)', paddingLeft: 8, marginTop: 4, whiteSpace: 'pre-wrap' as const, color: 'var(--text)' };
+            // The evidence behind the diagnosis: which scenario flipped in
+            // which run, the trigger, the bar, and what the agent actually
+            // said — without it, Apply is a blind bet.
+            const linkedTest = s.test_id ? tests.find((t) => t.id === s.test_id) : undefined;
+            const batch = s.batch_id ? batches.find((b) => b.batch_id === s.batch_id) : undefined;
             return (
               <div
                 key={s.id}
@@ -3886,6 +3892,41 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                       )}
                       {` · ${timeAgo(s.created_at)}`}
                     </div>
+                    {s.test_id && !linkedTest && (
+                      <div>The scenario it was flagged on no longer exists.</div>
+                    )}
+                    {linkedTest && (
+                      <div>
+                        On scenario{' '}
+                        <a href={`#sc-${linkedTest.id}`} style={{ color: 'var(--accent)' }}>
+                          "{linkedTest.name}"
+                        </a>
+                        {batch && (
+                          <span>
+                            {' '}— flagged by the{' '}
+                            {batch.kind === 'ab' ? 'A/B' : batch.kind} run {timeAgo(batch.at)}
+                          </span>
+                        )}
+                        :
+                        <div style={patchBlock}>
+                          <div>Customer: {scenarioPrompt(linkedTest)}</div>
+                          {linkedTest.expectation && <div>Expected: {linkedTest.expectation}</div>}
+                          {linkedTest.last_run?.reply && (
+                            <div className="scenario-reply-clamp">Agent said: {linkedTest.last_run.reply}</div>
+                          )}
+                          {linkedTest.source_conversation_id && (
+                            <div>
+                              <Link
+                                to={`/conversations/${linkedTest.source_conversation_id}`}
+                                style={{ color: 'var(--accent)' }}
+                              >
+                                source conversation →
+                              </Link>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                     {s.patch?.type === 'knowledge' && (
                       <div>
                         Applying adds this to the knowledge base:
