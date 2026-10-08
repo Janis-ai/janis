@@ -494,6 +494,21 @@ export default function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [railOpen, railTab, testProvided, onBuilderPage, ctxAgent, currentAgent]);
 
+  // Agent switch retargets the shared test chat — a rail resolved for the
+  // previous agent is stale and would keep chatAgentId pinned to it. The
+  // lazy resolver above re-stamps it for the new context (the per-agent
+  // channel cache makes it a prop swap, not a reload). An explicit
+  // ?rail=test&agent=<id> request survives while context doesn't change.
+  const prevCtxAgent = useRef(ctxAgent);
+  useEffect(() => {
+    if (prevCtxAgent.current === ctxAgent) return;
+    prevCtxAgent.current = ctxAgent;
+    if (testRail?.agentId !== ctxAgent) setTestRail(null);
+    // A seed queued for the old agent isn't input for the new one's chat.
+    setTestSeed(null);
+    setFallbackSeed(null);
+  }, [ctxAgent, testRail]);
+
   // The shared chat keys to the same persisted visitor everywhere —
   // navigating builder → Inbox keeps the thread you were just on.
   useEffect(() => {
