@@ -446,6 +446,7 @@ export default function Settings() {
 
       {section === 'deliverability' && (
         <>
+      {me?.user.role === 'admin' && <ResolutionCard />}
       {me?.user.role === 'admin' && <SendPolicyCard />}
       {me?.user.role === 'admin' && <CsatCard />}
       {me?.user.role === 'admin' && <EventTokenCard />}
@@ -985,6 +986,64 @@ type SendPolicy = {
 };
 type CsatSettings = { enabled?: boolean; prompt?: string; thanks?: string };
 type SuppressionRow = { id: string; address: string; kind: string; reason: string; source: string | null };
+
+/** Workspace default for the resolution flow — when on, agents sign off and
+ *  auto-archive once the customer confirms they're done (which fires the
+ *  survey below). Agents override under Behavior → Satisfaction survey.
+ *  Admin-only. */
+function ResolutionCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () =>
+      api<{ workspace: { auto_archive?: boolean | null } }>('/api/workspace'),
+  });
+  const saved = data?.workspace.auto_archive === true;
+  const [draft, setDraft] = useState<boolean | null>(null);
+  const [msg, setMsg] = useState('');
+  const on = draft ?? saved;
+  const save = useMutation({
+    mutationFn: () =>
+      api('/api/workspace', {
+        method: 'PATCH',
+        body: JSON.stringify({ auto_archive: on }),
+      }),
+    onSuccess: () => {
+      setDraft(null);
+      setMsg('Saved — applies to agents without their own override.');
+      void qc.invalidateQueries({ queryKey: ['workspace'] });
+    },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <strong>Resolution</strong>
+      <div className="muted" style={{ fontSize: 13 }}>
+        When a customer confirms they're done, the agent signs off and
+        archives the thread — firing the satisfaction survey below. Agents
+        can override this under Behavior → Satisfaction survey.
+      </div>
+      <label className="row" style={{ gap: 8, fontSize: 13 }}>
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => setDraft(e.target.checked)}
+        />
+        Auto-archive resolved chats
+      </label>
+      <div className="row">
+        <button
+          className="btn primary"
+          disabled={draft === null || save.isPending}
+          onClick={() => save.mutate()}
+        >
+          {save.isPending ? 'Saving…' : 'Save'}
+        </button>
+        {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
 
 /** Workspace default CSAT survey — fires when a conversation is archived.
  *  Agents override per-field via their Escalation tab. Admin-only. */

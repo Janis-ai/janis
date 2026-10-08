@@ -452,6 +452,26 @@ export function defaultPersona(
   }`;
 }
 
+/** auto_archive with workspace inheritance — an agent that never set the
+ *  flag takes workspaces.config.auto_archive; an explicit true/false wins.
+ *  Returns a row copy with the resolved value folded into config so every
+ *  downstream read (prompt build, the [END_CHAT] gate) just works. */
+export async function withAutoArchiveDefault(db: Db, agent: AgentRow): Promise<AgentRow> {
+  const cfg = (agent.config ?? {}) as { auto_archive?: boolean };
+  if (cfg.auto_archive !== undefined) return agent;
+  const [ws] = await db
+    .select({ config: workspaces.config })
+    .from(workspaces)
+    .where(eq(workspaces.id, agent.workspaceId))
+    .limit(1);
+  const inherited =
+    (ws?.config as { auto_archive?: boolean } | null)?.auto_archive === true;
+  return {
+    ...agent,
+    config: { ...(agent.config as object), auto_archive: inherited } as AgentRow['config'],
+  };
+}
+
 export function systemPrompt(
   agent: AgentRow,
   docs: { name: string; text: string; truncated?: boolean }[] = [],
@@ -2108,6 +2128,7 @@ export async function runHostedEvent(
   agent: AgentRow,
   event: OutboundWebhook,
 ): Promise<void> {
+  agent = await withAutoArchiveDefault(db, agent);
   if (event.type === 'suggestion.request') {
     const convId = event.janis_conversation_id;
     if (!convId) return;
@@ -2446,6 +2467,7 @@ async function replyAsHostedAgent(
   agent: AgentRow,
   conv: ConversationRow,
 ): Promise<void> {
+  agent = await withAutoArchiveDefault(db, agent);
   const convId = conv.id;
   const externalId = conv.externalId;
   const t0 = Date.now();

@@ -78,6 +78,9 @@ const updateWorkspace = z.object({
     })
     .nullable()
     .optional(),
+  // Workspace default for the resolution flow — agents inherit unless their
+  // own config.auto_archive overrides. null clears the key.
+  auto_archive: z.boolean().nullable().optional(),
   llm_config: z
     .object({
       provider: z.string().optional(),
@@ -116,6 +119,8 @@ export function workspaceRoutes(db: Db) {
           (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
         send_policy: (ws.config as { send_policy?: unknown } | undefined)?.send_policy ?? null,
         csat: (ws.config as { csat?: unknown } | undefined)?.csat ?? null,
+        auto_archive:
+          (ws.config as { auto_archive?: boolean } | undefined)?.auto_archive ?? null,
         event_token:
           (ws.config as { event_token?: string } | undefined)?.event_token ?? null,
       },
@@ -182,7 +187,8 @@ export function workspaceRoutes(db: Db) {
       body.event_webhook_url !== undefined ||
       body.help_domain !== undefined ||
       body.send_policy !== undefined ||
-      body.csat !== undefined
+      body.csat !== undefined ||
+      body.auto_archive !== undefined
     ) {
       const config = {
         ...(ws.config as Record<string, unknown>),
@@ -202,6 +208,10 @@ export function workspaceRoutes(db: Db) {
           ...(((config as Record<string, unknown>).csat ?? {}) as Record<string, unknown>),
           ...body.csat,
         };
+      if (body.auto_archive === null)
+        delete (config as Record<string, unknown>).auto_archive;
+      else if (body.auto_archive !== undefined)
+        (config as Record<string, unknown>).auto_archive = body.auto_archive;
       await db.update(workspaces).set({ config }).where(eq(workspaces.id, workspaceId));
       ws.config = config;
     }
@@ -254,6 +264,8 @@ export function workspaceRoutes(db: Db) {
           (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
         send_policy: (ws.config as { send_policy?: unknown } | undefined)?.send_policy ?? null,
         csat: (ws.config as { csat?: unknown } | undefined)?.csat ?? null,
+        auto_archive:
+          (ws.config as { auto_archive?: boolean } | undefined)?.auto_archive ?? null,
         event_token:
           (ws.config as { event_token?: string } | undefined)?.event_token ?? null,
       },

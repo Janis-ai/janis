@@ -913,8 +913,8 @@ export function InstructionsSection({
 }
 
 /** Satisfaction survey + resolution flow — the csat override card plus the
- *  auto-archive toggle that fires the survey when the customer confirms
- *  they're done. */
+ *  auto-archive override that fires the survey when the customer confirms
+ *  they're done. Both follow workspace defaults until overridden. */
 function SatisfactionSection({
   cfg,
   setCfg,
@@ -924,20 +924,47 @@ function SatisfactionSection({
   setCfg: (c: AgentConfig) => void;
   isAdmin: boolean;
 }) {
+  const { data: ws } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () =>
+      api<{ workspace: { auto_archive?: boolean | null } }>('/api/workspace'),
+  });
+  const wsDefault = ws?.workspace.auto_archive === true;
   return (
     <>
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
         <strong>Resolution</strong>
+        <div className="muted" style={{ fontSize: 12 }}>
+          Auto-archive signs off and closes the thread once the customer
+          confirms they're done — firing the CSAT survey. Overrides the
+          workspace default (currently {wsDefault ? 'on' : 'off'}) for this
+          agent.
+        </div>
         <ReadOnly off={!isAdmin}>
         <label className="check-label">
           <input
             type="checkbox"
-            checked={cfg.auto_archive === true}
-            onChange={(e) => setCfg({ ...cfg, auto_archive: e.target.checked || undefined })}
+            checked={cfg.auto_archive !== undefined}
+            onChange={(e) =>
+              setCfg({
+                ...cfg,
+                auto_archive: e.target.checked ? true : undefined,
+              })
+            }
           />
-          Auto-archive resolved chats — when the customer confirms they're done, the
-          agent signs off and archives the thread (fires the CSAT survey)
+          Override workspace default for this agent
         </label>
+        {cfg.auto_archive !== undefined && (
+          <select
+            value={cfg.auto_archive ? 'on' : 'off'}
+            onChange={(e) =>
+              setCfg({ ...cfg, auto_archive: e.target.value === 'on' })
+            }
+          >
+            <option value="on">On — sign off and archive when the customer confirms</option>
+            <option value="off">Off — the thread stays open</option>
+          </select>
+        )}
         </ReadOnly>
       </div>
       <SatisfactionCard cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
