@@ -349,6 +349,11 @@ export function DeployEscalation({
           </div>
         )}
       </div>
+      <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+        This sets the baseline — more alert kinds (sentiment, keywords, low
+        scores), Slack destinations, and rotation groups live in Agent
+        settings → Escalation.
+      </div>
       {err && <div className="error" style={{ marginTop: 8 }}>{err}</div>}
     </div>
 
