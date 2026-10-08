@@ -3372,6 +3372,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   const [newMsg, setNewMsg] = useState('');
   const [newExpectation, setNewExpectation] = useState('');
   const [err, setErr] = useState('');
+  const [confirmEl, confirm] = useConfirm();
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
 
@@ -3641,6 +3642,72 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   const batches = runsData?.batches ?? [];
   const suggestions = suggestionsData?.suggestions ?? [];
   const evalSuggestions = evalSugData?.suggestions ?? [];
+  // Actionable first: verified patches, then unverified patches, then
+  // hypotheses — so the bulk of a regression queue clears top-down.
+  const rankSug = (s: (typeof evalSuggestions)[number]) =>
+    s.verified && s.patch ? 0 : s.patch ? 1 : 2;
+  const evalSuggestionsSorted = [...evalSuggestions].sort((a, b) => rankSug(a) - rankSug(b));
+  const verifiedCount = evalSuggestions.filter((s) => s.verified && s.patch).length;
+
+  // Bulk triage. Applies run sequentially — each one rewrites agent
+  // config, so parallel writes could clobber each other. Dismissals only
+  // flip a row's own status, so they fan out.
+  const applyAllVerified = useMutation({
+    mutationFn: async () => {
+      for (const s of evalSuggestionsSorted.filter((s) => s.verified && s.patch)) {
+        await api(`/api/agents/${agentId}/eval-suggestions/${s.id}/apply`, { method: 'POST' });
+      }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['eval-suggestions', agentId] });
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
+    },
+    onError: (e) => setErr(e.message),
+  });
+  const dismissAllEval = useMutation({
+    mutationFn: () =>
+      Promise.all(
+        evalSuggestions.map((s) =>
+          api(`/api/agents/${agentId}/eval-suggestions/${s.id}/dismiss`, { method: 'POST' }),
+        ),
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['eval-suggestions', agentId] }),
+    onError: (e) => setErr(e.message),
+  });
+  const saveAllRescued = useMutation({
+    mutationFn: async () => {
+      for (const s of suggestions) {
+        await api(`/api/agents/${agentId}/tests`, {
+          method: 'POST',
+          body: JSON.stringify({ name: `${s.name} — rescue`, conversation_id: s.conversation_id }),
+        });
+      }
+    },
+    onSuccess: () => {
+      invalidate();
+      void qc.invalidateQueries({ queryKey: ['test-suggestions', agentId] });
+    },
+    onError: (e) => setErr(e.message),
+  });
+  const dismissAllRescued = useMutation({
+    mutationFn: () => {
+      const config = { ...(agent.config ?? {}) } as AgentConfig;
+      config.dismissed_test_suggestions = [
+        ...(config.dismissed_test_suggestions ?? []),
+        ...suggestions.map((s) => s.conversation_id),
+      ];
+      return api(`/api/agents/${agentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ config }),
+      });
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['test-suggestions', agentId] });
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+    },
+    onError: (e) => setErr(e.message),
+  });
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
@@ -3718,10 +3785,39 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
         <details className="card" style={{ padding: '10px 16px' }}>
           <summary style={{ cursor: 'pointer', fontSize: 13 }}>
             {evalSuggestions.length} suggested fix{evalSuggestions.length === 1 ? '' : 'es'}
-            <span className="muted"> — drafted from the last regressed run</span>
+            <span className="muted">
+              {' '}— {verifiedCount > 0 ? `${verifiedCount} verified · ` : ''}drafted from the last regressed run
+            </span>
           </summary>
+          <ReadOnly off={!isAdmin}>
+            <div className="row" style={{ gap: 8, marginTop: 10 }}>
+              {verifiedCount > 0 && (
+                <button
+                  className="btn sm"
+                  disabled={applyAllVerified.isPending || decideEvalSug.isPending}
+                  onClick={() => applyAllVerified.mutate()}
+                  title="Apply every suggestion whose patch was replay-verified against the suite"
+                >
+                  {applyAllVerified.isPending ? 'Applying…' : `Apply ${verifiedCount} verified`}
+                </button>
+              )}
+              <button
+                className="btn ghost sm"
+                disabled={dismissAllEval.isPending || decideEvalSug.isPending}
+                onClick={async () => {
+                  if (await confirm(`Dismiss all ${evalSuggestions.length} suggestions? Nothing is applied — the queue just clears.`))
+                    dismissAllEval.mutate();
+                }}
+              >
+                {dismissAllEval.isPending ? 'Dismissing…' : 'Dismiss all'}
+              </button>
+              <span className="muted" style={{ fontSize: 12 }}>
+                verified fixes replayed clean; the rest need a human look
+              </span>
+            </div>
+          </ReadOnly>
           <div style={{ marginTop: 8 }}>
-          {evalSuggestions.map((s) => {
+          {evalSuggestionsSorted.map((s) => {
             const KIND_LABEL: Record<string, string> = {
               knowledge_gap: 'knowledge gap',
               prompt_drift: 'prompt fix',
@@ -3818,6 +3914,28 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             {suggestions.length} rescued conversation{suggestions.length === 1 ? '' : 's'}
             <span className="muted"> — not yet covered by a scenario</span>
           </summary>
+          <ReadOnly off={!isAdmin}>
+            <div className="row" style={{ gap: 8, marginTop: 10 }}>
+              <button
+                className="btn sm"
+                disabled={saveAllRescued.isPending || saveSuggestion.isPending}
+                onClick={() => saveAllRescued.mutate()}
+                title="Save every listed conversation as scenarios — one per rescue point"
+              >
+                {saveAllRescued.isPending ? 'Saving…' : 'Save all as tests'}
+              </button>
+              <button
+                className="btn ghost sm"
+                disabled={dismissAllRescued.isPending || dismissSuggestion.isPending}
+                onClick={async () => {
+                  if (await confirm(`Dismiss all ${suggestions.length} rescued conversations? They won't be suggested again.`))
+                    dismissAllRescued.mutate();
+                }}
+              >
+                {dismissAllRescued.isPending ? 'Dismissing…' : 'Dismiss all'}
+              </button>
+            </div>
+          </ReadOnly>
           <div style={{ marginTop: 8 }}>
           {suggestions.map((s) => (
             <div
@@ -4185,6 +4303,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           </div>
         </div>
       )}
+      {confirmEl}
       </ReadOnly>
     </div>
   );
