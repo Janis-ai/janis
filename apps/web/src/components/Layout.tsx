@@ -229,32 +229,37 @@ function ContextSwitcher({
                         <span className="grow">{w.name}</span>
                       </button>
                     ))}
-                  <button type="button" className="ctx-item" onClick={onCreateWorkspace}>
-                    ＋ Create workspace
-                  </button>
-                  {data!.invites.map((inv) => (
-                    <div key={inv.id} className="ctx-item ctx-invite">
-                      <Building2 size={13} className="ctx-ic" />
-                      <span className="grow">Invited to {inv.workspace_name}</span>
-                      <button type="button" className="btn sm" onClick={() => onAnswerInvite(inv.id, 'accept')}>
-                        Join
-                      </button>
-                      <button type="button" className="btn sm" onClick={() => onAnswerInvite(inv.id, 'decline')}>
-                        Decline
-                      </button>
-                    </div>
-                  ))}
                   {data!.agent_invites.map((ai) => (
                     <button
                       key={ai.workspace_id}
                       type="button"
-                      className="ctx-item ctx-invite"
+                      className="ctx-item"
                       onClick={() => onSwitchWorkspace(ai.workspace_id)}
                     >
                       <Building2 size={13} className="ctx-ic" />
-                      <span className="grow">Join {ai.workspace_name} (agent access)</span>
+                      <span className="grow">{ai.workspace_name} · agent access</span>
                     </button>
                   ))}
+                  {data!.invites.length > 0 && <div className="ctx-sep" />}
+                  {data!.invites.map((inv) => (
+                    <div key={inv.id} className="ctx-invite">
+                      <div className="ctx-invite-msg">
+                        <Building2 size={13} className="ctx-ic" />
+                        <span>Invited to {inv.workspace_name}</span>
+                      </div>
+                      <div className="row" style={{ gap: 6, marginTop: 6 }}>
+                        <button type="button" className="btn sm grow" onClick={() => onAnswerInvite(inv.id, 'accept')}>
+                          Join
+                        </button>
+                        <button type="button" className="btn sm grow" onClick={() => onAnswerInvite(inv.id, 'decline')}>
+                          Decline
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  <button type="button" className="ctx-item" onClick={onCreateWorkspace}>
+                    ＋ Create workspace
+                  </button>
                 </div>
               )}
               <div className="ctx-sep" />

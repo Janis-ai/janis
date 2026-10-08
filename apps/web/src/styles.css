@@ -196,7 +196,8 @@ button, input, select, textarea { font: inherit; }
 .ctx-sub:hover { color: var(--text); }
 .ctx-sub .ctx-open { transform: rotate(90deg); }
 .ctx-sublist { border-left: 1px solid var(--border); margin: 0 9px 4px 17px; padding-left: 8px; }
-.ctx-invite { color: var(--muted); font-size: 12px; }
+.ctx-invite { color: var(--muted); font-size: 12px; padding: 4px 10px 8px; margin: 2px 0; }
+.ctx-invite-msg { display: flex; align-items: center; gap: 8px; color: var(--text); }
 .ctx-sep { height: 1px; background: var(--border); margin: 6px 4px; }
 .ctx-label {
   font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
