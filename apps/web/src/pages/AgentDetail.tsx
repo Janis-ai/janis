@@ -2168,7 +2168,7 @@ function AgentTeamCard({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
         <thead>
           <tr>
             <th style={th}>Member</th>
-            <th style={{ ...th, width: 96 }}>Alert settings</th>
+            <th style={{ ...th, width: 96 }}>Alerts</th>
             <th style={{ ...th, width: 200 }}>Role</th>
             <th style={{ ...th, width: 34 }} />
           </tr>
