@@ -1719,7 +1719,10 @@ function AgentNotifyOverride({ agent }: { agent: Agent }) {
   const qc = useQueryClient();
   const mine = members?.members.find((m) => m.user_id === me?.user.id);
   const [on, setOn] = useState<boolean | null>(null);
-  const [prefs, setPrefs] = useState({ push: true, email: true, sound: true });
+  // Tri-state like the admin editor: absent = inherit your own workspace
+  // prefs (seeded from the stored override only — not the effective value,
+  // so saving doesn't stamp explicit overrides over inherited keys).
+  const [prefs, setPrefs] = useState<{ push?: boolean; email?: boolean; sound?: boolean }>({});
   const [events, setEvents] = useState<Record<string, boolean>>({});
   const [msg, setMsg] = useState('');
 
@@ -1727,11 +1730,7 @@ function AgentNotifyOverride({ agent }: { agent: Agent }) {
     if (on !== null || !members) return;
     setOn(mine?.notify != null);
     const n = mine?.notify ?? {};
-    setPrefs({
-      push: n.push ?? me?.user.notify?.push ?? true,
-      email: n.email ?? me?.user.notify?.email ?? true,
-      sound: n.sound ?? me?.user.notify?.sound ?? true,
-    });
+    setPrefs({ push: n.push, email: n.email, sound: n.sound });
     setEvents((n as { events?: Record<string, boolean> }).events ?? {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [members]);
@@ -1782,19 +1781,26 @@ function AgentNotifyOverride({ agent }: { agent: Agent }) {
       {on && (
         <>
         <div className="row" style={{ marginTop: 8 }}>
-          {(['push', 'email', 'sound'] as const).map((k) => (
-            <label key={k} className="check-label">
-              <input
-                type="checkbox"
-                checked={prefs[k]}
+          {([['push', 'Web push'], ['email', 'Email'], ['sound', 'Alert sounds']] as const).map(([k, label]) => (
+            <span key={k} className="row" style={{ marginRight: 12, gap: 6 }}>
+              <span>{label}</span>
+              <select
+                value={prefs[k] === true ? 'on' : prefs[k] === false ? 'off' : 'inherit'}
                 onChange={(e) => {
-                  const next = { ...prefs, [k]: e.target.checked };
+                  const next = { ...prefs };
+                  const v = e.target.value;
+                  if (v === 'inherit') delete next[k];
+                  else next[k] = v === 'on';
                   setPrefs(next);
                   save.mutate({ ...next, events });
                 }}
-              />
-              {k === 'push' ? 'Web push' : k === 'email' ? 'Email' : 'Alert sounds'}
-            </label>
+                disabled={save.isPending}
+              >
+                <option value="inherit">Inherit</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+            </span>
           ))}
           {msg && <span className="muted">{msg}</span>}
         </div>
@@ -1836,10 +1842,13 @@ function MemberNotifyEditor({
   notify: AgentMember['notify'];
   onSaved: () => void;
 }) {
-  const [prefs, setPrefs] = useState({
-    push: notify?.push ?? true,
-    email: notify?.email ?? true,
-    sound: notify?.sound ?? true,
+  // Channel prefs are tri-state like events — absent = inherit the member's
+  // own workspace notify prefs. Seeding them `?? true` and always writing
+  // them would stamp explicit overrides on every save.
+  const [prefs, setPrefs] = useState<{ push?: boolean; email?: boolean; sound?: boolean }>({
+    push: notify?.push,
+    email: notify?.email,
+    sound: notify?.sound,
   });
   const [events, setEvents] = useState<Record<string, boolean>>(notify?.events ?? {});
   const [msg, setMsg] = useState('');
@@ -1874,19 +1883,26 @@ function MemberNotifyEditor({
         workspace notification settings (their Settings → Me); unset is on.
       </div>
       <div className="row">
-        {(['push', 'email', 'sound'] as const).map((k) => (
-          <label key={k} className="check-label" style={{ marginRight: 12 }}>
-            <input
-              type="checkbox"
-              checked={prefs[k]}
+        {([['push', 'Web push'], ['email', 'Email'], ['sound', 'Alert sounds']] as const).map(([k, label]) => (
+          <span key={k} className="row" style={{ marginRight: 12, gap: 6 }}>
+            <span>{label}</span>
+            <select
+              value={prefs[k] === true ? 'on' : prefs[k] === false ? 'off' : 'inherit'}
               onChange={(e) => {
-                const next = { ...prefs, [k]: e.target.checked };
+                const next = { ...prefs };
+                const v = e.target.value;
+                if (v === 'inherit') delete next[k];
+                else next[k] = v === 'on';
                 setPrefs(next);
                 save.mutate({ ...next, events });
               }}
-            />
-            {k === 'push' ? 'Web push' : k === 'email' ? 'Email' : 'Alert sounds'}
-          </label>
+              disabled={save.isPending}
+            >
+              <option value="inherit">Inherit</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </span>
         ))}
         {msg && <span className="muted">{msg}</span>}
       </div>
