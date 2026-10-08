@@ -1513,6 +1513,7 @@ function AgentProfileOverride({ agent }: { agent: Agent }) {
   const [on, setOn] = useState<boolean | null>(null);
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState('');
+  const [avatarUploading, setAvatarUploading] = useState(false);
   const [show, setShow] = useState(true);
   const [msg, setMsg] = useState('');
 
@@ -1542,10 +1543,17 @@ function AgentProfileOverride({ agent }: { agent: Agent }) {
   });
 
   const uploadAvatar = async (file: File) => {
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await fetch('/api/uploads', { method: 'POST', body: fd, credentials: 'include' });
-    if (res.ok) setAvatar(((await res.json()) as { url: string }).url);
+    setAvatarUploading(true);
+    setMsg('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/uploads', { method: 'POST', body: fd, credentials: 'include' });
+      if (res.ok) setAvatar(((await res.json()) as { url: string }).url);
+      else setMsg('Upload failed.');
+    } finally {
+      setAvatarUploading(false);
+    }
   };
 
   const baseName = me?.user.display_name || me?.user.name.split(' ')[0] || 'your profile name';
@@ -1580,12 +1588,16 @@ function AgentProfileOverride({ agent }: { agent: Agent }) {
               onChange={(e) => setName(e.target.value)}
               maxLength={80}
             />
-            <label className="btn" style={{ cursor: 'pointer' }}>
-              {avatar ? 'Change avatar' : 'Upload avatar'}
+            <label
+              className="btn"
+              style={{ cursor: avatarUploading ? 'default' : 'pointer', opacity: avatarUploading ? 0.6 : 1 }}
+            >
+              {avatarUploading ? 'Uploading…' : avatar ? 'Change avatar' : 'Upload avatar'}
               <input
                 type="file"
                 accept="image/*"
                 hidden
+                disabled={avatarUploading}
                 onChange={(e) => e.target.files?.[0] && void uploadAvatar(e.target.files[0])}
               />
             </label>
