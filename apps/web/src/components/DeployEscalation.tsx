@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Agent, AgentConfig } from '@janis/shared';
 import { api } from '../api/client';
@@ -351,8 +352,11 @@ export function DeployEscalation({
       </div>
       <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
         This sets the baseline — more alert kinds (sentiment, keywords, low
-        scores), Slack destinations, and rotation groups live in Agent
-        settings → Escalation.
+        scores), Slack destinations, and rotation groups live in{' '}
+        <Link to={`/agents/${agent.id}/settings?sub=escalation`}>
+          Agent settings → Escalation
+        </Link>
+        .
       </div>
       {err && <div className="error" style={{ marginTop: 8 }}>{err}</div>}
     </div>
@@ -376,7 +380,11 @@ export function DeployEscalation({
       </label>
       <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
         The survey question and thank-you inherit your workspace defaults —
-        per-agent overrides live in Agent settings → Escalation.
+        per-agent overrides live in{' '}
+        <Link to={`/agents/${agent.id}/settings?sub=escalation`}>
+          Agent settings → Escalation
+        </Link>
+        .
       </div>
     </div>
     </>
