@@ -46,6 +46,10 @@ as a push notification, and on the workspace Slack alert channel).
 - SSE check needs an existing conversation to trigger a bus event.
 - Slack features need SLACK_CLIENT_ID/SECRET/SIGNING_SECRET + a public API URL.
 - Devin preview proxies :5173 — API CORS echoes localhost/127.0.0.1 origins.
+- NEVER add visitor-visible notes/UI to communicate with the developer — chat
+  rails and widgets render to real users. Internal annotations (systemNote,
+  payload.internal) belong in the console only; anything on a visitor surface
+  must exist for the visitor's benefit.
 
 ## Gotchas
 - Repo lives at ~/repos/janis (moved out of iCloud Drive — sync was corrupting
