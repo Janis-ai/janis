@@ -357,6 +357,46 @@ describe('guardReplyLinks', () => {
     expect(r.stripped).toHaveLength(3);
   });
 
+  it('normalizes relative console paths into absolute links', async () => {
+    // Regression: the concierge hedged agent links as backticked relative
+    // paths (`/agents/id/behavior`) — invisible to LINK_RE, unclickable.
+    const exists = vi.fn(async () => true);
+    const r = await guardReplyLinks(
+      'see [Exp](/agents/586895f3-8285-4a95-ae2d-b18f389d838d/behavior) and `/agents/586895f3-8285-4a95-ae2d-b18f389d838d/knowledge` and /reports',
+      blessed,
+      { exists },
+    );
+    expect(r.text).toContain('[Exp](http://localhost:5173/agents/586895f3-8285-4a95-ae2d-b18f389d838d/behavior)');
+    expect(r.text).toContain(
+      '[`/agents/586895f3-8285-4a95-ae2d-b18f389d838d/knowledge`](http://localhost:5173/agents/586895f3-8285-4a95-ae2d-b18f389d838d/knowledge)',
+    );
+    expect(r.text).toContain('[`/reports`](http://localhost:5173/reports)');
+    expect(r.stripped).toHaveLength(0);
+    expect(exists).toHaveBeenCalledWith('agent', '586895f3-8285-4a95-ae2d-b18f389d838d', undefined);
+  });
+
+  it('strips an invalid relative console path after normalization', async () => {
+    const exists = vi.fn(async () => false);
+    const r = await guardReplyLinks(
+      'see `/agents/586895f3-8285-4a95-ae2d-b18f389d838d/behavior` here',
+      blessed,
+      { exists },
+    );
+    expect(r.stripped).toHaveLength(1);
+    expect(r.text).toBe('see `/agents/586895f3-8285-4a95-ae2d-b18f389d838d/behavior` here');
+  });
+
+  it('does not rewrite paths inside absolute URLs or non-console roots', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+    const r = await guardReplyLinks(
+      'docs https://example.com/agents/guide and api /v1/events',
+      blessed,
+    );
+    expect(r.text).toContain('https://example.com/agents/guide');
+    expect(r.text).toContain('/v1/events');
+    expect(r.text).not.toContain('localhost:5173/v1');
+  });
+
   it('unwraps markdown links emptied by a strip', async () => {
     const r = await guardReplyLinks('see [this page](https://bogus.io/deep/path) now', blessed);
     expect(r.text).toBe('see this page now');

@@ -614,7 +614,7 @@ export function systemPrompt(
   } else {
     parts.push(
       opts.operator
-        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. There is no human tier above you: never emit [HANDOFF], [OFFER_HUMAN] or [CANCEL_HANDOFF] and never offer to fetch a teammate — if something genuinely needs a human, say plainly what needs doing. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When you link to a console page, link it (https://app.janis.ai/…) — never leave a destination as bare bold text; use a URL a tool returned verbatim, or build it from ids in your context: agents are listed as Name {agent-id} (kind:{channel-id}, …), and current_agent_id covers the selected agent. Agent pages live at /agents/{agent-id}/{section} — sections: behavior (?sub=instructions, greeting, components, satisfaction — sidebar label 'Experience'), knowledge (?sub=sources, gaps — articles manage as a row inside Sources), channels (/{channel-id} for one channel), integrations ('Actions'), components, tests ('Test'), settings (?sub=general, escalation, team) — plus /agents/{agent-id}/inbox (/{conv-id} for a thread), /contacts, /campaigns, /reports; workspace-wide: /conversations (/{conv-id}), /contacts (/{id}), /campaigns, /reports, /errors, /billing, /settings?section=workspace|me|experience|escalation|team, /docs, and setup steps at /agents/new/{agent-id}?step=teach|guide|abilities|try|deploy. Every {…} slot carries a real uuid from your context — substitute it, never emit the placeholder itself or a slug or a kind name in an id slot. When the operator asks for a link, give the deep link — do not reply with click-path instructions instead. Never point the operator at a Google search or external docs for console navigation — you are the product's help desk; if you truly cannot construct a URL, say so plainly rather than outsourcing the answer to a search engine."
+        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. There is no human tier above you: never emit [HANDOFF], [OFFER_HUMAN] or [CANCEL_HANDOFF] and never offer to fetch a teammate — if something genuinely needs a human, say plainly what needs doing. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When you link to a console page, link it (https://app.janis.ai/…) — never leave a destination as bare bold text; use a URL a tool returned verbatim, or build it from ids in your context: agents are listed as Name {agent-id} (kind:{channel-id}, …), and current_agent_id covers the selected agent. Agent pages live at /agents/{agent-id}/{section} — sections: behavior (?sub=instructions, greeting, components, satisfaction — sidebar label 'Experience'), knowledge (?sub=sources, gaps — articles manage as a row inside Sources), channels (/{channel-id} for one channel), integrations ('Actions'), components, tests ('Test'), settings (?sub=general, escalation, team) — plus /agents/{agent-id}/inbox (/{conv-id} for a thread), /contacts, /campaigns, /reports; workspace-wide: /conversations (/{conv-id}), /contacts (/{id}), /campaigns, /reports, /errors, /billing, /settings?section=workspace|me|experience|escalation|team, /docs, and setup steps at /agents/new/{agent-id}?step=teach|guide|abilities|try|deploy. Every {…} slot carries a real uuid from your context — substitute it, never emit the placeholder itself or a slug or a kind name in an id slot. The console is a single-page app but every route above is a real browser deep link — never claim deep links don't exist or that the address bar can't reach them, and emit the full https URL, not a relative path or a code span. When the operator asks for a link, give the deep link — do not reply with click-path instructions instead. Never point the operator at a Google search or external docs for console navigation — you are the product's help desk; if you truly cannot construct a URL, say so plainly rather than outsourcing the answer to a search engine."
         : '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, or mild pushback, and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.',
     );
     parts.push(
@@ -900,6 +900,27 @@ export async function guardReplyLinks(
       .replace(/\[([^\]]*)\]\(\s*\)/g, '$1') // markdown link emptied by a strip
       .replace(/ {2,}/g, ' ')
       .replace(/ +([.,;:!?])/g, '$1');
+
+  // Relative console paths are how the model hedges — `[x](/agents/id)`,
+  // `` `/agents/id/…` `` or a bare `/agents/…` dodge LINK_RE and ship as
+  // unclickable code spans. Normalize them into absolute links up front so
+  // the console checks below judge route + ids like any emitted URL.
+  const consoleOrigin = (() => {
+    try {
+      return new URL(env.webOrigin).origin;
+    } catch {
+      return 'https://app.janis.ai';
+    }
+  })();
+  const consoleRoots = [...CONSOLE_PAGES, 'agents', 'help', 'llm'].join('|');
+  text = text.replace(
+    new RegExp(`\\]\\(/((?:${consoleRoots})(?:[/?#][^\\s)]*)?)\\)`, 'g'),
+    `](${consoleOrigin}/$1)`,
+  );
+  text = text.replace(
+    new RegExp(`(?<![\\w./:(])\`?(/(?:${consoleRoots})\\b[\\w\\-/{}?=&%#<>~]*)\`?`, 'g'),
+    (_m, p: string) => `[\`${p}\`](${consoleOrigin}${p})`,
+  );
 
   // Route-template placeholders shipped verbatim — <id>, %3Cid%3E, or
   // {agent-id} inside a URL. LINK_RE stops at '<' so it can't see these;
