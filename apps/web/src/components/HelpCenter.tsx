@@ -466,7 +466,7 @@ export function HelpCenter({ agent }: { agent: Agent }) {
         ),
       )}
       {articles.length === 0 && !editing && (
-        <div className="card muted">No articles yet — publish your FAQ here and the agent will answer from it too.</div>
+        <div className="card muted" style={{ marginTop: 10 }}>No articles yet — publish your FAQ here and the agent will answer from it too.</div>
       )}
     </div>
   );
