@@ -1792,7 +1792,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'update_agent',
     description:
-      "Propose an agent settings change in the visitor's workspace — rename, greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes, auto-assign, widget accent colour, or email alerts. Posts an approval card — nothing changes until the visitor approves. For chat components/widgets the agent shows in conversation, use save_widget instead. Admin-only.",
+      "Propose an agent settings change in the visitor's workspace — rename, greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes, auto-assign, widget accent colour, or email alerts. Posts an approval card — nothing changes until the visitor approves. Pass ONLY the params the visitor actually asked to change — every param is a real write; filling unrequested fields with current or guessed values makes an unsafe card. For how-do-I questions, answer with a link to the settings page instead of proposing a card. For chat components/widgets the agent shows in conversation, use save_widget instead. Admin-only.",
     params: {
       agent: 'agent name (required)',
       name: 'new agent name — renames the agent',
@@ -1892,12 +1892,17 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const emailAlerts = args.email_alerts !== undefined ? bool(args.email_alerts) : undefined;
       if (emailAlerts !== undefined) display.email_alerts = emailAlerts ? 'on' : 'off';
       const willRename = rename !== '' && rename !== agent.name;
-      if (
-        !Object.keys(patch).length &&
-        !willRename &&
-        args.accent === undefined &&
-        emailAlerts === undefined
-      ) {
+      const fieldCount =
+        Object.keys(patch).length +
+        (willRename ? 1 : 0) +
+        (args.accent !== undefined ? 1 : 0) +
+        (emailAlerts !== undefined ? 1 : 0);
+      if (fieldCount > 5) {
+        return JSON.stringify({
+          error: `${fieldCount} settings in one card — propose only the fields the visitor asked to change; re-try with the requested subset`,
+        });
+      }
+      if (fieldCount === 0) {
         return JSON.stringify({
           error: 'nothing to change — pass at least one of name, greeting, greeting_enabled, quick_replies, csat_*, sla_minutes, auto_assign, accent, email_alerts',
         });
