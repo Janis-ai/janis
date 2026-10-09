@@ -3643,8 +3643,16 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     ringScenario(el);
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [tests.length, hash]);
-  const passed = tests.filter((t) => t.last_run?.passed === true).length;
-  const failed = tests.filter((t) => t.last_run?.passed === false).length;
+  // The human verdict outranks the machine verdict everywhere — a row
+  // the owner approved is 'approved' even if its last replay failed, and
+  // a rejected row is 'rejected' even if the replay passed. Same
+  // precedence the ScenarioRow badge uses.
+  const isFailing = (t: AgentTest) =>
+    t.human_result === 'fail' || (t.human_result !== 'pass' && t.last_run?.passed === false);
+  const isPassing = (t: AgentTest) =>
+    t.human_result === 'pass' || (t.human_result !== 'fail' && t.last_run?.passed === true);
+  const passed = tests.filter(isPassing).length;
+  const failed = tests.filter(isFailing).length;
   const batches = runsData?.batches ?? [];
   const suggestions = suggestionsData?.suggestions ?? [];
   const evalSuggestions = evalSugData?.suggestions ?? [];
@@ -3718,8 +3726,6 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   // List filtering/sorting. A conv-split group counts as one item — if
   // any member matches the filter the group stays whole, because "Delete
   // all" on a filtered-down group would delete rows you can't see.
-  const isFailing = (t: AgentTest) => t.last_run?.passed === false || t.human_result === 'fail';
-  const isPassing = (t: AgentTest) => !isFailing(t) && (t.last_run?.passed === true || t.human_result === 'pass');
   const matchesTestFilter = (t: AgentTest) =>
     testFilter === 'all' ? true
     : testFilter === 'failing' ? isFailing(t)
@@ -4337,9 +4343,9 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                   <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
                     {ts[0].name.replace(/\s+#\d+$/, '')} — {ts.length} tests
                     <span className="muted" style={{ fontWeight: 400 }}>
-                      {' '}· {ts.filter((x) => x.last_run?.passed === true).length} passing
-                      {ts.some((x) => x.last_run?.passed === false) &&
-                        ` · ${ts.filter((x) => x.last_run?.passed === false).length} failing`}
+                      {' '}· {ts.filter(isPassing).length} passing
+                      {ts.some(isFailing) &&
+                        ` · ${ts.filter(isFailing).length} failing`}
                     </span>
                   </summary>
                   <div className="row" style={{ margin: '8px 0 8px 16px' }}>
