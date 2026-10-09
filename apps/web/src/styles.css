@@ -613,8 +613,10 @@ button, input, select, textarea { font: inherit; }
   container-type: inline-size;
 }
 /* Body content indents under the title — caret + name hold the left
-   edge, everything below sits past the caret. */
-.scenario-card > :not(:first-child) { margin-left: 20px; }
+   edge, everything below sits past the caret. 28px = the 18px caret
+   slot + the header row's 10px gap, so body text starts flush with
+   the title. */
+.scenario-card > :not(:first-child) { margin-left: 28px; }
 /* Narrow cards: action buttons collapse to icons + tooltips. */
 @container (max-width: 460px) {
   .scenario-card .scenario-btn-text { display: none; }
@@ -625,7 +627,7 @@ button, input, select, textarea { font: inherit; }
    the native details marker (the row uses the full-size ▶/▼ glyphs —
    the SMALL variants render tiny at any font size), muted until hover. */
 .scenario-fold {
-  background: none; border: 0; padding: 0 7px 0 0; margin: 0;
+  background: none; border: 0; padding: 0; margin: 0; width: 18px;
   cursor: pointer; color: var(--muted); font-size: 12px; line-height: 1;
 }
 .scenario-fold:hover { color: var(--text); }
