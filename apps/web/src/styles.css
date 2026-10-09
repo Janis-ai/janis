@@ -612,6 +612,9 @@ button, input, select, textarea { font: inherit; }
   flex-direction: column; align-items: stretch; flex-wrap: nowrap;
   container-type: inline-size;
 }
+/* Body content indents under the title — caret + name hold the left
+   edge, everything below sits past the caret. */
+.scenario-card > :not(:first-child) { margin-left: 20px; }
 /* Narrow cards: action buttons collapse to icons + tooltips. */
 @container (max-width: 460px) {
   .scenario-card .scenario-btn-text { display: none; }
