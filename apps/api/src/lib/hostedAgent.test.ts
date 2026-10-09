@@ -324,6 +324,28 @@ describe('guardReplyLinks', () => {
     expect(exists).toHaveBeenCalledWith('channel', '1fb291f8-c3f9-422d-bf3d-09766829efb6', '586895f3-8285-4a95-ae2d-b18f389d838d');
   });
 
+  it('keeps builder links — /agents/new and /agents/new/<id>?step=teach', async () => {
+    const exists = vi.fn(async () => true);
+    const r = await guardReplyLinks(
+      'start at https://app.janis.ai/agents/new then [Teach it](https://app.janis.ai/agents/new/586895f3-8285-4a95-ae2d-b18f389d838d?step=teach)',
+      blessed,
+      { exists },
+    );
+    expect(r.stripped).toHaveLength(0);
+    expect(r.text).toContain('/agents/new/586895f3-8285-4a95-ae2d-b18f389d838d?step=teach');
+    expect(exists).toHaveBeenCalledWith('agent', '586895f3-8285-4a95-ae2d-b18f389d838d', undefined);
+  });
+
+  it('strips /agents/new/<id> when the id is not a real agent', async () => {
+    const exists = vi.fn(async () => false);
+    const r = await guardReplyLinks(
+      'see https://app.janis.ai/agents/new/a630324e-25c7-4ec8-8677-356739906aa3?step=teach',
+      blessed,
+      { exists },
+    );
+    expect(r.stripped).toHaveLength(1);
+  });
+
   it('unwraps markdown links emptied by a strip', async () => {
     const r = await guardReplyLinks('see [this page](https://bogus.io/deep/path) now', blessed);
     expect(r.text).toBe('see this page now');

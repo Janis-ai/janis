@@ -778,6 +778,11 @@ function consoleSlots(pathname: string): ConsoleSlot[] | null {
   if (!a) return [];
   if (a === 'agents') {
     if (b === undefined) return [];
+    // /agents/new starts the builder; /agents/new/<id>?step=… resumes it.
+    if (b === 'new') {
+      if (c === undefined) return [];
+      return segs.length === 3 && isId(c) ? [{ kind: 'agent', id: c }] : null;
+    }
     if (!isId(b)) return null;
     if (c === undefined) return [{ kind: 'agent', id: b }];
     if (isId(c)) return null; // /agents/<id>/<id> is not a route
@@ -802,14 +807,19 @@ function consoleSlots(pathname: string): ConsoleSlot[] | null {
 /** DB-backed id verifier for console links — a uuid is only linkable in a
  *  slot when a real row of that kind exists in the workspace (nested slots
  *  must also belong to the claimed parent agent). */
-function consoleIdChecker(db: Db, workspaceId: string) {
+function consoleIdChecker(db: Db, workspaceId: string, opts?: { crossWorkspace?: boolean }) {
+  // Operator runs (the concierge copilot) link the visitor to agents in
+  // THEIR workspace, not the concierge's — a scoped check would strip
+  // every deep link. Row existence is still verified; the model can't
+  // mint a uuid that resolves, and a customer-facing run keeps the scope.
+  const scope = (col: any) => (opts?.crossWorkspace ? [] : [eq(col, workspaceId)]);
   return async (kind: ConsoleSlot['kind'], id: string, parent?: string): Promise<boolean> => {
     try {
       if (kind === 'agent') {
         const r = await db
           .select({ id: agents.id })
           .from(agents)
-          .where(and(eq(agents.id, id), eq(agents.workspaceId, workspaceId)))
+          .where(and(eq(agents.id, id), ...scope(agents.workspaceId)))
           .limit(1);
         return r.length > 0;
       }
@@ -820,7 +830,7 @@ function consoleIdChecker(db: Db, workspaceId: string) {
           .where(
             and(
               eq(channels.id, id),
-              eq(channels.workspaceId, workspaceId),
+              ...scope(channels.workspaceId),
               ...(parent ? [eq(channels.agentId, parent)] : []),
             ),
           )
@@ -831,7 +841,7 @@ function consoleIdChecker(db: Db, workspaceId: string) {
         const r = await db
           .select({ id: contacts.id })
           .from(contacts)
-          .where(and(eq(contacts.id, id), eq(contacts.workspaceId, workspaceId)))
+          .where(and(eq(contacts.id, id), ...scope(contacts.workspaceId)))
           .limit(1);
         return r.length > 0;
       }
@@ -843,7 +853,7 @@ function consoleIdChecker(db: Db, workspaceId: string) {
         .where(
           and(
             eq(conversations.id, id),
-            eq(agents.workspaceId, workspaceId),
+            ...scope(agents.workspaceId),
             ...(parent ? [eq(conversations.agentId, parent)] : []),
           ),
         )
@@ -1186,6 +1196,15 @@ const LINK_GUARD_RETRY =
   '(e.g. https://www.google.com/search?q=your+search) — never guess a deep link. ' +
   'If you have no link to share, tell the customer where to look instead.';
 
+/** Operator variant: the visitor is a console user — a stripped link should
+ *  make them rebuild from the documented routes, never retreat to a search
+ *  engine (that advice would re-teach the exact failure being guarded). */
+const LINK_GUARD_RETRY_OPERATOR =
+  'Your previous draft included console links that could not be verified — they were removed, so the reply now points at nothing. ' +
+  'Rewrite it: build console links only from the documented route patterns and ids in your context ' +
+  '(a real uuid in every id slot — never a slug or name), or tell the operator where to look in plain words. ' +
+  'Never substitute a search engine or external docs for console navigation.';
+
 /** complete() + link guard; if the guard stripped dead links, give the model
  * one retry with an explanation so the rewrite doesn't promise a link that
  * isn't there. Token counts are summed across both calls. */
@@ -1219,7 +1238,10 @@ export async function generateReply(
   // Console links check the DB — a uuid the model saw in the wrong slot
   // (a visitor id dropped into /conversations/) fails here where corpus
   // membership alone would pass it.
-  const exists = ctx?.db && ctx.workspaceId ? consoleIdChecker(ctx.db, ctx.workspaceId) : undefined;
+  const exists =
+    ctx?.db && ctx.workspaceId
+      ? consoleIdChecker(ctx.db, ctx.workspaceId, { crossWorkspace: ctx.identity?.operator })
+      : undefined;
   const guard = await guardReplyLinks(draft, allBlessed, { ids, exists });
   if (!guard.stripped.length) {
     return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, ...guard };
@@ -1230,7 +1252,7 @@ export async function generateReply(
     [
       ...msgs,
       { role: 'assistant', content: draft },
-      { role: 'user', content: LINK_GUARD_RETRY },
+      { role: 'user', content: ctx?.identity?.operator ? LINK_GUARD_RETRY_OPERATOR : LINK_GUARD_RETRY },
     ],
     tools,
     secrets,
