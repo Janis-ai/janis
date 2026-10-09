@@ -88,6 +88,7 @@ export function HelpCenter({ agent }: { agent: Agent }) {
     },
     onError: (e) => setDraftErr(e instanceof Error ? e.message : 'failed'),
   });
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [domainDraft, setDomainDraft] = useState<string | null>(null);
   const [domainMsg, setDomainMsg] = useState('');
   const [helpUrlDraft, setHelpUrlDraft] = useState<string | null>(null);
@@ -234,99 +235,100 @@ export function HelpCenter({ agent }: { agent: Agent }) {
 
   return (
     <div>
-      <div className="card" style={{ marginTop: 12 }}>
-        <div className="row" style={{ justifyContent: 'space-between' }}>
-          <div>
-            <strong>Articles you publish for customers</strong>
-            <p className="muted" style={{ margin: '6px 0 0' }}>
-              Customers can self-serve these at{' '}
-              <a href={publicUrl} target="_blank" rel="noreferrer">{publicUrl}</a>
-              . Published articles also feed the agent's knowledge — answers
-              never contradict the public KB.
-            </p>
-            <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
-              The chat widget shows a "Browse help articles" link once at least
-              one article is published. You can hide that link per widget under
-              Channels → appearance, or point it at an external help center
-              below — neither changes what the agent knows.
-              {helpDomain
-                ? ` Serving at https://${helpDomain} — CNAME it at ${window.location.host}.${agentDomain ? ' (agent override)' : ' (workspace domain)'}`
-                : ` Set a custom domain under Settings → Workspace, or override it just for this agent below. Point the domain's CNAME at ${window.location.host} first, then set it here.`}
-            </p>
-            <div className="row" style={{ marginTop: 8, gap: 8 }}>
-              <input
-                className="input"
-                style={{ maxWidth: 280 }}
-                placeholder="help.yourdomain.com — optional"
-                value={domainDraft ?? agentDomain ?? ''}
-                onChange={(e) => setDomainDraft(e.target.value)}
-              />
-              <button
-                className="btn sm"
-                disabled={saveDomain.isPending || (domainDraft === null || (domainDraft.trim().toLowerCase() || null) === agentDomain)}
-                onClick={() => {
-                  const v = (domainDraft ?? '').trim().toLowerCase() || null;
-                  saveDomain.mutate(v);
-                  setDomainDraft(null);
-                }}
-              >
-                {saveDomain.isPending ? 'Saving…' : 'Save domain'}
-              </button>
-              {domainMsg && <span className="muted" style={{ fontSize: 12 }}>{domainMsg}</span>}
-            </div>
-            {(agentDomain || ws?.workspace.help_domain) && (
-              <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                {agentDomain
-                  ? ws?.workspace.help_domain
-                    ? `Overrides the workspace domain (${ws.workspace.help_domain}) for this agent. Clear to inherit it.`
-                    : 'Overrides the workspace default for this agent. Clear to inherit.'
-                  : `Workspace domain applies (${ws?.workspace.help_domain}) — set one here to override it for this agent.`}
-              </p>
-            )}
-            <p className="muted" style={{ margin: '10px 0 0', fontSize: 12 }}>
-              <strong>External help link</strong> — already run a help center
-              elsewhere (Zendesk, Intercom, your own docs)? Set it here and the
-              widget's help button goes there instead of this center, even with
-              no published articles. Clear it to use this center again.
-            </p>
-            <div className="row" style={{ marginTop: 8, gap: 8 }}>
-              <input
-                className="input"
-                style={{ maxWidth: 280 }}
-                placeholder="https://help.yourcompany.com — optional"
-                value={helpUrlDraft ?? agentHelpUrl ?? ''}
-                onChange={(e) => setHelpUrlDraft(e.target.value)}
-              />
-              <button
-                className="btn sm"
-                disabled={saveHelpUrl.isPending || (helpUrlDraft === null || (helpUrlDraft.trim() || null) === agentHelpUrl)}
-                onClick={() => {
-                  const v = (helpUrlDraft ?? '').trim() || null;
-                  saveHelpUrl.mutate(v);
-                  setHelpUrlDraft(null);
-                }}
-              >
-                {saveHelpUrl.isPending ? 'Saving…' : 'Save link'}
-              </button>
-              {helpUrlMsg && <span className="muted" style={{ fontSize: 12 }}>{helpUrlMsg}</span>}
-            </div>
-          </div>
-          <div className="row" style={{ gap: 8 }}>
-            <button className="btn" onClick={() => setDraftOpen((o) => !o)}>
-              Draft from a source
-            </button>
-            <button
-              className="btn primary"
-              onClick={() => {
-                setForm(emptyForm);
-                setEditing('new');
-              }}
-            >
-              New article
-            </button>
-          </div>
+      <div className="row" style={{ marginTop: 8, justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <span className="muted" style={{ fontSize: 12 }}>
+          Live at{' '}
+          <a href={publicUrl} target="_blank" rel="noreferrer">{publicUrl}</a>
+          {' '}— published articles feed the agent's knowledge too.{' '}
+          <button className="link small muted" onClick={() => setSettingsOpen((o) => !o)}>
+            {settingsOpen ? '▾' : '▸'} Publishing settings
+          </button>
+        </span>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn" onClick={() => setDraftOpen((o) => !o)}>
+            Draft from a source
+          </button>
+          <button
+            className="btn primary"
+            onClick={() => {
+              setForm(emptyForm);
+              setEditing('new');
+            }}
+          >
+            New article
+          </button>
         </div>
       </div>
+
+      {settingsOpen && (
+        <div className="card" style={{ marginTop: 8 }}>
+          <div className="muted" style={{ fontSize: 12 }}>
+            The widget shows a "Browse help articles" link once an article is
+            published — hide it per widget under Channels → appearance, or point
+            it at an external help center below.
+            {helpDomain
+              ? ` Serving at https://${helpDomain} — CNAME it at ${window.location.host}.${agentDomain ? ' (agent override)' : ' (workspace domain)'}`
+              : ''}
+          </div>
+          <div className="row" style={{ marginTop: 8, gap: 8 }}>
+            <input
+              className="input"
+              style={{ maxWidth: 280 }}
+              placeholder="Custom domain — help.yourdomain.com"
+              value={domainDraft ?? agentDomain ?? ''}
+              onChange={(e) => setDomainDraft(e.target.value)}
+            />
+            <button
+              className="btn sm"
+              disabled={saveDomain.isPending || (domainDraft === null || (domainDraft.trim().toLowerCase() || null) === agentDomain)}
+              onClick={() => {
+                const v = (domainDraft ?? '').trim().toLowerCase() || null;
+                saveDomain.mutate(v);
+                setDomainDraft(null);
+              }}
+            >
+              {saveDomain.isPending ? 'Saving…' : 'Save domain'}
+            </button>
+            {domainMsg && <span className="muted" style={{ fontSize: 12 }}>{domainMsg}</span>}
+          </div>
+          {!helpDomain && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              CNAME the domain at {window.location.host} first; a workspace-wide
+              default lives under Settings → Workspace.
+            </div>
+          )}
+          {(agentDomain || ws?.workspace.help_domain) && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              {agentDomain
+                ? ws?.workspace.help_domain
+                  ? `Overrides the workspace domain (${ws.workspace.help_domain}) for this agent. Clear to inherit it.`
+                  : 'Overrides the workspace default for this agent. Clear to inherit.'
+                : `Workspace domain applies (${ws?.workspace.help_domain}) — set one here to override it for this agent.`}
+            </div>
+          )}
+          <div className="row" style={{ marginTop: 8, gap: 8 }}>
+            <input
+              className="input"
+              style={{ maxWidth: 280 }}
+              placeholder="External help center URL — optional"
+              value={helpUrlDraft ?? agentHelpUrl ?? ''}
+              onChange={(e) => setHelpUrlDraft(e.target.value)}
+            />
+            <button
+              className="btn sm"
+              disabled={saveHelpUrl.isPending || (helpUrlDraft === null || (helpUrlDraft.trim() || null) === agentHelpUrl)}
+              onClick={() => {
+                const v = (helpUrlDraft ?? '').trim() || null;
+                saveHelpUrl.mutate(v);
+                setHelpUrlDraft(null);
+              }}
+            >
+              {saveHelpUrl.isPending ? 'Saving…' : 'Save link'}
+            </button>
+            {helpUrlMsg && <span className="muted" style={{ fontSize: 12 }}>{helpUrlMsg}</span>}
+          </div>
+        </div>
+      )}
 
       {draftOpen && (
         <div className="card">
@@ -428,32 +430,38 @@ export function HelpCenter({ agent }: { agent: Agent }) {
         editing !== 'new' && editing?.id === a.id ? (
           <div key={a.id}>{renderForm(`Edit — ${a.title}`)}</div>
         ) : (
-          <div key={a.id} className="card">
-            <div className="row" style={{ justifyContent: 'space-between' }}>
-              <div>
-                <strong>{a.title}</strong>
-                <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>
-                  {a.category} · {a.status}
-                  {a.slug ? ` · /${a.slug}` : ''}
-                  {a.published_at ? ` · published ${new Date(a.published_at).toLocaleDateString()}` : ''}
-                </span>
-              </div>
-              <div className="row">
-                <button className="btn sm" onClick={() => toggle.mutate(a)}>
-                  {a.status === 'published' ? 'Unpublish' : 'Publish'}
-                </button>
-                <button
-                  className="btn sm"
-                  onClick={() => {
-                    setForm(fromArticle(a));
-                    setEditing(a);
-                  }}
-                >
-                  Edit
-                </button>
-                <button className="btn sm danger" onClick={() => remove.mutate(a)}>Delete</button>
-              </div>
-            </div>
+          <div key={a.id} className="row" style={{ marginTop: 6, fontSize: 13 }}>
+            <span className="grow">
+              <strong>{a.title}</strong>
+              <span className="muted">
+                {' '}· {a.category} · {a.status}
+                {a.slug ? ` · /${a.slug}` : ''}
+              </span>
+            </span>
+            {a.status === 'published' && (
+              <a
+                className="btn sm"
+                href={`${publicUrl}/${a.slug ?? a.id}`}
+                target="_blank"
+                rel="noreferrer"
+                title="Open the published page"
+              >
+                View ↗
+              </a>
+            )}
+            <button
+              className="btn sm"
+              onClick={() => {
+                setForm(fromArticle(a));
+                setEditing(a);
+              }}
+            >
+              Edit
+            </button>
+            <button className="btn sm" onClick={() => toggle.mutate(a)}>
+              {a.status === 'published' ? 'Unpublish' : 'Publish'}
+            </button>
+            <button className="btn sm danger" onClick={() => remove.mutate(a)}>Delete</button>
           </div>
         ),
       )}

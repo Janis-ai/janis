@@ -16,7 +16,6 @@ import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, 
 import { AgentChannels } from '../components/AgentChannels';
 import { MemberGroups } from '../components/MemberGroups';
 import { MemberCell, TeamRow, TeamTable, teamTd } from '../components/TeamTable';
-import { HelpCenter } from '../components/HelpCenter';
 import { SourceList } from '../components/SourceList';
 import { AutosizeText, timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
@@ -98,9 +97,8 @@ const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: b
   knowledge: [
     { key: 'sources', label: 'Sources' },
     { key: 'gaps', label: 'Gaps' },
-    // "Articles" — not "help center": this is where the operator writes
-    // for their customers, not where they get help themselves.
-    { key: 'articles', label: 'Articles' },
+    // No Articles tab — the Sources list owns an expandable Articles row
+    // with the full manager embedded; a second tab duplicated it.
   ],
   settings: [
     { key: 'general', label: 'General' },
@@ -162,7 +160,8 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     websites: 'sources',
     files: 'sources',
     text: 'sources',
-    help: 'articles',
+    help: 'sources',
+    articles: 'sources',
     replies: 'escalation',
   };
   const subKey = subParam ? (LEGACY_SUBS[subParam] ?? subParam) : subParam;
@@ -462,34 +461,6 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
             />
           )}
           {sub === 'gaps' && <KnowledgeGaps agentId={agent.id} config={agent.config ?? {}} />}
-          {sub === 'articles' && (
-            <>
-              <label
-                className="row muted"
-                style={{ fontSize: 12, marginTop: 10, gap: 6, cursor: 'pointer' }}
-              >
-                <input
-                  type="checkbox"
-                  checked={!!cfg.builder?.include_drafts_in_test}
-                  disabled={update.isPending}
-                  onChange={(e) => {
-                    const config: AgentConfig = {
-                      ...cfg,
-                      builder: {
-                        ...cfg.builder,
-                        include_drafts_in_test: e.target.checked,
-                      },
-                    };
-                    setCfg(config);
-                    update.mutate({ config });
-                  }}
-                />
-                Include draft articles in test chats — production always
-                injects published only
-              </label>
-              <HelpCenter agent={agent} />
-            </>
-          )}
         </>
       )}
       {section === 'settings' && (

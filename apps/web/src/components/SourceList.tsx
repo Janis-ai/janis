@@ -242,19 +242,6 @@ export function SourceList({
       api(`/api/agents/${agentId}/knowledge/${fileId}`, { method: 'DELETE' }),
     onSuccess: invalidate,
   });
-  const toggleArticle = useMutation({
-    mutationFn: (a: HelpArticle) =>
-      api(`/api/articles/${a.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status: a.status === 'published' ? 'draft' : 'published' }),
-      }),
-    onSuccess: invalidate,
-  });
-  const removeArticle = useMutation({
-    mutationFn: (a: HelpArticle) => api(`/api/articles/${a.id}`, { method: 'DELETE' }),
-    onSuccess: invalidate,
-  });
-
   const submitSmart = () => {
     const v = input.trim();
     if (!v) return;
@@ -605,44 +592,6 @@ export function SourceList({
           </span>
           <span className="muted">{articlesOpen ? '▾' : '▸'}</span>
         </button>
-        {articlesOpen && (
-          <div style={{ marginTop: 8 }}>
-            {articles.map((a) => (
-              <div key={a.id} className="row muted" style={{ marginTop: 6, fontSize: 13 }}>
-                <span className="grow">
-                  {a.title}
-                  <span className="muted">
-                    {' '}· {a.status} · ~{tok(a.body.length)} tok
-                  </span>
-                </span>
-                {isAdmin && (
-                  <>
-                    <button
-                      className="btn sm"
-                      onClick={() => toggleArticle.mutate(a)}
-                      disabled={toggleArticle.isPending}
-                    >
-                      {a.status === 'published' ? 'Unpublish' : 'Publish'}
-                    </button>
-                    <button
-                      className="btn danger sm"
-                      aria-label="Delete article"
-                      onClick={() => removeArticle.mutate(a)}
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </>
-                )}
-              </div>
-            ))}
-            {articles.length === 0 && (
-              <div className="muted" style={{ fontSize: 12 }}>
-                No articles yet — articles are public help pages your agent also
-                answers from.
-              </div>
-            )}
-          </div>
-        )}
         {articlesOpen && articlesExtras}
         {articlesOpen && agent && (
           <div style={{ marginTop: 8 }}>
