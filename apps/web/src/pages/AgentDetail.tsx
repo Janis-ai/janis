@@ -3137,7 +3137,8 @@ export function KnowledgeGaps({ agentId, config }: { agentId: string; config: Ag
             <textarea
               rows={4}
               style={{ marginTop: 8, width: '100%', boxSizing: 'border-box' }}
-              value={learnEdits[l.key] ?? l.text}
+              placeholder="Write the answer the agent should give — a fact, policy, or link…"
+              value={learnEdits[l.key] ?? ''}
               onChange={(e) =>
                 setLearnEdits((s) => ({ ...s, [l.key]: e.target.value }))
               }
@@ -3145,9 +3146,9 @@ export function KnowledgeGaps({ agentId, config }: { agentId: string; config: Ag
             <div className="row" style={{ marginTop: 8 }}>
               <button
                 className="btn primary"
-                disabled={approve.isPending || !(learnEdits[l.key] ?? l.text).trim()}
+                disabled={approve.isPending || !(learnEdits[l.key] ?? '').trim()}
                 onClick={() =>
-                  approve.mutate({ key: l.key, entry: (learnEdits[l.key] ?? l.text).trim() })
+                  approve.mutate({ key: l.key, entry: learnEdits[l.key].trim() })
                 }
               >
                 Add to knowledge base
