@@ -119,6 +119,7 @@ export function ScenarioRow({
   onFix,
   onTryInChat,
   reviewRequired,
+  foldSignal,
 }: {
   test: ScenarioTest;
   running: boolean;
@@ -143,6 +144,8 @@ export function ScenarioRow({
    *  rows on elevated-risk agents) — the row stays expanded so the
    *  review CTA lands on visible actions. */
   reviewRequired?: boolean;
+  /** Expand-all/collapse-all from the list toolbar — bump seq to apply. */
+  foldSignal?: { seq: number; open: boolean };
 }) {
   const [editing, setEditing] = useState(false);
   const [expText, setExpText] = useState('');
@@ -200,6 +203,15 @@ export function ScenarioRow({
       setCollapsed(false);
     }
   });
+  // Fold-all signal from the toolbar — seq-bumped so pressing the same
+  // direction twice still applies (a row you opened by hand re-folds).
+  const prevFoldSeq = useRef(0);
+  useLayoutEffect(() => {
+    if (!foldSignal || foldSignal.seq === prevFoldSeq.current) return;
+    prevFoldSeq.current = foldSignal.seq;
+    setFolded(!foldSignal.open);
+    setCollapsed(false);
+  }, [foldSignal]);
   // Verdict buttons are the flip, not the echo — 'Needs work' only on a
   // passing (or unjudged) reply, 'Looks right' only on a failing one.
   // Exception: a reviewRequired row (safety, elevated-risk) still owes a

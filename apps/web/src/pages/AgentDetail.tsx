@@ -3378,6 +3378,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   const [confirmEl, confirm] = useConfirm();
   const [testFilter, setTestFilter] = useState<'all' | 'failing' | 'passing' | 'unrun'>('all');
   const [testSort, setTestSort] = useState<'attention' | 'newest' | 'oldest'>('attention');
+  const [foldAll, setFoldAll] = useState<{ seq: number; open: boolean }>({ seq: 0, open: false });
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
 
@@ -4217,6 +4218,18 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               {f === 'unrun' ? 'Not run' : f[0].toUpperCase() + f.slice(1)} {testCounts[f]}
             </button>
           ))}
+          <button
+            className="btn ghost sm"
+            onClick={() => setFoldAll((s) => ({ seq: s.seq + 1, open: true }))}
+          >
+            Expand all
+          </button>
+          <button
+            className="btn ghost sm"
+            onClick={() => setFoldAll((s) => ({ seq: s.seq + 1, open: false }))}
+          >
+            Collapse all
+          </button>
           <span className="grow" />
           <label className="row" style={{ gap: 4 }}>
             <span className="muted">Sort</span>
@@ -4238,6 +4251,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             key={t.id}
             test={t}
             running={running === t.id}
+            foldSignal={foldAll}
             disabled={running !== null || batch !== null}
             onRun={() => { setRunning(t.id); runOne.mutate(t.id); }}
             onDelete={isAdmin ? () => del.mutate(t.id) : undefined}
@@ -4316,6 +4330,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               ) : (
                 <details
                   key={convId}
+                  open={foldAll.open}
                   className="card"
                   style={{ background: 'var(--panel-2)', padding: 12 }}
                 >
