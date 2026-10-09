@@ -14,7 +14,7 @@ import { ChevronDown, MessageSquarePlus, Play } from 'lucide-react';
 
 import { freshTestVisitor } from '../lib/testChat';
 import { useScenarioMatch } from '../lib/scenarioMatch';
-import { ringScenario } from '../lib/scenarioRing';
+import { revealScenario } from '../lib/scenarioRing';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow, scenarioPrompt, type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 import { ScenarioList, CAT_LABELS } from '../components/ScenarioList';
@@ -451,11 +451,7 @@ export default function AgentBuilder() {
             s.human_result !== 'pass' &&
             s.human_result !== 'fail',
         );
-      const el = document.getElementById(`sc-${first?.id}`);
-      if (el) {
-        ringScenario(el);
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
+      if (first) revealScenario(first.id);
       return;
     }
     if (next) goStep(next.key);
@@ -580,16 +576,11 @@ export default function AgentBuilder() {
       document.getElementById(`sc-${s.id}`)?.classList.add('scenario-hit');
   }, [safetyReview, step, scenarios]);
   // "see matched scenario" lands as #sc-<id> — the try step gates the
-  // checklist's mount, so scroll once the step and rows are both there.
-  // :target doesn't re-evaluate on pushState hash changes — the ring is
-  // a stamped class instead.
+  // checklist's mount, so reveal once the step and rows are both there.
   useEffect(() => {
     if (!hash.startsWith('#sc-')) return;
     if (step !== 'try' || !scenarios.length) return;
-    const el = document.getElementById(hash.slice(1));
-    if (!el) return;
-    ringScenario(el);
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    revealScenario(hash.slice(4));
   }, [hash, step, scenarios.length]);
   // First visit to the checklist materializes the draft's suggested
   // scenarios (bootstrap already seeds; this catches agents created
@@ -812,6 +803,8 @@ export default function AgentBuilder() {
       // An overlay dock would hide the row it just scrolled to.
       if (window.matchMedia('(max-width: 1199px)').matches) dock?.setOpen(false);
       navigate(`/agents/new/${agent?.id}?step=try#sc-${id}`, { replace: true });
+      // Same-hash re-click: the effect above won't re-run, so reveal now.
+      revealScenario(id);
     },
     // Header history/new-chat switched threads — reset the drift tracking
     // the way the old pickTestChat/newChat did. The seed clears too: a

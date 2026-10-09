@@ -35,7 +35,7 @@ import {
 import type { LlmVendor } from '@janis/shared';
 import { SavedWidgets } from '../components/WidgetComposer';
 import { janisBrain } from '../lib/agentContext';
-import { ringScenario } from '../lib/scenarioRing';
+import { revealScenario } from '../lib/scenarioRing';
 import { railBus } from '../lib/railBus';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { Modal } from '../components/Modal';
@@ -3632,14 +3632,11 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   const tests = data?.tests ?? [];
   const { hash } = useLocation();
   // Deep links land as #sc-<id> ("see matched scenario" from inbox/test
-  // chat) — scroll the row into view once the list has rendered. :target
-  // doesn't re-evaluate on pushState — stamp the ring as a class.
+  // chat) — revealScenario unfolds the row, opens any group it's nested
+  // in, drops a hiding filter, then rings + scrolls the live element.
   useEffect(() => {
     if (!tests.length || !hash.startsWith('#sc-')) return;
-    const el = document.getElementById(hash.slice(1));
-    if (!el) return;
-    ringScenario(el);
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    revealScenario(hash.slice(4));
   }, [tests.length, hash]);
   const passed = tests.filter(isPassing).length;
   const failed = tests.filter(isFailing).length;
@@ -3900,7 +3897,11 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                     {linkedTest && (
                       <div>
                         On scenario{' '}
-                        <a href={`#sc-${linkedTest.id}`} style={{ color: 'var(--accent)' }}>
+                        <a
+                          href={`#sc-${linkedTest.id}`}
+                          style={{ color: 'var(--accent)' }}
+                          onClick={() => revealScenario(linkedTest.id)}
+                        >
                           "{linkedTest.name}"
                         </a>
                         {batch && (

@@ -1,6 +1,7 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ScenarioTest } from './ScenarioRow';
+import { REVEAL_SCENARIO } from '../lib/scenarioRing';
 
 /** The scenario suite — shared list chrome for the builder's Try-it
  *  checklist and the deployed agent's Test tab. Owns the toolbar
@@ -74,6 +75,16 @@ export function ScenarioList({
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<Sort>('attention');
   const [foldAll, setFoldAll] = useState<FoldSignal>({ seq: 0, open: false });
+  // "See matched scenario" deep links — a filter that would hide the
+  // target row drops back to All so the reveal can find it.
+  useEffect(() => {
+    const onReveal = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (id && tests.some((t) => t.id === id)) setFilter('all');
+    };
+    window.addEventListener(REVEAL_SCENARIO, onReveal);
+    return () => window.removeEventListener(REVEAL_SCENARIO, onReveal);
+  }, [tests]);
 
   const counts = {
     all: tests.length,

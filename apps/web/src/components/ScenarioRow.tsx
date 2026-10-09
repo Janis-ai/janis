@@ -1,5 +1,6 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { REVEAL_SCENARIO } from '../lib/scenarioRing';
 import { MessageSquare, Play, RotateCcw, ThumbsDown, ThumbsUp, Trash2, Wrench } from 'lucide-react';
 
 /** One scenario, one card — shared by the builder's Try-it checklist and
@@ -213,6 +214,18 @@ export function ScenarioRow({
     setFolded(!foldSignal.open);
     setCollapsed(false);
   }, [foldSignal]);
+  // Deep-link reveal — a "see matched scenario" jump names this row, so
+  // it unfolds itself no matter which fold state it's sitting in.
+  useEffect(() => {
+    const onReveal = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === test.id) {
+        setFolded(false);
+        setCollapsed(false);
+      }
+    };
+    window.addEventListener(REVEAL_SCENARIO, onReveal);
+    return () => window.removeEventListener(REVEAL_SCENARIO, onReveal);
+  }, [test.id]);
   // Verdict buttons are the flip, not the echo — 'Needs work' only on a
   // passing (or unjudged) reply, 'Looks right' only on a failing one.
   // Exception: a reviewRequired row (safety, elevated-risk) still owes a

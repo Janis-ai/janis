@@ -16,6 +16,7 @@ import { CorrectThisCard, type CorrectTarget } from './CorrectThis';
 import { TestChatHistory } from './TestChatHistory';
 import { type ScenarioTest, type ScenarioTurn } from './ScenarioRow';
 import { useScenarioMatch } from '../lib/scenarioMatch';
+import { revealScenario } from '../lib/scenarioRing';
 import { freshTestVisitor, readTestVisitor, storeTestVisitor } from '../lib/testChat';
 import { railBus, type RailRequest } from '../lib/railBus';
 import { DockContext, type DockTab, type TestWiring } from '../lib/dockContext';
@@ -594,7 +595,11 @@ export default function Layout() {
   // "see matched scenario" off-builder — the regression rows live on the
   // agent's tests section, hash-anchored per row.
   const fallbackShowScenario = (id: string) => {
-    if (chatAgentId) navigate(`/agents/${chatAgentId}/tests#sc-${id}`);
+    if (!chatAgentId) return;
+    navigate(`/agents/${chatAgentId}/tests#sc-${id}`);
+    // Same-hash re-click: the destination's hash effect won't re-run,
+    // so reveal now if the row is already mounted.
+    revealScenario(id);
   };
   const fallbackOnSaveTest = (ctx: {
     agentText: string;
