@@ -172,14 +172,16 @@ export async function runTestSuite(
     })) satisfies TestRunResult;
     await recordRun(db, { agent, test, result, batchId: run.batchId, kind: run.kind });
     // Experiment runs are candidates — the baseline verdict stays put.
-    // Stamping the config fingerprint lets a machine pass go stale on the
-    // next config change, same as a human verdict does.
+    // A fresh replay replaces the reply a human verdict was judging, so
+    // the verdict clears too — 'approved' can't carry over to a reply
+    // nobody saw.
     if (run.kind !== 'ab') {
       await db
         .update(agentTests)
         .set({
           lastRun: result as never,
           configVersion: configVersion((agent.config ?? {}) as AgentConfig),
+          humanResult: null,
         })
         .where(eq(agentTests.id, test.id));
     }
@@ -239,6 +241,7 @@ export async function runScheduledEval(
       .set({
         lastRun: result as never,
         configVersion: configVersion((agent.config ?? {}) as AgentConfig),
+        humanResult: null,
       })
       .where(eq(agentTests.id, test.id));
     await recordRun(db, { agent, test, result, batchId, kind: 'scheduled' });

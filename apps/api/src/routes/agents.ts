@@ -2546,6 +2546,9 @@ export function agentRoutes(db: Db) {
       .set({
         lastRun: run as never,
         configVersion: configVersion((agent.config ?? {}) as AgentConfig),
+        // The verdict judged the previous reply — a new replay needs a
+        // fresh human look.
+        humanResult: null,
       })
       .where(eq(agentTests.id, test.id))
       .returning();

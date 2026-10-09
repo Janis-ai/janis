@@ -189,6 +189,21 @@ describe('runScheduledEval', () => {
     errSpy.mockRestore();
   });
 
+  it('clears a human verdict when a fresh replay lands', async () => {
+    // A verdict judges a specific reply — a new run produces a new reply,
+    // so 'approved' must not carry over and green-light unjudged output.
+    const agent = await makeAgent({ eval_interval_hours: 6 });
+    const t = await makeTest(agent.id);
+    await db
+      .update(agentTests)
+      .set({ humanResult: 'pass' })
+      .where(eq(agentTests.id, t.id));
+    await runScheduledEval(db, wsId, agent.id);
+    const [updated] = await db.select().from(agentTests).where(eq(agentTests.id, t.id));
+    expect(updated.humanResult).toBeNull();
+    expect((updated.lastRun as { passed: boolean }).passed).toBe(true);
+  });
+
   it('no-ops on a missing or non-hosted agent', async () => {
     const ghost = await runScheduledEval(db, wsId, crypto.randomUUID());
     expect(ghost.batchId).toBeNull();

@@ -3645,12 +3645,15 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   }, [tests.length, hash]);
   // The human verdict outranks the machine verdict everywhere — a row
   // the owner approved is 'approved' even if its last replay failed, and
-  // a rejected row is 'rejected' even if the replay passed. Same
-  // precedence the ScenarioRow badge uses.
+  // a rejected row is 'rejected' even if the replay passed. Stale rows
+  // count in neither bucket — the badge says stale, and both verdicts
+  // were earned against an old config. Same precedence the row uses.
   const isFailing = (t: AgentTest) =>
-    t.human_result === 'fail' || (t.human_result !== 'pass' && t.last_run?.passed === false);
+    !t.stale &&
+    (t.human_result === 'fail' || (t.human_result !== 'pass' && t.last_run?.passed === false));
   const isPassing = (t: AgentTest) =>
-    t.human_result === 'pass' || (t.human_result !== 'fail' && t.last_run?.passed === true);
+    !t.stale &&
+    (t.human_result === 'pass' || (t.human_result !== 'fail' && t.last_run?.passed === true));
   const passed = tests.filter(isPassing).length;
   const failed = tests.filter(isFailing).length;
   const batches = runsData?.batches ?? [];
