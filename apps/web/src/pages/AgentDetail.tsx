@@ -79,6 +79,14 @@ const SECTIONS = {
 } as const;
 type Section = keyof typeof SECTIONS;
 const HOSTED_ONLY: Section[] = ['knowledge', 'integrations', 'components', 'tests'];
+// The URL key predates the labels — accept the label spellings too so a
+// guessed or concierge-built link (/agents/<id>/experience) doesn't dump
+// the user on the Channels default.
+const SECTION_ALIASES: Record<string, Section> = {
+  experience: 'behavior',
+  actions: 'integrations',
+  test: 'tests',
+};
 
 const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: boolean }[]>> = {
   behavior: [
@@ -106,7 +114,8 @@ export default function AgentDetail() {
   const { data } = useAgents();
   const agent = data?.agents.find((a) => a.id === id);
   usePageTitle(agent?.name ?? 'Agent');
-  const section = (rawSection && rawSection in SECTIONS ? rawSection : 'channels') as Section;
+  const sectionKey = rawSection && (SECTION_ALIASES[rawSection] ?? rawSection);
+  const section = (sectionKey && sectionKey in SECTIONS ? sectionKey : 'channels') as Section;
   // Hosted-only sections make no sense for external-webhook agents and for
   // BYOK engines (dialogflow/monitor) where Janis doesn't write replies —
   // the sidebar hides them; direct hits bounce to Channels.
