@@ -45,6 +45,10 @@ export interface TestHandlers {
  *  ref (fresh closures without re-rendering Layout); the rest are values
  *  that affect what renders. */
 export interface TestWiring {
+  /** The provider's agent — Layout only trusts the wiring while this
+   *  matches the chat's agent, so a builder unmounting one commit late
+   *  can't hand the new agent's dock the old agent's channel/handlers. */
+  agentId?: string;
   channelId?: string;
   focusSignal?: number;
   seed?: { text: string; nonce: number } | null;

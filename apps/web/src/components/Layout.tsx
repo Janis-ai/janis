@@ -475,6 +475,13 @@ export default function Layout() {
   // it provides wiring (its testRail may be stale from another agent).
   const chatAgentId =
     testProvided && ctxAgent ? ctxAgent : testRail?.agentId ?? ctxAgent;
+  // The provider's wiring is only trusted while it names the same agent —
+  // on a builder → other-agent navigation there's a commit where ctxAgent
+  // has flipped but the old page's cleanup hasn't cleared its wiring yet;
+  // reading it would stamp the old agent's channel into the new agent's
+  // cache slot and render the old agent's chat under the new agent's name.
+  const wiring =
+    testProvided && testWiring?.agentId === chatAgentId ? testWiring : null;
   // Channel resolution: the provider's resolved channel, else the rail's,
   // else the per-agent cache populated by either — the cache is what makes
   // the builder → agent-page handoff a prop swap instead of a remount.
@@ -482,7 +489,7 @@ export default function Layout() {
   // commit that delivers the channel (the ref write below can't re-render),
   // leaving an empty dock until an unrelated render happens along.
   const liveChannelId =
-    (testProvided ? testWiring?.channelId : undefined) ??
+    wiring?.channelId ??
     (testRail && testRail.agentId === chatAgentId ? testRail.channelId : undefined);
   useEffect(() => {
     if (chatAgentId && liveChannelId) testChannelIds.current[chatAgentId] = liveChannelId;
@@ -896,7 +903,7 @@ export default function Layout() {
       setOpen: setRailOpen,
       openTab,
       setTestProvided,
-      testWiring,
+      testWiring: wiring,
       setTestWiring,
       testVisitor,
       setTestVisitor: setChatVisitor,
@@ -906,7 +913,7 @@ export default function Layout() {
     }),
     [
       railOpen, railTab, testAvail, testProvided, testSlot, openTab,
-      testWiring, testVisitor, setChatVisitor, testSeed, clearTestSeed,
+      wiring, testVisitor, setChatVisitor, testSeed, clearTestSeed,
       sendTestSeed,
     ],
   );
@@ -1430,7 +1437,7 @@ export default function Layout() {
                               testRail?.label ||
                               'agent'
                             }` +
-                              (testWiring?.statusText ? ` · ${testWiring.statusText}` : '')}
+                              (wiring?.statusText ? ` · ${wiring.statusText}` : '')}
                         </span>
                         <TestChatHistory
                           agentId={chatAgentId!}
@@ -1442,7 +1449,7 @@ export default function Layout() {
                             // thread it was fired into — don't let the
                             // remount re-send it here.
                             setFallbackSeed(null);
-                            testWiring?.handlers.current.onVisitorChange?.(v, false);
+                            wiring?.handlers.current.onVisitorChange?.(v, false);
                           }}
                         />
                         <button
@@ -1452,7 +1459,7 @@ export default function Layout() {
                             const v = freshTestVisitor();
                             setChatVisitor(v);
                             setFallbackSeed(null);
-                            testWiring?.handlers.current.onVisitorChange?.(v, true);
+                            wiring?.handlers.current.onVisitorChange?.(v, true);
                           }}
                         >
                           <MessageSquarePlus
@@ -1472,30 +1479,30 @@ export default function Layout() {
                         hideHeader
                         placeholder="You're chatting as a customer…"
                         seedMessage={
-                          testProvided
-                            ? (testWiring?.seed?.text ?? undefined)
+                          wiring
+                            ? (wiring.seed?.text ?? undefined)
                             : fallbackSeed?.text
                         }
                         seedNonce={
-                          testProvided ? testWiring?.seed?.nonce : fallbackSeed?.nonce
+                          wiring ? wiring.seed?.nonce : fallbackSeed?.nonce
                         }
-                        focusSignal={testWiring?.focusSignal}
-                        onCustomerMessage={testWiring?.handlers.current.onCustomerMessage}
+                        focusSignal={wiring?.focusSignal}
+                        onCustomerMessage={wiring?.handlers.current.onCustomerMessage}
                         verdictFor={(cust, reply, turns) =>
-                          (testWiring?.handlers.current.verdictFor ?? fallbackVerdictFor)(
+                          (wiring?.handlers.current.verdictFor ?? fallbackVerdictFor)(
                             cust,
                             reply,
                             turns,
                           )
                         }
                         onShowScenario={(id) =>
-                          (testWiring?.handlers.current.onShowScenario ?? fallbackShowScenario)(id)
+                          (wiring?.handlers.current.onShowScenario ?? fallbackShowScenario)(id)
                         }
                         onCorrect={(ctx) =>
-                          (testWiring?.handlers.current.onCorrect ?? fallbackOnCorrect)(ctx)
+                          (wiring?.handlers.current.onCorrect ?? fallbackOnCorrect)(ctx)
                         }
                         onSaveTest={(ctx) =>
-                          (testWiring?.handlers.current.onSaveTest ?? fallbackOnSaveTest)(ctx)
+                          (wiring?.handlers.current.onSaveTest ?? fallbackOnSaveTest)(ctx)
                         }
                       />
                     ) : (

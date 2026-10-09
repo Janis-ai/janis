@@ -821,6 +821,7 @@ export default function AgentBuilder() {
   useEffect(() => {
     if (!setTestWiring || !dockAvailableForReg) return;
     setTestWiring({
+      agentId: agent?.id,
       channelId: testChannel.data?.channel_id,
       focusSignal: chatFocus,
       seed: seed?.target === 'dock' ? { text: seed.text, nonce: seed.nonce } : null,
