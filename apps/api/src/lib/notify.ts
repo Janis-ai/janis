@@ -158,6 +158,10 @@ async function sendEmail(to: string[], title: string, body: string, url?: string
       to,
       subject: title,
       text: url ? `${body}\n\n${env.webOrigin}${url}` : body,
+      // marks our own sends — a notification landing in a connected mailbox
+      // (operator hooked their Gmail/Outlook in as a channel) must not come
+      // back in as a customer message; mailSkipReason drops it on this header
+      headers: { 'X-Janis-Outbound': 'notify', 'Auto-Submitted': 'auto-generated' },
     }),
     signal: AbortSignal.timeout(10_000),
   });

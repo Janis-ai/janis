@@ -173,6 +173,26 @@ describe('parsing helpers', () => {
         { selfAddress: 'me@you.com' },
       ),
     ).toBe('self');
+    // Prod incident: the daily digest (From: alerts@inbound.janis.ai) landed
+    // in a connected Gmail mailbox and the concierge replied to it. Mail from
+    // our own sending domain is a loop wherever it arrives.
+    expect(
+      mailSkipReason(
+        { headers: {}, from: 'Janis <alerts@inbound.janis.ai>', to: 'me@gmail.com' },
+        { selfDomain: 'inbound.janis.ai' },
+      ),
+    ).toBe('self');
+    // ...and the stamped-header guard catches it even without a domain match.
+    expect(
+      mailSkipReason(
+        {
+          headers: { 'x-janis-outbound': 'notify' },
+          from: 'Janis <alerts@mail.example.com>',
+          to: 'me@gmail.com',
+        },
+        {},
+      ),
+    ).toBe('self');
     expect(mailSkipReason({ from: 'mailer-daemon@x.com' }, {})).toBe('daemon');
     expect(mailSkipReason({ headers: {}, from: 'a@x.com' }, {})).toBeNull();
   });

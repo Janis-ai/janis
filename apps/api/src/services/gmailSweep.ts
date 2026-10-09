@@ -41,7 +41,11 @@ export async function pollGmailChannel(db: Db, channel: typeof channels.$inferSe
     if (!fromAddr) continue;
     if (mailSkipReason(
       { headers: mail.headers, from: mail.from, to: mail.to, subject: mail.subject },
-      { selfAddress: creds.email_address, filters: creds.email_filters },
+      {
+        selfAddress: creds.email_address,
+        selfDomain: env.emailInboundDomain,
+        filters: creds.email_filters,
+      },
     )) {
       continue;
     }

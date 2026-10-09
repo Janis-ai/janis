@@ -43,6 +43,9 @@ const res = await fetch('https://api.resend.com/emails', {
     to: [TO],
     subject: `Janis task: ${title}`,
     text: body,
+    // own-send marker — if this lands in a connected mailbox it must not
+    // ingest as a customer message
+    headers: { 'X-Janis-Outbound': 'notify', 'Auto-Submitted': 'auto-generated' },
   }),
 });
 console.log('email:', res.status, res.ok ? (await res.json() as {id:string}).id : await res.text());
