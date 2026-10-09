@@ -885,9 +885,10 @@ export function webchatRoutes(db: Db) {
             !f.handoff_cancelled &&
             !f.resolved &&
             // Approval cards reach the internal test rail (Ask Janis) so an
-            // operator can exercise a gated tool end-to-end; every other
-            // internal row stays operator-side.
-            (!p?.internal || (showActions && !!p?.action))
+            // operator can exercise a gated tool end-to-end. The verified
+            // concierge viewer sees every internal row too — system notes
+            // like sign-in adoption folds are operator-facing context.
+            (!p?.internal || (conciergeViewer ? true : showActions && !!p?.action))
           );
         })
         .map((m) => ({

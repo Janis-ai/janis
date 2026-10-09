@@ -26,6 +26,7 @@ import { openAlertOnce } from '../lib/alerts.js';
 import { captureCsat } from '../lib/csat.js';
 import { queueCrmActivity } from '../lib/crm.js';
 import { pickAutoAssignee } from '../lib/rules.js';
+import { systemNote } from '../lib/systemNote.js';
 import { groupsForRules } from '../lib/ruleAlerts.js';
 import { env } from '../env.js';
 import { deliverWebhook } from '../lib/webhooks.js';
@@ -114,6 +115,26 @@ export async function adoptVisitorConversation(
       .limit(1);
 
   let uConv: ConversationRow | undefined;
+  let wsId: string | undefined;
+  // Internal transcript line so the folded history doesn't look like a
+  // stranger's thread — invisible to anonymous viewers, visible in the
+  // console and to the verified signed-in viewer.
+  const noteAdopt = async (convId: string) => {
+    if (!wsId) {
+      const [a] = await db
+        .select({ w: agents.workspaceId })
+        .from(agents)
+        .where(eq(agents.id, channel.agentId));
+      wsId = a?.w;
+    }
+    if (wsId) {
+      await systemNote(
+        db, wsId, convId,
+        'Signed in — continuing the earlier chat from this browser',
+        'adopted',
+      );
+    }
+  };
   const adopt = async (participant: string) => {
     if (!participant || participant === userParticipant) return;
     const [vb] = await find(participant);
@@ -148,6 +169,7 @@ export async function adoptVisitorConversation(
         .set({ platformUserId: userParticipant })
         .where(eq(channelBindings.id, vb.binding.id));
       uConv = vb.conversation;
+      await noteAdopt(uConv.id);
       return;
     }
     if (uConv.id === vb.conversation.id) {
@@ -155,6 +177,7 @@ export async function adoptVisitorConversation(
         .update(channelBindings)
         .set({ platformUserId: userParticipant })
         .where(eq(channelBindings.id, vb.binding.id));
+      await noteAdopt(uConv.id);
       return;
     }
 
@@ -200,6 +223,7 @@ export async function adoptVisitorConversation(
       await db.update(conversations).set(patch).where(eq(conversations.id, uId));
       uConv = { ...uConv, ...patch };
     }
+    await noteAdopt(uId);
   };
 
   await adopt(visitorParticipant);
