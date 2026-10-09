@@ -245,7 +245,7 @@ export function ScenarioRow({
     return (
       <div className="scenario-row scenario-collapsed" id={`sc-${test.id}`}>
         <button
-          className="btn ghost sm"
+          className="scenario-fold"
           aria-label="Expand"
           onClick={() => {
             setFolded(false);
@@ -287,7 +287,7 @@ export function ScenarioRow({
       <div className="row" style={{ alignItems: 'center' }}>
         {!editing && (
           <button
-            className="btn ghost sm"
+            className="scenario-fold"
             aria-label="Collapse"
             onClick={() => setFolded(true)}
           >

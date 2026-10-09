@@ -3287,6 +3287,7 @@ interface AgentTest {
   last_run?: AgentTestRun | null;
   category?: string | null;
   human_result?: 'pass' | 'fail' | 'unreviewed' | 'fixed_recheck' | null;
+  stale?: boolean;
   created_at: string;
 }
 
@@ -3375,6 +3376,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   const [newExpectation, setNewExpectation] = useState('');
   const [err, setErr] = useState('');
   const [confirmEl, confirm] = useConfirm();
+  const [testFilter, setTestFilter] = useState<'all' | 'failing' | 'passing' | 'unrun'>('all');
+  const [testSort, setTestSort] = useState<'attention' | 'newest' | 'oldest'>('attention');
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
 
@@ -3710,6 +3713,23 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     },
     onError: (e) => setErr(e.message),
   });
+
+  // List filtering/sorting. A conv-split group counts as one item — if
+  // any member matches the filter the group stays whole, because "Delete
+  // all" on a filtered-down group would delete rows you can't see.
+  const isFailing = (t: AgentTest) => t.last_run?.passed === false || t.human_result === 'fail';
+  const isPassing = (t: AgentTest) => !isFailing(t) && (t.last_run?.passed === true || t.human_result === 'pass');
+  const matchesTestFilter = (t: AgentTest) =>
+    testFilter === 'all' ? true
+    : testFilter === 'failing' ? isFailing(t)
+    : testFilter === 'passing' ? isPassing(t)
+    : !t.last_run;
+  const testCounts = {
+    all: tests.length,
+    failing: tests.filter(isFailing).length,
+    passing: tests.filter(isPassing).length,
+    unrun: tests.filter((t) => !t.last_run).length,
+  };
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
@@ -4185,6 +4205,32 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
         </div>
       )}
 
+      {tests.length > 0 && (
+        <div className="row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+          {(['all', 'failing', 'passing', 'unrun'] as const).map((f) => (
+            <button
+              key={f}
+              className={`btn sm${testFilter === f ? '' : ' ghost'}`}
+              onClick={() => setTestFilter(f)}
+            >
+              {f === 'unrun' ? 'Not run' : f[0].toUpperCase() + f.slice(1)} {testCounts[f]}
+            </button>
+          ))}
+          <span className="grow" />
+          <label className="row" style={{ gap: 4 }}>
+            <span className="muted">Sort</span>
+            <select
+              value={testSort}
+              onChange={(e) => setTestSort(e.target.value as typeof testSort)}
+            >
+              <option value="attention">attention first</option>
+              <option value="newest">newest</option>
+              <option value="oldest">oldest</option>
+            </select>
+          </label>
+        </div>
+      )}
+
       {(() => {
         const renderTest = (t: AgentTest) => (
           <ScenarioRow
@@ -4236,21 +4282,36 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
         );
         // Tests split from one conversation group under a collapsible card —
         // a rescued transcript can yield a batch that would otherwise flood
-        // the list (and can only be deleted one at a time).
+        // the list (and can only be deleted one at a time). Groups and solos
+        // sort together — a failing rescue group shouldn't sink below solo
+        // rows just because it's grouped.
         const byConv = new Map<string, AgentTest[]>();
-        const solo: AgentTest[] = [];
+        const items: { convId: string | null; ts: AgentTest[] }[] = [];
         for (const t of tests) {
           if (t.source_conversation_id) {
             const g = byConv.get(t.source_conversation_id) ?? [];
             g.push(t);
             byConv.set(t.source_conversation_id, g);
-          } else solo.push(t);
+          } else items.push({ convId: null, ts: [t] });
         }
+        for (const [convId, ts] of byConv) items.push({ convId, ts });
+        const newest = (ts: AgentTest[]) => Math.max(...ts.map((t) => Date.parse(t.created_at) || 0));
+        const rank = (ts: AgentTest[]) =>
+          ts.some(isFailing) ? 0 : ts.some((t) => t.stale || !t.last_run) ? 1 : 2;
+        const visible = items.filter((it) => it.ts.some(matchesTestFilter));
+        visible.sort((a, b) =>
+          testSort === 'attention'
+            ? rank(a.ts) - rank(b.ts) || newest(b.ts) - newest(a.ts)
+            : testSort === 'newest'
+              ? newest(b.ts) - newest(a.ts)
+              : newest(a.ts) - newest(b.ts),
+        );
         return (
           <>
-            {[...byConv.entries()].map(([convId, ts]) =>
-              ts.length === 1 ? (
-                <Fragment key={convId}>{renderTest(ts[0])}</Fragment>
+            {visible.map((it) => {
+              const { convId, ts } = it;
+              return !convId || ts.length === 1 ? (
+                <Fragment key={ts[0].id}>{renderTest(ts[0])}</Fragment>
               ) : (
                 <details
                   key={convId}
@@ -4283,9 +4344,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                     {ts.map(renderTest)}
                   </div>
                 </details>
-              ),
-            )}
-            {solo.map(renderTest)}
+              );
+            })}
           </>
         );
       })()}
