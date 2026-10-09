@@ -967,6 +967,31 @@ describe('webchat authenticated identity', () => {
       const body = await res.json();
       const card = body.messages.find((m: { action?: { id: string } }) => m.action?.id === 'act_1');
       expect(card.action.tool).toBe('teach_agent');
+      // internal rows that aren't action cards stay hidden even from the
+      // signed-in concierge viewer — adoption folds, alert lines and notes
+      // are operator-only console annotation, and the rail is a visitor
+      // surface.
+      await db.insert(messages).values([
+        {
+          conversationId: conv.id,
+          direction: 'out',
+          text: 'Signed in — continuing the earlier chat from this browser',
+          payload: { internal: true, event: 'adopted' },
+        },
+        {
+          conversationId: conv.id,
+          direction: 'out',
+          text: 'Negative sentiment — customer sentiment classified negative',
+          payload: { internal: true, event: 'rule_trigger' },
+        },
+      ]);
+      const body2 = await (
+        await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR_C}`, {
+          headers: { cookie: 'janis_session=tok-card' },
+        })
+      ).json();
+      expect(body2.messages.some((m: { text: string }) => m.text.includes('continuing the earlier chat'))).toBe(false);
+      expect(body2.messages.some((m: { text: string }) => m.text.includes('Negative sentiment'))).toBe(false);
       // the same internal row on an anonymous visitor's thread never renders
       await post('anon hello', 'vis_anon0123456789');
       const [anonConv] = await db

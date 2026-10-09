@@ -875,7 +875,7 @@ export function webchatRoutes(db: Db) {
           // payload.internal covers operator-only rows (takeover/resume/notes)
           // — they carry the author's real name and must never reach visitors.
           const p = m.payload as
-            | { via?: string; internal?: boolean; action?: unknown }
+            | { via?: string; internal?: boolean; action?: unknown; event?: string }
             | undefined;
           return (
             !f.failure &&
@@ -885,10 +885,11 @@ export function webchatRoutes(db: Db) {
             !f.handoff_cancelled &&
             !f.resolved &&
             // Approval cards reach the internal test rail (Ask Janis) so an
-            // operator can exercise a gated tool end-to-end. The verified
-            // concierge viewer sees every internal row too — system notes
-            // like sign-in adoption folds are operator-facing context.
-            (!p?.internal || (conciergeViewer ? true : showActions && !!p?.action))
+            // operator can exercise a gated tool end-to-end. Every other
+            // internal row — alerts, notes, the sign-in adoption fold — is
+            // operator-only console annotation and stays hidden even from a
+            // signed-in concierge viewer: the rail is a visitor surface.
+            (!p?.internal || (showActions && !!p?.action))
           );
         })
         .map((m) => ({
