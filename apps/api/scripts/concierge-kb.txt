@@ -86,7 +86,7 @@ Internal notes never reach the customer — from the composer's Internal note mo
 
 ---
 
-Saved replies are shared canned responses — workspace-wide ones live in Settings → Me, agent-scoped ones in the agent's Settings → Saved replies — then insert one into a draft with the document icon in the composer; it fills the draft and you still hit send.
+Saved replies are shared canned responses — workspace-wide ones live in Settings → Me, agent-scoped ones at the bottom of the agent's Settings → Escalation — then insert one into a draft with the document icon in the composer; it fills the draft and you still hit send.
 
 ---
 
@@ -142,11 +142,11 @@ Reports at https://app.janis.ai/reports cover containment (AI vs human), resolut
 
 ---
 
-Customers are asked to rate resolved conversations 1–5 when they're archived — ratings roll up in the Reports CSAT card with distribution and per-topic averages. The survey is customisable: Settings → Sending → "Satisfaction survey" sets the workspace-wide on/off, question text and thank-you reply; an agent's Behavior → Satisfaction survey overrides any field for that agent.
+Customers are asked to rate resolved conversations 1–5 when they're archived — ratings roll up in the Reports CSAT card with distribution and per-topic averages. The survey is customisable: Settings → Experience → "Satisfaction survey" sets the workspace-wide on/off, question text and thank-you reply; an agent's Experience → Satisfaction survey overrides any field for that agent. The workspace Experience tab also holds the Resolution settings.
 
 ---
 
-The agent's knowledge lives on its Knowledge base section across five sub-tabs: Text (one standalone fact per line), Files (uploaded documents), Websites (pages re-crawled on a schedule), Gaps (suggested learnings for approval) and Help center (published articles).
+The agent's knowledge lives on its Knowledge section across three sub-tabs: Sources (one list for one-line notes, website sources and uploaded files), Gaps (suggested learnings for approval) and Articles (published help-center pages).
 
 ---
 
@@ -154,11 +154,11 @@ Keep each knowledge entry a one-line fact that makes sense alone — entries are
 
 ---
 
-Knowledge files: upload PDF, DOCX, TXT, MD, CSV, JSON, XML, HTML, LOG, YAML or image files — up to 50 per agent — under Knowledge base → Files, and the extracted text becomes part of the agent's context. Knowledge base → Websites adds live URL sources instead: give a page URL and its text is re-crawled on a refresh schedule so the agent stays current.
+Knowledge files: upload PDF, DOCX, TXT, MD, CSV, JSON, XML, HTML, LOG, YAML or image files — up to 50 per agent — under Knowledge → Sources, and the extracted text becomes part of the agent's context. Adding a page URL there makes it a website source instead: its text is re-crawled on a refresh schedule so the agent stays current.
 
 ---
 
-To make the agent unlearn something, remove it where it lives: a line in Knowledge base → Text, or a file in Knowledge base → Files. Both take effect immediately.
+To make the agent unlearn something, remove it where it lives in Knowledge → Sources: delete the fact from the notes row, or the file/website source from the list. Both take effect immediately.
 
 ---
 
@@ -166,7 +166,7 @@ Knowledge gaps: Janis clusters recurring questions the agent could not answer, d
 
 ---
 
-Knowledge gaps live under Knowledge base → Gaps — Janis looks at the last 30 days of escalations and clusters questions that forced a handoff; a theme needs at least two occurrences to count as a gap.
+Knowledge gaps live under Knowledge → Gaps — Janis looks at the last 30 days of escalations and clusters questions that forced a handoff; a theme needs at least two occurrences to count as a gap.
 
 ---
 
@@ -194,15 +194,15 @@ Long conversations are summarized for the agent automatically, so old context is
 
 ---
 
-Agents are managed at https://app.janis.ai/agents — each agent gets an Overview dashboard plus sections: Behavior, Knowledge base, Channels, Agent settings, and for hosted agents Integrations, Chat components and Tests. External webhook agents see Behavior, Channels and Agent settings.
+Agents are managed at https://app.janis.ai/agents — each agent gets an Overview dashboard plus sections: Experience, Knowledge, Channels, Settings, and for hosted agents Actions, Chat components and Test. External webhook agents see Experience, Channels and Settings.
 
 ---
 
-Agents can be hosted inside Janis or external via webhook. Hosted agents pick an engine under Behavior → Language model: Janis metered (billed at cost + margin) or your own key for OpenAI, Anthropic, Gemini, OpenRouter, xAI, DeepSeek, Moonshot, Z.ai, NVIDIA, Groq, Mistral, or any custom OpenAI-compatible endpoint. OpenRouter can connect in one click via OAuth — one key unlocks every frontier model.
+Agents can be hosted inside Janis or external via webhook. Hosted agents pick an engine under the agent's Settings → General → "LLM override": Janis metered (billed at cost + margin, the workspace default) or your own key for OpenAI, Anthropic, Gemini, OpenRouter, xAI, DeepSeek, Moonshot, Z.ai, NVIDIA, Groq, Mistral, or any custom OpenAI-compatible endpoint. OpenRouter can connect in one click via OAuth — one key unlocks every frontier model.
 
 ---
 
-The Behavior section holds the agent's language model, greeting, system prompt, tone, and its per-agent satisfaction-survey override.
+The Experience section holds the agent's greeting, system prompt and quick replies (Instructions sub-tab), chat components, tone, and its per-agent satisfaction-survey override.
 
 ---
 
@@ -210,11 +210,27 @@ External agents set their webhook URL under the agent's Settings → General —
 
 ---
 
-The Tests section runs evals — hand-written or CSV-imported test conversations scored against the agent, A/B runs to compare models or prompts, and scheduled runs that alert on regressions. When a scheduled run flips a test red, Janis classifies the cause, drafts a fix — a knowledge entry, a prompt addition, or a corrected expectation — replays the suite against the candidate, and only surfaces it as an approvable suggestion when the target passes with no new failures.
+The Test section replays saved conversations — scenarios — against the agent's current setup. Each scenario card shows the customer message, the expected behavior, the agent's replayed reply and a verdict. New scenarios, CSV import and A/B variant runs open as modals from the header; Auto-run there schedules the suite and Run all replays everything now. Scenarios split from the same real conversation cluster under one collapsible card.
 
 ---
 
-Every hosted agent gets a public help center at /help/<agent-id> — articles are managed under Knowledge base → Help center, are searchable, feed the agent's knowledge automatically, and can live on a custom domain.
+The scenario list has status filter chips (All / Failing / Passing / Not run), a sort control (attention first — failing, stale and unrun surface above passes — or newest/oldest), and Expand all / Collapse all. Filtering trims inside a conversation group too, and "Delete all" hides while a filter is active since it would delete rows you can't see.
+
+---
+
+A scenario carries two verdicts: the machine's (did the replay meet the expectation) and the human's (Looks right / Needs work thumbs). A human verdict applies only to the reply it judged — a fresh replay clears it for re-review, and any config change marks existing results "stale" until they're run again. Stale and unverdicted rows sort to the top under "attention first".
+
+---
+
+When a run flips a test red, Janis classifies the cause, drafts a fix — a knowledge entry, a prompt addition, or a corrected expectation — replays the suite against the candidate, and surfaces it in the collapsible "suggested fixes" queue with the evidence: which scenario, the customer message, what was expected, and what the agent actually said. "Verified" fixes replayed clean; "unverified" ones and "hypothesis" diagnoses should be read before deciding — dismissing removes only the suggestion and changes nothing on the agent. Rescued conversations queue the same way for one-click "save as test", and both queues have bulk apply/dismiss actions.
+
+---
+
+New agents are created in a guided builder — Create, Teach it, Guide it, Abilities, Try it, Deploy — where the Try it step runs the same scenario cards grouped by coverage category (safety, knowledge, actions, out of scope, tone, general) so a launch can't look tested on easy questions alone.
+
+---
+
+Every hosted agent gets a public help center at /help/<agent-id> — articles are managed under Knowledge → Articles, are searchable, feed the agent's knowledge automatically, and can live on a custom domain.
 
 ---
 
@@ -230,7 +246,7 @@ Agents can collect contact info natively: when a customer's email or phone is ne
 
 ---
 
-The Integrations section installs tools the agent can call mid-conversation — one-click templates for Shopify, HubSpot, Zendesk (API key or OAuth), Salesforce, Stripe, Cal.com, Brave Search and iTunes, or define your own HTTP endpoint with parameters.
+The Actions section installs tools the agent can call mid-conversation — one-click templates for Shopify, HubSpot, Zendesk (API key or OAuth), Salesforce, Stripe, Cal.com, Brave Search and iTunes, or define your own HTTP endpoint with parameters.
 
 ---
 
@@ -250,7 +266,7 @@ Approval gates are opt-in per tool: sensitive actions (refunds, plan changes) ca
 
 ---
 
-Connecting Stripe (agent → Integrations → Stripe → Connect): create a restricted key in Stripe Dashboard → Developers → API keys → Create restricted key; grant Read on Customers, Charges, Products, Prices and Subscriptions, plus Write on Subscriptions and Refunds if the agent may propose plan changes or refunds. Read tools run automatically; write tools always wait for a teammate's approval. Test with an rk_test_… key first.
+Connecting Stripe (agent → Actions → Stripe → Connect): create a restricted key in Stripe Dashboard → Developers → API keys → Create restricted key; grant Read on Customers, Charges, Products, Prices and Subscriptions, plus Write on Subscriptions and Refunds if the agent may propose plan changes or refunds. Read tools run automatically; write tools always wait for a teammate's approval. Test with an rk_test_… key first.
 
 ---
 
@@ -298,11 +314,15 @@ Contacts at https://app.janis.ai/contacts build one profile per customer across 
 
 ---
 
-Campaigns at https://app.janis.ai/campaigns send outbound broadcasts to contact lists — scheduled or immediate, with drip steps, per-recipient results (sent, replied, converted, failed, skipped), opt-out suppression and quiet-hours rules.
+Campaigns at https://app.janis.ai/campaigns send outbound broadcasts to contact lists — scheduled or immediate, with drip steps, per-recipient results (sent, replied, converted, failed, skipped), opt-out suppression and quiet-hours rules. Sending rules, the suppression list and the goal-tracking event token live in the gear "Campaign settings" modal on that page (admins).
 
 ---
 
-Connect Slack in Settings → Integrations → Slack (admins only) — you can connect more than one Slack workspace. Alerts post to a channel with Take over / Resume buttons; replying in the alert thread talks to the customer.
+Campaign conversions are goal-aware: a campaign with a goal event only counts a conversion when a tracked event matches that goal — stats show converted, other (non-goal) events and attributed revenue, and drip "if_converted" steps fire only on goal hits.
+
+---
+
+Connect Slack in Settings → Escalation → "Slack alerts" (admins only) — you can connect more than one Slack workspace. Alerts post to a channel with Take over / Resume buttons; replying in the alert thread talks to the customer.
 
 ---
 
@@ -310,7 +330,7 @@ Each agent's Slack destinations are a list set in its Settings → Escalation �
 
 ---
 
-The workspace default alert channel is chosen in Settings → Integrations → Slack — pick an existing channel or create a new one. New agents automatically get their own #janis-{name} channel when Slack is connected.
+The workspace default alert channel is chosen in Settings → Escalation → "Slack alerts" — pick an existing channel or create a new one. New agents automatically get their own #janis-{name} channel when Slack is connected.
 
 ---
 
@@ -398,11 +418,11 @@ Bubble developer options on the channel's page: the embed snippet, visitor micro
 
 ---
 
-When a Janis user asks what topics or questions their agents fail at, call knowledge_gaps — summarise each cluster (theme, times_failed, sample questions, the human answer) and link [the agent's Behavior tab](gaps_url). Offer to draft a knowledge entry for the top gap; show the entry text and only call teach_agent after they confirm.
+When a Janis user asks what topics or questions their agents fail at, call knowledge_gaps — summarise each cluster (theme, times_failed, sample questions, the human answer) and link [the agent's Gaps tab](gaps_url). Offer to draft a knowledge entry for the top gap; show the entry text and only call teach_agent after they confirm.
 
 ---
 
-When pointing the user at a console page, always render it as a markdown link — [Reports](https://app.janis.ai/reports), [the agent's Knowledge base](https://app.janis.ai/agents/<id>/knowledge), [a channel's page](https://app.janis.ai/agents/<id>/channels/<channel-id>) — never bare "go to X" instructions. Never copy a link or id from your own earlier messages in this chat — rebuild it from what a tool just returned or the pages listed here; earlier messages can carry dead links.
+When pointing the user at a console page, always render it as a markdown link — [Reports](https://app.janis.ai/reports), [the agent's Knowledge section](https://app.janis.ai/agents/<id>/knowledge), [a channel's page](https://app.janis.ai/agents/<id>/channels/<channel-id>) — never bare "go to X" instructions. Never copy a link or id from your own earlier messages in this chat — rebuild it from what a tool just returned or the pages listed here; earlier messages can carry dead links.
 
 ---
 
