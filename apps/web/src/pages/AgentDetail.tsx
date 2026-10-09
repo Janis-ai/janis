@@ -4210,7 +4210,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           {(['all', 'failing', 'passing', 'unrun'] as const).map((f) => (
             <button
               key={f}
-              className={`btn sm${testFilter === f ? '' : ' ghost'}`}
+              className={`btn sm${testFilter === f ? ' filter-on' : ' ghost'}`}
+              aria-pressed={testFilter === f}
               onClick={() => setTestFilter(f)}
             >
               {f === 'unrun' ? 'Not run' : f[0].toUpperCase() + f.slice(1)} {testCounts[f]}
