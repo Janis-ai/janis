@@ -1021,3 +1021,160 @@ describe('cross-channel externalId collisions', () => {
     expect(gone).toHaveLength(0);
   });
 });
+
+describe('hosted delivery stall reclaim', () => {
+  it('re-fires a wedged pending delivery when the inbound is still unanswered', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(llmResponse('still here — sorry about that')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'Hosted',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-stall-1' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'sitemap for my agent' });
+    const [delivery] = await db
+      .insert(webhookDeliveries)
+      .values({
+        agentId: hosted.id,
+        type: 'message.user',
+        payload: {
+          type: 'message.user',
+          timestamp: new Date().toISOString(),
+          conversation_id: 'ext-stall-1',
+          janis_conversation_id: conv.id,
+          text: 'sitemap for my agent',
+        },
+        status: 'pending',
+        createdAt: new Date(Date.now() - 10 * 60_000),
+      })
+      .returning();
+
+    const { sweepHostedStalls } = await import('../lib/webhooks.js');
+    await sweepHostedStalls(db);
+
+    const [d] = await db
+      .select()
+      .from(webhookDeliveries)
+      .where(eq(webhookDeliveries.id, delivery.id));
+    expect(d.status).toBe('delivered');
+    const outs = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id))
+      .then((rows) => rows.filter((m) => m.direction === 'out'));
+    expect(outs.some((m) => m.text === 'still here — sorry about that')).toBe(true);
+  });
+
+  it('closes out a stalled delivery already answered by another run', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(llmResponse('should never send')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'Hosted',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-stall-2' })
+      .returning();
+    await db
+      .insert(messages)
+      .values([
+        { conversationId: conv.id, direction: 'in', text: 'question' },
+        { conversationId: conv.id, direction: 'out', text: 'answer' },
+      ]);
+    const [delivery] = await db
+      .insert(webhookDeliveries)
+      .values({
+        agentId: hosted.id,
+        type: 'message.user',
+        payload: {
+          type: 'message.user',
+          timestamp: new Date().toISOString(),
+          conversation_id: 'ext-stall-2',
+          janis_conversation_id: conv.id,
+          text: 'question',
+        },
+        status: 'pending',
+        createdAt: new Date(Date.now() - 10 * 60_000),
+      })
+      .returning();
+
+    const { sweepHostedStalls } = await import('../lib/webhooks.js');
+    const callsBefore = fetchMock.mock.calls.length;
+    await sweepHostedStalls(db);
+
+    const [d] = await db
+      .select()
+      .from(webhookDeliveries)
+      .where(eq(webhookDeliveries.id, delivery.id));
+    expect(d.status).toBe('delivered');
+    // already answered — the run must not re-fire (no duplicate reply)
+    expect(fetchMock.mock.calls.length).toBe(callsBefore);
+    const outs = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id))
+      .then((rows) => rows.filter((m) => m.direction === 'out' && m.text === 'should never send'));
+    expect(outs).toHaveLength(0);
+  });
+
+  it('leaves fresh pending deliveries alone', async () => {
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'Hosted',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+      })
+      .returning();
+    const [delivery] = await db
+      .insert(webhookDeliveries)
+      .values({
+        agentId: hosted.id,
+        type: 'message.user',
+        payload: { type: 'message.user', timestamp: new Date().toISOString() },
+        status: 'pending',
+      })
+      .returning();
+
+    const { sweepHostedStalls } = await import('../lib/webhooks.js');
+    await sweepHostedStalls(db);
+
+    const [d] = await db
+      .select()
+      .from(webhookDeliveries)
+      .where(eq(webhookDeliveries.id, delivery.id));
+    expect(d.status).toBe('pending');
+    expect(d.attempts).toBe(0);
+  });
+});

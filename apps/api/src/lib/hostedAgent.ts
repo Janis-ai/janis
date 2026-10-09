@@ -2406,13 +2406,24 @@ export async function runHostedEvent(
   // same unanswered message, producing double replies. A message landing
   // mid-run marks pending and coalesces into one follow-up pass that sees
   // the fresh transcript.
-  const run = convRuns.get(convId) ?? { running: false, pending: false };
+  let run = convRuns.get(convId) ?? { running: false, pending: false, startedAt: 0 };
+  // Watchdog: a run can wedge inside an awaited call whose promise never
+  // settles (dead socket, hung tool). Left alone, run.running stays true and
+  // every later inbound just sets pending on a corpse — the conversation
+  // goes permanently silent on this instance. Past the budget, steal the
+  // run; the advisory lock + newestInboundIsPending keep a recovering
+  // original from double-replying.
+  if (run.running && Date.now() - run.startedAt > RUN_WATCHDOG_MS) {
+    console.warn(`[hosted] ${convId}: wedged run exceeded ${RUN_WATCHDOG_MS}ms — restarting`);
+    run = { running: false, pending: false, startedAt: 0 };
+  }
   convRuns.set(convId, run);
   if (run.running) {
     run.pending = true;
     return;
   }
   run.running = true;
+  run.startedAt = Date.now();
   try {
     // Multi-instance (DATABASE_URL): the Map only serializes this process —
     // a second instance can hold a simultaneous run for the same conv and
@@ -2451,7 +2462,10 @@ export async function runHostedEvent(
     }
   } finally {
     run.running = false;
-    convRuns.delete(convId);
+    // A wedged run unwedging late lands here after the watchdog replaced its
+    // map entry — delete only if the map still points at THIS run, or the
+    // stale finally would drop a live entry mid-run.
+    if (convRuns.get(convId) === run) convRuns.delete(convId);
     // An inbound that slipped in between the loop's last check and teardown
     // set pending on a run nobody will read — re-enter as a fresh run so it
     // isn't dropped.
@@ -2459,7 +2473,11 @@ export async function runHostedEvent(
   }
 }
 
-const convRuns = new Map<string, { running: boolean; pending: boolean }>();
+const convRuns = new Map<string, { running: boolean; pending: boolean; startedAt: number }>();
+// Runs are serialized per conversation; a healthy pass is seconds. 3min means
+// the run is wedged on an await that will never settle — let the next inbound
+// restart it rather than mute the conversation forever.
+const RUN_WATCHDOG_MS = 180_000;
 
 // Control tokens the model is told to append ([HANDOFF], [OFFER_HUMAN],
 // [CANCEL_HANDOFF]) — matched loosely because it misspells them ([HANDOF]

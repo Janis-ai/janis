@@ -12,7 +12,7 @@ import { mirrorToSlack, postSlackAlert } from '../lib/slack.js';
 import { resume } from './takeover.js';
 import { renewGmailWatches, sweepGmail } from './gmailSweep.js';
 import { renewOutlookWatches, sweepOutlook } from './outlookSweep.js';
-import { sweepWebhookRetries } from '../lib/webhooks.js';
+import { sweepHostedStalls, sweepWebhookRetries } from '../lib/webhooks.js';
 import { runJobs, enqueueJob } from '../lib/jobs.js';
 import { sweepCampaigns } from '../lib/campaigns.js';
 import { sweepEvals } from '../lib/evalRuns.js';
@@ -81,6 +81,7 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
       void sweepKnowledge(db).catch((err) => console.error('sweepKnowledge error:', err));
       void sweepSnoozes(db).catch((err) => console.error('sweepSnoozes error:', err));
       void sweepWebhookRetries(db).catch((err) => console.error('sweepWebhookRetries error:', err));
+      void sweepHostedStalls(db).catch((err) => console.error('sweepHostedStalls error:', err));
       void sweepDeliveryFailures(db).catch((err) => console.error('sweepDeliveryFailures error:', err));
       // Queued background work (broadcasts, campaign sends) — sequential,
       // runs off the request path.

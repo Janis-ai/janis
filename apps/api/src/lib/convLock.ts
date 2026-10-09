@@ -45,10 +45,25 @@ export async function acquireConvLock(
   if (!client) return null;
   const started = Date.now();
   const deadline = started + WAIT_BUDGET_MS;
+  // reserve() waits indefinitely when the pool's conns are checked out — a
+  // conn held by a run wedged on a dead socket never releases, and postgres-js
+  // v3 has no query timeout, so both the reserve and the lock queries get
+  // explicit deadlines. A wedged reserve would otherwise park the run inside
+  // acquireConvLock forever: convRuns stays 'running' and every later inbound
+  // on this instance sets pending on a run nobody services.
   let conn: ReservedSql;
+  const reserveP = client.reserve();
   try {
-    conn = await client.reserve();
+    conn = await Promise.race([
+      reserveP,
+      new Promise<never>((_, rej) =>
+        setTimeout(() => rej(new Error('reserve timeout')), WAIT_BUDGET_MS / 2),
+      ),
+    ]);
   } catch (err) {
+    // A late reserve still resolves eventually — release its conn back to the
+    // pool or it leaks alongside the wedged one.
+    void reserveP.then((c) => c.release()).catch(() => {});
     // Direct endpoint unreachable (Neon conn ceiling, transient network) —
     // fail open like the wait timeout: an unlocked reply beats none.
     console.warn(`[convLock] ${convId}: lock conn failed — replying unlocked`, err);
@@ -56,14 +71,34 @@ export async function acquireConvLock(
   }
   try {
     while (true) {
-      const [{ ok }] = await conn`select pg_try_advisory_lock(${LOCK_NS}, hashtext(${convId})) as ok`;
+      // A dead-but-unclosed socket hangs this query forever (postgres-js v3
+      // has no query timeout) — race it so the run can't wedge holding a
+      // reserved conn it never releases.
+      const [{ ok }] = await Promise.race([
+        conn`select pg_try_advisory_lock(${LOCK_NS}, hashtext(${convId})) as ok`,
+        new Promise<never>((_, rej) =>
+          setTimeout(() => rej(new Error('lock query timeout')), 10_000),
+        ),
+      ]);
       if (ok) {
         const waited = Date.now() - started;
         if (waited > 5_000)
           console.warn(`[convLock] ${convId}: acquired after ${waited}ms wait`);
         return async () => {
           try {
-            await conn`select pg_advisory_unlock(${LOCK_NS}, hashtext(${convId}))`;
+            // Dead conn → this query hangs without a timeout, and conn.release
+            // in the finally would never run — a leaked conn that shrinks the
+            // lock pool by one for every wedged unlock. Race it so release is
+            // guaranteed; if the backend is dead its session lock is gone
+            // anyway.
+            await Promise.race([
+              conn`select pg_advisory_unlock(${LOCK_NS}, hashtext(${convId}))`,
+              new Promise<never>((_, rej) =>
+                setTimeout(() => rej(new Error('unlock query timeout')), 10_000),
+              ),
+            ]);
+          } catch (err) {
+            console.warn(`[convLock] ${convId}: unlock failed — releasing conn anyway`, err);
           } finally {
             conn.release();
           }

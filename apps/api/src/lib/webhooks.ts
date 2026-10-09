@@ -1,9 +1,10 @@
 import type { OutboundWebhook, OutboundWebhookType } from '@janis/shared';
-import { and, eq, lt } from 'drizzle-orm';
+import { and, eq, isNull, lt, or } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alerts, webhookDeliveries } from '../db/schema.js';
 import { signWebhookPayload } from './crypto.js';
 import { runHostedEvent } from './hostedAgent.js';
+import { newestInboundIsPending } from './convLock.js';
 import { messageCap } from './plans.js';
 import { bus } from './bus.js';
 import { openAlertOnce } from './alerts.js';
@@ -216,6 +217,89 @@ export async function replayDelivery(
  * the sweeper's leader lock, so exactly one instance reclaims. The 30s grace
  * keeps it clear of healthy timers (delays top out at 15s).
  */
+/**
+ * Reclaim hosted deliveries whose run wedged — process died mid-run, or an
+ * await never settled (dead socket, hung tool) leaving status 'pending'
+ * forever. Hosted rows never set nextAttemptAt, so the retry sweeper skips
+ * them; the claim below reuses that column as the reclaim lock. Only
+ * unanswered conversations are re-fired — a run that replied before wedging
+ * (or a parallel instance that already did) is closed out, not duplicated.
+ */
+export async function sweepHostedStalls(db: Db): Promise<number> {
+  const stale = new Date(Date.now() - 5 * 60_000);
+  const rows = await db
+    .select({ delivery: webhookDeliveries, agent: agents })
+    .from(webhookDeliveries)
+    .innerJoin(agents, eq(webhookDeliveries.agentId, agents.id))
+    .where(
+      and(
+        eq(agents.hosted, true),
+        eq(webhookDeliveries.status, 'pending'),
+        lt(webhookDeliveries.createdAt, stale),
+        // nextAttemptAt doubles as the reclaim claim — unset (never claimed)
+        // or past (claim expired, run presumably dead again).
+        or(
+          isNull(webhookDeliveries.nextAttemptAt),
+          lt(webhookDeliveries.nextAttemptAt, new Date()),
+        ),
+      ),
+    )
+    .limit(20);
+
+  for (const { delivery, agent } of rows) {
+    // Claim: push nextAttemptAt ahead — a run still legitimately executing
+    // re-wins the claim on the next tick instead of racing a duplicate.
+    const claimed = await db
+      .update(webhookDeliveries)
+      .set({ nextAttemptAt: new Date(Date.now() + 10 * 60_000) })
+      .where(
+        and(eq(webhookDeliveries.id, delivery.id), eq(webhookDeliveries.status, 'pending')),
+      )
+      .returning({ id: webhookDeliveries.id });
+    if (!claimed.length) continue;
+
+    const payload = delivery.payload as OutboundWebhook;
+    const convId = payload.janis_conversation_id;
+    if (payload.type !== 'message.user' || !convId) {
+      await db
+        .update(webhookDeliveries)
+        .set({ status: 'failed', lastError: 'stalled non-message hosted delivery' })
+        .where(eq(webhookDeliveries.id, delivery.id));
+      continue;
+    }
+    if (!(await newestInboundIsPending(db, convId))) {
+      await db
+        .update(webhookDeliveries)
+        .set({ status: 'delivered', attempts: delivery.attempts + 1 })
+        .where(eq(webhookDeliveries.id, delivery.id));
+      continue;
+    }
+    console.warn(
+      `[webhooks] reclaiming stalled hosted delivery ${delivery.id} for conversation ${convId}`,
+    );
+    // Awaited, not voided — the sweep is background work anyway, and the row
+    // should record the re-run's real outcome. A re-wedge leaves the row
+    // pending until the claim expires (~10min), then the next tick reclaims.
+    try {
+      await runHostedEvent(db, agent, payload);
+      await db
+        .update(webhookDeliveries)
+        .set({ status: 'delivered', attempts: delivery.attempts + 1 })
+        .where(eq(webhookDeliveries.id, delivery.id));
+    } catch (err) {
+      await db
+        .update(webhookDeliveries)
+        .set({
+          status: 'failed',
+          attempts: delivery.attempts + 1,
+          lastError: err instanceof Error ? err.message : String(err),
+        })
+        .where(eq(webhookDeliveries.id, delivery.id));
+    }
+  }
+  return rows.length;
+}
+
 export async function sweepWebhookRetries(db: Db): Promise<number> {
   const stale = new Date(Date.now() - 30_000);
   const rows = await db
@@ -226,6 +310,9 @@ export async function sweepWebhookRetries(db: Db): Promise<number> {
       and(
         eq(webhookDeliveries.status, 'pending'),
         lt(webhookDeliveries.nextAttemptAt, stale),
+        // Hosted deliveries reuse nextAttemptAt as the stall-reclaim claim —
+        // they run in-process, and attempt() would fail them outright.
+        eq(agents.hosted, false),
       ),
     )
     .limit(50);
