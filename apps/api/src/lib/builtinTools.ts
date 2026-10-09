@@ -699,6 +699,29 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
 
       const prompt = (args.system_prompt ?? '').trim();
       const greeting = (args.greeting ?? '').trim();
+      // Double-fired calls are common (retries, the model re-reading a
+      // confirmation as a fresh ask) — a same-name agent created moments
+      // ago is almost certainly the same request: return it, don't dupe.
+      const [dupe] = await ctx.db
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(
+          and(
+            eq(agents.workspaceId, ws.id),
+            sql`lower(${agents.name}) = lower(${name})`,
+            gt(agents.createdAt, new Date(Date.now() - 15 * 60_000)),
+          ),
+        )
+        .limit(1);
+      if (dupe) {
+        return JSON.stringify({
+          already_created: true,
+          agent_id: dupe.id,
+          name: dupe.name,
+          url: `${env.webOrigin}/agents/${dupe.id}`,
+          note: `an agent named ${dupe.name} was just created — this is that same agent; reply with this exact link: [Open ${dupe.name}](${env.webOrigin}/agents/${dupe.id})`,
+        });
+      }
       const [row] = await ctx.db
         .insert(agents)
         .values({
@@ -759,7 +782,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         name: row.name,
         url: `${env.webOrigin}/agents/${row.id}`,
         channel_id: chan.id,
-        note: 'the agent is live on its webchat channel — send the visitor this link to open it',
+        note: `the agent is live on its webchat channel — reply with this exact link: [Open ${row.name}](${env.webOrigin}/agents/${row.id})`,
       });
     },
   },

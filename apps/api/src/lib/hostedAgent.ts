@@ -1318,7 +1318,24 @@ export async function verifiedIdentityFor(
             ),
           )
           .limit(1);
-        if (mem) operator = true;
+        if (mem) {
+          operator = true;
+        } else if (env.supportChannelId) {
+          // Every signed-in user on the concierge channel is a copilot user
+          // — the concierge's job is helping them run THEIR workspace. Tools
+          // still gate on admin rights in their own workspace downstream.
+          const [ownBind] = await db
+            .select({ id: channelBindings.id })
+            .from(channelBindings)
+            .where(
+              and(
+                eq(channelBindings.conversationId, conv.id),
+                eq(channelBindings.channelId, env.supportChannelId),
+              ),
+            )
+            .limit(1);
+          if (ownBind) operator = true;
+        }
       }
     }
   }
