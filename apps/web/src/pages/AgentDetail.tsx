@@ -4342,7 +4342,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                         ` · ${ts.filter((x) => x.last_run?.passed === false).length} failing`}
                     </span>
                   </summary>
-                  <div className="row" style={{ margin: '8px 0' }}>
+                  <div className="row" style={{ margin: '8px 0 8px 16px' }}>
                     <span className="grow muted" style={{ fontSize: 12 }}>
                       split from one conversation — one rescue point each
                     </span>
@@ -4356,7 +4356,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                       </button>
                     )}
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginLeft: 16 }}>
                     {ts.map(renderTest)}
                   </div>
                 </details>
