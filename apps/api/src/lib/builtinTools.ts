@@ -660,7 +660,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'create_agent',
     description:
-      "Create a new hosted AI agent in a workspace the signed-in visitor administers — 'take a prompt, get a working agent'. Confirm the name and purpose with the visitor first, then call this with a system_prompt you draft from their description. Creates the agent with a live webchat channel and returns its console URL. Ask which workspace only if they administer more than one.",
+      "Propose creating a new hosted AI agent in a workspace the signed-in visitor administers — 'take a prompt, get a working agent'. Confirm the name and purpose with the visitor first, then call this with a system_prompt you draft from their description. Posts an approval card showing the name + drafted instructions — nothing is created until the visitor approves. On approval the visitor lands on the builder's Teach it step — do NOT offer channels, the builder covers that next. Ask which workspace only if they administer more than one.",
     params: {
       name: 'agent name, e.g. "Acme Support"',
       system_prompt:
@@ -722,10 +722,77 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           note: `an agent named ${dupe.name} was just created — this is that same agent; reply with this exact link: [Open ${dupe.name}](${env.webOrigin}/agents/${dupe.id})`,
         });
       }
+      // The card carries the brief — name + drafted instructions — so the
+      // visitor approves the actual plan, not a text "y".
+      return parkConciergeAction(
+        ctx,
+        'apply_create_agent',
+        {
+          workspace_id: ws.id,
+          name,
+          system_prompt: prompt,
+          ...(greeting ? { greeting } : {}),
+        },
+        `Create agent ${name}`,
+        {
+          workspace: ws.name,
+          name,
+          instructions: prompt.length > 200 ? `${prompt.slice(0, 200)}…` : prompt || '(default)',
+          ...(greeting ? { greeting } : {}),
+        },
+      );
+    },
+  },
+  {
+    // Executor for approved create_agent cards — hidden from the model.
+    name: 'apply_create_agent',
+    description: 'internal — executes an approved create_agent action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+            eq(memberships.role, 'admin'),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs admin rights on the target workspace';
+      const name = String(args.name ?? '').trim().slice(0, 120);
+      if (!name) return 'error: name is required';
+      // A stale approved card must not create a second agent of the same
+      // name right after the first — re-run the proposer's dupe check.
+      const [dupe] = await ctx.db
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(
+          and(
+            eq(agents.workspaceId, wsId),
+            sql`lower(${agents.name}) = lower(${name})`,
+            gt(agents.createdAt, new Date(Date.now() - 15 * 60_000)),
+          ),
+        )
+        .limit(1);
+      if (dupe) {
+        return JSON.stringify({
+          summary: `${dupe.name} already exists`,
+          url: `${env.webOrigin}/agents/${dupe.id}`,
+        });
+      }
+      const prompt = String(args.system_prompt ?? '').trim().slice(0, 5000);
+      const greeting = String(args.greeting ?? '').trim().slice(0, 500);
       const [row] = await ctx.db
         .insert(agents)
         .values({
-          workspaceId: ws.id,
+          workspaceId: wsId,
           ownerUserId: user.id,
           name,
           webhookSecret: generateWebhookSecret(),
@@ -737,22 +804,11 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           },
         })
         .returning();
-      // A hosted agent with no channel can't talk to anyone — give it a
-      // webchat channel so it's live the moment the link opens.
-      const [chan] = await ctx.db
-        .insert(channels)
-        .values({
-          workspaceId: ws.id,
-          agentId: row.id,
-          kind: 'webchat',
-          name: row.name,
-          credentials: {},
-        })
-        .returning();
-      invalidateChannelCache();
+      // No channel — the builder's Teach/Guide/Abilities/Deploy steps take
+      // the operator the rest of the way, including picking channels.
       // Same Slack nicety as the API route — per-agent alert channel when the
       // workspace is connected; best-effort, never blocks creation.
-      const inst = await getInstallation(ctx.db, ws.id);
+      const inst = await getInstallation(ctx.db, wsId);
       if (inst) {
         const slug = sanitizeChannelName(`janis-${row.name}`) || 'janis-agent';
         const { channel } = await createSlackChannel(inst, slug);
@@ -766,7 +822,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         }
       }
       await audit(ctx.db, {
-        workspaceId: ws.id,
+        workspaceId: wsId,
         userId: user.id,
         userName: user.name,
         action: 'agent.create',
@@ -775,14 +831,12 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         meta: { name: row.name, hosted: true, via: 'concierge' },
       });
       // Open agent pages on the visitor's workspace refresh over SSE.
-      bus.publish(ws.id, { type: 'agent', data: { id: row.id } });
+      bus.publish(wsId, { type: 'agent', data: { id: row.id } });
       return JSON.stringify({
-        created: true,
+        summary: `Created ${row.name} — send them to Teach it next`,
         agent_id: row.id,
         name: row.name,
-        url: `${env.webOrigin}/agents/${row.id}`,
-        channel_id: chan.id,
-        note: `the agent is live on its webchat channel — reply with this exact link: [Open ${row.name}](${env.webOrigin}/agents/${row.id})`,
+        url: `${env.webOrigin}/agents/new/${row.id}?step=teach`,
       });
     },
   },

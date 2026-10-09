@@ -315,27 +315,53 @@ describe('create_agent builtin', () => {
     expect(out.error).toContain('admin');
   });
 
-  it('creates a hosted agent + webchat channel in the visitor\'s workspace', async () => {
-    const out = JSON.parse(
-      await createAgent().run(
-        { name: 'Acme Support', system_prompt: 'You answer Acme shipping questions.', greeting: 'Hi!' },
-        ctx(CONV2),
-      ),
+  const applyCreate = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_create_agent')!;
+
+  it('parks a card; approving creates the hosted agent with no channel and the Teach link', async () => {
+    const out = await createAgent().run(
+      { name: 'Acme Support', system_prompt: 'You answer Acme shipping questions.', greeting: 'Hi!' },
+      cctx(CONV2),
     );
-    expect(out.created).toBe(true);
-    expect(out.url).toBe(`https://app.janis.ai/agents/${out.agent_id}`);
-    const [agent] = await db.select().from(agents).where(eq(agents.id, out.agent_id));
+    expect(out).toContain('action_card');
+    const pa = (
+      await db.select().from(pendingActions).where(eq(pendingActions.conversationId, CONV2))
+    ).find((p) => p.toolName === 'apply_create_agent' && p.status === 'pending');
+    expect(pa).toBeTruthy();
+    const applied = JSON.parse(
+      await applyCreate().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(applied.agent_id).toBeTruthy();
+    expect(applied.url).toBe(`https://app.janis.ai/agents/new/${applied.agent_id}?step=teach`);
+    const [agent] = await db.select().from(agents).where(eq(agents.id, applied.agent_id));
     expect(agent.workspaceId).toBe(WS2); // visitor's workspace, not the concierge's
     expect(agent.hosted).toBe(true);
     const cfg = agent.config as { system_prompt?: string; greeting?: string };
     expect(cfg.system_prompt).toContain('shipping');
     expect(cfg.greeting).toBe('Hi!');
-    const [chan] = await db
+    // No auto channel — the builder's Teach→Deploy steps cover that.
+    const chans = await db.select().from(channels).where(eq(channels.agentId, agent.id));
+    expect(chans.length).toBe(0);
+    // Approving the same card a second time must not duplicate the agent.
+    const again = JSON.parse(
+      await applyCreate().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(again.summary).toContain('already exists');
+    const dupes = await db
       .select()
-      .from(channels)
-      .where(eq(channels.agentId, agent.id))
-      .limit(1);
-    expect(chan.kind).toBe('webchat');
+      .from(agents)
+      .where(and(eq(agents.workspaceId, WS2), eq(agents.name, 'Acme Support')));
+    expect(dupes.length).toBe(1);
+    // Remove the parked card so later tests' unfiltered pending-action
+    // lookups don't trip on it.
+    await db.delete(pendingActions).where(eq(pendingActions.id, pa!.id));
   });
 
   it('asks which workspace when the visitor administers several, honours the hint', async () => {
@@ -348,12 +374,25 @@ describe('create_agent builtin', () => {
     });
     const ambiguous = JSON.parse(await createAgent().run({ name: 'B' }, ctx(CONV2)));
     expect(ambiguous.error).toContain('Free WS');
-    const picked = JSON.parse(
-      await createAgent().run({ name: 'B2', workspace: 'ann second' }, ctx(CONV2)),
+    const picked = await createAgent().run({ name: 'B2', workspace: 'ann second' }, cctx(CONV2));
+    expect(picked).toContain('action_card');
+    const pa = (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_create_agent' && p.status === 'pending');
+    const applied = JSON.parse(
+      await applyCreate().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
     );
-    expect(picked.created).toBe(true);
-    const [agent] = await db.select().from(agents).where(eq(agents.id, picked.agent_id));
+    const [agent] = await db.select().from(agents).where(eq(agents.id, applied.agent_id));
     expect(agent.workspaceId).toBe(w5.id);
+    await db.delete(pendingActions).where(eq(pendingActions.id, pa!.id));
   });
 });
 
