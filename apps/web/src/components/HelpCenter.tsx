@@ -162,6 +162,70 @@ export function HelpCenter({ agent }: { agent: Agent }) {
     onSuccess: invalidate,
   });
 
+  const renderForm = (heading: string) => (
+    <div className="card">
+      <strong>{heading}</strong>
+      <input
+        placeholder="Title — e.g. How do I return an order?"
+        value={form.title}
+        onChange={(e) => setForm({ ...form, title: e.target.value })}
+        style={{ width: '100%', marginTop: 10 }}
+      />
+      <div className="row" style={{ marginTop: 8 }}>
+        <input
+          placeholder="Category — e.g. Shipping, Billing"
+          value={form.category}
+          onChange={(e) => setForm({ ...form, category: e.target.value })}
+          style={{ flex: 1 }}
+        />
+        <input
+          placeholder="URL slug — blank generates from title"
+          value={form.slug}
+          onChange={(e) =>
+            setForm({ ...form, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })
+          }
+          style={{ flex: 1 }}
+        />
+      </div>
+      <input
+        placeholder="SEO title (optional — defaults to article title)"
+        value={form.seo_title}
+        onChange={(e) => setForm({ ...form, seo_title: e.target.value })}
+        style={{ width: '100%', marginTop: 8 }}
+      />
+      <input
+        placeholder="SEO description (optional — defaults to the article opening)"
+        value={form.seo_description}
+        onChange={(e) => setForm({ ...form, seo_description: e.target.value })}
+        style={{ width: '100%', marginTop: 8 }}
+      />
+      <textarea
+        rows={12}
+        placeholder="Article body — plain text. The agent answers from this verbatim once published."
+        value={form.body}
+        onChange={(e) => setForm({ ...form, body: e.target.value })}
+        style={{ width: '100%', marginTop: 8 }}
+      />
+      <div className="row" style={{ marginTop: 10 }}>
+        <button
+          className="btn primary sm"
+          disabled={!form.title.trim() || save.isPending}
+          onClick={() => save.mutate(true)}
+        >
+          {save.isPending ? 'Saving…' : 'Save & publish'}
+        </button>
+        <button
+          className="btn sm"
+          disabled={!form.title.trim() || save.isPending}
+          onClick={() => save.mutate(false)}
+        >
+          Save draft
+        </button>
+        <button className="btn sm" onClick={() => setEditing(null)}>Cancel</button>
+      </div>
+    </div>
+  );
+
   const publicUrl = `${window.location.origin}/help/${agent.id}`;
   const agentDomain = (agent.config as { help_domain?: string | null } | undefined)?.help_domain ?? null;
   const agentHelpUrl = (agent.config as { help_url?: string | null } | undefined)?.help_url ?? null;
@@ -356,101 +420,43 @@ export function HelpCenter({ agent }: { agent: Agent }) {
         </div>
       )}
 
-      {editing && (
-        <div className="card">
-          <strong>{editing === 'new' ? 'New article' : 'Edit article'}</strong>
-          <input
-            placeholder="Title — e.g. How do I return an order?"
-            value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-            style={{ width: '100%', marginTop: 10 }}
-          />
-          <div className="row" style={{ marginTop: 8 }}>
-            <input
-              placeholder="Category — e.g. Shipping, Billing"
-              value={form.category}
-              onChange={(e) => setForm({ ...form, category: e.target.value })}
-              style={{ flex: 1 }}
-            />
-            <input
-              placeholder="URL slug — blank generates from title"
-              value={form.slug}
-              onChange={(e) =>
-                setForm({ ...form, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })
-              }
-              style={{ flex: 1 }}
-            />
-          </div>
-          <input
-            placeholder="SEO title (optional — defaults to article title)"
-            value={form.seo_title}
-            onChange={(e) => setForm({ ...form, seo_title: e.target.value })}
-            style={{ width: '100%', marginTop: 8 }}
-          />
-          <input
-            placeholder="SEO description (optional — defaults to the article opening)"
-            value={form.seo_description}
-            onChange={(e) => setForm({ ...form, seo_description: e.target.value })}
-            style={{ width: '100%', marginTop: 8 }}
-          />
-          <textarea
-            rows={12}
-            placeholder="Article body — plain text. The agent answers from this verbatim once published."
-            value={form.body}
-            onChange={(e) => setForm({ ...form, body: e.target.value })}
-            style={{ width: '100%', marginTop: 8 }}
-          />
-          <div className="row" style={{ marginTop: 10 }}>
-            <button
-              className="btn primary sm"
-              disabled={!form.title.trim() || save.isPending}
-              onClick={() => save.mutate(true)}
-            >
-              {save.isPending ? 'Saving…' : 'Save & publish'}
-            </button>
-            <button
-              className="btn sm"
-              disabled={!form.title.trim() || save.isPending}
-              onClick={() => save.mutate(false)}
-            >
-              Save draft
-            </button>
-            <button className="btn sm" onClick={() => setEditing(null)}>Cancel</button>
-          </div>
-        </div>
-      )}
+      {editing === 'new' && renderForm('New article')}
 
       <Insights agentId={agent.id} />
 
-      {articles.map((a) => (
-        <div key={a.id} className="card">
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <div>
-              <strong>{a.title}</strong>
-              <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>
-                {a.category} · {a.status}
-                {a.slug ? ` · /${a.slug}` : ''}
-                {a.published_at ? ` · published ${new Date(a.published_at).toLocaleDateString()}` : ''}
-              </span>
-            </div>
-            <div className="row">
-              <button className="btn sm" onClick={() => toggle.mutate(a)}>
-                {a.status === 'published' ? 'Unpublish' : 'Publish'}
-              </button>
-              <button
-                className="btn sm"
-                onClick={() => {
-                  setForm(fromArticle(a));
-                  setEditing(a);
-                }}
-              >
-                Edit
-              </button>
-              <button className="btn sm danger" onClick={() => remove.mutate(a)}>Delete</button>
+      {articles.map((a) =>
+        editing !== 'new' && editing?.id === a.id ? (
+          <div key={a.id}>{renderForm(`Edit — ${a.title}`)}</div>
+        ) : (
+          <div key={a.id} className="card">
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <div>
+                <strong>{a.title}</strong>
+                <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>
+                  {a.category} · {a.status}
+                  {a.slug ? ` · /${a.slug}` : ''}
+                  {a.published_at ? ` · published ${new Date(a.published_at).toLocaleDateString()}` : ''}
+                </span>
+              </div>
+              <div className="row">
+                <button className="btn sm" onClick={() => toggle.mutate(a)}>
+                  {a.status === 'published' ? 'Unpublish' : 'Publish'}
+                </button>
+                <button
+                  className="btn sm"
+                  onClick={() => {
+                    setForm(fromArticle(a));
+                    setEditing(a);
+                  }}
+                >
+                  Edit
+                </button>
+                <button className="btn sm danger" onClick={() => remove.mutate(a)}>Delete</button>
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        ),
+      )}
       {articles.length === 0 && !editing && (
         <div className="card muted">No articles yet — publish your FAQ here and the agent will answer from it too.</div>
       )}
