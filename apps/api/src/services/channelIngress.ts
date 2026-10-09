@@ -268,10 +268,17 @@ export async function handleChannelMessage(
   // widget, cross-origin embeds presenting a signed claim for a real Janis
   // user). Host claims for their own users annotate the visitor's
   // conversation instead, and anonymous visitors keep their senderId binding.
-  const participantId =
+  const baseParticipant =
     msg.user?.verified && msg.user.id && (msg.user.via === 'session' || msg.user.janisUser)
       ? `u:${msg.user.id}`
       : msg.senderId;
+  // Copilot "New chat" — a thread key forks the verified user's participant
+  // into u:<id>:<key>, binding its own conversation instead of the shared
+  // u:<id> thread.
+  const participantId =
+    msg.thread && baseParticipant.startsWith('u:')
+      ? `${baseParticipant}:${msg.thread}`
+      : baseParticipant;
   const creds = channel.credentials as ChannelCredentials;
   // Internal test channels namespace externalId by channel — an operator's
   // test thread must not collide with their real visitor conversation on the
@@ -286,9 +293,18 @@ export async function handleChannelMessage(
 
   // A verified user posting from a browser that has an anonymous thread
   // adopts it — the old visitor conversation becomes (or folds into) the
-  // user-bound one rather than stranding the transcript.
+  // user-bound one rather than stranding the transcript. On a named copilot
+  // thread the browser's own thread still folds in, but the verified-email
+  // sweep stays on the default thread — a fresh chat shouldn't inherit the
+  // user's whole anonymous past.
   if (participantId !== msg.senderId) {
-    await adoptVisitorConversation(db, channel, participantId, msg.senderId, msg.user?.email);
+    await adoptVisitorConversation(
+      db,
+      channel,
+      participantId,
+      msg.senderId,
+      msg.thread ? undefined : msg.user?.email,
+    );
   }
 
   // Find or create the conversation + binding

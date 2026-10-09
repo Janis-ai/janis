@@ -232,6 +232,11 @@ export interface InboundMessage {
      *  user_profile.metadata and reaches the agent as background context. */
     traits?: Record<string, unknown>;
   };
+  /** Copilot thread key (webchat only) — a verified Janis user's parallel
+   *  concierge chats scope the participant to u:<id>:<thread> so each keys
+   *  its own conversation instead of the shared u:<id> thread. Ignored for
+   *  anonymous visitors (their visitor_id already keys the thread). */
+  thread?: string;
   attachments?: AttachmentRef[];
 }
 

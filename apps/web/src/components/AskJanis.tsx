@@ -253,6 +253,7 @@ export function AskJanis({
   onSaveTest,
   hideHeader,
   visitorOverride,
+  thread,
   focusSignal,
   draftMessage,
   draftNonce,
@@ -334,6 +335,10 @@ export function AskJanis({
    *  each test chat is its own persistent conversation (remount via key
    *  alone would reuse the localStorage id and continue the old thread). */
   visitorOverride?: string;
+  /** Copilot thread key (t<rand>) — Ask Janis rail only. Scopes a signed-in
+   *  user's concierge chat to its own conversation (server forks the u:
+   *  participant); undefined rides the default shared thread. */
+  thread?: string;
   /** Bump to focus the composer — "Save & test" opens the panel and lands
    *  the cursor ready to type. */
   focusSignal?: number;
@@ -439,6 +444,7 @@ export function AskJanis({
     if (!loadStart.current) loadStart.current = Date.now();
     try {
       let url = `/chat/${channelId}/messages?visitor_id=${visitor}`;
+      if (thread) url += `&thread=${encodeURIComponent(thread)}`;
       if (lastTs.current) url += `&after=${encodeURIComponent(lastTs.current)}`;
       const d = await api<{
         messages: ChatMsg[];
@@ -536,7 +542,7 @@ export function AskJanis({
     const prevTop = el?.scrollTop ?? 0;
     try {
       const d = await api<{ messages: ChatMsg[]; has_more?: boolean }>(
-        `/chat/${channelId}/messages?visitor_id=${visitor}&before=${encodeURIComponent(oldestTs.current)}`,
+        `/chat/${channelId}/messages?visitor_id=${visitor}&before=${encodeURIComponent(oldestTs.current)}${thread ? `&thread=${encodeURIComponent(thread)}` : ''}`,
       );
       const fresh = d.messages.filter((m) => {
         if (m.id && seen.current.has(m.id)) return false;
@@ -915,6 +921,9 @@ export function AskJanis({
           // widget/chip taps arrive marked — a pick with context, not a
           // typed instruction
           ...(tap ? { tap: true, ...(tap.of ? { tap_of: tap.of } : {}) } : {}),
+          // copilot thread — Ask Janis "New chat" scopes the signed-in
+          // user's participant to this key's own conversation
+          ...(thread ? { thread } : {}),
         }),
       });
       showTyping();
@@ -1322,7 +1331,7 @@ export function AskJanis({
               lastTypingPing.current = Date.now();
               void api(`/chat/${channelId}/typing`, {
                 method: 'POST',
-                body: JSON.stringify({ visitor_id: visitor }),
+                body: JSON.stringify({ visitor_id: visitor, ...(thread ? { thread } : {}) }),
               }).catch(() => {});
             }
           }}

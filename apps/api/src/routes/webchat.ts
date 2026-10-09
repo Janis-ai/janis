@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { getCookie } from 'hono/cookie';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import { agents, agentWidgets, channelBindings, channels, conversations, helpArticles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
@@ -30,6 +30,14 @@ import { operatorIdentities } from '../lib/access.js';
  * in the visitor's browser) is the transcript credential.
  */
 const VISITOR_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+/** Copilot thread key — the Ask Janis rail's "New chat" mints `t<rand>`
+ *  tokens that scope a signed-in user's participant to u:<id>:<key>, giving
+ *  each concierge chat its own conversation. Anonymous visitors ignore it —
+ *  their visitor_id is already the thread key. */
+const THREAD_RE = /^t[a-z0-9]{5,39}$/;
+const threadFor = (raw: string | undefined | null) =>
+  raw && THREAD_RE.test(raw) ? raw : undefined;
 
 /**
  * Server-side dictation backend. Prefers the metered default account —
@@ -160,6 +168,9 @@ const postMessage = z
     // intent. tap_of names the card/widget it came from.
     tap: z.boolean().optional(),
     tap_of: z.string().max(300).optional(),
+    // Copilot thread key (t<rand>) — scopes a signed-in concierge chat to
+    // its own conversation; ignored for anonymous visitors.
+    thread: z.string().max(48).optional(),
   })
   .refine((d) => d.text.trim().length > 0 || (d.attachments?.length ?? 0) > 0, {
     message: 'text or attachments required',
@@ -340,9 +351,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * user) keys the conversation on the user so the same person keeps one
  * thread across devices and surfaces. Host-signed claims for their own
  * (non-Janis) users annotate the visitor's conversation instead. */
-function participantFor(resolved: InboundMessage['user'] | undefined, visitorId: string) {
+function participantFor(
+  resolved: InboundMessage['user'] | undefined,
+  visitorId: string,
+  thread?: string,
+) {
   return resolved?.verified && resolved.id && (resolved.via === 'session' || resolved.janisUser)
-    ? `u:${resolved.id}`
+    ? `u:${resolved.id}${thread ? `:${thread}` : ''}`
     : visitorId;
 }
 
@@ -545,8 +560,9 @@ export function webchatRoutes(db: Db) {
   app.post('/:token/messages', zValidator('json', postMessage), async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
-    const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of } =
+    const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of, thread } =
       c.req.valid('json');
+    const threadKey = threadFor(thread);
     // Inbound throttle — anonymous widgets are the spam/cost surface. Two
     // Postgres-backed buckets (exact across instances): per-visitor stops a
     // single scripted visitor; the channel ceiling bounds a many-visitor
@@ -577,7 +593,7 @@ export function webchatRoutes(db: Db) {
     // landed already; if a stored inbound carries this id, acknowledge and
     // skip rather than double-store.
     if (client_id) {
-      const conv = await findConversation(db, channel, participantFor(resolved, visitor_id));
+      const conv = await findConversation(db, channel, participantFor(resolved, visitor_id, threadKey));
       if (conv) {
         const [dup] = await db
           .select({ id: messages.id })
@@ -603,6 +619,7 @@ export function webchatRoutes(db: Db) {
       text,
       name: resolved?.name ?? name,
       user: resolved,
+      thread: threadKey,
       attachments,
       payload: {
         ...(client_id ? { client_id } : {}),
@@ -619,15 +636,26 @@ export function webchatRoutes(db: Db) {
   // before the first message or after a login/logout on the host page.
   app.post(
     '/:token/identify',
-    zValidator('json', z.object({ visitor_id: z.string().regex(VISITOR_RE), user: identityClaim })),
+    zValidator(
+      'json',
+      z.object({
+        visitor_id: z.string().regex(VISITOR_RE),
+        user: identityClaim,
+        thread: z.string().max(48).optional(),
+      }),
+    ),
     async (c) => {
       const channel = await findChannel(db, c.req.param('token'));
       if (!channel) return c.json({ error: 'not found' }, 404);
-      const { visitor_id, user } = c.req.valid('json');
+      const { visitor_id, user, thread } = c.req.valid('json');
       const resolved = simVisitor(channel, visitor_id)
         ? undefined
         : await resolveIdentity(c, db, channel, user);
-      const conv = await findConversation(db, channel, participantFor(resolved, visitor_id));
+      const conv = await findConversation(
+        db,
+        channel,
+        participantFor(resolved, visitor_id, threadFor(thread)),
+      );
       if (!resolved || !conv) return c.json({ ok: true }); // attaches on first message anyway
       const profile = (conv.userProfile ?? {}) as Record<string, unknown>;
       const patch = {
@@ -670,6 +698,59 @@ export function webchatRoutes(db: Db) {
       .update(`${u.id}|${u.email}|${u.name}`)
       .digest('hex');
     return c.json({ id: u.id, name: u.name, email: u.email, sig });
+  });
+
+  // Copilot history — the signed-in user's concierge threads on this
+  // channel's agent. Named threads carry externalId `webchat:u:<id>:t<key>`;
+  // the default shared thread is plain `webchat:u:<id>` (thread: null).
+  // Session-cookie only — anonymous visitors keep single visitor-keyed
+  // threads and have nothing to list.
+  app.get('/:token/threads', async (c) => {
+    const channel = await findChannel(db, c.req.param('token'));
+    if (!channel) return c.json({ error: 'not found' }, 404);
+    const token = getCookie(c, SESSION_COOKIE);
+    const [row] = token
+      ? await db
+          .select({ user: users })
+          .from(sessions)
+          .innerJoin(users, eq(sessions.userId, users.id))
+          .where(and(eq(sessions.id, sha256(token)), gt(sessions.expiresAt, new Date())))
+          .limit(1)
+      : [];
+    if (!row) return c.json({ threads: [] });
+    const prefix = `${channel.kind}:u:${row.user.id}`;
+    const convs = await db
+      .select({
+        id: conversations.id,
+        externalId: conversations.externalId,
+        state: conversations.state,
+        preview: conversations.lastMessagePreview,
+        at: conversations.lastMessageAt,
+        created: conversations.createdAt,
+      })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.agentId, channel.agentId),
+          or(
+            eq(conversations.externalId, prefix),
+            sql`${conversations.externalId} like ${prefix + ':%'}`,
+          ),
+        ),
+      )
+      .orderBy(desc(sql`coalesce(${conversations.lastMessageAt}, ${conversations.createdAt})`))
+      .limit(30);
+    return c.json({
+      threads: convs
+        .filter((cv) => cv.externalId)
+        .map((cv) => ({
+          thread: cv.externalId === prefix ? null : cv.externalId!.slice(prefix.length + 1),
+          conversation_id: cv.id,
+          state: cv.state,
+          preview: cv.preview,
+          at: (cv.at ?? cv.created).toISOString(),
+        })),
+    });
   });
 
   // Widget file upload — same storage as console uploads, but scoped to a
@@ -775,16 +856,26 @@ export function webchatRoutes(db: Db) {
     if (!bound && !VISITOR_RE.test(visitorId)) {
       return c.json({ error: 'bad visitor_id' }, 400);
     }
+    const thread = threadFor(c.req.query('thread'));
+    const participant = participantFor(resolved, visitorId, thread);
     // Same adoption as ingress — a signed-in user's poll pulls their
-    // browser's anonymous thread into the user-bound conversation even
-    // before they send anything new.
+    // browser's anonymous thread into the conversation being viewed even
+    // before they send anything new. The verified-email sweep stays on the
+    // default thread: polling a named copilot thread folds this browser's
+    // own anon chat in, but never drags the user's whole past with it.
     if (bound && VISITOR_RE.test(visitorId)) {
-      await adoptVisitorConversation(db, channel, `u:${resolved!.id}`, visitorId, resolved!.email);
+      await adoptVisitorConversation(
+        db,
+        channel,
+        participant,
+        visitorId,
+        thread ? undefined : resolved!.email,
+      );
     }
     // Live transcript data must never be heuristically cached — a stale
     // response hides new messages and makes delivery look broken.
     c.header('cache-control', 'no-store');
-    const conv = await findConversation(db, channel, participantFor(resolved, visitorId));
+    const conv = await findConversation(db, channel, participant);
     if (!conv) return c.json({ messages: [], state: 'new' });
 
     const after = c.req.query('after');
@@ -925,7 +1016,7 @@ export function webchatRoutes(db: Db) {
           : {}),
       })),
       state: conv.state,
-      participant: participantFor(resolved, visitorId),
+      participant,
       conversation_id: conv.id,
       // an operator composing in the console — the widget/rail render dots;
       // name is null when the operator opted out of identity sharing
@@ -942,15 +1033,21 @@ export function webchatRoutes(db: Db) {
   // Throttled client-side; drops silently when the thread doesn't exist yet.
   app.post(
     '/:token/typing',
-    zValidator('json', z.object({ visitor_id: z.string().regex(VISITOR_RE) })),
+    zValidator(
+      'json',
+      z.object({
+        visitor_id: z.string().regex(VISITOR_RE),
+        thread: z.string().max(48).optional(),
+      }),
+    ),
     async (c) => {
       const channel = await findChannel(db, c.req.param('token'));
       if (!channel) return c.json({ error: 'not found' }, 404);
-      const { visitor_id } = c.req.valid('json');
+      const { visitor_id, thread } = c.req.valid('json');
       const resolved = simVisitor(channel, visitor_id)
         ? undefined
         : await resolveIdentity(c, db, channel, undefined);
-      const participant = participantFor(resolved, visitor_id);
+      const participant = participantFor(resolved, visitor_id, threadFor(thread));
       const conv = await findConversation(db, channel, participant);
       if (!conv) return c.json({ ok: true });
       const [agent] = await db
@@ -973,7 +1070,7 @@ export function webchatRoutes(db: Db) {
             user_id: internal
               ? null
               : participant.startsWith('u:')
-                ? participant.slice(2)
+                ? participant.slice(2).split(':')[0]
                 : null,
           },
         });
@@ -987,15 +1084,21 @@ export function webchatRoutes(db: Db) {
   app.post(
     '/:token/end',
     rateLimit({ scope: 'chat-end', windowMs: 60_000, max: 10 }),
-    zValidator('json', z.object({ visitor_id: z.string().regex(VISITOR_RE) })),
+    zValidator(
+      'json',
+      z.object({
+        visitor_id: z.string().regex(VISITOR_RE),
+        thread: z.string().max(48).optional(),
+      }),
+    ),
     async (c) => {
       const channel = await findChannel(db, c.req.param('token'));
       if (!channel) return c.json({ error: 'not found' }, 404);
-      const { visitor_id } = c.req.valid('json');
+      const { visitor_id, thread } = c.req.valid('json');
       const resolved = simVisitor(channel, visitor_id)
         ? undefined
         : await resolveIdentity(c, db, channel, undefined);
-      const participant = participantFor(resolved, visitor_id);
+      const participant = participantFor(resolved, visitor_id, threadFor(thread));
       const conv = await findConversation(db, channel, participant);
       if (!conv || conv.state === 'archived') return c.json({ ok: true, state: 'archived' });
       const [agent] = await db.select().from(agents).where(eq(agents.id, channel.agentId)).limit(1);
@@ -1017,15 +1120,21 @@ export function webchatRoutes(db: Db) {
   app.post(
     '/:token/new',
     rateLimit({ scope: 'chat-new', windowMs: 60_000, max: 5 }),
-    zValidator('json', z.object({ visitor_id: z.string().regex(VISITOR_RE) })),
+    zValidator(
+      'json',
+      z.object({
+        visitor_id: z.string().regex(VISITOR_RE),
+        thread: z.string().max(48).optional(),
+      }),
+    ),
     async (c) => {
       const channel = await findChannel(db, c.req.param('token'));
       if (!channel) return c.json({ error: 'not found' }, 404);
-      const { visitor_id } = c.req.valid('json');
+      const { visitor_id, thread } = c.req.valid('json');
       const resolved = simVisitor(channel, visitor_id)
         ? undefined
         : await resolveIdentity(c, db, channel, undefined);
-      const participant = participantFor(resolved, visitor_id);
+      const participant = participantFor(resolved, visitor_id, threadFor(thread));
       const conv = await findConversation(db, channel, participant);
       if (!conv) return c.json({ ok: true, state: 'new' });
       if (conv.state !== 'archived') return c.json({ ok: true, state: conv.state });

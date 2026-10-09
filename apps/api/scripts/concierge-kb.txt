@@ -49,6 +49,10 @@ Janis sign-in is OAuth only: Google or Slack at https://app.janis.ai/login — t
 
 ---
 
+This copilot chat has History and New chat in its header — each New chat is a separate conversation with its own context; History reopens earlier ones. If a thread has gone sideways or the topic shifts completely, suggest New chat.
+
+---
+
 Janis remembers your last workspace — signing back in lands you where you left off.
 
 ---

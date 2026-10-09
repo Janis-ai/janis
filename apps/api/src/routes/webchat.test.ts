@@ -1559,6 +1559,102 @@ describe('webchat authenticated identity', () => {
     expect(meta.janis_account).toBe('yes');
     expect(meta.workspaces).toContain('Test');
   });
+
+  describe('copilot threads', () => {
+    const cookie = { cookie: 'janis_session=tok-abc' };
+    const VIS = 'vis_copilot0000001';
+    const postAs = (text: string, thread?: string) =>
+      app.request(`/chat/${channelId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...cookie },
+        body: JSON.stringify({ visitor_id: VIS, text, ...(thread ? { thread } : {}) }),
+      });
+    const pollAs = (thread?: string) =>
+      app.request(
+        `/chat/${channelId}/messages?visitor_id=${VIS}${thread ? `&thread=${thread}` : ''}`,
+        { headers: cookie },
+      );
+
+    it('scopes a signed-in user\'s threads to separate conversations', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+      const [u] = await db.select().from(users).where(eq(users.email, 'owner@janis.test'));
+      expect((await postAs('copilot t1 msg', 'taaa1111')).status).toBe(200);
+      expect((await postAs('copilot t2 msg', 'tbbb2222')).status).toBe(200);
+
+      const [c0] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.externalId, `webchat:u:${u.id}`))
+        .limit(1);
+      const [c1] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.externalId, `webchat:u:${u.id}:taaa1111`))
+        .limit(1);
+      const [c2] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.externalId, `webchat:u:${u.id}:tbbb2222`))
+        .limit(1);
+      expect(c1.id).not.toBe(c0.id);
+      expect(c2.id).not.toBe(c0.id);
+      expect(c1.id).not.toBe(c2.id);
+
+      // a threaded poll resolves its own participant + transcript
+      const p1 = (await (await pollAs('taaa1111')).json()) as {
+        messages: { text: string }[];
+        participant: string;
+      };
+      expect(p1.participant).toBe(`u:${u.id}:taaa1111`);
+      expect(p1.messages.map((m) => m.text)).toContain('copilot t1 msg');
+      expect(p1.messages.map((m) => m.text)).not.toContain('copilot t2 msg');
+    });
+
+    it('lists the user\'s threads for the History picker', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+      const res = await app.request(`/chat/${channelId}/threads`, { headers: cookie });
+      expect(res.status).toBe(200);
+      const { threads } = (await res.json()) as {
+        threads: { thread: string | null; conversation_id: string; preview: string | null }[];
+      };
+      const keys = threads.map((t) => t.thread);
+      expect(keys).toContain(null); // the default shared thread
+      expect(keys).toContain('taaa1111');
+      expect(keys).toContain('tbbb2222');
+      // previews come from the conversation's last message
+      const t1 = threads.find((t) => t.thread === 'taaa1111');
+      expect(t1?.preview).toBe('copilot t1 msg');
+      // anonymous visitors get nothing — no session, nothing to list
+      const anon = await app.request(`/chat/${channelId}/threads`);
+      expect((await anon.json()).threads).toEqual([]);
+    });
+
+    it('ignores thread keys for anonymous visitors', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+      // visitor-keyed already — a forged ?thread= must not fork the
+      // transcript or claim another participant
+      const ANON = 'vis_anonthread00001';
+      await app.request(`/chat/${channelId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visitor_id: ANON, text: 'anon hi' }),
+      });
+      const res = await app.request(
+        `/chat/${channelId}/messages?visitor_id=${ANON}&thread=tzzz9999`,
+      );
+      const body = (await res.json()) as { participant: string };
+      expect(body.participant).toBe(ANON);
+      // and a bogus thread shape is dropped, not stored
+      const [u] = await db.select().from(users).where(eq(users.email, 'owner@janis.test'));
+      expect((await postAs('bad thread key', 'NOT A KEY')).status).toBe(200);
+      const [bad] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.externalId, `webchat:u:${u.id}:NOT A KEY`))
+        .limit(1);
+      expect(bad).toBeUndefined();
+    });
+  });
 });
 
 describe('webchat transcript polish', () => {

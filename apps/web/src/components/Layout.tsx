@@ -12,12 +12,14 @@ import { setTabBadge } from '../lib/tabBadge';
 import PushBanner from './PushBanner';
 import { BrandImg } from './bits';
 import { AskJanis } from './AskJanis';
+import { CopilotHistory } from './CopilotHistory';
 import { CorrectThisCard, type CorrectTarget } from './CorrectThis';
 import { TestChatHistory } from './TestChatHistory';
 import { type ScenarioTest, type ScenarioTurn } from './ScenarioRow';
 import { useScenarioMatch } from '../lib/scenarioMatch';
 import { revealScenario } from '../lib/scenarioRing';
 import { freshTestVisitor, readTestVisitor, storeTestVisitor } from '../lib/testChat';
+import { freshCopilotThread, readCopilotThread, storeCopilotThread } from '../lib/copilotThread';
 import { railBus, type RailRequest } from '../lib/railBus';
 import { DockContext, type DockTab, type TestWiring } from '../lib/dockContext';
 import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
@@ -311,6 +313,18 @@ export default function Layout() {
   const [testRail, setTestRail] = useState<RailRequest | null>(null);
   const [askSeed, setAskSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [copilotDraft, setCopilotDraft] = useState<{ text: string; nonce: number } | null>(null);
+  // Which concierge thread the copilot rail shows — null = the default
+  // shared thread; a t<rand> key scopes to its own conversation (server
+  // forks the u: participant). Persists across reloads like testVisitor.
+  const [askThread, setAskThreadState] = useState<string | null>(() => readCopilotThread());
+  const setAskThread = (t: string | null) => {
+    setAskThreadState(t);
+    storeCopilotThread(t);
+    // A pending seed/draft belongs to the thread it was fired into —
+    // don't let the remount replay it here.
+    setAskSeed(null);
+    setCopilotDraft(null);
+  };
   const [testSeed, setTestSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [fallbackSeed, setFallbackSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [testSlot, setTestSlot] = useState<HTMLElement | null>(null);
@@ -1383,11 +1397,34 @@ export default function Layout() {
                       talking to Janis about your workspace. */}
                   <div className="test-dock-status" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <BrandImg mark className="dock-copilot-mark" alt="" />
-                    Janis · workspace copilot
+                    <span
+                      className="grow"
+                      style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    >
+                      Janis · workspace copilot
+                    </span>
+                    <CopilotHistory
+                      channelId={data!.support_channel_id!}
+                      currentThread={askThread ?? undefined}
+                      onPick={setAskThread}
+                    />
+                    <button
+                      className="link small"
+                      title="Start a fresh copilot chat — earlier threads stay in History"
+                      onClick={() => setAskThread(freshCopilotThread())}
+                    >
+                      <MessageSquarePlus
+                        size={11}
+                        style={{ verticalAlign: -1, marginRight: 3 }}
+                      />
+                      New chat
+                    </button>
                   </div>
                   <AskJanis
+                    key={askThread ?? 'default'}
                     channelId={data!.support_channel_id!}
                     agentId={ctxAgent ?? undefined}
+                    thread={askThread ?? undefined}
                     seedMessage={askSeed?.text}
                     seedNonce={askSeed?.nonce}
                     draftMessage={copilotDraft?.text}
