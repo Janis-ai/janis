@@ -134,13 +134,17 @@ async function isTestConversation(db: Db, conv: ConversationRow): Promise<boolea
   return (b?.credentials as { internal?: boolean } | undefined)?.internal === true;
 }
 
-/** Chars the notes block will actually occupy — capped at MAX_NOTES_CHARS
- *  by the injector, so docs never reserve more than notes can use. */
-export function notesReserved(agent: { config?: unknown }): number {
+/** Chars the notes block will actually occupy — capped by the injector,
+ *  so docs never reserve more than notes can use. */
+export function notesReserved(agent: { config?: unknown; workspaceId?: string | null }): number {
   const k = ((agent.config ?? {}) as { knowledge?: unknown }).knowledge;
   if (!Array.isArray(k)) return 0;
   const total = k.reduce((n: number, line) => n + (typeof line === 'string' ? line.length : 0), 0);
-  return Math.min(total, MAX_NOTES_CHARS);
+  const cap =
+    env.operatorWorkspaceId && agent.workspaceId === env.operatorWorkspaceId
+      ? 48_000
+      : MAX_NOTES_CHARS;
+  return Math.min(total, cap);
 }
 
 export function knowledgeQueryFor(history: ChatMsg[], conv?: ConversationRow): string {
@@ -499,11 +503,18 @@ export function systemPrompt(
   if (Array.isArray(cfg.knowledge) && cfg.knowledge.length) {
     // Notes aren't ranked — every line injects on every reply — so they
     // get a hard share of the budget and can't starve ranked documents.
+    // The concierge's KB is the product's own operator manual — it holds
+    // the console sitemap and tool rules, and losing its tail to the
+    // generic cap once made it deny having links it was carrying.
+    const notesBudget =
+      env.operatorWorkspaceId && agent.workspaceId === env.operatorWorkspaceId
+        ? 48_000
+        : MAX_NOTES_CHARS;
     const lines: string[] = [];
     let used = 0;
     for (const raw of cfg.knowledge) {
       const k = sanitizeSourceText(raw);
-      if (used + k.length > MAX_NOTES_CHARS) {
+      if (used + k.length > notesBudget) {
         lines.push('- (more notes omitted — knowledge over budget)');
         break;
       }
@@ -541,7 +552,9 @@ export function systemPrompt(
   // and drift rare domains toward plausible ones (janis.ai → native.ai), so
   // links must come from the given context, never be invented.
   parts.push(
-    '\nOnly share links that appear verbatim in your knowledge base, documents, or conversation context. If the customer asks for a link you don\'t have, share the site\'s own search page (e.g. https://www.google.com/search?q=your+search) rather than guessing a deep link — never invent a URL or domain.' +
+    (opts.operator
+      ? '\nExternal links must appear verbatim in your knowledge base or context — but console URLs you build from the documented section patterns and the ids in your context are correct, not invented: emit them directly.'
+      : '\nOnly share links that appear verbatim in your knowledge base, documents, or conversation context. If the customer asks for a link you don\'t have, share the site\'s own search page (e.g. https://www.google.com/search?q=your+search) rather than guessing a deep link — never invent a URL or domain.') +
     '\nIf answering exposed knowledge you\'re missing, end your reply with lines starting "LEARN:" describing each missing fact (e.g. "LEARN: returns are accepted within 30 days") — it\'s hidden from the customer and queued for human review.',
   );
   // Rich channels render **bold**; everywhere else markup is stripped on
