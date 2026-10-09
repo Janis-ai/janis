@@ -346,6 +346,17 @@ describe('guardReplyLinks', () => {
     expect(r.stripped).toHaveLength(1);
   });
 
+  it('strips route-template placeholders shipped verbatim — <id>, %3Cid%3E, {agent-id}', async () => {
+    // Regression: the concierge copied the pattern /agents/<id>/… into a
+    // reply; LINK_RE stops at '<' so only the /agents/ prefix was judged.
+    const r = await guardReplyLinks(
+      'open [Overview](https://app.janis.ai/agents/<id>) and [Exp](https://app.janis.ai/agents/%3Cid%3E/behavior?sub=instructions) and https://app.janis.ai/agents/{agent-id}/tests now',
+      blessed,
+    );
+    expect(r.text).toBe('open Overview and Exp and now');
+    expect(r.stripped).toHaveLength(3);
+  });
+
   it('unwraps markdown links emptied by a strip', async () => {
     const r = await guardReplyLinks('see [this page](https://bogus.io/deep/path) now', blessed);
     expect(r.text).toBe('see this page now');
