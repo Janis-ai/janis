@@ -17,6 +17,7 @@ import { useScenarioMatch } from '../lib/scenarioMatch';
 import { ringScenario } from '../lib/scenarioRing';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow, scenarioPrompt, type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
+import { ScenarioList, CAT_LABELS } from '../components/ScenarioList';
 import { AgentChannels } from '../components/AgentChannels';
 import { DeployEscalation } from '../components/DeployEscalation';
 import { SourceList, type KnowledgeBudget } from '../components/SourceList';
@@ -72,23 +73,13 @@ const TEACH_SUBS = [
 type TeachSub = (typeof TEACH_SUBS)[number]['key'];
 const teachSubKey = (agentId: string) => `janis.teach-sub.${agentId}`;
 
-// Try-it scenario categories — safety leads so an elevated-risk agent
-// can't look tested on office-hours questions alone.
-const CAT_ORDER = ['safety', 'knowledge', 'actions', 'out_of_scope', 'tone', 'general'];
 /** "Change the greeting", "add a booking tool", "update your instructions"
  *  — typed into the test chat these read as setup requests meant for
  *  Copilot. Loose on purpose: it only nudges, never blocks. */
 const CONFIG_HINT_RE =
   /\b(change|update|edit|rename|add|remove|delete|enable|disable|turn (?:on|off)|connect|configure|set up|make)\b[^.!?]{0,80}\b(agent|greeting|prompt|instruction|rule|knowledge|article|tool|abilit|channel|name|color|tone|widget|handoff|booking|calendar|setting|config|reply|answer|personality|voice)/i;
 
-const CAT_LABELS: Record<string, string> = {
-  safety: 'Safety & escalation',
-  knowledge: 'Knowledge',
-  actions: 'Actions',
-  out_of_scope: 'Out of scope',
-  tone: 'Tone & style',
-  general: 'General',
-};
+
 
 export default function AgentBuilder() {
   usePageTitle('New agent');
@@ -2142,62 +2133,60 @@ export default function AgentBuilder() {
                   </div>
                 </div>
               )}
-              {CAT_ORDER.filter((cat) => scenarios.some((s) => s.category === cat)).map(
-                (cat) => (
-                  <div key={cat} style={{ marginTop: 16 }}>
-                    <div className="scenario-cat">{CAT_LABELS[cat] ?? cat}</div>
-                    {scenarios
-                      .filter((s) => s.category === cat)
-                      .map((s) => {
-                        const prompt = scenarioPrompt(s);
-                        // Verdicts judge a reply the run produced — this
-                        // session's live reply or the recorded replay.
-                        const reply = replyRef.current.get(s.id);
-                        const verdictReply = reply ?? s.last_run?.reply ?? null;
-                        return (
-                          <ScenarioRow
-                            key={s.id}
-                            test={s}
-                            running={runningId === s.id}
-                            disabled={runningId !== null}
-                            onRun={() => runScenario(s)}
-                            onDelete={() => delTest.mutate(s.id)}
-                            replyOverride={reply}
-                            onSaveExpectation={(text) =>
-                              saveExp.mutate({ id: s.id, text })
-                            }
-                            expectationSaving={saveExp.isPending}
-                            verdict={{
-                              pending: markTest.isPending,
-                              onPass: () => markTest.mutate({ id: s.id, result: 'pass' }),
-                              onFail: () => {
-                                markTest.mutate({ id: s.id, result: 'fail' });
-                                setCorrectTarget({
-                                  agentText: verdictReply ?? '',
-                                  customerText: prompt,
-                                  scenarioId: s.id,
-                                });
-                              },
-                            }}
-                            onTryInChat={() => tryInChat(prompt)}
-                            reviewRequired={
-                              status?.domain_risk === 'elevated' &&
-                              s.category === 'safety' &&
-                              s.human_result !== 'pass' &&
-                              s.human_result !== 'fail'
-                            }
-                            onFix={(r, p) =>
-                              setCorrectTarget({
-                                agentText: r,
-                                customerText: p,
-                                scenarioId: s.id,
-                              })
-                            }
-                          />
-                        );
-                      })}
-                  </div>
-                ),
+              {scenarios.length > 0 && (
+                <ScenarioList
+                  tests={scenarios}
+                  groupBy="category"
+                  renderRow={(s, foldSignal) => {
+                    const prompt = scenarioPrompt(s);
+                    // Verdicts judge a reply the run produced — this
+                    // session's live reply or the recorded replay.
+                    const reply = replyRef.current.get(s.id);
+                    const verdictReply = reply ?? s.last_run?.reply ?? null;
+                    return (
+                      <ScenarioRow
+                        key={s.id}
+                        test={s}
+                        running={runningId === s.id}
+                        disabled={runningId !== null}
+                        onRun={() => runScenario(s)}
+                        onDelete={() => delTest.mutate(s.id)}
+                        replyOverride={reply}
+                        foldSignal={foldSignal}
+                        onSaveExpectation={(text) =>
+                          saveExp.mutate({ id: s.id, text })
+                        }
+                        expectationSaving={saveExp.isPending}
+                        verdict={{
+                          pending: markTest.isPending,
+                          onPass: () => markTest.mutate({ id: s.id, result: 'pass' }),
+                          onFail: () => {
+                            markTest.mutate({ id: s.id, result: 'fail' });
+                            setCorrectTarget({
+                              agentText: verdictReply ?? '',
+                              customerText: prompt,
+                              scenarioId: s.id,
+                            });
+                          },
+                        }}
+                        onTryInChat={() => tryInChat(prompt)}
+                        reviewRequired={
+                          status?.domain_risk === 'elevated' &&
+                          s.category === 'safety' &&
+                          s.human_result !== 'pass' &&
+                          s.human_result !== 'fail'
+                        }
+                        onFix={(r, p) =>
+                          setCorrectTarget({
+                            agentText: r,
+                            customerText: p,
+                            scenarioId: s.id,
+                          })
+                        }
+                      />
+                    );
+                  }}
+                />
               )}
             </>
           )}

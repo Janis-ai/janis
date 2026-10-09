@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
@@ -40,6 +40,7 @@ import { railBus } from '../lib/railBus';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { Modal } from '../components/Modal';
 import { ScenarioRow, scenarioPrompt } from '../components/ScenarioRow';
+import { ScenarioList, isFailing, isPassing } from '../components/ScenarioList';
 import { useDock } from '../lib/dockContext';
 import { usePageTitle } from '../lib/title';
 import { NOTIFY_EVENT_LABELS } from '../lib/notifyEvents';
@@ -3376,9 +3377,6 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   const [newExpectation, setNewExpectation] = useState('');
   const [err, setErr] = useState('');
   const [confirmEl, confirm] = useConfirm();
-  const [testFilter, setTestFilter] = useState<'all' | 'failing' | 'passing' | 'unrun'>('all');
-  const [testSort, setTestSort] = useState<'attention' | 'newest' | 'oldest'>('attention');
-  const [foldAll, setFoldAll] = useState<{ seq: number; open: boolean }>({ seq: 0, open: false });
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
 
@@ -3643,17 +3641,6 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     ringScenario(el);
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [tests.length, hash]);
-  // The human verdict outranks the machine verdict everywhere — a row
-  // the owner approved is 'approved' even if its last replay failed, and
-  // a rejected row is 'rejected' even if the replay passed. Stale rows
-  // count in neither bucket — the badge says stale, and both verdicts
-  // were earned against an old config. Same precedence the row uses.
-  const isFailing = (t: AgentTest) =>
-    !t.stale &&
-    (t.human_result === 'fail' || (t.human_result !== 'pass' && t.last_run?.passed === false));
-  const isPassing = (t: AgentTest) =>
-    !t.stale &&
-    (t.human_result === 'pass' || (t.human_result !== 'fail' && t.last_run?.passed === true));
   const passed = tests.filter(isPassing).length;
   const failed = tests.filter(isFailing).length;
   const batches = runsData?.batches ?? [];
@@ -3725,21 +3712,6 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     },
     onError: (e) => setErr(e.message),
   });
-
-  // List filtering/sorting. A conv-split group counts as one item — if
-  // any member matches the filter the group stays whole, because "Delete
-  // all" on a filtered-down group would delete rows you can't see.
-  const matchesTestFilter = (t: AgentTest) =>
-    testFilter === 'all' ? true
-    : testFilter === 'failing' ? isFailing(t)
-    : testFilter === 'passing' ? isPassing(t)
-    : !t.last_run;
-  const testCounts = {
-    all: tests.length,
-    failing: tests.filter(isFailing).length,
-    passing: tests.filter(isPassing).length,
-    unrun: tests.filter((t) => !t.last_run).length,
-  };
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
@@ -4216,52 +4188,18 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
       )}
 
       {tests.length > 0 && (
-        <div className="row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
-          {(['all', 'failing', 'passing', 'unrun'] as const).map((f) => (
-            <button
-              key={f}
-              className={`btn sm${testFilter === f ? ' filter-on' : ' ghost'}`}
-              aria-pressed={testFilter === f}
-              onClick={() => setTestFilter(f)}
-            >
-              {f === 'unrun' ? 'Not run' : f[0].toUpperCase() + f.slice(1)} {testCounts[f]}
-            </button>
-          ))}
-          <button
-            className="btn ghost sm"
-            onClick={() => setFoldAll((s) => ({ seq: s.seq + 1, open: true }))}
-          >
-            Expand all
-          </button>
-          <button
-            className="btn ghost sm"
-            onClick={() => setFoldAll((s) => ({ seq: s.seq + 1, open: false }))}
-          >
-            Collapse all
-          </button>
-          <span className="grow" />
-          <label className="row" style={{ gap: 4 }}>
-            <span className="muted">Sort</span>
-            <select
-              value={testSort}
-              onChange={(e) => setTestSort(e.target.value as typeof testSort)}
-            >
-              <option value="attention">attention first</option>
-              <option value="newest">newest</option>
-              <option value="oldest">oldest</option>
-            </select>
-          </label>
-        </div>
-      )}
-
-      {(() => {
-        const renderTest = (t: AgentTest) => (
-          <ScenarioRow
-            key={t.id}
-            test={t}
-            running={running === t.id}
-            foldSignal={foldAll}
-            disabled={running !== null || batch !== null}
+        <ScenarioList
+          tests={tests}
+          groupBy="conversation"
+          onDeleteGroup={isAdmin ? (id) => delGroup.mutate(id) : undefined}
+          deletingGroup={delGroup.isPending}
+          renderRow={(t, foldSignal) => (
+            <ScenarioRow
+              key={t.id}
+              test={t}
+              running={running === t.id}
+              foldSignal={foldSignal}
+              disabled={running !== null || batch !== null}
             onRun={() => { setRunning(t.id); runOne.mutate(t.id); }}
             onDelete={isAdmin ? () => del.mutate(t.id) : undefined}
             onSaveExpectation={
@@ -4302,78 +4240,10 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                   }
                 : undefined
             }
-          />
-        );
-        // Tests split from one conversation group under a collapsible card —
-        // a rescued transcript can yield a batch that would otherwise flood
-        // the list (and can only be deleted one at a time). Groups and solos
-        // sort together — a failing rescue group shouldn't sink below solo
-        // rows just because it's grouped.
-        const byConv = new Map<string, AgentTest[]>();
-        const items: { convId: string | null; ts: AgentTest[] }[] = [];
-        for (const t of tests) {
-          if (t.source_conversation_id) {
-            const g = byConv.get(t.source_conversation_id) ?? [];
-            g.push(t);
-            byConv.set(t.source_conversation_id, g);
-          } else items.push({ convId: null, ts: [t] });
-        }
-        for (const [convId, ts] of byConv) items.push({ convId, ts });
-        const newest = (ts: AgentTest[]) => Math.max(...ts.map((t) => Date.parse(t.created_at) || 0));
-        const rank = (ts: AgentTest[]) =>
-          ts.some(isFailing) ? 0 : ts.some((t) => t.stale || !t.last_run) ? 1 : 2;
-        const visible = items.filter((it) => it.ts.some(matchesTestFilter));
-        visible.sort((a, b) =>
-          testSort === 'attention'
-            ? rank(a.ts) - rank(b.ts) || newest(b.ts) - newest(a.ts)
-            : testSort === 'newest'
-              ? newest(b.ts) - newest(a.ts)
-              : newest(a.ts) - newest(b.ts),
-        );
-        return (
-          <>
-            {visible.map((it) => {
-              const { convId, ts } = it;
-              return !convId || ts.length === 1 ? (
-                <Fragment key={ts[0].id}>{renderTest(ts[0])}</Fragment>
-              ) : (
-                <details
-                  key={convId}
-                  open={foldAll.open}
-                  className="card"
-                  style={{ background: 'var(--panel-2)', padding: 12 }}
-                >
-                  <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-                    {ts[0].name.replace(/\s+#\d+$/, '')} — {ts.length} tests
-                    <span className="muted" style={{ fontWeight: 400 }}>
-                      {' '}· {ts.filter(isPassing).length} passing
-                      {ts.some(isFailing) &&
-                        ` · ${ts.filter(isFailing).length} failing`}
-                    </span>
-                  </summary>
-                  <div className="row" style={{ margin: '8px 0 8px 16px' }}>
-                    <span className="grow muted" style={{ fontSize: 12 }}>
-                      split from one conversation — one rescue point each
-                    </span>
-                    {isAdmin && (
-                      <button
-                        className="btn sm"
-                        disabled={delGroup.isPending}
-                        onClick={() => delGroup.mutate(convId)}
-                      >
-                        {delGroup.isPending ? 'Deleting…' : 'Delete all'}
-                      </button>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginLeft: 16 }}>
-                    {ts.map(renderTest)}
-                  </div>
-                </details>
-              );
-            })}
-          </>
-        );
-      })()}
+            />
+          )}
+        />
+      )}
 
       {batches.length > 0 && (
         <details>

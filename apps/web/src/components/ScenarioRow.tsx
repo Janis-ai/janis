@@ -39,6 +39,7 @@ export interface ScenarioTest {
   category?: string | null;
   source?: string;
   stale?: boolean;
+  created_at?: string;
 }
 
 /** The customer message a scenario replays — last inbound turn for
