@@ -264,7 +264,7 @@ export function ScenarioRow({
             setCollapsed(false);
           }}
         >
-          ▸
+          ▶
         </button>
         {ok && (
           <span className="scenario-check" style={{ color: 'var(--accent)' }}>✓</span>
@@ -303,7 +303,7 @@ export function ScenarioRow({
             aria-label="Collapse"
             onClick={() => setFolded(true)}
           >
-            ▾
+            ▼
           </button>
         )}
         <div className="grow" style={{ fontSize: 13, fontWeight: 600, minWidth: 0 }}>
