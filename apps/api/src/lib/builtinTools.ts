@@ -1792,10 +1792,15 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'update_agent',
     description:
-      "Propose an agent settings change in the visitor's workspace — rename, greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes, auto-assign, widget accent colour, or email alerts. Posts an approval card — nothing changes until the visitor approves. Pass ONLY the params the visitor actually asked to change — every param is a real write; filling unrequested fields with current or guessed values makes an unsafe card. For how-do-I questions, answer with a link to the settings page instead of proposing a card. For chat components/widgets the agent shows in conversation, use save_widget instead. Admin-only.",
+      "Propose an agent settings change in the visitor's workspace — rename, instructions/system-prompt changes, tone, greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes, auto-assign, widget accent colour, or email alerts. Posts an approval card — nothing changes until the visitor approves. Pass ONLY the params the visitor actually asked to change — every param is a real write; filling unrequested fields with current or guessed values makes an unsafe card. For how-do-I questions, answer with a link to the settings page instead of proposing a card. For chat components/widgets the agent shows in conversation, use save_widget instead. Admin-only.",
     params: {
       agent: 'agent name (required)',
       name: 'new agent name — renames the agent',
+      instructions_add:
+        "append this rule to the agent's instructions — use for 'always do X / never do Y' asks so existing instructions are kept",
+      instructions:
+        "full replacement instructions/system prompt — only when the visitor asks to rewrite them, not to add a rule",
+      tone: 'new tone descriptor, e.g. "warm and concise"',
       greeting: 'new greeting text (blank string disables it)',
       greeting_enabled: 'true/false — send the greeting on new conversations',
       quick_replies: 'comma-separated chips shown in the widget (max 8, each <= 20 chars — Meta limit)',
@@ -1837,6 +1842,23 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const bool = (v: unknown) => ['true', 'yes', 'on', '1'].includes(String(v).toLowerCase());
       const cur = (agent.config ?? {}) as Record<string, unknown>;
       const curCsat = (cur.csat ?? {}) as Record<string, unknown>;
+      if (args.instructions !== undefined) {
+        const text = String(args.instructions).trim().slice(0, 5000);
+        if (!text) return JSON.stringify({ error: 'instructions cannot be blank — use instructions_add to append a rule instead' });
+        patch.system_prompt = text;
+        display.instructions = text.length > 200 ? `${text.slice(0, 200)}… (${text.length} chars)` : text;
+      }
+      if (args.instructions_add !== undefined) {
+        const rule = String(args.instructions_add).trim().slice(0, 2000);
+        if (!rule) return JSON.stringify({ error: 'instructions_add cannot be blank' });
+        const base = args.instructions !== undefined ? String(patch.system_prompt ?? '') : String(cur.system_prompt ?? '');
+        patch.system_prompt = base ? `${base}\n\n${rule}` : rule;
+        display['added rule'] = rule.length > 200 ? `${rule.slice(0, 200)}…` : rule;
+      }
+      if (args.tone !== undefined) {
+        patch.tone = String(args.tone).trim().slice(0, 200);
+        display.tone = patch.tone || '(cleared)';
+      }
       if (args.greeting !== undefined) {
         patch.greeting = String(args.greeting).slice(0, 500);
         display.greeting = patch.greeting || '(disabled)';
@@ -1963,6 +1985,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       // Re-validate the proposed patch against the shared schema — an
       // approved card must never write keys the console wouldn't accept.
       const ALLOWED = [
+        'system_prompt',
+        'tone',
         'greeting',
         'greeting_enabled',
         'quick_replies',
