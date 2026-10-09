@@ -1618,7 +1618,13 @@ export async function complete(
   const toolUrls: string[] = [];
   const contextIds = new Set<string>();
 
-  for (let round = 0; round < 4; round++) {
+  // Truncated replies (finish_reason 'length') resume as a continuation
+  // turn instead of shipping a reply cut mid-word or mid-link. The
+  // continuations budget widens the round cap so resuming doesn't eat
+  // tool-call rounds.
+  let continuations = 0;
+  let truncatedHead: string | undefined;
+  for (let round = 0; round < 4 + continuations; round++) {
     // Retry network timeouts and transient upstream errors (429 / 5xx —
     // Gemini flash often 503s "model overloaded"). 4xx is our problem:
     // surface it immediately instead of retrying an identical bad request.
@@ -1679,7 +1685,10 @@ export async function complete(
             },
             body: JSON.stringify({
               model: cand.model,
-              max_tokens: cand.maxTokens ?? 400,
+              // Operator replies are console answers, not chat bubbles —
+              // link lists and sitemaps legitimately run long. Chat-sized
+              // stays at 400 for customer-facing turns.
+              max_tokens: cand.maxTokens ?? (ctx?.identity?.operator ? 1200 : 400),
               messages: msgs,
               ...(cand.temperature != null ? { temperature: cand.temperature } : {}),
               ...(toolsSchema ? { tools: toolsSchema } : {}),
@@ -1732,6 +1741,7 @@ export async function complete(
     }
     const json = (await res.json()) as {
       choices?: {
+        finish_reason?: string | null;
         message?: {
           content?: string | null;
           tool_calls?: { id: string; function: { name: string; arguments: string } }[];
@@ -1744,9 +1754,34 @@ export async function complete(
     const msg = json.choices?.[0]?.message;
     const calls = msg?.tool_calls ?? [];
     if (!calls.length) {
-      const text = msg?.content?.trim() ?? null;
+      const raw = msg?.content ?? '';
+      const text = raw.trim() || null;
       completionTokens += json.usage?.completion_tokens ?? (text ? Math.ceil(text.length / 4) : 0);
-      return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, contextIds };
+      // 'length' = the provider cut the reply at the token cap mid-stream.
+      // Echo the partial as an assistant turn and ask it to continue —
+      // a shipped reply should never end inside a markdown link.
+      if (raw && json.choices?.[0]?.finish_reason === 'length' && continuations < 3) {
+        continuations++;
+        truncatedHead = (truncatedHead ?? '') + raw;
+        msgs.push({ role: 'assistant', content: raw });
+        msgs.push({
+          role: 'user',
+          content:
+            '[the reply was cut at the token limit — continue from exactly where it stopped, mid-word if necessary; no preamble, no restart]',
+        });
+        continue;
+      }
+      return {
+        text: truncatedHead !== undefined ? (truncatedHead + raw).trim() || null : text,
+        promptTokens,
+        completionTokens,
+        model: servedModel,
+        toolCalls,
+        widgets: toolWidgets,
+        producedIds,
+        toolUrls,
+        contextIds,
+      };
     }
 
     completionTokens += json.usage?.completion_tokens ?? 0;

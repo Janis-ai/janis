@@ -820,6 +820,34 @@ describe('testRun tool stubbing', () => {
     expect(sent.messages).toHaveLength(2); // system + user — the stale reply is gone
   });
 
+  it('resumes a reply cut at the token cap instead of shipping it truncated', async () => {
+    // Prod incident: the concierge's sitemap reply hit max_tokens=400 and
+    // shipped a message ending inside a markdown link.
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              { message: { content: 'part one ends [Campaigns](https' }, finish_reason: 'length' },
+            ],
+            usage: {},
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(reply({ content: '://app.janis.ai/agents) done' }));
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'list pages' }], [], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+    });
+    expect(r.text).toBe('part one ends [Campaigns](https://app.janis.ai/agents) done');
+    const round2 = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    const tail = round2.messages.slice(-2);
+    expect(tail[0]).toMatchObject({ role: 'assistant', content: 'part one ends [Campaigns](https' });
+    expect(tail[1].content).toContain('continue from exactly where it stopped');
+  });
+
   it('returns empty rather than calling the provider with no user turn at all', async () => {
     const r = await complete(
       llm,
