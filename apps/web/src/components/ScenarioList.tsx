@@ -157,9 +157,9 @@ export function ScenarioList({
   }
 
   // Conversation mode — transcript splits cluster under one collapsible
-  // card (a rescue can yield a batch that would flood the list). A group
-  // stays whole when any member matches the filter: "Delete all" on a
-  // filtered-down group would delete rows you can't see.
+  // card (a rescue can yield a batch that would flood the list). An active
+  // filter trims a group to its matching members — and hides "Delete all",
+  // since it would delete rows the filter makes invisible.
   const byConv = new Map<string, ScenarioTest[]>();
   const items: { convId: string | null; ts: ScenarioTest[] }[] = [];
   for (const t of tests) {
@@ -170,10 +170,12 @@ export function ScenarioList({
     } else items.push({ convId: null, ts: [t] });
   }
   for (const [convId, ts] of byConv) items.push({ convId, ts });
-  const visible = items.filter((it) => it.ts.some((t) => matchesFilter(t, filter)));
+  const visible = items
+    .map((it) => ({ ...it, shown: it.ts.filter((t) => matchesFilter(t, filter)) }))
+    .filter((it) => it.shown.length > 0);
   visible.sort((a, b) =>
     sort === 'attention'
-      ? rank(a.ts) - rank(b.ts) || newest(b.ts) - newest(a.ts)
+      ? rank(a.shown) - rank(b.shown) || newest(b.ts) - newest(a.ts)
       : sort === 'newest'
         ? newest(b.ts) - newest(a.ts)
         : oldest(a.ts) - oldest(b.ts),
@@ -181,9 +183,9 @@ export function ScenarioList({
   return (
     <>
       {toolbar}
-      {visible.map(({ convId, ts }) =>
+      {visible.map(({ convId, ts, shown }) =>
         !convId || ts.length === 1 ? (
-          <Fragment key={ts[0].id}>{renderRow(ts[0], foldAll)}</Fragment>
+          <Fragment key={shown[0].id}>{renderRow(shown[0], foldAll)}</Fragment>
         ) : (
           <details
             key={`${convId}-${foldAll.seq}`}
@@ -196,13 +198,14 @@ export function ScenarioList({
               <span className="muted" style={{ fontWeight: 400 }}>
                 {' '}· {ts.filter(isPassing).length} passing
                 {ts.some(isFailing) && ` · ${ts.filter(isFailing).length} failing`}
+                {shown.length < ts.length && ` · ${shown.length} shown`}
               </span>
             </summary>
             <div className="row" style={{ margin: '8px 0 8px 16px' }}>
               <span className="grow muted" style={{ fontSize: 12 }}>
                 split from one conversation — one rescue point each
               </span>
-              {onDeleteGroup && (
+              {onDeleteGroup && shown.length === ts.length && (
                 <button
                   className="btn sm"
                   disabled={deletingGroup}
@@ -213,7 +216,7 @@ export function ScenarioList({
               )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginLeft: 16 }}>
-              {ts.map((t) => renderRow(t, foldAll))}
+              {shown.map((t) => renderRow(t, foldAll))}
             </div>
           </details>
         ),
