@@ -146,18 +146,20 @@ export function Empty({ children }: { children: React.ReactNode }) {
 }
 
 /** Tool-call args as readable key → value rows instead of a JSON blob.
- *  Non-scalar values stringify inline so structure stays visible. */
+ *  Label over value — the approval card lives in the chat rail where a
+ *  side-by-side column wraps values mid-word. Non-scalar values
+ *  stringify inline so structure stays visible. */
 export function ArgsRows({ args }: { args: Record<string, unknown> }) {
   const entries = Object.entries(args);
   if (!entries.length) return null;
   return (
     <div style={{ margin: '4px 0 2px', fontSize: 12.5 }}>
       {entries.map(([k, v]) => (
-        <div key={k} style={{ display: 'flex', gap: 8, padding: '1px 0' }}>
-          <span className="muted" style={{ minWidth: 110, flexShrink: 0 }}>{k.replace(/_/g, ' ')}</span>
-          <span className="mono" style={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+        <div key={k} style={{ padding: '2px 0' }}>
+          <div className="muted">{k.replace(/_/g, ' ')}</div>
+          <div className="mono" style={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
             {typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}
-          </span>
+          </div>
         </div>
       ))}
     </div>
