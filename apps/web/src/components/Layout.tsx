@@ -434,32 +434,42 @@ export default function Layout() {
   const dockScope = ctxAgent ?? 'ws';
   const onBuilderPage = /^\/agents\/new\//.test(location.pathname);
 
-  // Per-scope memory: last tab + open/closed survive navigation. A ?rail=
-  // deeplink wins over the saved state.
+  // Per-scope memory: the last tab survives navigation. Open/closed is ONE
+  // dock state — an agent switch keeps whatever it was, so it's only
+  // restored on a fresh page load. A ?rail= deeplink wins over saved state.
   const restoredFor = useRef('');
   useEffect(() => {
     if (data === undefined || restoredFor.current === dockScope) return;
+    const freshLoad = restoredFor.current === '';
     restoredFor.current = dockScope;
     if (searchParams.get('rail')) return;
     try {
       const t = localStorage.getItem(`janis.dock-tab.${dockScope}`);
-      const o = localStorage.getItem(`janis.dock-open.${dockScope}`);
       if (t === 'test' && testAvail) setRailTab('test');
       else if (t === 'copilot') setRailTab('ask');
-      if (o === 'open' && (hasAsk || testAvail)) setRailOpen(true);
+      if (freshLoad) {
+        // Pre-global builds remembered open per scope — honor it once.
+        const o =
+          localStorage.getItem('janis.dock-open') ??
+          localStorage.getItem(`janis.dock-open.${dockScope}`);
+        if (o === 'open' && (hasAsk || testAvail)) setRailOpen(true);
+      }
     } catch {
       /* private mode */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dockScope, data, testAvail, hasAsk]);
   useEffect(() => {
+    // Before /me lands the real rail state is unknown — writing here would
+    // clobber the saved state with the mount-time defaults every reload.
+    if (data === undefined) return;
     try {
       localStorage.setItem(`janis.dock-tab.${dockScope}`, railTab === 'ask' ? 'copilot' : 'test');
-      localStorage.setItem(`janis.dock-open.${dockScope}`, railOpen ? 'open' : 'closed');
+      localStorage.setItem('janis.dock-open', railOpen ? 'open' : 'closed');
     } catch {
       /* private mode */
     }
-  }, [railTab, railOpen, dockScope]);
+  }, [railTab, railOpen, dockScope, data]);
 
   // First encounter with a testable agent on the builder — the dock opens
   // once on wide screens, or the strip earns a callout on narrow ones.
