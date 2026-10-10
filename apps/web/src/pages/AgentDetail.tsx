@@ -87,10 +87,16 @@ const SECTION_ALIASES: Record<string, Section> = {
   test: 'tests',
 };
 
-const SUB_TABS: Partial<Record<Section, { key: string; label: string; hosted?: boolean }[]>> = {
+const SUB_TABS: Partial<
+  Record<Section, { key: string; label: string; hosted?: boolean; externalOnly?: boolean }[]>
+> = {
   behavior: [
+    // Instructions + greeting + quick replies share one page — same grouping
+    // as the builder's Guide-it step (InstructionsSection + GreetingSection).
+    // External-webhook agents keep greeting standalone: the merged page is
+    // hosted-only, and Janis still delivers their greeting row on webchat.
     { key: 'instructions', label: 'Instructions', hosted: true },
-    { key: 'greeting', label: 'Greeting' },
+    { key: 'greeting', label: 'Greeting', externalOnly: true },
     { key: 'components', label: 'Chat components', hosted: true },
     { key: 'satisfaction', label: 'Satisfaction survey' },
   ],
@@ -150,13 +156,17 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
   // Sub-tab lives in the URL (?sub=…) so refresh/back/deep links keep
   // position — the section itself is the route path.
   const [params, setParams] = useSearchParams();
-  const subs = (SUB_TABS[section] ?? []).filter((s) => janisBrain(agent) || !s.hosted);
+  const subs = (SUB_TABS[section] ?? []).filter(
+    (s) =>
+      (janisBrain(agent) || !s.hosted) && (!s.externalOnly || !janisBrain(agent)),
+  );
   const subParam = params.get('sub');
   // Legacy deep-links: prompt/tone merged into Instructions; the old
   // per-type knowledge tabs merged into Sources; help is now Articles.
   const LEGACY_SUBS: Record<string, string> = {
     prompt: 'instructions',
     tone: 'instructions',
+    ...(janisBrain(agent) ? { greeting: 'instructions' } : {}),
     websites: 'sources',
     files: 'sources',
     text: 'sources',
@@ -408,7 +418,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
           {sub === 'instructions' && janisBrain(agent) && (
             <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
-          {sub === 'greeting' && (
+          {sub === 'instructions' && (
             <GreetingSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
           {sub === 'satisfaction' && (
