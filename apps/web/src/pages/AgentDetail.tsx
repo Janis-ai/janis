@@ -68,7 +68,7 @@ const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
 /** Agent config sections — one per sidebar entry. `hosted` sections are
  *  hidden (and redirect) for external-webhook agents. */
 const SECTIONS = {
-  behavior: 'Experience',
+  behavior: 'Behavior',
   knowledge: 'Knowledge',
   channels: 'Channels',
   integrations: 'Actions',
@@ -98,7 +98,6 @@ const SUB_TABS: Partial<
     { key: 'instructions', label: 'Instructions', hosted: true },
     { key: 'greeting', label: 'Greeting', externalOnly: true },
     { key: 'components', label: 'Chat components', hosted: true },
-    { key: 'satisfaction', label: 'Satisfaction survey' },
   ],
   knowledge: [
     { key: 'sources', label: 'Sources' },
@@ -108,6 +107,7 @@ const SUB_TABS: Partial<
   ],
   settings: [
     { key: 'general', label: 'General' },
+    { key: 'csat', label: 'CSAT' },
     { key: 'escalation', label: 'Escalation' },
     { key: 'team', label: 'Team' },
   ],
@@ -115,6 +115,7 @@ const SUB_TABS: Partial<
 
 export default function AgentDetail() {
   const { id, section: rawSection } = useParams<{ id: string; section?: string }>();
+  const [searchParams] = useSearchParams();
   const { data } = useAgents();
   const agent = data?.agents.find((a) => a.id === id);
   usePageTitle(agent?.name ?? 'Agent');
@@ -124,6 +125,12 @@ export default function AgentDetail() {
   // BYOK engines (dialogflow/monitor) where Janis doesn't write replies —
   // the sidebar hides them; direct hits bounce to Channels.
   const hostedSection = agent && !janisBrain(agent) && HOSTED_ONLY.includes(section);
+  // The satisfaction survey moved to Agent settings → CSAT — old
+  // behavior?sub=satisfaction links follow it instead of landing on
+  // Instructions.
+  const movedSurvey =
+    section === 'behavior' &&
+    ['satisfaction', 'csat'].includes(searchParams.get('sub') ?? '');
 
   if (data && !agent) {
     return (
@@ -135,6 +142,7 @@ export default function AgentDetail() {
   }
   if (!agent) return null;
   if (hostedSection) return <Navigate to={`/agents/${agent.id}/channels`} replace />;
+  if (movedSurvey) return <Navigate to={`/agents/${agent.id}/settings?sub=csat`} replace />;
   // key remounts the editor (and its drafts) when navigating between agents
   return <AgentEditor key={agent.id} agent={agent} section={section} />;
 }
@@ -173,6 +181,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     help: 'sources',
     articles: 'sources',
     replies: 'escalation',
+    satisfaction: 'csat',
   };
   const subKey = subParam ? (LEGACY_SUBS[subParam] ?? subParam) : subParam;
   const sub = subs.some((s) => s.key === subKey) ? subKey! : (subs[0]?.key ?? '');
@@ -407,7 +416,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
         <ToolsTab cfg={cfg} setCfg={setCfg} agentId={agent.id} isAdmin={isAdmin} />
       )}
       {/* Legacy /components route still renders standalone; the canonical
-          home is now the Experience → Chat components sub-tab. */}
+          home is now the Behavior → Chat components sub-tab. */}
       {(section === 'components' || (section === 'behavior' && sub === 'components')) &&
         janisBrain(agent) && (
         <SavedWidgets agentId={agent.id} isAdmin={isAdmin} tools={(cfg.tools ?? []).map((t) => t.name)} />
@@ -418,11 +427,10 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
           {sub === 'instructions' && janisBrain(agent) && (
             <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
-          {sub === 'instructions' && (
+          {/* 'greeting' is the external-webhook agents' own sub — the merged
+              page is hosted-only, but Janis still delivers their greeting. */}
+          {(sub === 'instructions' || sub === 'greeting') && (
             <GreetingSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
-          )}
-          {sub === 'satisfaction' && (
-            <SatisfactionSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
         </>
       )}
@@ -516,6 +524,9 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
               onUpdateRule={(id, config) => updateRule.mutate({ id, config })}
               onDeleteRule={(rid) => deleteRule.mutate(rid)}
             />
+          )}
+          {sub === 'csat' && (
+            <SatisfactionSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
           {sub === 'team' && <TeamSection agent={agent} isAdmin={isAdmin} />}
         </>
@@ -4093,7 +4104,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             Thinking of changing the instructions or the model? Try it here
             first — every scenario re-runs against your version and reports
             pass/fail next to today's results. Your agent is untouched; if the
-            variant wins, adopt it yourself in Experience.
+            variant wins, adopt it yourself in Behavior.
           </div>
           <label style={{ fontSize: 12 }}>Instructions</label>
           <textarea

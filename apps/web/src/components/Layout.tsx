@@ -75,7 +75,7 @@ const SECTION_TO_STEP: Record<BuildStepKey, string> = {
  *  (reopened from Overview) and agent details live under settings. */
 const LIVE_NAV: Record<Exclude<BuildStepKey, 'create'>, { label: string; section: string }> = {
   teach: { label: 'Knowledge', section: 'knowledge' },
-  guide: { label: 'Experience', section: 'behavior' },
+  guide: { label: 'Behavior', section: 'behavior' },
   abilities: { label: 'Actions', section: 'integrations' },
   try: { label: 'Test', section: 'tests' },
   deploy: { label: 'Channels', section: 'channels' },

@@ -17,12 +17,12 @@ import { AutosizeText } from '../components/bits';
 import { currentTheme, setTheme } from '../lib/theme';
 import { usePageTitle } from '../lib/title';
 
-type Section = 'workspace' | 'me' | 'experience' | 'escalation' | 'team';
+type Section = 'workspace' | 'me' | 'csat' | 'escalation' | 'team';
 const SECTIONS: { key: Section; label: string }[] = [
   { key: 'workspace', label: 'Workspace' },
   { key: 'me', label: 'Me' },
 
-  { key: 'experience', label: 'Experience' },
+  { key: 'csat', label: 'CSAT' },
   { key: 'escalation', label: 'Escalation' },
   { key: 'team', label: 'Team' },
 ];
@@ -31,11 +31,12 @@ export default function Settings() {
   usePageTitle('Settings');
   const { data: me } = useMe();
   const [params, setParams] = useSearchParams();
-  // 'deliverability' was the old "Sending" tab — its surviving cards
-  // (resolution + survey defaults) live under Experience now; the campaign
-  // half moved to the Campaigns page's settings modal.
+  // 'deliverability' was the old "Sending" tab and 'experience' the old
+  // label for what's now CSAT — both land on the resolution + survey
+  // defaults; the campaign half moved to the Campaigns settings modal.
+  const rawParam = params.get('section');
   const rawSection =
-    params.get('section') === 'deliverability' ? 'experience' : params.get('section');
+    rawParam === 'deliverability' || rawParam === 'experience' ? 'csat' : rawParam;
   const section = (SECTIONS.some((s) => s.key === rawSection)
     ? rawSection
     : 'workspace') as Section;
@@ -481,7 +482,7 @@ export default function Settings() {
         </>
       )}
 
-      {section === 'experience' && (
+      {section === 'csat' && (
         <>
       {me?.user.role === 'admin' && <ResolutionCard />}
       {me?.user.role === 'admin' && <CsatCard />}
@@ -1067,7 +1068,7 @@ type CsatSettings = { enabled?: boolean; prompt?: string; thanks?: string };
 
 /** Workspace default for the resolution flow — when on, agents sign off and
  *  auto-archive once the customer confirms they're done (which fires the
- *  survey below). Agents override under Experience → Satisfaction survey.
+ *  survey below). Agents override under Agent settings → CSAT.
  *  Admin-only. */
 function ResolutionCard() {
   const qc = useQueryClient();
@@ -1099,7 +1100,7 @@ function ResolutionCard() {
       <div className="muted" style={{ fontSize: 13 }}>
         When a customer confirms they're done, the agent signs off and
         archives the thread — firing the satisfaction survey below. Agents
-        can override this under Experience → Satisfaction survey.
+        can override this under Agent settings → CSAT.
       </div>
       <label className="row" style={{ gap: 8, fontSize: 13 }}>
         <input
@@ -1124,7 +1125,7 @@ function ResolutionCard() {
 }
 
 /** Workspace default CSAT survey — fires when a conversation is archived.
- *  Agents override per-field via Experience → Satisfaction survey.
+ *  Agents override per-field via Agent settings → CSAT.
  *  Admin-only. */
 function CsatCard() {
   const qc = useQueryClient();
@@ -1155,7 +1156,7 @@ function CsatCard() {
       <div className="muted" style={{ fontSize: 13 }}>
         Sent to the customer when a conversation is archived — they reply with a
         1–5 rating, scored in Reports. Agents can override per-field under
-        Experience → Satisfaction survey.
+        Agent settings → CSAT.
       </div>
       <label className="row" style={{ gap: 8, fontSize: 13 }}>
         <input
