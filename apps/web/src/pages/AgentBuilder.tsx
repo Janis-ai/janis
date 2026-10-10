@@ -17,7 +17,7 @@ import { useScenarioMatch } from '../lib/scenarioMatch';
 import { revealScenario } from '../lib/scenarioRing';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { ScenarioRow, scenarioPrompt, type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
-import { ScenarioList, CAT_LABELS } from '../components/ScenarioList';
+import { ScenarioList, CAT_LABELS, isFailing } from '../components/ScenarioList';
 import { AgentChannels } from '../components/AgentChannels';
 import { DeployEscalation } from '../components/DeployEscalation';
 import { SourceList, type KnowledgeBudget } from '../components/SourceList';
@@ -443,8 +443,11 @@ export default function AgentBuilder() {
   const nextClick = () => {
     if (isSafetyReview) setSafetyReview((v) => v + 1);
     if ((failing > 0 || safetyDue) && step === 'try') {
+      // The count the label quotes counts machine-failed unreviewed rows
+      // too — the same isFailing predicate the list's filter uses, or the
+      // click finds no row to point at and dies silently.
       const first =
-        scenarios.find((s) => s.human_result === 'fail') ??
+        scenarios.find(isFailing) ??
         scenarios.find(
           (s) =>
             s.category === 'safety' &&
