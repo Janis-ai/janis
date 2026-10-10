@@ -4,6 +4,7 @@ import type { Db } from '../db/client.js';
 import {
   agents,
   agentMembers,
+  agentTests,
   agentWidgets,
   alerts,
   alertRules,
@@ -39,6 +40,7 @@ import {
 import { normWidgetRef, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 import { toolsFor } from './toolExec.js';
 import { backfillSentimentAlerts } from './intent.js';
+import type { BuilderDraft } from './agentBuilder.js';
 
 /** Context a builtin can reach — matches AgentRunContext in hostedAgent. */
 export interface BuiltinCtx {
@@ -316,9 +318,7 @@ async function parkConciergeAction(
     existing.some(
       // jsonb normalises key order — compare args with sorted keys, not raw
       // string equality.
-      (p) =>
-        p.toolName === toolName &&
-        canonArgs(p.args as Record<string, unknown>) === canonArgs(execArgs),
+      (p) => p.toolName === toolName && canonDeepEq(p.args, execArgs),
     )
   ) {
     return 'action_card: an identical card is already awaiting a decision in this chat — point the visitor at it';
@@ -660,11 +660,13 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'create_agent',
     description:
-      "Propose creating a new hosted AI agent in a workspace the signed-in visitor administers — 'take a prompt, get a working agent'. Confirm the name and purpose with the visitor first, then call this with a system_prompt you draft from their description. Posts an approval card showing the name + drafted instructions — nothing is created until the visitor approves. On approval the visitor lands on the builder's Teach it step — do NOT offer channels, the builder covers that next. Ask which workspace only if they administer more than one.",
+      "Propose creating a new hosted AI agent in a workspace the signed-in visitor administers — 'take a prompt, get a working agent'. Confirm the name and purpose with the visitor first, then call this with their description as `purpose` — it is stored verbatim as the agent's builder brief and drives the drafted instructions, greeting, and setup suggestions, exactly as if they had typed it into the Create step. Posts an approval card showing the name + drafted instructions — nothing is created until the visitor approves. On approval the builder's Create page opens for the new agent — do NOT offer channels, the builder covers that next. Ask which workspace only if they administer more than one.",
     params: {
       name: 'agent name, e.g. "Acme Support"',
+      purpose:
+        "the visitor's own description of what the agent should do, in their words — becomes the builder brief; keep their details (audience, scope, domain), don't summarize them away",
       system_prompt:
-        'the operating prompt you draft from the visitor\'s description — persona, scope, tone, what it should/shouldn\'t do',
+        'optional fallback instructions when the brief is too thin to draft from — persona, scope, tone, what it should/shouldn\'t do',
       greeting: 'optional first message the widget sends when a conversation opens',
       workspace: 'workspace name — required only when the visitor administers more than one',
     },
@@ -697,6 +699,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         });
       }
 
+      const purpose = (args.purpose ?? '').trim().slice(0, 4000);
       const prompt = (args.system_prompt ?? '').trim();
       const greeting = (args.greeting ?? '').trim();
       // Double-fired calls are common (retries, the model re-reading a
@@ -722,23 +725,34 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           note: `an agent named ${dupe.name} was just created — this is that same agent; reply with this exact link: [Open ${dupe.name}](${env.webOrigin}/agents/${dupe.id})`,
         });
       }
-      // The card carries the brief — name + drafted instructions — so the
-      // visitor approves the actual plan, not a text "y".
+      // The card carries the brief — the visitor's own purpose text plus
+      // the draft the Create step's generator produces from it — so the
+      // visitor approves the actual plan, not a text "y". The draft rides
+      // in the card: approval is then an instant write, not an LLM call
+      // behind a button, and the card shows the instructions that will
+      // actually ship (the generator's), not a second concierge draft.
+      const { generateDraft } = await import('./agentBuilder.js');
+      const draft = purpose ? await generateDraft(purpose).catch(() => null) : null;
+      const instructions = draft?.system_prompt ?? prompt;
       return parkConciergeAction(
         ctx,
         'apply_create_agent',
         {
           workspace_id: ws.id,
           name,
-          system_prompt: prompt,
-          ...(greeting ? { greeting } : {}),
+          ...(purpose ? { purpose } : {}),
+          ...(instructions ? { system_prompt: instructions } : {}),
+          ...(draft?.greeting ?? greeting ? { greeting: draft?.greeting ?? greeting } : {}),
+          ...(draft ? { draft } : {}),
         },
         `Create agent ${name}`,
         {
           workspace: ws.name,
           name,
-          instructions: prompt.length > 200 ? `${prompt.slice(0, 200)}…` : prompt || '(default)',
-          ...(greeting ? { greeting } : {}),
+          instructions:
+            instructions.length > 200 ? `${instructions.slice(0, 200)}…` : instructions || '(default)',
+          ...(purpose ? { brief: purpose.length > 200 ? `${purpose.slice(0, 200)}…` : purpose } : {}),
+          ...(draft?.greeting ?? greeting ? { greeting: draft?.greeting ?? greeting } : {}),
         },
       );
     },
@@ -789,6 +803,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       }
       const prompt = String(args.system_prompt ?? '').trim().slice(0, 5000);
       const greeting = String(args.greeting ?? '').trim().slice(0, 500);
+      const purpose = String(args.purpose ?? '').trim().slice(0, 4000);
+      // Parked args carry real objects (see decidePendingAction) — the
+      // string-typed signature is a lie for nested fields like draft.
+      const draft = (args.draft ?? null) as unknown as BuilderDraft | null;
       const [row] = await ctx.db
         .insert(agents)
         .values({
@@ -798,12 +816,73 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           webhookSecret: generateWebhookSecret(),
           hosted: true,
           autoResumeMinutes: 10,
+          // Same shape POST /agents/bootstrap writes from a Create-step
+          // brief — authored fields on top, review material under
+          // config.builder — so a concierge-born agent is
+          // indistinguishable from one born on the Create page.
           config: {
-            ...(prompt ? { system_prompt: prompt } : {}),
-            ...(greeting ? { greeting } : {}),
+            ...(purpose ? { purpose: purpose.slice(0, 2000) } : {}),
+            ...(draft?.system_prompt ?? prompt
+              ? { system_prompt: draft?.system_prompt ?? prompt }
+              : {}),
+            ...(draft?.tone ? { tone: draft.tone } : {}),
+            ...(draft?.greeting ?? greeting
+              ? { greeting: draft?.greeting ?? greeting, greeting_enabled: true }
+              : {}),
+            builder: {
+              ...(purpose ? { description: purpose } : {}),
+              ...(draft?.summary ? { summary: draft.summary } : {}),
+              ...(draft?.suggested_knowledge?.length
+                ? { suggested_knowledge: draft.suggested_knowledge }
+                : {}),
+              ...(draft?.suggested_templates?.length
+                ? { suggested_templates: draft.suggested_templates }
+                : {}),
+              ...(draft?.suggested_approvals?.length
+                ? { suggested_approvals: draft.suggested_approvals }
+                : {}),
+              ...(draft?.suggested_rules?.length
+                ? { suggested_rules: draft.suggested_rules }
+                : {}),
+              ...(draft?.suggested_questions?.length
+                ? { suggested_questions: draft.suggested_questions }
+                : {}),
+              ...(draft?.suggested_scenarios?.length
+                ? { suggested_scenarios: draft.suggested_scenarios }
+                : {}),
+              ...(draft?.knowledge_need ? { knowledge_need: draft.knowledge_need } : {}),
+              ...(draft?.knowledge_need_reason
+                ? { knowledge_need_reason: draft.knowledge_need_reason }
+                : {}),
+              ...(draft?.region_sensitive ? { region_sensitive: true } : {}),
+              ...(draft?.domain_risk ? { domain_risk: draft.domain_risk } : {}),
+              ...(draft?.suggested_channels?.length
+                ? { suggested_channels: draft.suggested_channels }
+                : {}),
+              generated_at: new Date().toISOString(),
+            },
           },
         })
         .returning();
+      // Materialize the draft's test checklist — the same insert
+      // bootstrap runs, so Try it opens with real scenarios, not an
+      // empty chat box.
+      if (draft?.suggested_scenarios?.length) {
+        await ctx.db
+          .insert(agentTests)
+          .values(
+            draft.suggested_scenarios.map((s) => ({
+              workspaceId: wsId,
+              agentId: row.id,
+              name: s.prompt.slice(0, 120),
+              expectation: s.expected,
+              turns: [{ role: 'customer' as const, text: s.prompt }] as never,
+              category: s.category,
+              source: 'generated',
+            })),
+          )
+          .catch(() => undefined);
+      }
       // No channel — the builder's Teach/Guide/Abilities/Deploy steps take
       // the operator the rest of the way, including picking channels.
       // Same Slack nicety as the API route — per-agent alert channel when the
@@ -833,10 +912,188 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       // Open agent pages on the visitor's workspace refresh over SSE.
       bus.publish(wsId, { type: 'agent', data: { id: row.id } });
       return JSON.stringify({
-        summary: `Created ${row.name} — send them to Teach it next`,
+        summary: `Created ${row.name} — its builder Create page is open now`,
         agent_id: row.id,
         name: row.name,
-        url: `${env.webOrigin}/agents/new/${row.id}?step=teach`,
+        url: `${env.webOrigin}/agents/new/${row.id}?step=create`,
+        // The rail navigates here itself on approval — no link-click needed.
+        open_url: `/agents/new/${row.id}?step=create`,
+      });
+    },
+  },
+  {
+    name: 'update_agent_brief',
+    description:
+      "Propose changing an agent's builder brief — the Create-page 'what should this agent do' description — and/or its name. The new brief re-drafts the agent's instructions, tone, greeting, and setup suggestions to match, exactly like editing the brief on the Create page and applying Janis's suggested changes. Posts an approval card — nothing changes until the visitor approves. For small edits to existing instructions (add a rule, fix a phrase) use update_agent instead — this is for redirecting the agent's whole purpose. Admin-only.",
+    params: {
+      agent: 'agent name (required)',
+      purpose:
+        'the new builder brief, verbatim — replaces the Create-page description; instructions/greeting/suggestions re-draft from it on approval',
+      name: 'optional new agent name — renames the agent',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    // Operator-workspace only — same rule as create_agent.
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const picked = await visitorAgent(ctx, ws, args.agent);
+      if ('error' in picked) return JSON.stringify(picked);
+      const agent = picked.agent;
+
+      const purpose =
+        args.purpose !== undefined ? String(args.purpose).trim().slice(0, 4000) : '';
+      const rename =
+        args.name !== undefined ? String(args.name).trim().slice(0, 120) : '';
+      if (args.purpose !== undefined && !purpose) {
+        return JSON.stringify({ error: 'purpose cannot be blank' });
+      }
+      if (args.name !== undefined && !rename) {
+        return JSON.stringify({ error: 'name cannot be blank' });
+      }
+      if (!purpose && (!rename || rename === agent.name)) {
+        return JSON.stringify({ error: 'nothing to change — pass purpose and/or name' });
+      }
+      // Draft now, at propose time — approval becomes an instant write and
+      // the card can show the instructions that will actually ship.
+      const { generateDraft } = await import('./agentBuilder.js');
+      const draft = purpose ? await generateDraft(purpose).catch(() => null) : null;
+      const willRename = Boolean(rename && rename !== agent.name);
+      return parkConciergeAction(
+        ctx,
+        'apply_agent_brief',
+        {
+          workspace_id: ws.id,
+          agent_id: agent.id,
+          ...(purpose ? { purpose } : {}),
+          ...(draft ? { draft } : {}),
+          ...(willRename ? { rename } : {}),
+        },
+        `${willRename ? `Rename ${agent.name} to ${rename}` : 'Update brief'} — ${agent.name}`,
+        {
+          agent: agent.name,
+          ...(willRename ? { name: `${agent.name} → ${rename}` } : {}),
+          ...(purpose
+            ? { brief: purpose.length > 300 ? `${purpose.slice(0, 300)}…` : purpose }
+            : {}),
+          ...(draft
+            ? {
+                'new instructions':
+                  (draft.system_prompt ?? '').length > 200
+                    ? `${draft.system_prompt!.slice(0, 200)}…`
+                    : draft.system_prompt,
+              }
+            : purpose
+              ? { note: 'brief saved — instructions re-draft failed, will stay as-is' }
+              : {}),
+        },
+      );
+    },
+  },
+  {
+    // Executor for approved update_agent_brief cards — hidden from the model.
+    name: 'apply_agent_brief',
+    description: 'internal — executes an approved update_agent_brief action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+            eq(memberships.role, 'admin'),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs admin rights on the target workspace';
+      const [agent] = await ctx.db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, String(args.agent_id ?? '')), eq(agents.workspaceId, wsId)))
+        .limit(1);
+      if (!agent) return 'error: agent not found';
+      const purpose = String(args.purpose ?? '').trim().slice(0, 4000);
+      const rename = String(args.rename ?? '').trim().slice(0, 120);
+      const d = (args.draft ?? null) as unknown as BuilderDraft | null;
+      if (!purpose && (!rename || rename === agent.name)) return 'error: nothing to change';
+
+      // Mirror the Create page's brief-save + apply-draft writes: purpose +
+      // builder.description carry the brief, authored fields adopt the
+      // re-draft, suggestion lists replace wholesale. Config edits mark the
+      // old scenario suite stale automatically (config-versioned).
+      const cur = (agent.config ?? {}) as Record<string, unknown>;
+      const curBuilder = (cur.builder ?? {}) as Record<string, unknown>;
+      const config: Record<string, unknown> = {
+        ...cur,
+        ...(purpose ? { purpose: purpose.slice(0, 2000) } : {}),
+        ...(d?.system_prompt ? { system_prompt: d.system_prompt } : {}),
+        ...(d?.tone ? { tone: d.tone } : {}),
+        ...(d?.greeting ? { greeting: d.greeting, greeting_enabled: true } : {}),
+        builder: {
+          ...curBuilder,
+          ...(purpose ? { description: purpose } : {}),
+          ...(d?.summary ? { summary: d.summary } : {}),
+          ...(d
+            ? {
+                suggested_knowledge: d.suggested_knowledge ?? [],
+                suggested_templates: d.suggested_templates ?? [],
+                suggested_approvals: d.suggested_approvals ?? [],
+                suggested_rules: d.suggested_rules ?? [],
+                suggested_questions: d.suggested_questions ?? [],
+                suggested_scenarios: d.suggested_scenarios ?? [],
+                region_sensitive: d.region_sensitive === true,
+                generated_at: new Date().toISOString(),
+              }
+            : {}),
+          ...(d?.knowledge_need ? { knowledge_need: d.knowledge_need } : {}),
+          ...(d?.knowledge_need_reason
+            ? { knowledge_need_reason: d.knowledge_need_reason }
+            : {}),
+          ...(d?.domain_risk ? { domain_risk: d.domain_risk } : {}),
+          ...(d?.suggested_channels?.length
+            ? { suggested_channels: d.suggested_channels }
+            : {}),
+          // A re-draft that now says 'required' clears a stale skip — same
+          // rule as the console's apply-draft.
+          ...(d?.knowledge_need === 'required' ? { teach_skipped: false } : {}),
+        },
+      };
+      const set: Record<string, unknown> = { config };
+      const willRename = Boolean(rename && rename !== agent.name);
+      if (willRename) set.name = rename;
+      await ctx.db.update(agents).set(set).where(eq(agents.id, agent.id));
+      const newName = willRename ? rename : agent.name;
+      await audit(ctx.db, {
+        workspaceId: wsId,
+        userId: user.id,
+        userName: user.name,
+        action: 'agent.config.update',
+        targetType: 'agent',
+        targetId: agent.id,
+        meta: { via: 'concierge', fields: ['brief', ...(willRename ? ['name'] : [])] },
+      });
+      bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
+      return JSON.stringify({
+        summary: purpose
+          ? `Updated ${newName}'s brief${d ? ' and re-drafted its setup to match' : ''}${willRename ? ` (was ${agent.name})` : ''}.`
+          : `Renamed ${agent.name} to ${newName}.`,
+        agent_id: agent.id,
+        name: newName,
+        url: `${env.webOrigin}/agents/new/${agent.id}?step=create`,
+        open_url: `/agents/new/${agent.id}?step=create`,
       });
     },
   },

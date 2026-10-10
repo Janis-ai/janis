@@ -971,10 +971,26 @@ export function AskJanis({
     setDeciding(actionId);
     setActError('');
     try {
-      await api(`/api/actions/${actionId}/decide`, {
-        method: 'POST',
-        body: JSON.stringify({ decision }),
-      });
+      const res = await api<{ ok: boolean; status: string; result?: string | null }>(
+        `/api/actions/${actionId}/decide`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ decision }),
+        },
+      );
+      // An approved action can hand back a console destination — a
+      // concierge-created agent lands you on its Create page rather than
+      // leaving you to click a link. Only console-relative paths navigate.
+      if (decision === 'approved' && res.result) {
+        try {
+          const r = JSON.parse(res.result) as { open_url?: unknown };
+          if (typeof r.open_url === 'string' && r.open_url.startsWith('/')) {
+            navigate(r.open_url);
+          }
+        } catch {
+          /* non-JSON result — nothing to open */
+        }
+      }
       // Optimistically resolve the card; the next poll lands the real row.
       setMsgs((ms) =>
         ms.map((m) =>

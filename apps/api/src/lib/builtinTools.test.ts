@@ -317,7 +317,7 @@ describe('create_agent builtin', () => {
 
   const applyCreate = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_create_agent')!;
 
-  it('parks a card; approving creates the hosted agent with no channel and the Teach link', async () => {
+  it('parks a card; approving creates the hosted agent with no channel and the Create link', async () => {
     const out = await createAgent().run(
       { name: 'Acme Support', system_prompt: 'You answer Acme shipping questions.', greeting: 'Hi!' },
       cctx(CONV2),
@@ -335,7 +335,8 @@ describe('create_agent builtin', () => {
       }),
     );
     expect(applied.agent_id).toBeTruthy();
-    expect(applied.url).toBe(`https://app.janis.ai/agents/new/${applied.agent_id}?step=teach`);
+    expect(applied.url).toBe(`https://app.janis.ai/agents/new/${applied.agent_id}?step=create`);
+    expect(applied.open_url).toBe(`/agents/new/${applied.agent_id}?step=create`);
     const [agent] = await db.select().from(agents).where(eq(agents.id, applied.agent_id));
     expect(agent.workspaceId).toBe(WS2); // visitor's workspace, not the concierge's
     expect(agent.hosted).toBe(true);
@@ -393,6 +394,121 @@ describe('create_agent builtin', () => {
     const [agent] = await db.select().from(agents).where(eq(agents.id, applied.agent_id));
     expect(agent.workspaceId).toBe(w5.id);
     await db.delete(pendingActions).where(eq(pendingActions.id, pa!.id));
+  });
+
+  it('stores the visitor purpose as the builder brief — bootstrap shape, minus the LLM draft', async () => {
+    // No platform key in tests → generateDraft returns null, the parked
+    // card carries purpose + no draft and the concierge prompt is the
+    // fallback instructions.
+    const prevKey = env.llmApiKey;
+    env.llmApiKey = '';
+    try {
+      const out = await createAgent().run(
+        {
+          name: 'Brief Bot',
+          purpose: 'A Grade 6 math teacher that answers homework questions.',
+          system_prompt: 'fallback prompt',
+          workspace: 'Free WS',
+        },
+        cctx(CONV2),
+      );
+      expect(out).toContain('action_card');
+      const pa = (
+        await db
+          .select()
+          .from(pendingActions)
+          .where(eq(pendingActions.conversationId, CONV2))
+          .orderBy(desc(pendingActions.createdAt))
+      ).find((p) => p.toolName === 'apply_create_agent' && p.status === 'pending');
+      const paArgs = pa!.args as Record<string, unknown>;
+      expect(paArgs.purpose).toContain('Grade 6 math teacher');
+      const applied = JSON.parse(
+        await applyCreate().run(paArgs as Record<string, string>, {
+          db,
+          convId: CONV2,
+          workspaceId: WS,
+        }),
+      );
+      const [agent] = await db.select().from(agents).where(eq(agents.id, applied.agent_id));
+      const cfg = agent.config as {
+        purpose?: string;
+        system_prompt?: string;
+        builder?: { description?: string; generated_at?: string };
+      };
+      // The brief rides both fields the Create page reads.
+      expect(cfg.purpose).toContain('Grade 6 math teacher');
+      expect(cfg.builder?.description).toContain('Grade 6 math teacher');
+      expect(cfg.builder?.generated_at).toBeTruthy();
+      expect(cfg.system_prompt).toBe('fallback prompt');
+      await db.delete(pendingActions).where(eq(pendingActions.id, pa!.id));
+    } finally {
+      env.llmApiKey = prevKey;
+    }
+  });
+});
+
+describe('update_agent_brief builtin', () => {
+  const updateBrief = () => BUILTIN_TOOLS.find((b) => b.name === 'update_agent_brief')!;
+  const applyBrief = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_agent_brief')!;
+
+  it('is gated to the operator workspace', () => {
+    expect(updateBrief().available(WS)).toBe(true);
+    expect(updateBrief().available('other-ws')).toBe(false);
+  });
+
+  it('parks a card; approving rewrites brief + name like the Create page', async () => {
+    const prevKey = env.llmApiKey;
+    env.llmApiKey = '';
+    try {
+      const [target] = await db
+        .insert(agents)
+        .values({ workspaceId: WS2, name: 'Old Name Bot', hosted: true, config: { purpose: 'old brief' } })
+        .returning();
+      const out = await updateBrief().run(
+        {
+          agent: 'Old Name Bot',
+          purpose: 'A Grade 6 math teacher for homework help.',
+          name: 'Mr. Smith',
+          workspace: 'Free WS',
+        },
+        cctx(CONV2),
+      );
+      expect(out).toContain('action_card');
+      const pa = (
+        await db
+          .select()
+          .from(pendingActions)
+          .where(eq(pendingActions.conversationId, CONV2))
+          .orderBy(desc(pendingActions.createdAt))
+      ).find((p) => p.toolName === 'apply_agent_brief' && p.status === 'pending');
+      expect(pa).toBeTruthy();
+      const applied = JSON.parse(
+        await applyBrief().run(pa!.args as Record<string, string>, {
+          db,
+          convId: CONV2,
+          workspaceId: WS,
+        }),
+      );
+      expect(applied.open_url).toBe(`/agents/new/${target.id}?step=create`);
+      const [agent] = await db.select().from(agents).where(eq(agents.id, target.id));
+      expect(agent.name).toBe('Mr. Smith');
+      const cfg = agent.config as {
+        purpose?: string;
+        builder?: { description?: string };
+      };
+      expect(cfg.purpose).toContain('math teacher');
+      expect(cfg.builder?.description).toContain('math teacher');
+      await db.delete(pendingActions).where(eq(pendingActions.id, pa!.id));
+    } finally {
+      env.llmApiKey = prevKey;
+    }
+  });
+
+  it('rejects an empty change', async () => {
+    const out = JSON.parse(
+      await updateBrief().run({ agent: 'Bot2', workspace: 'Free WS' }, cctx(CONV2)),
+    );
+    expect(out.error).toContain('nothing to change');
   });
 });
 
