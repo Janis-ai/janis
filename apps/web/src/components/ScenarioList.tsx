@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ScenarioTest } from './ScenarioRow';
 import { REVEAL_SCENARIO } from '../lib/scenarioRing';
@@ -21,8 +21,28 @@ export const CAT_LABELS: Record<string, string> = {
 };
 
 export type FoldSignal = { seq: number; open: boolean };
-type Filter = 'all' | 'failing' | 'passing' | 'unrun';
-type Sort = 'attention' | 'newest' | 'oldest';
+export type Filter = 'all' | 'failing' | 'passing' | 'unrun';
+export type Sort = 'attention' | 'newest' | 'oldest';
+
+export type ScenarioCounts = {
+  all: number;
+  failing: number;
+  passing: number;
+  unrun: number;
+};
+
+/** Paged mode — the server holds the full suite and the list shows a
+ *  growing slice. Counts/filters/sort delegate to the server so the
+ *  toolbar never lies about rows that aren't loaded yet. */
+export interface ScenarioListPaging {
+  counts: ScenarioCounts;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+  onQueryChange: (q: { filter: Filter; sort: Sort }) => void;
+  /** A reveal named a row beyond the loaded pages — fetch by id + mount. */
+  onRevealMissing: (id: string) => void;
+}
 
 // The human verdict outranks the machine verdict — an approved row is
 // 'approved' even if its last replay failed. Stale rows count in
@@ -62,6 +82,7 @@ export function ScenarioList({
   renderRow,
   onDeleteGroup,
   deletingGroup,
+  paged,
 }: {
   tests: ScenarioTest[];
   /** 'category' — coverage sections (builder Try-it); 'conversation' —
@@ -71,22 +92,53 @@ export function ScenarioList({
   /** Conversation mode only — delete-every-row-in-this-group. */
   onDeleteGroup?: (convId: string) => void;
   deletingGroup?: boolean;
+  paged?: ScenarioListPaging;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<Sort>('attention');
   const [foldAll, setFoldAll] = useState<FoldSignal>({ seq: 0, open: false });
+  const applyFilter = (f: Filter) => {
+    setFilter(f);
+    if (f !== filter) paged?.onQueryChange({ filter: f, sort });
+  };
+  const applySort = (s: Sort) => {
+    setSort(s);
+    if (s !== sort) paged?.onQueryChange({ filter, sort: s });
+  };
   // "See matched scenario" deep links — a filter that would hide the
-  // target row drops back to All so the reveal can find it.
+  // target row drops back to All so the reveal can find it. Paged mode:
+  // loaded rows are all visible (the server filtered), so only a row
+  // beyond the pages needs fetching by id.
   useEffect(() => {
     const onReveal = (e: Event) => {
       const id = (e as CustomEvent<string>).detail;
-      if (id && tests.some((t) => t.id === id)) setFilter('all');
+      if (!id) return;
+      if (tests.some((t) => t.id === id)) {
+        if (!paged) setFilter('all');
+      } else paged?.onRevealMissing(id);
     };
     window.addEventListener(REVEAL_SCENARIO, onReveal);
     return () => window.removeEventListener(REVEAL_SCENARIO, onReveal);
-  }, [tests]);
+  }, [tests, paged]);
+  // Load-more sentinel — auto-appends the next page as it nears view;
+  // the button stays as the no-observer fallback.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef(paged?.onLoadMore);
+  loadMoreRef.current = paged?.onLoadMore;
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !paged?.hasMore) return;
+    const io = new IntersectionObserver(
+      (es) => {
+        if (es.some((x) => x.isIntersecting)) loadMoreRef.current?.();
+      },
+      { rootMargin: '600px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [paged?.hasMore]);
 
-  const counts = {
+  const counts = paged?.counts ?? {
     all: tests.length,
     failing: tests.filter(isFailing).length,
     passing: tests.filter(isPassing).length,
@@ -100,7 +152,7 @@ export function ScenarioList({
           key={f}
           className={`btn sm${filter === f ? ' filter-on' : ' ghost'}`}
           aria-pressed={filter === f}
-          onClick={() => setFilter(f)}
+          onClick={() => applyFilter(f)}
         >
           {f === 'unrun' ? 'Not run' : f[0].toUpperCase() + f.slice(1)} {counts[f]}
         </button>
@@ -120,7 +172,7 @@ export function ScenarioList({
       <span className="grow" />
       <label className="row" style={{ gap: 4 }}>
         <span className="muted">Sort</span>
-        <select value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
+        <select value={sort} onChange={(e) => applySort(e.target.value as Sort)}>
           <option value="attention">attention first</option>
           <option value="newest">newest</option>
           <option value="oldest">oldest</option>
@@ -170,16 +222,23 @@ export function ScenarioList({
     } else items.push({ convId: null, ts: [t] });
   }
   for (const [convId, ts] of byConv) items.push({ convId, ts });
+  // Paged mode: the server already filtered + ordered — client-side
+  // re-passes would hide deliberately injected rows and lie about order
+  // beyond the loaded slice.
   const visible = items
-    .map((it) => ({ ...it, shown: it.ts.filter((t) => matchesFilter(t, filter)) }))
+    .map((it) => ({
+      ...it,
+      shown: paged ? it.ts : it.ts.filter((t) => matchesFilter(t, filter)),
+    }))
     .filter((it) => it.shown.length > 0);
-  visible.sort((a, b) =>
-    sort === 'attention'
-      ? rank(a.shown) - rank(b.shown) || newest(b.ts) - newest(a.ts)
-      : sort === 'newest'
-        ? newest(b.ts) - newest(a.ts)
-        : oldest(a.ts) - oldest(b.ts),
-  );
+  if (!paged)
+    visible.sort((a, b) =>
+      sort === 'attention'
+        ? rank(a.shown) - rank(b.shown) || newest(b.ts) - newest(a.ts)
+        : sort === 'newest'
+          ? newest(b.ts) - newest(a.ts)
+          : oldest(a.ts) - oldest(b.ts),
+    );
   return (
     <>
       {toolbar}
@@ -224,6 +283,17 @@ export function ScenarioList({
       {visible.length === 0 && tests.length > 0 && (
         <div className="muted" style={{ fontSize: 12 }}>
           Nothing matches this filter.
+        </div>
+      )}
+      {paged?.hasMore && (
+        <div ref={sentinelRef} style={{ textAlign: 'center', padding: '10px 0' }}>
+          {paged.loadingMore ? (
+            <span className="muted" style={{ fontSize: 12 }}>Loading…</span>
+          ) : (
+            <button className="btn ghost sm" onClick={() => paged.onLoadMore()}>
+              Load more
+            </button>
+          )}
         </div>
       )}
     </>

@@ -1348,4 +1348,67 @@ describe('try-it scenarios', () => {
     expect(res.status).toBe(200);
     expect((await buildStatus(id)).steps.abilities).toBe('done');
   });
+
+  it('pages the suite: stable cursors, server filters, counts, single-row read', async () => {
+    const id = await mkAgent();
+    const mk = (prompt: string) =>
+      postTest(id, { prompt, expectation: 'e' }).then((r) => r.json());
+    const a = await mk('t-fail');
+    const b = await mk('t-pass');
+    const c = await mk('t-unrun');
+    // a: machine-failed, unreviewed → the failing bucket; b: human pass;
+    // c: never ran.
+    await db
+      .update(agentTests)
+      .set({ lastRun: { at: new Date().toISOString(), passed: false, reply: 'r', model: 'm' } as never })
+      .where(eq(agentTests.id, a.test.id));
+    await patchTest(id, b.test.id, { human_result: 'pass' });
+
+    const get = (qs: string) =>
+      app
+        .request(`/api/agents/${id}/tests?${qs}`, { headers: { cookie: parentCookie } })
+        .then((r) => r.json());
+    // ?limit= opts into paged mode — no limit keeps the legacy full list.
+    const full = await get('');
+    expect(full.tests).toHaveLength(3);
+    expect(full.counts).toBeUndefined();
+    const page1 = await get('limit=2&sort=attention');
+    expect(page1.tests).toHaveLength(2);
+    expect(page1.next_cursor).toBeTruthy();
+    // Buckets overlap by design — 'unrun' means no machine run, so the
+    // human-passed row that never ran counts there too (same as the
+    // list's own !last_run predicate).
+    expect(page1.counts).toEqual({ all: 3, failing: 1, passing: 1, unrun: 2 });
+    // Attention order: the failing row first — b and c share rank 1
+    // (never machine-ran), c wins the created_at tiebreak.
+    expect(page1.tests[0].id).toBe(a.test.id);
+    expect(page1.tests[1].id).toBe(c.test.id);
+    const page2 = await get(`limit=2&sort=attention&cursor=${encodeURIComponent(page1.next_cursor)}`);
+    expect(page2.tests).toHaveLength(1);
+    expect(page2.tests[0].id).toBe(b.test.id);
+    expect(page2.next_cursor).toBeNull();
+    const seen = [...page1.tests, ...page2.tests].map((t: { id: string }) => t.id);
+    expect(new Set(seen).size).toBe(3);
+    // Server filters mirror the list's own predicates.
+    const failing = await get('limit=10&filter=failing');
+    expect(failing.tests.map((t: { id: string }) => t.id)).toEqual([a.test.id]);
+    const passing = await get('limit=10&filter=passing');
+    expect(passing.tests.map((t: { id: string }) => t.id)).toEqual([b.test.id]);
+    const unrun = await get('limit=10&filter=unrun');
+    expect(unrun.tests.map((t: { id: string }) => t.id)).toEqual([c.test.id, b.test.id]);
+    // Single-row read for reveal-by-id jumps.
+    const one = await (
+      await app.request(`/api/agents/${id}/tests/${b.test.id}`, {
+        headers: { cookie: parentCookie },
+      })
+    ).json();
+    expect(one.test.id).toBe(b.test.id);
+    expect(one.test.human_result).toBe('pass');
+    // A stale verdict lands in neither bucket — same rule as the list.
+    // b's verdict was stamped with the old fingerprint so it goes stale;
+    // a's run was seeded without one (null config_version never stales).
+    await patchConfig(id, { system_prompt: 'changed' });
+    const recount = await get('limit=10');
+    expect(recount.counts).toEqual({ all: 3, failing: 1, passing: 0, unrun: 2 });
+  });
 });

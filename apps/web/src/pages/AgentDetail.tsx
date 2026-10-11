@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   Agent,
   AgentConfig,
@@ -40,6 +40,7 @@ import { CorrectThisCard } from '../components/CorrectThis';
 import { Modal } from '../components/Modal';
 import { ScenarioRow, scenarioPrompt } from '../components/ScenarioRow';
 import { ScenarioList, isFailing, isPassing } from '../components/ScenarioList';
+import type { Filter as ScenarioFilter, ScenarioCounts, Sort as ScenarioSort } from '../components/ScenarioList';
 import { useDock } from '../lib/dockContext';
 import { usePageTitle } from '../lib/title';
 import { NOTIFY_EVENT_LABELS } from '../lib/notifyEvents';
@@ -3316,9 +3317,29 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     kind: 'manual' | 'ab';
     startedAt: number;
   } | null>(null);
-  const { data } = useQuery({
-    queryKey: ['agent-tests', agentId],
-    queryFn: () => api<{ tests: AgentTest[] }>(`/api/agents/${agentId}/tests`),
+  // Paged suite — ?limit= opts the endpoint into cursor mode; the server
+  // owns filter/sort/counts so the toolbar can't lie about unloaded rows.
+  // Key stays under ['agent-tests', agentId] so every existing invalidate
+  // (verdict writes, deletes, imports, runs) reaches it.
+  const [testQuery, setTestQuery] = useState<{ filter: ScenarioFilter; sort: ScenarioSort }>({
+    filter: 'all',
+    sort: 'attention',
+  });
+  // Rows jumped-to by id that live beyond the loaded pages — fetched on
+  // demand and mounted ahead of the slice.
+  const [injected, setInjected] = useState<Record<string, AgentTest>>({});
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
+    queryKey: ['agent-tests', agentId, 'paged', testQuery.filter, testQuery.sort],
+    queryFn: ({ pageParam }) =>
+      api<{
+        tests: AgentTest[];
+        next_cursor: string | null;
+        counts: ScenarioCounts;
+      }>(
+        `/api/agents/${agentId}/tests?limit=100&filter=${testQuery.filter}&sort=${testQuery.sort}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`,
+      ),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     // While a suite runs, last_run lands per test — poll so checkmarks
     // light up live instead of appearing all at once at the end.
     refetchInterval: batch ? 3000 : false,
@@ -3631,7 +3652,23 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     onError: (e) => setErr(e.message),
   });
 
-  const tests = data?.tests ?? [];
+  const tests = useMemo(() => {
+    const flat = (data?.pages ?? []).flatMap((p) => p.tests);
+    const extra = Object.values(injected).filter((t) => !flat.some((f) => f.id === t.id));
+    return [...extra, ...flat];
+  }, [data, injected]);
+  const testCounts = data?.pages[0]?.counts;
+  // A reveal can name a row beyond the loaded pages — fetch it by id and
+  // mount it ahead of the slice, then reveal normally (its frame polling
+  // covers the mount commit).
+  const revealMissing = (id: string) => {
+    void api<{ test: AgentTest }>(`/api/agents/${agentId}/tests/${id}`)
+      .then((d) => {
+        setInjected((prev) => ({ ...prev, [id]: d.test }));
+        revealScenario(id);
+      })
+      .catch(() => {});
+  };
   const { hash } = useLocation();
   // Deep links land as #sc-<id> ("see matched scenario" from inbox/test
   // chat) — revealScenario unfolds the row, opens any group it's nested
@@ -3640,8 +3677,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     if (!tests.length || !hash.startsWith('#sc-')) return;
     revealScenario(hash.slice(4));
   }, [tests.length, hash]);
-  const passed = tests.filter(isPassing).length;
-  const failed = tests.filter(isFailing).length;
+  const passed = testCounts?.passing ?? tests.filter(isPassing).length;
+  const failed = testCounts?.failing ?? tests.filter(isFailing).length;
   const batches = runsData?.batches ?? [];
   const suggestions = suggestionsData?.suggestions ?? [];
   const evalSuggestions = evalSugData?.suggestions ?? [];
@@ -4190,10 +4227,22 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
         </div>
       )}
 
-      {tests.length > 0 && (
+      {(tests.length > 0 || (testCounts?.all ?? 0) > 0) && (
         <ScenarioList
           tests={tests}
           groupBy="conversation"
+          paged={{
+            counts: testCounts ?? { all: 0, failing: 0, passing: 0, unrun: 0 },
+            hasMore: !!hasNextPage,
+            loadingMore: isFetchingNextPage,
+            onLoadMore: () => void fetchNextPage(),
+            onQueryChange: (q) => {
+              // New slice — injected jump-targets drop with it.
+              setInjected({});
+              setTestQuery(q);
+            },
+            onRevealMissing: revealMissing,
+          }}
           onDeleteGroup={isAdmin ? (id) => delGroup.mutate(id) : undefined}
           deletingGroup={delGroup.isPending}
           renderRow={(t, foldSignal) => (

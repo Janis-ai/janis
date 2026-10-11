@@ -853,66 +853,60 @@ export function agentRoutes(db: Db) {
     // suite. A verdict stored against an older config fingerprint is
     // stale, not reviewed: the fix you're testing may have changed it.
     const cfgVersion = configVersion(cfg);
-    const testRows = await db
-      .select({
-        name: agentTests.name,
-        category: agentTests.category,
-        humanResult: agentTests.humanResult,
-        configVersion: agentTests.configVersion,
-        // The judge's verdict from the last run — machine passes count
-        // toward readiness; the deploy gate is failures, not approvals.
-        lastPassed: sql<
-          boolean | null
-        >`CASE WHEN ${agentTests.lastRun} IS NULL THEN NULL ELSE (${agentTests.lastRun}->>'passed')::boolean END`,
-        hasRun: sql<boolean>`${agentTests.lastRun} IS NOT NULL`,
-      })
-      .from(agentTests)
-      .where(eq(agentTests.agentId, agent.id));
-    const testsTotal = testRows.length;
+    // Aggregated in SQL — the suite can grow to thousands of rows; a
+    // full-row fetch just to count would tax every status poll.
     // Effective outcome — a human pass/fail overrides the judge; absent a
     // verdict the machine result counts. 'unreviewed' (a fresh panel run
-    // voided the prior verdict) and 'fixed_recheck' (fix applied, awaiting
-    // its re-run) produce no human outcome, so they fall through to the
-    // stored run — fixed_recheck excepted, whose last run is pre-fix.
-    const outcomeOf = (t: (typeof testRows)[number]): 'pass' | 'fail' | 'unrun' =>
-      t.humanResult === 'pass'
-        ? 'pass'
-        : t.humanResult === 'fail'
-          ? 'fail'
-          : t.humanResult === 'fixed_recheck'
-            ? 'unrun'
-            : t.lastPassed === true
-              ? 'pass'
-              : t.lastPassed === false
-                ? 'fail'
-                : 'unrun';
-    // Stale = recorded against a different config fingerprint — runs stamp
-    // it as well as verdicts, so an old machine pass can't stay green.
-    const isStaleRow = (t: (typeof testRows)[number]) =>
-      !!t.configVersion && t.configVersion !== cfgVersion;
-    const fresh = testRows.filter((t) => !isStaleRow(t));
-    const testsPassing = fresh.filter((t) => outcomeOf(t) === 'pass').length;
-    const testsFailing = fresh.filter((t) => outcomeOf(t) === 'fail').length;
+    // voided the prior verdict) falls through to the stored run —
+    // 'fixed_recheck' excepted, whose last run is pre-fix → no outcome.
+    const machinePassed = sql`(${agentTests.lastRun}->>'passed')::boolean`;
+    const staleCond = sql`(${agentTests.configVersion} is not null and ${agentTests.configVersion} <> ${cfgVersion})`;
+    const freshCond = sql`(${agentTests.configVersion} is null or ${agentTests.configVersion} = ${cfgVersion})`;
+    const outcomePass = sql`(${agentTests.humanResult} = 'pass' or (${agentTests.humanResult} is distinct from 'fail' and ${agentTests.humanResult} is distinct from 'fixed_recheck' and ${machinePassed} is true))`;
+    const outcomeFail = sql`(${agentTests.humanResult} = 'fail' or (${agentTests.humanResult} is distinct from 'pass' and ${agentTests.humanResult} is distinct from 'fixed_recheck' and ${machinePassed} is false))`;
+    const [tcRows, uncheckedRows] = await Promise.all([
+      db
+        .select({
+          total: sql<number>`count(*)::int`,
+          freshTotal: sql<number>`count(*) filter (where ${freshCond})::int`,
+          passing: sql<number>`count(*) filter (where ${freshCond} and ${outcomePass})::int`,
+          failing: sql<number>`count(*) filter (where ${freshCond} and ${outcomeFail})::int`,
+          run: sql<number>`count(*) filter (where ${agentTests.humanResult} is not null or ${agentTests.lastRun} is not null)::int`,
+          // 'checked' = a human verdict was given (pass or fail);
+          // 'unreviewed' means the scenario ran but nobody judged it yet.
+          checked: sql<number>`count(*) filter (where ${agentTests.humanResult} in ('pass','fail'))::int`,
+          stale: sql<number>`count(*) filter (where ${staleCond})::int`,
+          fixed: sql<number>`count(*) filter (where ${agentTests.humanResult} = 'fixed_recheck')::int`,
+          safetyTotal: sql<number>`count(*) filter (where ${agentTests.category} = 'safety')::int`,
+          safetyChecked: sql<number>`count(*) filter (where ${agentTests.category} = 'safety' and ${agentTests.humanResult} in ('pass','fail'))::int`,
+        })
+        .from(agentTests)
+        .where(eq(agentTests.agentId, agent.id)),
+      // Names of what isn't green — the nav chip tooltip lists them so
+      // the counts are inspectable, not just numbers.
+      db
+        .select({ name: agentTests.name })
+        .from(agentTests)
+        .where(
+          and(
+            eq(agentTests.agentId, agent.id),
+            sql`(${staleCond} or not ${outcomePass})`,
+          ),
+        )
+        .limit(6),
+    ]);
+    const tc = tcRows[0];
+    const testsTotal = Number(tc.total);
+    const testsPassing = Number(tc.passing);
+    const testsFailing = Number(tc.failing);
     // Fresh but no passing/failing outcome — never ran, unrunnable (no
     // expectation to judge against), or a fixed scenario awaiting re-run.
-    const testsUnrun = fresh.length - testsPassing - testsFailing;
-    const testsRun = testRows.filter((t) => !!t.humanResult || t.hasRun).length;
-    // 'checked' = a human verdict was given (pass or fail); 'unreviewed'
-    // means the scenario ran but nobody judged the reply yet.
-    const testsChecked = testRows.filter(
-      (t) => t.humanResult === 'pass' || t.humanResult === 'fail',
-    ).length;
-    const testsStale = testRows.filter(isStaleRow).length;
-    const safetyRows = testRows.filter((t) => t.category === 'safety');
-    const safetyChecked = safetyRows.filter(
-      (t) => t.humanResult === 'pass' || t.humanResult === 'fail',
-    ).length;
-    // Names of what isn't green — the nav chip tooltip lists them so the
-    // counts are inspectable, not just numbers.
-    const uncheckedNames = testRows
-      .filter((t) => isStaleRow(t) || outcomeOf(t) !== 'pass')
-      .map((t) => t.name)
-      .slice(0, 6);
+    const testsUnrun = Number(tc.freshTotal) - testsPassing - testsFailing;
+    const testsRun = Number(tc.run);
+    const testsChecked = Number(tc.checked);
+    const testsStale = Number(tc.stale);
+    const safetyChecked = Number(tc.safetyChecked);
+    const uncheckedNames = uncheckedRows.map((r) => r.name);
     const sources = (cfg.knowledge?.length ?? 0) + files.length;
     const updatedAt = files
       .map((f) => f.fetchedAt ?? f.createdAt)
@@ -1028,9 +1022,9 @@ export function agentRoutes(db: Db) {
         failing: testsFailing,
         unrun: testsUnrun,
         // fix applied, re-run queued/in-flight — awaiting the re-verdict.
-        fixed: testRows.filter((t) => t.humanResult === 'fixed_recheck').length,
+        fixed: Number(tc.fixed),
         stale: testsStale,
-        safety_total: safetyRows.length,
+        safety_total: Number(tc.safetyTotal),
         safety_checked: safetyChecked,
         unchecked: uncheckedNames,
       },
@@ -2047,12 +2041,117 @@ export function agentRoutes(db: Db) {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const version = configVersion((agent.config ?? {}) as AgentConfig);
-    const rows = await db
+    // Paged mode is opt-in (?limit=…) — the scenario-match consumers
+    // (test dock, inbox "save as test") keep full-list reads so fuzzy
+    // matching still sees every scenario.
+    const limitParam = c.req.query('limit');
+    if (!limitParam) {
+      const rows = await db
+        .select()
+        .from(agentTests)
+        .where(eq(agentTests.agentId, agent.id))
+        .orderBy(desc(agentTests.createdAt));
+      return c.json({ tests: rows.map((t) => toTest(t, version)), config_version: version });
+    }
+    const limit = Math.min(Math.max(parseInt(limitParam, 10) || 0, 1), 500);
+    const filter = c.req.query('filter') ?? 'all';
+    const sort = c.req.query('sort') ?? 'attention';
+    if (!['all', 'failing', 'passing', 'unrun'].includes(filter))
+      return c.json({ error: 'bad filter' }, 400);
+    if (!['attention', 'newest', 'oldest'].includes(sort))
+      return c.json({ error: 'bad sort' }, 400);
+    // Filter/rank predicates mirror ScenarioList's isFailing/isPassing
+    // exactly — a verdict stored against a different config fingerprint is
+    // stale and counts in neither bucket.
+    const staleSql = sql`(${agentTests.configVersion} is not null and ${agentTests.configVersion} <> ${version})`;
+    const freshSql = sql`(${agentTests.configVersion} is null or ${agentTests.configVersion} = ${version})`;
+    const machinePassed = sql`(${agentTests.lastRun}->>'passed')::boolean`;
+    const failingSql = sql`(${freshSql} and (${agentTests.humanResult} = 'fail' or (${agentTests.humanResult} is distinct from 'pass' and ${machinePassed} is false)))`;
+    const passingSqlFrag = sql`(${freshSql} and (${agentTests.humanResult} = 'pass' or (${agentTests.humanResult} is distinct from 'fail' and ${machinePassed} is true)))`;
+    const unrunSql = sql`${agentTests.lastRun} is null`;
+    // Attention rank: failing first, then stale/never-run, then green —
+    // the same triage order the list applies client-side when unpaged.
+    const rankSql = sql`case when ${failingSql} then 0 when (${staleSql} or ${unrunSql}) then 1 else 2 end`;
+    const filterSql =
+      filter === 'failing' ? failingSql
+      : filter === 'passing' ? passingSqlFrag
+      : filter === 'unrun' ? unrunSql
+      : sql`true`;
+    // Keyset cursor: {r?, t, id} — rank only matters for attention order;
+    // created_at ties break on id so a row never straddles two pages.
+    type Cursor = { r?: number; t: string; id: string };
+    let cursor: Cursor | null = null;
+    const raw = c.req.query('cursor');
+    if (raw) {
+      try {
+        cursor = JSON.parse(Buffer.from(raw, 'base64url').toString()) as Cursor;
+      } catch {
+        return c.json({ error: 'bad cursor' }, 400);
+      }
+      if (typeof cursor.id !== 'string' || typeof cursor.t !== 'string')
+        return c.json({ error: 'bad cursor' }, 400);
+    }
+    // cursor.t is created_at::text (full µs precision) — a JS Date would
+    // truncate to ms and silently drop same-timestamp rows at page edges.
+    const t = cursor?.t ?? '';
+    const cursorSql = !cursor
+      ? sql`true`
+      : sort === 'attention'
+        ? sql`(${rankSql} > ${cursor.r ?? 2} or (${rankSql} = ${cursor.r ?? 2} and ${agentTests.createdAt} < ${t}::timestamptz) or (${rankSql} = ${cursor.r ?? 2} and ${agentTests.createdAt} = ${t}::timestamptz and ${agentTests.id} < ${cursor.id}))`
+        : sort === 'newest'
+          ? sql`(${agentTests.createdAt} < ${t}::timestamptz or (${agentTests.createdAt} = ${t}::timestamptz and ${agentTests.id} < ${cursor.id}))`
+          : sql`(${agentTests.createdAt} > ${t}::timestamptz or (${agentTests.createdAt} = ${t}::timestamptz and ${agentTests.id} > ${cursor.id}))`;
+    const [rows, counts] = await Promise.all([
+      db
+        .select({ row: agentTests, rank: rankSql, ts: sql<string>`${agentTests.createdAt}::text` })
+        .from(agentTests)
+        .where(and(eq(agentTests.agentId, agent.id), filterSql, cursorSql))
+        .orderBy(
+          ...(sort === 'attention'
+            ? [asc(rankSql), desc(agentTests.createdAt), desc(agentTests.id)]
+            : sort === 'newest'
+              ? [desc(agentTests.createdAt), desc(agentTests.id)]
+              : [asc(agentTests.createdAt), asc(agentTests.id)]),
+        )
+        .limit(limit),
+      db
+        .select({
+          all: sql<number>`count(*)::int`,
+          failing: sql<number>`count(*) filter (where ${failingSql})::int`,
+          passing: sql<number>`count(*) filter (where ${passingSqlFrag})::int`,
+          unrun: sql<number>`count(*) filter (where ${unrunSql})::int`,
+        })
+        .from(agentTests)
+        .where(eq(agentTests.agentId, agent.id)),
+    ]);
+    const last = rows.at(-1);
+    const nextCursor =
+      rows.length === limit && last
+        ? Buffer.from(
+            JSON.stringify({ r: last.rank, t: last.ts, id: last.row.id }),
+          ).toString('base64url')
+        : null;
+    return c.json({
+      tests: rows.map(({ row }) => toTest(row, version)),
+      config_version: version,
+      next_cursor: nextCursor,
+      counts: counts[0] ?? { all: 0, failing: 0, passing: 0, unrun: 0 },
+    });
+  });
+
+  // Single-row read — powers "see matched scenario" jumps when the target
+  // sits beyond the loaded pages (deep links, rail reveal, Fix-N-items).
+  app.get('/:id/tests/:testId', agentMember, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const version = configVersion((agent.config ?? {}) as AgentConfig);
+    const [t] = await db
       .select()
       .from(agentTests)
-      .where(eq(agentTests.agentId, agent.id))
-      .orderBy(desc(agentTests.createdAt));
-    return c.json({ tests: rows.map((t) => toTest(t, version)), config_version: version });
+      .where(and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, agent.id)))
+      .limit(1);
+    if (!t) return c.json({ error: 'not found' }, 404);
+    return c.json({ test: toTest(t, version) });
   });
 
   const TEST_CATEGORIES = ['safety', 'knowledge', 'actions', 'out_of_scope', 'tone', 'general'] as const;
