@@ -1359,7 +1359,77 @@ function CrmCard() {
 }
 
 /** Audit trail — every security/billing-relevant mutation, newest first.
- *  Admin-only (the endpoint 403s members anyway). */
+ *  Admin-only (the endpoint 403s members anyway). Collapsed by default —
+ *  it's a record you consult, not a surface you scan. */
+const AUDIT_ACTIONS: Record<string, string> = {
+  'agent.create': 'Created agent',
+  'agent.delete': 'Deleted agent',
+  'agent.config.update': 'Updated agent',
+  'agent.knowledge.add': 'Added knowledge',
+  'agent.rule.add': 'Added alert rule',
+  'agent.widget.save': 'Saved widget config',
+  'channel.create': 'Created channel',
+  'channel.update': 'Updated channel',
+  'channel.delete': 'Deleted channel',
+  'channel.send': 'Sent channel message',
+  'channel.broadcast': 'Broadcast to channel',
+  'campaign.create': 'Created campaign',
+  'campaign.send': 'Sent campaign',
+  'campaign.delete': 'Deleted campaign',
+  'contact.delete': 'Deleted contact',
+  'contact.export': 'Exported contacts',
+  'contact.merge': 'Merged contacts',
+  'conversation.assign': 'Assigned conversation',
+  'crm.connect': 'Connected CRM',
+  'crm.disconnect': 'Disconnected CRM',
+  'member.invite': 'Invited member',
+  'list.create': 'Created list',
+  'list.delete': 'Deleted list',
+  'list.import': 'Imported list',
+  'suppression.add': 'Added suppression',
+  'suppression.remove': 'Removed suppression',
+  'billing.checkout': 'Started checkout',
+  'billing.downgrade': 'Downgraded plan',
+  'billing.connect': 'Connected agency billing',
+  'billing.agency_pricing': 'Updated agency pricing',
+  'workspace.update': 'Updated workspace',
+  'workspace.event_token.rotate': 'Rotated event token',
+  'webhook.replay': 'Replayed webhook',
+  'scim.sync': 'SCIM sync',
+};
+
+/** ids and raw payloads don't help a human read the row — the interesting
+ *  meta is name/via/fields/entries. */
+const AUDIT_META_SKIP = new Set([
+  'id', 'target_id', 'agent_id', 'workspace_id', 'user_id', 'channel_id',
+  'conversation_id', 'member_id', 'name',
+]);
+function auditTarget(
+  targetType: string | null,
+  meta: Record<string, unknown>,
+): string {
+  const name = typeof meta.name === 'string' ? meta.name : null;
+  const bits = Object.entries(meta)
+    .filter(([k]) => !AUDIT_META_SKIP.has(k))
+    .slice(0, 3)
+    .map(([k, v]) => {
+      if (k === 'via' && v === 'concierge') return 'via Janis';
+      const val = Array.isArray(v)
+        ? v.map((x) => (typeof x === 'object' ? JSON.stringify(x) : String(x))).join(', ')
+        : typeof v === 'object' && v !== null
+          ? JSON.stringify(v)
+          : String(v);
+      return `${k}: ${val}`;
+    });
+  return [
+    name ?? targetType ?? '',
+    name && targetType ? `(${targetType})` : '',
+    ...bits,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 function AuditLogCard() {
   const { data, isLoading } = useQuery({
     queryKey: ['audit-log'],
@@ -1378,49 +1448,55 @@ function AuditLogCard() {
     refetchInterval: 30_000,
   });
   const entries = data?.entries ?? [];
+  const fmtWhen = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      ...(d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}),
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
   return (
     <div className="card">
-      <strong>Audit log</strong>
-      <div className="muted" style={{ margin: '4px 0 10px' }}>
-        Workspace mutations — who changed what, when.
-      </div>
-      {isLoading ? (
-        <div className="muted">Loading…</div>
-      ) : !entries.length ? (
-        <div className="muted">Nothing recorded yet.</div>
-      ) : (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>Who</th>
-              <th>Action</th>
-              <th>Target</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map((e) => (
-              <tr key={e.id}>
-                <td className="muted">{new Date(e.created_at).toLocaleString()}</td>
-                <td>{e.user_name ?? '—'}</td>
-                <td>
-                  <code>{e.action}</code>
-                </td>
-                <td className="muted">
-                  {e.target_type ?? ''}
-                  {e.target_id ? ` ${String(e.target_id).slice(0, 8)}` : ''}
-                  {Object.keys(e.meta ?? {}).length
-                    ? ` — ${Object.entries(e.meta)
-                        .slice(0, 3)
-                        .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
-                        .join(', ')}`
-                    : ''}
-                </td>
+      <details className="webhook-details" style={{ marginTop: 0 }}>
+        <summary>
+          <span className="details-title">Audit log</span>
+          <span className="details-sub">
+            workspace mutations — who changed what, when
+            {entries.length ? ` · ${entries.length}` : ''}
+          </span>
+        </summary>
+        {isLoading ? (
+          <div className="muted" style={{ marginTop: 8 }}>Loading…</div>
+        ) : !entries.length ? (
+          <div className="muted" style={{ marginTop: 8 }}>Nothing recorded yet.</div>
+        ) : (
+          <table className="data-table" style={{ marginTop: 8 }}>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Who</th>
+                <th>Action</th>
+                <th>Target</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            </thead>
+            <tbody>
+              {entries.map((e) => (
+                <tr key={e.id}>
+                  <td className="muted" style={{ whiteSpace: 'nowrap' }}>
+                    {fmtWhen(e.created_at)}
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{e.user_name ?? '—'}</td>
+                  <td>{AUDIT_ACTIONS[e.action] ?? <code>{e.action}</code>}</td>
+                  <td className="muted">{auditTarget(e.target_type, e.meta ?? {})}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </details>
     </div>
   );
 }
