@@ -420,7 +420,7 @@ export default function AgentOverview() {
             <div className="card" style={{ marginTop: 12 }}>
               <div className="row">
                 <strong className="grow">Knowledge</strong>
-                <button className="btn" onClick={() => navigate(buildStepLink(id!, 'teach'))}>
+                <button className="btn" onClick={() => navigate(`/agents/${id}/knowledge`)}>
                   Teach it
                 </button>
               </div>
