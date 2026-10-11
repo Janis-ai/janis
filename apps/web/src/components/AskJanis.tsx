@@ -1286,7 +1286,7 @@ export function AskJanis({
             </span>
           </div>
         )}
-        {convState !== 'human' && (chips ?? (!loaded || msgs.length ? null : cfg?.quick_replies ?? null))?.length ? (
+        {convState !== 'human' && (chips ?? (!loaded || msgs.length || outbox.length ? null : cfg?.quick_replies ?? null))?.length ? (
           <div className="ask-qrs">
             {(chips ?? cfg?.quick_replies ?? []).map((q, i) =>
               typeof q === 'string' ? (
