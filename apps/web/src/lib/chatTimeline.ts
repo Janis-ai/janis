@@ -111,6 +111,24 @@ export function reconcilePoll(
   return { outbox: next, fresh, maxTs, minTs };
 }
 
+/**
+ * Quick-reply chips belong to the newest message in the whole timeline —
+ * messages AND outbox. An 'in' echo is swallowed by the outbox rather than
+ * `fresh`, so `fresh`'s last row can be an 'out' that predates the send
+ * (the greeting row the server writes at first-send bootstrap): adopting
+ * its quick_replies revives chips the visitor already answered. Only take
+ * offers from an 'out' at least as new as the latest outbox send.
+ */
+export function chipsFromFresh(
+  last: ChatMsg | undefined,
+  outbox: OutEntry[],
+): NonNullable<ChatMsg['quick_replies']> | null {
+  const latestInTs = outbox.reduce((mx, o) => (o.ts > mx ? o.ts : mx), '');
+  return last && last.direction !== 'in' && last.created_at >= latestInTs && last.quick_replies?.length
+    ? last.quick_replies ?? null
+    : null;
+}
+
 export type TimelineItem =
   | { key: string; ts: string; kind: 'msg'; m: ChatMsg }
   | { key: string; ts: string; kind: 'out'; o: OutEntry };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  chipsFromFresh,
   reconcilePoll,
   timelineItems,
   type ChatMsg,
@@ -135,5 +136,44 @@ describe('reconcilePoll + timelineItems', () => {
     );
     expect(maxTs).toBe('2026-02-01T00:00:03.000Z');
     expect(minTs).toBe('2026-02-01T00:00:01.000Z');
+  });
+});
+
+describe('chipsFromFresh', () => {
+  const withQrs = (id: string, ts: string): ChatMsg => ({
+    ...msg(id, 'out', 'text', ts),
+    quick_replies: ['How does it work?', 'Talk to a human'],
+  });
+
+  // Regression: on a test channel the server writes the greeting row at
+  // first-send bootstrap, so the post-send poll returns it in `fresh` while
+  // the visitor's echo is swallowed by the outbox. Taking chips from the
+  // greeting revived them below the delivered message until the reply
+  // landed — chips must yield to a newer outbox send.
+  it('suppresses greeting chips that predate the visitor send', () => {
+    const outbox = [
+      { ...pending('Why Janis?', '2026-02-01T00:00:00.000Z'), status: 'delivered' as const, ts: '2026-02-01T00:00:00.100Z' },
+    ];
+    const greeting = withQrs('g1', '2026-02-01T00:00:00.050Z');
+    expect(chipsFromFresh(greeting, outbox)).toBeNull();
+  });
+
+  it('adopts chips from a reply newer than the send', () => {
+    const outbox = [
+      { ...pending('Why Janis?', '2026-02-01T00:00:00.000Z'), status: 'delivered' as const, ts: '2026-02-01T00:00:00.100Z' },
+    ];
+    const reply = withQrs('r1', '2026-02-01T00:00:02.000Z');
+    expect(chipsFromFresh(reply, outbox)).toEqual(['How does it work?', 'Talk to a human']);
+  });
+
+  it('adopts chips when the visitor has sent nothing', () => {
+    const last = withQrs('m1', '2026-02-01T00:00:00.000Z');
+    expect(chipsFromFresh(last, [])).toEqual(['How does it work?', 'Talk to a human']);
+  });
+
+  it('clears chips when the newest message is inbound or has none', () => {
+    expect(chipsFromFresh(msg('m1', 'in', 'hi', '2026-02-01T00:00:00.000Z'), [])).toBeNull();
+    expect(chipsFromFresh(msg('m2', 'out', 'no offers', '2026-02-01T00:00:01.000Z'), [])).toBeNull();
+    expect(chipsFromFresh(undefined, [])).toBeNull();
   });
 });

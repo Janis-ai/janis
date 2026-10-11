@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import {
+  chipsFromFresh,
   reconcilePoll,
   timelineItems,
   type Attachment,
@@ -516,8 +517,7 @@ export function AskJanis({
       // without its own quick replies retires the offer.
       const sawInbound = d.messages.some((m) => m.direction === 'in');
       if (fresh.length || sawInbound) {
-        const last = fresh[fresh.length - 1];
-        setChips(last && last.direction !== 'in' && last.quick_replies?.length ? last.quick_replies : null);
+        setChips(chipsFromFresh(fresh[fresh.length - 1], next));
       }
       setOpTyping(gotReply ? null : d.operator_typing ? (d.operator_typing.name ?? '') : null);
       setAgentTyping(gotReply ? false : !!d.agent_typing);
