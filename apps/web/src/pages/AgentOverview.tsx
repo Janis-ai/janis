@@ -121,9 +121,15 @@ export default function AgentOverview() {
 
   const tab = params.get('tab');
   if (tab && LEGACY_TAB_SECTION[tab]) {
+    // Carry the rest of the query through — meta_connect/rail came in on the
+    // same URL and dropping them silently breaks the OAuth return.
+    const rest = new URLSearchParams(params);
+    rest.delete('tab');
+    if (LEGACY_SUB[tab]) rest.set('sub', LEGACY_SUB[tab]);
+    const qs = rest.toString();
     return (
       <Navigate
-        to={`/agents/${id}/${LEGACY_TAB_SECTION[tab]}${LEGACY_SUB[tab] ? `?sub=${LEGACY_SUB[tab]}` : ''}`}
+        to={`/agents/${id}/${LEGACY_TAB_SECTION[tab]}${qs ? `?${qs}` : ''}`}
         replace
       />
     );

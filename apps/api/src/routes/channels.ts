@@ -1076,7 +1076,7 @@ export function channelWebhookRoutes(db: Db) {
         channelId && agentId
           ? `${env.webOrigin}/agents/${agentId}/channels/${channelId}?cf_error=${encodeURIComponent(msg)}`
           : agentId
-            ? `${env.webOrigin}/agents/${agentId}?tab=channels&cf_error=${encodeURIComponent(msg)}`
+            ? `${env.webOrigin}/agents/${agentId}/channels?cf_error=${encodeURIComponent(msg)}`
             : `${env.webOrigin}/agents?cf_error=${encodeURIComponent(msg)}`,
       );
     const code = c.req.query('code');

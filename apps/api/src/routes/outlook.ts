@@ -139,7 +139,7 @@ export function outlookPublicRoutes(db: Db) {
               ? // Success lands on the channel's own settings page — the
                 // mailbox has forwarding/watch config worth seeing.
                 `${env.webOrigin}/agents/${intent.a}/channels/${channelId}?outlook_connect=${encodeURIComponent(msg)}`
-              : `${env.webOrigin}/agents/${intent.a}?tab=channels&${ok ? 'outlook_connect' : 'outlook_error'}=${encodeURIComponent(msg)}`,
+              : `${env.webOrigin}/agents/${intent.a}/channels?${ok ? 'outlook_connect' : 'outlook_error'}=${encodeURIComponent(msg)}`,
           );
 
     const code = c.req.query('code');
