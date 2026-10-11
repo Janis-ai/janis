@@ -462,7 +462,7 @@ button, input, select, textarea { font: inherit; }
 }
 .main { transition: margin-right .15s ease; }
 @media (max-width: 640px) {
-  .dock { left: 0; width: auto; border-left: none; }
+  .dock { left: 0; width: auto; max-width: none; border-left: none; }
 }
 /* Per-topic "Add source" popover — four affordances behind one control. */
 .src-menu-wrap { position: relative; display: inline-block; }
