@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './models.js';
 
+export { latexToUnicode, mathToUnicode, splitMath, MATH_SRC } from './math.js';
+export type { MathSpan } from './math.js';
+
 // ---------------------------------------------------------------------------
 // Enums / literals
 // ---------------------------------------------------------------------------

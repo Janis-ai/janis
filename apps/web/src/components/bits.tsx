@@ -123,6 +123,7 @@ export function Md({ children }: { children: string }) {
     <>
       {splitEmphasis(children).map((seg, i) => {
         if (seg.kind === 'text') return stripStrayMarkers(seg.text);
+        if (seg.kind === 'math') return <span key={i} className="md-math">{seg.text}</span>;
         const Tag =
           seg.kind === 'bold'
             ? 'b'

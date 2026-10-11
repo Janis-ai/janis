@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { QuickReply, UserProfile } from '@janis/shared';
+import { mathToUnicode } from '@janis/shared';
 import type { WidgetComponent } from './widgets.js';
 import type { Db } from '../db/client.js';
 import { agents, channelBindings, channels, conversations, messages } from '../db/schema.js';
@@ -1520,10 +1521,13 @@ async function stampDelivery(
 }
 
 /** Canonical message text is markdown-ish: **bold**, *italic*, ~~strike~~,
- * `code`, [label](url). Egress translates it per channel — the webchat
- * widget renders the markdown itself, WhatsApp has its own dialect
- * (*bold*, _italic_, ~strike~, ```code```), and every text-only channel
- * gets the markers stripped so customers never see literal asterisks.
+ * `code`, [label](url), and LaTeX-ish math in $…$/$$…$$/\(…\)/\[…\].
+ * Egress translates it per channel — the webchat widget renders the
+ * markdown itself (math reaches it already Unicode'd via the messages
+ * read path), WhatsApp has its own dialect (*bold*, _italic_, ~strike~,
+ * ```code```), math becomes readable Unicode on every text channel
+ * ($60^\circ$ → 60°), and every text-only channel gets the markers
+ * stripped so customers never see literal asterisks.
  * Stored transcripts keep the canonical form. Guards against mangling
  * ordinary asterisks: emphasis needs non-space content at both ends. */
 const CHANNEL_FMT_RE =
@@ -1531,7 +1535,10 @@ const CHANNEL_FMT_RE =
 
 export function formatForChannel(text: string, kind: string): string {
   const wa = kind === 'whatsapp';
-  return text.replace(
+  // Math renders as Unicode on every delivery path — $60^\circ$ → 60°.
+  // (The webchat widget/console get canonical from storage and style it via
+  // richText; nothing reachable from here can typeset LaTeX.)
+  return mathToUnicode(text).replace(
     CHANNEL_FMT_RE,
     (m, bold, ital, strike, code, label, url) => {
       if (kind === 'webchat') return m; // the widget renders the markdown

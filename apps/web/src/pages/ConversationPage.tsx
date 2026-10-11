@@ -28,6 +28,12 @@ const WHO: Record<Message['direction'], string> = {
  *  `code`, plus real links (lists are handled one level up by splitBlocks). */
 function mdSpans(text: string, keyBase = 0) {
   return splitEmphasis(text).flatMap((seg, i) => {
+    if (seg.kind === 'math')
+      return [
+        <span key={keyBase * 1000 + i} className="md-math">
+          {seg.text}
+        </span>,
+      ];
     const inner = linkifyParts(seg.text).map((p, j) =>
       typeof p === 'string' ? (
         p

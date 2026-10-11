@@ -11,6 +11,7 @@ import { agents, agentWidgets, channelBindings, channels, conversations, helpArt
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
 import type { QuickReply } from '@janis/shared';
+import { mathToUnicode } from '@janis/shared';
 import type { ChannelCredentials, InboundMessage } from '../lib/channels.js';
 import { resolveGreeting } from '../lib/greeting.js';
 import { interpolateSpec, stripEmptyStrings, WidgetComponent } from '../lib/widgets.js';
@@ -747,7 +748,7 @@ export function webchatRoutes(db: Db) {
           thread: cv.externalId === prefix ? null : cv.externalId!.slice(prefix.length + 1),
           conversation_id: cv.id,
           state: cv.state,
-          preview: cv.preview,
+          preview: cv.preview == null ? cv.preview : mathToUnicode(cv.preview),
           at: (cv.at ?? cv.created).toISOString(),
         })),
     });
@@ -949,6 +950,7 @@ export function webchatRoutes(db: Db) {
     const supportId = process.env.JANIS_SUPPORT_CHANNEL_ID || env.supportChannelId;
     const conciergeViewer = supportId !== '' && channel.id === supportId && !!bound;
     const showActions = internal || conciergeViewer;
+    const raw = c.req.query('raw') === '1';
 
     return c.json({
       // Internal notes (failures/handoffs/alerts) are stored as 'out' but must
@@ -986,7 +988,10 @@ export function webchatRoutes(db: Db) {
         .map((m) => ({
         id: m.id,
         direction: m.direction,
-        text: m.text,
+        // Math renders as Unicode in the bubble ($60^\circ$ → 60°) — the
+        // widget has no typesetter. ?raw=1 keeps canonical $…$ for the
+        // console rail, whose richText styles math spans itself.
+        text: raw ? m.text : m.text == null ? m.text : mathToUnicode(m.text),
         created_at: m.created_at.toISOString(),
         // sender's own idempotency key — lets the client reconcile its
         // optimistic outbox entry exactly, even after a lost response

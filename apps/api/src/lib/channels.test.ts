@@ -446,6 +446,42 @@ describe('formatForChannel', () => {
       'hi *there* pal, click here (https://x.com)',
     );
   });
+
+  it('renders LaTeX math as Unicode on every push channel', () => {
+    const t = 'interior angles measuring $x$, $2x$, and $60^\\circ$';
+    for (const kind of ['whatsapp', 'sms', 'messenger', 'email', 'gmail', 'outlook', 'voice']) {
+      expect(formatForChannel(t, kind)).toBe('interior angles measuring x, 2x, and 60°');
+    }
+    // webchat too — the only consumers of this body (SDK socket, legacy
+    // emitChatResponse) can't typeset either; widget/console get canonical
+    // from storage instead.
+    expect(formatForChannel(t, 'webchat')).toBe('interior angles measuring x, 2x, and 60°');
+  });
+
+  it('translates math constructs: scripts, frac, sqrt, greek, symbols', () => {
+    expect(formatForChannel('$x^2$ and $x_1$', 'sms')).toBe('x² and x₁');
+    expect(formatForChannel('$\\frac{x+1}{2}$, $\\frac{1}{2}$', 'sms')).toBe('(x+1)/2, ½');
+    expect(formatForChannel('$\\sqrt{x+1}$, $\\sqrt[3]{8}$', 'sms')).toBe('√(x+1), ∛8');
+    expect(formatForChannel('$\\pi r^2$ and $\\theta \\geq 0$', 'sms')).toBe('π r² and θ ≥ 0');
+    expect(formatForChannel('$$\\sum_{i=1}^n i = \\frac{n(n+1)}{2}$$', 'sms')).toBe(
+      '∑ᵢ₌₁ⁿ i = (n(n+1))/2',
+    );
+    expect(formatForChannel('\\(\\alpha + \\beta\\)', 'email')).toBe('α + β');
+    expect(formatForChannel("$x \\neq 0$, $f'(x)$", 'messenger')).toBe('x ≠ 0, f′(x)');
+  });
+
+  it('leaves dollar amounts alone', () => {
+    for (const kind of ['whatsapp', 'sms', 'email']) {
+      expect(formatForChannel('it costs $5 and $10 total', kind)).toBe('it costs $5 and $10 total');
+      expect(formatForChannel('pay $50 now, $60 later', kind)).toBe('pay $50 now, $60 later');
+      expect(formatForChannel('price is $19', kind)).toBe('price is $19');
+    }
+  });
+
+  it('mixes math with the rest of the dialect', () => {
+    expect(formatForChannel('so **$x = 40$** — done', 'whatsapp')).toBe('so *x = 40* — done');
+    expect(formatForChannel('so **$x = 40$** — done', 'sms')).toBe('so x = 40 — done');
+  });
 });
 
 describe('sendChannelMessage quick replies', () => {

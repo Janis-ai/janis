@@ -36,6 +36,56 @@ describe('splitEmphasis', () => {
       { kind: 'italic', text: 'ital' },
     ]);
   });
+
+  it('splits $…$ math into detexed math segments', () => {
+    expect(
+      splitEmphasis('angles measuring $x$, $2x$, and $60^\\circ$.'),
+    ).toEqual([
+      { kind: 'text', text: 'angles measuring ' },
+      { kind: 'math', text: 'x' },
+      { kind: 'text', text: ', ' },
+      { kind: 'math', text: '2x' },
+      { kind: 'text', text: ', and ' },
+      { kind: 'math', text: '60°' },
+      { kind: 'text', text: '.' },
+    ]);
+  });
+
+  it('keeps emphasis working around math and inside-out', () => {
+    expect(splitEmphasis('so **$x^2$** and *plain*')).toEqual([
+      { kind: 'text', text: 'so ' },
+      { kind: 'bold', text: 'x²' },
+      { kind: 'text', text: ' and ' },
+      { kind: 'italic', text: 'plain' },
+    ]);
+  });
+
+  it('leaves dollar amounts alone', () => {
+    expect(splitEmphasis('it costs $5 and $10 total')).toEqual([
+      { kind: 'text', text: 'it costs $5 and $10 total' },
+    ]);
+    expect(splitEmphasis('pay $50 now, $60 later')).toEqual([
+      { kind: 'text', text: 'pay $50 now, $60 later' },
+    ]);
+    expect(splitEmphasis('price is $19')).toEqual([{ kind: 'text', text: 'price is $19' }]);
+  });
+
+  it('handles display math and \\(…\\) delimiters', () => {
+    expect(splitEmphasis('$$\\frac{1}{2}$$ and \\(\\alpha\\)')).toEqual([
+      { kind: 'math', text: '½' },
+      { kind: 'text', text: ' and ' },
+      { kind: 'math', text: 'α' },
+    ]);
+  });
+
+  it('math containing asterisks does not pair as emphasis', () => {
+    // $a*b$ — the * inside math must not leak an emphasis pair.
+    expect(splitEmphasis('note $a*b$ done')).toEqual([
+      { kind: 'text', text: 'note ' },
+      { kind: 'math', text: 'a×b' },
+      { kind: 'text', text: ' done' },
+    ]);
+  });
 });
 
 describe('splitBlocks', () => {

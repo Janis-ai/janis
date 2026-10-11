@@ -1,22 +1,41 @@
+import { MATH_SRC, latexToUnicode, mathToUnicode } from '@janis/shared';
+
 export interface EmphSeg {
-  kind: 'text' | 'bold' | 'italic' | 'strike' | 'code';
+  kind: 'text' | 'bold' | 'italic' | 'strike' | 'code' | 'math';
   text: string;
 }
 
-/** Canonical agent text is markdown-ish. The web surfaces render emphasis
- *  natively; push channels get it translated on egress (formatForChannel in
- *  the API). Emphasis needs non-space content at both ends so "5 * 3 = 15"
- *  and snake_case are untouched. Mirrors the API's CHANNEL_FMT_RE. */
-const EM_RE =
-  /\*\*([^\s*](?:[^*]*[^\s*])?)\*\*|\*([^\s*](?:[^*]*[^\s*])?)\*|~~([^\s~](?:[^~]*[^\s~])?)~~|`([^`\n]+)`/g;
+/** Canonical agent text is markdown-ish plus LaTeX-ish math ($…$, $$…$$,
+ *  \(…\), \[…\]). The web surfaces render it natively; push channels get it
+ *  translated on egress (formatForChannel in the API). One combined pass so
+ *  ordering is leftmost-match: math tried first at each position keeps the
+ *  * inside $a*b$ from pairing as italic, while **$x^2$** still works —
+ *  emphasis that wraps math is detexed inside the emphasis tag (code keeps
+ *  its literal source). Emphasis needs non-space content at both ends so
+ *  "5 * 3 = 15" and snake_case are untouched. Mirrors the API's
+ *  CHANNEL_FMT_RE + shared's MATH_SRC. */
+const SEG_RE = new RegExp(
+  `${MATH_SRC}|\\*\\*([^\\s*](?:[^*]*[^\\s*])?)\\*\\*|\\*([^\\s*](?:[^*]*[^\\s*])?)\\*|~~([^\\s~](?:[^~]*[^\\s~])?)~~|\`([^\`\\n]+)\``,
+  'g',
+);
 
 export function splitEmphasis(text: string): EmphSeg[] {
   const out: EmphSeg[] = [];
   let last = 0;
-  for (let m = EM_RE.exec(text); m; m = EM_RE.exec(text)) {
+  SEG_RE.lastIndex = 0;
+  for (let m = SEG_RE.exec(text); m; m = SEG_RE.exec(text)) {
     if (m.index > last) out.push({ kind: 'text', text: text.slice(last, m.index) });
-    const kind = m[1] != null ? 'bold' : m[2] != null ? 'italic' : m[3] != null ? 'strike' : 'code';
-    out.push({ kind, text: (m[1] ?? m[2] ?? m[3] ?? m[4]) as string });
+    const body = m[1] ?? m[2] ?? m[3] ?? m[4]; // MATH_SRC capture groups
+    if (body != null) {
+      const d = latexToUnicode(body.trim()).trim();
+      out.push({ kind: 'math', text: d || m[0] });
+    } else {
+      const kind =
+        m[5] != null ? 'bold' : m[6] != null ? 'italic' : m[7] != null ? 'strike' : 'code';
+      let inner = (m[5] ?? m[6] ?? m[7] ?? m[8]) as string;
+      if (kind !== 'code') inner = mathToUnicode(inner);
+      out.push({ kind, text: inner });
+    }
     last = m.index + m[0].length;
   }
   if (last < text.length) out.push({ kind: 'text', text: text.slice(last) });

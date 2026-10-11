@@ -108,6 +108,12 @@ function linkify(text: string, onNav: (to: string) => void) {
  *  translated at send time). */
 function richText(text: string, onNav: (to: string) => void) {
   return splitEmphasis(text).flatMap((seg, i) => {
+    if (seg.kind === 'math')
+      return [
+        <span key={i} className="md-math">
+          {seg.text}
+        </span>,
+      ];
     const inner = linkify(seg.text, onNav);
     if (seg.kind === 'text') return inner;
     const Tag =
@@ -443,7 +449,7 @@ export function AskJanis({
     pollBusy.current = true;
     if (!loadStart.current) loadStart.current = Date.now();
     try {
-      let url = `/chat/${channelId}/messages?visitor_id=${visitor}`;
+      let url = `/chat/${channelId}/messages?visitor_id=${visitor}&raw=1`;
       if (thread) url += `&thread=${encodeURIComponent(thread)}`;
       if (lastTs.current) url += `&after=${encodeURIComponent(lastTs.current)}`;
       const d = await api<{
@@ -542,7 +548,7 @@ export function AskJanis({
     const prevTop = el?.scrollTop ?? 0;
     try {
       const d = await api<{ messages: ChatMsg[]; has_more?: boolean }>(
-        `/chat/${channelId}/messages?visitor_id=${visitor}&before=${encodeURIComponent(oldestTs.current)}${thread ? `&thread=${encodeURIComponent(thread)}` : ''}`,
+        `/chat/${channelId}/messages?visitor_id=${visitor}&raw=1&before=${encodeURIComponent(oldestTs.current)}${thread ? `&thread=${encodeURIComponent(thread)}` : ''}`,
       );
       const fresh = d.messages.filter((m) => {
         if (m.id && seen.current.has(m.id)) return false;
