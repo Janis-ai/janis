@@ -386,6 +386,7 @@ export function SourceList({
             }}
             onClick={() => setNotesOpen((v) => !v)}
           >
+            <span className="muted" style={{ fontSize: 16, width: 14 }}>{notesOpen ? '▾' : '▸'}</span>
             <StickyNote size={14} />
             <span className="grow" style={{ marginLeft: 6 }}>
               <strong>Notes</strong>
@@ -393,7 +394,6 @@ export function SourceList({
                 {' '}— {notes.length} line{notes.length === 1 ? '' : 's'} · ~{tok(notesChars)} tok
               </span>
             </span>
-            <span className="muted">{notesOpen ? '▾' : '▸'}</span>
           </button>
           {notesOpen && (
             <div style={{ marginTop: 8 }}>
@@ -582,6 +582,7 @@ export function SourceList({
           }}
           onClick={() => setArticlesOpen((v) => !v)}
         >
+          <span className="muted" style={{ fontSize: 16, width: 14 }}>{articlesOpen ? '▾' : '▸'}</span>
           <Newspaper size={14} />
           <span className="grow" style={{ marginLeft: 6 }}>
             <strong>Articles</strong>
@@ -590,7 +591,6 @@ export function SourceList({
               {published.length ? ` · ~${tok(published.reduce((n, a) => n + a.body.length, 0))} tok` : ''}
             </span>
           </span>
-          <span className="muted">{articlesOpen ? '▾' : '▸'}</span>
         </button>
         {articlesOpen && articlesExtras}
         {articlesOpen && agent && (
