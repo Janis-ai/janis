@@ -1370,13 +1370,13 @@ export default function Layout() {
                   <Columns2 size={14} />
                 </button>
               )}
-              {railTab === 'ask' || isAskPage ? (
+              {isAskPage ? (
                 <button
                   className="btn"
-                  title={isAskPage ? 'Dock panel' : 'Expand'}
-                  onClick={() => navigate(isAskPage ? lastNonAsk.current : '/ask')}
+                  title="Dock panel"
+                  onClick={() => navigate(lastNonAsk.current)}
                 >
-                  {isAskPage ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                  <Minimize2 size={14} />
                 </button>
               ) : (
                 // No expand in drawer mode — there's no room for the
