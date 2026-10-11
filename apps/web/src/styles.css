@@ -1315,6 +1315,19 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   border-top: 1px solid var(--border);
 }
 .webhook-details { margin-top: 8px; font-size: 12px; }
+/* Big left chevron — the native summary marker can't be sized or restyled. */
+.appearance-details > summary,
+.webhook-details > summary {
+  list-style: none; display: flex; align-items: baseline; user-select: none;
+}
+.appearance-details > summary::-webkit-details-marker,
+.webhook-details > summary::-webkit-details-marker { display: none; }
+.appearance-details > summary::before,
+.webhook-details > summary::before {
+  content: '▸'; font-size: 16px; margin-right: 6px; flex-shrink: 0;
+}
+.appearance-details[open] > summary::before,
+.webhook-details[open] > summary::before { content: '▾'; }
 .appearance-details > summary .details-title,
 .webhook-details > summary .details-title { font-size: 15px; font-weight: 700; color: var(--text); }
 .appearance-details > summary .details-sub,
