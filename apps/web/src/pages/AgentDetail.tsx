@@ -1195,6 +1195,35 @@ function EscalationTab({
     (kind !== 'intent' || intents.length > 0) &&
     (route !== 'route' || pool.length + groupIds.length > 0);
 
+  // Editing an existing rule: "Save changes" grays out while the form still
+  // holds the stored values — mirrors the unpacking in editRule. String
+  // compares on the loaded field values: a retype that would produce the
+  // same config may read dirty (harmless), never the reverse.
+  const ruleUnchanged = useMemo(() => {
+    if (!editing) return false;
+    const c = editing.config;
+    const sameList = (a: string[], b: string[] | undefined) =>
+      a.length === (b?.length ?? 0) && a.every((x, i) => x === b?.[i]);
+    return (
+      sameList(
+        keywords.split(',').map((k) => k.trim()).filter(Boolean),
+        c.keywords,
+      ) &&
+      sameList(intents, c.intents) &&
+      minutes === String(c.inactivity_minutes ?? 15) &&
+      maxScore === String(c.max_score ?? 3) &&
+      route ===
+        (c.assign_to || (c.assignees ?? []).length || (c.group_ids ?? []).length
+          ? 'route'
+          : 'none') &&
+      sameList(pool, c.assignees) &&
+      sameList(groupIds, c.group_ids) &&
+      ruleTag.trim() === (c.tag ?? '') &&
+      (c.assign_to ?? '') ===
+        (route === 'route' && pool.length === 1 && groupIds.length === 0 ? pool[0] : '')
+    );
+  }, [editing, keywords, intents, minutes, maxScore, route, ruleTag, pool, groupIds]);
+
   const buildConfig = (enabled: boolean) => ({
     enabled,
     ...(kind === 'keyword'
@@ -1454,7 +1483,7 @@ function EscalationTab({
             </>
           )}
           <div className="row" style={{ marginTop: 10 }}>
-            <button className="btn" disabled={!canAdd} onClick={submitRule}>
+            <button className="btn" disabled={!canAdd || ruleUnchanged} onClick={submitRule}>
               {editing ? 'Save changes' : 'Add rule'}
             </button>
             {editing && (
@@ -1712,7 +1741,13 @@ function AgentProfileOverride({ agent }: { agent: Agent }) {
           <div className="row" style={{ marginTop: 8 }}>
             <button
               className="btn"
-              disabled={save.isPending}
+              disabled={
+                save.isPending ||
+                (name.trim() === (mine?.display_name ?? '') &&
+                  avatar === (mine?.avatar_override ?? '') &&
+                  (show === 'inherit' ? null : show === 'on') ===
+                    (mine?.show_identity ?? null))
+              }
               onClick={() =>
                 save.mutate({
                   display_name: name.trim() || null,

@@ -335,6 +335,13 @@ export default function Settings() {
 
   // Inline edit — Edit loads the reply into the form; the same fields PATCH.
   const [editReplyId, setEditReplyId] = useState<string | null>(null);
+  // Edit mode: gray out Save until the draft actually differs from stored.
+  const replyUnchanged =
+    !!editReplyId &&
+    (() => {
+      const t = savedReplies?.saved_replies.find((r) => r.id === editReplyId);
+      return !!t && reply.title === t.title && reply.body === t.body;
+    })();
   const updateReply = useMutation({
     mutationFn: ({ id, ...b }: { id: string; title: string; body: string }) =>
       api(`/api/saved-replies/${id}`, { method: 'PATCH', body: JSON.stringify(b) }),
@@ -435,7 +442,10 @@ export default function Settings() {
                 />
                 <button
                   className="btn"
-                  disabled={saveHook.isPending}
+                  disabled={
+                    saveHook.isPending ||
+                    hookUrl.trim() === (workspaceDetail?.workspace?.event_webhook_url ?? '')
+                  }
                   onClick={() => saveHook.mutate(hookUrl.trim() || null)}
                 >
                   {saveHook.isPending ? 'Saving…' : 'Save'}
@@ -459,7 +469,11 @@ export default function Settings() {
                 />
                 <button
                   className="btn"
-                  disabled={saveDomain.isPending}
+                  disabled={
+                    saveDomain.isPending ||
+                    helpDomain.trim().toLowerCase() ===
+                      (workspaceDetail?.workspace?.help_domain ?? '')
+                  }
                   onClick={() => saveDomain.mutate(helpDomain.trim().toLowerCase() || null)}
                 >
                   {saveDomain.isPending ? 'Saving…' : 'Save'}
@@ -626,7 +640,15 @@ export default function Settings() {
             onChange={(e) => setProfile({ ...profile, display_name: e.target.value })}
             maxLength={80}
           />
-          <button className="btn" disabled={saveProfile.isPending}>Save</button>
+          <button
+            className="btn"
+            disabled={
+              saveProfile.isPending ||
+              profile.display_name.trim() === (me?.user.display_name ?? '')
+            }
+          >
+            Save
+          </button>
           <span className="grow" />
           <label
             className="btn"
@@ -731,7 +753,10 @@ export default function Settings() {
             rows={3}
           />
           <div className="row" style={{ gap: 8 }}>
-            <button className="btn" disabled={addReply.isPending || updateReply.isPending}>
+            <button
+              className="btn"
+              disabled={addReply.isPending || updateReply.isPending || replyUnchanged}
+            >
               {editReplyId ? 'Save changes' : 'Add'}
             </button>
             {editReplyId && (

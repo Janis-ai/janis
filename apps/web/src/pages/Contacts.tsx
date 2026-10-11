@@ -602,7 +602,15 @@ export function ContactDetail() {
             <div className="row">
               <button
                 className="btn primary"
-                disabled={save.isPending}
+                disabled={
+                  save.isPending ||
+                  ((edit.name || '') === (c.name ?? '') &&
+                    (edit.email || '') === (c.email ?? '') &&
+                    (edit.phone || '') === (c.phone ?? '') &&
+                    (edit.notes || '') === (c.notes ?? '') &&
+                    edit.tags.split(',').map((t) => t.trim()).filter(Boolean).join(',') ===
+                      (c.tags ?? []).join(','))
+                }
                 onClick={() =>
                   save.mutate({
                     name: edit.name || null,

@@ -66,6 +66,7 @@ export function ChannelCard({
     },
   });
   const [bubTab, setBubTab] = useState<'preview' | 'deploy'>('preview');
+  const [bubDirty, setBubDirty] = useState(false);
   const [confirmEl, confirmRemove] = useConfirm();
   const doRemove = async () => {
     if (
@@ -162,7 +163,7 @@ export function ChannelCard({
           {remove.isPending ? 'Disconnecting…' : 'Disconnect'}
         </button>
         {ch.kind === 'webchat' && (
-          <button className="btn save" type="submit" form={`bub-form-${ch.id}`}>
+          <button className="btn save" type="submit" form={`bub-form-${ch.id}`} disabled={!bubDirty}>
             Save changes
           </button>
         )}
@@ -229,6 +230,7 @@ export function ChannelCard({
               channel={ch}
               tabs={bubTabs}
               stage={bubTab === 'deploy' ? deployEl : undefined}
+              onDirty={setBubDirty}
             />
           </>
         );
@@ -622,7 +624,13 @@ Janis.identify({ id: user.id, name: user.name, email: user.email, sig,
           onChange={(e) => setSecret(e.target.value)}
         />
         <button className="btn" type="button" onClick={generate}>Generate</button>
-        <button className="btn" disabled={save.isPending} onClick={() => save.mutate()}>Save</button>
+        <button
+          className="btn"
+          disabled={save.isPending || secret.trim() === (channel.meta.identity_secret ?? '')}
+          onClick={() => save.mutate()}
+        >
+          Save
+        </button>
       </div>
       {msg && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
       {channel.meta.identity_secret && secret !== channel.meta.identity_secret && (
@@ -807,11 +815,15 @@ function WebchatBranding({
   channel,
   tabs,
   stage,
+  onDirty,
 }: {
   channel: Channel;
   tabs?: ReactNode;
   /** Replaces the live-preview canvas (the Deploy tab's content). */
   stage?: ReactNode;
+  /** Reports dirty state up to the card so the header save button can gray
+   *  out — the submit button lives outside the form via the form= attr. */
+  onDirty?: (dirty: boolean) => void;
 }) {
   const qc = useQueryClient();
   const b = channel.meta.branding ?? {};
@@ -934,6 +946,9 @@ function WebchatBranding({
     },
     onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),
   });
+  useEffect(() => {
+    onDirty?.(dirty && !save.isPending);
+  }, [dirty, save.isPending, onDirty]);
   const accentValid = f.accent === '' || /^#[0-9a-fA-F]{6}$/.test(f.accent);
   return (
     <form
