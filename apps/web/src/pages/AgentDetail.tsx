@@ -510,6 +510,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
                 }}
                 freshSecret={freshSecret}
               />
+              <HelpDomainCard cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
             </>
           )}
           {sub === 'escalation' && (
@@ -2779,6 +2780,55 @@ function ConnectionTab({
         )}
       </div>
     );
+}
+
+/** Help center domain — per-agent override of the workspace help_domain.
+ *  Set: this agent's centre alone answers on the host. Blank: inherits the
+ *  workspace domain, which lists every agent with published articles. The
+ *  Articles manager's Publishing-settings field writes the same key. */
+function HelpDomainCard({
+  cfg,
+  setCfg,
+  isAdmin,
+}: {
+  cfg: AgentConfig;
+  setCfg: (c: AgentConfig) => void;
+  isAdmin: boolean;
+}) {
+  const { data: ws } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () => api<{ workspace: { help_domain: string | null } }>('/api/workspace'),
+  });
+  const wsDomain = ws?.workspace.help_domain ?? null;
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <strong>Help center domain</strong>
+      <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+        Serve this agent's help centre on its own domain —{' '}
+        {wsDomain
+          ? `overrides the workspace domain (${wsDomain}), which otherwise lists every agent's articles.`
+          : 'a workspace-wide default can also be set under Settings → Workspace.'}{' '}
+        Point the domain's CNAME at {window.location.host} first.
+      </div>
+      <ReadOnly off={!isAdmin}>
+        <input
+          className="mono"
+          style={{ maxWidth: 320 }}
+          placeholder={
+            wsDomain ? `${wsDomain} (inherited — blank keeps it)` : 'help.yourdomain.com'
+          }
+          value={cfg.help_domain ?? ''}
+          onChange={(e) =>
+            setCfg({
+              ...cfg,
+              help_domain: e.target.value.trim().toLowerCase() || null,
+            })
+          }
+          maxLength={200}
+        />
+      </ReadOnly>
+    </div>
+  );
 }
 
 /** API key / webhook secret / deliveries — its own card so the General tab
