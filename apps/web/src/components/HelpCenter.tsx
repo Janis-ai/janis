@@ -88,7 +88,6 @@ export function HelpCenter({ agent }: { agent: Agent }) {
     },
     onError: (e) => setDraftErr(e instanceof Error ? e.message : 'failed'),
   });
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [domainDraft, setDomainDraft] = useState<string | null>(null);
   const [domainMsg, setDomainMsg] = useState('');
   const [helpUrlDraft, setHelpUrlDraft] = useState<string | null>(null);
@@ -239,10 +238,7 @@ export function HelpCenter({ agent }: { agent: Agent }) {
         <span className="muted" style={{ fontSize: 12 }}>
           Live at{' '}
           <a href={publicUrl} target="_blank" rel="noreferrer">{publicUrl}</a>
-          {' '}— published articles feed the agent's knowledge too.{' '}
-          <button className="link small muted" onClick={() => setSettingsOpen((o) => !o)}>
-            {settingsOpen ? '▾' : '▸'} Publishing settings
-          </button>
+          {' '}— published articles feed the agent's knowledge too.
         </span>
         <div className="row" style={{ gap: 8 }}>
           <button className="btn" onClick={() => setDraftOpen((o) => !o)}>
@@ -260,7 +256,11 @@ export function HelpCenter({ agent }: { agent: Agent }) {
         </div>
       </div>
 
-      {settingsOpen && (
+      <details className="webhook-details" style={{ marginTop: 10 }}>
+        <summary>
+          <span className="details-title">Publishing settings</span>
+          <span className="details-sub">custom domain · external help link — optional</span>
+        </summary>
         <div className="card" style={{ marginTop: 8 }}>
           <div className="muted" style={{ fontSize: 12 }}>
             The widget shows a "Browse help articles" link once an article is
@@ -328,7 +328,7 @@ export function HelpCenter({ agent }: { agent: Agent }) {
             {helpUrlMsg && <span className="muted" style={{ fontSize: 12 }}>{helpUrlMsg}</span>}
           </div>
         </div>
-      )}
+      </details>
 
       {draftOpen && (
         <div className="card">
