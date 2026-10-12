@@ -904,9 +904,9 @@ button, input, select, textarea { font: inherit; }
 .md-list li { margin: 2px 0; }
 .md-para { display: block; }
 .md-gap { margin-top: 8px; }
-/* Suggested replies mirrored in the transcript — a muted italic "offered:"
-   line of echoed choices. No pill/border: pill-shaped things in a transcript
-   are console actions, and these are content the customer saw. */
+/* Suggested replies mirrored in the transcript — a muted italic "quick
+   replies:" line of echoed choices. No pill/border: pill-shaped things in
+   a transcript are console actions, and these are content the customer saw. */
 .transcript-qrs { margin-top: 6px; font-size: 12px; color: var(--muted); font-style: italic; }
 .transcript-qrs-label { margin-right: 4px; }
 .transcript-qr + .transcript-qr::before { content: ' · '; }
