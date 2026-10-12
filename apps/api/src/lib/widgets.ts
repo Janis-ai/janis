@@ -426,8 +426,14 @@ export function extractWidgets(text: string): {
   let dropped = 0;
   const out = text
     .split('\n')
-    .filter((line) => {
-      const t = line.trim();
+    .map((line) => {
+      // The directive can start mid-line ("options: WIDGET: {…}") — the
+      // model loves a colon lead-in. The prose prefix survives; the tail
+      // is consumed as the directive.
+      const dm = /\bWIDGET(?:_REF)?:/i.exec(line);
+      if (!dm) return line;
+      const before = line.slice(0, dm.index).trimEnd();
+      const t = line.slice(dm.index).trim();
       const ref = t.match(WIDGET_REF_LINE);
       if (ref) {
         let data: Record<string, unknown> | undefined;
@@ -441,10 +447,10 @@ export function extractWidgets(text: string): {
           }
         }
         refs.push({ name: normWidgetRef(ref[1]), data });
-        return false;
+        return before;
       }
       const m = t.match(WIDGET_LINE);
-      if (!m) return true;
+      if (!m) return line; // WIDGET-ish word, not a directive — keep verbatim
       let ok = false;
       if (widgets.length < MAX_WIDGETS) {
         try {
@@ -458,8 +464,9 @@ export function extractWidgets(text: string): {
         }
       }
       if (!ok) dropped++;
-      return false;
+      return before;
     })
+    .filter((line) => line !== '')
     .join('\n');
   return { text: out.trim(), widgets, refs, dropped };
 }

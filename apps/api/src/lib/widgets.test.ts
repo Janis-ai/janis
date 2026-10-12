@@ -132,6 +132,21 @@ describe('extractWidgets', () => {
     expect(out.dropped).toBe(0);
   });
 
+  it('consumes a directive that starts mid-line — the colon lead-in stays', async () => {
+    const { extractWidgets } = await import('./widgets.js');
+    // Real incident: the model emitted 'options: WIDGET: {…}' — the anchor
+    // missed it and the raw JSON rendered to the customer.
+    const out = extractWidgets(
+      'Here are our available meeting options: WIDGET: {"type":"cards","items":[{"title":"30 Minute Meeting","link":"https://calendly.com/x/30min"}]}',
+    );
+    expect(out.text).toBe('Here are our available meeting options:');
+    expect(out.widgets).toHaveLength(1);
+    expect(out.widgets[0].type).toBe('cards');
+    const ref = extractWidgets('the tracker: WIDGET_REF: order-status {"order_id":"1"}');
+    expect(ref.text).toBe('the tracker:');
+    expect(ref.refs).toEqual([{ name: 'order-status', data: { order_id: '1' } }]);
+  });
+
   it('counts WIDGET: lines that fail to parse — the caller can regenerate', async () => {
     const { extractWidgets } = await import('./widgets.js');
     const out = extractWidgets(
