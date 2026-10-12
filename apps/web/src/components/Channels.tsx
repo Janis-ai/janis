@@ -764,22 +764,28 @@ const RADIUS_OPTS = [
 ] as const;
 
 /** Widget typeface — '' = the system stack; 'custom' splits into the
- *  free-text stack input. The widget resolves these keys to real stacks. */
+ *  free-text stack input. The widget resolves these keys to real stacks;
+ *  `stack` renders each option in its own typeface, Gmail-style. */
 const FONT_PRESET_KEYS = ['', 'serif', 'rounded', 'mono'];
-const FONT_OPTS = [
-  { v: '', label: 'System' },
-  { v: 'serif', label: 'Serif' },
-  { v: 'rounded', label: 'Rounded' },
-  { v: 'mono', label: 'Mono' },
+const FONT_OPTS: { v: string; label: string; stack?: string }[] = [
+  { v: '', label: 'Sans Serif' },
+  { v: 'serif', label: 'Serif', stack: "Georgia,'Times New Roman',Times,serif" },
+  {
+    v: 'rounded',
+    label: 'Rounded',
+    stack: "ui-rounded,'SF Pro Rounded','Nunito','Varela Round',system-ui,sans-serif",
+  },
+  { v: 'mono', label: 'Monospace', stack: "ui-monospace,'SF Mono',Menlo,monospace" },
   { v: 'custom', label: 'Custom…' },
-] as const;
+];
 
-/** Widget text scale — multiplier on every px font-size in the sheet. */
+/** Widget text scale — multiplier on every px font-size in the sheet.
+ *  Labels follow Gmail's Small/Normal/Large/Huge. */
 const FONT_SCALE_OPTS = [
-  { v: 0.9, label: 'Compact' },
-  { v: 1, label: 'Default' },
+  { v: 0.9, label: 'Small' },
+  { v: 1, label: 'Normal' },
   { v: 1.15, label: 'Large' },
-  { v: 1.3, label: 'XL' },
+  { v: 1.3, label: 'Huge' },
 ] as const;
 
 /** Label-above-control wrapper used inside the bubble editor sections. */
@@ -1103,20 +1109,35 @@ function WebchatBranding({
               </div>
             </BubField>
             <BubField
-              label="Font"
-              hint="Custom needs the typeface loaded by your page — a stack like 'Inter', system-ui, sans-serif"
+              label="Typography"
+              hint="Custom needs the typeface loaded by your page"
             >
-              <div className="bub-seg">
-                {FONT_OPTS.map(({ v, label }) => (
-                  <button
-                    key={v || 'system'}
-                    type="button"
-                    className={f.font_preset === v ? 'on' : ''}
-                    onClick={() => setF({ ...f, font_preset: v })}
-                  >
-                    {label}
-                  </button>
-                ))}
+              <div className="row" style={{ gap: 8 }}>
+                {/* Gmail-style: family dropdown shows each preset in its
+                    own typeface; size is a second select, not segments. */}
+                <select
+                  value={f.font_preset}
+                  onChange={(e) => setF({ ...f, font_preset: e.target.value })}
+                >
+                  {FONT_OPTS.map(({ v, label, stack }) => (
+                    <option key={v || 'system'} value={v} style={stack ? { fontFamily: stack } : undefined}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={String(f.font_scale)}
+                  onChange={(e) =>
+                    setF({ ...f, font_scale: parseFloat(e.target.value) })
+                  }
+                  aria-label="Text size"
+                >
+                  {FONT_SCALE_OPTS.map(({ v, label }) => (
+                    <option key={v} value={String(v)}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
               </div>
               {f.font_preset === 'custom' && (
                 <input
@@ -1127,20 +1148,6 @@ function WebchatBranding({
                   onChange={(e) => setF({ ...f, font_custom: e.target.value })}
                 />
               )}
-            </BubField>
-            <BubField label="Text size" hint="Scales every label in the widget">
-              <div className="bub-seg">
-                {FONT_SCALE_OPTS.map(({ v, label }) => (
-                  <button
-                    key={v}
-                    type="button"
-                    className={f.font_scale === v ? 'on' : ''}
-                    onClick={() => setF({ ...f, font_scale: v })}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
             </BubField>
           </div>
         </details>
