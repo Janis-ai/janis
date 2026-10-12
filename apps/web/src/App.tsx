@@ -10,6 +10,7 @@ import Landing from './pages/Landing';
 import { Privacy, Terms } from './pages/Legal';
 import Docs from './pages/Docs';
 import Conversations from './pages/Conversations';
+import Welcome from './pages/Welcome';
 import ConversationPage from './pages/ConversationPage';
 import Agents from './pages/Agents';
 import AgentBuilder from './pages/AgentBuilder';
@@ -185,6 +186,7 @@ export default function App() {
           }
         >
           <Route path="/conversations" element={<Conversations />} />
+          <Route path="/welcome" element={<Welcome />} />
           <Route path="/inbox" element={<Navigate to="/conversations" replace />} />
           <Route path="/channels" element={<Navigate to="/conversations" replace />} />
           <Route path="/conversations/:id" element={<ConversationPage />} />

@@ -1706,6 +1706,11 @@ input[type=color].swatch::-moz-color-swatch { border: none; border-radius: 5px; 
 
 /* Discovery cards */
 .discovery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-top: 10px; }
+/* First-run landing — the create-agent CTA owns the page; the discovery
+   grid sits underneath as the tour. */
+.welcome { max-width: 780px; margin: 6vh auto 40px; padding: 0 16px; }
+.welcome-hero { text-align: center; padding: 36px 28px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.welcome-hero h1 { font-size: 24px; margin: 4px 0 0; }
 .discovery-card { text-align: left; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; }
 .discovery-card:hover { border-color: var(--accent); background: var(--accent-dim); }
 

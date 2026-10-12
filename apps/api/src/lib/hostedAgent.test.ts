@@ -1352,6 +1352,60 @@ describe('verifiedIdentityFor', () => {
   });
 });
 
+describe('handoff opt-out', () => {
+  it('systemPrompt drops the escalation ladder when handoff_enabled is false', () => {
+    const fakeAgent = { name: 'Bot', config: { handoff_enabled: false } } as never;
+    const p = systemPrompt(fakeAgent, [], undefined, {});
+    expect(p).toContain('no human escalation');
+    expect(p).toContain('no human tier above you');
+    expect(p).not.toContain('Escalation, two levels');
+    expect(p).not.toContain('offer a human once');
+    // and a handoff-on agent still gets the ladder
+    const on = systemPrompt({ name: 'Bot', config: {} } as never, [], undefined, {});
+    expect(on).toContain('Escalation, two levels');
+  });
+
+  it('withWorkspaceDefaults inherits the workspace flag unless the agent overrides', async () => {
+    const { withWorkspaceDefaults } = await import('./hostedAgent.js');
+    const [ws] = await db
+      .insert(workspaces)
+      .values({ name: 'NoHumans', plan: 'pro', config: { handoff_enabled: false } })
+      .returning();
+    const [a] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'A', apiKeyHash: 'ha', apiKeyPreview: 'pa', hosted: true })
+      .returning();
+    const [b] = await db
+      .insert(agents)
+      .values({
+        workspaceId: ws.id,
+        name: 'B',
+        apiKeyHash: 'hb',
+        apiKeyPreview: 'pb',
+        hosted: true,
+        config: { handoff_enabled: true },
+      })
+      .returning();
+    // unset on the agent → inherits the workspace's false
+    expect(
+      ((await withWorkspaceDefaults(db, a)).config as { handoff_enabled?: boolean })
+        .handoff_enabled,
+    ).toBe(false);
+    // explicit agent true beats the workspace false
+    expect(
+      ((await withWorkspaceDefaults(db, b)).config as { handoff_enabled?: boolean })
+        .handoff_enabled,
+    ).toBe(true);
+    // unset everywhere → default on
+    expect(
+      (
+        (await withWorkspaceDefaults(db, { ...a, workspaceId: wsId } as never))
+          .config as { handoff_enabled?: boolean }
+      ).handoff_enabled,
+    ).toBe(true);
+  });
+});
+
 describe('operator copilot prompt', () => {
   it('drops the customer handoff ladder for a signed-in teammate', () => {
     const fakeAgent = { name: 'Janis', config: {} } as never;

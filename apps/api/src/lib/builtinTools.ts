@@ -2174,6 +2174,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       csat_thanks: 'the reply sent after a survey answer',
       sla_minutes: 're-alert when a handoff stays unclaimed for N minutes (1-1440)',
       auto_assign: 'true/false — route handoffs to the least-loaded teammate',
+      handoff_enabled: 'true/false — let this agent offer or escalate to a human teammate',
       accent: 'widget accent/bubble colour, e.g. #635bff (webchat only)',
       email_alerts: "true/false — email the approver this agent's escalation alerts",
       workspace: 'workspace name — only needed when ambiguous',
@@ -2269,6 +2270,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         patch.auto_assign = bool(args.auto_assign);
         display.auto_assign = patch.auto_assign ? 'on' : 'off';
       }
+      if (args.handoff_enabled !== undefined) {
+        patch.handoff_enabled = bool(args.handoff_enabled);
+        display.handoff = patch.handoff_enabled ? 'on' : 'off';
+      }
       // Widget accent lives on the webchat channel's credentials, not
       // agents.config — it travels as its own exec arg like `rename`.
       const accent = args.accent !== undefined ? String(args.accent).trim().slice(0, 40) : '';
@@ -2295,7 +2300,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       }
       if (fieldCount === 0) {
         return JSON.stringify({
-          error: 'nothing to change — pass at least one of name, greeting, greeting_enabled, quick_replies, csat_*, sla_minutes, auto_assign, accent, email_alerts',
+          error: 'nothing to change — pass at least one of name, greeting, greeting_enabled, quick_replies, csat_*, sla_minutes, auto_assign, handoff_enabled, accent, email_alerts',
         });
       }
       const extras =
@@ -2363,6 +2368,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         'csat',
         'sla_minutes',
         'auto_assign',
+        'handoff_enabled',
       ];
       const patch = argObject(args.patch);
       const clean = Object.fromEntries(

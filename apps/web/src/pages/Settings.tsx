@@ -572,6 +572,7 @@ export default function Settings() {
 
       {section === 'escalation' && (
         <>
+      {me?.user.role === 'admin' && <HandoffCard />}
       <div className="card">
         <strong>Slack alerts</strong>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
@@ -1094,6 +1095,66 @@ function DefaultLlmCard() {
 }
 
 type CsatSettings = { enabled?: boolean; prompt?: string; thanks?: string };
+
+/** Workspace default for human escalation — off steers every agent away
+ *  from offering or requesting a human (they resolve what they can and say
+ *  so when they can't). For workspaces that can't staff takeover. Agents
+ *  can override under Agent settings → Escalation. Admin-only. */
+function HandoffCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () =>
+      api<{ workspace: { handoff_enabled?: boolean | null } }>('/api/workspace'),
+  });
+  const saved = data?.workspace.handoff_enabled !== false;
+  const [draft, setDraft] = useState<boolean | null>(null);
+  const [msg, setMsg] = useState('');
+  const on = draft ?? saved;
+  const save = useMutation({
+    mutationFn: () =>
+      api('/api/workspace', {
+        method: 'PATCH',
+        body: JSON.stringify({ handoff_enabled: on }),
+      }),
+    onSuccess: () => {
+      setDraft(null);
+      setMsg('Saved — applies to agents without their own override.');
+      void qc.invalidateQueries({ queryKey: ['workspace'] });
+    },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <strong>Human takeover</strong>
+      <div className="muted" style={{ fontSize: 13 }}>
+        When on, agents can offer or escalate to a human teammate when a
+        customer asks or gets stuck. Turn off for workspaces that can't staff
+        takeovers — agents then resolve what they can and say so plainly when
+        they can't, never promising a human. Agents can override this under
+        Agent settings → Escalation.
+      </div>
+      <label className="row" style={{ gap: 8, fontSize: 13 }}>
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => setDraft(e.target.checked)}
+        />
+        Agents can hand off to a human
+      </label>
+      <div className="row">
+        <button
+          className="btn primary"
+          disabled={draft === null || save.isPending}
+          onClick={() => save.mutate()}
+        >
+          {save.isPending ? 'Saving…' : 'Save'}
+        </button>
+        {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
 
 /** Workspace default for the resolution flow — when on, agents sign off and
  *  auto-archive once the customer confirms they're done (which fires the

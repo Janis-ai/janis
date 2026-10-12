@@ -270,6 +270,11 @@ export const AgentConfig = z.object({
   eval_interval_hours: z.number().min(1).max(720).optional(),
   // routing: assign handoffs to the least-loaded workspace member
   auto_assign: z.boolean().optional(),
+  // Human-escalation opt-out — workspaces that can't staff takeover steer
+  // the agent away from offering or requesting a human (it resolves or
+  // says it can't instead). Unset inherits workspaces.config.handoff_enabled
+  // (default on); an explicit true/false overrides.
+  handoff_enabled: z.boolean().optional(),
   // post-resolution satisfaction survey — per-agent override of the
   // workspace-level csat block (unset fields inherit the workspace's)
   csat: z

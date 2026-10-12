@@ -15,7 +15,7 @@ import {
   loadKnowledgeDocs,
   notesReserved,
   systemPrompt,
-  withAutoArchiveDefault,
+  withWorkspaceDefaults,
   type AgentRunContext,
   type InspectorToolCall,
   type LlmSettings,
@@ -235,7 +235,7 @@ export async function runAgentTest(
   }
   // Workspace-level auto_archive inherits when the agent hasn't set it —
   // test runs must see the same effective flag production does.
-  agent = await withAutoArchiveDefault(db, agent);
+  agent = await withWorkspaceDefaults(db, agent);
   const at = new Date().toISOString();
   const turns = (test.turns ?? []) as TestTurn[];
   const base: Omit<TestRunResult, 'passed' | 'reason'> & { passed: null; reason: string } = {

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { and, eq, isNotNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, channels, conversations, messages } from '../db/schema.js';
+import { agents, channels, conversations, messages, workspaces } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { agentVis } from '../lib/access.js';
 
@@ -15,7 +15,7 @@ export function onboardingRoutes(db: Db) {
   app.get('/', async (c) => {
     const ws = c.get('workspaceId');
     const vis = agentVis(ws, c.get('agentScope'));
-    const [[a], [live], [ch], [conv], [human]] = await Promise.all([
+    const [[a], [live], [ch], [conv], [human], [wsRow]] = await Promise.all([
       db.select({ n: count }).from(agents).where(and(...vis)),
       db
         .select({ n: count })
@@ -40,7 +40,16 @@ export function onboardingRoutes(db: Db) {
         .where(
           and(...vis, or(isNotNull(conversations.humanSince), isNotNull(messages.id))),
         ),
+      db
+        .select({ config: workspaces.config })
+        .from(workspaces)
+        .where(eq(workspaces.id, ws))
+        .limit(1),
     ]);
+    // Workspaces that opted out of human escalation don't get a takeover
+    // step — they'd never complete it.
+    const handoffOn =
+      (wsRow?.config as { handoff_enabled?: boolean } | undefined)?.handoff_enabled !== false;
 
     const steps = [
       {
@@ -67,12 +76,16 @@ export function onboardingRoutes(db: Db) {
         hint: 'Send a message to the connected channel',
         done: conv.n > 0,
       },
-      {
-        key: 'take_over',
-        label: 'Take over a conversation',
-        hint: 'Open a conversation → Take over → reply as a human',
-        done: human.n > 0,
-      },
+      ...(handoffOn
+        ? [
+            {
+              key: 'take_over',
+              label: 'Take over a conversation',
+              hint: 'Open a conversation → Take over → reply as a human',
+              done: human.n > 0,
+            },
+          ]
+        : []),
     ];
     return c.json({ steps, complete: steps.every((s) => s.done) });
   });

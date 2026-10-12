@@ -161,6 +161,10 @@ The agent's Settings → Escalation section holds its handoff settings: auto-res
 
 ---
 
+Handoff itself is optional: workspaces that don't want live human takeover disable it at Settings → Escalation ("Allow human takeover"), and any agent can opt out individually at Settings → Escalation → Handoff. With handoff off, the agent never offers a human and escalation stays notifications-only — ideal for unattended or after-hours workspaces.
+
+---
+
 Routing rules automate triage: keyword and inactivity rules can assign a conversation to a teammate, tag it, or escalate it; auto-assign round-robins new conversations across the team.
 
 ---

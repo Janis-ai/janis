@@ -1109,6 +1109,13 @@ function EscalationTab({
   const { data: members } = useAgentMembers(agent.id);
   const { data: groupsData } = useGroups();
   const { data: users } = useUsers();
+  const { data: wsRow } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () =>
+      api<{ workspace: { handoff_enabled?: boolean | null } }>('/api/workspace'),
+  });
+  // Unset (null) reads as on — only an explicit workspace false disables.
+  const wsHandoff = wsRow?.workspace.handoff_enabled !== false;
   // Routable groups: workspace rosters plus this agent's own — another
   // agent's scoped roster can't be pulled in.
   const groups = (groupsData?.groups ?? []).filter(
@@ -1529,6 +1536,32 @@ function EscalationTab({
     <ReadOnly off={!isAdmin}>
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Human takeover</strong>
+        <div className="form-field" style={{ marginTop: 8 }}>
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={cfg.handoff_enabled !== undefined}
+              onChange={(e) =>
+                setCfg({
+                  ...cfg,
+                  handoff_enabled: e.target.checked ? true : undefined,
+                })
+              }
+            />
+            Override the workspace default (currently {wsHandoff ? 'on' : 'off'}) for this agent
+          </label>
+          {cfg.handoff_enabled !== undefined && (
+            <select
+              value={cfg.handoff_enabled ? 'on' : 'off'}
+              onChange={(e) =>
+                setCfg({ ...cfg, handoff_enabled: e.target.value === 'on' })
+              }
+            >
+              <option value="on">On — can offer or escalate to a human</option>
+              <option value="off">Off — resolves or says it can't; never promises a human</option>
+            </select>
+          )}
+        </div>
         <div className="form-field" style={{ marginTop: 8 }}>
           <label>Auto-resume — release a takeover back to the agent after N minutes</label>
           <div className="row">

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
 import { useConversations, useAgents, useSearch, useViews } from '../api/hooks';
@@ -356,6 +356,12 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       setBusy(false);
     }
   };
+
+  // Zero agents = nothing to inbox — first-run workspaces land on the
+  // welcome page with the create-agent CTA instead of an empty list.
+  if (agents && agents.agents.length === 0) {
+    return <Navigate to="/welcome" replace />;
+  }
 
   return (
     <>

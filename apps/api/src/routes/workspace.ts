@@ -81,6 +81,10 @@ const updateWorkspace = z.object({
   // Workspace default for the resolution flow — agents inherit unless their
   // own config.auto_archive overrides. null clears the key.
   auto_archive: z.boolean().nullable().optional(),
+  // Workspace default for human escalation — false steers agents away from
+  // offering/requesting a human (they resolve or say they can't). Agents
+  // inherit unless their own config.handoff_enabled overrides.
+  handoff_enabled: z.boolean().nullable().optional(),
   llm_config: z
     .object({
       provider: z.string().optional(),
@@ -121,6 +125,8 @@ export function workspaceRoutes(db: Db) {
         csat: (ws.config as { csat?: unknown } | undefined)?.csat ?? null,
         auto_archive:
           (ws.config as { auto_archive?: boolean } | undefined)?.auto_archive ?? null,
+        handoff_enabled:
+          (ws.config as { handoff_enabled?: boolean } | undefined)?.handoff_enabled ?? null,
         event_token:
           (ws.config as { event_token?: string } | undefined)?.event_token ?? null,
       },
@@ -188,7 +194,8 @@ export function workspaceRoutes(db: Db) {
       body.help_domain !== undefined ||
       body.send_policy !== undefined ||
       body.csat !== undefined ||
-      body.auto_archive !== undefined
+      body.auto_archive !== undefined ||
+      body.handoff_enabled !== undefined
     ) {
       const config = {
         ...(ws.config as Record<string, unknown>),
@@ -212,6 +219,10 @@ export function workspaceRoutes(db: Db) {
         delete (config as Record<string, unknown>).auto_archive;
       else if (body.auto_archive !== undefined)
         (config as Record<string, unknown>).auto_archive = body.auto_archive;
+      if (body.handoff_enabled === null)
+        delete (config as Record<string, unknown>).handoff_enabled;
+      else if (body.handoff_enabled !== undefined)
+        (config as Record<string, unknown>).handoff_enabled = body.handoff_enabled;
       await db.update(workspaces).set({ config }).where(eq(workspaces.id, workspaceId));
       ws.config = config;
     }
@@ -266,6 +277,8 @@ export function workspaceRoutes(db: Db) {
         csat: (ws.config as { csat?: unknown } | undefined)?.csat ?? null,
         auto_archive:
           (ws.config as { auto_archive?: boolean } | undefined)?.auto_archive ?? null,
+        handoff_enabled:
+          (ws.config as { handoff_enabled?: boolean } | undefined)?.handoff_enabled ?? null,
         event_token:
           (ws.config as { event_token?: string } | undefined)?.event_token ?? null,
       },

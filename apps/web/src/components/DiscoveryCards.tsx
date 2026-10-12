@@ -3,15 +3,16 @@ import { api } from '../api/client';
 import { useMe } from '../api/hooks';
 import { railBus } from '../lib/railBus';
 
-interface Card {
+export interface DiscoveryCard {
   key: string;
   title: string;
   body: string;
   question: string;
 }
 
-// Differentiator order — the story the product leads with.
-const CARDS: Card[] = [
+// Differentiator order — the story the product leads with. Every question
+// seeds Ask Janis, so it must be something the concierge KB covers.
+export const DISCOVERY_CARDS: DiscoveryCard[] = [
   {
     key: 'approvals',
     title: 'AI proposes, you approve',
@@ -19,16 +20,22 @@ const CARDS: Card[] = [
     question: 'How do approval-gated actions work?',
   },
   {
-    key: 'takeover',
-    title: 'Human takeover',
-    body: 'Jump into any live conversation; hand it back when you\u2019re done.',
-    question: 'How does human takeover work in Janis?',
+    key: 'copilot',
+    title: 'A copilot that builds with you',
+    body: 'Ask Janis writes prompts, teaches knowledge, wires tools — a teammate inside the console.',
+    question: 'What can the Ask Janis copilot do for me?',
   },
   {
-    key: 'instant',
-    title: 'Instant AI',
-    body: 'Replies in seconds, 24/7, on every channel at once.',
-    question: 'How fast does the agent reply?',
+    key: 'evals',
+    title: 'Tested before customers see it',
+    body: 'Scenario suites replay your agent on every change — regressions surface before they ship.',
+    question: 'How do scenario tests and eval runs work?',
+  },
+  {
+    key: 'alerts',
+    title: 'Alerts that route themselves',
+    body: 'Escalation rules, SLA re-alerts, and auto-assign put the right person on it — Slack included.',
+    question: 'How do escalation alerts and routing work?',
   },
   {
     key: 'tools',
@@ -41,12 +48,6 @@ const CARDS: Card[] = [
     title: 'Deploy everywhere',
     body: 'Web chat, Messenger, Instagram, WhatsApp, SMS, email — one agent.',
     question: 'What channels can I deploy Janis on?',
-  },
-  {
-    key: 'branding',
-    title: 'Your brand, not ours',
-    body: 'Colors, greeting, logo, tone — the bubble wears your brand.',
-    question: 'Can I customize the chat bubble branding?',
   },
 ];
 
@@ -77,7 +78,7 @@ export default function DiscoveryCards() {
     );
   }
 
-  const click = (c: Card) => {
+  const click = (c: DiscoveryCard) => {
     void api('/api/track', {
       method: 'POST',
       body: JSON.stringify({ event: 'discovery_card_click', meta: { card: c.key } }),
@@ -106,7 +107,7 @@ export default function DiscoveryCards() {
         </button>
       </div>
       <div className="discovery-grid">
-        {CARDS.map((c) => (
+        {DISCOVERY_CARDS.map((c) => (
           <button key={c.key} className="discovery-card" onClick={() => click(c)}>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>{c.title}</div>
             <div className="muted" style={{ fontSize: 12 }}>{c.body}</div>

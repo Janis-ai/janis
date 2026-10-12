@@ -447,32 +447,39 @@ export async function resolveWidgetRef(
  *  instructions — the verified candidate must be exactly what apply writes. */
 export function defaultPersona(
   name: string,
-  opts?: { forSuggestion?: boolean; operator?: boolean },
+  opts?: { forSuggestion?: boolean; operator?: boolean; handoff?: boolean },
 ): string {
+  const tail =
+    opts?.handoff === false
+      ? ' There is no human tier above you — never offer or promise a human, and for what you cannot do say so plainly and point the customer to any contact path your knowledge provides.'
+      : ' If the customer explicitly asks for a human, reply with [HANDOFF]. If they seem stuck or frustrated and you genuinely cannot help further, offer a human once with [OFFER_HUMAN] — otherwise just ask a clarifying question. If they decline a human, reply with [CANCEL_HANDOFF].';
   return `You are ${name}, a helpful assistant. Answer concisely and accurately. You don't represent a company or brand — if asked who you are, give your name.${
-    opts?.forSuggestion || opts?.operator
-      ? ''
-      : ' If the customer explicitly asks for a human, reply with [HANDOFF]. If they seem stuck or frustrated and you genuinely cannot help further, offer a human once with [OFFER_HUMAN] — otherwise just ask a clarifying question. If they decline a human, reply with [CANCEL_HANDOFF].'
+    opts?.forSuggestion || opts?.operator ? '' : tail
   }`;
 }
 
-/** auto_archive with workspace inheritance — an agent that never set the
- *  flag takes workspaces.config.auto_archive; an explicit true/false wins.
- *  Returns a row copy with the resolved value folded into config so every
- *  downstream read (prompt build, the [END_CHAT] gate) just works. */
-export async function withAutoArchiveDefault(db: Db, agent: AgentRow): Promise<AgentRow> {
-  const cfg = (agent.config ?? {}) as { auto_archive?: boolean };
-  if (cfg.auto_archive !== undefined) return agent;
+/** Workspace-inherited flags — an agent that never set a flag takes
+ *  workspaces.config's value; an explicit true/false wins. Returns a row
+ *  copy with the resolved values folded into config so every downstream
+ *  read (prompt build, the [END_CHAT]/escalation gates) just works. */
+export async function withWorkspaceDefaults(db: Db, agent: AgentRow): Promise<AgentRow> {
+  const cfg = (agent.config ?? {}) as { auto_archive?: boolean; handoff_enabled?: boolean };
+  if (cfg.auto_archive !== undefined && cfg.handoff_enabled !== undefined) return agent;
   const [ws] = await db
     .select({ config: workspaces.config })
     .from(workspaces)
     .where(eq(workspaces.id, agent.workspaceId))
     .limit(1);
-  const inherited =
-    (ws?.config as { auto_archive?: boolean } | null)?.auto_archive === true;
+  const wscfg = (ws?.config ?? {}) as { auto_archive?: boolean; handoff_enabled?: boolean };
   return {
     ...agent,
-    config: { ...(agent.config as object), auto_archive: inherited } as AgentRow['config'],
+    config: {
+      ...(agent.config as object),
+      auto_archive: cfg.auto_archive ?? wscfg.auto_archive ?? false,
+      // Handoff defaults ON — only an explicit false (either level) turns
+      // the escalation ladder off.
+      handoff_enabled: cfg.handoff_enabled ?? wscfg.handoff_enabled ?? true,
+    } as AgentRow['config'],
   };
 }
 
@@ -495,10 +502,14 @@ export function systemPrompt(
     knowledge?: string[];
     tone?: string;
     auto_archive?: boolean;
+    handoff_enabled?: boolean;
     builder?: { region?: string };
   };
+  // Workspace/agent escalation opt-out — resolved by withWorkspaceDefaults;
+  // a raw row outside the hosted path reads unset as enabled.
+  const handoffOff = cfg.handoff_enabled === false;
   const parts = [
-    cfg.system_prompt || defaultPersona(agent.name, opts),
+    cfg.system_prompt || defaultPersona(agent.name, { ...opts, handoff: !handoffOff }),
   ];
   if (Array.isArray(cfg.knowledge) && cfg.knowledge.length) {
     // Notes aren't ranked — every line injects on every reply — so they
@@ -616,7 +627,9 @@ export function systemPrompt(
     parts.push(
       opts.operator
         ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. There is no human tier above you: never emit [HANDOFF], [OFFER_HUMAN] or [CANCEL_HANDOFF] and never offer to fetch a teammate — if something genuinely needs a human, say plainly what needs doing. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When you link to a console page, link it (https://app.janis.ai/…) — never leave a destination as bare bold text; use a URL a tool returned verbatim, or build it from ids in your context: agents are listed as Name {agent-id} (kind:{channel-id}, …), and current_agent_id covers the selected agent. Agent pages live at /agents/{agent-id}/{section} — sections: behavior (?sub=instructions (covers greeting + quick replies too), components — sidebar label 'Behavior'), knowledge (?sub=sources, gaps — articles manage as a row inside Sources), channels (/{channel-id} for one channel), integrations ('Actions'), components, tests ('Test'), settings (?sub=general, csat, escalation, team) — plus /agents/{agent-id}/inbox (/{conv-id} for a thread), /contacts, /campaigns, /reports; workspace-wide: /conversations (/{conv-id}), /contacts (/{id}), /campaigns, /reports, /errors, /billing, /settings?section=workspace|me|csat|escalation|team, /docs, and setup steps at /agents/new/{agent-id}?step=teach|guide|abilities|try|deploy. Every {…} slot carries a real uuid from your context — substitute it, never emit the placeholder itself or a slug or a kind name in an id slot. The console is a single-page app but every route above is a real browser deep link — never claim deep links don't exist or that the address bar can't reach them, and emit the full https URL, not a relative path or a code span. When the operator asks for a link, give the deep link — do not reply with click-path instructions instead. Never point the operator at a Google search or external docs for console navigation — you are the product's help desk; if you truly cannot construct a URL, say so plainly rather than outsourcing the answer to a search engine."
-        : '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, or mild pushback, and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.',
+        : handoffOff
+          ? '\nThere is no human escalation here — no team exists to hand the conversation to. Never emit [HANDOFF], [OFFER_HUMAN] or [CANCEL_HANDOFF], and never offer, promise or mention a human teammate — not to rescue a hard question, not to appease frustration. Resolve what you can; for what you genuinely cannot do, say plainly that you cannot and point the customer to whatever contact path your context actually provides (a support email, booking link or help page — never invent one).'
+          : '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, or mild pushback, and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.',
     );
     parts.push(
       // Real incident: the model read a plan-card tap ("Choose Free") as a
@@ -625,7 +638,9 @@ export function systemPrompt(
       '\nActions and identity, hard rules. Never claim to have made or completed a change — switched a plan, cancelled a subscription, issued a refund, updated an account, booked or scheduled anything, "it will take effect…" — unless a tool call this turn actually performed it or created an approval request. ' +
         (opts.operator
           ? 'If the request needs an action you have no tool for, say plainly that you cannot do it in this chat and what would be needed instead.'
-          : 'If the request needs an action you have no tool for, say plainly that you cannot do it in this chat, point them to the right place (their dashboard/billing page), or offer a human once.') +
+          : handoffOff
+            ? 'If the request needs an action you have no tool for, say plainly that you cannot do it in this chat and point them to the right place (their dashboard/billing page) or a contact path in your context.'
+            : 'If the request needs an action you have no tool for, say plainly that you cannot do it in this chat, point them to the right place (their dashboard/billing page), or offer a human once.') +
         ' Never say you lack access to something a connected tool provides — check your tools before disclaiming, and only claim a capability is missing after the tool fails or none exists. A claimed action that did not run is a lie the customer acts on.' +
         ' Never promise a step you cannot take inside this reply — "let me check", "give me just a second", "one moment while I grab that" announce a next turn that never comes; tool calls happen inside this same reply, so either call the tool now or answer without narrating a lookup.' +
         " You cannot see the customer's account, workspace, plan, email or sign-in state unless the context or a tool result provides it — never assume or invent an account or workspace name; if which account they mean matters, ask." +
@@ -2368,7 +2383,7 @@ export async function runHostedEvent(
   agent: AgentRow,
   event: OutboundWebhook,
 ): Promise<void> {
-  agent = await withAutoArchiveDefault(db, agent);
+  agent = await withWorkspaceDefaults(db, agent);
   if (event.type === 'suggestion.request') {
     const convId = event.janis_conversation_id;
     if (!convId) return;
@@ -2702,6 +2717,13 @@ const FAILURE_LINES = [
   'Sorry — something went wrong on my end. Should I get a human to help?',
 ];
 
+// Same failure, no human tier — offering one would hang a dead offer.
+const FAILURE_LINES_NO_HANDOFF = [
+  "I'm having trouble answering that properly right now — could you try asking again in a moment?",
+  "I can't give you a good answer just yet — please try again shortly.",
+  'Sorry — something went wrong on my end. Please try again in a moment.',
+];
+
 const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
 
 // The escalation tags can arrive bare ([OFFER_HUMAN] with no reply text) —
@@ -2725,7 +2747,7 @@ async function replyAsHostedAgent(
   agent: AgentRow,
   conv: ConversationRow,
 ): Promise<void> {
-  agent = await withAutoArchiveDefault(db, agent);
+  agent = await withWorkspaceDefaults(db, agent);
   const convId = conv.id;
   const externalId = conv.externalId;
   const t0 = Date.now();
@@ -3048,8 +3070,10 @@ async function replyAsHostedAgent(
     // reply; the console renders it as the per-message inspector. Knowledge
     // comes from two prompt sources: curated snippets (config.knowledge,
     // where approved gap fixes land) and uploaded files.
-    const acfg = (agent.config ?? {}) as { knowledge?: unknown; system_prompt?: string; auto_archive?: boolean };
+    const acfg = (agent.config ?? {}) as { knowledge?: unknown; system_prompt?: string; auto_archive?: boolean; handoff_enabled?: boolean };
     const cfgAutoArchive = acfg.auto_archive === true;
+    // Escalation opt-out — handoff/offer tags get stripped to a plain reply.
+    const handoffEnabled = acfg.handoff_enabled !== false;
     const inspectorFlag: { inspector: Record<string, unknown> } = {
       inspector: {
         model,
@@ -3086,6 +3110,20 @@ async function replyAsHostedAgent(
     }
     if (!reply && !widgets.length && !buttons.length) {
       void fireErrorAlert(db, agent, convId, 'no LLM configured or empty reply').catch(() => {});
+      // Handoff off → flagging needs_human only parks the thread on a human
+      // tier that doesn't exist; alert operators, apologize, stay active.
+      if (!handoffEnabled) {
+        await emit([
+          { type: 'failure', conversation_id: externalId, reason: 'no LLM configured or empty reply' },
+          {
+            type: 'message_out',
+            conversation_id: externalId,
+            text: pick(FAILURE_LINES_NO_HANDOFF),
+            payload: { via: 'hosted', ...inspectorFlag },
+          },
+        ]);
+        return;
+      }
       await emit([
         {
           type: 'handoff_request',
@@ -3142,7 +3180,7 @@ async function replyAsHostedAgent(
       .trim()
       .toLowerCase();
     const declineTapped = lastCustomerText === 'no thanks' && pendingEscalation;
-    const tag = controlTag(reply);
+    let tag = controlTag(reply);
     if (declineTapped || tag?.kind === 'cancel') {
       // Customer declined a human — deliver the reply and de-escalate any
       // pending handoff/offer back to the agent. An explicit decline beats
@@ -3171,6 +3209,14 @@ async function replyAsHostedAgent(
       });
       await emit(events);
       return;
+    }
+    if (!handoffEnabled && tag && (tag.kind === 'handoff' || tag.kind === 'offer')) {
+      // Escalation is off for this agent — the tag can't page anyone;
+      // strip it and deliver the text as a plain reply instead.
+      console.warn(`[hosted] ${tag.kind} ignored — handoff disabled conv=${convId}`);
+      inspectorFlag.inspector.handoff_disabled = tag.kind;
+      reply = tag.partial;
+      tag = null;
     }
     if (tag?.kind === 'handoff') {
       // The model may pair the tag with a partial answer — deliver it so the
@@ -3278,13 +3324,19 @@ async function replyAsHostedAgent(
       convId,
       `run threw: ${err instanceof Error ? err.message : 'generation failed'}`,
     ).catch(() => {});
+    // Handoff off → no human to offer; the failure line asks for a retry
+    // instead and the yes/no chips stay home (a "yes" tap would go nowhere).
+    const canHandoff =
+      ((agent.config ?? {}) as { handoff_enabled?: boolean }).handoff_enabled !== false;
     await emit([
       { type: 'failure', conversation_id: externalId, reason: err instanceof Error ? err.message : 'generation failed' },
       {
         type: 'message_out',
         conversation_id: externalId,
-        text: pick(FAILURE_LINES),
-        payload: { via: 'hosted', quick_replies: OFFER_CHOICES },
+        text: pick(canHandoff ? FAILURE_LINES : FAILURE_LINES_NO_HANDOFF),
+        payload: canHandoff
+          ? { via: 'hosted', quick_replies: OFFER_CHOICES }
+          : { via: 'hosted' },
       },
     ]);
   }
