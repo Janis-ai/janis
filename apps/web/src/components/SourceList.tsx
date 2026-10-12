@@ -103,6 +103,7 @@ export function SourceList({
   const [dragging, setDragging] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importMsg, setImportMsg] = useState('');
+  const [importUrl, setImportUrl] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -189,7 +190,7 @@ export function SourceList({
         { method: 'POST', body: JSON.stringify({ url: url.trim(), refresh_hours: 24 }) },
       ),
     onSuccess: (r) => {
-      setInput('');
+      setImportUrl('');
       const dup = r.skipped ? ` (${r.skipped} already imported)` : '';
       setImportMsg(
         r.kind === 'zendesk'
@@ -345,7 +346,13 @@ export function SourceList({
             {' · '}
             <button
               className="link small muted"
-              onClick={() => setImportOpen((v) => !v)}
+              onClick={() => {
+                // The crawl field is its own state — opening it seeds from
+                // a pasted URL so "paste link → crawl whole site" still
+                // flows, without the two inputs mirroring every keystroke.
+                if (!importOpen && looksLikeUrl(input.trim())) setImportUrl(input.trim());
+                setImportOpen((v) => !v);
+              }}
             >
               Crawl a whole website
             </button>
@@ -362,13 +369,13 @@ export function SourceList({
                 <input
                   className="input grow"
                   placeholder="https://help.example.com"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  value={importUrl}
+                  onChange={(e) => setImportUrl(e.target.value)}
                 />
                 <button
                   className="btn"
-                  disabled={!looksLikeUrl(input.trim()) || importCentre.isPending}
-                  onClick={() => importCentre.mutate(input.trim())}
+                  disabled={!looksLikeUrl(importUrl.trim()) || importCentre.isPending}
+                  onClick={() => importCentre.mutate(importUrl.trim())}
                 >
                   {importCentre.isPending ? 'Importing…' : 'Import'}
                 </button>
