@@ -552,112 +552,116 @@ export function SourceList({
         </div>
       )}
       {files.map((f) => (
-        <div
-          key={f.id}
-          className="card"
-          style={{ marginTop: 8, padding: 10, opacity: f.enabled ? 1 : 0.55 }}
-        >
-          <div className="row muted" style={{ fontSize: 13 }}>
-            {isAdmin && (
-              <input
-                type="checkbox"
-                checked={selected.has(f.id)}
-                aria-label={`Select ${f.name}`}
-                title="Select for bulk delete"
-                onChange={(e) =>
-                  setSelected((prev) => {
-                    const next = new Set(prev);
-                    if (e.target.checked) next.add(f.id);
-                    else next.delete(f.id);
-                    return next;
-                  })
-                }
-              />
-            )}
-            {isAdmin && (
-              <input
-                type="checkbox"
-                checked={f.enabled}
-                disabled={toggle.isPending}
-                title={
-                  f.enabled
-                    ? 'Included in the agent — uncheck to exclude it without deleting'
-                    : 'Excluded — the agent never sees this source'
-                }
-                onChange={(e) => toggle.mutate({ fileId: f.id, enabled: e.target.checked })}
-              />
-            )}
-            {/* URLs-as-names are one long unbroken string — without a break
-                opportunity the text overflows its box and paints over the
-                row's buttons. */}
-            <span className="grow" style={{ overflowWrap: 'anywhere' }}>
-              {f.source_url ? <Globe size={13} /> : <FileText size={13} />} {f.name}
-              {f.topic ? <span className="badge" style={{ marginLeft: 6 }}>{f.topic}</span> : null}
-              <span className="muted">
-                {' '}— {f.chars.toLocaleString()} chars (~{tok(f.chars)} tok)
+        <div key={f.id} className="row" style={{ marginTop: 8, gap: 8, flexWrap: 'nowrap' }}>
+          {/* Select-for-bulk lives OUTSIDE the card — it marks the row for
+              the toolbar action above, it is not part of the source itself. */}
+          {isAdmin && (
+            <input
+              type="checkbox"
+              checked={selected.has(f.id)}
+              aria-label={`Select ${f.name}`}
+              title="Select for bulk delete"
+              style={{ flexShrink: 0 }}
+              onChange={(e) =>
+                setSelected((prev) => {
+                  const next = new Set(prev);
+                  if (e.target.checked) next.add(f.id);
+                  else next.delete(f.id);
+                  return next;
+                })
+              }
+            />
+          )}
+          <div
+            className="card"
+            style={{ flex: 1, minWidth: 0, padding: 10, opacity: f.enabled ? 1 : 0.55 }}
+          >
+            <div className="row muted" style={{ fontSize: 13 }}>
+              {/* URLs-as-names are one long unbroken string — without a break
+                  opportunity the text overflows its box and paints over the
+                  row's buttons. */}
+              <span className="grow" style={{ overflowWrap: 'anywhere' }}>
+                {f.source_url ? <Globe size={13} /> : <FileText size={13} />} {f.name}
+                {f.topic ? <span className="badge" style={{ marginLeft: 6 }}>{f.topic}</span> : null}
+                <span className="muted">
+                  {' '}— {f.chars.toLocaleString()} chars (~{tok(f.chars)} tok)
+                </span>
+                {!f.enabled && <span className="muted"> · excluded</span>}
+                {f.enabled && data?.budget && f.chars > data.budget.limit && (
+                  <span className="error"> · larger than the whole budget — always truncated</span>
+                )}
+                {f.source_url && (
+                  <span className="muted">
+                    {' '}· fetched {f.last_fetched_at ? timeAgo(f.last_fetched_at) : 'never'}
+                  </span>
+                )}
+                {f.status === 'failed' && <span className="error"> {f.error}</span>}
+                {f.status === 'degraded' && <span className="error"> stale — {f.error}</span>}
               </span>
-              {!f.enabled && <span className="muted"> · excluded</span>}
-              {f.enabled && data?.budget && f.chars > data.budget.limit && (
-                <span className="error"> · larger than the whole budget — always truncated</span>
+              {/* The include/exclude checkbox read as an unlabeled third
+                  box next to the select box — exclusion stays API-only, but
+                  an already-excluded row always offers the way back. */}
+              {!f.enabled && isAdmin && (
+                <button
+                  className="btn sm"
+                  title="Re-include this source in the agent's context"
+                  disabled={toggle.isPending}
+                  onClick={() => toggle.mutate({ fileId: f.id, enabled: true })}
+                >
+                  Re-include
+                </button>
               )}
-              {f.source_url && (
-                <span className="muted">
-                  {' '}· fetched {f.last_fetched_at ? timeAgo(f.last_fetched_at) : 'never'}
-                </span>
+              {f.source_url && isAdmin && (
+                <button
+                  className="btn sm"
+                  title="Re-crawl now"
+                  aria-label="Re-crawl now"
+                  disabled={refresh.isPending}
+                  onClick={() => refresh.mutate(f.id)}
+                >
+                  <RefreshCw size={13} className={refresh.isPending ? 'spin-ic' : ''} />
+                </button>
               )}
-              {f.status === 'failed' && <span className="error"> {f.error}</span>}
-              {f.status === 'degraded' && <span className="error"> stale — {f.error}</span>}
-            </span>
-            {f.source_url && isAdmin && (
-              <button
-                className="btn sm"
-                title="Re-crawl now"
-                aria-label="Re-crawl now"
-                disabled={refresh.isPending}
-                onClick={() => refresh.mutate(f.id)}
-              >
-                <RefreshCw size={13} className={refresh.isPending ? 'spin-ic' : ''} />
-              </button>
-            )}
-            {isAdmin && (
-              <button
-                className="btn danger sm"
-                onClick={() => remove.mutate(f.id)}
-                aria-label="Delete source"
-              >
-                <Trash2 size={14} />
-              </button>
-            )}
-          </div>
-          {/* Re-crawl cadence lives on its own row — the checkbox IS the
-              toggle (null = manual only), distinct from the row's
-              select-for-bulk checkbox above. */}
-          {f.source_url && (
-            <div className="row" style={{ marginTop: 6, fontSize: 12 }}>
-              {isAdmin ? (
-                <label className="row muted" style={{ gap: 6, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={f.refresh_hours != null}
-                    disabled={setRefresh.isPending}
-                    aria-label={`Auto re-check ${f.name}`}
-                    onChange={(e) =>
-                      setRefresh.mutate({
-                        fileId: f.id,
-                        refresh_hours: e.target.checked ? 24 : null,
-                      })
-                    }
-                  />
-                  Re-check every {f.refresh_hours ?? 24}h
-                  {!f.refresh_hours && <span> · manual only</span>}
-                </label>
-              ) : (
-                <span className="muted">
-                  {f.refresh_hours ? `Re-checks every ${f.refresh_hours}h` : 'Manual refresh only'}
-                </span>
+              {isAdmin && (
+                <button
+                  className="btn danger sm"
+                  onClick={() => remove.mutate(f.id)}
+                  aria-label="Delete source"
+                >
+                  <Trash2 size={14} />
+                </button>
               )}
             </div>
-          )}
+            {/* Re-crawl cadence lives on its own row — the checkbox IS the
+                toggle (null = manual only), left-aligned under the globe so
+                it reads as this source's setting. */}
+            {f.source_url && (
+              <div className="row" style={{ marginTop: 6, fontSize: 12 }}>
+                {isAdmin ? (
+                  <label className="row muted" style={{ gap: 6, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={f.refresh_hours != null}
+                      disabled={setRefresh.isPending}
+                      aria-label={`Auto re-check ${f.name}`}
+                      onChange={(e) =>
+                        setRefresh.mutate({
+                          fileId: f.id,
+                          refresh_hours: e.target.checked ? 24 : null,
+                        })
+                      }
+                    />
+                    Re-check every {f.refresh_hours ?? 24}h
+                    {!f.refresh_hours && <span> · manual only</span>}
+                  </label>
+                ) : (
+                  <span className="muted">
+                    {f.refresh_hours ? `Re-checks every ${f.refresh_hours}h` : 'Manual refresh only'}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       ))}
 
