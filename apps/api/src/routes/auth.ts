@@ -67,7 +67,12 @@ export function authRoutes(db: Db) {
       .from(memberships)
       .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
       .where(and(eq(memberships.userId, userId), isNotNull(memberships.acceptedAt)));
-    const list = mems.map((m) => ({
+    const list: {
+      id: string;
+      name: string;
+      role: 'admin' | 'member';
+      agent_scoped?: boolean;
+    }[] = mems.map((m) => ({
       id: m.workspace.id,
       name: m.workspace.name,
       role: m.membership.role as 'admin' | 'member',
@@ -91,7 +96,10 @@ export function authRoutes(db: Db) {
         .from(workspaces)
         .where(eq(workspaces.id, s.workspaceId))
         .limit(1);
-      if (ws) list.push({ id: ws.id, name: ws.name, role: 'member' });
+      // agent_scoped flags grant-only workspaces so the switcher can label
+      // them — agent_invites lists the same rows as "added to" notices and
+      // the switcher would otherwise show the workspace twice.
+      if (ws) list.push({ id: ws.id, name: ws.name, role: 'member', agent_scoped: true });
     }
     return list;
   };

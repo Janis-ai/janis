@@ -23,7 +23,13 @@ export function useMe() {
       api<{
         user: WorkspaceUser;
         workspace: { id: string; name: string; owner_id: string | null } | null;
-        workspaces: { id: string; name: string; role: 'admin' | 'member' }[];
+        workspaces: {
+          id: string;
+          name: string;
+          role: 'admin' | 'member';
+          /** Reachable only through agent grants — no membership. */
+          agent_scoped?: boolean;
+        }[];
         /** Set when the user holds no workspace membership — only these
          *  agents are visible (agent-scoped grants via the Team override). */
         agent_scope: { id: string; name: string; role: string }[] | null;

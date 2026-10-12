@@ -110,7 +110,7 @@ function buildNav(agent: Agent, agentId: string, live: boolean) {
 
 interface MeData {
   workspace: { id: string; name: string } | null;
-  workspaces: { id: string; name: string; role: string }[];
+  workspaces: { id: string; name: string; role: string; agent_scoped?: boolean }[];
   invites: { id: string; workspace_name: string }[];
   agent_invites: { workspace_id: string; workspace_name: string; agents: string[] }[];
 }
@@ -229,20 +229,12 @@ function ContextSwitcher({
                         onClick={() => onSwitchWorkspace(w.id)}
                       >
                         <Building2 size={13} className="ctx-ic" />
-                        <span className="grow">{w.name}</span>
+                        <span className="grow">
+                          {w.name}
+                          {w.agent_scoped ? ' · agent access' : ''}
+                        </span>
                       </button>
                     ))}
-                  {data!.agent_invites.map((ai) => (
-                    <button
-                      key={ai.workspace_id}
-                      type="button"
-                      className="ctx-item"
-                      onClick={() => onSwitchWorkspace(ai.workspace_id)}
-                    >
-                      <Building2 size={13} className="ctx-ic" />
-                      <span className="grow">{ai.workspace_name} · agent access</span>
-                    </button>
-                  ))}
                   {data!.invites.length > 0 && <div className="ctx-sep" />}
                   {data!.invites.map((inv) => (
                     <div key={inv.id} className="ctx-invite">
