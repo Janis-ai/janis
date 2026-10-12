@@ -763,6 +763,25 @@ const RADIUS_OPTS = [
   { v: 22, label: 'Bubble' },
 ] as const;
 
+/** Widget typeface — '' = the system stack; 'custom' splits into the
+ *  free-text stack input. The widget resolves these keys to real stacks. */
+const FONT_PRESET_KEYS = ['', 'serif', 'rounded', 'mono'];
+const FONT_OPTS = [
+  { v: '', label: 'System' },
+  { v: 'serif', label: 'Serif' },
+  { v: 'rounded', label: 'Rounded' },
+  { v: 'mono', label: 'Mono' },
+  { v: 'custom', label: 'Custom…' },
+] as const;
+
+/** Widget text scale — multiplier on every px font-size in the sheet. */
+const FONT_SCALE_OPTS = [
+  { v: 0.9, label: 'Compact' },
+  { v: 1, label: 'Default' },
+  { v: 1.15, label: 'Large' },
+  { v: 1.3, label: 'XL' },
+] as const;
+
 /** Label-above-control wrapper used inside the bubble editor sections. */
 function BubField({
   label,
@@ -857,6 +876,15 @@ function WebchatBranding({
     // absent on channels saved before the engine switch — 'llm' matches
     // the server default so their behaviour is preserved
     dictation_advanced: b.dictation_engine !== 'browser',
+    // font_family stores a preset key or a custom CSS stack — the UI splits
+    // it into preset select + custom input
+    font_preset: FONT_PRESET_KEYS.includes(b.font_family ?? '')
+      ? (b.font_family ?? '')
+      : b.font_family
+        ? 'custom'
+        : '',
+    font_custom: FONT_PRESET_KEYS.includes(b.font_family ?? '') ? '' : (b.font_family ?? ''),
+    font_scale: b.font_scale ?? 1,
   };
   const [f, setF] = useState(initial);
   // Snapshot of the last persisted values — drives the unsaved-changes bar.
@@ -939,6 +967,8 @@ function WebchatBranding({
             show_help_link: f.show_help_link,
             dictation: f.dictation,
             dictation_engine: f.dictation_advanced ? 'llm' : 'browser',
+            font_family: f.font_preset === 'custom' ? f.font_custom.trim() : f.font_preset,
+            font_scale: f.font_scale,
           },
         }),
       }),
@@ -1068,6 +1098,46 @@ function WebchatBranding({
                       className="bub-corner"
                       style={{ borderTopLeftRadius: v === 0 ? 0 : Math.max(3, Math.round(v * 0.65)) }}
                     />
+                  </button>
+                ))}
+              </div>
+            </BubField>
+            <BubField
+              label="Font"
+              hint="Custom needs the typeface loaded by your page — a stack like 'Inter', system-ui, sans-serif"
+            >
+              <div className="bub-seg">
+                {FONT_OPTS.map(({ v, label }) => (
+                  <button
+                    key={v || 'system'}
+                    type="button"
+                    className={f.font_preset === v ? 'on' : ''}
+                    onClick={() => setF({ ...f, font_preset: v })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {f.font_preset === 'custom' && (
+                <input
+                  style={{ marginTop: 6, width: '100%', fontFamily: 'inherit', fontSize: 13 }}
+                  placeholder="'Inter', system-ui, sans-serif"
+                  spellCheck={false}
+                  value={f.font_custom}
+                  onChange={(e) => setF({ ...f, font_custom: e.target.value })}
+                />
+              )}
+            </BubField>
+            <BubField label="Text size" hint="Scales every label in the widget">
+              <div className="bub-seg">
+                {FONT_SCALE_OPTS.map(({ v, label }) => (
+                  <button
+                    key={v}
+                    type="button"
+                    className={f.font_scale === v ? 'on' : ''}
+                    onClick={() => setF({ ...f, font_scale: v })}
+                  >
+                    {label}
                   </button>
                 ))}
               </div>

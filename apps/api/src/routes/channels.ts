@@ -119,6 +119,17 @@ const patchChannel = z.object({
       dictation: z.boolean().optional(),
       // 'llm' = metered server transcription; 'browser' = free Web Speech
       dictation_engine: z.enum(['llm', 'browser']).optional(),
+      // font stack — a preset key or a custom CSS font-family list. The
+      // charset whitelist is load-bearing: the value lands inside a
+      // generated <style>, so ;{}() etc. would be a CSS-injection hole.
+      font_family: z
+        .string()
+        .max(160)
+        .regex(/^[\w\s,'"\-.]+$/)
+        .or(z.literal(''))
+        .optional(),
+      // text-size multiplier — 0.8x compact … 1.5x xl
+      font_scale: z.number().min(0.8).max(1.5).optional(),
     })
     .optional(),
   // webchat: HMAC key for signed visitor identity (Janis.identify sig); '' clears
@@ -583,6 +594,11 @@ export function channelApiRoutes(db: Db) {
       if (b.show_help_link !== undefined) creds.show_help_link = b.show_help_link;
       if (b.dictation !== undefined) creds.dictation = b.dictation;
       if (b.dictation_engine !== undefined) creds.dictation_engine = b.dictation_engine;
+      if (b.font_family !== undefined) {
+        if (b.font_family === '') delete creds.font_family;
+        else creds.font_family = b.font_family;
+      }
+      if (b.font_scale !== undefined) creds.font_scale = b.font_scale;
       if (b.quick_replies !== undefined) {
         if (b.quick_replies.length) creds.quick_replies = b.quick_replies;
         else delete creds.quick_replies;

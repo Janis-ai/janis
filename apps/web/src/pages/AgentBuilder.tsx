@@ -10,7 +10,7 @@ import { railBus } from '../lib/railBus';
 import { stepGlyph, stepSubtitle, useSeenSteps } from '../lib/seenSteps';
 import { usePageTitle } from '../lib/title';
 import type { Agent, AgentConfig } from '@janis/shared';
-import { ChevronDown, MessageSquarePlus, Play } from 'lucide-react';
+import { ChevronDown, MessageSquarePlus, Play, Sparkles } from 'lucide-react';
 
 import { freshTestVisitor } from '../lib/testChat';
 import { useScenarioMatch } from '../lib/scenarioMatch';
@@ -690,6 +690,50 @@ export default function AgentBuilder() {
     },
     onError: (e) => setTestNotice(e.message),
   });
+  // Scenario drafting — the builder's creation-time suggestions predate
+  // the knowledge base, so this regenerates from the agent's current
+  // instructions + sources. Drafts come back for review; accepted ones
+  // land as ordinary 'generated' rows through the tests endpoint.
+  const [genDrafts, setGenDrafts] = useState<
+    { category: string; prompt: string; expected: string; on: boolean }[] | null
+  >(null);
+  const genScenarios = useMutation({
+    mutationFn: () =>
+      api<{
+        suggestions: { category: string; prompt: string; expected: string }[];
+      }>(`/api/agents/${agent?.id}/tests-generate`, { method: 'POST' }),
+    onSuccess: (r) =>
+      setGenDrafts(r.suggestions.map((s) => ({ ...s, on: true }))),
+    onError: (e) => setTestNotice(e.message),
+  });
+  const [addingDrafts, setAddingDrafts] = useState(false);
+  const addGenDrafts = async () => {
+    const chosen = (genDrafts ?? []).filter((d) => d.on);
+    if (!chosen.length || !agent) return;
+    setAddingDrafts(true);
+    try {
+      for (const s of chosen) {
+        await api(`/api/agents/${agent.id}/tests`, {
+          method: 'POST',
+          body: JSON.stringify({
+            prompt: s.prompt,
+            expectation: s.expected,
+            category: s.category,
+            source: 'generated',
+          }),
+        });
+      }
+      setGenDrafts(null);
+      void qc.invalidateQueries({ queryKey: ['agent-tests', agent.id] });
+      setTestNotice(
+        `Added ${chosen.length} scenario${chosen.length === 1 ? '' : 's'}.`,
+      );
+    } catch (e) {
+      setTestNotice(e instanceof Error ? e.message : 'save failed');
+    } finally {
+      setAddingDrafts(false);
+    }
+  };
   // Sequential runner — one prompt in flight at a time so replies pair
   // unambiguously. A multi-bubble answer attaches to the running scenario;
   // the queue advances on a short delay after the first reply lands.
@@ -2055,6 +2099,16 @@ export default function AgentBuilder() {
                 >
                   <MessageSquarePlus size={13} /> New chat
                 </button>
+                <button
+                  className="btn sm"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                  title="Draft fresh scenarios from the agent's current instructions + knowledge — for review before they join the list"
+                  disabled={genScenarios.isPending || runningId !== null}
+                  onClick={() => genScenarios.mutate()}
+                >
+                  <Sparkles size={13} />{' '}
+                  {genScenarios.isPending ? 'Drafting…' : 'Generate scenarios'}
+                </button>
                 {scenarios.length > 0 && (
                   <button
                     className="btn sm"
@@ -2105,6 +2159,81 @@ export default function AgentBuilder() {
               {testNotice && (
                 <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
                   {testNotice}
+                </div>
+              )}
+              {genDrafts && (
+                <div className="card" style={{ marginTop: 10 }}>
+                  <strong>Drafted from the agent's current instructions and knowledge</strong>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                    Review before adding — expectations are AI drafts you can
+                    edit on the row after it lands.
+                  </div>
+                  {genDrafts.length === 0 ? (
+                    <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+                      Nothing new to suggest — existing scenarios already cover
+                      it.{' '}
+                      <button className="link small" onClick={() => setGenDrafts(null)}>
+                        dismiss
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ marginTop: 6 }}>
+                        {genDrafts.map((d, i) => (
+                          <label
+                            key={i}
+                            className="row"
+                            style={{
+                              gap: 8,
+                              padding: '4px 0',
+                              fontSize: 13,
+                              alignItems: 'flex-start',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={d.on}
+                              style={{ marginTop: 3 }}
+                              onChange={() =>
+                                setGenDrafts(
+                                  (g) =>
+                                    g &&
+                                    g.map((x, j) =>
+                                      j === i ? { ...x, on: !x.on } : x,
+                                    ),
+                                )
+                              }
+                            />
+                            <span>
+                              <span className="badge">{CAT_LABELS[d.category] ?? d.category}</span>{' '}
+                              {d.prompt}
+                              <span className="muted" style={{ display: 'block', fontSize: 12 }}>
+                                {d.expected}
+                              </span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                        <button
+                          className="btn sm"
+                          disabled={addingDrafts || !genDrafts.some((d) => d.on)}
+                          onClick={addGenDrafts}
+                        >
+                          {addingDrafts
+                            ? 'Adding…'
+                            : `Add ${genDrafts.filter((d) => d.on).length} scenario${genDrafts.filter((d) => d.on).length === 1 ? '' : 's'}`}
+                        </button>
+                        <button
+                          className="link small muted"
+                          onClick={() => setGenDrafts(null)}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               {scenarios.some((s) => s.stale) && (

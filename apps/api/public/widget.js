@@ -286,7 +286,9 @@
   var accent = '#5b21b6';
   var css = document.createElement('style');
   css.id = 'janis-style';
-  css.textContent =
+  // Kept in a var so applyCfg can re-emit it scaled (branding.font_scale)
+  // without losing the pristine rules.
+  var baseCss =
     '#janis-bubble{position:fixed;right:20px;bottom:20px;width:56px;height:56px;border-radius:50%;' +
     'border:none;cursor:pointer;z-index:999998;display:flex;align-items:center;justify-content:center;' +
     'box-shadow:0 4px 16px rgba(0,0,0,.3);font-size:24px;color:#fff}' +
@@ -484,7 +486,36 @@
     // keep the input at 16px on touch devices so opening the widget doesn't
     // blow up the host site's layout.
     '@media (pointer:coarse){#janis-input{font-size:16px}}';
+  css.textContent = baseCss;
   document.head.appendChild(css);
+
+  // Branding typeface — preset keys map to stacks; a custom stack passes
+  // through verbatim but only after the charset whitelist (mirrors the
+  // server-side check; anything else degrades to the default stack).
+  var FONT_PRESETS = {
+    serif: "Georgia,'Times New Roman',Times,serif",
+    rounded: "ui-rounded,'SF Pro Rounded','Nunito','Varela Round',system-ui,sans-serif",
+    mono: "ui-monospace,'SF Mono',SFMono-Regular,Menlo,monospace",
+  };
+  function fontStack(v) {
+    if (!v || v === 'system') return '';
+    if (FONT_PRESETS[v]) return FONT_PRESETS[v];
+    return /^[\w\s,'"\-.]+$/.test(v) ? v : '';
+  }
+  // Text scale — multiply every px font-size in the sheet. The trailing
+  // (pointer:coarse) block pins the input at 16px to stop iOS zoom; it
+  // must NOT scale or focusing the field would blow up the host layout.
+  function scaleFontCss(s, cssText) {
+    if (!s || s === 1) return cssText;
+    var i = cssText.indexOf('@media (pointer:coarse)');
+    var head = i >= 0 ? cssText.slice(0, i) : cssText;
+    var tail = i >= 0 ? cssText.slice(i) : '';
+    return (
+      head.replace(/font-size:([\d.]+)px/g, function (m, n) {
+        return 'font-size:' + Math.max(11, Math.round(parseFloat(n) * s * 10) / 10) + 'px';
+      }) + tail
+    );
+  }
 
   // ---- DOM ----------------------------------------------------------------
   var bubble = el('button', { background: accent }, { id: 'janis-bubble', 'aria-label': 'Chat with us' });
@@ -706,6 +737,8 @@
     try { if (sessionStorage.getItem(SS_TEASER)) return; } catch (e) {}
     var txt = state.config.teaser_text || state.config.greeting || 'Questions? Chat with us.';
     teaserEl = el('div', {}, { id: 'janis-teaser', role: 'button' });
+    var tf = fontStack(state.config.font_family);
+    if (tf) teaserEl.style.fontFamily = tf;
     if (state.config.position === 'left') teaserEl.classList.add('janis-left');
     if (panel.classList.contains('janis-dark')) teaserEl.classList.add('janis-dark');
     var tx = el('span', {}, {});
@@ -1933,6 +1966,15 @@
       // Corner radius — panel + teaser share the --janis-radius var.
       if (cfg.radius != null)
         document.documentElement.style.setProperty('--janis-radius', cfg.radius + 'px');
+      // Typeface — set on the panel root; children inherit. The teaser is
+      // a body-level sibling, so it gets its own assignment (plus the one
+      // at creation in maybeTeaser, which can run after this).
+      var fam = fontStack(cfg.font_family);
+      panel.style.fontFamily = fam || '';
+      var teaserNow = document.getElementById('janis-teaser');
+      if (teaserNow) teaserNow.style.fontFamily = fam || '';
+      // Text scale — re-emit the stylesheet with every px size multiplied.
+      css.textContent = scaleFontCss(cfg.font_scale, baseCss);
       panel.querySelector('#janis-title').textContent = cfg.title || cfg.name || 'Chat';
       panel.querySelector('#janis-sub').textContent =
         cfg.subtitle !== null && cfg.subtitle !== undefined

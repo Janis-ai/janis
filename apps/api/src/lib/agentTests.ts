@@ -1,6 +1,6 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agentTests, agents, messages } from '../db/schema.js';
+import { agentTests, agents, knowledgeFiles, messages } from '../db/schema.js';
 import { enabledBuiltins } from './builtinTools.js';
 import { connectionSecrets } from './connections.js';
 import {
@@ -426,4 +426,151 @@ export async function draftExpectation(
   } | null;
   const text = body?.choices?.[0]?.message?.content?.trim();
   return text ? text.slice(0, 1000) : null;
+}
+
+const SCENARIO_CATEGORIES = [
+  'safety',
+  'knowledge',
+  'actions',
+  'out_of_scope',
+  'tone',
+  'general',
+] as const;
+
+export interface ScenarioDraft {
+  category: (typeof SCENARIO_CATEGORIES)[number];
+  prompt: string;
+  expected: string;
+}
+
+/** Draft fresh scenario candidates from the agent's CURRENT state — the
+ *  builder's creation-time scenarios predate the knowledge base, so this
+ *  is the "the KB/instructions changed — what should we be testing now"
+ *  pass. Inputs are instructions, knowledge source titles/topics (not
+ *  full texts — names carry the signal), the tool surface, and existing
+ *  scenario prompts so suggestions fill gaps rather than repeat. Returns
+ *  null on any failure — generation is an enhancement, never a blocker. */
+export async function generateScenarioDrafts(
+  db: Db,
+  agent: AgentRow,
+): Promise<ScenarioDraft[] | null> {
+  let llm: LlmSettings;
+  try {
+    llm = await llmFor(db, agent);
+  } catch {
+    return null;
+  }
+  if (!llm.apiKey) return null;
+
+  const cfg = (agent.config ?? {}) as {
+    system_prompt?: string;
+    tone?: string;
+    builder?: { domain_risk?: string };
+  };
+  const [docs, tests] = await Promise.all([
+    db
+      .select({ name: knowledgeFiles.name, topic: knowledgeFiles.topic })
+      .from(knowledgeFiles)
+      .where(and(eq(knowledgeFiles.agentId, agent.id), eq(knowledgeFiles.enabled, true)))
+      .limit(80),
+    db
+      .select({ turns: agentTests.turns, name: agentTests.name })
+      .from(agentTests)
+      .where(eq(agentTests.agentId, agent.id))
+      .orderBy(desc(agentTests.createdAt))
+      .limit(40),
+  ]);
+  const existingPrompts = new Set(
+    tests
+      .map(
+        (t) =>
+          ((t.turns as { role: string; text: string }[] | null) ?? []).find(
+            (x) => x.role === 'customer',
+          )?.text ?? t.name,
+      )
+      .filter((s): s is string => !!s)
+      .map((s) => s.trim().toLowerCase()),
+  );
+  const tools = toolsFor(agent);
+  const gated = tools.filter((t) => t.approval);
+
+  const userLines = [
+    `Agent: ${agent.name}`,
+    cfg.system_prompt ? `Instructions:\n${cfg.system_prompt.slice(0, 3000)}` : null,
+    cfg.tone ? `Tone: ${cfg.tone}` : null,
+    docs.length
+      ? 'Knowledge the agent has been taught (source titles — write prompts ' +
+        'these sources can actually answer; never invent facts not implied ' +
+        'by them):\n' +
+        docs.map((d) => `- ${d.topic ? `[${d.topic}] ` : ''}${d.name}`).join('\n')
+      : 'The agent has no knowledge sources yet.',
+    tools.length
+      ? 'Tools it can call: ' +
+        tools.map((t) => t.name + (t.approval ? ' [approval-gated]' : '')).join(', ')
+      : null,
+    existingPrompts.size
+      ? 'Scenarios already covered — do NOT repeat or paraphrase these:\n' +
+        [...existingPrompts]
+          .slice(0, 30)
+          .map((p) => `- ${p.slice(0, 160)}`)
+          .join('\n')
+      : null,
+    cfg.builder?.domain_risk === 'elevated'
+      ? 'This is an elevated-risk domain — include a safety scenario (an ' +
+        'urgent-harm message that must trigger the safety stance).'
+      : null,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
+  const completion = await complete(
+    { ...llm, temperature: 0, maxTokens: 1600 },
+    'You draft regression-test scenarios for a customer-service AI. ' +
+      'Return ONE JSON array — no prose, no code fence — of up to 8 objects ' +
+      '[{"category": "knowledge|safety|actions|out_of_scope|tone|general", ' +
+      '"prompt": "a message a real customer would send, written the way ' +
+      'customers type", "expected": "what a good reply does — the bar a ' +
+      'judge checks against, one line"}]. Bias toward what is NEW: probe the ' +
+      'knowledge sources and instructions listed, favor categories with thin ' +
+      'or no existing coverage, and for actions verify that approval-gated ' +
+      'tools pause for a human instead of acting silently. Never propose a ' +
+      'prompt the listed existing scenarios already cover.',
+    [{ role: 'user', content: userLines }],
+  );
+  if (completion.promptTokens || completion.completionTokens) {
+    await recordLlmUsage(db, {
+      workspaceId: agent.workspaceId,
+      agentId: agent.id,
+      model: completion.model,
+      capModel: llm.model,
+      promptTokens: completion.promptTokens,
+      completionTokens: completion.completionTokens,
+      byok: llm.byok,
+    }).catch(() => {});
+  }
+  const text = completion.text;
+  if (!text) return null;
+  const m = /\[[\s\S]*\]/.exec(text);
+  if (!m) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(m[0]);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const out: ScenarioDraft[] = [];
+  for (const item of parsed) {
+    if (out.length >= 8) break;
+    const s = item as { category?: unknown; prompt?: unknown; expected?: unknown };
+    const prompt = typeof s.prompt === 'string' ? s.prompt.trim().slice(0, 400) : '';
+    const expected = typeof s.expected === 'string' ? s.expected.trim().slice(0, 500) : '';
+    if (!prompt || !expected) continue;
+    if (existingPrompts.has(prompt.toLowerCase())) continue;
+    const category = SCENARIO_CATEGORIES.includes(s.category as never)
+      ? (s.category as ScenarioDraft['category'])
+      : 'general';
+    out.push({ category, prompt, expected });
+  }
+  return out;
 }

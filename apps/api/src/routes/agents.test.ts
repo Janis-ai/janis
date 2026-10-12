@@ -1285,6 +1285,7 @@ describe('agent bootstrap (guided builder)', () => {
 });
 
 describe('try-it scenarios', () => {
+  afterEach(() => vi.unstubAllGlobals());
   const mkAgent = async () => {
     const res = await postAgent(parentCookie);
     return (await res.json()).agent.id as string;
@@ -1410,6 +1411,74 @@ describe('try-it scenarios', () => {
     expect(st.test_scenarios.safety_total).toBe(1);
     // Scenarios exist but nothing ran → pending, not partial.
     expect(st.steps.try).toBe('pending');
+  });
+
+  it('tests-generate drafts fresh scenarios, skipping covered prompts', async () => {
+    const id = await mkAgent();
+    await postTest(id, { prompt: 'what are your hours?', expectation: 'states hours' });
+    const [agent] = await db.select().from(agents).where(eq(agents.id, id));
+    const cfg = (agent.config ?? {}) as Record<string, unknown>;
+    await patchConfig(id, {
+      ...cfg,
+      llm: { provider: 'openai', api_key: 'k', base_url: 'https://llm.test/v1', model: 'm' },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  // prose around the JSON + a verbatim repeat of the
+                  // existing scenario + an unknown category — all get
+                  // cleaned
+                  content:
+                    'Sure! ' +
+                    JSON.stringify([
+                      { category: 'knowledge', prompt: 'what are your hours?', expected: 'states hours' },
+                      { category: 'out_of_scope', prompt: 'can you write my wedding vows', expected: 'politely declines and redirects' },
+                      { category: 'bogus', prompt: 'do you deliver to brooklyn', expected: 'answers from delivery knowledge' },
+                    ]) +
+                    ' — hope that helps.',
+                },
+              },
+            ],
+            usage: { prompt_tokens: 100, completion_tokens: 60 },
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const res = await app.request(`/api/agents/${id}/tests-generate`, {
+      method: 'POST',
+      headers: { cookie: parentCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.suggestions).toHaveLength(2);
+    expect(body.suggestions.map((s: { prompt: string }) => s.prompt)).toEqual([
+      'can you write my wedding vows',
+      'do you deliver to brooklyn',
+    ]);
+    // unknown category clamps to 'general'
+    expect(body.suggestions[1].category).toBe('general');
+  });
+
+  it('tests-generate 502s when the agent has no usable LLM', async () => {
+    const id = await mkAgent();
+    const [agent] = await db.select().from(agents).where(eq(agents.id, id));
+    const cfg = (agent.config ?? {}) as Record<string, unknown>;
+    // BYOK flagged but no key — complete() sees an empty apiKey and bails.
+    await patchConfig(id, {
+      ...cfg,
+      llm: { provider: 'openai', base_url: 'https://llm.test/v1', model: 'm' },
+    });
+    const res = await app.request(`/api/agents/${id}/tests-generate`, {
+      method: 'POST',
+      headers: { cookie: parentCookie },
+    });
+    expect(res.status).toBe(502);
   });
 
   it('marks try done only when every scenario passes', async () => {

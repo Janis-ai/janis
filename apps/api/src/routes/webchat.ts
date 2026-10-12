@@ -527,6 +527,8 @@ export function webchatRoutes(db: Db) {
       // Web Speech. Absent resolves to 'llm' — channels that opted into
       // dictation before the engine switch keep their coverage.
       dictation_engine: creds.dictation_engine === 'browser' ? 'browser' : 'llm',
+      font_family: creds.font_family ?? null,
+      font_scale: creds.font_scale ?? null,
       // Saved components pinned to the greeting — rendered under the greeting
       // text on an empty thread (widget.js) and in the Ask Janis rail.
       // Greeting pins are static — interpolate with empty props and re-validate

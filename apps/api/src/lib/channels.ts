@@ -66,6 +66,11 @@ export interface ChannelCredentials {
   // hides on Safari/Firefox). Absent resolves to 'llm' so channels that
   // enabled dictation before this existed keep their coverage.
   dictation_engine?: 'llm' | 'browser';
+  // webchat: typeface — a preset key ('serif'|'rounded'|'mono') or a
+  // sanitized CSS font-family list; absent = the system default stack
+  font_family?: string;
+  // webchat: text-size multiplier applied to every px font-size — 0.8..1.5
+  font_scale?: number;
   // webchat: HMAC-SHA256 key for host-signed identity assertions — when set,
   // a `sig` on the widget's user payload proves the host vouched for it
   identity_secret?: string;

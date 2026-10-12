@@ -43,7 +43,7 @@ import {
   triggerOf,
   type MatchTurn,
 } from '../lib/promptMatch.js';
-import { checkpointIndices, draftExpectation, judgeExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
+import { checkpointIndices, draftExpectation, generateScenarioDrafts, judgeExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { configVersion } from '../lib/configVersion.js';
 import { agentNameTaken, groupNameTaken } from '../lib/names.js';
@@ -2606,6 +2606,19 @@ export function agentRoutes(db: Db) {
       return c.json({ test: toTest(row, configVersion((agent.config ?? {}) as AgentConfig)) });
     },
   );
+
+  // Draft fresh scenario candidates from the agent's CURRENT state — the
+  // builder's creation-time scenarios predate the knowledge base and any
+  // instruction edits, so this is the "things changed — what should we be
+  // testing now" pass. Returns drafts for review; the client materializes
+  // the accepted ones through POST /:id/tests (source 'generated').
+  app.post('/:id/tests-generate', agentAdmin, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const suggestions = await generateScenarioDrafts(db, agent);
+    if (suggestions === null) return c.json({ error: 'generation failed' }, 502);
+    return c.json({ suggestions });
+  });
 
   // Materialize the draft's suggested_scenarios as test rows — the Try it
   // checklist. Idempotent: a prompt that already exists (any source) is

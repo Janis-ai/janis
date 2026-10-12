@@ -591,6 +591,11 @@ export const Channel = z.object({
         // 'llm' = metered server transcription (all browsers); 'browser' =
         // free client-side Web Speech (Chrome/Edge only)
         dictation_engine: z.enum(['llm', 'browser']).optional(),
+        // typeface — preset key ('serif'|'rounded'|'mono') or a custom CSS
+        // font-family list; absent = the system default stack
+        font_family: z.string().optional(),
+        // text-size multiplier on every widget font-size — 0.8..1.5
+        font_scale: z.number().optional(),
       })
       .optional(),
   }),
