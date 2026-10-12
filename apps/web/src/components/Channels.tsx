@@ -1363,6 +1363,12 @@ function WebchatBranding({
               logo_border_color: f.logo_border_color,
               quick_replies: parseReplies(f.quick_replies),
               theme: f.theme,
+              display: f.display,
+              // Same preset→stack resolution as the save payload — the widget
+              // whitelists the custom stack's charset in fontStack().
+              font_family:
+                f.font_preset === 'custom' ? f.font_custom.trim() : f.font_preset,
+              font_scale: f.font_scale,
               hide_powered_by: f.hide_powered_by && !freePlan,
               proactive: f.proactive,
               proactive_delay: f.proactive_delay,

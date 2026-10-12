@@ -2033,7 +2033,12 @@
       // Center-stage display — the panel centers on a backdrop; page mode
       // always wins (it IS the whole page). Live preview edits re-apply too.
       panel.classList.toggle('janis-modal', !PAGE && cfg.display === 'modal');
-      if (!panel.classList.contains('janis-modal')) backdrop.classList.remove('open');
+      // Mirror setOpen's rule — covers live preview toggles in BOTH
+      // directions while the panel is already open.
+      backdrop.classList.toggle(
+        'open',
+        state.open && panel.classList.contains('janis-modal')
+      );
       // Draft greeting edits re-render the synthetic greeting bubble in
       // place (only exists while the thread is still empty).
       if (state.greetEl && state.greetEl.parentNode && cfg.greeting) {
