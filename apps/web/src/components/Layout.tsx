@@ -521,6 +521,14 @@ export default function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onBuilderPage, testAvail, ctxAgent]);
 
+  // The nudge can't park over the page forever — unclicked and
+  // undismissed, it fades itself after a beat.
+  useEffect(() => {
+    if (!dockCallout) return;
+    const t = setTimeout(() => setDockCallout(false), 9000);
+    return () => clearTimeout(t);
+  }, [dockCallout]);
+
   // Test-tab fallback — a plain chat when no page is portaling a wired
   // panel (agent pages other than the builder). Resolves the test channel
   // lazily; on builder pages the builder's own panel owns the slot.
@@ -1320,23 +1328,24 @@ export default function Layout() {
               {copilotUnread && <span className="test-strip-dot copilot-dot" />}
             </button>
           )}
-        </div>
-      )}
-      {/* One-time nudge when there's a draft agent but no room to auto-open */}
-      {dockCallout && !railOpen && testAvail && (
-        <div className="test-callout">
-          <button
-            onClick={() => {
-              setDockCallout(false);
-              setRailTab('test');
-              setRailOpen(true);
-            }}
-          >
-            Chat with your draft agent →
-          </button>
-          <button aria-label="Dismiss" onClick={() => setDockCallout(false)}>
-            <X size={13} />
-          </button>
+          {/* One-time nudge when there's a draft agent but no room to
+              auto-open — anchored to the flask it points at. */}
+          {dockCallout && !railOpen && testAvail && (
+            <div className="test-callout">
+              <button
+                onClick={() => {
+                  setDockCallout(false);
+                  setRailTab('test');
+                  setRailOpen(true);
+                }}
+              >
+                Chat with your draft agent →
+              </button>
+              <button aria-label="Dismiss" onClick={() => setDockCallout(false)}>
+                <X size={13} />
+              </button>
+            </div>
+          )}
         </div>
       )}
       {railVisible && (
