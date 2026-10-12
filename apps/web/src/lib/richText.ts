@@ -1,4 +1,4 @@
-import { MATH_SRC, latexToUnicode, mathToUnicode } from '@janis/shared';
+import { MATH_SRC, latexToUnicode, mathToUnicode, cleanMathNoise } from '@janis/shared';
 
 export interface EmphSeg {
   kind: 'text' | 'bold' | 'italic' | 'strike' | 'code' | 'math';
@@ -24,7 +24,8 @@ export function splitEmphasis(text: string): EmphSeg[] {
   let last = 0;
   SEG_RE.lastIndex = 0;
   for (let m = SEG_RE.exec(text); m; m = SEG_RE.exec(text)) {
-    if (m.index > last) out.push({ kind: 'text', text: text.slice(last, m.index) });
+    if (m.index > last)
+      out.push({ kind: 'text', text: cleanMathNoise(text.slice(last, m.index)) });
     const body = m[1] ?? m[2] ?? m[3] ?? m[4]; // MATH_SRC capture groups
     if (body != null) {
       const d = latexToUnicode(body.trim()).trim();
@@ -38,7 +39,8 @@ export function splitEmphasis(text: string): EmphSeg[] {
     }
     last = m.index + m[0].length;
   }
-  if (last < text.length) out.push({ kind: 'text', text: text.slice(last) });
+  if (last < text.length)
+    out.push({ kind: 'text', text: cleanMathNoise(text.slice(last)) });
   return out;
 }
 

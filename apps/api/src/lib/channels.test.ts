@@ -478,6 +478,23 @@ describe('formatForChannel', () => {
     }
   });
 
+  it('cleans LaTeX noise outside math spans on push channels', () => {
+    // Model noise that survives segmentation: a lone $ glued to a percent
+    // ("over $50% of families") and escaped prose chars (\$, \%).
+    for (const kind of ['whatsapp', 'sms', 'email']) {
+      expect(formatForChannel('reaches over $50% of families', kind)).toBe(
+        'reaches over 50% of families',
+      );
+      expect(formatForChannel('over \\$5.25 million and 50\\% of families', kind)).toBe(
+        'over $5.25 million and 50% of families',
+      );
+    }
+    // Closed spans still detex — $50\%$ and $\$28,100$ were already valid.
+    expect(formatForChannel('around $50\\%$ to $\\$28,100$ here', 'sms')).toBe(
+      'around 50% to $28,100 here',
+    );
+  });
+
   it('mixes math with the rest of the dialect', () => {
     expect(formatForChannel('so **$x = 40$** — done', 'whatsapp')).toBe('so *x = 40* — done');
     expect(formatForChannel('so **$x = 40$** — done', 'sms')).toBe('so x = 40 — done');

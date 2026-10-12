@@ -247,10 +247,13 @@ export interface MathSpan {
 
 // $…$ pairs need non-space content at both ends — "costs $5 and $10" fails
 // the closing rule ("5 and " ends with a space) so prices stay literal.
+// \\\$ inside the inline branch lets $\$28,100$ (a dollar amount wrapped
+// in math) match as ONE span instead of the body closing early at the
+// escaped $ and leaking "28,100$" as prose.
 // MATH_SRC is exported so richer tokenizers (the console's emphasis pass)
 // can share the exact same math pattern in a combined alternation.
 export const MATH_SRC =
-  '\\$\\$([\\s\\S]+?)\\$\\$|\\\\\\[(.+?)\\\\\\]|\\\\\\((.+?)\\\\\\)|\\$((?=[^\\s$])[^\\n$]*[^\\s$])\\$';
+  '\\$\\$([\\s\\S]+?)\\$\\$|\\\\\\[(.+?)\\\\\\]|\\\\\\((.+?)\\\\\\)|\\$((?=[^\\s$])(?:\\\\\\$|[^\\n$])*[^\\s$])\\$';
 const MATH_RE = new RegExp(MATH_SRC, 'g');
 
 /** Split text into prose and detexed math spans — $…$, $$…$$, \(…\), \[…\].
@@ -271,10 +274,22 @@ export function splitMath(text: string): MathSpan[] {
   return out;
 }
 
+/** LaTeX noise that lands OUTSIDE a closed $…$ span: the model escapes
+ *  prose characters (\$, \%, \*, \( …) or glues a lone $ to a percent
+ *  ("over $50% of families"). Both leak visible glyphs, so text spans get
+ *  this pass — escapes become the literal char, and $N% becomes N% since
+ *  a real price never ends in %. Legit math is already a span by then. */
+export function cleanMathNoise(text: string): string {
+  if (!/[$%\\]/.test(text)) return text;
+  return text
+    .replace(/\\([$%&#_{}*~^|()[\]])/g, '$1')
+    .replace(/\$(\d[\d,.]*)%/g, '$1%');
+}
+
 /** Whole-string form — push channels get $60^\circ$ as 60°, $x^2$ as x². */
 export function mathToUnicode(text: string): string {
   if (!/[$\\]/.test(text)) return text;
   return splitMath(text)
-    .map((s) => s.text)
+    .map((s) => (s.kind === 'math' ? s.text : cleanMathNoise(s.text)))
     .join('');
 }

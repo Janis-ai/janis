@@ -70,6 +70,25 @@ describe('splitEmphasis', () => {
     expect(splitEmphasis('price is $19')).toEqual([{ kind: 'text', text: 'price is $19' }]);
   });
 
+  it('cleans LaTeX noise that lands outside a math span', () => {
+    // A lone $ glued to a percent ("over $50% of families") and escaped
+    // prose chars (\$, \%) are model noise, not math — strip the noise.
+    expect(splitEmphasis('reaches over $50% of families')).toEqual([
+      { kind: 'text', text: 'reaches over 50% of families' },
+    ]);
+    expect(splitEmphasis('over \\$5.25 million and 50\\%')).toEqual([
+      { kind: 'text', text: 'over $5.25 million and 50%' },
+    ]);
+    // Closed spans still win — $50\%$ is math that detexes to 50%.
+    expect(splitEmphasis('around $50\\%$ to $\\$28,100$ here')).toEqual([
+      { kind: 'text', text: 'around ' },
+      { kind: 'math', text: '50%' },
+      { kind: 'text', text: ' to ' },
+      { kind: 'math', text: '$28,100' },
+      { kind: 'text', text: ' here' },
+    ]);
+  });
+
   it('handles display math and \\(…\\) delimiters', () => {
     expect(splitEmphasis('$$\\frac{1}{2}$$ and \\(\\alpha\\)')).toEqual([
       { kind: 'math', text: '½' },
