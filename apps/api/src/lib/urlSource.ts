@@ -46,6 +46,14 @@ function pageImageUrl(html: string, pageUrl: string): string | undefined {
     }
   }
   if (!src || src.startsWith('data:')) return undefined;
+  // Meta/img attributes are HTML-encoded — &amp;/&#x3D; in a stored URL
+  // resolves to a literal entity the CDN can't parse, so decode first.
+  src = src
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(parseInt(d, 10)))
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&amp;/gi, '&');
   try {
     const u = new URL(src, pageUrl);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined;

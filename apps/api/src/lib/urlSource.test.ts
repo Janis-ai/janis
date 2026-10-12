@@ -72,3 +72,13 @@ describe('fetchUrlText image extraction', () => {
     expect(r.text).toBe('plain text body');
   });
 });
+
+describe('entity decoding in extracted URLs', () => {
+  it('decodes &#x3D;/&amp; so the stored URL is usable', async () => {
+    stubPage(
+      '<html><head><meta property="og:image" content="https://cdn.example/i?q&#x3D;85&amp;w&#x3D;960"></head><body><p>Body.</p></body></html>',
+    );
+    const r = await fetchUrlText(PAGE);
+    expect(r.imageUrl).toBe('https://cdn.example/i?q=85&w=960');
+  });
+});
