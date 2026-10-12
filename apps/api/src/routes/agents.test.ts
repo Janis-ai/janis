@@ -1074,6 +1074,96 @@ describe('knowledge-import', () => {
   });
 });
 
+describe('knowledge patch + bulk delete', () => {
+  const newAgent = async () => {
+    const res = await postAgent(parentCookie);
+    return (await res.json()).agent.id as string;
+  };
+  const addFile = async (
+    agentId: string,
+    over: Partial<typeof knowledgeFiles.$inferInsert> = {},
+  ) => {
+    const [a] = await db
+      .select({ workspaceId: agents.workspaceId })
+      .from(agents)
+      .where(eq(agents.id, agentId));
+    const [r] = await db
+      .insert(knowledgeFiles)
+      .values({
+        workspaceId: a.workspaceId,
+        agentId,
+        name: 'https://x.example/page',
+        mimeType: 'text/url-source',
+        sizeBytes: 12,
+        text: 'some content',
+        sourceUrl: 'https://x.example/page',
+        refreshHours: 24,
+        nextFetchAt: new Date(),
+        ...over,
+      })
+      .returning();
+    return r;
+  };
+  const patch = (id: string, fileId: string, body: unknown) =>
+    app.request(`/api/agents/${id}/knowledge/${fileId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify(body),
+    });
+
+  it('PATCH refresh_hours toggles the re-crawl schedule', async () => {
+    const id = await newAgent();
+    const f = await addFile(id);
+
+    let res = await patch(id, f.id, { refresh_hours: null });
+    expect(res.status).toBe(200);
+    let [row] = await db.select().from(knowledgeFiles).where(eq(knowledgeFiles.id, f.id));
+    expect(row.refreshHours).toBeNull();
+    expect(row.nextFetchAt).toBeNull();
+
+    res = await patch(id, f.id, { refresh_hours: 48 });
+    expect(res.status).toBe(200);
+    [row] = await db.select().from(knowledgeFiles).where(eq(knowledgeFiles.id, f.id));
+    expect(row.refreshHours).toBe(48);
+    expect(row.nextFetchAt?.getTime()).toBeGreaterThan(Date.now());
+
+    // enabled still works alongside the new field
+    res = await patch(id, f.id, { enabled: false });
+    expect(res.status).toBe(200);
+    [row] = await db.select().from(knowledgeFiles).where(eq(knowledgeFiles.id, f.id));
+    expect(row.enabled).toBe(false);
+    expect(row.refreshHours).toBe(48);
+  });
+
+  it('bulk-delete removes only this agent\'s listed files', async () => {
+    const id = await newAgent();
+    const other = await newAgent();
+    const f1 = await addFile(id);
+    const f2 = await addFile(id, { name: 'second' });
+    const keep = await addFile(id, { name: 'keep me' });
+    const alien = await addFile(other);
+
+    const res = await app.request(`/api/agents/${id}/knowledge/bulk-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ ids: [f1.id, f2.id, alien.id] }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).deleted).toBe(2);
+
+    const remaining = await db
+      .select({ id: knowledgeFiles.id })
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.agentId, id));
+    expect(remaining.map((r) => r.id)).toEqual([keep.id]);
+    const [alienRow] = await db
+      .select()
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.id, alien.id));
+    expect(alienRow).toBeTruthy();
+  });
+});
+
 describe('agent list ordering', () => {
   it('returns agents alphabetically regardless of creation order', async () => {
     const [ws] = await db.insert(workspaces).values({ name: 'Sort WS' }).returning();

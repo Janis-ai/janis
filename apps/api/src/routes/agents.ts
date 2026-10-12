@@ -737,23 +737,58 @@ export function agentRoutes(db: Db) {
     });
   });
 
-  // Include/exclude — the over-budget escape that keeps the content.
+  // Include/exclude (the over-budget escape that keeps the content) and the
+  // per-source re-crawl toggle — refresh_hours null = manual only.
   app.patch(
     '/:id/knowledge/:fileId',
     agentAdmin,
-    zValidator('json', z.object({ enabled: z.boolean() })),
+    zValidator(
+      'json',
+      z.object({
+        enabled: z.boolean().optional(),
+        refresh_hours: z.number().int().min(1).max(24 * 30).nullable().optional(),
+      }),
+    ),
     async (c) => {
       const agent = await ownedAgent(c);
       if (!agent) return c.json({ error: 'not found' }, 404);
+      const { enabled, refresh_hours } = c.req.valid('json');
+      const set: Partial<typeof knowledgeFiles.$inferInsert> = {};
+      if (enabled !== undefined) set.enabled = enabled;
+      if (refresh_hours !== undefined) {
+        set.refreshHours = refresh_hours;
+        set.nextFetchAt = refresh_hours
+          ? new Date(Date.now() + refresh_hours * 3600_000)
+          : null;
+      }
+      if (Object.keys(set).length === 0) return c.json({ ok: true });
       const [row] = await db
         .update(knowledgeFiles)
-        .set({ enabled: c.req.valid('json').enabled })
+        .set(set)
         .where(
           and(eq(knowledgeFiles.id, c.req.param('fileId')), eq(knowledgeFiles.agentId, agent.id)),
         )
         .returning({ id: knowledgeFiles.id });
       if (!row) return c.json({ error: 'not found' }, 404);
       return c.json({ ok: true });
+    },
+  );
+
+  // Bulk delete — the "drop this whole crawl" path. Scoped to the agent;
+  // ids that don't match just don't count.
+  app.post(
+    '/:id/knowledge/bulk-delete',
+    agentAdmin,
+    zValidator('json', z.object({ ids: z.array(z.string().uuid()).min(1).max(500) })),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const { ids } = c.req.valid('json');
+      const rows = await db
+        .delete(knowledgeFiles)
+        .where(and(eq(knowledgeFiles.agentId, agent.id), inArray(knowledgeFiles.id, ids)))
+        .returning({ id: knowledgeFiles.id });
+      return c.json({ deleted: rows.length });
     },
   );
 

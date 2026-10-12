@@ -103,6 +103,7 @@ export function SourceList({
   const [dragging, setDragging] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importMsg, setImportMsg] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -236,6 +237,25 @@ export function SourceList({
     mutationFn: (fileId: string) =>
       api(`/api/agents/${agentId}/knowledge/${fileId}/refresh`, { method: 'POST' }),
     onSuccess: invalidate,
+  });
+  const setRefresh = useMutation({
+    mutationFn: ({ fileId, refresh_hours }: { fileId: string; refresh_hours: number | null }) =>
+      api(`/api/agents/${agentId}/knowledge/${fileId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ refresh_hours }),
+      }),
+    onSuccess: invalidate,
+  });
+  const removeBulk = useMutation({
+    mutationFn: (ids: string[]) =>
+      api<{ deleted: number }>(`/api/agents/${agentId}/knowledge/bulk-delete`, {
+        method: 'POST',
+        body: JSON.stringify({ ids }),
+      }),
+    onSuccess: () => {
+      setSelected(new Set());
+      invalidate();
+    },
   });
   const remove = useMutation({
     mutationFn: (fileId: string) =>
@@ -500,7 +520,37 @@ export function SourceList({
         </div>
       )}
 
-      {/* Files + websites */}
+      {/* Files + websites — bulk selection sits in this toolbar; the
+          per-row checkbox only marks a row for the bulk action. */}
+      {isAdmin && files.length > 0 && (
+        <div className="row" style={{ marginTop: 10, gap: 8, fontSize: 12 }}>
+          <input
+            type="checkbox"
+            aria-label="Select all sources"
+            ref={(el) => {
+              if (el)
+                el.indeterminate =
+                  selected.size > 0 && selected.size < files.length;
+            }}
+            checked={files.length > 0 && selected.size === files.length}
+            onChange={(e) =>
+              setSelected(e.target.checked ? new Set(files.map((f) => f.id)) : new Set())
+            }
+          />
+          <span className="muted grow">
+            {selected.size > 0 ? `${selected.size} selected` : 'Select all'}
+          </span>
+          {selected.size > 0 && (
+            <button
+              className="btn danger sm"
+              disabled={removeBulk.isPending}
+              onClick={() => removeBulk.mutate([...selected])}
+            >
+              {removeBulk.isPending ? 'Deleting…' : `Delete ${selected.size} selected`}
+            </button>
+          )}
+        </div>
+      )}
       {files.map((f) => (
         <div
           key={f.id}
@@ -508,6 +558,22 @@ export function SourceList({
           style={{ marginTop: 8, padding: 10, opacity: f.enabled ? 1 : 0.55 }}
         >
           <div className="row muted" style={{ fontSize: 13 }}>
+            {isAdmin && (
+              <input
+                type="checkbox"
+                checked={selected.has(f.id)}
+                aria-label={`Select ${f.name}`}
+                title="Select for bulk delete"
+                onChange={(e) =>
+                  setSelected((prev) => {
+                    const next = new Set(prev);
+                    if (e.target.checked) next.add(f.id);
+                    else next.delete(f.id);
+                    return next;
+                  })
+                }
+              />
+            )}
             {isAdmin && (
               <input
                 type="checkbox"
@@ -537,7 +603,6 @@ export function SourceList({
               {f.source_url && (
                 <span className="muted">
                   {' '}· fetched {f.last_fetched_at ? timeAgo(f.last_fetched_at) : 'never'}
-                  {f.refresh_hours ? ` · re-checks every ${f.refresh_hours}h` : ''}
                 </span>
               )}
               {f.status === 'failed' && <span className="error"> {f.error}</span>}
@@ -564,6 +629,35 @@ export function SourceList({
               </button>
             )}
           </div>
+          {/* Re-crawl cadence lives on its own row — the checkbox IS the
+              toggle (null = manual only), distinct from the row's
+              select-for-bulk checkbox above. */}
+          {f.source_url && (
+            <div className="row" style={{ marginTop: 6, fontSize: 12 }}>
+              {isAdmin ? (
+                <label className="row muted" style={{ gap: 6, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={f.refresh_hours != null}
+                    disabled={setRefresh.isPending}
+                    aria-label={`Auto re-check ${f.name}`}
+                    onChange={(e) =>
+                      setRefresh.mutate({
+                        fileId: f.id,
+                        refresh_hours: e.target.checked ? 24 : null,
+                      })
+                    }
+                  />
+                  Re-check every {f.refresh_hours ?? 24}h
+                  {!f.refresh_hours && <span> · manual only</span>}
+                </label>
+              ) : (
+                <span className="muted">
+                  {f.refresh_hours ? `Re-checks every ${f.refresh_hours}h` : 'Manual refresh only'}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       ))}
 
