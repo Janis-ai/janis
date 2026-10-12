@@ -236,10 +236,14 @@ export default function Settings() {
         method: 'PATCH',
         body: JSON.stringify({ notify }),
       }),
-    onSuccess: (d) =>
+    onSuccess: (d) => {
       qc.setQueryData<{ user: WorkspaceUser; workspace: unknown }>(['me'], (old) =>
         old ? { ...old, user: d.user } : old,
-      ),
+      );
+      // The editor renders notifyMember from ['users'] — a self-edit must
+      // refresh it too or the selects snap back to the stale baseline.
+      void qc.invalidateQueries({ queryKey: ['users'] });
+    },
   });
   // Admin writes another member's workspace notification baseline via
   // PATCH /api/users/:id (notify is account-level — crosses workspaces).
