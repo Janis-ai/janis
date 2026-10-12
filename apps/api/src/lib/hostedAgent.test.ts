@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, promisesLookup, rankDocs, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, promisesLookup, rankDocs, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -716,6 +716,50 @@ describe('rankDocs', () => {
     const r = rankDocs(docs, 'return policy please');
     // Returns first, the two unmatched docs keep their original order after.
     expect(r.map((d) => d.name)).toEqual(['Returns', 'Shipping policy', 'Billing FAQ']);
+  });
+
+  it('length-normalizes so a giant index page cannot outrank a focused doc on bulk', () => {
+    const fat = {
+      name: 'Terms and conditions',
+      text: `one bedroom mention. ${'legal boilerplate '.repeat(3000)}`,
+    };
+    const focused = {
+      name: '44 Moberly Ave',
+      text: 'one bedroom mention. detached, 2 storey, great yard.',
+    };
+    const r = rankDocs([fat, focused], 'bedroom');
+    expect(r[0].name).toBe('44 Moberly Ave');
+  });
+});
+
+describe('cardsCoverQuickReplies', () => {
+  const cards = (withSelect: boolean) => [
+    {
+      type: 'cards' as const,
+      items: [
+        {
+          title: 'T',
+          ...(withSelect ? { select_label: 'Tell me more' } : {}),
+        },
+      ],
+    },
+  ];
+
+  it('suppresses chips on webchat when card items carry select_label', () => {
+    expect(cardsCoverQuickReplies('webchat', cards(true))).toBe(true);
+  });
+
+  it('keeps chips when cards have no select actions', () => {
+    expect(cardsCoverQuickReplies('webchat', cards(false))).toBe(false);
+  });
+
+  it('keeps chips on channels where cards do not render', () => {
+    expect(cardsCoverQuickReplies('sms', cards(true))).toBe(false);
+    expect(cardsCoverQuickReplies('email', cards(true))).toBe(false);
+  });
+
+  it('keeps chips when there are no widgets at all', () => {
+    expect(cardsCoverQuickReplies('webchat', [])).toBe(false);
   });
 });
 

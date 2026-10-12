@@ -740,6 +740,10 @@ export const knowledgeFiles = pgTable(
     // URL sources — the row's text is re-crawled from source_url on a
     // refresh_hours cadence (null = manual only, like an uploaded file).
     sourceUrl: text('source_url'),
+    // Best image the crawled page advertises (og:/twitter:image, else first
+    // content <img>) — htmlToText drops tags, so without this the model has
+    // no real image URLs to put in cards and invents them.
+    imageUrl: text('image_url'),
     // Suggested-knowledge topic this source was added for (builder.topic id)
     // — untagged for sources added straight from the tabs.
     topic: text('topic'),

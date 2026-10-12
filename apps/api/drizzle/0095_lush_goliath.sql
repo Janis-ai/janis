@@ -1,0 +1,1 @@
+ALTER TABLE "knowledge_files" ADD COLUMN "image_url" text;

@@ -1121,7 +1121,7 @@ export function agentRoutes(db: Db) {
       .where(eq(knowledgeFiles.agentId, agent.id));
     if (count >= MAX_KNOWLEDGE_SOURCES)
       return c.json({ error: `knowledge file limit reached (${MAX_KNOWLEDGE_SOURCES})` }, 409);
-    let fetched: { text: string; sizeBytes: number };
+    let fetched: { text: string; sizeBytes: number; imageUrl?: string };
     try {
       fetched = await fetchUrlText(url);
     } catch (err) {
@@ -1138,6 +1138,7 @@ export function agentRoutes(db: Db) {
         sizeBytes: fetched.sizeBytes,
         text: fetched.text,
         sourceUrl: url,
+        imageUrl: fetched.imageUrl ?? null,
         topic: topic ?? null,
         refreshHours: refresh_hours,
         lastFetchedAt: now,

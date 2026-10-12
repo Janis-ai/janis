@@ -25,8 +25,40 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
+/** The page's best image — og:/twitter:image first (what the site itself
+ *  promotes), else the first content-looking <img> (logo/icon/sprite srces
+ *  skipped). Resolved against the page URL so protocol-relative and
+ *  root-relative srces survive. Knowledge text drops every tag, so this is
+ *  the only image URL the agent will ever see for a crawled page. */
+function pageImageUrl(html: string, pageUrl: string): string | undefined {
+  const metas = html.match(/<meta[^>]+>/gi) ?? [];
+  let src: string | undefined;
+  for (const tag of metas) {
+    if (!/(?:property|name)=["'](?:og:image|twitter:image)/i.test(tag)) continue;
+    src = /\bcontent=["']([^"']+)["']/i.exec(tag)?.[1];
+    if (src) break;
+  }
+  if (!src) {
+    for (const m of html.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)) {
+      if (/logo|icon|sprite|blank|pixel|spacer|avatar|badge|\.svg(?:$|\?)/i.test(m[1])) continue;
+      src = m[1];
+      break;
+    }
+  }
+  if (!src || src.startsWith('data:')) return undefined;
+  try {
+    const u = new URL(src, pageUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined;
+    return u.href.slice(0, 500);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Fetch a URL and return its knowledge text. Throws on network/HTTP errors. */
-export async function fetchUrlText(url: string): Promise<{ text: string; sizeBytes: number }> {
+export async function fetchUrlText(
+  url: string,
+): Promise<{ text: string; sizeBytes: number; imageUrl?: string }> {
   const parsed = new URL(url);
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
     throw new Error('only http(s) URLs are supported');
@@ -42,14 +74,19 @@ export async function fetchUrlText(url: string): Promise<{ text: string; sizeByt
   if (!res.ok) throw new Error(`fetch failed: HTTP ${res.status}`);
   const raw = await res.text();
   const type = (res.headers.get('content-type') ?? '').toLowerCase();
-  const text = (type.includes('html') ? htmlToText(raw) : raw)
+  const isHtml = type.includes('html');
+  const text = (isHtml ? htmlToText(raw) : raw)
     // strip nulls/control chars that break DB storage and prompt quality
     // eslint-disable-next-line no-control-regex
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
     .trim()
     .slice(0, MAX_CHARS);
   if (!text) throw new Error('page had no readable text');
-  return { text, sizeBytes: Buffer.byteLength(raw) };
+  return {
+    text,
+    sizeBytes: Buffer.byteLength(raw),
+    imageUrl: isHtml ? pageImageUrl(raw, res.url || url) : undefined,
+  };
 }
 
 /**
@@ -66,12 +103,13 @@ export async function refreshKnowledgeSource(
   const now = new Date();
   const intervalMs = (file.refreshHours ?? 24) * 3600_000;
   try {
-    const { text, sizeBytes } = await fetchUrlText(file.sourceUrl!);
+    const { text, sizeBytes, imageUrl } = await fetchUrlText(file.sourceUrl!);
     await db
       .update(knowledgeFiles)
       .set({
         text,
         sizeBytes,
+        imageUrl: imageUrl ?? null,
         status: 'ready',
         error: null,
         lastFetchedAt: now,

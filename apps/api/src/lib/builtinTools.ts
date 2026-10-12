@@ -3042,6 +3042,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       let text: string;
       let sizeBytes: number;
       let sourceUrl: string | null = null;
+      let imageUrl: string | null = null;
       let refreshHours: number | null = null;
       let lastFetchedAt: Date | null = null;
       let nextFetchAt: Date | null = null;
@@ -3051,6 +3052,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           const fetched = await fetchUrlText(sourceUrl);
           text = fetched.text;
           sizeBytes = fetched.sizeBytes;
+          imageUrl = fetched.imageUrl ?? null;
         } catch (err) {
           return `error: crawl failed — ${err instanceof Error ? err.message : 'fetch failed'}`;
         }
@@ -3076,6 +3078,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           sizeBytes,
           text,
           sourceUrl,
+          imageUrl,
           refreshHours,
           lastFetchedAt,
           nextFetchAt,
