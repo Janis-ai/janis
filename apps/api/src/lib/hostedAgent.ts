@@ -1661,6 +1661,10 @@ export async function complete(
   const toolUrls: string[] = [];
   const contextIds = new Set<string>();
   let actionCards = 0;
+  // Calls (name+args) that already failed this run — an identical retry can
+  // only fail again (validation errors are deterministic), so repeats get
+  // short-circuited instead of burning the remaining tool rounds.
+  const failedCalls = new Set<string>();
 
   // Truncated replies (finish_reason 'length') resume as a continuation
   // turn instead of shipping a reply cut mid-word or mid-link. The
@@ -1843,6 +1847,11 @@ export async function complete(
       let args: Record<string, unknown> = {};
       try {
         args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
+      } catch {
+        // leave args {} — the tool call below still runs and reports its own error
+      }
+      const callKey = `${call.function.name}::${call.function.arguments}`;
+      try {
         // Customer-record tools hard-bind to the verified identity — a typed
         // email is a claim, never proof. Blocks before gating too, so an
         // unverifiable call can't even reach the approval queue.
@@ -1850,7 +1859,11 @@ export async function complete(
           tool?.identity && !ctx?.testRun && !ctx?.identity?.operator
             ? identityBlockReason(args, ctx?.identity?.emails ?? new Set(), producedIds)
             : null;
-        if (ctx?.testRun) {
+        if (!ctx?.testRun && failedCalls.has(callKey)) {
+          outcome = 'failed';
+          result =
+            'error: this exact call already failed this turn — do not retry it; reply to the visitor in plain text instead';
+        } else if (ctx?.testRun) {
           outcome = gated ? 'proposed' : 'simulated';
           result = gated
             ? 'approval_required: this action needs a human teammate to approve it before it runs — it is now queued for review; tell the customer it is pending approval rather than calling the tool again'
@@ -1883,6 +1896,7 @@ export async function complete(
         outcome = 'failed';
         result = `error: ${err instanceof Error ? err.message : 'tool failed'}`;
       }
+      if (outcome === 'failed') failedCalls.add(callKey);
       // Ids in a real result become the anchor for later identity-scoped
       // calls this run (find_customer → its cus_… feeds charges/subs).
       // Fuzzy-search tools pad results with off-query filler — drop rows
@@ -1910,6 +1924,49 @@ export async function complete(
       }
       msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
     }
+  }
+  // The model spent every round on tool calls and never wrote a reply — one
+  // last pass with no tools offered forces a plain-text answer instead of an
+  // empty escalation. The appended user turn also keeps the transcript's
+  // final role 'user' for providers that require it.
+  try {
+    const res = await fetch(`${llm.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${llm.apiKey}`,
+        ...(llm.headers ?? {}),
+      },
+      body: JSON.stringify({
+        model: llm.model,
+        max_tokens: llm.maxTokens ?? (ctx?.identity?.operator ? 1200 : 400),
+        messages: [
+          ...msgs,
+          {
+            role: 'user',
+            content:
+              '[the tool results above are final — reply to the user now in plain text; do not call any more tools]',
+          },
+        ],
+        ...(llm.temperature != null ? { temperature: llm.temperature } : {}),
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.ok) {
+      const json = (await res.json()) as {
+        choices?: { message?: { content?: string | null } }[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      promptTokens += json.usage?.prompt_tokens ?? 0;
+      completionTokens += json.usage?.completion_tokens ?? 0;
+      const text = (json.choices?.[0]?.message?.content ?? '').trim() || null;
+      if (text) {
+        console.warn(`[hosted] tool-storm salvage — forced text after ${toolCalls.length} calls`);
+        return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, contextIds, actionCards };
+      }
+    }
+  } catch {
+    // fall through — the null-text path escalates as before
   }
   return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, contextIds, actionCards };
 }

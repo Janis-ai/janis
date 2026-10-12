@@ -2290,7 +2290,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         (emailAlerts !== undefined ? 1 : 0);
       if (fieldCount > 5) {
         return JSON.stringify({
-          error: `${fieldCount} settings in one card — propose only the fields the visitor asked to change; re-try with the requested subset`,
+          error: `${fieldCount} settings in one card — send ONLY the field(s) the visitor asked to change (usually one, e.g. just agent + greeting for a greeting change); do not re-send the full form`,
         });
       }
       if (fieldCount === 0) {

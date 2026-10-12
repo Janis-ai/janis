@@ -923,6 +923,73 @@ describe('testRun tool stubbing', () => {
     expect(r.toolCalls.every((t) => t.outcome === 'proposed')).toBe(true);
   });
 
+  it('forces a plain-text reply when the model burns all rounds on tool calls', async () => {
+    // Prod incident (conv ac153999): update_agent kept rejecting an
+    // overstuffed call, the model re-issued it all 4 rounds, text came back
+    // null → "empty reply" handoff. The salvage pass must answer anyway.
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: wsId, name: 'T-storm', apiKeyHash: 'h-storm', apiKeyPreview: 'p', hosted: true })
+      .returning();
+    let n = 0;
+    fetchMock.mockImplementation(() => {
+      n++;
+      return Promise.resolve(
+        n <= 4
+          ? reply({ tool_calls: [toolCall(`c${n}`)] })
+          : reply({ content: 'I could not apply that change — a teammate is taking a look.' }),
+      );
+    });
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'refund me' }], [gatedTool], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+      agent,
+      testRun: true,
+    });
+    expect(r.text).toBe('I could not apply that change — a teammate is taking a look.');
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    // the salvage request offers no tools — the model cannot loop again
+    const salvage = JSON.parse(fetchMock.mock.calls[4][1].body as string);
+    expect(salvage.tools).toBeUndefined();
+    expect(salvage.messages[salvage.messages.length - 1].role).toBe('user');
+  });
+
+  it('short-circuits an identical call that already failed this turn', async () => {
+    // Same incident: the model re-issued the exact same rejected update_agent
+    // every round. An identical retry can only fail again — stop it early.
+    let runs = 0;
+    const failBuiltin = {
+      name: 'update_agent',
+      description: 'propose config changes',
+      params: { agent: 'name' },
+      available: () => true,
+      run: async () => {
+        runs++;
+        return '{"error":"10 settings in one card — send only the requested fields"}';
+      },
+    };
+    const dupe = (id: string) => ({
+      id,
+      function: { name: 'update_agent', arguments: '{"agent":"Mr. Tony","greeting":"hi"}' },
+    });
+    fetchMock
+      .mockResolvedValueOnce(reply({ tool_calls: [dupe('c1'), dupe('c2')] }))
+      .mockResolvedValueOnce(reply({ tool_calls: [dupe('c3')] }))
+      .mockResolvedValueOnce(reply({ content: "That change didn't go through." }));
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'change the greeting' }], [], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+    }, [failBuiltin]);
+    expect(r.text).toBe("That change didn't go through.");
+    expect(runs).toBe(1); // the tool executed once — repeats were short-circuited
+    expect(r.toolCalls).toHaveLength(3);
+    expect(r.toolCalls[1].outcome).toBe('failed');
+    expect(r.toolCalls[1].error).toContain('already failed this turn');
+    expect(r.toolCalls[2].error).toContain('already failed this turn');
+  });
+
   it('counts action_card results so a parked-but-silent run can narrate the card', async () => {
     // Prod incident (conv ac153999): the concierge parked nothing and went
     // silent — but when it DOES park a card then produce no text, the caller
