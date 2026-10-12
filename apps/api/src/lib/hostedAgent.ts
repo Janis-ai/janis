@@ -624,7 +624,7 @@ export function systemPrompt(
               '\n{"type":"status","title","steps":[{"label","state":"done|current|todo","note"}]} — order/application tracker.' +
               '\n{"type":"receipt","title","rows":[{"label","value"}],"total":{"label","value"}} — order summary.'
             : '') +
-          '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.' +
+          '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. For a card about a specific page or listing, use only the "Image:" URL attached to that page\'s knowledge — never reuse another document\'s image, and omit "image" if the page has none. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.' +
           '\nWhen the customer asks to see products, plans or options that carry data (price, image, description), prefer a "cards" or "options" widget over a BUTTON: list — and when a tool call returns list data (search results, products, availability), render it as a widget rather than retelling it as text. Always pair a widget with a one-line lead-in ("Here are our plans:") — never emit a WIDGET: line alone.' +
           metaOnly +
           (opts.savedWidgets?.length
