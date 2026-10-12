@@ -615,6 +615,93 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     ],
   },
   {
+    id: 'calendly',
+    name: 'Calendly',
+    category: 'Scheduling',
+    blurb:
+      'Share booking links, check real slot availability, and look up a customer’s scheduled events — cancellations wait for teammate approval.',
+    docs_url: 'https://developer.calendly.com/api-docs',
+    fields: [
+      {
+        key: 'api_key',
+        label: 'Personal access token',
+        placeholder: 'e.g. eyJraWQiOi…',
+        help: 'Calendly → Integrations & apps → API and webhooks → Personal access tokens → Generate new token → copy it — it is only shown once.',
+      },
+    ],
+    secrets: (f) => ({ CALENDLY_TOKEN: f.api_key.trim() }),
+    tools: [
+      {
+        name: 'calendly_me',
+        label: 'Get account',
+        description:
+          'Get the connected Calendly account — returns the user_uri (resource.uri) the other Calendly tools need. Call this first.',
+        method: 'GET',
+        url: 'https://api.calendly.com/users/me',
+        headers: { authorization: 'Bearer {{secrets.CALENDLY_TOKEN}}' },
+      },
+      {
+        name: 'calendly_event_types',
+        label: 'Event types',
+        description:
+          'List the account’s active event types with their booking links — renders as tappable cards the customer books from. Needs user_uri from calendly_me.',
+        method: 'GET',
+        url: 'https://api.calendly.com/event_types?user={user_uri}&active=true&count=20',
+        headers: { authorization: 'Bearer {{secrets.CALENDLY_TOKEN}}' },
+        params: { user_uri: 'the resource.uri returned by calendly_me' },
+        widget: {
+          type: 'cards',
+          items: 'collection',
+          map: { title: 'name', subtitle: 'description_plain', link: 'scheduling_url' },
+          link_label: 'Book a time',
+        },
+      },
+      {
+        name: 'calendly_available_times',
+        label: 'Check availability',
+        description:
+          'List open booking slots for one event type inside a window (7 days max). Needs the event_type uri from calendly_event_types.',
+        method: 'GET',
+        url: 'https://api.calendly.com/event_type_available_times?event_type={event_type_uri}&start_time={start_time}&end_time={end_time}',
+        headers: { authorization: 'Bearer {{secrets.CALENDLY_TOKEN}}' },
+        params: {
+          event_type_uri:
+            'event type uri from calendly_event_types, e.g. https://api.calendly.com/event_types/AAAA…',
+          start_time: 'window start — ISO 8601 UTC, e.g. 2026-10-13T00:00:00Z',
+          end_time: 'window end — ISO 8601 UTC, at most 7 days after start_time',
+        },
+      },
+      {
+        name: 'calendly_scheduled_events',
+        label: 'Customer bookings',
+        description:
+          "List the verified customer's upcoming scheduled Calendly events — confirms whether they already booked. Needs user_uri from calendly_me.",
+        method: 'GET',
+        url: 'https://api.calendly.com/scheduled_events?user={user_uri}&invitee_email={email}&status=active&sort=start_time:asc&count=10',
+        headers: { authorization: 'Bearer {{secrets.CALENDLY_TOKEN}}' },
+        params: {
+          user_uri: 'the resource.uri returned by calendly_me',
+          email: "the verified customer's own email address",
+        },
+        identity: true,
+      },
+      {
+        name: 'calendly_cancel_event',
+        label: 'Cancel event',
+        description:
+          'Cancel a scheduled Calendly event by uuid — the last segment of the event uri from calendly_scheduled_events. Needs a teammate to approve.',
+        method: 'POST',
+        approval: true,
+        url: 'https://api.calendly.com/scheduled_events/{event_uuid}/cancellation',
+        headers: { authorization: 'Bearer {{secrets.CALENDLY_TOKEN}}' },
+        params: {
+          event_uuid: 'event uuid — the last path segment of the event uri from calendly_scheduled_events',
+          reason: 'cancellation reason shown to the invitee',
+        },
+      },
+    ],
+  },
+  {
     id: 'itunes',
     name: 'iTunes Search',
     category: 'Media lookup',

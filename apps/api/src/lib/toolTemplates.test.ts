@@ -43,3 +43,39 @@ describe('stripe tool template', () => {
     expect(tool('stripe_cancel_subscription').approval).toBe(true);
   });
 });
+
+describe('calendly tool template', () => {
+  const calendly = TOOL_TEMPLATES.find((t) => t.id === 'calendly')!;
+  const tool = (name: string) => calendly.tools.find((t) => t.name === name)!;
+  it('exists with a bearer-token secret', () => {
+    expect(calendly).toBeTruthy();
+    expect(calendly.category).toBe('Scheduling');
+    expect(calendly.secrets({ api_key: ' tok ' })).toEqual({ CALENDLY_TOKEN: 'tok' });
+  });
+  it('chains user_uri through reads and keeps them ungated', () => {
+    for (const name of [
+      'calendly_me',
+      'calendly_event_types',
+      'calendly_available_times',
+      'calendly_scheduled_events',
+    ]) {
+      const t = tool(name);
+      expect(t.method).toBe('GET');
+      expect(t.approval).toBeUndefined();
+      expect(t.headers?.authorization).toBe('Bearer {{secrets.CALENDLY_TOKEN}}');
+    }
+    expect(tool('calendly_event_types').url).toContain('user={user_uri}');
+    expect(tool('calendly_event_types').widget?.items).toBe('collection');
+  });
+  it('identity-binds the customer booking lookup', () => {
+    const t = tool('calendly_scheduled_events');
+    expect(t.identity).toBe(true);
+    expect(t.url).toContain('invitee_email={email}');
+  });
+  it('gates cancellation behind approval', () => {
+    const t = tool('calendly_cancel_event');
+    expect(t.approval).toBe(true);
+    expect(t.method).toBe('POST');
+    expect(t.url).toContain('/scheduled_events/{event_uuid}/cancellation');
+  });
+});
