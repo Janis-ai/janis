@@ -588,7 +588,22 @@ export function SourceList({
                   opportunity the text overflows its box and paints over the
                   row's buttons. */}
               <span className="grow" style={{ overflowWrap: 'anywhere' }}>
-                {f.source_url ? <Globe size={13} /> : <FileText size={13} />} {f.name}
+                {f.source_url ? <Globe size={13} /> : <FileText size={13} />}{' '}
+                {/* URL sources name themselves — the visible text IS the
+                    link; open the pasted page (not the normalized fetch
+                    URL, which can be an export endpoint). */}
+                {f.source_url ? (
+                  <a
+                    className="src-link"
+                    href={/^https?:\/\//i.test(f.name) ? f.name : f.source_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {f.name}
+                  </a>
+                ) : (
+                  f.name
+                )}
                 {f.topic ? <span className="badge" style={{ marginLeft: 6 }}>{f.topic}</span> : null}
                 <span className="muted">
                   {' '}— {f.chars.toLocaleString()} chars (~{tok(f.chars)} tok)

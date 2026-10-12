@@ -1051,6 +1051,8 @@ button.link:hover { text-decoration: underline; }
 button.link.small { font-size: 12px; }
 button.link.muted { color: var(--muted); }
 button.link:disabled { opacity: .5; cursor: not-allowed; }
+.src-link { color: inherit; }
+.src-link:hover { text-decoration: underline; }
 .action-card {
   margin-top: 6px; padding: 10px 12px; border: 1px solid var(--border);
   border-radius: 10px; background: var(--panel-2); max-width: 420px;
