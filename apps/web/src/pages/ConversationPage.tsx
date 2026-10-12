@@ -1219,10 +1219,12 @@ export default function ConversationPage() {
                   </div>
                 </div>
               )}
-              {/* Suggested replies the customer was shown — inert chips so the
-                  operator sees what was offered without being able to tap it. */}
+              {/* Suggested replies the customer was shown — echoed as a muted
+                  italic "offered:" line, not pills: pill-shaped things in the
+                  transcript are console actions, these are echoed content. */}
               {!!(m.payload.quick_replies as (string | { type: 'email' | 'phone' })[] | undefined)?.length && (
                 <div className="transcript-qrs">
+                  <span className="transcript-qrs-label">offered:</span>
                   {(m.payload.quick_replies as (string | { type: 'email' | 'phone' })[]).map((q, i) => (
                     <span key={i} className="transcript-qr">
                       {typeof q === 'string' ? q : q.type === 'email' ? 'share email' : 'share phone'}

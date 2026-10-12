@@ -904,13 +904,12 @@ button, input, select, textarea { font: inherit; }
 .md-list li { margin: 2px 0; }
 .md-para { display: block; }
 .md-gap { margin-top: 8px; }
-/* Suggested replies mirrored in the transcript — dashed/muted so they read
-   as "shown to the customer", never tappable here. */
-.transcript-qrs { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px; margin-top: 8px; }
-.transcript-qr {
-  display: inline-block; border: 1px dashed var(--border); border-radius: 999px;
-  padding: 3px 10px; font-size: 12px; color: var(--muted); white-space: nowrap;
-}
+/* Suggested replies mirrored in the transcript — a muted italic "offered:"
+   line of echoed choices. No pill/border: pill-shaped things in a transcript
+   are console actions, and these are content the customer saw. */
+.transcript-qrs { margin-top: 6px; font-size: 12px; color: var(--muted); font-style: italic; }
+.transcript-qrs-label { margin-right: 4px; }
+.transcript-qr + .transcript-qr::before { content: ' · '; }
 .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
 .msg .who .who-avatar { width: 14px; height: 14px; border-radius: 50%; object-fit: cover; margin-right: 4px; vertical-align: -2px; }
 .msg .who .time { margin-left: 6px; }
