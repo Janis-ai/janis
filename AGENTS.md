@@ -165,7 +165,9 @@ drizzle-kit/workbox-build, nothing to drop directly).
     by the per-channel Bubble editor (channel page: live preview,
     Appearance/Developer sections, custom domain).
 21. Webhook recipes in Docs — ManyChat/GHL HTTP-Request → POST /v1/events
-    handoff recipe.
+    handoff recipe; also external-change → POST
+    /:id/knowledge/:fileId/refresh (repo commit / Zapier / doc-change
+    trigger for fresher-than-cadence knowledge).
 22. DONE — `analytics_events` + POST /api/track + lib/analytics.ts
     track() wired into landing/console events.
 23. DONE — in-process state audit closed (convLock advisory lock, voice
@@ -193,6 +195,15 @@ drizzle-kit/workbox-build, nothing to drop directly).
     claims widget_domain, CNAME→app.janis.ai, scripts/map-domain.sh.)
 32. Autonomous agent-led campaigns — rails exist (send policy, drip
     conditions, conversion attribution); last.
+33. Knowledge-source tail — authenticated sources (per-source request
+    headers JSONB for Notion/GitHub tokens — stored redacted like channel
+    credentials, never echoed to the console; full Drive/Notion OAuth
+    connectors are the bigger lift); conditional re-crawl (ETag/
+    Last-Modified or content hash → skip no-change writes, gives a
+    "changed at" signal); stale-source alert event on knowledge 'degraded'
+    rows (alert-rules system already exists — 'degraded' status +
+    last-good retention shipped 2026-10, so the signal to fire on is
+    already there).
 
 *F. Writing/marketing (non-code)*
 33. Reactivation email sequence — 3 emails (approvals-led), subjects/

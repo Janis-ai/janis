@@ -541,6 +541,7 @@ export function SourceList({
                 </span>
               )}
               {f.status === 'failed' && <span className="error"> {f.error}</span>}
+              {f.status === 'degraded' && <span className="error"> stale — {f.error}</span>}
             </span>
             {f.source_url && isAdmin && (
               <button

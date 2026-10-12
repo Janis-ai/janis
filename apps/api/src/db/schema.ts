@@ -735,7 +735,9 @@ export const knowledgeFiles = pgTable(
     mimeType: text('mime_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),
     text: text('text').notNull().default(''),
-    status: text('status', { enum: ['ready', 'failed'] }).notNull().default('ready'),
+    // 'degraded' = last-good text kept serving after a failed/rotted
+    // re-crawl (still injected like 'ready'); 'failed' = never had content.
+    status: text('status', { enum: ['ready', 'failed', 'degraded'] }).notNull().default('ready'),
     error: text('error'),
     // URL sources — the row's text is re-crawled from source_url on a
     // refresh_hours cadence (null = manual only, like an uploaded file).

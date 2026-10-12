@@ -42,7 +42,7 @@ import {
 import { normWidgetRef, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 import { toolsFor } from './toolExec.js';
 import { backfillSentimentAlerts } from './intent.js';
-import { fetchUrlText } from './urlSource.js';
+import { fetchUrlText, normalizeSourceUrl } from './urlSource.js';
 import { importHelpCentre } from './helpCentreImport.js';
 import { MAX_KNOWLEDGE_SOURCES } from './helpCentreImport.js';
 import type { BuilderDraft } from './agentBuilder.js';
@@ -3047,7 +3047,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       let lastFetchedAt: Date | null = null;
       let nextFetchAt: Date | null = null;
       if (kind === 'url') {
-        sourceUrl = String(args.url ?? '');
+        // Same normalization the console applies — /edit links, blob pages.
+        const pastedUrl = String(args.url ?? '');
+        sourceUrl = normalizeSourceUrl(pastedUrl);
         try {
           const fetched = await fetchUrlText(sourceUrl);
           text = fetched.text;
@@ -3056,7 +3058,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         } catch (err) {
           return `error: crawl failed — ${err instanceof Error ? err.message : 'fetch failed'}`;
         }
-        name = sourceUrl;
+        name = pastedUrl;
         refreshHours = Number(args.refresh_hours ?? 24) || 24;
         lastFetchedAt = new Date();
         nextFetchAt = new Date(lastFetchedAt.getTime() + refreshHours * 3600_000);

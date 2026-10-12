@@ -19,7 +19,7 @@ import { bus } from '../lib/bus.js';
 import { env } from '../env.js';
 import { deliverWebhook, replayDelivery } from '../lib/webhooks.js';
 import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
-import { fetchUrlText, refreshKnowledgeSource } from '../lib/urlSource.js';
+import { fetchUrlText, normalizeSourceUrl, refreshKnowledgeSource } from '../lib/urlSource.js';
 import { importHelpCentre, MAX_KNOWLEDGE_SOURCES } from '../lib/helpCentreImport.js';
 import {
   detectKnowledgeGaps,
@@ -708,7 +708,7 @@ export function agentRoutes(db: Db) {
     // text reaches the prompt.
     const docsChars =
       rows
-        .filter((r) => r.enabled && r.status === 'ready')
+        .filter((r) => r.enabled && (r.status === 'ready' || r.status === 'degraded'))
         .reduce((n, r) => n + r.text.length, 0) + (art?.total ?? 0);
     return c.json({
       budget: {
@@ -791,7 +791,7 @@ export function agentRoutes(db: Db) {
           and(
             eq(knowledgeFiles.agentId, agent.id),
             eq(knowledgeFiles.enabled, true),
-            eq(knowledgeFiles.status, 'ready'),
+            inArray(knowledgeFiles.status, ['ready', 'degraded']),
           ),
         ),
       db
@@ -1115,6 +1115,11 @@ export function agentRoutes(db: Db) {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const { url, refresh_hours, topic } = c.req.valid('json');
+    // Rewrite shapes that can't serve content directly — a Google Doc /edit
+    // link yields the editor shell, github blob pages yield site chrome.
+    // The pasted URL stays as the display name; the normalized form is what
+    // gets stored and re-crawled.
+    const sourceUrl = normalizeSourceUrl(url);
     const [{ count }] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(knowledgeFiles)
@@ -1123,7 +1128,7 @@ export function agentRoutes(db: Db) {
       return c.json({ error: `knowledge file limit reached (${MAX_KNOWLEDGE_SOURCES})` }, 409);
     let fetched: { text: string; sizeBytes: number; imageUrl?: string };
     try {
-      fetched = await fetchUrlText(url);
+      fetched = await fetchUrlText(sourceUrl);
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : 'fetch failed' }, 422);
     }
@@ -1137,7 +1142,7 @@ export function agentRoutes(db: Db) {
         mimeType: 'text/url-source',
         sizeBytes: fetched.sizeBytes,
         text: fetched.text,
-        sourceUrl: url,
+        sourceUrl,
         imageUrl: fetched.imageUrl ?? null,
         topic: topic ?? null,
         refreshHours: refresh_hours,

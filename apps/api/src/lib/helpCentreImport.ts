@@ -1,7 +1,7 @@
 import { and, eq, isNotNull } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { knowledgeFiles } from '../db/schema.js';
-import { htmlToText } from './urlSource.js';
+import { fetchPublic, htmlToText } from './urlSource.js';
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_ARTICLE_CHARS = 80_000;
@@ -32,14 +32,16 @@ export interface HelpCentreImport {
 }
 
 async function get(url: string, accept: string): Promise<Response> {
-  return fetch(url, {
-    redirect: 'follow',
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    headers: {
-      'user-agent': 'JanisKB/1.0 (+knowledge import)',
-      accept,
-    },
-  });
+  // SSRF-guarded hop-by-hop fetch — import roots are operator-pasted.
+  return (
+    await fetchPublic(url, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: {
+        'user-agent': 'JanisKB/1.0 (+knowledge import)',
+        accept,
+      },
+    })
+  ).res;
 }
 
 interface ZdArticle {

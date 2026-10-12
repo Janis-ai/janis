@@ -30,6 +30,7 @@ import { catalogModel, vendorForBaseUrl, OR_VENDOR_SLUG, effortFor } from '@jani
 import { runLegacyReply } from './legacyAgent.js';
 import { env } from '../env.js';
 import { acquireConvLock, newestInboundIsPending } from './convLock.js';
+import { publiclyFetchable } from './urlSource.js';
 
 // The injection budget — docs and notes are injected verbatim on every
 // reply, so this is the real cap the Teach it meter measures against.
@@ -182,7 +183,7 @@ export async function loadKnowledgeDocs(
       .where(
         and(
           eq(knowledgeFiles.agentId, agentId),
-          eq(knowledgeFiles.status, 'ready'),
+          inArray(knowledgeFiles.status, ['ready', 'degraded']),
           eq(knowledgeFiles.enabled, true),
         ),
       )
@@ -710,32 +711,8 @@ export function blessedUrlsFor(agent: AgentRow, prompt: string, history: ChatMsg
 const LINK_CHECK_TIMEOUT_MS = 4_000;
 
 /** Only public http(s) hosts may be fetch-checked — emitted URLs are model
- * output, i.e. untrusted input for a server-side request (SSRF). */
-function publiclyFetchable(raw: string): boolean {
-  try {
-    const u = new URL(raw);
-    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
-    const h = u.hostname;
-    if (h.includes(':')) return false; // ipv6 literal — block outright
-    if (['localhost', '127.0.0.1', '0.0.0.0'].includes(h)) return false;
-    if (h.endsWith('.local') || h.endsWith('.internal') || h.endsWith('.localhost')) return false;
-    const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-    if (m) {
-      const a = +m[1];
-      const b = +m[2];
-      if (
-        a === 0 || a === 10 || a === 127 || a >= 224 ||
-        (a === 100 && b >= 64 && b <= 127) ||
-        (a === 169 && b === 254) ||
-        (a === 172 && b >= 16 && b <= 31) ||
-        (a === 192 && b === 168)
-      ) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
+ * output, i.e. untrusted input for a server-side request (SSRF). The shared
+ * literal guard lives in urlSource (the crawl path adds DNS checks). */
 
 type LinkVerdict = 'ok' | 'dead' | 'unknown';
 
