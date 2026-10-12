@@ -2,6 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
+import { storeCopilotThread } from '../lib/copilotThread';
 import {
   chipsFromFresh,
   reconcilePoll,
@@ -932,6 +933,9 @@ export function AskJanis({
           ...(thread ? { thread } : {}),
         }),
       });
+      // A New-chat thread persists only now — storing the key before it has
+      // a message means a reload restores a forever-empty rail.
+      if (thread) storeCopilotThread(thread);
       showTyping();
       await poll();
       // The awaited poll can race the store — verify once more, then mark failed

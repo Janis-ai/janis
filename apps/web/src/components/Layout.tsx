@@ -317,14 +317,38 @@ export default function Layout() {
   // shared thread; a t<rand> key scopes to its own conversation (server
   // forks the u: participant). Persists across reloads like testVisitor.
   const [askThread, setAskThreadState] = useState<string | null>(() => readCopilotThread());
-  const setAskThread = (t: string | null) => {
+  const freshAskThread = useRef<string | null>(null);
+  const setAskThread = (t: string | null, opts?: { fresh?: boolean }) => {
     setAskThreadState(t);
-    storeCopilotThread(t);
+    // A just-minted New-chat key has no server conversation — persisting it
+    // now means a reload restores a forever-empty rail. AskJanis stores it
+    // once the first send lands; picking an existing history row (or null)
+    // persists immediately.
+    if (opts?.fresh && t) {
+      freshAskThread.current = t;
+    } else {
+      storeCopilotThread(t);
+    }
     // A pending seed/draft belongs to the thread it was fired into —
     // don't let the remount replay it here.
     setAskSeed(null);
     setCopilotDraft(null);
   };
+  // Heal a stale restored key: if the stored thread has no conversation
+  // server-side (minted by New chat but never sent to), fall back to the
+  // default thread — otherwise the rail pins to an empty thread forever.
+  const askThreadChecked = useRef(false);
+  useEffect(() => {
+    if (askThreadChecked.current || !data?.support_channel_id) return;
+    askThreadChecked.current = true;
+    const restored = askThread;
+    if (!restored || restored === freshAskThread.current) return;
+    api<{ threads: { thread: string | null }[] }>(`/chat/${data.support_channel_id}/threads`)
+      .then((d) => {
+        if (!d.threads.some((t) => t.thread === restored)) setAskThread(null);
+      })
+      .catch(() => {});
+  }, [data?.support_channel_id]);
   const [testSeed, setTestSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [fallbackSeed, setFallbackSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [testSlot, setTestSlot] = useState<HTMLElement | null>(null);
@@ -1441,7 +1465,7 @@ export default function Layout() {
                     <button
                       className="link small"
                       title="Start a fresh copilot chat — earlier threads stay in History"
-                      onClick={() => setAskThread(freshCopilotThread())}
+                      onClick={() => setAskThread(freshCopilotThread(), { fresh: true })}
                     >
                       <MessageSquarePlus
                         size={11}
