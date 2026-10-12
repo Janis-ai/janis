@@ -830,7 +830,9 @@ describe('testRun tool stubbing', () => {
       testRun: true,
     });
     expect(r.text).toBe('Your refund request is pending approval.');
-    expect(r.toolCalls).toEqual([{ name: 'create_refund', gated: true, outcome: 'proposed' }]);
+    expect(r.toolCalls).toEqual([
+      { name: 'create_refund', gated: true, outcome: 'proposed', args: { order: '5' } },
+    ]);
     // the tool result fed back says "queued for review", not "treat as proposed, not done"
     const round2 = JSON.parse(fetchMock.mock.calls[1][1].body as string);
     const toolMsg = round2.messages.find((m: { role: string }) => m.role === 'tool');
@@ -962,7 +964,15 @@ describe('identity-scoped customer-record tools', () => {
       workspaceId: wsId,
       identity: { emails: new Set(), operator: false },
     });
-    expect(r.toolCalls).toEqual([{ name: 'stripe_find_customer', gated: false, outcome: 'failed' }]);
+    expect(r.toolCalls).toEqual([
+      {
+        name: 'stripe_find_customer',
+        gated: false,
+        outcome: 'failed',
+        args: { email: 'victim@example.com' },
+        error: expect.stringContaining('identity check'),
+      },
+    ]);
     // the Stripe endpoint was never touched — no data could leak
     expect(stripeCalls()).toHaveLength(0);
     expect(toolMsgOf(1)?.content).toContain('identity check');

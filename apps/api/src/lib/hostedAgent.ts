@@ -1473,6 +1473,22 @@ export interface InspectorToolCall {
   /** approval-gated tool — the call is/was proposed, not executed. */
   gated?: boolean;
   outcome: 'ran' | 'failed' | 'proposed' | 'simulated';
+  /** Args the model sent (truncated) — the inspector's only record of what
+   *  the call actually attempted when it misfires. */
+  args?: Record<string, unknown>;
+  /** First 300 chars of the result when the call failed. */
+  error?: string;
+}
+
+/** Args go into the inspector verbatim but capped — a prompt blob in a
+ *  param would balloon the row. */
+function inspectorArgs(args: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(args).map(([k, v]) => [
+      k,
+      typeof v === 'string' && v.length > 200 ? `${v.slice(0, 200)}…` : v,
+    ]),
+  );
 }
 
 interface Completion {
@@ -1851,7 +1867,7 @@ export async function complete(
                       : await requestToolApproval(ctx!.db, ctx!.agent!, ctx!.convId, tool, args)
                     : await callTool(tool, args, secrets)
                   : `error: unknown tool ${call.function.name}`;
-          if (result.startsWith('error')) outcome = 'failed';
+          if (result.startsWith('error') || result.startsWith('{"error"')) outcome = 'failed';
           else if (result.startsWith('pending_approval') || result.startsWith('approval_required'))
             outcome = 'proposed';
         }
@@ -1871,7 +1887,13 @@ export async function complete(
       // reply guard blesses them and rejects id segments it never saw.
       toolUrls.push(...extractUrls(result));
       extractIds(result, contextIds);
-      toolCalls.push({ name: call.function.name, gated, outcome });
+      toolCalls.push({
+        name: call.function.name,
+        gated,
+        outcome,
+        args: inspectorArgs(args),
+        ...(outcome === 'failed' ? { error: result.slice(0, 300) } : {}),
+      });
       // Live data binding — a widget-bound tool's JSON result renders as a
       // component on the reply, no model transcription needed.
       if (tool?.widget && outcome === 'ran') {

@@ -12,6 +12,8 @@ import {
   channels,
   conversations,
   errorReports,
+  helpArticles,
+  knowledgeFiles,
   memberships,
   messages,
   pendingActions,
@@ -40,6 +42,8 @@ import {
 import { normWidgetRef, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 import { toolsFor } from './toolExec.js';
 import { backfillSentimentAlerts } from './intent.js';
+import { fetchUrlText } from './urlSource.js';
+import { MAX_KNOWLEDGE_SOURCES } from './helpCentreImport.js';
 import type { BuilderDraft } from './agentBuilder.js';
 
 /** Context a builtin can reach — matches AgentRunContext in hostedAgent. */
@@ -87,6 +91,16 @@ async function signedInUser(ctx: BuiltinCtx) {
 
 type WorkspaceRow = typeof workspaces.$inferSelect;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Context-pack names come decorated — "Name <agent-uuid> (webchat:chan-uuid)".
+ *  A hint the model echoes verbatim must still resolve: strip the
+ *  decorations, leaving the bare name (or the bare uuid for id matching). */
+function cleanHint(hint: string | undefined): string {
+  return String(hint ?? '')
+    .replace(/<[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}>/gi, '')
+    .replace(/\([a-z_]+:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)/gi, '')
+    .trim();
+}
 
 /** Executor args arrive as jsonb — object-typed params should already be
  *  objects, but tolerate a JSON string (older rows, manual rows). */
@@ -150,11 +164,12 @@ async function visitorWorkspace(
         : 'the visitor has no workspaces',
     };
   }
-  const needle = hint?.trim().toLowerCase();
+  const needle = cleanHint(hint).toLowerCase();
   if (needle) {
-    const hit = rows.find(
-      (r) => r.ws.name.toLowerCase() === needle || r.ws.name.toLowerCase().includes(needle),
-    );
+    const hit =
+      rows.find(
+        (r) => r.ws.name.toLowerCase() === needle || r.ws.name.toLowerCase().includes(needle),
+      ) ?? rows.find((r) => needle.includes(r.ws.name.toLowerCase()));
     if (hit) return { ws: hit.ws };
     return {
       error: `no workspace matching "${hint}" — the visitor's workspaces: ${rows.map((r) => r.ws.name).join(', ')}`,
@@ -186,11 +201,14 @@ async function visitorAgent(
   hint: string | undefined,
 ): Promise<{ agent: typeof agents.$inferSelect } | { error: string }> {
   const wsAgents = await ctx.db.select().from(agents).where(eq(agents.workspaceId, ws.id));
-  const needle = hint?.trim().toLowerCase();
+  const cleaned = cleanHint(hint);
+  const needle = cleaned.toLowerCase();
   if (needle) {
     const agent =
+      (UUID.test(cleaned) ? wsAgents.find((a) => a.id === cleaned) : undefined) ??
       wsAgents.find((a) => a.name.toLowerCase() === needle) ??
-      wsAgents.find((a) => a.name.toLowerCase().includes(needle));
+      wsAgents.find((a) => a.name.toLowerCase().includes(needle)) ??
+      wsAgents.find((a) => needle.includes(a.name.toLowerCase()));
     if (agent) return { agent };
     return {
       error: `which agent? "${hint}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
@@ -2848,6 +2866,409 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         channel_id: chan.id,
         url,
         summary: `Bubble channel created on "${agent.name}" — open it: ${url}`,
+      });
+    },
+  },
+  {
+    name: 'add_knowledge_source',
+    description:
+      "Propose adding a knowledge SOURCE to an agent in the visitor's workspace — kind=url crawls a web page (and re-crawls it on the refresh cadence, like the console's Websites source), kind=text saves a pasted document as a file (like an uploaded doc). For a one-line fact use teach_agent instead; for a public help-centre article use draft_article. Posts an approval card — nothing is added until the visitor approves. Admin-only.",
+    params: {
+      agent: 'agent name (required)',
+      kind: 'url | text (required)',
+      url: 'kind=url: page to crawl, e.g. https://acme.com/faq',
+      refresh_hours: 'kind=url: re-crawl cadence in hours, 1-720 (default 24)',
+      title: 'kind=text: document name, e.g. "Return policy"',
+      content: 'kind=text: the document text',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const picked = await visitorAgent(ctx, ws, args.agent);
+      if ('error' in picked) return JSON.stringify(picked);
+      const agent = picked.agent;
+      const kind = String(args.kind ?? '').trim();
+      if (!['url', 'text'].includes(kind)) {
+        return JSON.stringify({ error: `unknown kind "${kind}" — url or text` });
+      }
+      const execArgs: Record<string, unknown> = {
+        workspace_id: ws.id,
+        agent_id: agent.id,
+        kind,
+      };
+      const display: Record<string, unknown> = { agent: agent.name };
+      if (kind === 'url') {
+        const url = String(args.url ?? '').trim();
+        try {
+          const u = new URL(url);
+          if (!['http:', 'https:'].includes(u.protocol)) throw new Error('bad protocol');
+        } catch {
+          return JSON.stringify({ error: 'a full http(s) url is required for kind=url' });
+        }
+        const hours = args.refresh_hours !== undefined ? Number(args.refresh_hours) : 24;
+        if (!Number.isFinite(hours) || hours < 1 || hours > 720) {
+          return JSON.stringify({ error: 'refresh_hours must be 1-720' });
+        }
+        execArgs.url = url;
+        execArgs.refresh_hours = Math.floor(hours);
+        display.website = url;
+        display.recrawl = `every ${Math.floor(hours)}h`;
+      } else {
+        const title = String(args.title ?? '').trim().slice(0, 200);
+        const content = String(args.content ?? '').trim();
+        if (!title) return JSON.stringify({ error: 'kind=text needs a title' });
+        if (!content) return JSON.stringify({ error: 'kind=text needs content — ask the visitor for the text to save' });
+        execArgs.title = title;
+        execArgs.content = content;
+        display.document = title;
+        display.size = `${content.length} chars`;
+      }
+      return parkConciergeAction(
+        ctx,
+        'apply_knowledge_source',
+        execArgs,
+        kind === 'url' ? `Crawl ${execArgs.url} — ${agent.name}` : `Save "${execArgs.title}" — ${agent.name}`,
+        display,
+      );
+    },
+  },
+  {
+    // Executor for approved add_knowledge_source cards — hidden from the model.
+    name: 'apply_knowledge_source',
+    description: 'internal — executes an approved add_knowledge_source action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+            eq(memberships.role, 'admin'),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs admin rights on the target workspace';
+      const [agent] = await ctx.db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, String(args.agent_id ?? '')), eq(agents.workspaceId, wsId)))
+        .limit(1);
+      if (!agent) return 'error: agent not found';
+      const [{ count }] = await ctx.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(knowledgeFiles)
+        .where(eq(knowledgeFiles.agentId, agent.id));
+      if (count >= MAX_KNOWLEDGE_SOURCES) {
+        return `error: knowledge source limit reached (${MAX_KNOWLEDGE_SOURCES})`;
+      }
+      const kind = String(args.kind ?? '');
+      let name: string;
+      let text: string;
+      let sizeBytes: number;
+      let sourceUrl: string | null = null;
+      let refreshHours: number | null = null;
+      let lastFetchedAt: Date | null = null;
+      let nextFetchAt: Date | null = null;
+      if (kind === 'url') {
+        sourceUrl = String(args.url ?? '');
+        try {
+          const fetched = await fetchUrlText(sourceUrl);
+          text = fetched.text;
+          sizeBytes = fetched.sizeBytes;
+        } catch (err) {
+          return `error: crawl failed — ${err instanceof Error ? err.message : 'fetch failed'}`;
+        }
+        name = sourceUrl;
+        refreshHours = Number(args.refresh_hours ?? 24) || 24;
+        lastFetchedAt = new Date();
+        nextFetchAt = new Date(lastFetchedAt.getTime() + refreshHours * 3600_000);
+      } else if (kind === 'text') {
+        name = String(args.title ?? '').trim().slice(0, 200);
+        text = String(args.content ?? '');
+        sizeBytes = Buffer.byteLength(text, 'utf8');
+        if (!name || !text) return 'error: missing title or content';
+      } else {
+        return 'error: unknown kind';
+      }
+      const [file] = await ctx.db
+        .insert(knowledgeFiles)
+        .values({
+          workspaceId: wsId,
+          agentId: agent.id,
+          name,
+          mimeType: kind === 'url' ? 'text/url-source' : 'text/plain',
+          sizeBytes,
+          text,
+          sourceUrl,
+          refreshHours,
+          lastFetchedAt,
+          nextFetchAt,
+        })
+        .returning();
+      await audit(ctx.db, {
+        workspaceId: wsId,
+        userId: user.id,
+        userName: user.name,
+        action: 'agent.knowledge_source.add',
+        targetType: 'agent',
+        targetId: agent.id,
+        meta: { via: 'concierge', kind, name, file_id: file.id },
+      });
+      bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
+      return JSON.stringify({
+        ok: true,
+        file_id: file.id,
+        agent: agent.name,
+        summary:
+          kind === 'url'
+            ? `Added ${sourceUrl} to ${agent.name}'s knowledge — crawled (${sizeBytes} bytes), re-crawls every ${refreshHours}h.`
+            : `Saved "${name}" as a knowledge document on ${agent.name} (${sizeBytes} bytes).`,
+      });
+    },
+  },
+  {
+    name: 'draft_article',
+    description:
+      "Propose a help-centre article on an agent in the visitor's workspace — the public KB customers read at /help/{agent}. Drafts by default; pass publish=true to publish immediately. Posts an approval card — nothing is saved until the visitor approves. For internal knowledge the agent quotes in chat, use teach_agent or add_knowledge_source instead. Admin-only.",
+    params: {
+      agent: 'agent name (required)',
+      title: 'article title (required)',
+      body: 'article body — markdown (required)',
+      category: 'help-centre category, e.g. "Shipping" (default General)',
+      publish: 'true/false — publish now instead of saving a draft',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const picked = await visitorAgent(ctx, ws, args.agent);
+      if ('error' in picked) return JSON.stringify(picked);
+      const agent = picked.agent;
+      const title = String(args.title ?? '').trim().slice(0, 200);
+      const body = String(args.body ?? '').trim();
+      if (!title) return JSON.stringify({ error: 'title is required' });
+      if (!body) return JSON.stringify({ error: 'body is required' });
+      const publish = ['true', 'yes', 'on', '1'].includes(String(args.publish ?? '').toLowerCase());
+      const category = String(args.category ?? '').trim().slice(0, 60) || 'General';
+      return parkConciergeAction(
+        ctx,
+        'apply_article',
+        { workspace_id: ws.id, agent_id: agent.id, title, body, category, publish: String(publish) },
+        `${publish ? 'Publish' : 'Draft'} "${title}" — ${agent.name}`,
+        { agent: agent.name, title, category, status: publish ? 'published' : 'draft', length: `${body.length} chars` },
+      );
+    },
+  },
+  {
+    // Executor for approved draft_article cards — hidden from the model.
+    name: 'apply_article',
+    description: 'internal — executes an approved draft_article action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+            eq(memberships.role, 'admin'),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs admin rights on the target workspace';
+      const [agent] = await ctx.db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, String(args.agent_id ?? '')), eq(agents.workspaceId, wsId)))
+        .limit(1);
+      if (!agent) return 'error: agent not found';
+      const title = String(args.title ?? '').trim().slice(0, 200);
+      const body = String(args.body ?? '').trim();
+      if (!title || !body) return 'error: missing title or body';
+      const publish = args.publish === 'true';
+      // Same slugify + -2/-3 uniqueness the console route uses.
+      const base =
+        title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 80) || 'article';
+      const existing = await ctx.db
+        .select({ slug: helpArticles.slug })
+        .from(helpArticles)
+        .where(eq(helpArticles.agentId, agent.id));
+      const taken = new Set(existing.map((r) => r.slug).filter((s): s is string => Boolean(s)));
+      let slug = base;
+      for (let i = 2; taken.has(slug); i++) slug = `${base}-${i}`;
+      const [row] = await ctx.db
+        .insert(helpArticles)
+        .values({
+          workspaceId: wsId,
+          agentId: agent.id,
+          title,
+          slug,
+          category: String(args.category ?? '').trim().slice(0, 60) || 'General',
+          body: body.slice(0, 60_000),
+          status: publish ? 'published' : 'draft',
+          publishedAt: publish ? new Date() : null,
+        })
+        .returning();
+      await audit(ctx.db, {
+        workspaceId: wsId,
+        userId: user.id,
+        userName: user.name,
+        action: publish ? 'agent.article.publish' : 'agent.article.draft',
+        targetType: 'agent',
+        targetId: agent.id,
+        meta: { via: 'concierge', title, slug, article_id: row.id },
+      });
+      bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
+      const url = `${env.webOrigin}/help/${agent.id}/${slug}`;
+      return JSON.stringify({
+        ok: true,
+        article_id: row.id,
+        slug,
+        url: publish ? url : undefined,
+        summary: publish
+          ? `Published "${title}" on ${agent.name}'s help centre — ${url}`
+          : `Saved "${title}" as a draft on ${agent.name}'s help centre — publish it from the agent's Knowledge → Sources.`,
+      });
+    },
+  },
+  {
+    name: 'save_regression_test',
+    description:
+      "Propose saving a regression test on an agent in the visitor's workspace — the same kind of test the console's Test tab saves: a customer message is replayed and the judge checks the reply against the expectation. Use when the visitor wants to pin down behavior ('make sure it always does X', 'save this as a test'). Posts an approval card — nothing is saved until the visitor approves. Admin-only.",
+    params: {
+      agent: 'agent name (required)',
+      name: 'short test name, e.g. "refund policy question" (required)',
+      customer_message: 'the customer message the test replays (required)',
+      expectation: 'what a good reply looks like — the judge checks this (required)',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const picked = await visitorAgent(ctx, ws, args.agent);
+      if ('error' in picked) return JSON.stringify(picked);
+      const agent = picked.agent;
+      const name = String(args.name ?? '').trim().slice(0, 120);
+      const customerMessage = String(args.customer_message ?? '').trim().slice(0, 2000);
+      const expectation = String(args.expectation ?? '').trim().slice(0, 2000);
+      if (!name) return JSON.stringify({ error: 'name is required' });
+      if (!customerMessage) return JSON.stringify({ error: 'customer_message is required — the message the test replays' });
+      if (!expectation) return JSON.stringify({ error: 'expectation is required — describe what a good reply does' });
+      return parkConciergeAction(
+        ctx,
+        'apply_regression_test',
+        {
+          workspace_id: ws.id,
+          agent_id: agent.id,
+          name,
+          customer_message: customerMessage,
+          expectation,
+        },
+        `Save test "${name}" — ${agent.name}`,
+        { agent: agent.name, customer: customerMessage.slice(0, 120), expectation: expectation.slice(0, 200) },
+      );
+    },
+  },
+  {
+    // Executor for approved save_regression_test cards — hidden from the model.
+    name: 'apply_regression_test',
+    description: 'internal — executes an approved save_regression_test action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) return 'error: the decider is not a signed-in Janis user';
+      const wsId = String(args.workspace_id ?? '');
+      const [member] = await ctx.db
+        .select({ id: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, wsId),
+            isNotNull(memberships.acceptedAt),
+            eq(memberships.role, 'admin'),
+          ),
+        )
+        .limit(1);
+      if (!member) return 'error: needs admin rights on the target workspace';
+      const [agent] = await ctx.db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, String(args.agent_id ?? '')), eq(agents.workspaceId, wsId)))
+        .limit(1);
+      if (!agent) return 'error: agent not found';
+      const name = String(args.name ?? '').trim().slice(0, 120);
+      const customerMessage = String(args.customer_message ?? '').trim().slice(0, 2000);
+      const expectation = String(args.expectation ?? '').trim().slice(0, 2000);
+      if (!name || !customerMessage || !expectation) return 'error: missing name, customer_message or expectation';
+      const [row] = await ctx.db
+        .insert(agentTests)
+        .values({
+          workspaceId: wsId,
+          agentId: agent.id,
+          name,
+          turns: [{ role: 'customer', text: customerMessage }],
+          expectation,
+          expectationDraft: true,
+          source: 'user',
+          category: 'general',
+        })
+        .returning();
+      await audit(ctx.db, {
+        workspaceId: wsId,
+        userId: user.id,
+        userName: user.name,
+        action: 'agent.test.save',
+        targetType: 'agent',
+        targetId: agent.id,
+        meta: { via: 'concierge', name, test_id: row.id },
+      });
+      bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
+      return JSON.stringify({
+        ok: true,
+        test_id: row.id,
+        agent: agent.name,
+        summary: `Saved regression test "${name}" on ${agent.name} — find it under the agent's Test tab.`,
       });
     },
   },

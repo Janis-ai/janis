@@ -7,6 +7,7 @@ import { BUILTIN_TOOLS, enabledBuiltins } from '../lib/builtinTools.js';
 import { decidePendingAction } from '../lib/approvals.js';
 import {
   agents,
+  agentTests,
   agentWidgets,
   channelBindings,
   alertRules,
@@ -1387,5 +1388,156 @@ describe('create_channel builtin', () => {
       await createChan().run({ workspace: 'free', agent: 'bot2' }, cctx(CONV2)),
     );
     expect(dup.error).toContain('already has a Bubble channel');
+  });
+});
+
+describe('visitorAgent hint normalization', () => {
+  const updateAgent = () => BUILTIN_TOOLS.find((b) => b.name === 'update_agent')!;
+  it('resolves the decorated "Name <id> (kind:id)" form the context pack shows', async () => {
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    const [ch] = await db
+      .insert(channels)
+      .values({ workspaceId: WS2, agentId: bot2.id, kind: 'webchat', name: 'Bubble', credentials: {} })
+      .returning();
+    const out = await updateAgent().run(
+      {
+        workspace: 'free',
+        agent: `Bot2 <${bot2.id}> (webchat:${ch.id})`,
+        greeting: 'Decorated hint resolves',
+      },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    await db.delete(pendingActions).where(eq(pendingActions.conversationId, CONV2));
+    await db.delete(channels).where(eq(channels.id, ch.id));
+  });
+  it('resolves a bare agent uuid', async () => {
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    const out = await updateAgent().run(
+      { workspace: 'free', agent: bot2.id, greeting: 'Uuid hint resolves' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    await db.delete(pendingActions).where(eq(pendingActions.conversationId, CONV2));
+  });
+});
+
+describe('add_knowledge_source builtin', () => {
+  const addSource = () => BUILTIN_TOOLS.find((b) => b.name === 'add_knowledge_source')!;
+  const applySource = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_knowledge_source')!;
+  it('is gated to the operator workspace', () => {
+    expect(addSource().available(WS)).toBe(true);
+    expect(addSource().available('other-ws')).toBe(false);
+  });
+  it('rejects a bad kind and a missing url', async () => {
+    const bad = JSON.parse(await addSource().run({ workspace: 'free', agent: 'bot2', kind: 'pdf' }, cctx(CONV2)));
+    expect(bad.error).toContain('url or text');
+    const noUrl = JSON.parse(
+      await addSource().run({ workspace: 'free', agent: 'bot2', kind: 'url', url: 'notaurl' }, cctx(CONV2)),
+    );
+    expect(noUrl.error).toContain('http');
+  });
+  it('parks a card; approving saves the text document as a knowledge file', async () => {
+    const out = await addSource().run(
+      {
+        workspace: 'free',
+        agent: 'bot2',
+        kind: 'text',
+        title: 'Return policy',
+        content: 'Refunds are accepted within 30 days.',
+      },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db.select().from(pendingActions).where(eq(pendingActions.conversationId, CONV2))
+    ).find((p) => p.toolName === 'apply_knowledge_source' && p.status === 'pending');
+    const applied = JSON.parse(
+      await applySource().run(pa!.args as Record<string, unknown>, { db, convId: CONV2, workspaceId: WS }),
+    );
+    expect(applied.ok).toBe(true);
+    const [file] = await db
+      .select()
+      .from(schema.knowledgeFiles)
+      .where(eq(schema.knowledgeFiles.id, applied.file_id));
+    expect(file.name).toBe('Return policy');
+    expect(file.text).toContain('30 days');
+    expect(file.mimeType).toBe('text/plain');
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    expect(file.agentId).toBe(bot2.id);
+    await db.delete(pendingActions).where(eq(pendingActions.id, pa!.id));
+  });
+});
+
+describe('draft_article builtin', () => {
+  const draftArticle = () => BUILTIN_TOOLS.find((b) => b.name === 'draft_article')!;
+  const applyArticle = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_article')!;
+  it('parks a card; approving creates a draft article with a unique slug', async () => {
+    const out = await draftArticle().run(
+      { workspace: 'free', agent: 'bot2', title: 'Shipping Info', body: 'We ship in 2 days.' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db.select().from(pendingActions).where(eq(pendingActions.conversationId, CONV2))
+    ).find((p) => p.toolName === 'apply_article' && p.status === 'pending');
+    const applied = JSON.parse(
+      await applyArticle().run(pa!.args as Record<string, unknown>, { db, convId: CONV2, workspaceId: WS }),
+    );
+    expect(applied.ok).toBe(true);
+    const [art] = await db
+      .select()
+      .from(schema.helpArticles)
+      .where(eq(schema.helpArticles.id, applied.article_id));
+    expect(art.slug).toBe('shipping-info');
+    expect(art.status).toBe('draft');
+    // Second article with the same title gets a -2 slug, and publish flag works.
+    const again = JSON.parse(
+      await applyArticle().run(
+        { ...(pa!.args as Record<string, unknown>), publish: 'true' },
+        { db, convId: CONV2, workspaceId: WS },
+      ),
+    );
+    const [art2] = await db
+      .select()
+      .from(schema.helpArticles)
+      .where(eq(schema.helpArticles.id, again.article_id));
+    expect(art2.slug).toBe('shipping-info-2');
+    expect(art2.status).toBe('published');
+    expect(art2.publishedAt).toBeTruthy();
+    await db.delete(pendingActions).where(eq(pendingActions.id, pa!.id));
+  });
+});
+
+describe('save_regression_test builtin', () => {
+  const saveTest = () => BUILTIN_TOOLS.find((b) => b.name === 'save_regression_test')!;
+  const applyTest = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_regression_test')!;
+  it('parks a card; approving stores the test under the agent', async () => {
+    const out = await saveTest().run(
+      {
+        workspace: 'free',
+        agent: 'bot2',
+        name: 'refund question',
+        customer_message: 'Can I get a refund?',
+        expectation: 'Explains the 30-day refund policy',
+      },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db.select().from(pendingActions).where(eq(pendingActions.conversationId, CONV2))
+    ).find((p) => p.toolName === 'apply_regression_test' && p.status === 'pending');
+    const applied = JSON.parse(
+      await applyTest().run(pa!.args as Record<string, unknown>, { db, convId: CONV2, workspaceId: WS }),
+    );
+    expect(applied.ok).toBe(true);
+    const [row] = await db
+      .select()
+      .from(agentTests)
+      .where(eq(agentTests.id, applied.test_id));
+    expect(row.name).toBe('refund question');
+    expect((row.turns as { role: string; text: string }[])[0].text).toBe('Can I get a refund?');
+    expect(row.expectation).toContain('30-day');
+    await db.delete(pendingActions).where(eq(pendingActions.id, pa!.id));
   });
 });
