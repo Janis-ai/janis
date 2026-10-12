@@ -351,6 +351,19 @@ export default function Layout() {
   const [dockSplit, setDockSplit] = useState(() => {
     try { return localStorage.getItem('janis.dock-split') === '1'; } catch { return false; }
   });
+  // "You've been added to" cards persist while the grant exists — a grant
+  // on a workspace you never join would nag on every other workspace
+  // forever. Dismiss stores the grant signature so a NEW agent granted on
+  // the same workspace re-shows the card.
+  const [dismissedGrants, setDismissedGrants] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('janis.grant-dismissed') ?? '{}'); } catch { return {}; }
+  });
+  const grantSig = (ai: { agents: string[] }) => [...ai.agents].sort().join(' ');
+  const dismissGrant = (ai: { workspace_id: string; agents: string[] }) => {
+    const next = { ...dismissedGrants, [ai.workspace_id]: grantSig(ai) };
+    setDismissedGrants(next);
+    try { localStorage.setItem('janis.grant-dismissed', JSON.stringify(next)); } catch {}
+  };
   // Below the push breakpoint the dock is a drawer — two columns or an
   // 840px panel can't fit. CSS already hides the split toggle under
   // 1800px but never unlatches a split latched wide; this does, settling
@@ -1222,7 +1235,11 @@ export default function Layout() {
           </div>
         )}
         {data?.agent_invites
-          ?.filter((ai) => ai.workspace_id !== data.workspace?.id)
+          ?.filter(
+            (ai) =>
+              ai.workspace_id !== data.workspace?.id &&
+              dismissedGrants[ai.workspace_id] !== grantSig(ai),
+          )
           .map((ai) => (
             <div key={ai.workspace_id} className="card" style={{ marginBottom: 12 }}>
               <div className="row">
@@ -1235,6 +1252,9 @@ export default function Layout() {
                   onClick={() => void switchWorkspace(ai.workspace_id)}
                 >
                   Switch
+                </button>
+                <button aria-label="Dismiss" onClick={() => dismissGrant(ai)}>
+                  <X size={13} />
                 </button>
               </div>
             </div>

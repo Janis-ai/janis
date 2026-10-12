@@ -1,6 +1,6 @@
 import webpush from 'web-push';
 import { and, eq, inArray, isNotNull } from 'drizzle-orm';
-import { friendlyName } from '@janis/shared';
+import { friendlyName, mathToUnicode } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agentMembers, channelBindings, channels, pushSubscriptions, users } from '../db/schema.js';
 import { workspaceMembers } from './members.js';
@@ -124,7 +124,9 @@ export async function alertNotification(
   return {
     title: `${ALERT_TITLES[alert.type] ?? 'Needs attention'} · ${agent.name}`,
     body: `${customer}${channel ? ` on ${channel}` : ''}: ${
-      body ?? alert.detail ?? 'needs attention'
+      // Detail/summary text is model- or visitor-written — push, email and
+      // Slack can't typeset $…$ math, so detex like the channel egress does.
+      mathToUnicode(body ?? alert.detail ?? 'needs attention')
     }`,
     url: `/conversations/${conv.id}`,
   };

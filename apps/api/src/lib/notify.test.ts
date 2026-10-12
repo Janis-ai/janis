@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agentMembers, agents, memberships, users, workspaces } from '../db/schema.js';
-import { eventForAlertType, resolveNotifyRecipients } from './notify.js';
+import { alertNotification, eventForAlertType, resolveNotifyRecipients } from './notify.js';
 
 let db: Db;
 let ws: typeof workspaces.$inferSelect;
@@ -121,5 +121,22 @@ describe('resolveNotifyRecipients', () => {
     expect(r.prefs(muted.id).events?.digest).toBe(false);
     expect(r.prefs(overridden.id).events?.keyword).toBe(true);
     expect(r.prefs(overridden.id).events?.sentiment).toBe(false);
+  });
+});
+
+describe('alertNotification', () => {
+  it('detexes math noise — push/email/Slack bodies cannot typeset', async () => {
+    const n = await alertNotification(
+      db,
+      { type: 'help_request', detail: null },
+      {
+        id: '00000000-0000-0000-0000-000000000000',
+        externalId: 'c-x',
+        userProfile: { name: 'Kai', channel: 'webchat' },
+      },
+      agent,
+      'aid reaches over $50% of families; tuition $\\$28,100$ and $x^2$',
+    );
+    expect(n.body).toBe('Kai on Bubble: aid reaches over 50% of families; tuition $28,100 and x²');
   });
 });
