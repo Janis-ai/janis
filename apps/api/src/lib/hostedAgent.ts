@@ -1251,11 +1251,11 @@ export async function generateReply(
   ctx: AgentRunContext | undefined,
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
-): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[]; producedIds: Set<string> }> {
+): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[]; producedIds: Set<string>; actionCards: number }> {
   const first = await complete(llm, prompt, msgs, tools, secrets, ctx, builtins, onStall);
   const draft = first.text;
   if (!draft) {
-    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, fixed: [], stripped: [], verified: [], unverified: [] };
+    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, fixed: [], stripped: [], verified: [], unverified: [] };
   }
   // The linkable corpus grows inside the tool loop — results carry URLs and
   // ids the model may cite (conversation links, channel pages). Blessed =
@@ -1277,7 +1277,7 @@ export async function generateReply(
       : undefined;
   const guard = await guardReplyLinks(draft, allBlessed, { ids, exists });
   if (!guard.stripped.length) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, ...guard };
   }
   const retry = await complete(
     llm,
@@ -1293,7 +1293,7 @@ export async function generateReply(
     builtins,
   ).catch(() => null);
   if (!retry?.text) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards + (retry?.actionCards ?? 0), ...guard };
   }
   for (const id of retry.contextIds) ids.add(id);
   const allBlessed2 = retry.toolUrls.length ? [...allBlessed, ...retry.toolUrls] : allBlessed;
@@ -1305,6 +1305,7 @@ export async function generateReply(
     toolCalls: [...first.toolCalls, ...retry.toolCalls],
     widgets: [...first.widgets, ...retry.widgets],
     producedIds: new Set([...first.producedIds, ...retry.producedIds]),
+    actionCards: first.actionCards + retry.actionCards,
     ...g2,
   };
 }
@@ -1511,6 +1512,10 @@ interface Completion {
   /** Uuids (dash-normalized) that appeared in tool results — the id corpus
    *  the link guard validates console links against. */
   contextIds: Set<string>;
+  /** Tool calls this run that parked an approval card ('action_card:'
+   *  results). Lets the caller narrate a completed-but-silent run
+   *  truthfully instead of escalating it as an empty reply. */
+  actionCards: number;
 }
 
 /** OpenAI-compat multimodal content part — Gemini accepts image_url parts. */
@@ -1576,7 +1581,7 @@ export async function complete(
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
 ): Promise<Completion> {
-  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[], producedIds: new Set<string>(), toolUrls: [] as string[], contextIds: new Set<string>() };
+  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[], producedIds: new Set<string>(), toolUrls: [] as string[], contextIds: new Set<string>(), actionCards: 0 };
   if (!llm.apiKey) return empty;
 
   const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
@@ -1655,6 +1660,7 @@ export async function complete(
   const producedIds = new Set<string>();
   const toolUrls: string[] = [];
   const contextIds = new Set<string>();
+  let actionCards = 0;
 
   // Truncated replies (finish_reason 'length') resume as a continuation
   // turn instead of shipping a reply cut mid-word or mid-link. The
@@ -1819,6 +1825,7 @@ export async function complete(
         producedIds,
         toolUrls,
         contextIds,
+        actionCards,
       };
     }
 
@@ -1870,6 +1877,7 @@ export async function complete(
           if (result.startsWith('error') || result.startsWith('{"error"')) outcome = 'failed';
           else if (result.startsWith('pending_approval') || result.startsWith('approval_required'))
             outcome = 'proposed';
+          if (outcome === 'ran' && result.startsWith('action_card:')) actionCards++;
         }
       } catch (err) {
         outcome = 'failed';
@@ -1903,7 +1911,7 @@ export async function complete(
       msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
     }
   }
-  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, contextIds };
+  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, contextIds, actionCards };
 }
 
 const RECENT_WINDOW = 20;
@@ -2848,8 +2856,9 @@ async function replyAsHostedAgent(
         prompt += '\n\n' + WIDGET_GUARD_RETRY;
         continue;
       }
-      if (reply || widgets.length || toolWidgets.length || attempt === 1) break;
+      if (reply || widgets.length || toolWidgets.length || buttons.length || attempt === 1) break;
       console.warn(`[hosted] empty completion conv=${convId} — retrying once`);
+      prompt += '\n\n[your previous reply came back empty — reply to the user now in plain text]';
     }
     // Belt-and-braces: a claim that survived the regen gets its claiming
     // sentences stripped rather than shipped to the customer as fact.
@@ -2945,10 +2954,25 @@ async function replyAsHostedAgent(
         byok: llm.byok,
       });
     }
-    if (!reply && !widgets.length) {
+    // A run that parked an approval card then produced no text did the work —
+    // narrate just the card rather than escalating a completed action as
+    // "empty reply". Cards are deduped, so retries can't double-post.
+    if (!reply && gen.actionCards > 0) {
+      console.warn(`[hosted] silent card run conv=${convId} — narrating parked card`);
+      reply = "Done — I've posted an approval card with that change; approve or edit it in this thread.";
+      inspectorFlag.inspector.silent_card_run = true;
+    }
+    if (!reply && !widgets.length && !buttons.length) {
       void fireErrorAlert(db, agent, convId, 'no LLM configured or empty reply').catch(() => {});
       await emit([
-        { type: 'handoff_request', conversation_id: externalId, reason: 'no LLM configured or empty reply' },
+        {
+          type: 'handoff_request',
+          conversation_id: externalId,
+          reason: 'no LLM configured or empty reply',
+          // The run trace (tool calls incl. args/errors, model, tokens) rides
+          // the handoff note — a silent escalation keeps its inspector.
+          payload: { via: 'hosted', ...inspectorFlag },
+        },
       ]);
       return;
     }

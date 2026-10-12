@@ -18,7 +18,7 @@ import { generateApiKey } from '../lib/crypto.js';
 import { adoptVisitorConversation, handleChannelMessage } from './channelIngress.js';
 import { refreshConversationSummary, runHostedEvent } from '../lib/hostedAgent.js';
 import { systemPrompt } from '../lib/hostedAgent.js';
-import { enrichHandoff } from '../lib/handoff.js';
+import { enrichHandoff, summarizeHandoff } from '../lib/handoff.js';
 import { agentWidgets, alerts } from '../db/schema.js';
 
 const llm = { apiKey: 'k', baseUrl: 'https://llm.test', model: 'test-model' };
@@ -430,6 +430,37 @@ describe('handoff brief', () => {
     expect(updatedAlert.detail).toBe(
       'agent signalled handoff — Customer needs a refund for order #4213',
     );
+  });
+
+  it('anchors the brief to the operator-selected agent, not stale transcript topics', async () => {
+    // Prod incident: the copilot rail conversation's console trait said
+    // "Jerry Garcia" but the brief named "Mr. Tony" — the prior topic —
+    // because the prompt never saw the selected-agent trait.
+    const fetchMock = vi.fn().mockResolvedValue(llmResponse('needs a new greeting'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const [conv] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent.id,
+        externalId: 'handoff-conv-2',
+        userProfile: {
+          name: 'Mike',
+          metadata: { current_agent: 'Jerry Garcia', current_workspace: "Mike's workspace" },
+        },
+      })
+      .returning();
+    const brief = await summarizeHandoff(
+      db,
+      { ...agent, config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } } },
+      conv,
+      'no LLM configured or empty reply',
+    );
+    expect(brief).toBe('needs a new greeting');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const prompt = body.messages[1].content as string;
+    expect(prompt).toContain('agent "Jerry Garcia"');
+    expect(prompt).toContain('workspace "Mike\'s workspace"');
   });
 });
 

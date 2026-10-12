@@ -117,6 +117,7 @@ export const FailureEvent = z.object({
 export const HandoffRequestEvent = z.object({
   type: z.literal('handoff_request'),
   reason: z.string().optional(),
+  payload: z.record(z.unknown()).optional(),
   ...eventBase,
 });
 

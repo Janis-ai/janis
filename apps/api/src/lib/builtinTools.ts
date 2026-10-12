@@ -194,13 +194,21 @@ async function visitorWorkspace(
 /** Resolve which agent of a workspace a concierge tool should act on.
  * Order: explicit `agent` name hint → the agent selected in the console
  * (the context pack's current_agent trait) → a "which agent?" error listing
- * the options. */
+ * the options. `current` echoes the console selection so callers can flag
+ * when an explicit hint lands on a different (possibly stale) agent. */
 async function visitorAgent(
   ctx: BuiltinCtx,
   ws: WorkspaceRow,
   hint: string | undefined,
-): Promise<{ agent: typeof agents.$inferSelect } | { error: string }> {
+): Promise<{ agent: typeof agents.$inferSelect; current?: string } | { error: string }> {
   const wsAgents = await ctx.db.select().from(agents).where(eq(agents.workspaceId, ws.id));
+  const [conv] = await ctx.db
+    .select({ userProfile: conversations.userProfile })
+    .from(conversations)
+    .where(eq(conversations.id, ctx.convId))
+    .limit(1);
+  const meta = (conv?.userProfile as UserProfile | undefined)?.metadata ?? {};
+  const current = String(meta.current_agent ?? '');
   const cleaned = cleanHint(hint);
   const needle = cleaned.toLowerCase();
   if (needle) {
@@ -209,24 +217,28 @@ async function visitorAgent(
       wsAgents.find((a) => a.name.toLowerCase() === needle) ??
       wsAgents.find((a) => a.name.toLowerCase().includes(needle)) ??
       wsAgents.find((a) => needle.includes(a.name.toLowerCase()));
-    if (agent) return { agent };
+    if (agent) return { agent, current: current || undefined };
     return {
       error: `which agent? "${hint}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
     };
   }
-  const [conv] = await ctx.db
-    .select({ userProfile: conversations.userProfile })
-    .from(conversations)
-    .where(eq(conversations.id, ctx.convId))
-    .limit(1);
-  const meta = (conv?.userProfile as UserProfile | undefined)?.metadata ?? {};
-  const cur = String(meta.current_agent ?? '').toLowerCase();
-  const curHit = cur ? wsAgents.find((a) => a.name.toLowerCase() === cur) : undefined;
+  const curHit = current
+    ? wsAgents.find((a) => a.name.toLowerCase() === current.toLowerCase())
+    : undefined;
   if (curHit) return { agent: curHit };
   if (wsAgents.length === 1) return { agent: wsAgents[0] };
   return {
     error: `which agent? ${ws.name} has: ${wsAgents.map((a) => a.name).join(', ')}`,
   };
+}
+
+/** Caution appended to a tool result when the resolved agent isn't the one
+ *  the visitor has selected — a stale topic can land changes on the wrong
+ *  agent, and the model can't see the console selection to notice. */
+function offSelectionNote(picked: { agent: { name: string }; current?: string }): string {
+  return picked.current && picked.current.toLowerCase() !== picked.agent.name.toLowerCase()
+    ? ` NOTE: this targets "${picked.agent.name}" but the visitor's console has "${picked.current}" selected — name the target agent in your reply so they can catch a mix-up, or retry with agent="${picked.current}" if they meant the selected one.`
+    : '';
 }
 
 /** Accepted members of a workspace, for name → id resolution in rules. */
@@ -1674,13 +1686,14 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if (!freshEntries.length) {
         return 'already_known: every proposed line is already in that agent\'s knowledge — tell the visitor it\'s already covered';
       }
-      return parkConciergeAction(
+      const res = await parkConciergeAction(
         ctx,
         'apply_knowledge',
         { workspace_id: ws.id, agent_id: agent.id, entry: freshEntries.join('\n') },
         `Teach ${agent.name}`,
         { agent: agent.name, entry: freshEntries.join('\n') },
       );
+      return res + offSelectionNote(picked);
     },
   },
   {
@@ -2179,6 +2192,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const picked = await visitorAgent(ctx, ws, args.agent);
       if ('error' in picked) return JSON.stringify(picked);
       const agent = picked.agent;
+      // The model sometimes names an agent from an older topic, not the one
+      // the visitor is looking at — the card is still correct to post, but
+      // tell the model so its reply can name the target out loud.
+      const offSelection = offSelectionNote(picked);
 
       // Flat params → nested config patch. Only these keys ever reach the
       // card — the executor re-validates with the shared schema anyway.
@@ -2289,7 +2306,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           : willRename && !Object.keys(patch).length
             ? 'Rename'
             : 'Update';
-      return parkConciergeAction(
+      const res = await parkConciergeAction(
         ctx,
         'apply_agent_config',
         {
@@ -2303,6 +2320,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         `${extras} ${agent.name}`,
         display,
       );
+      return res + offSelection;
     },
   },
   {

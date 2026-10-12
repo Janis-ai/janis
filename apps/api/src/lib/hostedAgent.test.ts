@@ -922,6 +922,37 @@ describe('testRun tool stubbing', () => {
     expect(r.toolCalls).toHaveLength(4);
     expect(r.toolCalls.every((t) => t.outcome === 'proposed')).toBe(true);
   });
+
+  it('counts action_card results so a parked-but-silent run can narrate the card', async () => {
+    // Prod incident (conv ac153999): the concierge parked nothing and went
+    // silent — but when it DOES park a card then produce no text, the caller
+    // must know a card exists so it doesn't escalate as "empty reply".
+    const cardBuiltin = {
+      name: 'update_agent',
+      description: 'propose config changes',
+      params: { greeting: 'new greeting text' },
+      available: () => true,
+      run: async () =>
+        'action_card: an approval card was posted to the chat — the visitor applies or dismisses it there; do not claim the change is done',
+    };
+    const cardCall = (id: string) => ({
+      id,
+      function: { name: 'update_agent', arguments: '{"greeting":"hi"}' },
+    });
+    fetchMock
+      .mockResolvedValueOnce(reply({ tool_calls: [cardCall('c1')] }))
+      .mockResolvedValueOnce(reply({ content: null }));
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'change my greeting to hi' }], [], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+    }, [cardBuiltin]);
+    expect(r.text).toBeNull();
+    expect(r.actionCards).toBe(1);
+    expect(r.toolCalls).toEqual([
+      { name: 'update_agent', gated: false, outcome: 'ran', args: { greeting: 'hi' } },
+    ]);
+  });
 });
 
 describe('identity-scoped customer-record tools', () => {

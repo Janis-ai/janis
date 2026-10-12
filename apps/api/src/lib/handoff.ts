@@ -49,9 +49,32 @@ export async function summarizeHandoff(
     .orderBy(desc(messages.createdAt))
     .limit(15);
   const transcript = rows.reverse().map(line).filter(Boolean).join('\n').slice(-6000);
+  // Console traits (set by the operator/copilot rail) anchor "their agent" to
+  // what the user actually has selected — recency in the transcript often
+  // names a stale agent from an earlier topic.
+  const prof = (conv.userProfile ?? {}) as {
+    name?: string | null;
+    email?: string | null;
+    metadata?: Record<string, unknown> | null;
+  };
+  const md = (prof.metadata ?? {}) as Record<string, unknown>;
+  const who = [prof.name, prof.email].filter((s) => typeof s === 'string' && s).join(' ');
+  const viewing = [
+    typeof md.current_agent === 'string' && md.current_agent
+      ? `agent "${md.current_agent}"`
+      : null,
+    typeof md.current_workspace === 'string' && md.current_workspace
+      ? `workspace "${md.current_workspace}"`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' in ');
   const prompt = [
     conv.agentSummary ? `Earlier context: ${conv.agentSummary}` : null,
     transcript ? `Recent messages:\n${transcript}` : null,
+    who || viewing
+      ? `Signed-in user: ${who || 'unknown'}${viewing ? ` — currently viewing ${viewing} in the console; treat that as the agent they mean over older topics` : ''}.`
+      : null,
     `The automated agent just requested a human${reason ? ` (reason: ${reason})` : ''}.`,
   ]
     .filter(Boolean)
