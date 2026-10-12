@@ -95,6 +95,9 @@ const patchChannel = z.object({
       quick_replies: z.array(z.string().min(1).max(120)).max(8).optional(),
       accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).or(z.literal('')).optional(),
       position: z.enum(['left', 'right']).optional(),
+      // how the open panel presents — 'bubble' corner-docks (default),
+      // 'modal' centers on a dimmed page
+      display: z.enum(['bubble', 'modal']).optional(),
       // absolute http(s) url or an uploaded image path; '' clears
       logo_url: z
         .union([z.literal(''), z.string().url().max(500), z.string().regex(/^\/uploads\//).max(500)])
@@ -559,6 +562,7 @@ export function channelApiRoutes(db: Db) {
         else creds[key] = v;
       }
       if (b.position !== undefined) creds.position = b.position;
+      if (b.display !== undefined) creds.display = b.display;
       if (b.logo_padding !== undefined) creds.logo_padding = b.logo_padding;
       if (b.logo_radius !== undefined) creds.logo_radius = b.logo_radius;
       if (b.logo_border_width !== undefined) creds.logo_border_width = b.logo_border_width;

@@ -220,6 +220,11 @@ export function ChannelCard({
               code={`<script src="${apiOrigin}/widget.js" data-janis-token="${ch.id}" async></script>`}
               lang="html"
             />
+            <CodeBlock
+              title="Open it from your own button or link"
+              code={`<button onclick="window.Janis && Janis.open()">Chat with us</button>\n<!-- Janis.open() · Janis.close() · Janis.toggle() — call any time.\n     Before the script loads, queue instead: Janis.q = Janis.q || []; Janis.q.push('open') -->`}
+              lang="html"
+            />
             <WebchatIdentity channel={ch} />
             <WidgetDomainField channel={ch} />
           </div>
@@ -833,6 +838,7 @@ function WebchatBranding({
     greeting: b.greeting ?? '',
     accent: normHex(b.accent),
     position: b.position ?? 'right',
+    display: b.display ?? 'bubble',
     radius: b.radius ?? 14,
     logo_url: b.logo_url ?? '',
     logo_padding: b.logo_padding ?? 2,
@@ -916,6 +922,7 @@ function WebchatBranding({
             greeting: f.greeting,
             accent: f.accent,
             position: f.position,
+            display: f.display,
             logo_url: f.logo_url,
             logo_padding: f.logo_padding,
             logo_radius: f.logo_radius,
@@ -1070,6 +1077,21 @@ function WebchatBranding({
         <details className="bub-sec">
           <summary>Launcher</summary>
           <div className="bub-sec-body">
+            <BubField label="Window" hint="How the open chat presents — the launcher stays a corner bubble either way">
+              <div className="bub-pos">
+                {(['bubble', 'modal'] as const).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    className={f.display === d ? 'on' : ''}
+                    onClick={() => setF({ ...f, display: d })}
+                  >
+                    <span className={`bub-pos-page ${d === 'modal' ? 'center' : 'dock'}`} />
+                    {d === 'bubble' ? 'Corner dock' : 'Center stage'}
+                  </button>
+                ))}
+              </div>
+            </BubField>
             <BubField label="Position">
               <div className="bub-pos">
                 {(['left', 'right'] as const).map((p) => (

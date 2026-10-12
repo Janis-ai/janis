@@ -206,6 +206,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     greeting?: string;
     accent?: string;
     position?: 'left' | 'right';
+    display?: 'bubble' | 'modal';
     logo_url?: string;
     logo_padding?: number;
     logo_radius?: number;
@@ -302,6 +303,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
               greeting: creds.greeting,
               accent: creds.accent,
               position: creds.position,
+              display: creds.display,
               logo_url: creds.logo_url,
               logo_padding: creds.logo_padding,
               logo_radius: creds.logo_radius,

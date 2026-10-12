@@ -165,6 +165,10 @@ Handoff itself is optional: workspaces that don't want live human takeover disab
 
 ---
 
+The webchat bubble is scriptable: host pages call Janis.open(), Janis.close() or Janis.toggle() to drive it from their own buttons, nav links or onboarding tours (calls made before widget.js evaluates queue via Janis.q.push('open')). The open window presents two ways — a corner dock (default) or center stage, a centered window on a dimmed page — chosen under the channel's Appearance → Launcher → Window. A shareable full-page messenger lives at /chat/{channel-id}/page?mode=full (also what a claimed chat domain serves).
+
+---
+
 Routing rules automate triage: keyword and inactivity rules can assign a conversation to a teammate, tag it, or escalate it; auto-assign round-robins new conversations across the team.
 
 ---

@@ -104,6 +104,13 @@
     var els = document.querySelectorAll('[id^="janis-"]');
     for (var i = 0; i < els.length; i++) els[i].remove();
   };
+  // Programmatic control — a "Contact us" button or nav link anywhere on the
+  // host page opens/closes the chat without the visitor finding the bubble.
+  // Calls made before this script evaluates go through Janis.q.push('open'),
+  // drained at the bottom of the file.
+  window.Janis.open = function () { setOpen(true); };
+  window.Janis.close = function () { setOpen(false); };
+  window.Janis.toggle = function () { setOpen(!state.open); };
 
   var EMOJIS = ('😀 😄 😁 🙂 😉 😊 😍 🤩 😘 😜 🤪 😎 🤔 😅 😂 🤣 😢 😭 😮 😴' +
     ' 👍 👎 🙏 👏 🙌 🤝 💪 ✌️ 🤞 👋 👀 💬 ❤️ 💚 💙 💜 🖤 🤍 💯 ✅ 🎉 🔥 ⭐ 💡 📎 ❓').split(' ');
@@ -295,6 +302,15 @@
     '#janis-bubble.janis-left{left:20px;right:auto}' +
     '#janis-panel.janis-left{left:20px;right:auto}' +
     '#janis-panel.janis-left.expanded{left:12px;right:auto}' +
+    // Center-stage display: the open panel presents as a centered window on
+    // a dimmed page instead of docking to the corner. The bubble stays the
+    // launcher; the backdrop click and Escape close. Rules sit after
+    // janis-left so modal wins the same specificity.
+    '#janis-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999997;display:none}' +
+    '#janis-backdrop.open{display:block}' +
+    '#janis-panel.janis-modal{left:50%;top:50%;right:auto;bottom:auto;transform:translate(-50%,-50%);' +
+    'width:min(720px,calc(100vw - 32px));max-width:none;height:min(680px,calc(100vh - 64px));max-height:none}' +
+    '#janis-panel.janis-modal.expanded{width:min(900px,calc(100vw - 24px));height:calc(100vh - 40px)}' +
     '#janis-head{padding:12px 16px;color:#fff;font-weight:600;display:flex;align-items:center;gap:8px}' +
     '#janis-head img.janis-logo{width:30px;height:30px;border-radius:8px;object-fit:contain;background:#fff;padding:2px;flex:none}' +
     '#janis-bubble img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}' +
@@ -477,6 +493,7 @@
   var badgeEl = el('span', {}, { id: 'janis-badge' });
   bubble.appendChild(badgeEl);
   var panel = el('div', {}, { id: 'janis-panel' });
+  var backdrop = el('div', {}, { id: 'janis-backdrop' });
   if (PAGE) {
     panel.classList.add('janis-page');
     bubble.style.display = 'none';
@@ -502,7 +519,12 @@
     '<a id="janis-help" target="_blank" rel="noopener" style="display:none">Browse help articles</a>' +
     '<div id="janis-power">Powered by Janis</div>';
   document.body.appendChild(bubble);
+  document.body.appendChild(backdrop);
   document.body.appendChild(panel);
+  backdrop.onclick = function () { setOpen(false); };
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && state.open && panel.classList.contains('janis-modal')) setOpen(false);
+  });
 
   var msgs = panel.querySelector('#janis-msgs');
   var form = panel.querySelector('#janis-form');
@@ -1489,6 +1511,7 @@
     if (PAGE && !open) return; // the page-mode panel is the surface — always open
     state.open = open;
     panel.classList.toggle('open', open);
+    backdrop.classList.toggle('open', open && panel.classList.contains('janis-modal'));
     localStorage.setItem(LS_OPEN, open ? '1' : '0');
     if (open) {
       hideTeaser();
@@ -1965,6 +1988,10 @@
       var left = cfg.position === 'left';
       bubble.classList.toggle('janis-left', left);
       panel.classList.toggle('janis-left', left);
+      // Center-stage display — the panel centers on a backdrop; page mode
+      // always wins (it IS the whole page). Live preview edits re-apply too.
+      panel.classList.toggle('janis-modal', !PAGE && cfg.display === 'modal');
+      if (!panel.classList.contains('janis-modal')) backdrop.classList.remove('open');
       // Draft greeting edits re-render the synthetic greeting bubble in
       // place (only exists while the thread is still empty).
       if (state.greetEl && state.greetEl.parentNode && cfg.greeting) {
@@ -2010,4 +2037,15 @@
     }
     if (PAGE || state.open) setOpen(true); // page mode always opens
   }).catch(function () {});
+  // Commands queued before this script evaluated — a host button calling
+  // Janis.q.push('open') before widget.js loaded drains now that everything
+  // is wired.
+  var pending = window.Janis && window.Janis.q;
+  if (pending && pending.length) {
+    window.Janis.q = [];
+    for (var qi = 0; qi < pending.length; qi++) {
+      var cmd = window.Janis[pending[qi]];
+      if (typeof cmd === 'function') cmd();
+    }
+  }
 })();

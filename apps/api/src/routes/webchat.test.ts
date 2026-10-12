@@ -143,6 +143,22 @@ describe('webchat widget endpoints', () => {
       .where(eq(channels.id, channelId));
   });
 
+  it('passes display through — modal branding reaches the widget bootstrap', async () => {
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    let body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.display).toBe('bubble');
+    await db
+      .update(channels)
+      .set({ credentials: { ...(ch.credentials as object), display: 'modal' } })
+      .where(eq(channels.id, channelId));
+    body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.display).toBe('modal');
+    await db
+      .update(channels)
+      .set({ credentials: ch.credentials as object })
+      .where(eq(channels.id, channelId));
+  });
+
   it('help_url honours the agent domain override, then the workspace claim', async () => {
     const [agent] = await db.select().from(agents).where(eq(agents.workspaceId, wsId));
     await db.insert(helpArticles).values({

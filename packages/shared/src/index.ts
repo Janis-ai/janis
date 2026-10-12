@@ -563,6 +563,9 @@ export const Channel = z.object({
         greeting: z.string().optional(),
         accent: z.string().optional(),
         position: z.enum(['left', 'right']).optional(),
+        // how the open panel presents — 'bubble' docks to the corner;
+        // 'modal' centers on a dimmed page (the launcher stays)
+        display: z.enum(['bubble', 'modal']).optional(),
         logo_url: z.string().optional(),
         // logo tile (header) + launcher inset
         logo_padding: z.number().optional(),

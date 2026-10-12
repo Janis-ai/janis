@@ -39,6 +39,9 @@ export interface ChannelCredentials {
   title?: string; // webchat: header title (falls back to channel name)
   subtitle?: string; // webchat: header subtext (falls back to agent name)
   position?: 'left' | 'right'; // webchat: which corner the launcher sits in
+  // webchat: how the open panel presents — 'bubble' docks to the corner
+  // (default); 'modal' centers on a dimmed page (the launcher stays)
+  display?: 'bubble' | 'modal';
   logo_url?: string; // webchat: header/bubble logo image
   logo_padding?: number; // webchat: px inset inside the header tile + launcher ring
   logo_radius?: number; // webchat: px corner radius of the header logo tile

@@ -167,6 +167,14 @@ describe('webchat branding round-trip', () => {
     expect(body.channel?.meta?.branding?.radius).toBe(20);
     expect(body.channel?.meta?.branding?.accent).toBe('#5b21b6');
   });
+
+  it('round-trips branding.display — center-stage survives PATCH → read', async () => {
+    const res = await patch(webchatId, { branding: { display: 'modal' } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { channel?: { meta?: { branding?: { display?: string } } } };
+    expect(body.channel?.meta?.branding?.display).toBe('modal');
+    await patch(webchatId, { branding: { display: 'bubble' } });
+  });
 });
 
 describe('channel id guard', () => {
