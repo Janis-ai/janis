@@ -1075,6 +1075,55 @@ export function cardsCoverQuickReplies(chan: string, widgets: WidgetComponent[])
   );
 }
 
+/** Card images are model-typed URLs — a one-character slip in a 200-char
+ *  nested CDN URL (or an image borrowed verbatim from a different doc)
+ *  renders broken or wrong, and prompt guidance can't stop a small model
+ *  corrupting long URLs. Reconcile each emitted card against the knowledge
+ *  docs actually in context:
+ *   - a card linking to a KB doc gets THAT doc's image — authoritative:
+ *     fills an omitted field, repairs a corrupted one, evicts a borrowed one
+ *   - a card not about a KB doc keeps an image only when it's context-
+ *     verbatim (e.g. tool output); another doc's image or an unseen URL is
+ *     dropped rather than rendered wrong/broken.
+ *  `skip` holds resolved WIDGET_REF components — their specs are designed,
+ *  not model-typed, so their images stand. */
+export function repairCardImages(
+  widgets: WidgetComponent[],
+  docs: { name: string; text: string }[],
+  blessedUrls: string[],
+  skip: Set<WidgetComponent> = new Set(),
+): void {
+  const normLink = (u: string) => u.replace(/\/+$/, '').toLowerCase();
+  const imgFor = new Map<string, string>();
+  const docUrls = new Set<string>();
+  const docImages = new Set<string>();
+  for (const d of docs) {
+    docUrls.add(normLink(d.name));
+    const img = /^Image: (\S+)/.exec(d.text)?.[1];
+    if (img) {
+      imgFor.set(normLink(d.name), img);
+      docImages.add(normLink(img));
+    }
+  }
+  const blessed = new Set(blessedUrls.map(normLink));
+  for (const w of widgets) {
+    if (w.type !== 'cards' || skip.has(w)) continue;
+    for (const item of w.items) {
+      const docKey = item.link ? normLink(item.link) : undefined;
+      if (docKey && docUrls.has(docKey)) {
+        const img = imgFor.get(docKey);
+        if (img) item.image = img;
+        else delete item.image;
+      } else if (
+        item.image &&
+        (docImages.has(normLink(item.image)) || !blessed.has(normLink(item.image)))
+      ) {
+        delete item.image;
+      }
+    }
+  }
+}
+
 /** Meta display-caps button titles at 20 chars, but that truncation belongs
  * in the channel adapters — a label sliced here was also mangled in webchat
  * and Ask Janis, and Meta taps echoed the cut text. Keep the full label so
@@ -1302,11 +1351,11 @@ export async function generateReply(
   ctx: AgentRunContext | undefined,
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
-): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[]; producedIds: Set<string>; actionCards: number }> {
+): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[]; producedIds: Set<string>; actionCards: number; toolUrls: string[] }> {
   const first = await complete(llm, prompt, msgs, tools, secrets, ctx, builtins, onStall);
   const draft = first.text;
   if (!draft) {
-    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, fixed: [], stripped: [], verified: [], unverified: [] };
+    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, fixed: [], stripped: [], verified: [], unverified: [] };
   }
   // The linkable corpus grows inside the tool loop — results carry URLs and
   // ids the model may cite (conversation links, channel pages). Blessed =
@@ -1328,7 +1377,7 @@ export async function generateReply(
       : undefined;
   const guard = await guardReplyLinks(draft, allBlessed, { ids, exists });
   if (!guard.stripped.length) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, ...guard };
   }
   const retry = await complete(
     llm,
@@ -1344,7 +1393,7 @@ export async function generateReply(
     builtins,
   ).catch(() => null);
   if (!retry?.text) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards + (retry?.actionCards ?? 0), ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards + (retry?.actionCards ?? 0), toolUrls: [...first.toolUrls, ...(retry?.toolUrls ?? [])], ...guard };
   }
   for (const id of retry.contextIds) ids.add(id);
   const allBlessed2 = retry.toolUrls.length ? [...allBlessed, ...retry.toolUrls] : allBlessed;
@@ -1357,6 +1406,7 @@ export async function generateReply(
     widgets: [...first.widgets, ...retry.widgets],
     producedIds: new Set([...first.producedIds, ...retry.producedIds]),
     actionCards: first.actionCards + retry.actionCards,
+    toolUrls: [...first.toolUrls, ...retry.toolUrls],
     ...g2,
   };
 }
@@ -2888,6 +2938,9 @@ async function replyAsHostedAgent(
     let buttons: ReturnType<typeof extractButtons>['buttons'] = [];
     let learns: ReturnType<typeof extractLearns>['learns'] = [];
     const toolWidgets: WidgetComponent[] = [];
+    // Ref-resolved components are designed specs, not model-typed — the
+    // card-image reconciler leaves them alone.
+    const refResolved = new Set<WidgetComponent>();
     let promptTokens = 0;
     let completionTokens = 0;
     // component lines that rendered nothing on the surviving attempt —
@@ -2922,7 +2975,10 @@ async function replyAsHostedAgent(
           continue;
         }
         const spec = await resolveWidgetRef(def, ref.data, agentToolDefs, secrets, ctx, gen.producedIds);
-        if (spec) w.push(spec);
+        if (spec) {
+          w.push(spec);
+          refResolved.add(spec);
+        }
       }
       const { text: r, buttons: b } = extractButtons(noWidgets);
       reply = unwrapInlineLists(r);
@@ -3058,6 +3114,10 @@ async function replyAsHostedAgent(
     // model's own WIDGET: lines trail — minus any that restate an earlier
     // component (a duplicate cards row reads as a bug; the pairwise dedupe
     // also collapses a tool-bound widget emitted twice by the tool loop).
+    // Card image fields are model-typed URLs — reconcile them against the
+    // injected docs before anything ships (tool-result URLs count as
+    // context; ref-resolved specs are exempt).
+    repairCardImages(widgets, docs, [...blessedUrls, ...gen.toolUrls], refResolved);
     widgets = dedupeWidgetList([...toolWidgets, ...widgets]).slice(0, 3);
     const genMs = Date.now() - tGen;
     if (genMs > 10_000)

@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, promisesLookup, rankDocs, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, promisesLookup, rankDocs, repairCardImages, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -760,6 +760,72 @@ describe('cardsCoverQuickReplies', () => {
 
   it('keeps chips when there are no widgets at all', () => {
     expect(cardsCoverQuickReplies('webchat', [])).toBe(false);
+  });
+});
+
+describe('repairCardImages', () => {
+  const DOC_URL = 'https://site.example/properties/oak-st';
+  const DOC_IMG = 'https://cdn.example/oak-real.jpg';
+  const docs = [
+    { name: DOC_URL, text: `Image: ${DOC_IMG}\n3 beds, 2 baths.` },
+    { name: 'https://site.example/properties/no-photo', text: 'Text only doc.' },
+    { name: 'https://site.example/properties/other', text: 'Image: https://cdn.example/other.jpg\nOther.' },
+  ];
+  const card = (items: Record<string, unknown>[]) => ({
+    type: 'cards' as const,
+    items: items as never,
+  });
+
+  it('fills the doc\u2019s own image when the model omitted it', () => {
+    const w = [card([{ title: 'Oak', link: DOC_URL }])];
+    repairCardImages(w, docs, []);
+    expect(w[0].items[0]).toMatchObject({ image: DOC_IMG });
+  });
+
+  it('repairs a corrupted image URL to the doc\u2019s real one', () => {
+    const mangled = 'https://cdn.example/oak-real.jpg'.replace('cdn.example', 'cdn'); // lp-cdn.com/media → lp-cdn/media style slip
+    const w = [card([{ title: 'Oak', link: DOC_URL, image: mangled }])];
+    repairCardImages(w, docs, []);
+    expect(w[0].items[0]).toMatchObject({ image: DOC_IMG });
+  });
+
+  it('drops an image borrowed from a different doc on a no-image doc card', () => {
+    const w = [
+      card([
+        {
+          title: 'NoPhoto',
+          link: 'https://site.example/properties/no-photo',
+          image: 'https://cdn.example/other.jpg',
+        },
+      ]),
+    ];
+    repairCardImages(w, docs, []);
+    expect(w[0].items[0]).not.toHaveProperty('image');
+  });
+
+  it('drops a fabricated or borrowed image on a non-doc card', () => {
+    const w = [
+      card([
+        { title: 'External', link: 'https://elsewhere.example/x', image: 'https://cdn.example/other.jpg' },
+        { title: 'Invented', link: 'https://elsewhere.example/y', image: 'https://made.up/x.png' },
+      ]),
+    ];
+    repairCardImages(w, docs, []);
+    for (const i of w[0].items as { image?: string }[]) expect(i.image).toBeUndefined();
+  });
+
+  it('keeps context-verbatim images on non-doc cards (tool output)', () => {
+    const w = [
+      card([{ title: 'Product', link: 'https://shop.example/p/1', image: 'https://cdn.shopify.com/tee.png' }]),
+    ];
+    repairCardImages(w, docs, ['https://cdn.shopify.com/tee.png']);
+    expect(w[0].items[0]).toMatchObject({ image: 'https://cdn.shopify.com/tee.png' });
+  });
+
+  it('leaves resolved saved-component specs alone', () => {
+    const w = [card([{ title: 'Designed', link: DOC_URL, image: 'https://assets.example/hero.png' }])];
+    repairCardImages(w, docs, [], new Set(w));
+    expect(w[0].items[0]).toMatchObject({ image: 'https://assets.example/hero.png' });
   });
 });
 
