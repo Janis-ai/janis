@@ -608,7 +608,10 @@ export function webchatRoutes(db: Db) {
             ),
           )
           .limit(1);
-        if (dup) return c.json({ ok: true });
+        // Echo deduped:true — an honest 200 either way, but a buggy sender
+        // reusing one client_id (scripted runners minting it once outside
+        // the loop) sees "accepted" for messages that never stored.
+        if (dup) return c.json({ ok: true, deduped: true });
       }
     }
     // Ingress includes awaited side-paths (sync greeting generation on a

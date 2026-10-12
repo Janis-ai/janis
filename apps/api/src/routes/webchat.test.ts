@@ -264,8 +264,12 @@ describe('webchat widget endpoints', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ visitor_id: VISITOR, text: 'same text twice', client_id: 'c-123' }),
       });
-    expect((await send()).status).toBe(200);
-    expect((await send()).status).toBe(200);
+    const first = await send();
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ ok: true });
+    const retry = await send();
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ ok: true, deduped: true });
 
     const poll = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR}`);
     const body = await poll.json();
