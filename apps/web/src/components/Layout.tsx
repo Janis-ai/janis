@@ -1071,6 +1071,10 @@ export default function Layout() {
         body: JSON.stringify({ workspace_id: workspaceId }),
       });
     }
+    // Agent context belongs to the workspace being left — the persisted
+    // id survives qc.clear()+reload and would scope the new workspace's
+    // inbox to an agent it doesn't contain ("No conversations").
+    clearLastAgent();
     qc.clear();
     navigate('/conversations');
     window.location.reload();

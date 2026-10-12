@@ -77,11 +77,30 @@ export function useAgentContext() {
   return resolved ?? param;
 }
 
+/** A persisted last-agent id is usable only while it names an agent in the
+ *  current workspace's list — a foreign/stale id (workspace switch, revoked
+ *  grant, deleted agent) sent as ?agent_id= correctly returns nothing
+ *  server-side, which reads as an empty inbox. Undefined agents means the
+ *  list is still loading; the stored id is trusted then (the common case)
+ *  rather than flashing the unscoped view. */
+export function contextAgentStale(
+  stored: string | null,
+  agents: { id: string }[] | undefined,
+): boolean {
+  return !!stored && !!agents && !agents.some((a) => a.id === stored);
+}
+
 /** The effective context agent: the URL's when on an agent route, else the
- *  persisted last-visited agent. Not reactive on its own — context always
- *  changes alongside a navigation, which re-renders the tree. */
+ *  persisted last-visited agent, dropped (and cleared) when stale. */
 export function useContextAgent(): string | null {
-  return useAgentContext() ?? lastAgentId();
+  const urlAgent = useAgentContext();
+  const { data } = useAgents();
+  const stored = urlAgent ? null : lastAgentId();
+  const stale = contextAgentStale(stored, data?.agents);
+  useEffect(() => {
+    if (stale) clearLastAgent();
+  }, [stale]);
+  return urlAgent ?? (stale ? null : stored);
 }
 
 export function lastAgentId(): string | null {
