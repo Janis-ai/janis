@@ -1199,6 +1199,32 @@ export function stripWidgetClaims(text: string): string {
   return stripSentencesByLine(text, (s) => isWidgetClaim(s) || isWidgetDeny(s)).text;
 }
 
+// Deferred-lookup narration — "let me grab my calendar connection", "give
+// me just a second", "I'll check and get back". Tools run inside this
+// reply, so a promised next step can never happen: a reply that narrates
+// one while making no tool call is a lie with no follow-up. (When a tool
+// DID run this turn the same phrasing describes what just happened, so
+// the guard only fires with zero successful tool calls.)
+const LOOKUP_RES = [
+  // "let me grab/check/look up/pull up the…"
+  /\blet\s+me\s+(?:grab|check|look|pull|see|verify|find|get|fetch|bring|take)\b/i,
+  // "one moment", "just a sec", "give me a second", "give me just a minute"
+  /\b(?:one|just\s+a|give\s+me\s+(?:just\s+)?a)\s+(?:sec|secs|second|seconds|moment|moments|minute|minutes|mo)\b/i,
+  // "hang on", "hold on a sec", "bear with me", "be right back"
+  /\b(?:hang\s+on|hold\s+on|bear\s+with\s+me|be\s+right\s+back)\b/i,
+  // "I'll check", "I'll look into it", "I'll find out", "I'll get back to you"
+  /\bi'?ll\s+(?:check|look\s+(?:into|at|for|up)|find\s+out|get\s+back|verify|follow\s+up|pull\s+that\s+up|grab|fetch|bring)\b/i,
+];
+function isLookupPromise(s: string): boolean {
+  return !NEGATION.test(s) && LOOKUP_RES.some((p) => p.test(s));
+}
+export function promisesLookup(text: string): boolean {
+  return sentencesOf(text).some(isLookupPromise);
+}
+export function stripLookupPromises(text: string): string {
+  return stripSentencesByLine(text, isLookupPromise).text;
+}
+
 const CLAIM_GUARD_RETRY =
   'Your previous draft claimed to have completed a change (plan, account, refund, booking, "will take effect"…) but no tool ran. ' +
   'Rewrite it: describe what you can and cannot do in this chat — never claim an action that did not happen. ' +
@@ -1207,6 +1233,12 @@ const CLAIM_GUARD_RETRY =
 const WIDGET_GUARD_RETRY =
   'Your previous draft mis-described the components in this reply: never say "here are the cards/buttons" unless you emitted a WIDGET: or button line this turn, ' +
   'and never apologise that a component failed to render — if you emitted one, it rendered. Rewrite without the false claim.';
+
+const LOOKUP_GUARD_RETRY =
+  'Your previous draft promised a lookup or next step ("let me check", "give me a second", "I\'ll grab that") but made no tool call — ' +
+  'that promise can never be kept because everything you can do happens inside this one reply. ' +
+  'Rewrite it: if the request needs a tool, call it this turn; if you have no tool for it, say so plainly. ' +
+  'Never announce a step you are not taking.';
 
 const WIDGET_PARSE_RETRY =
   'Your previous draft emitted a component line (WIDGET: or WIDGET_REF:) that produced nothing — the JSON was malformed or the component name unknown — ' +
@@ -2914,6 +2946,19 @@ async function replyAsHostedAgent(
         prompt += '\n\n' + WIDGET_GUARD_RETRY;
         continue;
       }
+      // Deferred-lookup narration — "let me grab my calendar — give me a
+      // second" promises a next turn that never comes; tools run inside
+      // this reply. Regenerate once when nothing actually ran.
+      if (
+        attempt === 0 &&
+        reply &&
+        promisesLookup(reply) &&
+        !gen.toolCalls.some((t) => t.outcome !== 'failed')
+      ) {
+        console.warn(`[hosted] unbacked lookup narration conv=${convId} — regenerating`);
+        prompt += '\n\n' + LOOKUP_GUARD_RETRY;
+        continue;
+      }
       if (reply || widgets.length || toolWidgets.length || buttons.length || attempt === 1) break;
       console.warn(`[hosted] empty completion conv=${convId} — retrying once`);
       prompt += '\n\n[your previous reply came back empty — reply to the user now in plain text]';
@@ -2949,6 +2994,23 @@ async function replyAsHostedAgent(
         }
       }
     }
+    // Same belt-and-braces for a deferred-lookup promise that survived the
+    // regen — strip the narration sentences rather than ship a dead promise.
+    let lookupPromiseStripped = false;
+    if (
+      reply &&
+      promisesLookup(reply) &&
+      !gen.toolCalls.some((t) => t.outcome !== 'failed')
+    ) {
+      const stripped = stripLookupPromises(reply).trim();
+      if (stripped !== reply.trim()) {
+        console.error(`[hosted] stripped unbacked lookup narration conv=${convId}`);
+        lookupPromiseStripped = true;
+        reply =
+          stripped ||
+          "I can't look that up directly — tell me what you need and I'll answer as best I can.";
+      }
+    }
     // Run-degradation report — tool failures and output loss that survived
     // the regen guards are exactly what 'error' alert rules exist for
     // (the iTunes dropped-widget case). Opt-in: no rule, no work.
@@ -2962,6 +3024,7 @@ async function replyAsHostedAgent(
       runIssues.push(`${lostComponents} component line(s) rendered nothing`);
     if (actionClaimStripped) runIssues.push('stripped an unbacked action claim');
     if (widgetClaimStripped) runIssues.push('stripped a widget-claim mismatch');
+    if (lookupPromiseStripped) runIssues.push('stripped an unbacked lookup narration');
     if (gen.stripped.length)
       runIssues.push(`link guard stripped ${gen.stripped.length} URL(s)`);
     if (runIssues.length)
@@ -2998,6 +3061,7 @@ async function replyAsHostedAgent(
         tools: gen.toolCalls,
         ...(actionClaimStripped ? { claim_guard: 'stripped' } : {}),
         ...(widgetClaimStripped ? { widget_guard: 'stripped' } : {}),
+        ...(lookupPromiseStripped ? { lookup_guard: 'stripped' } : {}),
       },
     };
     if (promptTokens || completionTokens) {

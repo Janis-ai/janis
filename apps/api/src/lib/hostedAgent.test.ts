@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, rankDocs, stripActionClaims, stripEscalationClaims, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, promisesLookup, rankDocs, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -640,6 +640,47 @@ describe('claimsWidgetShown / deniesWidgetShown', () => {
         "Here are the cards for each plan. The Free tier covers 1 agent. Let me know if you'd like details.",
       ),
     ).toBe("The Free tier covers 1 agent. Let me know if you'd like details.");
+  });
+});
+
+describe('promisesLookup / stripLookupPromises', () => {
+  it('catches deferred-lookup narration that can never be fulfilled', () => {
+    // prod incident (Jerry Garcia): "first, let me grab my calendar
+    // connection. Give me just a second!" — tools: [], nothing ever ran.
+    for (const s of [
+      'Let me grab my calendar connection.',
+      'Give me just a second!',
+      'One moment while I look that up.',
+      "I'll check and get back to you.",
+      "Hang on, I'll pull that up.",
+      "Let's see — I'll look into it.",
+      'Bear with me for a moment.',
+      'Let me verify that for you.',
+    ]) {
+      expect(promisesLookup(s), s).toBe(true);
+    }
+  });
+
+  it('leaves direct answers, questions and negations alone', () => {
+    for (const s of [
+      'The next open slot is Tuesday at 2pm.',
+      'Would you like me to check availability?',
+      "I can't check that from here.",
+      'I checked your order — it ships tomorrow.',
+      'Here is what I found in the docs.',
+      'Let me know if you need anything else.',
+      'It takes me a second to explain.',
+    ]) {
+      expect(promisesLookup(s), s).toBe(false);
+    }
+  });
+
+  it('strips only the narration sentences', () => {
+    const stripped = stripLookupPromises(
+      "I would love to chat! I'm always down to talk music.\n\n" +
+        "Let's check out what times are open—first, let me grab my calendar connection. Give me just a second!",
+    ).trim();
+    expect(stripped).toBe("I would love to chat! I'm always down to talk music.");
   });
 });
 
