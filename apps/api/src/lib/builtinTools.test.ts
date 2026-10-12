@@ -1431,7 +1431,7 @@ describe('add_knowledge_source builtin', () => {
   });
   it('rejects a bad kind and a missing url', async () => {
     const bad = JSON.parse(await addSource().run({ workspace: 'free', agent: 'bot2', kind: 'pdf' }, cctx(CONV2)));
-    expect(bad.error).toContain('url or text');
+    expect(bad.error).toContain('url, site or text');
     const noUrl = JSON.parse(
       await addSource().run({ workspace: 'free', agent: 'bot2', kind: 'url', url: 'notaurl' }, cctx(CONV2)),
     );
@@ -1466,6 +1466,60 @@ describe('add_knowledge_source builtin', () => {
     const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
     expect(file.agentId).toBe(bot2.id);
     await db.delete(pendingActions).where(eq(pendingActions.id, pa!.id));
+  });
+  it('kind=site fans the root out into per-page sources on approval', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (u: unknown) => {
+        const url = String(u);
+        if (url.includes('/api/v2/help_center')) return new Response('no', { status: 404 });
+        if (url.endsWith('/robots.txt') || url.endsWith('/sitemap.xml'))
+          return new Response('no', { status: 404 });
+        if (url === 'https://docs.acme.com/guide')
+          return new Response('<a href="/guide/a">a</a>', {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+          });
+        if (url === 'https://docs.acme.com/guide/a')
+          return new Response('<p>a</p>', {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+          });
+        return new Response('no', { status: 404 });
+      }),
+    );
+    try {
+      const out = await addSource().run(
+        { workspace: 'free', agent: 'bot2', kind: 'site', url: 'https://docs.acme.com/guide' },
+        cctx(CONV2),
+      );
+      expect(out).toContain('action_card');
+      const pa = (
+        await db.select().from(pendingActions).where(eq(pendingActions.conversationId, CONV2))
+      ).find((p) => p.toolName === 'apply_knowledge_source' && p.status === 'pending');
+      const applied = JSON.parse(
+        await applySource().run(pa!.args as Record<string, unknown>, { db, convId: CONV2, workspaceId: WS }),
+      );
+      expect(applied.ok).toBe(true);
+      expect(applied.summary).toContain('via crawl');
+      const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+      const files = await db
+        .select()
+        .from(schema.knowledgeFiles)
+        .where(eq(schema.knowledgeFiles.agentId, bot2.id));
+      expect(files.map((f) => f.sourceUrl).filter(Boolean).sort()).toEqual([
+        'https://docs.acme.com/guide',
+        'https://docs.acme.com/guide/a',
+      ]);
+      for (const f of files) {
+        if (f.sourceUrl?.includes('docs.acme.com')) {
+          await db.delete(schema.knowledgeFiles).where(eq(schema.knowledgeFiles.id, f.id));
+        }
+      }
+      await db.delete(pendingActions).where(eq(pendingActions.id, pa!.id));
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

@@ -43,6 +43,7 @@ import { normWidgetRef, WidgetComponent, WidgetState, WidgetToolBinding } from '
 import { toolsFor } from './toolExec.js';
 import { backfillSentimentAlerts } from './intent.js';
 import { fetchUrlText } from './urlSource.js';
+import { importHelpCentre } from './helpCentreImport.js';
 import { MAX_KNOWLEDGE_SOURCES } from './helpCentreImport.js';
 import type { BuilderDraft } from './agentBuilder.js';
 
@@ -2896,12 +2897,12 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'add_knowledge_source',
     description:
-      "Propose adding a knowledge SOURCE to an agent in the visitor's workspace — kind=url crawls a web page (and re-crawls it on the refresh cadence, like the console's Websites source), kind=text saves a pasted document as a file (like an uploaded doc). For a one-line fact use teach_agent instead; for a public help-centre article use draft_article. Posts an approval card — nothing is added until the visitor approves. Admin-only.",
+      "Propose adding a knowledge SOURCE to an agent in the visitor's workspace — kind=url crawls a web page (and re-crawls it on the refresh cadence, like the console's Websites source), kind=site imports a WHOLE website or help centre as per-page sources (Zendesk API → sitemap → link crawl), kind=text saves a pasted document as a file (like an uploaded doc). For a one-line fact use teach_agent instead; for a public help-centre article use draft_article. Posts an approval card — nothing is added until the visitor approves. Admin-only.",
     params: {
       agent: 'agent name (required)',
-      kind: 'url | text (required)',
-      url: 'kind=url: page to crawl, e.g. https://acme.com/faq',
-      refresh_hours: 'kind=url: re-crawl cadence in hours, 1-720 (default 24)',
+      kind: 'url | text | site (required)',
+      url: 'kind=url: page to crawl, e.g. https://acme.com/faq — kind=site: site/help-centre root to fan out, e.g. https://docs.acme.com',
+      refresh_hours: 'kind=url/site: re-crawl cadence in hours, 1-720 (default 24)',
       title: 'kind=text: document name, e.g. "Return policy"',
       content: 'kind=text: the document text',
       workspace: 'workspace name — only needed when ambiguous',
@@ -2920,8 +2921,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if ('error' in picked) return JSON.stringify(picked);
       const agent = picked.agent;
       const kind = String(args.kind ?? '').trim();
-      if (!['url', 'text'].includes(kind)) {
-        return JSON.stringify({ error: `unknown kind "${kind}" — url or text` });
+      if (!['url', 'text', 'site'].includes(kind)) {
+        return JSON.stringify({ error: `unknown kind "${kind}" — url, site or text` });
       }
       const execArgs: Record<string, unknown> = {
         workspace_id: ws.id,
@@ -2929,13 +2930,13 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         kind,
       };
       const display: Record<string, unknown> = { agent: agent.name };
-      if (kind === 'url') {
+      if (kind === 'url' || kind === 'site') {
         const url = String(args.url ?? '').trim();
         try {
           const u = new URL(url);
           if (!['http:', 'https:'].includes(u.protocol)) throw new Error('bad protocol');
         } catch {
-          return JSON.stringify({ error: 'a full http(s) url is required for kind=url' });
+          return JSON.stringify({ error: `a full http(s) url is required for kind=${kind}` });
         }
         const hours = args.refresh_hours !== undefined ? Number(args.refresh_hours) : 24;
         if (!Number.isFinite(hours) || hours < 1 || hours > 720) {
@@ -2945,6 +2946,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         execArgs.refresh_hours = Math.floor(hours);
         display.website = url;
         display.recrawl = `every ${Math.floor(hours)}h`;
+        if (kind === 'site') display.scope = 'whole site — each page lands as its own source';
       } else {
         const title = String(args.title ?? '').trim().slice(0, 200);
         const content = String(args.content ?? '').trim();
@@ -2959,7 +2961,11 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         ctx,
         'apply_knowledge_source',
         execArgs,
-        kind === 'url' ? `Crawl ${execArgs.url} — ${agent.name}` : `Save "${execArgs.title}" — ${agent.name}`,
+        kind === 'url'
+          ? `Crawl ${execArgs.url} — ${agent.name}`
+          : kind === 'site'
+            ? `Crawl site ${execArgs.url} — ${agent.name}`
+            : `Save "${execArgs.title}" — ${agent.name}`,
         display,
       );
     },
@@ -3001,6 +3007,37 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return `error: knowledge source limit reached (${MAX_KNOWLEDGE_SOURCES})`;
       }
       const kind = String(args.kind ?? '');
+      if (kind === 'site') {
+        // Whole-site import — Zendesk API → sitemap → link crawl; per-page
+        // stub rows the sweeper fills on its re-crawl pass.
+        let result;
+        try {
+          result = await importHelpCentre(
+            ctx.db,
+            wsId,
+            agent.id,
+            String(args.url ?? ''),
+            Number(args.refresh_hours ?? 24) || 24,
+          );
+        } catch (err) {
+          return `error: site import failed — ${err instanceof Error ? err.message : 'import failed'}`;
+        }
+        await audit(ctx.db, {
+          workspaceId: wsId,
+          userId: user.id,
+          userName: user.name,
+          action: 'agent.knowledge_source.add',
+          targetType: 'agent',
+          targetId: agent.id,
+          meta: { via: 'concierge', kind, url: String(args.url ?? ''), discovered: result.discovered },
+        });
+        bus.publish(wsId, { type: 'agent', data: { id: agent.id } });
+        return JSON.stringify({
+          ok: true,
+          agent: agent.name,
+          summary: `Crawling ${args.url} into ${agent.name}'s knowledge — ${result.discovered} pages found via ${result.kind}${result.skipped ? ` (${result.skipped} already imported)` : ''}; each lands as its own re-crawled source.`,
+        });
+      }
       let name: string;
       let text: string;
       let sizeBytes: number;

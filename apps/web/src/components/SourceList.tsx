@@ -193,7 +193,7 @@ export function SourceList({
       setImportMsg(
         r.kind === 'zendesk'
           ? `Imported ${r.imported} article${r.imported === 1 ? '' : 's'} from the Zendesk API${dup} — they re-crawl on this schedule.`
-          : `Found ${r.discovered} pages${dup} — ${r.queued} queued; the sweeper fetches them in batches. Sizes appear per row once fetched.`,
+          : `Found ${r.discovered} pages${r.kind === 'crawl' ? ' by following links' : ''}${dup} — ${r.queued} queued; the sweeper fetches them in batches. Sizes appear per row once fetched.`,
       );
       invalidate();
     },
@@ -327,15 +327,16 @@ export function SourceList({
               className="link small muted"
               onClick={() => setImportOpen((v) => !v)}
             >
-              Import a whole help center
+              Crawl a whole website
             </button>
           </div>
           {importOpen && (
             <div className="card" style={{ marginTop: 8 }}>
               <div className="muted" style={{ fontSize: 12 }}>
                 Zendesk/Intercom-style centers import via their articles API;
-                other sites are discovered through the sitemap and fetched in
-                batches — each page lands as its own row you can keep or drop.
+                other sites are discovered through the sitemap or by
+                following links from the page you paste — each page lands as
+                its own row you can keep or drop.
               </div>
               <div className="row" style={{ marginTop: 8, gap: 8 }}>
                 <input

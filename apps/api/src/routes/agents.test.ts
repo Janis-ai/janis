@@ -989,6 +989,51 @@ describe('knowledge-import', () => {
     expect(files[0].nextFetchAt!.getTime()).toBeLessThanOrEqual(Date.now());
   });
 
+  it('crawls links when there is no sitemap, staying in scope', async () => {
+    const id = await newAgent();
+    const html = (links: string[]) =>
+      `<html><body>${links.map((l) => `<a href="${l}">x</a>`).join('')}</body></html>`;
+    const pages: Record<string, string> = {
+      'https://docs.acme.com/guide': html([
+        '/guide/start',
+        '/guide/setup',
+        'https://docs.acme.com/guide/start#top', // fragment dedupe
+        '/guide/start?utm_source=x', // query dedupe
+        '/blog/post', // outside the /guide scope
+        'https://other.example.com/guide/x', // off-host
+        '/guide/logo.png', // asset
+        'mailto:a@acme.com',
+      ]),
+      'https://docs.acme.com/guide/start': html(['/guide/start/install', '/guide']),
+      'https://docs.acme.com/guide/setup': html([]),
+      'https://docs.acme.com/guide/start/install': html([]),
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (u: unknown) => {
+        const url = String(u);
+        if (url.includes('/api/v2/help_center')) return new Response('no', { status: 404 });
+        if (url.endsWith('/robots.txt') || url.endsWith('/sitemap.xml'))
+          return new Response('no', { status: 404 });
+        const body = pages[url];
+        return body !== undefined
+          ? new Response(body, { status: 200, headers: { 'content-type': 'text/html' } })
+          : new Response('no', { status: 404 });
+      }),
+    );
+    const res = await post(id, 'https://docs.acme.com/guide');
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.kind).toBe('crawl');
+    const files = await rows(id);
+    expect(files.map((f) => f.sourceUrl).sort()).toEqual([
+      'https://docs.acme.com/guide',
+      'https://docs.acme.com/guide/setup',
+      'https://docs.acme.com/guide/start',
+      'https://docs.acme.com/guide/start/install',
+    ]);
+  });
+
   it('follows sitemap index files', async () => {
     const id = await newAgent();
     vi.stubGlobal(
@@ -1019,12 +1064,12 @@ describe('knowledge-import', () => {
     expect(files[0].sourceUrl).toBe('https://kb.acme.com/help/refunds');
   });
 
-  it('422s when the site is neither Zendesk nor sitemap-discoverable', async () => {
+  it('422s when the site is neither Zendesk, sitemap- nor crawl-discoverable', async () => {
     const id = await newAgent();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('no', { status: 404 })));
     const res = await post(id, 'https://acme.com');
     expect(res.status).toBe(422);
-    expect((await res.json()).error).toContain('no help centre found');
+    expect((await res.json()).error).toContain('no pages found');
     expect(await rows(id)).toHaveLength(0);
   });
 });

@@ -197,6 +197,10 @@ Knowledge files: upload PDF, DOCX, TXT, MD, CSV, JSON, XML, HTML, LOG, YAML or i
 
 ---
 
+Whole-site knowledge: the "Crawl a whole website" option under Knowledge → Sources fans one pasted root out into per-page website sources — Zendesk/Intercom-style centres go through their articles API, other sites through the sitemap, and sites with no sitemap are crawled by following links (bounded to the pasted path's subtree). Each page re-crawls on the refresh cadence like a single page source. I can also do this for you — ask me to crawl a site into an agent (kind=site on add_knowledge_source; it still posts an approval card).
+
+---
+
 To make the agent unlearn something, remove it where it lives in Knowledge → Sources: delete the fact from the notes row, or the file/website source from the list. Both take effect immediately.
 
 ---

@@ -7,6 +7,10 @@ const FETCH_TIMEOUT_MS = 15_000;
 const MAX_ARTICLE_CHARS = 80_000;
 const MAX_ZENDESK_PAGES = 10; // 100 per page — 1000 articles discovered at most
 const MAX_SITEMAPS = 10; // index children + robots-listed files followed
+const MAX_CRAWL_PAGES = 30; // BFS discovery — pages visited per import, inline
+const MAX_CRAWL_DEPTH = 2; // root → section → leaf
+const SKIP_EXT =
+  /\.(pdf|jpe?g|png|gif|webp|svg|ico|css|js|mjs|map|zip|tar|gz|mp[34]|mov|avi|xml|json|txt|csv|docx?|xlsx?|pptx?|woff2?|ttf)$/i;
 
 /** Upper bound on knowledge rows per agent — a help-centre import can fan
  *  out to hundreds of article sources. Prompt injection is separately capped
@@ -14,7 +18,7 @@ const MAX_SITEMAPS = 10; // index children + robots-listed files followed
 export const MAX_KNOWLEDGE_SOURCES = 500;
 
 export interface HelpCentreImport {
-  kind: 'zendesk' | 'sitemap';
+  kind: 'zendesk' | 'sitemap' | 'crawl';
   /** Article URLs the centre advertised. */
   discovered: number;
   /** Rows filled with article text inline (Zendesk API path). */
@@ -120,9 +124,70 @@ function inScope(root: URL, urls: string[]): string[] {
   return out;
 }
 
+/** Same-host page links, canonicalised — fragment and query stripped so
+ *  ?sort= permutations can't fan the crawl out. */
+function extractLinks(html: string, page: URL): string[] {
+  const out: string[] = [];
+  for (const m of html.matchAll(/<a\s[^>]*?href\s*=\s*["']([^"'#]+)/gi)) {
+    try {
+      const u = new URL(m[1], page);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') continue;
+      u.hash = '';
+      u.search = '';
+      out.push(u.href);
+    } catch {
+      // unparseable href — skip
+    }
+  }
+  return out;
+}
+
+/** Whether a URL sits under the pasted path scope on the same host —
+ *  pasting .../docs scopes the crawl to the /docs subtree, the root keeps
+ *  the whole site. Mirrors inScope's prefix rule for a single candidate. */
+function inScopeUrl(root: URL, href: string): boolean {
+  const prefix = root.pathname === '/' ? '/' : root.pathname.replace(/\/+$/, '') + '/';
+  try {
+    const p = new URL(href);
+    return p.host === root.host && (prefix === '/' || p.pathname.startsWith(prefix));
+  } catch {
+    return false;
+  }
+}
+
+/** Sites with no sitemap — BFS same-host links from the pasted page, staying
+ *  inside its path scope. Discovery only; stub rows are filled by the
+ *  sweeper's re-crawl like the sitemap path. Bounded pages+depth keeps the
+ *  request-time crawl polite and finite. */
+async function crawlUrls(root: URL): Promise<string[]> {
+  const start = new URL(root.href);
+  start.hash = '';
+  start.search = '';
+  const seen = new Set([start.href]);
+  const queue: { url: string; depth: number }[] = [{ url: start.href, depth: 0 }];
+  const found: string[] = [];
+  let visited = 0;
+  while (queue.length && visited < MAX_CRAWL_PAGES) {
+    const { url, depth } = queue.shift()!;
+    visited++;
+    const res = await get(url, 'text/html,*/*;q=0.5').catch(() => null);
+    if (!res?.ok) continue;
+    if (!(res.headers.get('content-type') ?? '').toLowerCase().includes('html')) continue;
+    found.push(url);
+    if (depth >= MAX_CRAWL_DEPTH) continue;
+    for (const link of extractLinks(await res.text(), new URL(url))) {
+      if (seen.has(link) || !inScopeUrl(root, link) || SKIP_EXT.test(link)) continue;
+      seen.add(link);
+      queue.push({ url: link, depth: depth + 1 });
+    }
+  }
+  return found;
+}
+
 /** Import a whole help centre as per-article URL knowledge sources. Zendesk
  *  centres fill rows inline from the articles API; anything else falls back
- *  to the sitemap and leaves stub rows for the sweeper's bounded re-crawl. */
+ *  to the sitemap and leaves stub rows for the sweeper's bounded re-crawl.
+ *  No sitemap either → a bounded link crawl from the pasted page. */
 export async function importHelpCentre(
   db: Db,
   workspaceId: string,
@@ -186,16 +251,21 @@ export async function importHelpCentre(
     return { kind: 'zendesk', discovered: zd.length, imported, queued: 0, skipped, capped };
   }
 
+  // Sitemap first — the site's own page list is the most complete. When it
+  // yields nothing under the pasted path, BFS the site's own links instead.
   const scoped = inScope(root, await sitemapUrls(root));
-  if (!scoped.length) {
+  const crawled = scoped.length ? [] : await crawlUrls(root);
+  const discovered = scoped.length ? scoped : crawled;
+  const kind = scoped.length ? 'sitemap' : 'crawl';
+  if (!discovered.length) {
     throw new Error(
-      'no help centre found — not a Zendesk API and no sitemap URLs under that path',
+      'no pages found — not a Zendesk API, no sitemap URLs, and no crawlable links under that path',
     );
   }
   let queued = 0;
   let skipped = 0;
   let capped = false;
-  for (const u of scoped) {
+  for (const u of discovered) {
     if (have.has(u)) {
       skipped++;
       continue;
@@ -218,5 +288,5 @@ export async function importHelpCentre(
     have.add(u);
     queued++;
   }
-  return { kind: 'sitemap', discovered: scoped.length, imported: 0, queued, skipped, capped };
+  return { kind, discovered: discovered.length, imported: 0, queued, skipped, capped };
 }
