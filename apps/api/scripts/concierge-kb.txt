@@ -285,7 +285,7 @@ Agents can collect contact info natively: when a customer's email or phone is ne
 
 ---
 
-The Actions section installs tools the agent can call mid-conversation — one-click templates for Shopify, HubSpot, Zendesk (API key or OAuth), Salesforce, Stripe, Cal.com, Calendly, Brave Search and iTunes, or define your own HTTP endpoint with parameters. Calendly needs a personal access token (Calendly → Integrations & apps → API and webhooks → Personal access tokens); the agent can then list event types as bookable cards, check real slot availability, look up a customer's scheduled events, and propose cancellations for approval.
+The Actions section installs tools the agent can call mid-conversation — one-click templates for Shopify, HubSpot, Zendesk (API key or OAuth), Salesforce, Stripe, Cal.com, Calendly, Brave Search and iTunes, or define your own HTTP endpoint with parameters. Calendly connects one click via the Calendly (OAuth) card — no token hunting — or with a personal access token (Calendly → Integrations & apps → API and webhooks → Personal access tokens) on the plain Calendly card; the agent can then list event types as bookable cards, check real slot availability, look up a customer's scheduled events, and propose cancellations for approval.
 
 ---
 

@@ -40,6 +40,10 @@ export interface ToolTemplate {
     label: (fields: Record<string, string>) => string;
     credentials: (fields: Record<string, string>) => Record<string, string>;
   };
+  /** Janis-owned OAuth app — the card renders a Connect link to this API
+   *  path instead of a credentials form; the OAuth callback creates the
+   *  agent_connection row AND installs the tools. */
+  oauth_connect?: string;
   tools: CatalogTool[];
 }
 
@@ -701,6 +705,27 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       },
     ],
   },
+  // OAuth variant — same tool set, tokens minted from the agent_connection
+  // the /calendly/callback flow stores (Janis-owned app, refresh-rotated).
+  // Installing overwrites the PAT tools by name and vice-versa, so the
+  // connect method is swappable without touching approvals.
+  {
+    id: 'calendly-connect',
+    name: 'Calendly (OAuth)',
+    category: 'Scheduling',
+    blurb:
+      'One-click Calendly connect — share booking links, check real slot availability, and look up a customer’s scheduled events.',
+    docs_url: 'https://developer.calendly.com/api-docs',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'calendly',
+      label: () => 'Calendly',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/calendly/connect',
+    tools: [], // filled from the `calendly` template below — one source of truth
+  },
   {
     id: 'itunes',
     name: 'iTunes Search',
@@ -773,6 +798,24 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     ],
   },
 ];
+
+// The OAuth Calendly card shares the PAT card's tool defs with the
+// connection token swapped in — declared once, bound to either secret.
+{
+  const pat = TOOL_TEMPLATES.find((t) => t.id === 'calendly');
+  const oauth = TOOL_TEMPLATES.find((t) => t.id === 'calendly-connect');
+  if (pat && oauth) {
+    oauth.tools = pat.tools.map((t) => ({
+      ...t,
+      headers: Object.fromEntries(
+        Object.entries(t.headers ?? {}).map(([k, v]) => [
+          k,
+          v.replaceAll('{{secrets.CALENDLY_TOKEN}}', '{{secrets.CONN_CALENDLY_TOKEN}}'),
+        ]),
+      ),
+    }));
+  }
+}
 
 /** Names of catalog tools bound to the verified customer identity — applied
  *  by toolsFor at load time so tools installed before the flag existed are

@@ -2475,6 +2475,21 @@ function IntegrationCards({
   const [openId, setOpenId] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [err, setErr] = useState('');
+  // OAuth returns land back on this tab with a flash param — surface it and
+  // clear the query so a refresh doesn't replay the banner.
+  const [params, setParams] = useSearchParams();
+  const flash =
+    params.get('calendly_connect') != null
+      ? { kind: 'ok' as const, msg: `Calendly connected — ${params.get('calendly_connect')}` }
+      : params.get('calendly_error') != null
+        ? { kind: 'err' as const, msg: `Calendly connect failed — ${params.get('calendly_error')}` }
+        : null;
+  const clearFlash = () => {
+    if (!flash) return;
+    params.delete('calendly_connect');
+    params.delete('calendly_error');
+    setParams(params, { replace: true });
+  };
 
   const syncTools = (tools: AgentConfig['tools']) => setCfg({ ...cfg, tools });
   const invalidate = () => {
@@ -2648,9 +2663,20 @@ function IntegrationCards({
             </div>
           ) : (
             <div className="row" style={{ marginTop: 10 }}>
+              {/* Janis-owned OAuth apps get a consent link, not a form — the
+                  callback stores the connection and installs the tools. */}
+              {t.oauth_connect && !installed(t) ? (
+                <a
+                  className="btn primary"
+                  href={`${t.oauth_connect}?agent_id=${agentId}`}
+                  onClick={clearFlash}
+                >
+                  Connect {t.name.replace(/ \(OAuth\)$/, '')}
+                </a>
+              ) : null}
               {/* Credential-less integrations have nothing to update once
                   installed — show the badge + Remove, not a dead button. */}
-              {(!installed(t) || t.fields.length > 0) && (
+              {!t.oauth_connect && (!installed(t) || t.fields.length > 0) && (
                 <button
                   className="btn"
                   onClick={() =>
@@ -2663,7 +2689,9 @@ function IntegrationCards({
               {installed(t) && (
                 <>
                   {/* 'connected' overstates a credential-less add — 'enabled' */}
-                  <span className="badge active">{t.fields.length ? 'connected' : 'enabled'}</span>
+                  <span className="badge active">
+                    {t.fields.length || t.oauth_connect ? 'connected' : 'enabled'}
+                  </span>
                   <button className="btn" onClick={() => remove.mutate(t)}>Remove</button>
                 </>
               )}
@@ -2673,20 +2701,32 @@ function IntegrationCards({
     );
   }
 
-  return shown.length ? (
+  return (
     <>
-      {grid(shown)}
-      {rest.length > 0 && (
-        <details style={{ marginTop: 12 }}>
-          <summary className="muted" style={{ cursor: 'pointer', fontSize: 13 }}>
-            Browse all integrations ({rest.length})
-          </summary>
-          <div style={{ marginTop: 10 }}>{grid(rest)}</div>
-        </details>
+      {flash && (
+        <div
+          className={flash.kind === 'ok' ? 'badge active' : 'error'}
+          style={{ display: 'inline-block', marginBottom: 10 }}
+        >
+          {flash.msg}
+        </div>
+      )}
+      {shown.length ? (
+        <>
+          {grid(shown)}
+          {rest.length > 0 && (
+            <details style={{ marginTop: 12 }}>
+              <summary className="muted" style={{ cursor: 'pointer', fontSize: 13 }}>
+                Browse all integrations ({rest.length})
+              </summary>
+              <div style={{ marginTop: 10 }}>{grid(rest)}</div>
+            </details>
+          )}
+        </>
+      ) : (
+        grid(rest)
       )}
     </>
-  ) : (
-    grid(rest)
   );
 }
 

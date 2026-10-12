@@ -61,7 +61,7 @@ import { audit } from '../lib/audit.js';
 import { invalidateChannelCache } from '../lib/channels.js';
 import { TOOL_TEMPLATES } from '../lib/toolTemplates.js';
 import { generateDraft } from '../lib/agentBuilder.js';
-import { connectionToken } from '../lib/connections.js';
+import { connectionSecretName, connectionToken } from '../lib/connections.js';
 import {
   createSlackChannel,
   getInstallation,
@@ -1454,6 +1454,23 @@ export function agentRoutes(db: Db) {
     return c.json({ ok: true });
   });
 
+  // A connection whose minted-token secret no remaining tool references is
+  // orphaned — an OAuth grant that would keep refreshing on every run
+  // unused (e.g. uninstalling OAuth-Calendly tools via the PAT card, which
+  // shares the tool names but carries no connection itself). A custom tool
+  // referencing CONN_* still counts as a live reference.
+  const gcUnusedConnections = async (agentId: string, tools: AgentConfig['tools']) => {
+    const refs = JSON.stringify(tools ?? []);
+    for (const row of await db
+      .select()
+      .from(agentConnections)
+      .where(eq(agentConnections.agentId, agentId))) {
+      if (!refs.includes(connectionSecretName(row.provider))) {
+        await db.delete(agentConnections).where(eq(agentConnections.id, row.id));
+      }
+    }
+  };
+
   // Predefined connections — install a catalog template's tools + store its
   // credentials as agent secrets in one shot. Tools merge by name so
   // reinstalling updates rather than duplicating.
@@ -1476,7 +1493,9 @@ export function agentRoutes(db: Db) {
 
       // OAuth templates: store the credentials and mint a token now so a bad
       // client_id/secret fails at connect time, not during a conversation.
-      if (tpl.connection) {
+      // oauth_connect templates are different — the authorization-code
+      // callback owns the connection row; the install just lands the tools.
+      if (tpl.connection && !tpl.oauth_connect) {
         const { provider } = tpl.connection;
         const creds = tpl.connection.credentials(fields);
         const [conn] = await db
@@ -1523,6 +1542,7 @@ export function agentRoutes(db: Db) {
         .set({ config: { ...cfg, tools } })
         .where(eq(agents.id, agent.id))
         .returning();
+      await gcUnusedConnections(agent.id, tools);
       return c.json({ agent: toAgent(updated) });
     },
   );
@@ -1558,22 +1578,14 @@ export function agentRoutes(db: Db) {
     },
   );
 
-  // Remove a template's tools; secrets stay (they may be shared with custom tools).
+  // Remove a template's tools; secrets stay (they may be shared with custom
+  // tools). The template's connection drops via gcUnusedConnections below —
+  // reference-aware, so a custom tool still minting via CONN_* keeps it.
   app.delete('/:id/tools/:template', agentAdmin, async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
     const tpl = TOOL_TEMPLATES.find((t) => t.id === c.req.param('template'));
     if (!tpl) return c.json({ error: 'unknown template' }, 404);
-    if (tpl.connection) {
-      await db
-        .delete(agentConnections)
-        .where(
-          and(
-            eq(agentConnections.agentId, agent.id),
-            eq(agentConnections.provider, tpl.connection.provider),
-          ),
-        );
-    }
     const cfg = (agent.config ?? {}) as AgentConfig;
     const names = new Set(tpl.tools.map((t) => t.name));
     const tools = (cfg.tools ?? []).filter((t) => !names.has(t.name));
@@ -1582,6 +1594,7 @@ export function agentRoutes(db: Db) {
       .set({ config: { ...cfg, tools } })
       .where(eq(agents.id, agent.id))
       .returning();
+    await gcUnusedConnections(agent.id, tools);
     return c.json({ agent: toAgent(updated) });
   });
 

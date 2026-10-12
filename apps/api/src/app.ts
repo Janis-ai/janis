@@ -38,6 +38,7 @@ import { slackApiRoutes, slackPublicRoutes } from './routes/slack.js';
 import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 import { metaApiRoutes, metaPublicRoutes } from './routes/meta.js';
 import { gmailApiRoutes, gmailPublicRoutes } from './routes/gmail.js';
+import { calendlyApiRoutes, calendlyPublicRoutes } from './routes/calendly.js';
 import { outlookApiRoutes, outlookPublicRoutes } from './routes/outlook.js';
 import { voiceRoutes } from './routes/voice.js';
 import { smsRoutes } from './routes/sms.js';
@@ -142,6 +143,7 @@ export function createApp(db: Db) {
   app.use('/channels/meta/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));
   app.use('/channels/email/*', rateLimit({ scope: 'email', windowMs: 60_000, max: 300 }));
   app.use('/gmail/*', rateLimit({ scope: 'gmail', windowMs: 60_000, max: 60 }));
+  app.use('/calendly/*', rateLimit({ scope: 'calendly', windowMs: 60_000, max: 60 }));
   app.use('/messenger/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));
   app.use('/meta/*', rateLimit({ scope: 'meta-cb', windowMs: 60_000, max: 60 }));
   app.use('/billing/stripe-webhook', rateLimit({ scope: 'stripe', windowMs: 60_000, max: 60 }));
@@ -187,6 +189,7 @@ export function createApp(db: Db) {
   app.route('/messenger', legacyWebhookRoutes(db)); // legacy Meta app path (webhook.janis.ai)
   app.route('/meta', metaPublicRoutes(db)); // Meta-signed: data-deletion + deauthorize callbacks
   app.route('/gmail', gmailPublicRoutes(db));
+  app.route('/calendly', calendlyPublicRoutes(db)); // Calendly OAuth callback
   app.route('/outlook', outlookPublicRoutes(db)); // MS-signed-token OAuth + Graph push // signed-token OAuth start/callback — no session
   app.use('/voice/*', rateLimit({ scope: 'voice', windowMs: 60_000, max: 120 }));
   app.route('/voice', voiceRoutes(db)); // Twilio-signed voice webhooks
@@ -252,6 +255,7 @@ export function createApp(db: Db) {
   api.route('/channels', channelApiRoutes(db));
   api.route('/meta', metaApiRoutes(db));
   api.route('/gmail', gmailApiRoutes(db));
+  api.route('/calendly', calendlyApiRoutes(db));
   api.route('/outlook', outlookApiRoutes(db));
   api.route('/onboarding', onboardingRoutes(db));
   api.route('/billing', billingRoutes(db));

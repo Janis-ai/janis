@@ -141,6 +141,13 @@ export const env = {
   msPushToken: process.env.MS_PUSH_TOKEN ?? '', // shared secret on the push URL
   metaAppId: process.env.META_APP_ID ?? '', // FB app id for OAuth connect flow
   metaAppSecret: process.env.META_APP_SECRET ?? '', // OAuth exchange + X-Hub-Signature-256
+  // Calendly OAuth app — authorization-code connect for the Calendly tool
+  // template; replaces customers pasting a personal access token.
+  calendlyClientId: process.env.CALENDLY_CLIENT_ID ?? '',
+  calendlyClientSecret: process.env.CALENDLY_CLIENT_SECRET ?? '',
+  calendlyRedirectUri:
+    process.env.CALENDLY_REDIRECT_URI ??
+    `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/calendly/callback`,
   // Cloudflare OAuth client — auto-configures sending-domain DNS records on
   // the client's zone (zone.read + dns.write scopes).
   cfOauthClientId: process.env.CLOUDFLARE_OAUTH_CLIENT_ID ?? '',

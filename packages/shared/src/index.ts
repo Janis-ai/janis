@@ -843,6 +843,9 @@ export const ToolTemplateInfo = z.object({
   docs_url: z.string().optional(),
   // 'oauth' templates mint client-credentials tokens onto agent_connections
   auth: z.enum(['secrets', 'oauth']).optional(),
+  // Janis-owned OAuth app — the card links here instead of rendering a
+  // credentials form; the callback stores the connection + installs tools.
+  oauth_connect: z.string().optional(),
   fields: z.array(ToolTemplateField),
   tools: z.array(
     z.object({

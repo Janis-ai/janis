@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agentConnections } from '../db/schema.js';
+import { env } from '../env.js';
 import { decryptSecret, encryptSecret } from './secrets.js';
 
 type ConnRow = typeof agentConnections.$inferSelect;
@@ -11,16 +12,23 @@ export interface ConnectionCreds {
   client_id?: string;
   client_secret?: string;
   scope?: string;
+  /** Authorization-code providers (Calendly) — rotating; persisted on mint. */
+  refresh_token?: string;
   [k: string]: string | undefined;
 }
 
 interface ProviderSpec {
-  /** OAuth2 client_credentials token endpoint for this connection's host. */
+  /** OAuth2 token endpoint for this connection's host. */
   tokenUrl: (c: ConnectionCreds) => string;
   /** Optional scope sent with the grant. */
   scope?: string;
   /** Extra form fields beyond grant_type/client_id/client_secret/scope. */
   extra?: (c: ConnectionCreds) => Record<string, string>;
+  /** Authorization-code connections carry a refresh_token in creds instead
+   *  of client credentials — mint uses grant_type=refresh_token with this
+   *  Basic-auth pair (the Janis app's client id/secret), then persists the
+   *  rotated refresh token providers hand back. */
+  refreshBasic?: () => [string, string];
 }
 
 const PROVIDERS: Record<string, ProviderSpec> = {
@@ -32,6 +40,12 @@ const PROVIDERS: Record<string, ProviderSpec> = {
   salesforce: {
     tokenUrl: (c) => `https://${c.host}/services/oauth2/token`,
     extra: () => ({ grant_type: 'client_credentials' }),
+  },
+  // Janis-owned OAuth app (developer.calendly.com) — the connection stores
+  // only the visitor-granted refresh token; access tokens last ~2h.
+  calendly: {
+    tokenUrl: () => 'https://auth.calendly.com/oauth/token',
+    refreshBasic: () => [env.calendlyClientId, env.calendlyClientSecret],
   },
 };
 
@@ -48,28 +62,42 @@ export function connectionCreds(conn: ConnRow): ConnectionCreds {
   }
 }
 
-/** Mint a fresh client_credentials token and persist it on the row. */
+/** Mint a fresh token and persist it on the row — client_credentials for
+ *  BYO-app providers, refresh_token (Basic-auth, rotating) for Janis-owned
+ *  OAuth apps like Calendly. */
 async function mint(db: Db, conn: ConnRow, spec: ProviderSpec): Promise<string> {
   const creds = connectionCreds(conn);
-  if (!creds.client_id || !creds.client_secret) {
+  const refresh = spec.refreshBasic && creds.refresh_token;
+  if (!refresh && (!creds.client_id || !creds.client_secret)) {
     throw new Error('connection is missing client credentials');
   }
-  const body = new URLSearchParams({
-    grant_type: 'client_credentials',
-    client_id: creds.client_id,
-    client_secret: creds.client_secret,
-    ...(spec.scope ?? creds.scope ? { scope: spec.scope ?? creds.scope! } : {}),
-    ...(spec.extra?.(creds) ?? {}),
-  });
+  const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded' };
+  const body = refresh
+    ? new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: creds.refresh_token!,
+      })
+    : new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: creds.client_id!,
+        client_secret: creds.client_secret!,
+        ...(spec.scope ?? creds.scope ? { scope: spec.scope ?? creds.scope! } : {}),
+        ...(spec.extra?.(creds) ?? {}),
+      });
+  if (refresh) {
+    const [id, secret] = spec.refreshBasic!();
+    headers.authorization = `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`;
+  }
   const res = await fetch(spec.tokenUrl(creds), {
     method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers,
     body: body.toString(),
     signal: AbortSignal.timeout(10_000),
   });
   const data = (await res.json().catch(() => ({}))) as {
     access_token?: string;
     expires_in?: number;
+    refresh_token?: string;
     error?: string;
     error_description?: string;
   };
@@ -84,6 +112,14 @@ async function mint(db: Db, conn: ConnRow, spec: ProviderSpec): Promise<string> 
     .set({
       accessTokenEnc: encryptSecret(data.access_token),
       expiresAt,
+      // Rotating refresh tokens (Calendly) — the old one dies on use.
+      ...(data.refresh_token
+        ? {
+            credentialsEnc: encryptSecret(
+              JSON.stringify({ ...creds, refresh_token: data.refresh_token }),
+            ),
+          }
+        : {}),
       updatedAt: new Date(),
     })
     .where(eq(agentConnections.id, conn.id));

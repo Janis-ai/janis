@@ -78,4 +78,21 @@ describe('calendly tool template', () => {
     expect(t.method).toBe('POST');
     expect(t.url).toContain('/scheduled_events/{event_uuid}/cancellation');
   });
+
+  it('oauth variant mirrors the tool set against CONN_CALENDLY_TOKEN', () => {
+    const oauth = TOOL_TEMPLATES.find((t) => t.id === 'calendly-connect')!;
+    expect(oauth.fields).toEqual([]);
+    expect(oauth.oauth_connect).toBe('/api/calendly/connect');
+    expect(oauth.connection?.provider).toBe('calendly');
+    // same names/urls/approval+identity flags; only the auth header differs
+    for (const pt of calendly.tools) {
+      const ot = oauth.tools.find((t) => t.name === pt.name)!;
+      expect(ot).toBeTruthy();
+      expect(ot.url).toBe(pt.url);
+      expect(ot.method).toBe(pt.method);
+      expect(ot.approval).toBe(pt.approval);
+      expect(ot.identity).toBe(pt.identity);
+      expect(ot.headers?.authorization).toBe('Bearer {{secrets.CONN_CALENDLY_TOKEN}}');
+    }
+  });
 });

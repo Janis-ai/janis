@@ -8,6 +8,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agentConnections, agents, agentTests, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken } from '../lib/crypto.js';
+import { encryptSecret } from '../lib/secrets.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { env } from '../env.js';
 import { agentRoutes } from './agents.js';
@@ -211,6 +212,74 @@ describe('tool template install', () => {
     expect(
       await db.select().from(agentConnections).where(eq(agentConnections.agentId, id)),
     ).toHaveLength(0);
+  });
+
+  it('removing via a sibling template drops an orphaned OAuth connection', async () => {
+    // OAuth-Calendly tools and the PAT-Calendly card share tool names —
+    // removing through the PAT card (which has no connection of its own)
+    // must still retire the calendly grant or it keeps minting on every run.
+    const id = await newAgentId();
+    await app.request(`/api/agents/${id}/tools/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ template: 'calendly-connect', fields: {} }),
+    });
+    const [agentRow] = await db.select().from(agents).where(eq(agents.id, id));
+    await db.insert(agentConnections).values({
+      agentId: id,
+      workspaceId: agentRow.workspaceId,
+      provider: 'calendly',
+      credentialsEnc: encryptSecret(JSON.stringify({ refresh_token: 'r1' })),
+    });
+    const res = await app.request(`/api/agents/${id}/tools/calendly`, {
+      method: 'DELETE',
+      headers: { cookie: parentCookie },
+    });
+    expect(res.status).toBe(200);
+    expect(
+      await db.select().from(agentConnections).where(eq(agentConnections.agentId, id)),
+    ).toHaveLength(0);
+  });
+
+  it('uninstall keeps a connection a custom tool still references', async () => {
+    const id = await newAgentId();
+    const res = await app.request(`/api/agents/${id}/tools/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ template: 'calendly-connect', fields: {} }),
+    });
+    const { agent } = await res.json();
+    const [agentRow] = await db.select().from(agents).where(eq(agents.id, id));
+    await db.insert(agentConnections).values({
+      agentId: id,
+      workspaceId: agentRow.workspaceId,
+      provider: 'calendly',
+      credentialsEnc: encryptSecret(JSON.stringify({ refresh_token: 'r1' })),
+    });
+    // Swap the template tools for a hand-built one that still mints via CONN_.
+    await db
+      .update(agents)
+      .set({
+        config: {
+          ...agent.config,
+          tools: [
+            {
+              name: 'my_calendly_ping',
+              method: 'GET',
+              url: 'https://api.calendly.com/users/me',
+              headers: { authorization: 'Bearer {{secrets.CONN_CALENDLY_TOKEN}}' },
+            },
+          ],
+        },
+      })
+      .where(eq(agents.id, id));
+    await app.request(`/api/agents/${id}/tools/calendly-connect`, {
+      method: 'DELETE',
+      headers: { cookie: parentCookie },
+    });
+    expect(
+      await db.select().from(agentConnections).where(eq(agentConnections.agentId, id)),
+    ).toHaveLength(1);
   });
 
   it('oauth install fails cleanly when the provider rejects the credentials', async () => {
