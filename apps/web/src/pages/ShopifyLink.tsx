@@ -90,12 +90,12 @@ export default function ShopifyLink() {
           <p>
             <strong>{shop}</strong> is connected — its credentials now live on the agent.
           </p>
-          <a className="btn primary" style={{ width: '100%', textAlign: 'center' }} href={`/agents/${done}`}>
+          <a className="btn primary" style={{ display: 'block', textAlign: 'center' }} href={`/agents/${done}`}>
             Configure the agent
           </a>
           <a
             className="btn"
-            style={{ width: '100%', marginTop: 8, textAlign: 'center' }}
+            style={{ display: 'block', margin: '8px 0 0', textAlign: 'center' }}
             href={`https://${shop}/admin`}
           >
             Back to Shopify admin

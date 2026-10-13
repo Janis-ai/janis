@@ -125,7 +125,7 @@ export default function ShopifyApp() {
             </p>
             <a
               className="btn primary"
-              style={{ width: '100%', marginTop: 8, textAlign: 'center' }}
+              style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
               href={state.link_url}
               target="_blank"
               rel="noreferrer"
@@ -156,7 +156,7 @@ export default function ShopifyApp() {
               Your agent now holds this shop's credentials — configure order lookups, product
               answers, and the storefront chat widget in Janis.
             </p>
-            <a className="btn" style={{ width: '100%', marginTop: 8, textAlign: 'center' }} href="/conversations" target="_blank" rel="noreferrer">
+            <a className="btn" style={{ display: 'block', marginTop: 8, textAlign: 'center' }} href="/conversations" target="_blank" rel="noreferrer">
               Open Janis
             </a>
           </>
