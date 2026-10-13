@@ -123,7 +123,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
-          '{"query":"query($q:String!){products(first:8,query:$q){nodes{id title handle vendor productType featuredImage{url} variants(first:1){nodes{price}}}}}","variables":{"q":"status:active title:*${query:text}*"}}',
+          '{"query":"query($q:String!){products(first:8,query:$q){nodes{id title handle vendor productType featuredImage{url} variants(first:1){nodes{price}} priceRangeV2{minVariantPrice{amount currencyCode}}}}}","variables":{"q":"status:active title:*${query:text}*"}}',
         params: { query: 'keyword to match in product titles' },
         widget: {
           type: 'cards',
@@ -134,7 +134,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
             title: 'title',
             subtitle: 'vendor',
             image: 'featuredImage.url',
-            price: 'variants.nodes.0.price',
+            price: '{priceRangeV2.minVariantPrice.currencyCode} {priceRangeV2.minVariantPrice.amount}',
             link: 'https://{{secrets.SHOPIFY_SHOP}}/products/{handle}',
           },
         },

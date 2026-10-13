@@ -410,7 +410,7 @@
     '.janis-wscroll.janis-wprev{left:2px;padding-right:2px}.janis-wscroll.janis-wnext{right:2px;padding-left:2px}' +
     '.janis-wscroll[disabled]{opacity:0;pointer-events:none}' +
     '.janis-wcard{flex:0 0 150px;max-width:150px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;color:#1f2937;overflow:hidden}' +
-    '.janis-wcard img{width:100%;height:90px;object-fit:cover;display:block;margin:0!important;max-width:none!important;max-height:90px!important;border-radius:0}' +
+    '.janis-wcard img{width:100%;height:110px;object-fit:contain;display:block;margin:0!important;max-width:none!important;max-height:110px!important;border-radius:0;background:#f8fafc}' +
     '.janis-wcard-body{padding:8px}' +
     '.janis-wcard-t{font-weight:600;font-size:13px;line-height:1.3}' +
     '.janis-wcard-s{color:#6b7280;font-size:12px;margin-top:2px;line-height:1.3}' +

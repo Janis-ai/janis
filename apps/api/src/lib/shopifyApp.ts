@@ -341,12 +341,31 @@ export async function bindShop(
     (ch) => !(ch.credentials as { internal?: boolean } | null)?.internal,
   );
   if (!external.length) {
+    // Visitor-facing header — the shop's display name, not the myshopify
+    // handle ("Shopify — janis-store-sx5bpcd3" reads wrong to customers).
+    let shopName: string | undefined;
+    if (token) {
+      try {
+        const res = await fetch(`https://${row.shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-shopify-access-token': token,
+          },
+          body: JSON.stringify({ query: '{shop{name}}' }),
+        });
+        const json = (await res.json()) as { data?: { shop?: { name?: string } } };
+        shopName = json.data?.shop?.name || undefined;
+      } catch {
+        // cosmetic — fall through to the handle-derived title
+      }
+    }
     await db.insert(channels).values({
       workspaceId: binding.workspaceId,
       agentId: binding.agentId,
       kind: 'webchat',
       name: `Shopify — ${row.shop.replace(/\.myshopify\.com$/, '')}`,
-      credentials: {},
+      credentials: { title: shopName ?? row.shop.replace(/\.myshopify\.com$/, '') },
     });
     invalidateChannelCache();
   }
