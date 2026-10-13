@@ -91,7 +91,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_lookup_order',
         label: 'Look up order',
         description:
-          'Look up a Shopify order by order number for the verified customer email. Returns status, items, totals and fulfilment/tracking info.',
+          'Look up a Shopify order by order number + the email it was placed under — the pair verifies the shopper (same model as Shopify guest order tracking; a guest needs no sign-in). Returns status, items, totals and fulfilment/tracking info.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
@@ -99,9 +99,8 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           '{"query":"query($q:String!){orders(first:1,query:$q){nodes{id name email displayFinancialStatus displayFulfillmentStatus totalPriceSet{shopMoney{amount currencyCode}} createdAt cancelledAt lineItems(first:10){nodes{title quantity}} fulfillments{status trackingInfo{number url company}}}}}","variables":{"q":"name:${order_number:text} email:${email:text}"}}',
         params: {
           order_number: 'the order number including the # prefix, e.g. #1234',
-          email: "the verified customer's own email address",
+          email: 'the email the order was placed under — required alongside the order number',
         },
-        identity: true,
       },
       {
         name: 'shopify_customer_orders',
@@ -862,6 +861,13 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
  *  covered too (stored config.tools can't carry a stale unflagged def). */
 export const IDENTITY_TOOL_NAMES = new Set(
   TOOL_TEMPLATES.flatMap((t) => t.tools.filter((x) => x.identity).map((x) => x.name)),
+);
+
+/** Every catalog tool name — lets toolsFor tell "catalog def changed"
+ *  apart from "operator-authored custom tool" when deciding whether a
+ *  stored flag is stale. */
+export const CATALOG_TOOL_NAMES = new Set(
+  TOOL_TEMPLATES.flatMap((t) => t.tools.map((x) => x.name)),
 );
 
 /** Catalog tool name → its widget binding — backfilled by toolsFor onto

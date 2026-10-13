@@ -115,6 +115,32 @@ describe('toolsFor identity backfill', () => {
     expect(t[0].widget?.items).toBe('results');
   });
 
+  it('clears a stale stored identity flag when the catalog def dropped it', () => {
+    // shopify_lookup_order was identity-bound when installed; the def is
+    // now pair-verified (order_number + email) — the stored flag must go.
+    const t = toolsFor(
+      fakeAgent([
+        {
+          name: 'shopify_lookup_order',
+          description: 'd',
+          method: 'POST',
+          url: 'https://x.myshopify.com/admin/api/2026-10/graphql.json',
+          identity: true,
+        },
+      ]),
+    );
+    expect(t[0].identity).toBeUndefined();
+  });
+
+  it('keeps a custom tool\'s own identity flag — only catalog defs clear', () => {
+    const t = toolsFor(
+      fakeAgent([
+        { name: 'my_custom_lookup', description: 'd', method: 'POST', url: 'https://x.example', identity: true },
+      ]),
+    );
+    expect(t[0].identity).toBe(true);
+  });
+
   it('a stored widget config wins over the catalog backfill', () => {
     const mine = { type: 'options' as const, map: { label: 'name' } };
     const t = toolsFor(
