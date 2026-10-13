@@ -1,0 +1,162 @@
+import { useEffect, useState } from 'react';
+import { api } from '../api/client';
+import { BrandImg } from '../components/bits';
+
+/**
+ * The embedded app — loaded inside Shopify admin's iframe (App URL). App
+ * Bridge v4 hands us a session-token JWT; /api/shopify/session verifies it
+ * and answers with the shop's link state. Unlinked shops get a "Connect
+ * your Janis workspace" button that opens the console link flow in a new
+ * tab (cookies/session can't be relied on inside the iframe anyway).
+ */
+
+declare global {
+  interface Window {
+    shopify?: { idToken?: () => Promise<string> };
+  }
+}
+
+type SessionState =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'unlinked'; shop: string; link_url: string }
+  | { kind: 'linked'; shop: string; agent: string | null; workspace: string | null }
+  | { kind: 'uninstalled'; shop: string };
+
+async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopify']>> {
+  // The meta tag MUST exist before the script evaluates — v4 reads its
+  // config (api key + host param) off it at init.
+  const meta = document.createElement('meta');
+  meta.name = 'shopify-api-key';
+  meta.content = apiKey;
+  document.head.appendChild(meta);
+  await new Promise<void>((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Shopify App Bridge failed to load'));
+    document.head.appendChild(s);
+  });
+  if (!window.shopify?.idToken) throw new Error('open this app inside Shopify admin');
+  return window.shopify;
+}
+
+export default function ShopifyApp() {
+  const [state, setState] = useState<SessionState>({ kind: 'loading' });
+  const [tick, setTick] = useState(0); // "I've connected" re-check
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get('shop')) {
+      setState({
+        kind: 'error',
+        message: 'Open this app from the Apps section of your Shopify admin — the shop context is missing.',
+      });
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await api<{ api_key: string }>('/api/shopify/app-config');
+        const bridge = await loadAppBridge(cfg.api_key);
+        const token = await bridge.idToken!();
+        const res = await api<{
+          shop: string;
+          state: string;
+          link_url?: string;
+          agent?: string | null;
+          workspace?: string | null;
+        }>('/api/shopify/session', { method: 'POST', body: JSON.stringify({ token }) });
+        if (cancelled) return;
+        if (res.state === 'linked') {
+          setState({ kind: 'linked', shop: res.shop, agent: res.agent ?? null, workspace: res.workspace ?? null });
+        } else if (res.state === 'uninstalled') {
+          setState({ kind: 'uninstalled', shop: res.shop });
+        } else {
+          setState({ kind: 'unlinked', shop: res.shop, link_url: res.link_url ?? '' });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setState({ kind: 'error', message: err instanceof Error ? err.message : 'install failed' });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tick]);
+
+  return (
+    <div className="login-wrap">
+      <div className="card login-card">
+        <div className="login-brand">
+          <BrandImg alt="Janis" style={{ height: 40, marginBottom: 6 }} />
+          <p className="muted">Human backup for AI agents</p>
+        </div>
+
+        {state.kind === 'loading' && <div className="muted">Connecting to Janis…</div>}
+
+        {state.kind === 'error' && (
+          <>
+            <div className="error">{state.message}</div>
+            <button className="btn" style={{ width: '100%', marginTop: 12 }} onClick={() => setTick((t) => t + 1)}>
+              Try again
+            </button>
+          </>
+        )}
+
+        {state.kind === 'unlinked' && (
+          <>
+            <p>
+              Connect <strong>{state.shop}</strong> to a Janis workspace to power your storefront
+              assistant — order lookups, product answers, and a chat widget for your customers.
+            </p>
+            <a
+              className="btn primary"
+              style={{ width: '100%', marginTop: 8, textAlign: 'center' }}
+              href={state.link_url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Connect your Janis workspace
+            </a>
+            <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
+              Already connected?{' '}
+              <a href="#" onClick={(e) => { e.preventDefault(); setTick((t) => t + 1); }}>
+                Refresh this app
+              </a>
+            </p>
+          </>
+        )}
+
+        {state.kind === 'linked' && (
+          <>
+            <p>
+              <strong>{state.shop}</strong> is connected
+              {state.agent ? (
+                <>
+                  {' '}to <strong>{state.agent}</strong>
+                </>
+              ) : null}
+              {state.workspace ? <span className="muted"> ({state.workspace})</span> : null}.
+            </p>
+            <p className="muted" style={{ fontSize: 13 }}>
+              Your agent now holds this shop's credentials — configure order lookups, product
+              answers, and the storefront chat widget in Janis.
+            </p>
+            <a className="btn" style={{ width: '100%', marginTop: 8, textAlign: 'center' }} href="/conversations" target="_blank" rel="noreferrer">
+              Open Janis
+            </a>
+          </>
+        )}
+
+        {state.kind === 'uninstalled' && (
+          <p className="muted">
+            <strong>{state.shop}</strong> — this install was removed. Re-add the app from the
+            Shopify App Store to reconnect.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}

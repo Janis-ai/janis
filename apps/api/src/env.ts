@@ -145,6 +145,13 @@ export const env = {
   // template; replaces customers pasting a personal access token.
   calendlyClientId: process.env.CALENDLY_CLIENT_ID ?? '',
   calendlyClientSecret: process.env.CALENDLY_CLIENT_SECRET ?? '',
+  // Shopify App Store listing — Janis-owned embedded app (Partner
+  // Dashboard). The API key doubles as the session-token aud and the App
+  // Bridge meta value; the secret verifies session tokens + webhooks.
+  shopifyAppApiKey: process.env.SHOPIFY_APP_API_KEY ?? '',
+  shopifyAppApiSecret: process.env.SHOPIFY_APP_API_SECRET ?? '',
+  shopifyAppScopes:
+    process.env.SHOPIFY_APP_SCOPES ?? 'read_orders,write_orders,read_products,read_customers',
   calendlyRedirectUri:
     process.env.CALENDLY_REDIRECT_URI ??
     `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/calendly/callback`,

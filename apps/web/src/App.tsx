@@ -26,6 +26,8 @@ import { Status } from './pages/Status';
 import { Contacts, ContactDetail } from './pages/Contacts';
 import Campaigns from './pages/Campaigns';
 import ChannelPage from './pages/ChannelPage';
+import ShopifyApp from './pages/ShopifyApp';
+import ShopifyLink from './pages/ShopifyLink';
 import { finishOpenRouterCallback } from './lib/openrouterAuth';
 import { reportClientError } from './lib/errorReporter';
 
@@ -176,6 +178,12 @@ export default function App() {
         <Route path="/docs" element={<Docs />} />
         <Route path="/status" element={<Status />} />
         <Route path="/llm/callback" element={<LlmCallback />} />
+        {/* Shopify embedded app — loads inside the admin iframe; App
+            Bridge's session token is the credential, no console auth. */}
+        <Route path="/shopify-app" element={<ShopifyApp />} />
+        {/* The link flow's console half — authed but outside Layout, an
+            interstitial like the OAuth callbacks. */}
+        <Route path="/shopify-link" element={<RequireAuth><ShopifyLink /></RequireAuth>} />
         <Route path="/help/:agentId" element={<HelpCenter />} />
         <Route path="/help/:agentId/:articleId" element={<HelpArticle />} />
         <Route

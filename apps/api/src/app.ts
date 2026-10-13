@@ -39,6 +39,7 @@ import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 import { metaApiRoutes, metaPublicRoutes } from './routes/meta.js';
 import { gmailApiRoutes, gmailPublicRoutes } from './routes/gmail.js';
 import { calendlyApiRoutes, calendlyPublicRoutes } from './routes/calendly.js';
+import { shopifyApiRoutes, shopifyPublicRoutes, shopifyWebhookRoutes } from './routes/shopify.js';
 import { outlookApiRoutes, outlookPublicRoutes } from './routes/outlook.js';
 import { voiceRoutes } from './routes/voice.js';
 import { smsRoutes } from './routes/sms.js';
@@ -190,6 +191,12 @@ export function createApp(db: Db) {
   app.route('/meta', metaPublicRoutes(db)); // Meta-signed: data-deletion + deauthorize callbacks
   app.route('/gmail', gmailPublicRoutes(db));
   app.route('/calendly', calendlyPublicRoutes(db)); // Calendly OAuth callback
+  // Shopify embedded app — session-token authed iframe calls under
+  // /api/shopify; App-signed webhooks under /shopify.
+  app.use('/api/shopify/*', rateLimit({ scope: 'shopify-app', windowMs: 60_000, max: 120 }));
+  app.route('/api/shopify', shopifyPublicRoutes(db));
+  app.use('/shopify/*', rateLimit({ scope: 'shopify-wh', windowMs: 60_000, max: 120 }));
+  app.route('/shopify', shopifyWebhookRoutes(db));
   app.route('/outlook', outlookPublicRoutes(db)); // MS-signed-token OAuth + Graph push // signed-token OAuth start/callback — no session
   app.use('/voice/*', rateLimit({ scope: 'voice', windowMs: 60_000, max: 120 }));
   app.route('/voice', voiceRoutes(db)); // Twilio-signed voice webhooks

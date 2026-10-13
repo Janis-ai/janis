@@ -1031,6 +1031,32 @@ export const agentConnections = pgTable(
   (t) => [uniqueIndex('agent_connections_agent_provider').on(t.agentId, t.provider)],
 );
 
+// Shopify App Store installs — one row per shop that loaded the embedded
+// app. The shop ↔ agent binding is what makes the shop's tools and
+// webhooks resolve to a workspace: token exchange lands an OFFLINE admin
+// token here (encrypted), and linking mirrors it into the bound agent's
+// SHOPIFY_* secrets so the shopify_* tools just work.
+export const shopifyShops = pgTable('shopify_shops', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  // Shop's *.myshopify.com domain — the stable install key (custom
+  // storefront domains resolve to it in session tokens + webhooks).
+  shop: text('shop').notNull().unique(),
+  // Bound on the console link step; null while the merchant installed but
+  // hasn't connected a Janis workspace yet.
+  workspaceId: uuid('workspace_id').references(() => workspaces.id),
+  agentId: uuid('agent_id').references(() => agents.id),
+  // Offline Admin API token from the token exchange — encrypted like
+  // agent secrets. Null after uninstall (Shopify revokes it anyway).
+  accessTokenEnc: text('access_token_enc'),
+  scopes: text('scopes').notNull().default(''), // granted scope list
+  // 'unlinked' = installed-not-bound | 'linked' = serving | 'uninstalled'.
+  state: text('state').notNull().default('unlinked'),
+  // Shopify Billing state (phase 5): {subscription_id, capped_amount_cents…}
+  billing: jsonb('billing').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const webhookDeliveries = pgTable('webhook_deliveries', {
   id: uuid('id').primaryKey().defaultRandom(),
   agentId: uuid('agent_id')

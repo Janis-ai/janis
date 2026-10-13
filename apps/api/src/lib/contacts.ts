@@ -1,6 +1,19 @@
-import { and, eq, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { contactIdentities, contacts, conversations } from '../db/schema.js';
+import {
+  alerts,
+  campaignSends,
+  channelBindings,
+  contactIdentities,
+  contacts,
+  conversations,
+  messages,
+  slackThreads,
+  suggestions,
+  typingState,
+  usageEvents,
+  viewers,
+} from '../db/schema.js';
 import type { UserProfile } from '@janis/shared';
 
 type Profile = UserProfile & {
@@ -282,4 +295,32 @@ export async function linkConversationContact(
     .update(conversations)
     .set({ contactId })
     .where(eq(conversations.id, conversationId));
+}
+
+/** GDPR erasure (purge mode) — delete the contact AND its threads:
+ *  conversations, transcripts, identity joins, campaign sends. Financial
+ *  usage rows keep their record with the conversation link scrubbed.
+ *  Callers write their own audit row (the actor differs: console admin
+ *  vs. a provider webhook). */
+export async function purgeContactData(db: Db, contactId: string): Promise<void> {
+  const convRows = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(eq(conversations.contactId, contactId));
+  const convIds = convRows.map((r) => r.id);
+  if (convIds.length) {
+    await db
+      .update(usageEvents)
+      .set({ conversationId: null })
+      .where(inArray(usageEvents.conversationId, convIds));
+    for (const t of [messages, alerts, suggestions, typingState, slackThreads] as const) {
+      await db.delete(t).where(inArray(t.conversationId, convIds));
+    }
+    await db.delete(viewers).where(inArray(viewers.conversationId, convIds));
+    await db.delete(channelBindings).where(inArray(channelBindings.conversationId, convIds));
+    await db.delete(conversations).where(inArray(conversations.id, convIds));
+  }
+  await db.delete(campaignSends).where(eq(campaignSends.contactId, contactId));
+  await db.delete(contactIdentities).where(eq(contactIdentities.contactId, contactId));
+  await db.delete(contacts).where(eq(contacts.id, contactId));
 }

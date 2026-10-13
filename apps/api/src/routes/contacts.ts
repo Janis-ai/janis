@@ -5,9 +5,7 @@ import { and, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
-  alerts,
   campaignSends,
-  channelBindings,
   channels,
   contactIdentities,
   contactListMembers,
@@ -15,15 +13,11 @@ import {
   contacts,
   conversations,
   messages,
-  slackThreads,
-  suggestions,
-  typingState,
-  usageEvents,
-  viewers,
 } from '../db/schema.js';
 import { sessionAuth, adminOnly, type SessionEnv } from '../middleware/sessionAuth.js';
 import { audit } from '../lib/audit.js';
 import { segmentConditions, type CampaignSegment } from '../lib/campaigns.js';
+import { purgeContactData } from '../lib/contacts.js';
 
 const boolParam = (v: string | undefined) =>
   v === '1' || v === 'true' ? true : undefined;
@@ -420,28 +414,20 @@ export function contactRoutes(db: Db) {
       .where(eq(conversations.contactId, contactId));
     const convIds = convRows.map((r) => r.id);
 
-    if (purge && convIds.length) {
-      // Financial records stay (legal retention) but lose the link.
-      await db
-        .update(usageEvents)
-        .set({ conversationId: null })
-        .where(inArray(usageEvents.conversationId, convIds));
-      for (const t of [messages, alerts, suggestions, typingState, slackThreads] as const) {
-        await db.delete(t).where(inArray(t.conversationId, convIds));
-      }
-      await db.delete(viewers).where(inArray(viewers.conversationId, convIds));
-      await db.delete(channelBindings).where(inArray(channelBindings.conversationId, convIds));
-      await db.delete(conversations).where(inArray(conversations.id, convIds));
+    if (purge) {
+      // The shared purge — conversations, transcripts, identity joins; the
+      // Shopify customers/redact webhook runs the same deletion.
+      await purgeContactData(db, contactId);
     } else {
       // Unlink, don't delete — the transcript survives without a person.
       await db
         .update(conversations)
         .set({ contactId: null })
         .where(eq(conversations.contactId, contactId));
+      await db.delete(campaignSends).where(eq(campaignSends.contactId, contactId));
+      await db.delete(contactIdentities).where(eq(contactIdentities.contactId, contactId));
+      await db.delete(contacts).where(eq(contacts.id, contactId));
     }
-    await db.delete(campaignSends).where(eq(campaignSends.contactId, contactId));
-    await db.delete(contactIdentities).where(eq(contactIdentities.contactId, contactId));
-    await db.delete(contacts).where(eq(contacts.id, contactId));
 
     await audit(db, {
       workspaceId,
