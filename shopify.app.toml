@@ -13,7 +13,7 @@ embedded = true
 automatically_update_urls_on_dev = false
 
 [access_scopes]
-scopes = "read_orders,write_orders,write_draft_orders,read_products,read_customers"
+scopes = "read_orders,write_orders,write_draft_orders,read_products,read_customers,read_legal_policies"
 
 [auth]
 # Managed install (token exchange) — no OAuth redirect endpoints.

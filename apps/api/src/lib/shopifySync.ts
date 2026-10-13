@@ -44,6 +44,7 @@ type ProductNode = {
   tags: string[];
   status: string;
   totalInventory?: number | null;
+  isGiftCard?: boolean;
   description?: string;
   priceRangeV2?: { minVariantPrice?: { amount?: string; currencyCode?: string } };
 };
@@ -58,7 +59,7 @@ async function catalogText(shop: string, token: string): Promise<string> {
   const data = (await adminGql(
     shop,
     token,
-    `query{productsCount{count} products(first:${CATALOG_LIMIT},query:"status:active",sortKey:TITLE){nodes{title handle vendor productType tags status totalInventory description(truncateAt:280) priceRangeV2{minVariantPrice{amount currencyCode}}}}}`,
+    `query{productsCount(query:"status:active"){count} products(first:${CATALOG_LIMIT},query:"status:active",sortKey:TITLE){nodes{title handle vendor productType tags status totalInventory isGiftCard description(truncateAt:280) priceRangeV2{minVariantPrice{amount currencyCode}}}}}`,
   )) as { productsCount?: { count?: number }; products?: { nodes?: ProductNode[] } };
   const total = data.productsCount?.count ?? 0;
   const nodes = data.products?.nodes ?? [];
@@ -73,7 +74,7 @@ async function catalogText(shop: string, token: string): Promise<string> {
       p.vendor ? `by ${p.vendor}` : '',
       p.productType ? `[${p.productType}]` : '',
       money(p),
-      p.totalInventory === 0 ? 'OUT OF STOCK' : '',
+      p.totalInventory === 0 && !p.isGiftCard ? 'OUT OF STOCK' : '',
     ].filter(Boolean);
     lines.push(bits.join(' — '));
     lines.push(`  https://${shop}/products/${p.handle}`);
