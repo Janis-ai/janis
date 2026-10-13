@@ -168,7 +168,33 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           '{"query":"mutation($input:DraftOrderInput!){draftOrderCreate(input:$input){draftOrder{id name invoiceUrl totalPriceSet{shopMoney{amount currencyCode}}} userErrors{field message}}}","variables":{"input":${draft_order}}}',
         params: {
           draft_order:
-            'JSON object — a DraftOrderInput. For a catalogue product use its variantId from shopify_search_products (variants.nodes[0].id), e.g. {"lineItems":[{"variantId":"gid://shopify/ProductVariant/…","quantity":1}]}. Add "email" ONLY if the customer already gave it — otherwise omit it, the invoice checkout collects their details. For items not in the catalogue use {"title":"…","originalUnitPrice":"19.99","quantity":1} instead.',
+            'JSON object — a DraftOrderInput. For a catalogue product use its variantId from shopify_search_products (variants.nodes[0].id), e.g. {"lineItems":[{"variantId":"gid://shopify/ProductVariant/…","quantity":1}]}. Add "email" ONLY if the customer already gave it (then call shopify_send_invoice too so the pay link also reaches their inbox) — otherwise omit it, the invoice checkout collects their details. For items not in the catalogue use {"title":"…","originalUnitPrice":"19.99","quantity":1} instead.',
+        },
+        // The pay link renders as a real card button, not a bare URL.
+        widget: {
+          type: 'cards',
+          items: 'data.draftOrderCreate.draftOrder',
+          link_label: 'Complete your purchase',
+          map: {
+            title: 'Order {name} — ready to pay',
+            price: '{totalPriceSet.shopMoney.amount:money}',
+            link: '{invoiceUrl}',
+          },
+        },
+      },
+      {
+        name: 'shopify_send_invoice',
+        label: 'Send order invoice email',
+        description:
+          'Email the draft order\'s payment link to the customer — call right AFTER shopify_create_draft_order when the customer gave their email (which must also be on the draft order\'s "email" field). The emailed link opens the same checkout as the in-chat pay button.',
+        method: 'POST',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
+        headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"mutation($id:ID!){draftOrderInvoiceSend(id:$id){draftOrder{id name invoiceUrl} userErrors{field message}}}","variables":{"id":"${draft_order_id:text}"}}',
+        params: {
+          draft_order_id:
+            'the draftOrder.id gid returned by shopify_create_draft_order — gid://shopify/DraftOrder/…',
         },
       },
       {

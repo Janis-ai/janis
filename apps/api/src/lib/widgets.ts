@@ -330,6 +330,9 @@ export function widgetFromToolResult(
   }
   let rows: unknown =
     cfg.items != null ? digPath(data, cfg.items) : Array.isArray(data) ? data : undefined;
+  // items may point at a single object (data.draftOrder) — wrap it so a
+  // create-one-thing result renders as a one-card widget with its pay link.
+  if (cfg.items != null && rows && typeof rows === 'object' && !Array.isArray(rows)) rows = [rows];
   // Result is an object — find its first array-valued property (the common
   // { products: [...] } / { results: [...] } envelope shape).
   if (!Array.isArray(rows) && data && typeof data === 'object') {

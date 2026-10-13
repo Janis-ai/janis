@@ -160,6 +160,41 @@ describe('widgetFromToolResult', () => {
     expect(w.items[1].stock).toBeUndefined();
     expect(w.items[2].stock).toBeUndefined();
   });
+
+  it('items pointing at a single object renders a one-card widget (pay link)', () => {
+    const w = widgetFromToolResult(
+      {
+        type: 'cards',
+        items: 'data.draftOrderCreate.draftOrder',
+        link_label: 'Complete your purchase',
+        map: {
+          title: 'Order {name} — ready to pay',
+          price: '{totalPriceSet.shopMoney.amount:money}',
+          link: '{invoiceUrl}',
+        },
+      },
+      JSON.stringify({
+        data: {
+          draftOrderCreate: {
+            draftOrder: {
+              id: 'gid://shopify/DraftOrder/1',
+              name: '#D12',
+              invoiceUrl: 'https://shop.example/invoices/abc',
+              totalPriceSet: { shopMoney: { amount: '10.0', currencyCode: 'USD' } },
+            },
+            userErrors: [],
+          },
+        },
+      }),
+    );
+    expect(w?.type).toBe('cards');
+    if (w?.type !== 'cards') return;
+    expect(w.items).toHaveLength(1);
+    expect(w.items[0].title).toBe('Order #D12 — ready to pay');
+    expect(w.items[0].price).toBe('$10.00');
+    expect(w.items[0].link).toBe('https://shop.example/invoices/abc');
+    expect(w.items[0].link_label).toBe('Complete your purchase');
+  });
 });
 
 describe('extractWidgets', () => {
