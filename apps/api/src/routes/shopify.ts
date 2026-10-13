@@ -5,6 +5,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import { agents, channels, shopifyShops, workspaces } from '../db/schema.js';
+import { invalidateChannelCache } from '../lib/channels.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import {
   bindShop,
@@ -102,14 +103,30 @@ export function shopifyPublicRoutes(db: Db) {
       .where(eq(shopifyShops.shop, shop))
       .limit(1);
     if (row?.state !== 'linked' || !row.agentId) return noop();
-    const chans = await db
+    let chans = await db
       .select({ id: channels.id, credentials: channels.credentials })
       .from(channels)
       .where(and(eq(channels.agentId, row.agentId), eq(channels.kind, 'webchat')));
     // Internal test-chat channels never serve a storefront.
-    const chan = chans.find(
+    let chan = chans.find(
       (ch) => !(ch.credentials as { internal?: boolean } | null)?.internal,
     );
+    if (!chan && row.workspaceId) {
+      // Self-heal: shops bound before the channel auto-create landed (or
+      // merchants who deleted their Bubble) get one on first storefront
+      // hit instead of silently serving nothing forever.
+      [chan] = await db
+        .insert(channels)
+        .values({
+          workspaceId: row.workspaceId,
+          agentId: row.agentId,
+          kind: 'webchat',
+          name: `Shopify — ${shop.replace(/\.myshopify\.com$/, '')}`,
+          credentials: {},
+        })
+        .returning({ id: channels.id, credentials: channels.credentials });
+      invalidateChannelCache();
+    }
     if (!chan) return noop();
     return js(
       `(function(){var s=document.createElement('script');s.src=${JSON.stringify(

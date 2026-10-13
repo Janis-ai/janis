@@ -368,20 +368,23 @@ describe('storefront loader', () => {
     }
   });
 
-  it('no-ops when only an internal test channel exists', async () => {
+  it('self-heals a missing Bubble — never serves the internal test chat', async () => {
     stubShopifyApi();
     const { hash, preview } = generateApiKey();
     const [agent2] = await db
       .insert(agents)
       .values({ workspaceId, name: 'Bot2', apiKeyHash: hash, apiKeyPreview: preview })
       .returning();
-    await db.insert(channels).values({
-      workspaceId,
-      agentId: agent2.id,
-      kind: 'webchat',
-      name: `Test — ${agent2.name}`,
-      credentials: { internal: true },
-    });
+    const [internal] = await db
+      .insert(channels)
+      .values({
+        workspaceId,
+        agentId: agent2.id,
+        kind: 'webchat',
+        name: `Test — ${agent2.name}`,
+        credentials: { internal: true },
+      })
+      .returning();
     const code = await linkCodeFor();
     await app.request('/api/shopify/link', {
       method: 'POST',
@@ -389,7 +392,8 @@ describe('storefront loader', () => {
       body: JSON.stringify({ code, agent_id: agent2.id }),
     });
     // bind adds a real Bubble — delete it to simulate a merchant who
-    // removed the channel and left only the test chat behind
+    // removed the channel; the loader must recreate, not serve the test
+    // chat or go dark
     await db
       .delete(channels)
       .where(
@@ -400,7 +404,9 @@ describe('storefront loader', () => {
         ),
       );
     const res = await storefrontJs(SHOP);
-    expect(await res.text()).toContain('no storefront widget');
+    const js = await res.text();
+    expect(js).toContain('/widget.js');
+    expect(js).not.toContain(internal.id);
     // relink back to the primary agent for the tests that follow
     const code2 = await linkCodeFor();
     await app.request('/api/shopify/link', {
