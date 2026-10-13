@@ -264,6 +264,10 @@ export function createApp(db: Db) {
   api.route('/gmail', gmailApiRoutes(db));
   api.route('/calendly', calendlyApiRoutes(db));
   api.route('/outlook', outlookApiRoutes(db));
+  // Console-authed link management — shares the /api/shopify prefix with
+  // the iframe's session-token routes; subpaths don't overlap so both
+  // mounts serve their own routes.
+  api.route('/shopify', shopifyApiRoutes(db));
   api.route('/onboarding', onboardingRoutes(db));
   api.route('/billing', billingRoutes(db));
   api.route('/workspace', workspaceRoutes(db));

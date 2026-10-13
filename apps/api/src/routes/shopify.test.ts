@@ -304,3 +304,15 @@ describe('shopify webhooks', () => {
     ).toBe(0);
   });
 });
+
+describe('app wiring', () => {
+  it('the real app mounts the console link endpoints under /api/shopify', async () => {
+    // The suite above mounts the route groups on a scratch Hono — this
+    // boots the production app so a missing mount can't ship as a 404.
+    const { createApp } = await import('../app.js');
+    const res = await createApp(db).request('/api/shopify/link-info?code=forged.sig', {
+      headers: { cookie },
+    });
+    expect(res.status).toBe(400); // mounted → code validation, not "route not found"
+  });
+});
