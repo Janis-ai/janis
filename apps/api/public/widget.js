@@ -418,6 +418,8 @@
     '.janis-wcard-t{font-weight:600;font-size:13px;line-height:1.3}' +
     '.janis-wcard-s{color:#6b7280;font-size:12px;margin-top:2px;line-height:1.3}' +
     '.janis-wcard-p{font-weight:600;font-size:13px;margin-top:4px}' +
+    '.janis-wcard-stock{display:inline-block;font-size:11px;font-weight:600;color:#b45309;' +
+      'background:#fef3c7;border-radius:4px;padding:1px 6px;margin-top:4px}' +
     '.janis-wcard-btns{display:flex;gap:4px;padding:0 8px 8px;flex-wrap:wrap;justify-content:flex-start;margin-top:auto}' +
     '.janis-wbtn{display:inline-block;border:1px solid var(--janis-accent);color:var(--janis-accent);background:#fff;' +
     'border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit}' +
@@ -989,6 +991,11 @@
         var p = el('div', {}, { class: 'janis-wcard-p' });
         wtext(p, item.price);
         body.appendChild(p);
+      }
+      if (item.stock) {
+        var sb = el('div', {}, { class: 'janis-wcard-stock' });
+        wtext(sb, item.stock);
+        body.appendChild(sb);
       }
       card.appendChild(body);
       if (item.link || item.select_label) {

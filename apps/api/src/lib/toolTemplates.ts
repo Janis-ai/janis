@@ -118,17 +118,17 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_search_products',
         label: 'Search products',
         description:
-          'Search or browse the Shopify product catalogue. Returns up to 16 product cards with images and prices, plus productsCount — the TRUE total of matching products (always quote THIS number when asked how many products there are, never the card count) and pageInfo. When productsCount exceeds the cards returned, say so — then either pass the endCursor as `after` for the next page ("show me more") or suggest narrowing the search. Each node also carries a short description you can summarise when they ask about a product.',
+          'Search or browse the Shopify product catalogue. Returns up to 12 product cards with images and prices, plus productsCount — the TRUE total of matching products (always quote THIS number when asked how many products there are, never the card count) and pageInfo. When productsCount exceeds the cards returned, say so — then either pass the endCursor as `after` for the next page ("show me more") or suggest narrowing the search. Each node also carries a short description you can summarise when they ask about a product, and variants.nodes[0].availableForSale — if it is FALSE the item is out of stock: tell the customer plainly, offer an alternative from the results, and do NOT move toward a purchase of that item.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
-          '{"query":"query($q:String!,$after:String){productsCount(query:$q){count} products(first:16,query:$q,after:$after){pageInfo{hasNextPage endCursor} nodes{id title handle vendor productType tags description(truncateAt:160) featuredImage{url} priceRangeV2{minVariantPrice{amount currencyCode}} variants(first:1){nodes{id}}}}}","variables":{"q":"${query:text}","after":${after?}}}',
+          '{"query":"query($q:String!,$after:String){productsCount(query:$q){count} products(first:12,query:$q,after:$after){pageInfo{hasNextPage endCursor} nodes{title handle vendor productType tags description(truncateAt:80) featuredImage{url} priceRangeV2{minVariantPrice{amount currencyCode}} variants(first:1){nodes{id availableForSale}}}}}","variables":{"q":"${query:text}","after":${after?}}}',
         params: {
           query:
             'Shopify catalogue search string — "status:active" lists the whole catalogue (use it for "show me your products"); add " title:*snowboard*" to match a keyword, or " product_type:…" / " vendor:…" to filter',
           'after?':
-            'optional — the previous result\'s pageInfo.endCursor; pass it (with the same query) to fetch the NEXT 16 products when the customer asks for more. Omit for the first page.',
+            'optional — the previous result\'s pageInfo.endCursor; pass it (with the same query) to fetch the NEXT page of products when the customer asks for more. Omit for the first page.',
         },
         widget: {
           type: 'cards',
@@ -139,6 +139,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
             subtitle: 'vendor',
             image: 'featuredImage.url',
             price: '{priceRangeV2.minVariantPrice.amount:money}',
+            stock: '{variants.nodes.0.availableForSale:stock}',
             link: 'https://{{secrets.SHOPIFY_SHOP}}/products/{handle}',
           },
         },
@@ -159,7 +160,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_create_draft_order',
         label: 'Create draft order',
         description:
-          'Create a Shopify draft order — this IS how a customer buys in chat: it returns an invoiceUrl they tap to pay on the real checkout (addresses, shipping, payment all handled there). When the customer has picked a product and confirmed they want it, call this straight away — do NOT re-show the product, do NOT ask them to confirm again, and do NOT gate it on email (the invoice page collects everything). On success, give them the invoiceUrl as a "complete your purchase" link.',
+          'Create a Shopify draft order — this IS how a customer buys in chat: it returns an invoiceUrl they tap to pay on the real checkout (addresses, shipping, payment all handled there). When the customer has picked a product and confirmed they want it, call this straight away — do NOT re-show the product, do NOT ask them to confirm again, and do NOT gate it on email (the invoice page collects everything). Never draft an item that shopify_search_products flagged out of stock (availableForSale:false) — say it\'s unavailable and offer an alternative instead. On success, give them the invoiceUrl as a "complete your purchase" link.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },

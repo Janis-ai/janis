@@ -26,6 +26,9 @@ export const WidgetComponent = z.discriminatedUnion('type', [
           subtitle: s(200).optional(),
           image: url.optional(),
           price: s(40).optional(),
+          // Availability badge — the :stock map modifier emits "Out of
+          // stock" when the source flag is false, otherwise the field drops.
+          stock: s(30).optional(),
           link: url.optional(),
           link_label: s(30).optional(),
           // Interpolated labels carry a full title ("I'm interested in the
@@ -298,6 +301,9 @@ function mapValue(row: unknown, expr: string, secrets: Record<string, string>): 
         const parent = p.slice(0, Math.max(0, p.lastIndexOf('.')));
         return formatMoney(v, digPath(row, parent ? `${parent}.currencyCode` : 'currencyCode')) ?? '';
       }
+      // {flag:stock} — 'Out of stock' only when the source flag is a real
+      // false; true/absent (untracked inventory, gift cards) stays silent.
+      if (mod === 'stock') return v === false ? 'Out of stock' : '';
       return v == null ? '' : String(v);
     });
     return out.trim() ? out : undefined;
@@ -359,6 +365,7 @@ export function widgetFromToolResult(
               subtitle: str(mapValue(r, map.subtitle ?? 'subtitle', secrets)),
               image: str(mapValue(r, map.image ?? 'image', secrets)),
               price: str(mapValue(r, map.price ?? 'price', secrets)),
+              stock: map.stock ? str(mapValue(r, map.stock, secrets)) : undefined,
               link: str(mapValue(r, map.link ?? 'link', secrets)),
               link_label: label(cfg.link_label, r),
               select_label: label(cfg.select_label, r),

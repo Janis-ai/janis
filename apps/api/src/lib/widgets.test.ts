@@ -130,6 +130,36 @@ describe('widgetFromToolResult', () => {
     expect(w.items[0].price).toBe('$9.95');
     expect(w.items[1].price).toBe('€699.95');
   });
+
+  it('"{path:stock}" flags only a real false — true/untracked stays silent', () => {
+    const w = widgetFromToolResult(
+      {
+        type: 'cards',
+        items: 'data.products.nodes',
+        map: {
+          title: 'title',
+          stock: '{variants.nodes.0.availableForSale:stock}',
+        },
+      },
+      JSON.stringify({
+        data: {
+          products: {
+            nodes: [
+              { title: 'Wax', variants: { nodes: [{ id: 'v1', availableForSale: false }] } },
+              { title: 'Board', variants: { nodes: [{ id: 'v2', availableForSale: true }] } },
+              // Untracked inventory (gift card) — no flag at all.
+              { title: 'Gift Card', variants: { nodes: [{ id: 'v3' }] } },
+            ],
+          },
+        },
+      }),
+    );
+    expect(w?.type).toBe('cards');
+    if (w?.type !== 'cards') return;
+    expect(w.items[0].stock).toBe('Out of stock');
+    expect(w.items[1].stock).toBeUndefined();
+    expect(w.items[2].stock).toBeUndefined();
+  });
 });
 
 describe('extractWidgets', () => {
