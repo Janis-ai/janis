@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { harvestProducedIds, identityBlockReason, toolsFor, type ToolDef } from './toolExec.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  callTool,
+  harvestProducedIds,
+  identityBlockReason,
+  toolsFor,
+  type ToolDef,
+} from './toolExec.js';
 import type { agents } from '../db/schema.js';
 
 const VERIFIED = new Set(['me@example.com']);
@@ -117,5 +123,79 @@ describe('toolsFor identity backfill', () => {
       ]),
     );
     expect(t[0].widget).toBe(mine);
+  });
+});
+
+describe('callTool bodyTemplate', () => {
+  const bookingTool: ToolDef = {
+    name: 'calcom_create_booking',
+    description: 'd',
+    method: 'POST',
+    url: 'https://api.cal.com/v2/bookings',
+    headers: { authorization: 'Bearer {{secrets.CALCOM_API_KEY}}' },
+    bodyTemplate:
+      '{"eventTypeId":{{secrets.CALCOM_EVENT_TYPE}},"start":{start},"attendee":{"name":{name},"email":{email},"timeZone":{time_zone}}}',
+    params: { start: 's', name: 'n', email: 'e', time_zone: 'tz' },
+  };
+  const secrets = { CALCOM_API_KEY: 'cal_live_x', CALCOM_EVENT_TYPE: '12345' };
+  const fetchMock = vi.fn();
+  const booked = {
+    start: '2026-10-15T14:00:00Z',
+    name: 'Mike',
+    email: 'mike@x.com',
+    time_zone: 'America/New_York',
+  };
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(new Response('{"status":"ok"}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const sentBody = () => JSON.parse(fetchMock.mock.calls[0][1].body as string);
+
+  it('builds a shaped JSON body — args as typed values, secrets expanded server-side', async () => {
+    const out = await callTool(bookingTool, booked, secrets);
+    expect(out).toContain('"status":"ok"');
+    const body = sentBody();
+    expect(body.eventTypeId).toBe(12345); // numeric — secret expanded raw
+    expect(body.start).toBe('2026-10-15T14:00:00Z');
+    expect(body.attendee).toEqual({
+      name: 'Mike',
+      email: 'mike@x.com',
+      timeZone: 'America/New_York',
+    });
+    expect(fetchMock.mock.calls[0][1].headers.authorization).toBe('Bearer cal_live_x');
+  });
+
+  it('nests arg objects the model supplies as JSON text or real objects', async () => {
+    const tool: ToolDef = {
+      ...bookingTool,
+      bodyTemplate: '{"eventTypeId":{{secrets.CALCOM_EVENT_TYPE}},"start":{start},"attendee":{attendee}}',
+      params: { start: 's', attendee: 'a' },
+    };
+    await callTool(tool, {
+      start: '2026-10-15T14:00:00Z',
+      attendee: '{"name":"Mike","email":"mike@x.com","timeZone":"UTC"}',
+    }, secrets);
+    expect(sentBody().attendee).toEqual({ name: 'Mike', email: 'mike@x.com', timeZone: 'UTC' });
+  });
+
+  it('fails closed when the model omits a templated arg — no request leaves', async () => {
+    const out = await callTool(bookingTool, { ...booked, time_zone: undefined as never }, secrets);
+    expect(out).toContain('missing required args: time_zone');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a templated secret is unconfigured', async () => {
+    const out = await callTool(bookingTool, booked, { CALCOM_API_KEY: 'k' });
+    expect(out).toContain('CALCOM_EVENT_TYPE');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('model args can never trigger secret expansion — {{secrets.*}} stays literal', async () => {
+    await callTool(bookingTool, { ...booked, name: '{{secrets.CALCOM_API_KEY}}' }, secrets);
+    expect(sentBody().attendee.name).toBe('{{secrets.CALCOM_API_KEY}}');
   });
 });

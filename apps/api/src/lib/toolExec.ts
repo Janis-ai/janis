@@ -16,6 +16,13 @@ export interface ToolDef {
   /** POST/PUT/PATCH body encoding — 'json' (default) or 'form'
    *  (application/x-www-form-urlencoded, e.g. Stripe). */
   bodyFormat?: 'json' | 'form';
+  /** Operator-authored JSON body template — {param} placeholders substitute
+   *  the arg as a JSON value (strings quoted, objects/arrays nested) and
+   *  {{secrets.*}} expand exactly like url/headers. Needed when the provider
+   *  wants a shaped body (nested objects, secret-derived fields like
+   *  Cal.com's eventTypeId) rather than flat args. Takes precedence over
+   *  the flat-args body. */
+  bodyTemplate?: string;
   /** Mutating tools: the model proposes the call, a teammate approves or
    *  denies it in the console or Slack, and only then it executes. */
   approval?: boolean;
@@ -150,7 +157,7 @@ export async function callTool(
   // placeholders, and arg values never get a second expansion pass.
   const missing = [
     ...new Set(
-      [tool.url, ...Object.values(tool.headers ?? {})]
+      [tool.url, tool.bodyTemplate ?? '', ...Object.values(tool.headers ?? {})]
         .flatMap((s) => [...s.matchAll(/\{\{secrets\.([A-Za-z0-9_]+)\}\}/g)].map((m) => m[1]))
         .filter((n) => !(n in secrets)),
     ),
@@ -172,6 +179,39 @@ export async function callTool(
     }
   }
   if (!toolUrlAllowed(url)) return 'error: tool URL not allowed';
+
+  // Body templates: every {key} placeholder must be supplied as an arg;
+  // values substitute as JSON (strings quoted, objects nested). Secrets in
+  // the template expand server-side exactly like url/headers — arg values
+  // are never re-scanned, so model input can't trigger secret expansion.
+  const canBody = tool.method !== 'GET' && tool.method !== 'DELETE';
+  let templateBody: string | undefined;
+  if (canBody && tool.bodyTemplate) {
+    const placeholders = [
+      ...new Set(
+        [...tool.bodyTemplate.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]),
+      ),
+    ];
+    const missingArgs = placeholders.filter((k) => args[k] === undefined || args[k] === null);
+    if (missingArgs.length) {
+      return `error: missing required args: ${missingArgs.join(', ')}`;
+    }
+    let tpl = interpolateSecrets(tool.bodyTemplate, secrets);
+    for (const key of placeholders) {
+      const v = args[key];
+      // Params are declared type:string — JSON-parse object/array-looking
+      // strings so nested structures land as objects, same as flat bodies.
+      tpl = tpl.replaceAll(`{${key}}`, JSON.stringify(typeof v === 'string' ? jsonArg(v) : (v ?? null)));
+      used.add(key);
+    }
+    try {
+      JSON.parse(tpl);
+    } catch {
+      return 'error: tool body template is not valid JSON';
+    }
+    templateBody = tpl;
+  }
+
   const rest = Object.fromEntries(Object.entries(args).filter(([k]) => !used.has(k)));
 
   if (tool.method === 'GET' || tool.method === 'DELETE') {
@@ -186,7 +226,10 @@ export async function callTool(
   // bodies (Stripe) stay flat strings.
   let body: string | undefined;
   let contentType: string | undefined;
-  if (tool.method !== 'GET' && tool.method !== 'DELETE' && Object.keys(rest).length) {
+  if (templateBody) {
+    body = templateBody;
+    contentType = 'application/json';
+  } else if (canBody && Object.keys(rest).length) {
     if (tool.bodyFormat === 'form') {
       body = new URLSearchParams(
         Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, String(v)])),

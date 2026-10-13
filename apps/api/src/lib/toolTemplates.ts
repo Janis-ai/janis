@@ -12,6 +12,9 @@ interface CatalogTool {
   params?: Record<string, string>;
   /** 'form' = application/x-www-form-urlencoded (Stripe); default JSON. */
   bodyFormat?: 'json' | 'form';
+  /** Shaped JSON body — {param} args substitute as JSON values, {{secrets.*}}
+   *  expand like headers (see ToolDef.bodyTemplate in toolExec). */
+  bodyTemplate?: string;
   /** Mutating/money-moving calls — the agent proposes, a teammate approves. */
   approval?: boolean;
   /** Customer-record tool — args hard-bind to the conversation's verified
@@ -571,7 +574,8 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     id: 'calcom',
     name: 'Cal.com',
     category: 'Scheduling',
-    blurb: 'Check booking availability and list bookings — schedule callbacks.',
+    blurb:
+      'Check real slot availability, book the appointment in-chat, and list bookings — confirmations come from Cal.com.',
     docs_url: 'https://cal.com/docs/api-reference',
     fields: [
       {
@@ -602,6 +606,28 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           'cal-api-version': '2024-08-13',
         },
         params: { date: 'date to check, YYYY-MM-DD' },
+      },
+      {
+        name: 'calcom_create_booking',
+        label: 'Book appointment',
+        description:
+          'Book a real appointment on the configured event type — only call after the customer picked a start time calcom_availability returned AND confirmed their name and email. Cal.com emails the confirmation to the attendee.',
+        method: 'POST',
+        url: 'https://api.cal.com/v2/bookings',
+        headers: {
+          authorization: 'Bearer {{secrets.CALCOM_API_KEY}}',
+          'cal-api-version': '2024-08-13',
+        },
+        bodyTemplate:
+          '{"eventTypeId":{{secrets.CALCOM_EVENT_TYPE}},"start":{start},"attendee":{"name":{name},"email":{email},"timeZone":{time_zone}}}',
+        params: {
+          start:
+            'booking start — ISO 8601 UTC, e.g. 2026-10-15T14:00:00Z — must be a start time calcom_availability returned',
+          name: "the customer's full name",
+          email: "the customer's email — the booking confirmation goes here",
+          time_zone:
+            "the customer's IANA timezone, e.g. America/New_York — ask or infer from their city; a wrong zone books the wrong wall-clock time",
+        },
       },
       {
         name: 'calcom_list_bookings',
