@@ -104,7 +104,7 @@ export async function contactForBinding(
  *  a value a human or an earlier channel set (coalesce(existing, new)).
  *  A differing email/phone isn't lost either — it lands in the alt arrays
  *  so a person can carry several addresses. */
-async function enrichContact(db: Db, contactId: string, profile: Profile): Promise<void> {
+export async function enrichContact(db: Db, contactId: string, profile: Profile): Promise<void> {
   const email = profile.email?.trim().toLowerCase();
   const phone = profile.phone?.trim();
   await db
@@ -129,6 +129,33 @@ async function enrichContact(db: Db, contactId: string, profile: Profile): Promi
       updatedAt: new Date(),
     })
     .where(eq(contacts.id, contactId));
+}
+
+/** Visitor-claimed identifiers — save_user_profile and (host-asserted) the
+ *  /v1 profile push. Writes onto the contact already bound to the
+ *  conversation: the merge leg (contactForBinding matching claimed email
+ *  into a DIFFERENT contact) deliberately never runs, so a stranger can't
+ *  join someone else's record by typing their address. What does happen is
+ *  the form-parity write — claimed fields fill the row's own columns, so a
+ *  later VERIFIED inbound from that address merges naturally (the channel
+ *  proves the claim for free). `claimed` tags the provenance: a claimed
+ *  email is campaign-reachable like a form lead, but the tag lets audiences
+ *  exclude it and tells operators the address was asserted, not verified. */
+export async function enrichContactClaimed(
+  db: Db,
+  contactId: string,
+  profile: Profile,
+): Promise<void> {
+  await enrichContact(db, contactId, profile);
+  if (profile.email?.trim() || profile.phone?.trim()) {
+    await db
+      .update(contacts)
+      .set({
+        tags: sql`case when not ('self-reported' = any(${contacts.tags})) then array_append(${contacts.tags}, 'self-reported') else ${contacts.tags} end`,
+        updatedAt: new Date(),
+      })
+      .where(eq(contacts.id, contactId));
+  }
 }
 
 /** Find-or-create a contact by email/phone — the import path. Matches on

@@ -11,6 +11,7 @@ import { sendOutbound } from '../lib/outbound.js';
 import { applyConvEffects } from '../lib/conversationOps.js';
 import { HOOK_EVENTS } from '../lib/hooks.js';
 import { toConversation } from '../lib/serializers.js';
+import { enrichContact } from '../lib/contacts.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 
@@ -159,6 +160,16 @@ export function v1Routes(db: Db) {
         .update(conversations)
         .set({ userProfile: { ...base, ...patch } })
         .where(eq(conversations.id, conv.id));
+      // Host-asserted data also enriches the bound contact — same trust bar
+      // as an import, so no 'self-reported' tag. Only enriches the contact
+      // already bound to this conversation; it never merges across contacts.
+      if (conv.contactId && (name || email)) {
+        try {
+          await enrichContact(db, conv.contactId, { name, email });
+        } catch (err) {
+          console.error('v1 user-push contact enrich failed:', err);
+        }
+      }
       return c.json({ ok: true });
     },
   );

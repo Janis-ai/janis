@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, promisesLookup, rankDocs, repairCardImages, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, promisesLookup, rankDocs, repairCardImages, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -1574,5 +1574,77 @@ describe('unwrapInlineLists', () => {
     expect(
       unwrapInlineLists('Try: - **A** do this. Carefully. - **B** do that. Then rest.'),
     ).toBe('Try:\n- **A** do this. Carefully.\n- **B** do that. Then rest.');
+  });
+});
+
+describe('save_user_profile → contact enrichment', () => {
+  const mkAgent = async (name: string) => {
+    const [a] = await db
+      .insert(agents)
+      .values({ workspaceId: wsId, name, apiKeyHash: `h-${name}`, apiKeyPreview: 'p', hosted: true })
+      .returning();
+    return a;
+  };
+  const mkConv = async (agentId: string, externalId: string) => {
+    const [c] = await db
+      .insert(conversations)
+      .values({ agentId, externalId, state: 'active' })
+      .returning();
+    return c;
+  };
+
+  it('claimed fields fill the bound contact and tag it self-reported', async () => {
+    const a = await mkAgent('sp1');
+    const [contact] = await db.insert(contacts).values({ workspaceId: wsId }).returning();
+    const conv = await mkConv(a.id, 'webchat:sp1');
+    await db.update(conversations).set({ contactId: contact.id }).where(eq(conversations.id, conv.id));
+
+    const out = await saveUserProfile(
+      { db, convId: conv.id, workspaceId: wsId },
+      { name: 'Jane', email: 'Jane@Acme.com', phone: '+1 555 0100' },
+    );
+    expect(out).toContain('saved');
+
+    const [c] = await db.select().from(contacts).where(eq(contacts.id, contact.id));
+    expect(c.email).toBe('jane@acme.com'); // normalized at write
+    expect(c.name).toBe('Jane');
+    expect(c.phone).toBe('+1 555 0100');
+    expect(c.tags).toContain('self-reported');
+
+    // conversation-local save keeps the value as typed
+    const [cv] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect((cv.userProfile as { email?: string }).email).toBe('Jane@Acme.com');
+  });
+
+  it('never overwrites a verified contact email — the claim folds to alt_emails', async () => {
+    const a = await mkAgent('sp2');
+    const [contact] = await db
+      .insert(contacts)
+      .values({ workspaceId: wsId, email: 'real@x.com', name: 'Real' })
+      .returning();
+    const conv = await mkConv(a.id, 'webchat:sp2');
+    await db.update(conversations).set({ contactId: contact.id }).where(eq(conversations.id, conv.id));
+
+    await saveUserProfile(
+      { db, convId: conv.id, workspaceId: wsId },
+      { email: 'claimed@y.com' },
+    );
+
+    const [c] = await db.select().from(contacts).where(eq(contacts.id, contact.id));
+    expect(c.email).toBe('real@x.com');
+    expect(c.altEmails).toContain('claimed@y.com');
+    expect(c.tags).toContain('self-reported');
+  });
+
+  it('still saves conversation-locally when no contact is bound', async () => {
+    const a = await mkAgent('sp3');
+    const conv = await mkConv(a.id, 'webchat:sp3'); // no contactId
+    const out = await saveUserProfile(
+      { db, convId: conv.id, workspaceId: wsId },
+      { email: 'a@b.co' },
+    );
+    expect(out).toContain('saved');
+    const [cv] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect((cv.userProfile as { email?: string }).email).toBe('a@b.co');
   });
 });

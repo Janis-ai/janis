@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, channels, conversations, workspaces } from '../db/schema.js';
+import { agents, channels, contacts, conversations, workspaces } from '../db/schema.js';
 import { generateApiKey } from '../lib/crypto.js';
 import { v1Routes } from './v1.js';
 
@@ -141,6 +141,32 @@ describe('v1 integration surface', () => {
     const meta2 = ((conv2?.userProfile as Record<string, unknown>).metadata ?? {}) as Record<string, unknown>;
     expect(meta2.plan).toBe('enterprise');
     expect(meta2.region).toBe('eu');
+  });
+
+  it('PATCH /user enriches the bound contact — host-asserted, no self-reported tag', async () => {
+    await app.request('/v1/events', {
+      method: 'POST',
+      headers: { ...authed(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: [{ type: 'message_in', conversation_id: 'c-contact', text: 'hi' }] }),
+    });
+    const [contact] = await db.insert(contacts).values({ workspaceId: (await db.select({ workspaceId: agents.workspaceId }).from(agents).where(eq(agents.id, agentId)))[0].workspaceId }).returning();
+    await db
+      .update(conversations)
+      .set({ contactId: contact.id })
+      .where(eq(conversations.externalId, 'c-contact'));
+
+    const res = await app.request('/v1/conversations/c-contact/user', {
+      method: 'PATCH',
+      headers: { ...authed(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Vip Person', email: 'Vip@Acme.test' }),
+    });
+    expect(res.status).toBe(200);
+
+    const [c] = await db.select().from(contacts).where(eq(contacts.id, contact.id));
+    expect(c.email).toBe('vip@acme.test');
+    expect(c.name).toBe('Vip Person');
+    // host-asserted — no 'self-reported' tag
+    expect(c.tags).not.toContain('self-reported');
   });
 
   it('lists conversations newest-first with state filter', async () => {

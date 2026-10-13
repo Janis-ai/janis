@@ -17,6 +17,7 @@ import { getUpload } from './uploads.js';
 import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
+import { enrichContactClaimed } from './contacts.js';
 import { dedupeWidgetList, extractWidgets, filterRowsByQuery, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
@@ -1561,6 +1562,19 @@ export async function saveUserProfile(
     .update(conversations)
     .set({ userProfile: { ...(conv.userProfile as UserProfile), ...update } })
     .where(eq(conversations.id, ctx.convId));
+  // Form-parity: claimed details also enrich the contact bound to this
+  // conversation — fills empty fields, differing values fold into alt
+  // arrays, and email/phone claims tag the row 'self-reported'. It never
+  // joins someone ELSE's contact (no merge leg), and a contact binding
+  // that hasn't landed yet simply skips this step — the conversation-local
+  // save above always succeeds.
+  if (conv.contactId) {
+    try {
+      await enrichContactClaimed(ctx.db, conv.contactId, update);
+    } catch (err) {
+      console.error('saveUserProfile contact enrich failed:', err);
+    }
+  }
   bus.publish(ctx.workspaceId, {
     type: 'conversation',
     data: { id: ctx.convId, state: conv.state },
