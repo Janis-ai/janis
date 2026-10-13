@@ -1,0 +1,1 @@
+ALTER TABLE "contacts" ADD COLUMN "metadata" jsonb DEFAULT '{}'::jsonb NOT NULL;

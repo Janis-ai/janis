@@ -268,6 +268,12 @@ export const contacts = pgTable(
     // External-system ids — {system: id} e.g. {"salesforce": "003abc",
     // "shopify": "123"} — so CRM-synced people stay one Janis contact.
     externalIds: jsonb('external_ids').notNull().default({}),
+    // Free-form traits, namespaced by provenance: top-level keys are
+    // host/system-asserted (the /v1 traits push, future CRM syncs);
+    // `claimed` is the ONLY bag chat-collected facts write to, so a
+    // visitor-stated value can never clobber a system field of the
+    // same name. Shape: {claimed?: Record<string,string>, ...systemKeys}
+    metadata: jsonb('metadata').notNull().default({}),
     avatarUrl: text('avatar_url'),
     notes: text('notes'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

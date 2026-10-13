@@ -169,6 +169,39 @@ describe('v1 integration surface', () => {
     expect(c.tags).not.toContain('self-reported');
   });
 
+  it('PATCH /user traits merge into contact.metadata — claimed stays reserved', async () => {
+    await app.request('/v1/events', {
+      method: 'POST',
+      headers: { ...authed(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: [{ type: 'message_in', conversation_id: 'c-traits', text: 'hi' }] }),
+    });
+    const [ws] = await db
+      .select({ workspaceId: agents.workspaceId })
+      .from(agents)
+      .where(eq(agents.id, agentId));
+    const [contact] = await db
+      .insert(contacts)
+      .values({ workspaceId: ws.workspaceId, metadata: { claimed: { interest: 'package 9' } } })
+      .returning();
+    await db
+      .update(conversations)
+      .set({ contactId: contact.id })
+      .where(eq(conversations.externalId, 'c-traits'));
+
+    const res = await app.request('/v1/conversations/c-traits/user', {
+      method: 'PATCH',
+      headers: { ...authed(), 'Content-Type': 'application/json' },
+      // 'claimed' must NOT merge — it's the reserved visitor namespace
+      body: JSON.stringify({ traits: { plan: 'enterprise', claimed: { hijack: true } } }),
+    });
+    expect(res.status).toBe(200);
+
+    const [c] = await db.select().from(contacts).where(eq(contacts.id, contact.id));
+    const md = c.metadata as Record<string, unknown> & { claimed?: Record<string, unknown> };
+    expect(md.plan).toBe('enterprise');
+    expect(md.claimed).toEqual({ interest: 'package 9' });
+  });
+
   it('lists conversations newest-first with state filter', async () => {
     await app.request('/v1/events', {
       method: 'POST',

@@ -3,7 +3,15 @@ import type { Db } from '../db/client.js';
 import { contactIdentities, contacts, conversations } from '../db/schema.js';
 import type { UserProfile } from '@janis/shared';
 
-type Profile = UserProfile & { picture_url?: string };
+type Profile = UserProfile & {
+  picture_url?: string;
+  /** Host-asserted traits (the /v1 push) — merge into contact.metadata at
+   *  the top level. `claimed` is a reserved namespace and gets stripped. */
+  traits?: Record<string, unknown>;
+  /** Visitor-stated facts (save_user_profile) — merge into
+   *  contact.metadata.claimed, never the system-level keys. */
+  facts?: Record<string, string>;
+};
 
 /**
  * Resolve the (channel, platformUserId) identity to a workspace contact.
@@ -107,6 +115,9 @@ export async function contactForBinding(
 export async function enrichContact(db: Db, contactId: string, profile: Profile): Promise<void> {
   const email = profile.email?.trim().toLowerCase();
   const phone = profile.phone?.trim();
+  // `claimed` is the reserved visitor-claims namespace — a host-asserted
+  // trait bag must not write into it from the top level.
+  const { claimed: _reserved, ...traits } = profile.traits ?? {};
   await db
     .update(contacts)
     .set({
@@ -125,6 +136,9 @@ export async function enrichContact(db: Db, contactId: string, profile: Profile)
       ...(profile.name ? { name: sql`coalesce(${contacts.name}, ${profile.name})` } : {}),
       ...(profile.picture_url
         ? { avatarUrl: sql`coalesce(${contacts.avatarUrl}, ${profile.picture_url})` }
+        : {}),
+      ...(Object.keys(traits).length
+        ? { metadata: sql`${contacts.metadata} || ${JSON.stringify(traits)}::jsonb` }
         : {}),
       updatedAt: new Date(),
     })
@@ -146,7 +160,19 @@ export async function enrichContactClaimed(
   contactId: string,
   profile: Profile,
 ): Promise<void> {
-  await enrichContact(db, contactId, profile);
+  const { facts, ...fields } = profile;
+  await enrichContact(db, contactId, fields);
+  // Claimed facts merge into metadata.claimed — a jsonb path, not a merge
+  // column, so keys can't collide with system-asserted traits.
+  if (facts && Object.keys(facts).length) {
+    await db
+      .update(contacts)
+      .set({
+        metadata: sql`jsonb_set(${contacts.metadata}, '{claimed}', coalesce(${contacts.metadata}->'claimed', '{}'::jsonb) || ${JSON.stringify(facts)}::jsonb, true)`,
+        updatedAt: new Date(),
+      })
+      .where(eq(contacts.id, contactId));
+  }
   if (profile.email?.trim() || profile.phone?.trim()) {
     await db
       .update(contacts)

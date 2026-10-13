@@ -69,6 +69,7 @@ type ContactRow = {
   alt_emails?: string[];
   alt_phones?: string[];
   tags?: string[];
+  metadata?: Record<string, unknown> & { claimed?: Record<string, string> };
   has_avatar: boolean;
   notes: string | null;
   identities?: number;
@@ -642,6 +643,32 @@ export function ContactDetail() {
             </div>
           )}
           {c.notes && <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>{c.notes}</div>}
+          {(() => {
+            // Two provenance tiers: `claimed` is what the visitor stated in
+            // chat (save_user_profile facts); other top-level keys are
+            // system-asserted traits (API push, future CRM syncs).
+            const { claimed, ...system } = c.metadata ?? {};
+            const sysKeys = Object.entries(system).filter(([, v]) => v != null && typeof v !== 'object');
+            return (
+              <>
+                {!!sysKeys.length && (
+                  <div style={{ marginTop: 6 }}>
+                    {sysKeys.map(([k, v]) => (
+                      <div key={k}>{k}: {String(v)}</div>
+                    ))}
+                  </div>
+                )}
+                {!!claimed && !!Object.keys(claimed).length && (
+                  <div style={{ marginTop: 6 }}>
+                    Stated in chat:{' '}
+                    {Object.entries(claimed)
+                      .map(([k, v]) => `${k}: ${v}`)
+                      .join(' · ')}
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
       </div>
 

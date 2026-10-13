@@ -673,6 +673,13 @@
       "when": 1791813672933,
       "tag": "0095_lush_goliath",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1791864299898,
+      "tag": "0096_spotty_tigra",
+      "breakpoints": true
     }
   ]
 }

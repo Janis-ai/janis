@@ -1648,3 +1648,58 @@ describe('save_user_profile → contact enrichment', () => {
     expect((cv.userProfile as { email?: string }).email).toBe('a@b.co');
   });
 });
+
+describe('save_user_profile facts → metadata.claimed', () => {
+  const mkAgent = async (name: string) => {
+    const [a] = await db
+      .insert(agents)
+      .values({ workspaceId: wsId, name, apiKeyHash: `h-${name}`, apiKeyPreview: 'p', hosted: true })
+      .returning();
+    return a;
+  };
+
+  it('claimed facts land in metadata.claimed — never touching system keys', async () => {
+    const a = await mkAgent('sp4');
+    const [contact] = await db
+      .insert(contacts)
+      .values({ workspaceId: wsId, metadata: { plan: 'enterprise' } })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: a.id, externalId: 'webchat:sp4', state: 'active' })
+      .returning();
+    await db.update(conversations).set({ contactId: contact.id }).where(eq(conversations.id, conv.id));
+
+    const out = await saveUserProfile(
+      { db, convId: conv.id, workspaceId: wsId },
+      { facts: { interest: 'package 9', plan: 'unverified?' } },
+    );
+    expect(out).toContain('saved');
+
+    const [c] = await db.select().from(contacts).where(eq(contacts.id, contact.id));
+    const md = c.metadata as { claimed?: Record<string, string>; plan?: string };
+    expect(md.claimed?.interest).toBe('package 9');
+    // Same key name as a system trait — separate namespace, no clobber
+    expect(md.claimed?.plan).toBe('unverified?');
+    expect(md.plan).toBe('enterprise');
+
+    // conversation-local metadata carries them for recall next turn
+    const [cv] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    const convMd = ((cv.userProfile as Record<string, unknown>).metadata ?? {}) as Record<string, unknown>;
+    expect(convMd.interest).toBe('package 9');
+  });
+
+  it('facts alone satisfy "something to save" — name/email/phone optional', async () => {
+    const a = await mkAgent('sp5');
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: a.id, externalId: 'webchat:sp5', state: 'active' })
+      .returning();
+    const out = await saveUserProfile(
+      { db, convId: conv.id, workspaceId: wsId },
+      { facts: { company: 'Acme' } },
+    );
+    expect(out).toContain('saved');
+    expect(out).toContain('fact:company');
+  });
+});

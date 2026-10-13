@@ -161,11 +161,13 @@ export function v1Routes(db: Db) {
         .set({ userProfile: { ...base, ...patch } })
         .where(eq(conversations.id, conv.id));
       // Host-asserted data also enriches the bound contact — same trust bar
-      // as an import, so no 'self-reported' tag. Only enriches the contact
-      // already bound to this conversation; it never merges across contacts.
-      if (conv.contactId && (name || email)) {
+      // as an import, so no 'self-reported' tag. Traits merge into
+      // contact.metadata at the top level ('claimed' is reserved and
+      // stripped inside enrichContact). Only enriches the contact already
+      // bound to this conversation; it never merges across contacts.
+      if (conv.contactId && (name || email || (traits && Object.keys(traits).length))) {
         try {
-          await enrichContact(db, conv.contactId, { name, email });
+          await enrichContact(db, conv.contactId, { name, email, traits });
         } catch (err) {
           console.error('v1 user-push contact enrich failed:', err);
         }

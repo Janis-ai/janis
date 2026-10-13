@@ -1548,19 +1548,36 @@ export async function saveUserProfile(
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return 'error: not saved — that does not look like a valid email address';
   }
+  // Free-form facts the customer stated — clamped so a hostile visitor can't
+  // stuff the context via the agent ("save these 10,000 details").
+  const facts: Record<string, string> = {};
+  if (args.facts && typeof args.facts === 'object' && !Array.isArray(args.facts)) {
+    for (const [k, v] of Object.entries(args.facts as Record<string, unknown>)) {
+      const key = k.trim().slice(0, 40);
+      if (!key || typeof v !== 'string') continue;
+      facts[key] = v.trim().slice(0, 200);
+      if (Object.keys(facts).length >= 20) break;
+    }
+  }
   const update = Object.fromEntries(
     Object.entries({ name, email, phone }).filter(([, v]) => v),
   );
-  if (!Object.keys(update).length) return 'error: nothing to save';
+  if (!Object.keys(update).length && !Object.keys(facts).length) return 'error: nothing to save';
   const [conv] = await ctx.db
     .select()
     .from(conversations)
     .where(eq(conversations.id, ctx.convId))
     .limit(1);
   if (!conv) return 'error: conversation not found';
+  const base = (conv.userProfile as UserProfile) ?? {};
+  // Facts live under userProfile.metadata — same bag the /v1 traits push
+  // merges into — so this conversation recalls them next turn.
+  const metadata = Object.keys(facts).length
+    ? { ...((base as Record<string, unknown>).metadata as Record<string, unknown> ?? {}), ...facts }
+    : (base as Record<string, unknown>).metadata;
   await ctx.db
     .update(conversations)
-    .set({ userProfile: { ...(conv.userProfile as UserProfile), ...update } })
+    .set({ userProfile: { ...base, ...update, ...(metadata ? { metadata } : {}) } })
     .where(eq(conversations.id, ctx.convId));
   // Form-parity: claimed details also enrich the contact bound to this
   // conversation — fills empty fields, differing values fold into alt
@@ -1570,7 +1587,7 @@ export async function saveUserProfile(
   // save above always succeeds.
   if (conv.contactId) {
     try {
-      await enrichContactClaimed(ctx.db, conv.contactId, update);
+      await enrichContactClaimed(ctx.db, conv.contactId, { ...update, facts });
     } catch (err) {
       console.error('saveUserProfile contact enrich failed:', err);
     }
@@ -1579,7 +1596,8 @@ export async function saveUserProfile(
     type: 'conversation',
     data: { id: ctx.convId, state: conv.state },
   });
-  return `saved: ${Object.keys(update).join(', ')}`;
+  const saved = [...Object.keys(update), ...Object.keys(facts).map((k) => `fact:${k}`)];
+  return `saved: ${saved.join(', ')}`;
 }
 
 /** One tool call from a run — surfaced on the message inspector so an
@@ -1749,13 +1767,18 @@ export async function complete(
             function: {
               name: SAVE_PROFILE_TOOL,
               description:
-                'Save contact details the customer explicitly stated in this conversation (name, email, phone). Only call with information the customer gave you — never guess.',
+                'Save contact details the customer explicitly stated in this conversation (name, email, phone, and any other facts worth remembering — interests, order numbers, preferences). Only call with information the customer gave you — never guess.',
               parameters: {
                 type: 'object',
                 properties: {
                   name: { type: 'string', description: "customer's full name" },
                   email: { type: 'string', description: "customer's email address" },
                   phone: { type: 'string', description: "customer's phone number" },
+                  facts: {
+                    type: 'object',
+                    description:
+                      'Other stated details worth keeping, as short-label keys — e.g. {"interest": "package 9", "company": "Acme"}. Only facts the customer stated.',
+                  },
                 },
               },
             },
