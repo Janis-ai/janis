@@ -118,18 +118,21 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_search_products',
         label: 'Search products',
         description:
-          'Search the Shopify product catalogue by title keyword. Returns product cards with images and prices to show the customer.',
+          'Search or browse the Shopify product catalogue. Returns product cards with images and prices to show the customer.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
-          '{"query":"query($q:String!){products(first:8,query:$q){nodes{id title handle vendor productType featuredImage{url} variants(first:1){nodes{price}} priceRangeV2{minVariantPrice{amount currencyCode}}}}}","variables":{"q":"status:active title:*${query:text}*"}}',
-        params: { query: 'keyword to match in product titles' },
+          '{"query":"query($q:String!){products(first:8,query:$q){nodes{id title handle vendor productType featuredImage{url} variants(first:1){nodes{price}} priceRangeV2{minVariantPrice{amount currencyCode}}}}}","variables":{"q":"${query:text}"}}',
+        params: {
+          query:
+            'Shopify catalogue search string — "status:active" lists the whole catalogue (use it for "show me your products"); add " title:*snowboard*" to match a keyword, or " product_type:…" / " vendor:…" to filter',
+        },
         widget: {
           type: 'cards',
           items: 'data.products.nodes',
           link_label: 'View product',
-          select_label: "I'm interested in {title}",
+          select_label: "I'm interested",
           map: {
             title: 'title',
             subtitle: 'vendor',
