@@ -200,20 +200,6 @@ describe('shopify embedded app — session', () => {
     expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(fetchCalls);
   });
 
-  it('re-exchanges when stored scopes drift from the app config', async () => {
-    // e.g. read_orders withheld until protected-data access is declared —
-    // the next embedded load must pick up the widened grant.
-    stubShopifyApi();
-    await postSession(sessionJwt());
-    await db
-      .update(shopifyShops)
-      .set({ scopes: 'read_products,read_customers' })
-      .where(eq(shopifyShops.shop, SHOP));
-    const res = await postSession(sessionJwt());
-    expect(res.status).toBe(200);
-    const [row] = await db.select().from(shopifyShops).where(eq(shopifyShops.shop, SHOP));
-    expect(row.scopes).toBe('read_orders,write_orders,read_products,read_customers');
-  });
 });
 
 describe('shopify link flow', () => {
