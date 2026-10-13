@@ -22,6 +22,7 @@ export default function ShopifyLink() {
   const code = params.get('code') ?? '';
   const [agentId, setAgentId] = useState('');
   const [newName, setNewName] = useState('');
+  const [purpose, setPurpose] = useState('');
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -52,7 +53,13 @@ export default function ShopifyLink() {
       if (creating) {
         const { agent } = await api<{ agent: { id: string } }>('/api/agents', {
           method: 'POST',
-          body: JSON.stringify({ name: newName.trim(), hosted: true }),
+          body: JSON.stringify({
+            name: newName.trim(),
+            hosted: true,
+            // purpose triggers the hosted draft generator — an agent made
+            // here without it is an empty shell.
+            ...(purpose.trim() ? { purpose: purpose.trim() } : {}),
+          }),
         });
         id = agent.id;
       }
@@ -150,7 +157,19 @@ export default function ShopifyLink() {
                     No agents in this workspace yet — create one for the shop.
                   </p>
                 )}
-                <button className="btn" style={{ width: '100%', marginTop: 6 }} onClick={() => { setCreating(true); setNewName(newName || shopHandle); }}>
+                <button
+                  className="btn"
+                  style={{ width: '100%', marginTop: 6 }}
+                  onClick={() => {
+                    setCreating(true);
+                    setNewName(newName || shopHandle);
+                    if (!purpose) {
+                      setPurpose(
+                        `Storefront assistant for ${shop} — answer product questions, look up order status and tracking for customers, help with returns and exchanges, and hand off to the team when a human should take over.`,
+                      );
+                    }
+                  }}
+                >
                   Create a new agent
                 </button>
               </>
@@ -162,6 +181,13 @@ export default function ShopifyLink() {
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder={shopHandle}
+                  style={{ width: '100%' }}
+                />
+                <label>What should it do for your customers?</label>
+                <textarea
+                  value={purpose}
+                  onChange={(e) => setPurpose(e.target.value)}
+                  rows={4}
                   style={{ width: '100%' }}
                 />
                 {list.length > 0 && (
