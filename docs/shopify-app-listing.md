@@ -70,18 +70,20 @@ honest answers, mapped to what the code actually does:
 
 | Data type | Accessed | Justification |
 |---|---|---|
-| Customer name | yes (order payloads) | Match a shopper's question to their order/conversation |
-| Customer email | yes | Order lookup + draft order creation + linking chat visitors to orders |
-| Customer address | no | — |
-| Customer phone | no | — |
-| Order data | yes | Order status answers, fulfillment updates, refund alerts in the inbox |
+| Customer name | yes (order + checkout payloads) | Match a shopper's question to their order/conversation |
+| Customer email | yes | Order lookup + draft order creation + linking chat visitors to orders + checkout activity notes |
+| Customer address | yes (checkout payloads only — not persisted) | Arrives on checkouts/update webhooks; we use only email/cart contents for the thread note |
+| Customer phone | yes (customerUpdate self-service) | Shopper asks to update their own customer record — verified-order flow only |
+| Order data | yes | Order status answers, fulfillment updates, return requests, refund alerts in the inbox |
 | Product data | yes (not PCD) | Catalog sync — product info is not protected customer data |
 | Shop policies | yes (not PCD) | Policy knowledge for agent answers |
 
 Draft justification text for the form:
 > Janis uses customer email and order identifiers only to answer the
-> shopper's own questions in chat (order status, fulfillment) and to create
-> draft orders the shopper asked for. Customer data is never used for
+> shopper's own questions in chat (order status, fulfillment), to create
+> draft orders and return requests the shopper asked for, to update the
+> shopper's own customer record on request, and to note checkout activity
+> on an existing conversation thread. Customer data is never used for
 > advertising, never shared with third parties, and is deleted on the
 > GDPR redact webhooks (customers/redact, shop/redact) which we already
 > handle.
@@ -95,8 +97,10 @@ Draft justification text for the form:
 - [ ] Verify a real `appSubscriptionCreate` on the dev store (test:true
       still applies to dev stores) → approve → `app_subscriptions/update`
       webhook flips `workspaces.plan` — billing rail proven end-to-end
-- [ ] Re-approve the app in the dev store admin so the token picks up
-      `read_legal_policies` (janis-8) — then `shopify://policies` syncs
+- [ ] Re-approve the app in the dev store admin so the token picks up the
+      bundled scopes — `read_legal_policies`, `write_returns`,
+      `write_customers`, `write_discounts`, `read_checkouts` (janis-10) —
+      one consent covers all five
 - [ ] Screenshots (step 4)
 - [ ] PCD declaration (step 5)
 - [ ] Demo video — review requires a walkthrough: install → link agent →

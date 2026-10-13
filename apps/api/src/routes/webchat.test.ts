@@ -306,6 +306,29 @@ describe('webchat widget endpoints', () => {
     expect((stored.payload as { tap?: boolean; tap_of?: string }).tap_of).toBe('Free');
   });
 
+  it('lands a storefront cart snapshot on userProfile.metadata.cart — and refreshes it', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const VISITOR = 'vis_cartsnapshot001';
+    const send = (cart?: string) =>
+      app.request(`/chat/${channelId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visitor_id: VISITOR, text: 'hi', ...(cart ? { cart } : {}) }),
+      });
+    await send('2 items — Wax ×2 — USD 19.98');
+    const profile = async () =>
+      (
+        await db
+          .select()
+          .from(conversations)
+          .where(eq(conversations.externalId, `webchat:${VISITOR}`))
+      )[0].userProfile as { metadata?: Record<string, unknown> };
+    expect((await profile()).metadata?.cart).toBe('2 items — Wax ×2 — USD 19.98');
+    // A later message carries the fresher cart — the trait updates in place.
+    await send('3 items — Wax ×2, Board ×1 — USD 152.00');
+    expect((await profile()).metadata?.cart).toBe('3 items — Wax ×2, Board ×1 — USD 152.00');
+  });
+
   it('isolates transcripts by visitor id', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     await post('a secret', VISITOR_B);

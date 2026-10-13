@@ -91,12 +91,12 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_lookup_order',
         label: 'Look up order',
         description:
-          'Look up a Shopify order by order number + the email it was placed under — the pair verifies the shopper (same model as Shopify guest order tracking; a guest needs no sign-in). Returns status, items, totals and fulfilment/tracking info.',
+          'Look up a Shopify order by order number + the email it was placed under — the pair verifies the shopper (same model as Shopify guest order tracking; a guest needs no sign-in). Returns status, items, totals, fulfilment/tracking info, the customer gid (customer.id — feed it to shopify_update_customer) and fulfillmentLineItem ids (feed them to shopify_request_return).',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
-          '{"query":"query($q:String!){orders(first:1,query:$q){nodes{id name email displayFinancialStatus displayFulfillmentStatus totalPriceSet{shopMoney{amount currencyCode}} createdAt cancelledAt lineItems(first:10){nodes{title quantity}} fulfillments{status trackingInfo{number url company}}}}}","variables":{"q":"name:${order_number:text} email:${email:text}"}}',
+          '{"query":"query($q:String!){orders(first:1,query:$q){nodes{id name email customer{id} displayFinancialStatus displayFulfillmentStatus totalPriceSet{shopMoney{amount currencyCode}} createdAt cancelledAt lineItems(first:10){nodes{title quantity}} fulfillments{status trackingInfo{number url company} fulfillmentLineItems(first:10){nodes{id quantity lineItem{title}}}}}}}","variables":{"q":"name:${order_number:text} email:${email:text}"}}',
         params: {
           order_number: 'the order number including the # prefix, e.g. #1234',
           email: 'the email the order was placed under — required alongside the order number',
@@ -118,7 +118,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_search_products',
         label: 'Search products',
         description:
-          'Search or browse the Shopify product catalogue. Returns up to 12 product cards with images and prices, plus productsCount — the TRUE total of matching products (always quote THIS number when asked how many products there are, never the card count) and pageInfo. When productsCount exceeds the cards returned, say so — then either pass the endCursor as `after` for the next page ("show me more") or suggest narrowing the search. Each node also carries a short description you can summarise when they ask about a product, and variants.nodes[0].availableForSale — if it is FALSE the item is out of stock: tell the customer plainly, offer an alternative from the results, and do NOT move toward a purchase of that item. On a Shopify storefront each rendered card also carries an "Add to cart" button the shopper can tap themselves — for a buy-it ask you can point them at it or at their cart (the /cart page on the store), and still create a draft order when they want you to do it all for them.',
+          'Search or browse the Shopify product catalogue. Returns up to 12 product cards with images and prices, plus productsCount — the TRUE total of matching products (always quote THIS number when asked how many products there are, never the card count) and pageInfo. When productsCount exceeds the cards returned, say so — then either pass the endCursor as `after` for the next page ("show me more") or suggest narrowing the search. Each node also carries a short description you can summarise when they ask about a product, and variants.nodes[0].availableForSale — if it is FALSE the item is out of stock: the card badges it automatically, you say so plainly, and you do NOT move toward a purchase of it. When browsing ("what do you have"), lead with in-stock items and skip out-of-stock ones unless nothing else matches — but when the customer asks for a specific product that IS out of stock, still show it and call out the badge ("it is out of stock right now — want the closest alternative?"). On a Shopify storefront each rendered card also carries an "Add to cart" button the shopper can tap themselves — for a buy-it ask you can point them at it or at their cart (the /cart page on the store), and still create a draft order when they want you to do it all for them.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
@@ -225,7 +225,55 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           '{"query":"mutation($id:ID!,$tags:[String!]!){orderUpdate(input:{id:$id,tags:$tags}){order{id tags} userErrors{field message}}}","variables":{"id":"gid://shopify/Order/${order_id:text}","tags":${tags}}}',
         params: {
           order_id: 'numeric Shopify order id',
-          tags: 'JSON array of tag strings, e.g. ["vip","follow-up"] — replaces the order\'s whole tag list',
+          tags: 'JSON array of tag strings, e.g. ["vip","chat-order"]',
+        },
+      },
+      {
+        name: 'shopify_update_customer',
+        label: 'Update customer record',
+        description:
+          'Update the VERIFIED customer\'s own Shopify customer record — name, email, phone, note, marketing consent. Use when they ask to change their account details (self-serve, like the website account page). The customer id comes from shopify_lookup_order\'s customer.id — never invent it.',
+        method: 'POST',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
+        headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"mutation($input:CustomerInput!){customerUpdate(input:$input){customer{id email firstName lastName phone displayName} userErrors{field message}}}","variables":{"input":${customer}}}',
+        params: {
+          customer:
+            'JSON CustomerInput — {"id":"gid://shopify/Customer/…" (from shopify_lookup_order customer.id) plus only the fields to change, e.g. {"phone":"+1…"} or {"email":"new@x.com"}',
+        },
+        identity: true,
+      },
+      {
+        name: 'shopify_request_return',
+        label: 'Request a return',
+        description:
+          'File a return request on a fulfilled Shopify order — the store-side equivalent of the customer returns portal. Flow: shopify_lookup_order → pick the fulfillmentLineItems to return → call this with orderId + returnLineItems. A teammate approves before it\'s filed; tell the customer their request is submitted for review, not confirmed.',
+        approval: true,
+        method: 'POST',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
+        headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"mutation($input:ReturnRequestInput!){returnRequest(input:$input){returnRequest{id status} userErrors{field message}}}","variables":{"input":${return_request}}}',
+        params: {
+          return_request:
+            'JSON ReturnRequestInput — {"orderId":"gid://shopify/Order/…","returnLineItems":[{"fulfillmentLineItemId":"gid://shopify/FulfillmentLineItem/…","quantity":1,"customerNote":"…"}]} — ids come from shopify_lookup_order (order.id + fulfillments[].fulfillmentLineItems[].id)',
+        },
+      },
+      {
+        name: 'shopify_create_discount',
+        label: 'Create discount code',
+        description:
+          'Create a one-off Shopify discount code — the "save the sale" move when a shopper hesitates. A teammate approves before the code goes live; on approval the result carries the code to share with the customer.',
+        approval: true,
+        method: 'POST',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
+        headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"mutation($d:DiscountCodeBasicInput!){discountCodeBasicCreate(basicCodeDiscount:$d){codeDiscountNode{id codeDiscount{__typename ... on DiscountCodeBasic{codes(first:1){nodes{code}}}}} userErrors{field message}}}","variables":{"d":${discount}}}',
+        params: {
+          discount:
+            'JSON DiscountCodeBasicInput — {"title":"…","code":"CHAT10","customerGets":{"value":{"percentage":0.1},"items":{"all":true}},"customerSelection":{"all":true},"usageLimit":1}. percentage is 0–1 (0.1 = 10%).',
         },
       },
     ],

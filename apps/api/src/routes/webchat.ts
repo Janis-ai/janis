@@ -169,6 +169,10 @@ const postMessage = z
     // intent. tap_of names the card/widget it came from.
     tap: z.boolean().optional(),
     tap_of: z.string().max(300).optional(),
+    // Storefront cart snapshot — the widget reads the shop's /cart.js and
+    // sends a one-line summary so the agent can answer "what's in my cart"
+    // from the shopper's real cart. Lands on user_profile.metadata.cart.
+    cart: z.string().max(300).optional(),
     // Copilot thread key (t<rand>) — scopes a signed-in concierge chat to
     // its own conversation; ignored for anonymous visitors.
     thread: z.string().max(48).optional(),
@@ -566,7 +570,7 @@ export function webchatRoutes(db: Db) {
   app.post('/:token/messages', zValidator('json', postMessage), async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
-    const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of, thread } =
+    const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of, cart, thread } =
       c.req.valid('json');
     const threadKey = threadFor(thread);
     // Inbound throttle — anonymous widgets are the spam/cost surface. Two
@@ -628,6 +632,7 @@ export function webchatRoutes(db: Db) {
       text,
       name: resolved?.name ?? name,
       user: resolved,
+      cart,
       thread: threadKey,
       attachments,
       payload: {

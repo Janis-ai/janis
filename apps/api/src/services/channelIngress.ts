@@ -56,7 +56,12 @@ function baseProfile(channel: ChannelRow, msg: InboundMessage): UserProfile {
     // the field every avatar surface (console, Slack) already reads.
     ...(msg.user?.avatarUrl ? { picture_url: msg.user.avatarUrl } : {}),
     ...(msg.user ? { identity_verified: msg.user.verified === true } : {}),
-    ...(msg.user?.traits ? { metadata: msg.user.traits } : {}),
+    // metadata merges per-key on update — cart rides alongside identify
+    // traits without touching identity_verified (an anonymous shopper is
+    // not "unverified", they just have a cart).
+    ...(msg.user?.traits || msg.cart
+      ? { metadata: { ...(msg.user?.traits ?? {}), ...(msg.cart ? { cart: msg.cart } : {}) } }
+      : {}),
   };
 }
 

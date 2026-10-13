@@ -148,10 +148,40 @@ export function shopifyPublicRoutes(db: Db) {
       const v = (q[param] ?? '').trim().slice(0, 500);
       if (v) attrs.push(`s.setAttribute(${JSON.stringify(attr)},${JSON.stringify(v)});`);
     }
+    // Theme → channel sync: non-empty theme overrides persist into the
+    // channel's branding so the console Bubble editor shows the same
+    // effective values (blank always means "channel default", so absent
+    // params never clear a stored value). Write only on change — this
+    // endpoint is hot (every storefront page load).
+    {
+      const branding = ((chan.credentials ?? {}) as { branding?: Record<string, unknown> }).branding ?? {};
+      const next: Record<string, unknown> = {};
+      // Same validation as the attrs above — junk theme values are dropped,
+      // not persisted into channel branding.
+      if (/^#[0-9a-fA-F]{6}$/.test(accent)) next.accent = accent;
+      if (position === 'left' || position === 'right') next.position = position;
+      const teaser = (q.teaser ?? '').trim().slice(0, 200);
+      if (teaser) next.teaser_text = teaser;
+      const greeting = (q.greeting ?? '').trim().slice(0, 500);
+      if (greeting) next.greeting = greeting;
+      const changed = Object.entries(next).some(([k, v]) => branding[k] !== v);
+      if (changed)
+        void db
+          .update(channels)
+          .set({
+            credentials: {
+              ...(chan.credentials as Record<string, unknown>),
+              branding: { ...branding, ...next },
+            },
+          } as never)
+          .where(eq(channels.id, chan.id))
+          .then(() => invalidateChannelCache())
+          .catch((e) => console.error('shopify theme→channel sync:', e));
+    }
     return js(
       `(function(){var s=document.createElement('script');s.src=${JSON.stringify(
         `${env.apiOrigin}/widget.js`,
-      )};s.async=true;s.setAttribute('data-janis-token',${JSON.stringify(chan.id)});${attrs.join('')}document.head.appendChild(s);})();`,
+      )};s.async=true;s.setAttribute('data-janis-token',${JSON.stringify(chan.id)});s.setAttribute('data-janis-cart','1');${attrs.join('')}document.head.appendChild(s);})();`,
     );
   });
 

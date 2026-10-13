@@ -425,6 +425,37 @@ describe('shopify webhooks', () => {
     expect(notes.filter((m) => m.text?.includes('#1010')).length).toBe(0);
   });
 
+  it('checkouts/update notes the thread once per checkout token', async () => {
+    const { conv } = await linkAndThread('checkout@x.com');
+    const payload = {
+      token: 'chk-tok-1',
+      email: 'checkout@x.com',
+      total_price: '88.00',
+      currency: 'USD',
+      line_items: [{ title: 'Wax' }, { title: 'Board' }],
+    };
+    const res = await webhook('checkouts/update', payload);
+    expect(res.status).toBe(200);
+    const notes = async () =>
+      (await db.select().from(messages).where(eq(messages.conversationId, conv.id))).filter(
+        (m) => (m.payload as { event?: string })?.event === 'checkout_event',
+      );
+    expect((await notes()).length).toBe(1);
+    const note = (await notes())[0];
+    expect(note.text).toContain('2 items');
+    expect(note.text).toContain('USD 88.00');
+    expect((note.payload as { internal?: boolean }).internal).toBe(true);
+    expect((note.payload as { checkout?: string }).checkout).toBe('chk-tok-1');
+    // checkouts/update refires on every field change — same token must not
+    // double-note the thread.
+    const res2 = await webhook('checkouts/update', { ...payload, total_price: '88.00' });
+    expect(res2.status).toBe(200);
+    expect((await notes()).length).toBe(1);
+    // A different checkout token is a different checkout — allowed.
+    await webhook('checkouts/update', { ...payload, token: 'chk-tok-2' });
+    expect((await notes()).length).toBe(2);
+  });
+
   it('products/update pulls the catalog knowledge sync forward', async () => {
     await linkAndThread('prod@x.com');
     const [file] = await db

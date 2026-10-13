@@ -8,6 +8,7 @@ import {
   channels,
   contacts,
   conversations,
+  messages,
   shopifyShops,
   workspaces,
 } from '../db/schema.js';
@@ -19,6 +20,8 @@ import { invalidateChannelCache } from './channels.js';
 import { purgeContactData } from './contacts.js';
 import { bumpCatalogSync, ensureShopifyKnowledge } from './shopifySync.js';
 import { systemNote } from './systemNote.js';
+import { bus } from './bus.js';
+import { toMessage } from './serializers.js';
 import { TOOL_TEMPLATES } from './toolTemplates.js';
 
 /**
@@ -170,6 +173,9 @@ const WEBHOOK_TOPICS = [
   'PRODUCTS_DELETE',
   // Billing rail: subscription status changes (approve/cancel/freeze).
   'APP_SUBSCRIPTIONS_UPDATE',
+  // Abandoned-checkout signal — checkout activity on a known shopper's
+  // thread; the proactive nudge builds on this (read_checkouts scope).
+  'CHECKOUTS_UPDATE',
 ] as const;
 
 export async function registerWebhooks(shop: string, token: string): Promise<void> {
@@ -710,6 +716,63 @@ export async function startBillingSubscription(
   return { confirmationUrl: out.confirmationUrl };
 }
 
+/** checkouts/update — the abandonment signal. One note per checkout on a
+ *  matched shopper's thread ("started checkout — N items, $X"); the
+ *  proactive nudge and recovery messaging build on this marker. */
+async function checkoutNote(
+  db: Db,
+  row: ShopRow,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  if (!row.agentId || !row.workspaceId) return;
+  const token = (payload.token ?? payload.id) as string | undefined;
+  const email = (payload.email ??
+    payload.contact_email ??
+    (payload.customer as { email?: string } | undefined)?.email) as string | undefined;
+  if (!token || !email) return;
+  const [contact] = await db
+    .select()
+    .from(contacts)
+    .where(and(eq(contacts.workspaceId, row.workspaceId), eq(contacts.email, email)))
+    .limit(1);
+  if (!contact) return;
+  const [conv] = await db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.contactId, contact.id))
+    .orderBy(desc(conversations.lastMessageAt))
+    .limit(1);
+  if (!conv) return;
+  // One note per checkout — checkouts/update refires on every field change.
+  const [dup] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conv.id),
+        sql`${messages.payload}->>'checkout' = ${token}`,
+      ),
+    )
+    .limit(1);
+  if (dup) return;
+  const items = Array.isArray(payload.line_items) ? payload.line_items.length : 0;
+  const total = payload.total_price as string | undefined;
+  const cur = (payload.currency ?? payload.presentment_currency) as string | undefined;
+  const summary = `Shopify: checkout activity — ${items || '?'} item${items === 1 ? '' : 's'}${
+    total ? `, ${cur ?? ''} ${total}`.trimEnd() : ''
+  } (${email})`;
+  const [note] = await db
+    .insert(messages)
+    .values({
+      conversationId: conv.id,
+      direction: 'out',
+      text: summary,
+      payload: { internal: true, event: 'checkout_event', checkout: token },
+    })
+    .returning();
+  bus.publish(row.workspaceId, { type: 'message', data: toMessage(note) });
+}
+
 /** app_subscriptions/update → reconcile workspace plan. ACTIVE flips
  *  billing_provider to 'shopify' + sets the plan the merchant bought;
  *  CANCELLED/DECLINED/EXPIRED drops a shopify-billed workspace back to free
@@ -780,6 +843,9 @@ export async function handleShopifyWebhook(
       return;
     case 'app_subscriptions/update':
       if (row) await syncBillingSubscription(db, row, payload);
+      return;
+    case 'checkouts/update':
+      if (row) await checkoutNote(db, row, payload);
       return;
     default:
       return;

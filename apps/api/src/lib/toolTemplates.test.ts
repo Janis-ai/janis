@@ -96,3 +96,40 @@ describe('calendly tool template', () => {
     }
   });
 });
+
+describe('shopify self-service tools', () => {
+  const shopify = TOOL_TEMPLATES.find((t) => t.id === 'shopify')!;
+  const tool = (name: string) => shopify.tools.find((t) => t.name === name)!;
+
+  it('lookup_order exposes the ids the self-service tools need', () => {
+    const t = tool('shopify_lookup_order');
+    expect(t.bodyTemplate).toContain('customer{id}');
+    expect(t.bodyTemplate).toContain('fulfillmentLineItems');
+    // The description is the model's only pointer at these fields.
+    expect(t.description).toContain('shopify_update_customer');
+    expect(t.description).toContain('shopify_request_return');
+  });
+
+  it('customerUpdate is identity-bound self-service — never gated', () => {
+    const t = tool('shopify_update_customer');
+    expect(t.identity).toBe(true);
+    expect(t.approval).toBeUndefined();
+    expect(t.bodyTemplate).toContain('customerUpdate');
+    expect(Object.keys(t.params!)).toContain('customer');
+  });
+
+  it('returnRequest is approval-gated (humans rule) and takes fulfillment line items', () => {
+    const t = tool('shopify_request_return');
+    expect(t.approval).toBe(true);
+    expect(t.bodyTemplate).toContain('returnRequest');
+    expect(t.bodyTemplate).toContain('ReturnRequestInput');
+    expect(t.params?.return_request).toContain('fulfillmentLineItemId');
+  });
+
+  it('discountCodeBasicCreate is approval-gated save-the-sale', () => {
+    const t = tool('shopify_create_discount');
+    expect(t.approval).toBe(true);
+    expect(t.bodyTemplate).toContain('discountCodeBasicCreate');
+    expect(t.params?.discount).toContain('DiscountCodeBasicInput');
+  });
+});

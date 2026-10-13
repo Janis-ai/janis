@@ -224,6 +224,12 @@ export interface InboundMessage {
    *  subject/message-id/references so replies can thread. */
   payload?: Record<string, unknown>;
   name?: string;
+  /** Storefront cart snapshot (webchat on a Shopify storefront only) — the
+   *  widget reads /cart.js before each send and passes a one-line summary
+   *  ("3 items — Wax ×2, Board ×1 — $152.00 CAD"); lands on
+   *  user_profile.metadata.cart so "what's in my cart" answers from the
+   *  shopper's real cart, not the catalog. */
+  cart?: string;
   /** Identity asserted by the embedding host (webchat): session-authenticated
    *  or HMAC-signed payloads carry verified=true; anything else is a claim.
    *  `via` marks where the identity came from. `janisUser` is set when a
