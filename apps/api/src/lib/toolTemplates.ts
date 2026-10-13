@@ -71,7 +71,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     id: 'shopify',
     name: 'Shopify',
     category: 'E-commerce',
-    blurb: 'Track and look up orders, cancel, edit addresses, create draft orders — money-moving actions wait for teammate approval.',
+    blurb: 'Track and look up orders, cancel, edit addresses, create draft orders — customers can buy and manage orders in chat.',
     docs_url: 'https://shopify.dev/docs/api/admin-graphql',
     fields: [
       { key: 'shop', label: 'Shop domain', placeholder: 'mystore.myshopify.com' },
@@ -147,9 +147,8 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_cancel_order',
         label: 'Cancel order',
         description:
-          'Cancel a Shopify order by its numeric order id (from shopify_lookup_order). Cancels with reason CUSTOMER, restocks items, and notifies the customer. Money-moving — needs a teammate to approve.',
+          'Cancel a Shopify order by its numeric order id (from shopify_lookup_order) — the same self-serve cancel a website offers: cancels with reason CUSTOMER, restocks items, notifies the customer. Only for orders that are not yet fulfilled; if the customer wants money back on a paid/fulfilled order that is a REFUND — escalate to a human instead of guessing.',
         method: 'POST',
-        approval: true,
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
@@ -160,25 +159,23 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_create_draft_order',
         label: 'Create draft order',
         description:
-          'Create a Shopify draft order (invoice the customer can pay — this IS how a customer buys a product in chat). When the customer has picked a product and confirmed they want it, do NOT re-show the product or ask them to confirm again: if their email is already known, call this straight away; otherwise ask once for their email, then call this. Needs a teammate to approve.',
+          'Create a Shopify draft order — this IS how a customer buys in chat: it returns an invoiceUrl they tap to pay on the real checkout (addresses, shipping, payment all handled there). When the customer has picked a product and confirmed they want it, call this straight away — do NOT re-show the product, do NOT ask them to confirm again, and do NOT gate it on email (the invoice page collects everything). On success, give them the invoiceUrl as a "complete your purchase" link.',
         method: 'POST',
-        approval: true,
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
           '{"query":"mutation($input:DraftOrderInput!){draftOrderCreate(input:$input){draftOrder{id name invoiceUrl totalPriceSet{shopMoney{amount currencyCode}}} userErrors{field message}}}","variables":{"input":${draft_order}}}',
         params: {
           draft_order:
-            'JSON object — a DraftOrderInput. For a catalogue product use its variantId from shopify_search_products (variants.nodes[0].id), e.g. {"lineItems":[{"variantId":"gid://shopify/ProductVariant/…","quantity":1}],"email":"customer@email.com"}. For items not in the catalogue use {"title":"…","originalUnitPrice":"19.99","quantity":1} instead.',
+            'JSON object — a DraftOrderInput. For a catalogue product use its variantId from shopify_search_products (variants.nodes[0].id), e.g. {"lineItems":[{"variantId":"gid://shopify/ProductVariant/…","quantity":1}]}. Add "email" ONLY if the customer already gave it — otherwise omit it, the invoice checkout collects their details. For items not in the catalogue use {"title":"…","originalUnitPrice":"19.99","quantity":1} instead.',
         },
       },
       {
         name: 'shopify_update_shipping_address',
         label: 'Update shipping address',
         description:
-          'Change the shipping address on an unfulfilled Shopify order by numeric order id (from shopify_lookup_order). Needs a teammate to approve.',
+          'Change the shipping address on an unfulfilled Shopify order by numeric order id (from shopify_lookup_order).',
         method: 'POST',
-        approval: true,
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:

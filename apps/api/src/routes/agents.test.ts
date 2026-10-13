@@ -377,8 +377,8 @@ describe('tool template install', () => {
     // un-gated a write; gated a read — the trust dial is per action
     expect(byName('shopify_cancel_order').approval).toBeUndefined();
     expect(byName('shopify_lookup_order').approval).toBe(true);
-    // not in the map → untouched
-    expect(byName('shopify_create_draft_order').approval).toBe(true);
+    // not in the map → untouched (ungated by catalog default)
+    expect(byName('shopify_create_draft_order').approval).toBeUndefined();
   });
 
   it('PATCH manages legacy installs by name and stamps the marker', async () => {
