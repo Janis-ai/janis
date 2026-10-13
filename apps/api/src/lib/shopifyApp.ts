@@ -233,7 +233,10 @@ export async function ensureShopForSession(
       scopes: tok.scope,
       updatedAt: new Date(),
     };
-    if (reinstall && row.workspaceId && row.agentId) updates.state = 'linked';
+    // A reinstall with a surviving binding relinks straight away; with no
+    // binding it must fall back to 'unlinked' or the embedded page is
+    // stuck showing "install was removed" forever.
+    if (reinstall) updates.state = row.workspaceId && row.agentId ? 'linked' : 'unlinked';
     [row] = await db
       .update(shopifyShops)
       .set(updates)

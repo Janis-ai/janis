@@ -201,6 +201,22 @@ describe('shopify embedded app — session', () => {
     expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(fetchCalls);
   });
 
+  it('an unbound reinstall lands back on unlinked, not stuck on uninstalled', async () => {
+    stubShopifyApi();
+    // Fresh row with a token, then uninstall (unbound — no agent linked)
+    await postSession(sessionJwt('fresh.myshopify.com'));
+    await webhook('app/uninstalled', {}, SECRET, 'fresh.myshopify.com');
+    let [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'fresh.myshopify.com'));
+    expect(row.state).toBe('uninstalled');
+    // Reinstall → session exchange must restore the link flow
+    const res = await postSession(sessionJwt('fresh.myshopify.com'));
+    const body = (await res.json()) as { state: string; link_url?: string };
+    expect(body.state).toBe('unlinked');
+    expect(body.link_url).toContain('/shopify-link?code=');
+  });
 });
 
 describe('shopify link flow', () => {
