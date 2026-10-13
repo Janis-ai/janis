@@ -379,6 +379,21 @@ describe('dedupeWidgetList', () => {
     expect(dedupeWidgetList([opts, { ...opts }])).toEqual([opts]);
   });
 
+  it('dedupes a model restatement that drops link/reformats price', () => {
+    // Live case: shopify_search_products renders tool cards with
+    // link+select_label, then the model emits its own cards of the same
+    // products with "$"-prefixed prices and no link — item keys must still
+    // collide on title or the customer sees the row twice.
+    const model = {
+      type: 'cards' as const,
+      items: [
+        { title: 'tenth stair', price: '$9.00', image: 'https://img.test/a' },
+        { title: '  Dress Rehearsal ', price: '$9.00' },
+      ],
+    };
+    expect(dedupeWidgetList([cards, model])).toEqual([cards]);
+  });
+
   it('does not collapse different widget types sharing item titles', () => {
     const status = {
       type: 'status' as const,

@@ -483,7 +483,13 @@ function widgetItemKeys(w: WidgetComponent): string[] {
         : w.type === 'status'
           ? w.steps
           : w.rows;
-  return items.map((i) => `${i.title ?? i.label ?? i.name ?? ''}|${i.link ?? ''}`);
+  // Title-first: a model-authored card restating a tool result often omits
+  // link/link_label, so "Tenth Stair|" must still match the tool's
+  // "Tenth Stair" + link item. Untitled items fall back to the link.
+  return items.map((i) => {
+    const title = String(i.title ?? i.label ?? i.name ?? '').trim().toLowerCase();
+    return title || String(i.link ?? '').trim().toLowerCase();
+  });
 }
 
 /**

@@ -627,7 +627,7 @@ export function systemPrompt(
               '\n{"type":"receipt","title","rows":[{"label","value"}],"total":{"label","value"}} — order summary.'
             : '') +
           '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. For a card about a specific page or listing, use only the "Image:" URL attached to that page\'s knowledge — never reuse another document\'s image, and omit "image" if the page has none. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.' +
-          '\nWhen the customer asks to see products, plans or options that carry data (price, image, description), prefer a "cards" or "options" widget over a BUTTON: list — and when a tool call returns list data (search results, products, availability), render it as a widget rather than retelling it as text. Always pair a widget with a one-line lead-in ("Here are our plans:") — never emit a WIDGET: line alone.' +
+          '\nWhen the customer asks to see products, plans or options that carry data (price, image, description), prefer a "cards" or "options" widget over a BUTTON: list — and when a tool call returns list data (search results, products, availability), render it as a widget rather than retelling it as text. Some tool results arrive already rendered as a component — the result says so; never emit a WIDGET: line restating data that was already rendered. Always pair a widget with a one-line lead-in ("Here are our plans:") — never emit a WIDGET: line alone.' +
           metaOnly +
           (opts.savedWidgets?.length
             ? '\nSaved components (built by your team). When a request matches one, emit a line "WIDGET_REF: <name>" instead of building the same thing with WIDGET: — prefer the ref whenever it fits. When the digest lists props, args or states, add a JSON object on the same line — "WIDGET_REF: order-status {\"order_id\":\"1234\"}" supplies a bound tool its args or fills {prop} placeholders (only values you actually have — never invent them), and {"state":"<name>"} selects one of its named states:\n' +
@@ -2055,10 +2055,15 @@ export async function complete(
         ...(outcome === 'failed' ? { error: result.slice(0, 300) } : {}),
       });
       // Live data binding — a widget-bound tool's JSON result renders as a
-      // component on the reply, no model transcription needed.
+      // component on the reply, no model transcription needed. Tell the
+      // model it rendered — otherwise it dutifully re-emits the same data
+      // as a WIDGET: line and the customer sees the row twice.
       if (tool?.widget && outcome === 'ran') {
         const w = widgetFromToolResult(tool.widget, result, secrets);
-        if (w) toolWidgets.push(w);
+        if (w) {
+          toolWidgets.push(w);
+          result += `\n[already rendered to the customer as a "${w.type}" component — do not restate it with a WIDGET: line; narrate it in text if needed]`;
+        }
       }
       msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
     }
