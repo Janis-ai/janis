@@ -403,6 +403,16 @@ export async function handleChannelMessage(
     conv = { ...conv, externalId };
   }
 
+  // The bound conversation's stored externalId can differ from the base id
+  // recomputed above — POST /new forks it to `…#<ts>` (the archived thread
+  // keeps the bare id) and a sibling-channel collision appends `#ch:<id>`.
+  // processEvents and deliverWebhook re-resolve the conversation BY
+  // externalId, so they must see the stored value — otherwise the inbound
+  // lands on the archived thread (widget never echoes it → "Not delivered")
+  // while the agent dispatches against the empty fork and replies to
+  // nothing.
+  if (conv) externalId = conv.externalId;
+
   // Hard-capped plan (free tier over its included volume): drop the inbound
   // before any platform calls or transcript writes — no profile fetch, no
   // greeting, no message row, no webhook delivery. First-time senders still

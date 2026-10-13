@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import {
@@ -123,6 +123,67 @@ describe('handleChannelMessage dedup', () => {
       (d) => (d.payload as { janis_conversation_id?: string }).janis_conversation_id === conv.id,
     );
     expect(deliveries).toHaveLength(1);
+  });
+
+  it('routes post-/new messages to the bound fork, not the archived base-id conv', async () => {
+    // Regression: POST /:token/new rebinds the visitor to a fresh conv with a
+    // `#`-suffixed externalId, leaving the archived thread on the bare
+    // kind:participant id. Ingress resolved the conv by binding but handed
+    // processEvents the recomputed BASE externalId — the message landed on
+    // the archived conv the widget can't poll (echo never arrived →
+    // "Not delivered") while the agent dispatched to the empty fork.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const senderId = 'VIS-FORK';
+    await handleChannelMessage(db, channel, {
+      objectId: 'PG1', senderId, text: 'first', messageId: 'mid.f1',
+    });
+    const [old] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, `messenger:${senderId}`));
+    expect(old).toBeTruthy();
+
+    // Archive + fork exactly like POST /:token/new
+    await db
+      .update(conversations)
+      .set({ state: 'archived' })
+      .where(eq(conversations.id, old.id));
+    const [fresh] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: `${old.externalId}#fork` })
+      .returning();
+    await db
+      .update(channelBindings)
+      .set({ conversationId: fresh.id })
+      .where(
+        and(
+          eq(channelBindings.channelId, channel.id),
+          eq(channelBindings.platformUserId, senderId),
+        ),
+      );
+
+    await handleChannelMessage(db, channel, {
+      objectId: 'PG1', senderId, text: 'second', messageId: 'mid.f2',
+    });
+
+    const newConvMsgs = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, fresh.id));
+    expect(newConvMsgs.filter((m) => m.direction === 'in').map((m) => m.text)).toEqual(['second']);
+    // nothing new on the archived thread
+    const oldConvMsgs = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, old.id));
+    expect(oldConvMsgs.filter((m) => m.direction === 'in').map((m) => m.text)).toEqual(['first']);
+    // the agent dispatch names the fork's externalId, not the bare base id
+    const deliveries = await db.select().from(webhookDeliveries);
+    const last = deliveries[deliveries.length - 1];
+    expect((last.payload as { conversation_id?: string }).conversation_id).toBe(
+      `${old.externalId}#fork`,
+    );
+    expect((last.payload as { janis_conversation_id?: string }).janis_conversation_id).toBe(fresh.id);
   });
 
   it('processes a different mid as a new message', async () => {
