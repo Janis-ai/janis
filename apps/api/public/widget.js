@@ -29,6 +29,10 @@
     teaser: script.getAttribute('data-janis-teaser'),
     greeting: script.getAttribute('data-janis-greeting'),
   };
+  // Shopify storefront mode (the theme app-embed loader sets this) — the
+  // widget may read the shopper's real cart via the same-origin Ajax API
+  // (/cart/add.js on card taps, /cart.js as send-time context).
+  var SHOPIFY = script.getAttribute('data-janis-cart') === '1';
   // Set by Janis.destroy() — the host SPA tore the widget down; stray timers
   // and document listeners must become inert instead of re-adding DOM.
   var destroyed = false;
@@ -1012,7 +1016,7 @@
         // Storefront add-to-cart — same-origin Shopify Ajax API (only
         // renders when the tool mapped a variant id and the card isn't
         // flagged out of stock).
-        if (item.cart_variant_id && !item.stock && !PREVIEW && !PAGE) {
+        if (item.cart_variant_id && !item.stock && SHOPIFY && !PREVIEW && !PAGE) {
           var cartBtn = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
           wtext(cartBtn, 'Add to cart');
           cartBtn.onclick = function () {
@@ -1026,7 +1030,9 @@
               .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
               .then(function () {
                 wtext(cartBtn, 'Added ✓');
-                sendText('I just added ' + (item.title || 'an item') + ' to my cart.');
+                // tap marker — the model sees this as a component action on
+                // the product card (an add-to-cart event), not typed text.
+                sendText('I just added ' + (item.title || 'an item') + ' to my cart.', { of: (item.title || 'product') + ' — add to cart' });
               })
               .catch(function () {
                 cartBtn.disabled = false;
@@ -1297,7 +1303,37 @@
   });
 
   // Optimistic send: bubble renders instantly, swaps for the server echo when it arrives.
+  // Shopify storefront: snapshot the shopper's real cart before each send
+  // so the agent can answer "what's in my cart" without a tool. One line,
+  // best-effort — a slow shop must never delay the message.
+  function cartSnapshot() {
+    if (!SHOPIFY || destroyed) return Promise.resolve(undefined);
+    return Promise.race([
+      fetch('/cart.js', { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : undefined; })
+        .then(function (cart) {
+          if (!cart || typeof cart.item_count !== 'number') return undefined;
+          if (cart.item_count === 0) return 'cart empty';
+          var items = (cart.items || []).slice(0, 5)
+            .map(function (i) { return i.title + ' ×' + i.quantity; }).join(', ');
+          var total = (cart.total_price / 100).toFixed(2);
+          return cart.item_count + ' item' + (cart.item_count === 1 ? '' : 's') +
+            ' — ' + items + ' — ' + (cart.currency || '') + ' ' + total;
+        }),
+      new Promise(function (r) { setTimeout(function () { r(undefined); }, 600); }),
+    ]).catch(function () { return undefined; });
+  }
+
   function sendPayload(entry) {
+    // Shopify storefronts: attach a cart snapshot to EVERY send (typed
+    // text, taps, forms) — the agent answers "what's in my cart" from it.
+    cartSnapshot().then(function (cart) {
+      if (cart && !entry.payload.cart) entry.payload.cart = cart.slice(0, 300);
+      postPayload(entry);
+    });
+  }
+
+  function postPayload(entry) {
     fetch(API + '/chat/' + TOKEN + '/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
