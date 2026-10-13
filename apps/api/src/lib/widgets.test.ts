@@ -139,16 +139,17 @@ describe('widgetFromToolResult', () => {
         map: {
           title: 'title',
           stock: '{variants.nodes.0.availableForSale:stock}',
+          cart_variant_id: '{variants.nodes.0.id:gidnum}',
         },
       },
       JSON.stringify({
         data: {
           products: {
             nodes: [
-              { title: 'Wax', variants: { nodes: [{ id: 'v1', availableForSale: false }] } },
-              { title: 'Board', variants: { nodes: [{ id: 'v2', availableForSale: true }] } },
+              { title: 'Wax', variants: { nodes: [{ id: 'gid://shopify/ProductVariant/11', availableForSale: false }] } },
+              { title: 'Board', variants: { nodes: [{ id: 'gid://shopify/ProductVariant/22', availableForSale: true }] } },
               // Untracked inventory (gift card) — no flag at all.
-              { title: 'Gift Card', variants: { nodes: [{ id: 'v3' }] } },
+              { title: 'Gift Card', variants: { nodes: [{ id: 'gid://shopify/ProductVariant/33' }] } },
             ],
           },
         },
@@ -159,6 +160,10 @@ describe('widgetFromToolResult', () => {
     expect(w.items[0].stock).toBe('Out of stock');
     expect(w.items[1].stock).toBeUndefined();
     expect(w.items[2].stock).toBeUndefined();
+    // gid tails become storefront-cart variant ids.
+    expect(w.items[0].cart_variant_id).toBe('11');
+    expect(w.items[1].cart_variant_id).toBe('22');
+    expect(w.items[2].cart_variant_id).toBe('33');
   });
 
   it('items pointing at a single object renders a one-card widget (pay link)', () => {

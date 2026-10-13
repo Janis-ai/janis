@@ -118,7 +118,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_search_products',
         label: 'Search products',
         description:
-          'Search or browse the Shopify product catalogue. Returns up to 12 product cards with images and prices, plus productsCount — the TRUE total of matching products (always quote THIS number when asked how many products there are, never the card count) and pageInfo. When productsCount exceeds the cards returned, say so — then either pass the endCursor as `after` for the next page ("show me more") or suggest narrowing the search. Each node also carries a short description you can summarise when they ask about a product, and variants.nodes[0].availableForSale — if it is FALSE the item is out of stock: tell the customer plainly, offer an alternative from the results, and do NOT move toward a purchase of that item.',
+          'Search or browse the Shopify product catalogue. Returns up to 12 product cards with images and prices, plus productsCount — the TRUE total of matching products (always quote THIS number when asked how many products there are, never the card count) and pageInfo. When productsCount exceeds the cards returned, say so — then either pass the endCursor as `after` for the next page ("show me more") or suggest narrowing the search. Each node also carries a short description you can summarise when they ask about a product, and variants.nodes[0].availableForSale — if it is FALSE the item is out of stock: tell the customer plainly, offer an alternative from the results, and do NOT move toward a purchase of that item. On a Shopify storefront each rendered card also carries an "Add to cart" button the shopper can tap themselves — for a buy-it ask you can point them at it or at their cart (the /cart page on the store), and still create a draft order when they want you to do it all for them.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
@@ -140,6 +140,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
             image: 'featuredImage.url',
             price: '{priceRangeV2.minVariantPrice.amount:money}',
             stock: '{variants.nodes.0.availableForSale:stock}',
+            cart_variant_id: '{variants.nodes.0.id:gidnum}',
             link: 'https://{{secrets.SHOPIFY_SHOP}}/products/{handle}',
           },
         },
@@ -160,7 +161,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_create_draft_order',
         label: 'Create draft order',
         description:
-          'Create a Shopify draft order — this IS how a customer buys in chat: it returns an invoiceUrl they tap to pay on the real checkout (addresses, shipping, payment all handled there). When the customer has picked a product and confirmed they want it, call this straight away — do NOT re-show the product, do NOT ask them to confirm again, and do NOT gate it on email (the invoice page collects everything). Never draft an item that shopify_search_products flagged out of stock (availableForSale:false) — say it\'s unavailable and offer an alternative instead. On success, give them the invoiceUrl as a "complete your purchase" link.',
+          'Create a Shopify draft order — the done-for-you checkout: it returns an invoiceUrl they tap to pay on the real checkout (addresses, shipping, payment all handled there). On a storefront where the shopper already added items via a card\'s Add to cart button, prefer pointing them to their cart (the /cart page on the store) — the cart preserves their other items; draft orders create a standalone checkout instead. When the customer has picked a product and confirmed they want it, call this straight away — do NOT re-show the product, do NOT ask them to confirm again, and do NOT gate it on email (the invoice page collects everything). Never draft an item that shopify_search_products flagged out of stock (availableForSale:false) — say it\'s unavailable and offer an alternative instead. On success, give them the invoiceUrl as a "complete your purchase" link.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },

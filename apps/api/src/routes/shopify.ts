@@ -130,10 +130,28 @@ export function shopifyPublicRoutes(db: Db) {
       invalidateChannelCache();
     }
     if (!chan) return noop();
+    // Theme-embed overrides — the merchant's Theme Settings values ride
+    // as data attributes; widget.js applies them on top of the channel's
+    // Bubble config. Whitelisted + validated: the query params are
+    // storefront-controlled input.
+    const q = c.req.query();
+    const attrs: string[] = [];
+    const accent = (q.accent ?? '').trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(accent)) attrs.push(`s.setAttribute('data-janis-accent',${JSON.stringify(accent)});`);
+    const position = (q.position ?? '').trim();
+    if (position === 'left' || position === 'right')
+      attrs.push(`s.setAttribute('data-janis-position',${JSON.stringify(position)});`);
+    for (const [param, attr] of [
+      ['teaser', 'data-janis-teaser'],
+      ['greeting', 'data-janis-greeting'],
+    ] as const) {
+      const v = (q[param] ?? '').trim().slice(0, 500);
+      if (v) attrs.push(`s.setAttribute(${JSON.stringify(attr)},${JSON.stringify(v)});`);
+    }
     return js(
       `(function(){var s=document.createElement('script');s.src=${JSON.stringify(
         `${env.apiOrigin}/widget.js`,
-      )};s.async=true;s.setAttribute('data-janis-token',${JSON.stringify(chan.id)});document.head.appendChild(s);})();`,
+      )};s.async=true;s.setAttribute('data-janis-token',${JSON.stringify(chan.id)});${attrs.join('')}document.head.appendChild(s);})();`,
     );
   });
 

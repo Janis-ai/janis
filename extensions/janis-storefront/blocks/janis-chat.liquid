@@ -5,12 +5,56 @@
   injects widget.js (a no-op until the shop is linked to an agent).
   The block handle is `janis-chat` — referenced by the activation deep
   link the embedded app renders (`activateAppId=<api_key>/janis-chat`).
+
+  Settings here are OPTIONAL theme-level overrides — blank/unset fields
+  fall back to the channel's Bubble config in the Janis console, so the
+  embed stays zero-config for merchants who never open them.
 {% endcomment %}
-<script src="https://app.janis.ai/api/shopify/storefront.js?s={{ shop.permanent_domain }}" async></script>
+<script src="https://app.janis.ai/api/shopify/storefront.js?s={{ shop.permanent_domain }}&accent={{ block.settings.accent_color | url_encode }}&position={{ block.settings.position | url_encode }}&teaser={{ block.settings.teaser_text | url_encode }}&greeting={{ block.settings.greeting | url_encode }}" async></script>
 {% schema %}
 {
   "name": "Janis chat",
   "target": "body",
-  "settings": []
+  "settings": [
+    {
+      "type": "header",
+      "content": "Appearance"
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Accent color",
+      "info": "Bubble + header color. Leave blank to use your Janis channel setting."
+    },
+    {
+      "type": "select",
+      "id": "position",
+      "label": "Bubble position",
+      "default": "",
+      "options": [
+        { "value": "", "label": "Channel default" },
+        { "value": "right", "label": "Bottom right" },
+        { "value": "left", "label": "Bottom left" }
+      ]
+    },
+    {
+      "type": "header",
+      "content": "Messaging"
+    },
+    {
+      "type": "text",
+      "id": "teaser_text",
+      "label": "Teaser text",
+      "info": "The little prompt beside the closed bubble. Blank uses your Janis channel setting.",
+      "placeholder": "Questions? Chat with us."
+    },
+    {
+      "type": "text",
+      "id": "greeting",
+      "label": "Greeting",
+      "info": "First message when a shopper opens the chat. Blank uses your Janis channel setting.",
+      "placeholder": "Hi! How can I help?"
+    }
+  ]
 }
 {% endschema %}

@@ -29,6 +29,10 @@ export const WidgetComponent = z.discriminatedUnion('type', [
           // Availability badge — the :stock map modifier emits "Out of
           // stock" when the source flag is false, otherwise the field drops.
           stock: s(30).optional(),
+          // Numeric variant id for the storefront Ajax cart API — the
+          // :gidnum map modifier strips the gid:// wrapper. widget.js
+          // renders an "Add to cart" button when present (storefront only).
+          cart_variant_id: s(30).optional(),
           link: url.optional(),
           link_label: s(30).optional(),
           // Interpolated labels carry a full title ("I'm interested in the
@@ -304,6 +308,12 @@ function mapValue(row: unknown, expr: string, secrets: Record<string, string>): 
       // {flag:stock} — 'Out of stock' only when the source flag is a real
       // false; true/absent (untracked inventory, gift cards) stays silent.
       if (mod === 'stock') return v === false ? 'Out of stock' : '';
+      // {path:gidnum} — the numeric tail of a Shopify gid
+      // (gid://shopify/ProductVariant/123 → '123') for the Ajax cart API.
+      if (mod === 'gidnum') {
+        const m = String(v ?? '').match(/\/(\d+)$/);
+        return m ? m[1] : '';
+      }
       return v == null ? '' : String(v);
     });
     return out.trim() ? out : undefined;
@@ -369,6 +379,9 @@ export function widgetFromToolResult(
               image: str(mapValue(r, map.image ?? 'image', secrets)),
               price: str(mapValue(r, map.price ?? 'price', secrets)),
               stock: map.stock ? str(mapValue(r, map.stock, secrets)) : undefined,
+              cart_variant_id: map.cart_variant_id
+                ? str(mapValue(r, map.cart_variant_id, secrets))
+                : undefined,
               link: str(mapValue(r, map.link ?? 'link', secrets)),
               link_label: label(cfg.link_label, r),
               select_label: label(cfg.select_label, r),

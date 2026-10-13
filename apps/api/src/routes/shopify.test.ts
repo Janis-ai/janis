@@ -597,6 +597,29 @@ describe('storefront loader', () => {
     expect(js).toContain(external[0].id);
   });
 
+  it('theme-embed settings pass through as validated data attributes', async () => {
+    stubShopifyApi();
+    const code = await linkCodeFor();
+    await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code, agent_id: agentId }),
+    });
+    const res = await app.request(
+      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&position=left&teaser=Hi!&greeting=Hello&bogus=ignored&accent2=notahex`,
+    );
+    const js = await res.text();
+    expect(js).toContain('data-janis-accent');
+    expect(js).toContain('#aabbcc');
+    expect(js).toContain('data-janis-position');
+    expect(js).toContain('"left"');
+    expect(js).toContain('data-janis-teaser');
+    expect(js).toContain('data-janis-greeting');
+    // unwhitelisted/invalid params never reach the tag
+    expect(js).not.toContain('bogus');
+    expect(js).not.toContain('notahex');
+  });
+
   it('a re-link reuses the existing Bubble — no duplicate channels', async () => {
     stubShopifyApi();
     const code = await linkCodeFor();

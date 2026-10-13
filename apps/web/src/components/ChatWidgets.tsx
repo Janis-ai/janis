@@ -11,6 +11,7 @@ export interface WidgetCardItem {
   image?: string;
   price?: string;
   stock?: string;
+  cart_variant_id?: string;
   link?: string;
   link_label?: string;
   select_label?: string;
@@ -126,6 +127,9 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
             {item.subtitle && <div className="wgt-card-s">{item.subtitle}</div>}
             {item.price && <div className="wgt-card-p">{item.price}</div>}
             {item.stock && <div className="wgt-card-stock">{item.stock}</div>}
+            {item.cart_variant_id && !item.stock && (
+              <div className="wgt-card-cart">Add to cart</div>
+            )}
           </div>
           {(item.link || item.select_label) && (
             <div className="wgt-card-btns">

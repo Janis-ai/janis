@@ -20,6 +20,15 @@
   // Hosted chat page (a channel's custom widget domain): the panel IS the
   // page — full-viewport, no launcher, no teaser, cannot be closed.
   var PAGE = script.getAttribute('data-janis-page') === '1';
+  // Theme-embed overrides (Shopify app-embed settings → storefront.js
+  // → these attrs). Applied over the channel config — the merchant's theme
+  // settings win when set, blank attrs fall back to the channel's values.
+  var OVR = {
+    accent: script.getAttribute('data-janis-accent'),
+    position: script.getAttribute('data-janis-position'),
+    teaser: script.getAttribute('data-janis-teaser'),
+    greeting: script.getAttribute('data-janis-greeting'),
+  };
   // Set by Janis.destroy() — the host SPA tore the widget down; stray timers
   // and document listeners must become inert instead of re-adding DOM.
   var destroyed = false;
@@ -998,8 +1007,35 @@
         body.appendChild(sb);
       }
       card.appendChild(body);
-      if (item.link || item.select_label) {
+      if (item.link || item.select_label || item.cart_variant_id) {
         var btns = el('div', {}, { class: 'janis-wcard-btns' });
+        // Storefront add-to-cart — same-origin Shopify Ajax API (only
+        // renders when the tool mapped a variant id and the card isn't
+        // flagged out of stock).
+        if (item.cart_variant_id && !item.stock && !PREVIEW && !PAGE) {
+          var cartBtn = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
+          wtext(cartBtn, 'Add to cart');
+          cartBtn.onclick = function () {
+            cartBtn.disabled = true;
+            wtext(cartBtn, 'Adding…');
+            fetch('/cart/add.js', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', accept: 'application/json' },
+              body: JSON.stringify({ items: [{ id: Number(item.cart_variant_id), quantity: 1 }] }),
+            })
+              .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+              .then(function () {
+                wtext(cartBtn, 'Added ✓');
+                sendText('I just added ' + (item.title || 'an item') + ' to my cart.');
+              })
+              .catch(function () {
+                cartBtn.disabled = false;
+                wtext(cartBtn, 'Add to cart');
+                sendText("I tried to add " + (item.title || 'an item') + ' to my cart but it failed.');
+              });
+          };
+          btns.appendChild(cartBtn);
+        }
         if (item.link) {
           var a = el('a', {}, { class: 'janis-wbtn', href: item.link, target: '_blank', rel: 'noopener noreferrer' });
           wtext(a, item.link_label || 'View');
@@ -1966,6 +2002,10 @@
   // heuristic cache decides to expire.
   fetch(API + '/chat/' + TOKEN, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (cfg) {
     if (!cfg) return;
+    if (OVR.accent) cfg.accent = OVR.accent;
+    if (OVR.position) cfg.position = OVR.position;
+    if (OVR.teaser) cfg.teaser_text = OVR.teaser;
+    if (OVR.greeting) cfg.greeting = OVR.greeting;
     state.config = cfg;
     var darkQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
     var applyTheme = function () {
