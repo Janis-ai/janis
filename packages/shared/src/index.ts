@@ -227,6 +227,8 @@ export const AgentConfig = z.object({
     .array(
       z.object({
         name: z.string(),
+        // display label in the integrations UI
+        label: z.string().optional(),
         description: z.string(),
         method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).default('GET'),
         url: z.string(),
@@ -236,8 +238,13 @@ export const AgentConfig = z.object({
         params: z.record(z.string(), z.string()).optional(),
         // POST/PUT/PATCH body encoding — 'form' for APIs like Stripe
         bodyFormat: z.enum(['json', 'form']).optional(),
+        // shaped body (GraphQL documents, nested payloads) — {param} /
+        // ${param:text} placeholders substitute args (see ToolDef.bodyTemplate)
+        bodyTemplate: z.string().optional(),
         // mutating tools park as pending actions until a teammate decides
         approval: z.boolean().optional(),
+        // customer-record tool — args bind to the verified identity at runtime
+        identity: z.boolean().optional(),
         // live data binding: a JSON result renders as an in-conversation
         // component instead of the model retelling it. `items` is the dot
         // path to the rows array; `map` maps widget fields to row paths.
@@ -249,6 +256,10 @@ export const AgentConfig = z.object({
             select_label: z.string().optional(),
             items: z.string().optional(),
             map: z.record(z.string(), z.string()).optional(),
+            // fuzzy-result filter — drop rows not matching the query arg
+            relevance: z
+              .object({ arg: z.string(), fields: z.array(z.string()) })
+              .optional(),
           })
           .optional(),
         // catalog template id that installed this tool — managed via the
@@ -260,6 +271,16 @@ export const AgentConfig = z.object({
   // hosted agents only — server-side built-in tools by name (e.g.
   // 'web_search'). Unlike `tools` these run in-process — no URL or secrets.
   builtin_tools: z.array(z.string()).optional(),
+  // Extra domains the link guard treats as blessed — a client's backend
+  // returns tracking/booking URLs that never appear verbatim in context.
+  allowed_link_domains: z.array(z.string().max(200)).max(50).optional(),
+  // Server-maintained cache of the last knowledge-gap detection run —
+  // written by the gaps route/builtin, never authored by the console.
+  gaps_cache: z
+    .object({ at: z.string(), gaps: z.array(z.unknown()) })
+    .optional(),
+  // Rate-limit marker for the error-report alert (last alert timestamp).
+  error_alert_at: z.string().optional(),
   // escalation: re-alert when a handoff stays unclaimed past N minutes
   sla_minutes: z.number().min(1).max(1440).optional(),
   // When on, the agent ends resolved chats itself — [END_CHAT] archives the

@@ -1,0 +1,17 @@
+import { createDb } from '../../src/db/client.js';
+import { pendingActions, agents, conversations, workspaces, memberships, users } from '../../src/db/schema.js';
+import { eq } from 'drizzle-orm';
+const db = await createDb();
+const [a] = await db.select().from(pendingActions).where(eq(pendingActions.id, '940a2517-6d37-4ec5-87ba-143439f7d3e7'));
+console.log('action ws:', a.workspaceId);
+const [ag] = await db.select().from(agents).where(eq(agents.id, a.agentId));
+console.log('agent ws:', ag?.workspaceId, '| hidden:', ag?.hidden);
+const [cv] = await db.select().from(conversations).where(eq(conversations.id, a.conversationId));
+console.log('conv agent:', cv?.agentId, '| userProfile:', JSON.stringify(cv?.userProfile));
+const ws = await db.select({ id: workspaces.id, name: workspaces.name }).from(workspaces);
+console.log('workspaces:', ws);
+const mem = await db.select({ workspaceId: memberships.workspaceId, userId: memberships.userId, role: memberships.role }).from(memberships);
+console.log('memberships:', mem);
+const us = await db.select({ id: users.id, email: users.email }).from(users);
+console.log('users:', us);
+process.exit(0);

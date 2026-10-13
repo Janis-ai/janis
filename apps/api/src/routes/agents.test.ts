@@ -178,6 +178,36 @@ describe('tool template install', () => {
     expect(agent.config.tools ?? []).toHaveLength(0);
   });
 
+  it('a config PATCH preserves every tool field — bodyTemplate, identity, widget.relevance', async () => {
+    // Prod incident: the AgentConfig zod dropped bodyTemplate (and identity /
+    // label / widget.relevance) on any config save, so the stored Shopify
+    // tools shipped flat-arg bodies and every GraphQL call parse-failed.
+    const id = await newAgentId();
+    await app.request(`/api/agents/${id}/tools/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ template: 'shopify', fields: { shop: 'mystore', token: 'shpat_test' } }),
+    });
+    const list = await (
+      await app.request('/api/agents', { headers: { cookie: parentCookie } })
+    ).json();
+    const cfg = list.agents.find((a: { id: string }) => a.id === id).config;
+    const res = await app.request(`/api/agents/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({ config: { ...cfg, tone: 'warm' } }),
+    });
+    expect(res.status).toBe(200);
+    const [row] = await db.select().from(schema.agents).where(eq(schema.agents.id, id));
+    const tools = (row.config as { tools: Record<string, unknown>[] }).tools;
+    const search = tools.find((t) => t.name === 'shopify_search_products')!;
+    expect(search.bodyTemplate).toContain('${query:text}');
+    expect(search.label).toBe('Search products');
+    const custOrders = tools.find((t) => t.name === 'shopify_customer_orders')!;
+    expect(custOrders.identity).toBe(true);
+    expect((search.widget as { map: Record<string, string> }).map.link).toContain('{handle}');
+  });
+
   it('oauth template mints a token at install and stores a connection', async () => {
     vi.stubGlobal(
       'fetch',

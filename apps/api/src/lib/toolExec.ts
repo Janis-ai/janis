@@ -1,7 +1,7 @@
 import type { Db } from '../db/client.js';
 import type { agents } from '../db/schema.js';
 import { interpolateSecrets } from './secrets.js';
-import { CATALOG_TOOL_NAMES, IDENTITY_TOOL_NAMES, TEMPLATE_WIDGETS } from './toolTemplates.js';
+import { CATALOG_TOOL_NAMES, IDENTITY_TOOL_NAMES, TEMPLATE_BODY_TEMPLATES, TEMPLATE_WIDGETS } from './toolTemplates.js';
 import type { ToolWidgetConfig } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
@@ -60,6 +60,10 @@ export function toolsFor(agent: AgentRow): ToolDef[] {
       if (!out.widget) {
         const w = TEMPLATE_WIDGETS.get(t.name);
         if (w) out.widget = w;
+      }
+      if (!out.bodyTemplate) {
+        const b = TEMPLATE_BODY_TEMPLATES.get(t.name);
+        if (b) out.bodyTemplate = b;
       }
       return out;
     });

@@ -879,3 +879,12 @@ export const TEMPLATE_WIDGETS = new Map<string, ToolWidgetConfig>(
     t.tools.filter((x) => x.widget).map((x) => [x.name, x.widget!] as const),
   ),
 );
+
+/** Catalog tool name → its bodyTemplate — backfilled by toolsFor so stored
+ *  defs stripped by older schema versions (the AgentConfig zod used to drop
+ *  the field on any config write) still execute the shaped request. */
+export const TEMPLATE_BODY_TEMPLATES = new Map<string, string>(
+  TOOL_TEMPLATES.flatMap((t) =>
+    t.tools.filter((x) => x.bodyTemplate).map((x) => [x.name, x.bodyTemplate!] as const),
+  ),
+);

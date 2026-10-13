@@ -2026,7 +2026,18 @@ export async function complete(
                     : await callTool(tool, args, secrets)
                   : `error: unknown tool ${call.function.name}`;
           if (result.startsWith('error') || result.startsWith('{"error"')) outcome = 'failed';
-          else if (result.startsWith('pending_approval') || result.startsWith('approval_required'))
+          else if (result.startsWith('{')) {
+            // GraphQL request errors return HTTP 200 as {"errors":[…]} — a
+            // successful-looking body the prefix check marks "ran", so the
+            // model treats a broken response as data and retries forever.
+            try {
+              const errs = (JSON.parse(result) as { errors?: unknown }).errors;
+              if (Array.isArray(errs) && errs.length) outcome = 'failed';
+            } catch {
+              // truncated at the tool cap — leave as ran
+            }
+          }
+          if (result.startsWith('pending_approval') || result.startsWith('approval_required'))
             outcome = 'proposed';
           if (outcome === 'ran' && result.startsWith('action_card:')) actionCards++;
         }

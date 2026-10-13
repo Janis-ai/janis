@@ -141,6 +141,23 @@ describe('toolsFor identity backfill', () => {
     expect(t[0].identity).toBe(true);
   });
 
+  it('backfills the catalog bodyTemplate onto installs stripped by an old schema', () => {
+    // Prod incident: a config round-trip through the old AgentConfig zod
+    // dropped bodyTemplate from stored tools — calls shipped flat-arg bodies.
+    const t = toolsFor(
+      fakeAgent([
+        {
+          name: 'shopify_search_products',
+          description: 'd',
+          method: 'POST',
+          url: 'https://x.myshopify.com/admin/api/2026-10/graphql.json',
+          params: { query: 'search clause' },
+        },
+      ]),
+    );
+    expect(t[0].bodyTemplate).toContain('${query:text}');
+  });
+
   it('a stored widget config wins over the catalog backfill', () => {
     const mine = { type: 'options' as const, map: { label: 'name' } };
     const t = toolsFor(

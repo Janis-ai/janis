@@ -1141,6 +1141,46 @@ describe('testRun tool stubbing', () => {
     expect(r.toolCalls[2].error).toContain('already failed this turn');
   });
 
+  it('marks a GraphQL {"errors"} body as failed — the model sees the error, not fake data', async () => {
+    // Prod incident (janis-store): the stored shopify tool's bodyTemplate was
+    // stripped, Shopify returned {"errors":[…syntax…]} with HTTP 200, the call
+    // was recorded 'ran', and the model retried the same broken call until
+    // tool-storm salvage — then hallucinated links in its forced reply.
+    const searchTool = {
+      name: 'shopify_search_products',
+      description: 'search products',
+      method: 'POST' as const,
+      url: 'https://shop.example/admin/api/2026-10/graphql.json',
+      params: { query: 'search clause' },
+    };
+    const searchCall = (id: string) => ({
+      id,
+      function: { name: 'shopify_search_products', arguments: '{"query":"status:active"}' },
+    });
+    fetchMock
+      .mockResolvedValueOnce(reply({ tool_calls: [searchCall('c1')] }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ errors: [{ message: 'Parse error on "status" (IDENTIFIER)' }] }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(reply({ tool_calls: [searchCall('c2')] }))
+      .mockResolvedValueOnce(reply({ content: 'Search is having trouble — please try again.' }));
+    const r = await complete(llm, 'sys', [{ role: 'user', content: 'show products' }], [searchTool], {}, {
+      db,
+      convId: 'c',
+      workspaceId: wsId,
+    });
+    expect(r.toolCalls[0].outcome).toBe('failed');
+    expect(r.toolCalls[0].error).toContain('Parse error');
+    // the identical retry is short-circuited — the tool endpoint is hit once
+    expect(r.toolCalls[1].outcome).toBe('failed');
+    expect(r.toolCalls[1].error).toContain('already failed this turn');
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('shop.example'))).toHaveLength(1);
+    expect(r.text).toBe('Search is having trouble — please try again.');
+  });
+
   it('counts action_card results so a parked-but-silent run can narrate the card', async () => {
     // Prod incident (conv ac153999): the concierge parked nothing and went
     // silent — but when it DOES park a card then produce no text, the caller
