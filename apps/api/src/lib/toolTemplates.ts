@@ -132,7 +132,6 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           type: 'cards',
           items: 'data.products.nodes',
           link_label: 'View product',
-          select_label: "I'm interested",
           map: {
             title: 'title',
             subtitle: 'vendor',

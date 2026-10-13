@@ -409,13 +409,16 @@
     'cursor:pointer;font-size:16px;line-height:0;display:flex;align-items:center;justify-content:center;padding:0 1px 2px 0;z-index:2;transition:opacity .15s}' +
     '.janis-wscroll.janis-wprev{left:2px;padding-right:2px}.janis-wscroll.janis-wnext{right:2px;padding-left:2px}' +
     '.janis-wscroll[disabled]{opacity:0;pointer-events:none}' +
-    '.janis-wcard{flex:0 0 150px;max-width:150px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;color:#1f2937;overflow:hidden}' +
+    '.janis-wcard{flex:0 0 150px;max-width:150px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;color:#1f2937;overflow:hidden;display:flex;flex-direction:column}' +
     '.janis-wcard img{width:100%;height:110px;object-fit:contain;display:block;margin:0!important;max-width:none!important;max-height:110px!important;border-radius:0;background:#f8fafc}' +
+    // Missing product image — same slot kept so every card's title, price
+    // and buttons line up across the row.
+    '.janis-wcard-imgph{width:100%;height:110px;flex:0 0 110px;background:#f3f4f6}' +
     '.janis-wcard-body{padding:8px}' +
     '.janis-wcard-t{font-weight:600;font-size:13px;line-height:1.3}' +
     '.janis-wcard-s{color:#6b7280;font-size:12px;margin-top:2px;line-height:1.3}' +
     '.janis-wcard-p{font-weight:600;font-size:13px;margin-top:4px}' +
-    '.janis-wcard-btns{display:flex;gap:4px;padding:0 8px 8px;flex-wrap:wrap;justify-content:flex-start}' +
+    '.janis-wcard-btns{display:flex;gap:4px;padding:0 8px 8px;flex-wrap:wrap;justify-content:flex-start;margin-top:auto}' +
     '.janis-wbtn{display:inline-block;border:1px solid var(--janis-accent);color:var(--janis-accent);background:#fff;' +
     'border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit}' +
     '.janis-wbtn.janis-wbtn-primary{background:var(--janis-accent);color:#fff}' +
@@ -970,6 +973,8 @@
       var card = el('div', {}, { class: 'janis-wcard' });
       if (item.image) {
         card.appendChild(el('img', {}, { src: item.image, alt: '', loading: 'lazy' }));
+      } else {
+        card.appendChild(el('div', {}, { class: 'janis-wcard-imgph' }));
       }
       var body = el('div', {}, { class: 'janis-wcard-body' });
       var t = el('div', {}, { class: 'janis-wcard-t' });
