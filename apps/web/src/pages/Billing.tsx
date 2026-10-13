@@ -67,6 +67,18 @@ export default function Billing() {
     queryFn: () => api<BillingSummary>(`/api/billing/summary?period=${period}`),
     refetchInterval: upgraded ? 3000 : false, // poll until the webhook lands
   });
+  // Shopify billing rail — present when a store is linked; the merchant
+  // approves the AppSubscription in Shopify admin instead of Stripe checkout.
+  const { data: shopifyBilling } = useQuery({
+    queryKey: ['shopify-billing'],
+    queryFn: () =>
+      api<{
+        provider: string;
+        shop: { shop: string; subscription?: { plan?: string; status?: string } } | null;
+        test_mode: boolean;
+      }>('/api/shopify/billing'),
+    retry: false,
+  });
 
   useEffect(() => {
     if (data && upgraded && data.plan.key !== 'free') setUpgraded(false);
@@ -75,6 +87,15 @@ export default function Billing() {
   const checkout = async (plan: string) => {
     setError('');
     try {
+      if (shopifyBilling?.shop) {
+        const r = await api<{ confirmation_url: string }>('/api/shopify/billing/start', {
+          method: 'POST',
+          body: JSON.stringify({ plan }),
+        });
+        window.open(r.confirmation_url, '_blank', 'noopener');
+        setUpgraded(true); // poll summary until the subscription webhook lands
+        return;
+      }
       const r = await api<{ url: string }>('/api/billing/checkout', {
         method: 'POST',
         body: JSON.stringify({ plan }),
@@ -143,6 +164,13 @@ export default function Billing() {
       )}
       {error && <div className="error">{error}</div>}
       {notice && <div className="card muted">{notice}</div>}
+      {shopifyBilling?.shop && (
+        <div className="card muted" style={{ fontSize: 13 }}>
+          Plan billing runs through Shopify{shopifyBilling.shop.shop ? ` (${shopifyBilling.shop.shop})` : ''}
+          {shopifyBilling.test_mode && ' — test charges while the store is in development'}
+          . Approving a plan opens Shopify admin; cancel from the app's admin page there.
+        </div>
+      )}
 
       {data && (
         <>

@@ -669,6 +669,122 @@ describe('storefront loader', () => {
   });
 });
 
+describe('shopify billing rail', () => {
+  const link = async () => {
+    stubShopifyApi();
+    const code = await linkCodeFor();
+    await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code, agent_id: agentId }),
+    });
+  };
+
+  it('start → appSubscriptionCreate → confirmation url; webhook ACTIVE flips the workspace', async () => {
+    await link();
+    // GraphQL stub answering the subscription mutation.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes('graphql.json'))
+          return Promise.resolve(
+            Response.json({
+              data: {
+                appSubscriptionCreate: {
+                  confirmationUrl: 'https://admin.shopify.com/store/dev-store/charges/123/confirm',
+                  appSubscription: { id: 'gid://shopify/AppSubscription/123', status: 'PENDING' },
+                  userErrors: [],
+                },
+              },
+            }),
+          );
+        return Promise.resolve(new Response('{}', { status: 404 }));
+      }),
+    );
+    const res = await app.request('/api/shopify/billing/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ plan: 'pro' }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { confirmation_url: string };
+    expect(body.confirmation_url).toContain('confirm');
+    let [row] = await db.select().from(shopifyShops).where(eq(shopifyShops.shop, SHOP));
+    expect((row.billing as { subscriptionId?: string }).subscriptionId).toBe(
+      'gid://shopify/AppSubscription/123',
+    );
+
+    // Merchant approves → app_subscriptions/update ACTIVE.
+    const wh = await webhook('app_subscriptions/update', {
+      app_subscription: {
+        admin_graphql_api_id: 'gid://shopify/AppSubscription/123',
+        name: 'Janis Pro',
+        status: 'ACTIVE',
+      },
+    });
+    expect(wh.status).toBe(200);
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+    expect(ws.plan).toBe('pro');
+    expect(ws.billingProvider).toBe('shopify');
+    [row] = await db.select().from(shopifyShops).where(eq(shopifyShops.shop, SHOP));
+    expect((row.billing as { status?: string }).status).toBe('ACTIVE');
+  });
+
+  it('cancel drops a shopify-billed workspace to free — provider stays shopify', async () => {
+    await link();
+    await db
+      .update(workspaces)
+      .set({ plan: 'pro', billingProvider: 'shopify' })
+      .where(eq(workspaces.id, workspaceId));
+    const wh = await webhook('app_subscriptions/update', {
+      app_subscription: {
+        admin_graphql_api_id: 'gid://shopify/AppSubscription/123',
+        name: 'Janis Pro',
+        status: 'CANCELLED',
+      },
+    });
+    expect(wh.status).toBe(200);
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+    expect(ws.plan).toBe('free');
+    expect(ws.billingProvider).toBe('shopify');
+  });
+
+  it('a stripe-billed workspace ignores a stray subscription cancel', async () => {
+    await link();
+    await db
+      .update(workspaces)
+      .set({ plan: 'pro', billingProvider: 'stripe' })
+      .where(eq(workspaces.id, workspaceId));
+    await webhook('app_subscriptions/update', {
+      app_subscription: { name: 'Janis Pro', status: 'CANCELLED' },
+    });
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+    expect(ws.plan).toBe('pro'); // stripe rail owns the plan — untouched
+  });
+
+  it('GET /billing reports the rail + subscription state', async () => {
+    await link();
+    const res = await app.request('/api/shopify/billing', { headers: { cookie } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      provider: string;
+      shop: { shop: string; subscription: { status?: string } };
+    };
+    expect(body.shop.shop).toBe(SHOP);
+    expect(body.shop.subscription.status).toBe('CANCELLED'); // persisted by the prior test
+  });
+
+  it('start rejects non-billable plans', async () => {
+    const res = await app.request('/api/shopify/billing/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ plan: 'free' }),
+    });
+    expect(res.status).toBe(400); // zod — free/internal never reach Shopify
+  });
+});
+
 describe('app wiring', () => {
   it('the real app mounts the console link endpoints under /api/shopify', async () => {
     // The suite above mounts the route groups on a scratch Hono — this

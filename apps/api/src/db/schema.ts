@@ -25,6 +25,9 @@ export const workspaces = pgTable('workspaces', {
   plan: text('plan').notNull().default('free'), // key into PLANS rate map
   stripeCustomerId: text('stripe_customer_id'),
   stripeSubscriptionId: text('stripe_subscription_id'),
+  // Which rail bills this workspace: 'stripe' (default, incl. agency
+  // connect) or 'shopify' (AppSubscription via a bound shopify_shops row).
+  billingProvider: text('billing_provider').notNull().default('stripe'),
   // Agency rebilling (Stripe Connect, GHL-style): the agency's Express
   // account. Client workspaces check out on it as direct charges at
   // agency-set retail prices; application_fee_percent keeps our wholesale.

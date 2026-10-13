@@ -11,7 +11,9 @@ import {
   bindShop,
   ensureShopForSession,
   handleShopifyWebhook,
+  shopBilling,
   shopifyAppConfigured,
+  startBillingSubscription,
   signLinkCode,
   unbindShop,
   verifyLinkCode,
@@ -180,10 +182,55 @@ export function shopifyApiRoutes(db: Db) {
         shop: r.shop,
         agent_id: r.agentId,
         state: r.state,
+        billing: shopBilling(r),
         created_at: r.createdAt,
       })),
     });
   });
+
+  /* ── Billing rail (Phase 5) — the bound shop's AppSubscription drives
+     workspaces.plan; Stripe stays untouched on non-shopify workspaces. ── */
+
+  app.get('/billing', async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const [ws] = await db
+      .select({ billingProvider: workspaces.billingProvider, plan: workspaces.plan })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(and(eq(shopifyShops.workspaceId, workspaceId), eq(shopifyShops.state, 'linked')))
+      .limit(1);
+    return c.json({
+      provider: ws?.billingProvider ?? 'stripe',
+      plan: ws?.plan ?? 'free',
+      shop: row ? { id: row.id, shop: row.shop, subscription: shopBilling(row) } : null,
+      test_mode: env.shopifyBillingTest,
+    });
+  });
+
+  app.post(
+    '/billing/start',
+    adminOnly,
+    zValidator('json', z.object({ plan: z.enum(['starter', 'pro', 'scale']) })),
+    async (c) => {
+      const { plan } = c.req.valid('json');
+      const [row] = await db
+        .select()
+        .from(shopifyShops)
+        .where(and(eq(shopifyShops.workspaceId, c.get('workspaceId')), eq(shopifyShops.state, 'linked')))
+        .limit(1);
+      if (!row) return c.json({ error: 'no linked Shopify shop — connect a store first' }, 409);
+      try {
+        const { confirmationUrl } = await startBillingSubscription(db, row, plan);
+        return c.json({ confirmation_url: confirmationUrl, test_mode: env.shopifyBillingTest });
+      } catch (e) {
+        return c.json({ error: e instanceof Error ? e.message : 'billing start failed' }, 502);
+      }
+    },
+  );
 
   // What the link-code points at — the link page shows the shop domain
   // before the admin picks an agent to serve it.

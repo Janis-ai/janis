@@ -9,7 +9,9 @@ import {
   contacts,
   conversations,
   shopifyShops,
+  workspaces,
 } from '../db/schema.js';
+import { PLANS } from './plans.js';
 import { decryptSecret, encryptSecret } from './secrets.js';
 import { audit } from './audit.js';
 import { dispatchAlert, openAlertOnce } from './alerts.js';
@@ -166,6 +168,8 @@ const WEBHOOK_TOPICS = [
   'PRODUCTS_CREATE',
   'PRODUCTS_UPDATE',
   'PRODUCTS_DELETE',
+  // Billing rail: subscription status changes (approve/cancel/freeze).
+  'APP_SUBSCRIPTIONS_UPDATE',
 ] as const;
 
 export async function registerWebhooks(shop: string, token: string): Promise<void> {
@@ -647,6 +651,99 @@ async function orderEventNote(
   }
 }
 
+/* ── Shopify Billing (AppSubscription) ─────────────────────────────────
+ * A bound merchant subscribes to a Janis plan on Shopify's rails instead of
+ * Stripe: appSubscriptionCreate → merchant approves on confirmationUrl →
+ * app_subscriptions/update webhook flips workspaces.plan + billing_provider.
+ * Paid plans only — free/internal never reach Shopify. */
+
+interface ShopBilling {
+  subscriptionId?: string;
+  plan?: string;
+  status?: string;
+}
+
+/** The subscription the merchant currently holds (empty when never billed). */
+export function shopBilling(row: ShopRow): ShopBilling {
+  return ((row.billing ?? {}) as ShopBilling) ?? {};
+}
+
+export async function startBillingSubscription(
+  db: Db,
+  row: ShopRow,
+  planKey: string,
+): Promise<{ confirmationUrl: string }> {
+  const plan = PLANS[planKey];
+  if (!plan || plan.baseCents <= 0) throw new Error(`not a Shopify-billable plan: ${planKey}`);
+  if (!row.accessTokenEnc) throw new Error('shop has no offline token');
+  if (!row.workspaceId) throw new Error('shop is not linked to a workspace');
+  const token = decryptSecret(row.accessTokenEnc);
+  const amount = (plan.baseCents / 100).toFixed(2);
+  const res = await shopifyGraphql(
+    row.shop,
+    token,
+    `mutation { appSubscriptionCreate(name: ${JSON.stringify(`Janis ${plan.name}`)}, returnUrl: ${JSON.stringify(`${env.webOrigin}/shopify-app`)}, test: ${env.shopifyBillingTest}, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: ${amount}, currencyCode: USD}, interval: EVERY_30_DAYS}}}]) { confirmationUrl appSubscription { id status } userErrors { field message } } }`,
+  );
+  const out = (res.data as {
+    appSubscriptionCreate?: {
+      confirmationUrl?: string;
+      appSubscription?: { id: string; status: string };
+      userErrors?: { message: string }[];
+    };
+  })?.appSubscriptionCreate;
+  if (out?.userErrors?.length)
+    throw new Error(`appSubscriptionCreate: ${out.userErrors.map((e) => e.message).join(', ')}`);
+  if (!out?.confirmationUrl || !out.appSubscription?.id)
+    throw new Error(`appSubscriptionCreate: no confirmation URL (${res.errors?.[0]?.message ?? 'empty response'})`);
+  await db
+    .update(shopifyShops)
+    .set({
+      billing: {
+        ...shopBilling(row),
+        subscriptionId: out.appSubscription.id,
+        plan: planKey,
+        status: out.appSubscription.status ?? 'PENDING',
+      },
+      updatedAt: new Date(),
+    })
+    .where(eq(shopifyShops.id, row.id));
+  return { confirmationUrl: out.confirmationUrl };
+}
+
+/** app_subscriptions/update → reconcile workspace plan. ACTIVE flips
+ *  billing_provider to 'shopify' + sets the plan the merchant bought;
+ *  CANCELLED/DECLINED/EXPIRED drops a shopify-billed workspace back to free
+ *  (provider stays 'shopify' — that's still their rail, just unsubscribed). */
+async function syncBillingSubscription(
+  db: Db,
+  row: ShopRow,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const sub = (payload.app_subscription ?? payload) as { admin_graphql_api_id?: string; name?: string; status?: string };
+  const status = sub.status ?? '';
+  const prior = shopBilling(row);
+  // Name "Janis Pro" → 'pro'; fall back to the plan stored at create time.
+  const plan = sub.name?.toLowerCase().replace(/^janis\s+/, '').trim() || prior.plan;
+  await db
+    .update(shopifyShops)
+    .set({
+      billing: { ...prior, subscriptionId: sub.admin_graphql_api_id ?? prior.subscriptionId, plan, status },
+      updatedAt: new Date(),
+    })
+    .where(eq(shopifyShops.id, row.id));
+  if (!row.workspaceId || !PLANS[plan ?? '']) return;
+  const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId)).limit(1);
+  if (!ws) return;
+  if (status === 'ACTIVE') {
+    await db
+      .update(workspaces)
+      .set({ plan: plan!, billingProvider: 'shopify' })
+      .where(eq(workspaces.id, ws.id));
+  } else if (['CANCELLED', 'DECLINED', 'EXPIRED', 'FROZEN'].includes(status) && ws.billingProvider === 'shopify') {
+    await db.update(workspaces).set({ plan: 'free' }).where(eq(workspaces.id, ws.id));
+  }
+}
+
 export async function handleShopifyWebhook(
   db: Db,
   shop: string,
@@ -680,6 +777,9 @@ export async function handleShopifyWebhook(
     case 'products/update':
     case 'products/delete':
       if (row?.agentId) await bumpCatalogSync(db, row.agentId).catch(() => {});
+      return;
+    case 'app_subscriptions/update':
+      if (row) await syncBillingSubscription(db, row, payload);
       return;
     default:
       return;

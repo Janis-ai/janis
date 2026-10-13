@@ -1,0 +1,1 @@
+ALTER TABLE "workspaces" ADD COLUMN "billing_provider" text DEFAULT 'stripe' NOT NULL;

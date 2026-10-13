@@ -153,6 +153,9 @@ export const env = {
   shopifyAppScopes:
     process.env.SHOPIFY_APP_SCOPES ??
     'read_orders,write_orders,write_draft_orders,read_products,read_customers',
+  // Shopify AppSubscription charges as test (no money moves) — required on
+  // dev stores, forbidden on production installs. Flip off at App Store launch.
+  shopifyBillingTest: process.env.SHOPIFY_BILLING_TEST === 'true',
   calendlyRedirectUri:
     process.env.CALENDLY_REDIRECT_URI ??
     `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/calendly/callback`,
