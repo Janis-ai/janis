@@ -110,7 +110,7 @@ async function exchangeOfflineToken(shop: string, sessionToken: string): Promise
       grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
       subject_token: sessionToken,
       subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
-      requested_token_type: 'urn:shopify:params:oauth:token-type:access_token:offline',
+      requested_token_type: 'urn:shopify:params:oauth:token-type:offline-access-token',
     }),
     signal: AbortSignal.timeout(10_000),
   });
