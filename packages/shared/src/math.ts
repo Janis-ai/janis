@@ -247,13 +247,16 @@ export interface MathSpan {
 
 // $…$ pairs need non-space content at both ends — "costs $5 and $10" fails
 // the closing rule ("5 and " ends with a space) so prices stay literal.
+// The closing $ also can't be followed by a digit — a run of prices like
+// "($885.95), x ($885.95)" would otherwise pair the currency signs as
+// math delimiters and mangle the text between them (pandoc's rule).
 // \\\$ inside the inline branch lets $\$28,100$ (a dollar amount wrapped
 // in math) match as ONE span instead of the body closing early at the
 // escaped $ and leaking "28,100$" as prose.
 // MATH_SRC is exported so richer tokenizers (the console's emphasis pass)
 // can share the exact same math pattern in a combined alternation.
 export const MATH_SRC =
-  '\\$\\$([\\s\\S]+?)\\$\\$|\\\\\\[(.+?)\\\\\\]|\\\\\\((.+?)\\\\\\)|\\$((?=[^\\s$])(?:\\\\\\$|[^\\n$])*[^\\s$])\\$';
+  '\\$\\$([\\s\\S]+?)\\$\\$(?!\\d)|\\\\\\[(.+?)\\\\\\]|\\\\\\((.+?)\\\\\\)|\\$((?=[^\\s$])(?:\\\\\\$|[^\\n$])*[^\\s$])\\$(?!\\d)';
 const MATH_RE = new RegExp(MATH_SRC, 'g');
 
 /** Split text into prose and detexed math spans — $…$, $$…$$, \(…\), \[…\].

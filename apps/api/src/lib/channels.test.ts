@@ -495,6 +495,28 @@ describe('formatForChannel', () => {
     );
   });
 
+  it('does not read a run of prices as inline math', () => {
+    // ($885.95) … ($885.95) paired the currency signs as $…$ delimiters and
+    // mathified the text between them ("**name**" → "××name××", $'s eaten).
+    const t =
+      'We also carry **The Minimal Snowboard** ($885.95), **The Videographer Snowboard** ($885.95), ' +
+      '**The Compare at Price Snowboard** ($785.95), **The Complete Snowboard** ($699.95), ' +
+      'and **The Out of Stock Snowboard** ($885.95).';
+    for (const kind of ['sms', 'email']) {
+      expect(formatForChannel(t, kind)).toBe(
+        'We also carry The Minimal Snowboard ($885.95), The Videographer Snowboard ($885.95), ' +
+          'The Compare at Price Snowboard ($785.95), The Complete Snowboard ($699.95), ' +
+          'and The Out of Stock Snowboard ($885.95).',
+      );
+    }
+    expect(formatForChannel(t, 'webchat')).toBe(t);
+    expect(formatForChannel(t, 'whatsapp')).toBe(
+      'We also carry *The Minimal Snowboard* ($885.95), *The Videographer Snowboard* ($885.95), ' +
+        '*The Compare at Price Snowboard* ($785.95), *The Complete Snowboard* ($699.95), ' +
+        'and *The Out of Stock Snowboard* ($885.95).',
+    );
+  });
+
   it('mixes math with the rest of the dialect', () => {
     expect(formatForChannel('so **$x = 40$** — done', 'whatsapp')).toBe('so *x = 40* — done');
     expect(formatForChannel('so **$x = 40$** — done', 'sms')).toBe('so x = 40 — done');
