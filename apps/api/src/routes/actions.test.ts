@@ -200,4 +200,53 @@ describe('action decide route', () => {
       env.operatorWorkspaceId = prev;
     }
   });
+
+  it('operator-workspace customer threads decide by membership', async () => {
+    const prev = env.operatorWorkspaceId;
+    try {
+      const [opWs] = await db.insert(workspaces).values({ name: 'Operator 2' }).returning();
+      env.operatorWorkspaceId = opWs.id;
+      // Mike's case: a regular storefront agent lives inside the operator
+      // workspace; its customer conversations carry no verified identity.
+      const [member] = await db
+        .insert(users)
+        .values({ email: 'opm@x.c', name: 'OpM', passwordHash: await hashPassword('password123') })
+        .returning();
+      await db
+        .insert(memberships)
+        .values({ userId: member.id, workspaceId: opWs.id, role: 'admin', acceptedAt: new Date() });
+      const memberCookie = await seedSession(member.id);
+      const [storeAgent] = await db
+        .insert(agents)
+        .values({ workspaceId: opWs.id, name: 'Store', hosted: true })
+        .returning();
+      const [sconv] = await db
+        .insert(conversations)
+        .values({ agentId: storeAgent.id, externalId: 'webchat:guest' })
+        .returning();
+      const [action] = await db
+        .insert(pendingActions)
+        .values({
+          workspaceId: opWs.id,
+          agentId: storeAgent.id,
+          conversationId: sconv.id,
+          toolName: 'propose_refund',
+          tool: GATED,
+          args: { amount: '25' },
+        })
+        .returning();
+      // Not a concierge thread — outsiders 404, members decide as usual.
+      expect((await decide(action.id, 'approved', outsiderCookie)).status).toBe(404);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(new Response('{"ok":true}', { status: 200 })),
+      );
+      const res = await decide(action.id, 'approved', memberCookie);
+      expect(res.status).toBe(200);
+      expect((await res.json()).status).toBe('approved');
+      vi.unstubAllGlobals();
+    } finally {
+      env.operatorWorkspaceId = prev;
+    }
+  });
 });

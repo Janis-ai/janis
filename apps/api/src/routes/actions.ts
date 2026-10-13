@@ -1,13 +1,12 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { conversations, pendingActions } from '../db/schema.js';
 import { conversationAgent } from '../lib/access.js';
-import { decidePendingAction } from '../lib/approvals.js';
+import { decidePendingAction, isConciergeAction } from '../lib/approvals.js';
 import { runHostedEvent } from '../lib/hostedAgent.js';
-import { env } from '../env.js';
 import type { UserProfile } from '@janis/shared';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
@@ -28,15 +27,15 @@ export function actionRoutes(db: Db) {
       .where(eq(pendingActions.id, c.req.param('id')))
       .limit(1);
     if (!action) return c.json({ error: 'not found' }, 404);
-    if (action.workspaceId === env.operatorWorkspaceId) {
+    const [conv] = await db
+      .select({ userProfile: conversations.userProfile })
+      .from(conversations)
+      .where(eq(conversations.id, action.conversationId))
+      .limit(1);
+    if (isConciergeAction(action.workspaceId, conv?.userProfile)) {
       // Concierge action cards live on Janis's own workspace — the decider is
       // the verified signed-in visitor of the concierge conversation, not a
       // member here.
-      const [conv] = await db
-        .select({ userProfile: conversations.userProfile })
-        .from(conversations)
-        .where(eq(conversations.id, action.conversationId))
-        .limit(1);
       const p = (conv?.userProfile ?? {}) as UserProfile;
       if (!p.identity_verified || p.external_id !== user.id) {
         return c.json({ error: 'not found' }, 404);
@@ -60,10 +59,10 @@ export function actionRoutes(db: Db) {
     if (!decided) return c.json({ error: 'not found' }, 404);
 
     // Resume the agent so it can close the loop with the customer. Concierge
-    // (operator-workspace) cards skip the LLM resume — decidePendingAction
-    // already posted a deterministic confirmation, and a resumed turn that
-    // took a while or emitted nothing read as typing dots that never resolve.
-    if (decided.action.workspaceId !== env.operatorWorkspaceId) {
+    // cards skip the LLM resume — decidePendingAction already posted a
+    // deterministic confirmation, and a resumed turn that took a while or
+    // emitted nothing read as typing dots that never resolve.
+    if (!isConciergeAction(decided.action.workspaceId, decided.conv.userProfile)) {
       void runHostedEvent(db, decided.agent, {
         type: 'message.user',
         conversation_id: decided.conv.externalId,

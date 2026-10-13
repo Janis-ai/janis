@@ -16,6 +16,20 @@ type ConversationRow = typeof conversations.$inferSelect;
 
 const RESULT_PREVIEW = 400;
 
+/** A pending action belongs to a concierge thread when its conversation
+ * carries a verified signed-in visitor — those cards are decided by that
+ * visitor, never by workspace members. Ordinary agents that happen to live
+ * in the operator workspace (customer threads aren't sign-in verified)
+ * take the normal workspace-member path. */
+export function isConciergeAction(actionWorkspaceId: string, userProfile: unknown): boolean {
+  const p = (userProfile ?? {}) as { identity_verified?: unknown };
+  return (
+    !!env.operatorWorkspaceId &&
+    actionWorkspaceId === env.operatorWorkspaceId &&
+    p.identity_verified === true
+  );
+}
+
 /**
  * A gated tool call — park it as a pending action instead of executing.
  * Returns the tool-result string the model sees; the transcript card and
@@ -277,7 +291,7 @@ export async function decidePendingAction(
   // never resolve. Post a deterministic confirmation line instead. Applies
   // to every decision on a concierge thread, not just builtin executors —
   // webhook-tool cards parked there are decided the same way.
-  if (env.operatorWorkspaceId && action.workspaceId === env.operatorWorkspaceId) {
+  if (isConciergeAction(action.workspaceId, conv.userProfile)) {
     const failed = approve && result !== null && result.startsWith('error:');
     const confirm = !approve
       ? 'Dismissed — no changes made.'
