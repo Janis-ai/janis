@@ -10,9 +10,11 @@ import type { Db } from '../db/client.js';
 import {
   agentSecrets,
   agents,
+  alerts,
   channels,
   contacts,
   conversations,
+  knowledgeFiles,
   memberships,
   messages,
   sessions,
@@ -285,6 +287,15 @@ describe('shopify link flow', () => {
     const toolNames = ((a.config as { tools?: { name: string }[] }).tools ?? []).map((t) => t.name);
     expect(toolNames).toContain('shopify_lookup_order');
     expect(toolNames).toContain('shopify_cancel_order');
+    // Phase 4 — bind also lands the shopify:// knowledge sources
+    const kf = await db
+      .select({ sourceUrl: knowledgeFiles.sourceUrl })
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.agentId, agentId));
+    expect(kf.map((f) => f.sourceUrl).sort()).toEqual([
+      'shopify://catalog',
+      'shopify://policies',
+    ]);
   });
 
   it('link refuses an agent outside the workspace', async () => {
@@ -355,6 +366,205 @@ describe('shopify webhooks', () => {
     expect(
       (await db.select().from(messages).where(eq(messages.conversationId, conv.id))).length,
     ).toBe(0);
+  });
+
+  /** Link SHOP, then plant a contact + open thread — the order-event
+   *  tests' shared setup. Email must be unique per test: contact match is
+   *  by email, so reuse would attach the note to an earlier test's thread. */
+  const linkAndThread = async (email: string) => {
+    stubShopifyApi();
+    const code = await linkCodeFor();
+    await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code, agent_id: agentId }),
+    });
+    const [contact] = await db
+      .insert(contacts)
+      .values({ workspaceId, email })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: `chat:${Math.random()}`, contactId: contact.id })
+      .returning();
+    return { contact, conv };
+  };
+
+  it('orders/create notes the order on the customer thread', async () => {
+    const { conv } = await linkAndThread('order@x.com');
+    const res = await webhook('orders/create', {
+      name: '#1009',
+      email: 'order@x.com',
+      total_price: '29.95',
+      currency: 'USD',
+    });
+    expect(res.status).toBe(200);
+    const notes = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    const note = notes.find(
+      (m) => (m.payload as { event?: string })?.event === 'order_event',
+    );
+    expect(note?.text).toContain('#1009');
+    expect(note?.text).toContain('placed');
+    expect(note?.text).toContain('USD 29.95');
+    expect((note?.payload as { internal?: boolean })?.internal).toBe(true);
+  });
+
+  it('orders/create stays silent for buyers who never chatted', async () => {
+    await linkAndThread('silent@x.com');
+    const res = await webhook('orders/create', {
+      name: '#1010',
+      email: 'stranger@x.com',
+      total_price: '5.00',
+      currency: 'USD',
+    });
+    expect(res.status).toBe(200);
+    const notes = await db.select().from(messages);
+    expect(notes.filter((m) => m.text?.includes('#1010')).length).toBe(0);
+  });
+
+  it('products/update pulls the catalog knowledge sync forward', async () => {
+    await linkAndThread('prod@x.com');
+    const [file] = await db
+      .select()
+      .from(knowledgeFiles)
+      .where(
+        and(
+          eq(knowledgeFiles.agentId, agentId),
+          eq(knowledgeFiles.sourceUrl, 'shopify://catalog'),
+        ),
+      );
+    expect(file).toBeTruthy();
+    await db
+      .update(knowledgeFiles)
+      .set({ nextFetchAt: new Date(Date.now() + 86_400_000) })
+      .where(eq(knowledgeFiles.id, file.id));
+    const res = await webhook('products/update', { id: 1 });
+    expect(res.status).toBe(200);
+    const [after] = await db
+      .select()
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.id, file.id));
+    expect(after.nextFetchAt!.getTime()).toBeLessThan(Date.now() + 60_000);
+  });
+
+  it('refunds/create notes the thread AND raises a custom alert', async () => {
+    const { conv } = await linkAndThread('refund@x.com');
+    // Refund payloads carry no email — the handler fetches the order.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes('/admin/oauth/access_token'))
+          return Promise.resolve(Response.json({ access_token: 't', scope: 'read_orders' }));
+        if (url.includes('graphql.json')) {
+          const body = String(init?.body ?? '');
+          if (body.includes('order(id:'))
+            return Promise.resolve(
+              Response.json({
+                data: {
+                  order: {
+                    name: '#1007',
+                    email: 'refund@x.com',
+                    currentTotalPriceSet: {
+                      shopMoney: { amount: '50.00', currencyCode: 'USD' },
+                    },
+                  },
+                },
+              }),
+            );
+          return Promise.resolve(
+            Response.json({
+              data: {
+                webhookSubscriptions: { nodes: [] },
+                webhookSubscriptionCreate: { webhookSubscription: { id: 'w' }, userErrors: [] },
+              },
+            }),
+          );
+        }
+        return Promise.resolve(new Response('{}', { status: 404 }));
+      }),
+    );
+    const res = await webhook('refunds/create', { id: 9, order_id: 555 });
+    expect(res.status).toBe(200);
+    const notes = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    const note = notes.find((m) => (m.payload as { event?: string })?.event === 'order_event');
+    expect(note?.text).toContain('#1007');
+    expect(note?.text).toContain('refunded');
+    const [a] = await db
+      .select()
+      .from(alerts)
+      .where(and(eq(alerts.conversationId, conv.id), eq(alerts.type, 'custom')));
+    expect(a?.detail).toContain('#1007');
+    expect(a?.status).toBe('open');
+  });
+
+  it('shopify://catalog refresh renders store products as knowledge text', async () => {
+    await linkAndThread('catalog@x.com');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes('graphql.json')) {
+          const isCatalog = true;
+          void isCatalog;
+          return Promise.resolve(
+            Response.json({
+              data: {
+                productsCount: { count: 2 },
+                products: {
+                  nodes: [
+                    {
+                      title: 'Ski Wax',
+                      handle: 'ski-wax',
+                      vendor: 'WaxCo',
+                      productType: 'Wax',
+                      tags: ['winter'],
+                      status: 'ACTIVE',
+                      totalInventory: 8,
+                      description: 'Fast wax.',
+                      priceRangeV2: {
+                        minVariantPrice: { amount: '9.95', currencyCode: 'USD' },
+                      },
+                    },
+                  ],
+                },
+              },
+            }),
+          );
+        }
+        return Promise.resolve(new Response('{}', { status: 404 }));
+      }),
+    );
+    const [file] = await db
+      .select()
+      .from(knowledgeFiles)
+      .where(
+        and(
+          eq(knowledgeFiles.agentId, agentId),
+          eq(knowledgeFiles.sourceUrl, 'shopify://catalog'),
+        ),
+      );
+    // Lazy — env.ts must not evaluate before beforeAll set the app creds.
+    const { refreshKnowledgeSource } = await import('../lib/urlSource.js');
+    const ok = await refreshKnowledgeSource(db, file);
+    expect(ok).toBe(true);
+    const [after] = await db
+      .select()
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.id, file.id));
+    expect(after.status).toBe('ready');
+    expect(after.text).toContain('2 active products');
+    expect(after.text).toContain('Ski Wax');
+    expect(after.text).toContain('https://dev-store.myshopify.com/products/ski-wax');
+    expect(after.text).toContain('USD 9.95');
   });
 });
 

@@ -1,12 +1,22 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agentSecrets, agents, channels, contacts, shopifyShops } from '../db/schema.js';
+import {
+  agentSecrets,
+  agents,
+  channels,
+  contacts,
+  conversations,
+  shopifyShops,
+} from '../db/schema.js';
 import { decryptSecret, encryptSecret } from './secrets.js';
 import { audit } from './audit.js';
+import { dispatchAlert, openAlertOnce } from './alerts.js';
 import { invalidateChannelCache } from './channels.js';
 import { purgeContactData } from './contacts.js';
+import { bumpCatalogSync, ensureShopifyKnowledge } from './shopifySync.js';
+import { systemNote } from './systemNote.js';
 import { TOOL_TEMPLATES } from './toolTemplates.js';
 
 /**
@@ -144,33 +154,47 @@ async function shopifyGraphql(
   return (await res.json().catch(() => ({}))) as { data?: unknown; errors?: { message: string }[] };
 }
 
-/** app/uninstalled must be API-registered (the mandatory GDPR topics are
- *  declared in app config instead). Idempotent — checks before creating.
- *  Best-effort: a failure logs and the install still succeeds; the session
- *  endpoint retries on the next embedded load anyway. */
-async function registerWebhooks(shop: string, token: string): Promise<void> {
+/** Subscriptions every install gets: lifecycle (uninstall — the mandatory
+ *  GDPR topics are declared in app config instead) + the Phase 4
+ *  order/refund/product events. All sit under the granted scopes —
+ *  orders/* and refunds/* need read_orders, products/* read_products. */
+const WEBHOOK_TOPICS = [
+  'APP_UNINSTALLED',
+  'ORDERS_CREATE',
+  'ORDERS_FULFILLED',
+  'REFUNDS_CREATE',
+  'PRODUCTS_CREATE',
+  'PRODUCTS_UPDATE',
+  'PRODUCTS_DELETE',
+] as const;
+
+export async function registerWebhooks(shop: string, token: string): Promise<void> {
   const cbUrl = `${env.apiOrigin}/shopify/webhooks`;
   const existing = await shopifyGraphql(
     shop,
     token,
-    `{ webhookSubscriptions(first: 25) { nodes { endpoint { __typename ... on WebhookHttpEndpoint { callbackUrl } } topic } } }`,
+    `{ webhookSubscriptions(first: 50) { nodes { endpoint { __typename ... on WebhookHttpEndpoint { callbackUrl } } topic } } }`,
   );
   const nodes =
     (existing.data as { webhookSubscriptions?: { nodes?: { topic: string; endpoint?: { callbackUrl?: string } }[] } })
       ?.webhookSubscriptions?.nodes ?? [];
-  const have = nodes.some(
-    (n) => n.topic === 'APP_UNINSTALLED' && n.endpoint?.callbackUrl === cbUrl,
-  );
-  if (have) return;
-  const created = await shopifyGraphql(
-    shop,
-    token,
-    `mutation { webhookSubscriptionCreate(topic: APP_UNINSTALLED, webhookSubscription: {callbackUrl: ${JSON.stringify(cbUrl)}, format: JSON}) { webhookSubscription { id } userErrors { field message } } }`,
-  );
-  const errs =
-    (created.data as { webhookSubscriptionCreate?: { userErrors?: { message: string }[] } })
-      ?.webhookSubscriptionCreate?.userErrors ?? [];
-  if (errs.length) console.error(`shopify webhook register ${shop}:`, errs.map((e) => e.message).join(', '));
+  // Idempotent — checks before creating. Best-effort: a failure logs and
+  // the install still succeeds; the session endpoint retries on the next
+  // embedded load anyway.
+  const have = new Set(nodes.filter((n) => n.endpoint?.callbackUrl === cbUrl).map((n) => n.topic));
+  for (const topic of WEBHOOK_TOPICS) {
+    if (have.has(topic)) continue;
+    const created = await shopifyGraphql(
+      shop,
+      token,
+      `mutation { webhookSubscriptionCreate(topic: ${topic}, webhookSubscription: {callbackUrl: ${JSON.stringify(cbUrl)}, format: JSON}) { webhookSubscription { id } userErrors { field message } } }`,
+    );
+    const errs =
+      (created.data as { webhookSubscriptionCreate?: { userErrors?: { message: string }[] } })
+        ?.webhookSubscriptionCreate?.userErrors ?? [];
+    if (errs.length)
+      console.error(`shopify webhook register ${shop} ${topic}:`, errs.map((e) => e.message).join(', '));
+  }
 }
 
 /* ── Link codes (signed, stateless — same scheme as Calendly intent) ─── */
@@ -264,6 +288,13 @@ export async function ensureShopForSession(
     // Re-mirror on every embedded load — a secret deleted since the link
     // self-heals here; upserts are cheap.
     await mirrorSecrets(db, row.agentId, row.workspaceId, shop, decryptSecret(row.accessTokenEnc));
+  }
+  // Idempotent shopify:// knowledge rows — covers installs bound before
+  // the catalog/policy sync existed.
+  if (row.state === 'linked' && row.agentId && row.workspaceId) {
+    await ensureShopifyKnowledge(db, row.agentId, row.workspaceId).catch((err) =>
+      console.error(`shopify knowledge ensure ${shop}:`, err),
+    );
   }
   return row;
 }
@@ -381,6 +412,11 @@ export async function bindShop(
     });
     invalidateChannelCache();
   }
+  // shopify:// knowledge rows — catalog + policies sync on the URL-source
+  // cadence from here on.
+  await ensureShopifyKnowledge(db, binding.agentId, binding.workspaceId).catch((err) =>
+    console.error(`shopify knowledge ensure ${row.shop}:`, err),
+  );
   await audit(db, {
     workspaceId: binding.workspaceId,
     action: 'shopify.link',
@@ -528,6 +564,89 @@ async function shopRedact(db: Db, row: ShopRow): Promise<void> {
 
 /** Dispatch a verified webhook. Returns false for unknown topics (caller
  *  still 200s — Shopify retries non-2xx and unknown topics aren't errors). */
+/**
+ * Order lifecycle events → an internal note on the customer's thread, so
+ * the agent knows "they just ordered #1003 / it shipped / it was
+ * refunded" the next time they chat. Refunds additionally fire a custom
+ * alert — per the house rule, money going back out roped in a human.
+ * Silent when the buyer never chatted (no contact = no thread to note).
+ */
+async function orderEventNote(
+  db: Db,
+  row: ShopRow,
+  payload: Record<string, unknown>,
+  kind: 'placed' | 'fulfilled' | 'refunded',
+): Promise<void> {
+  if (!row.agentId || !row.workspaceId) return;
+
+  let email = (payload.email ??
+    payload.contact_email ??
+    (payload.customer as { email?: string } | undefined)?.email) as string | undefined;
+  let name = payload.name as string | undefined;
+  let total = (payload.total_price ?? payload.current_total_price) as string | undefined;
+  let currency = (payload.currency ?? payload.presentment_currency) as string | undefined;
+  // Refund payloads carry only ids — pull the order for the summary.
+  if (kind === 'refunded' && payload.order_id && row.accessTokenEnc) {
+    try {
+      const data = await shopifyGraphql(
+        row.shop,
+        decryptSecret(row.accessTokenEnc),
+        `query{order(id:"gid://shopify/Order/${payload.order_id}"){name email currentTotalPriceSet{shopMoney{amount currencyCode}}}}`,
+      );
+      const o = (
+        data.data as {
+          order?: {
+            name?: string;
+            email?: string;
+            currentTotalPriceSet?: { shopMoney?: { amount?: string; currencyCode?: string } };
+          };
+        }
+      )?.order;
+      name ??= o?.name;
+      email ??= o?.email ?? undefined;
+      total ??= o?.currentTotalPriceSet?.shopMoney?.amount;
+      currency ??= o?.currentTotalPriceSet?.shopMoney?.currencyCode;
+    } catch {
+      /* the note still posts with whatever the payload gave us */
+    }
+  }
+
+  const summary = `Shopify: order ${name ?? `#${payload.order_number ?? payload.id ?? ''}`} ${kind}${
+    total ? ` — ${currency ?? ''} ${total}`.trimEnd() : ''
+  }${email ? ` (${email})` : ''}`;
+
+  if (!email) {
+    console.log(`shopify webhook ${kind} ${row.shop}: no customer email — ${summary}`);
+    return;
+  }
+  const [contact] = await db
+    .select()
+    .from(contacts)
+    .where(and(eq(contacts.workspaceId, row.workspaceId), eq(contacts.email, email)))
+    .limit(1);
+  if (!contact) return;
+  const [conv] = await db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.contactId, contact.id))
+    .orderBy(desc(conversations.lastMessageAt))
+    .limit(1);
+  if (!conv) return;
+  await systemNote(db, row.workspaceId, conv.id, summary, 'order_event');
+
+  if (kind === 'refunded') {
+    const { created, alert } = await openAlertOnce(db, {
+      conversationId: conv.id,
+      type: 'custom',
+      detail: summary,
+    });
+    if (created && alert) {
+      const [agent] = await db.select().from(agents).where(eq(agents.id, row.agentId)).limit(1);
+      if (agent) await dispatchAlert(db, agent, conv, alert).catch(() => {});
+    }
+  }
+}
+
 export async function handleShopifyWebhook(
   db: Db,
   shop: string,
@@ -547,6 +666,20 @@ export async function handleShopifyWebhook(
       return;
     case 'shop/redact':
       if (row) await shopRedact(db, row);
+      return;
+    case 'orders/create':
+      if (row) await orderEventNote(db, row, payload, 'placed');
+      return;
+    case 'orders/fulfilled':
+      if (row) await orderEventNote(db, row, payload, 'fulfilled');
+      return;
+    case 'refunds/create':
+      if (row) await orderEventNote(db, row, payload, 'refunded');
+      return;
+    case 'products/create':
+    case 'products/update':
+    case 'products/delete':
+      if (row?.agentId) await bumpCatalogSync(db, row.agentId).catch(() => {});
       return;
     default:
       return;

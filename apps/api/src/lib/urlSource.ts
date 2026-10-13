@@ -2,6 +2,7 @@ import dns from 'node:dns/promises';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { knowledgeFiles } from '../db/schema.js';
+import { fetchShopifySourceText } from './shopifySync.js';
 
 const MAX_CHARS = 80_000;
 const FETCH_TIMEOUT_MS = 15_000;
@@ -268,7 +269,12 @@ export async function refreshKnowledgeSource(
     return false;
   };
   try {
-    const { text, sizeBytes, imageUrl, finalUrl } = await fetchUrlText(file.sourceUrl!);
+    // shopify://catalog|policies rows render from the bound shop's Admin
+    // API instead of an HTTP crawl — same update/degrade contract either
+    // way (a wiped catalog still trips the shrink guard like page rot).
+    const { text, sizeBytes, imageUrl, finalUrl } = file.sourceUrl!.startsWith('shopify://')
+      ? await fetchShopifySourceText(db, file)
+      : await fetchUrlText(file.sourceUrl!);
     const rot = rotReason(file.text ?? '', file.sourceUrl!, text, finalUrl);
     if (rot) return degrade(rot);
     await db
