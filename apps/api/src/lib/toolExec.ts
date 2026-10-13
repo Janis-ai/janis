@@ -17,11 +17,15 @@ export interface ToolDef {
    *  (application/x-www-form-urlencoded, e.g. Stripe). */
   bodyFormat?: 'json' | 'form';
   /** Operator-authored JSON body template — {param} placeholders substitute
-   *  the arg as a JSON value (strings quoted, objects/arrays nested) and
-   *  {{secrets.*}} expand exactly like url/headers. Needed when the provider
-   *  wants a shaped body (nested objects, secret-derived fields like
-   *  Cal.com's eventTypeId) rather than flat args. Takes precedence over
-   *  the flat-args body. */
+   *  the arg as a JSON value (strings quoted, objects/arrays nested),
+   *  {param:text} substitutes raw text JSON-escaped for embedding inside a
+   *  quoted string (e.g. a GraphQL search clause), and {{secrets.*}} expand
+   *  exactly like url/headers. Needed when the provider wants a shaped body
+   *  (nested objects, secret-derived fields like Cal.com's eventTypeId)
+   *  rather than flat args. Takes precedence over the flat-args body.
+   *  Bodies with literal braces (a GraphQL document's selection sets) use
+   *  ${param} / ${param:text} instead — a template containing any ${…}
+   *  treats {…} as data, not placeholders. */
   bodyTemplate?: string;
   /** Mutating tools: the model proposes the call, a teammate approves or
    *  denies it in the console or Slack, and only then it executes. */
@@ -187,23 +191,33 @@ export async function callTool(
   const canBody = tool.method !== 'GET' && tool.method !== 'DELETE';
   let templateBody: string | undefined;
   if (canBody && tool.bodyTemplate) {
+    // Two placeholder spellings: legacy {key} for braces-free bodies, and
+    // ${key} for bodies that carry literal braces (GraphQL selection sets).
+    // A template using any ${…} disables the legacy form so `{nodes{id}}`
+    // reads as data, not a placeholder.
+    const dollar = tool.bodyTemplate.includes('${');
+    const PLACEHOLDER = dollar
+      ? /\$\{([A-Za-z_][A-Za-z0-9_]*)(:(text))?\}/g
+      : /\{([A-Za-z_][A-Za-z0-9_]*)(:(text))?\}/g;
     const placeholders = [
-      ...new Set(
-        [...tool.bodyTemplate.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]),
-      ),
+      ...new Set([...tool.bodyTemplate.matchAll(PLACEHOLDER)].map((m) => m[1])),
     ];
     const missingArgs = placeholders.filter((k) => args[k] === undefined || args[k] === null);
     if (missingArgs.length) {
       return `error: missing required args: ${missingArgs.join(', ')}`;
     }
-    let tpl = interpolateSecrets(tool.bodyTemplate, secrets);
-    for (const key of placeholders) {
-      const v = args[key];
-      // Params are declared type:string — JSON-parse object/array-looking
-      // strings so nested structures land as objects, same as flat bodies.
-      tpl = tpl.replaceAll(`{${key}}`, JSON.stringify(typeof v === 'string' ? jsonArg(v) : (v ?? null)));
-      used.add(key);
-    }
+    // {key} → arg as a JSON value (object/array strings parse first, same
+    // as flat bodies). {key:text} → raw text escaped for a JSON string
+    // context — builds compound values like GraphQL search clauses.
+    const tpl = interpolateSecrets(tool.bodyTemplate, secrets).replace(
+      PLACEHOLDER,
+      (_match, key: string, _colon?: string, mode?: string) => {
+        const v = args[key];
+        used.add(key);
+        if (mode === 'text') return JSON.stringify(String(v)).slice(1, -1);
+        return JSON.stringify(typeof v === 'string' ? jsonArg(v) : v);
+      },
+    );
     try {
       JSON.parse(tpl);
     } catch {

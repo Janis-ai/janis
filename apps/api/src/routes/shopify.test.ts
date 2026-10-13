@@ -236,6 +236,12 @@ describe('shopify link flow', () => {
       .from(agentSecrets)
       .where(eq(agentSecrets.agentId, agentId));
     expect(secrets.map((s) => s.name).sort()).toEqual(['SHOPIFY_SHOP', 'SHOPIFY_TOKEN']);
+    // bind also lands the catalog tool defs — the agent works with no
+    // console install step
+    const [a] = await db.select({ config: agents.config }).from(agents).where(eq(agents.id, agentId));
+    const toolNames = ((a.config as { tools?: { name: string }[] }).tools ?? []).map((t) => t.name);
+    expect(toolNames).toContain('shopify_lookup_order');
+    expect(toolNames).toContain('shopify_cancel_order');
   });
 
   it('link refuses an agent outside the workspace', async () => {

@@ -2,10 +2,11 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agentSecrets, contacts, shopifyShops } from '../db/schema.js';
+import { agentSecrets, agents, contacts, shopifyShops } from '../db/schema.js';
 import { decryptSecret, encryptSecret } from './secrets.js';
 import { audit } from './audit.js';
 import { purgeContactData } from './contacts.js';
+import { TOOL_TEMPLATES } from './toolTemplates.js';
 
 /**
  * Shopify App Store install plumbing — the embedded app (Partner Dashboard,
@@ -24,7 +25,8 @@ import { purgeContactData } from './contacts.js';
  * the app becomes the credential dispenser instead of the merchant.
  */
 
-const SHOPIFY_API_VERSION = '2025-10';
+// Same version the shopify_* tool defs target (toolTemplates.ts) — probe-verified live.
+const SHOPIFY_API_VERSION = '2026-10';
 const LINK_CODE_TTL_MS = 30 * 60 * 1000;
 /** Agent-secret names the link mirrors — same names the PAT template uses,
  *  so tool defs are connection-agnostic. */
@@ -303,6 +305,27 @@ export async function bindShop(
     })
     .where(eq(shopifyShops.id, row.id));
   if (token) await mirrorSecrets(db, binding.agentId, binding.workspaceId, row.shop, token);
+  // Land the catalog's shopify tools so a bound agent works with no
+  // console install step — merge by name, same semantics as the
+  // agents/tools/install route (an existing install upgrades in place).
+  const tpl = TOOL_TEMPLATES.find((t) => t.id === 'shopify');
+  if (tpl) {
+    const [a] = await db
+      .select({ config: agents.config })
+      .from(agents)
+      .where(eq(agents.id, binding.agentId))
+      .limit(1);
+    const cfg = (a?.config ?? {}) as { tools?: Array<{ name?: string }> };
+    const names = new Set(tpl.tools.map((t) => t.name));
+    const tools = [
+      ...(cfg.tools ?? []).filter((t) => !names.has(t.name ?? '')),
+      ...tpl.tools.map((t) => ({ ...t, template: tpl.id })),
+    ];
+    await db
+      .update(agents)
+      .set({ config: { ...cfg, tools } })
+      .where(eq(agents.id, binding.agentId));
+  }
   await audit(db, {
     workspaceId: binding.workspaceId,
     action: 'shopify.link',

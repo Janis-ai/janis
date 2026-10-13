@@ -199,3 +199,53 @@ describe('callTool bodyTemplate', () => {
     expect(sentBody().attendee.name).toBe('{{secrets.CALCOM_API_KEY}}');
   });
 });
+
+describe('callTool bodyTemplate {key:text}', () => {
+  const searchTool: ToolDef = {
+    name: 'shopify_lookup_order',
+    description: 'd',
+    method: 'POST',
+    url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
+    headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+    bodyTemplate:
+      '{"query":"query($q:String!){orders(first:1,query:$q){nodes{id name}}}","variables":{"q":"name:${order_number:text} email:${email:text}","id":"gid://shopify/Order/${order_id:text}"}}',
+    params: { order_number: 'n', email: 'e', order_id: 'i' },
+  };
+  const secrets = { SHOPIFY_SHOP: 's.myshopify.com', SHOPIFY_TOKEN: 'shpat_x' };
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(new Response('{"data":{}}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const sentBody = () => JSON.parse(fetchMock.mock.calls[0][1].body as string);
+
+  it('injects raw text inside JSON strings — builds compound search clauses', async () => {
+    await callTool(
+      searchTool,
+      { order_number: '#1234', email: 'm@x.com', order_id: '555' },
+      secrets,
+    );
+    const vars = sentBody().variables;
+    expect(vars.q).toBe('name:#1234 email:m@x.com');
+    expect(vars.id).toBe('gid://shopify/Order/555');
+  });
+
+  it('JSON-escapes so quotes in args cannot break out of the string', async () => {
+    await callTool(
+      searchTool,
+      { order_number: '#1", "evil": "', email: 'm@x.com', order_id: '5' },
+      secrets,
+    );
+    expect(sentBody().variables.q).toBe('name:#1", "evil": " email:m@x.com');
+  });
+
+  it(':text args still count for the missing-arg check', async () => {
+    const out = await callTool(searchTool, { order_number: '#1', email: 'm@x.com' }, secrets);
+    expect(out).toContain('missing required args: order_id');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

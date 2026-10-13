@@ -28,7 +28,9 @@ export const WidgetComponent = z.discriminatedUnion('type', [
           price: s(40).optional(),
           link: url.optional(),
           link_label: s(30).optional(),
-          select_label: s(40).optional(), // tapping sends this as a message
+          // Interpolated labels carry a full title ("I'm interested in the
+          // {title}") — the cap must clear a 120-char product name.
+          select_label: s(160).optional(), // tapping sends this as a message
         }),
       )
       .min(1)

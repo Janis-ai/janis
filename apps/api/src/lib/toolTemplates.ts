@@ -72,7 +72,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Shopify',
     category: 'E-commerce',
     blurb: 'Track and look up orders, cancel, edit addresses, create draft orders — money-moving actions wait for teammate approval.',
-    docs_url: 'https://shopify.dev/docs/api/admin-rest',
+    docs_url: 'https://shopify.dev/docs/api/admin-graphql',
     fields: [
       { key: 'shop', label: 'Shop domain', placeholder: 'mystore.myshopify.com' },
       {
@@ -92,9 +92,11 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         label: 'Look up order',
         description:
           'Look up a Shopify order by order number for the verified customer email. Returns status, items, totals and fulfilment/tracking info.',
-        method: 'GET',
-        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders.json?status=any&limit=1&fields=id,name,order_number,email,financial_status,fulfillment_status,total_price,currency,created_at,cancelled_at,line_items,fulfillments&name={order_number}&email={email}',
+        method: 'POST',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"query($q:String!){orders(first:1,query:$q){nodes{id name email displayFinancialStatus displayFulfillmentStatus totalPriceSet{shopMoney{amount currencyCode}} createdAt cancelledAt lineItems(first:10){nodes{title quantity}} fulfillments{status trackingInfo{number url company}}}}}","variables":{"q":"name:${order_number:text} email:${email:text}"}}',
         params: {
           order_number: 'the order number including the # prefix, e.g. #1234',
           email: "the verified customer's own email address",
@@ -105,9 +107,11 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_customer_orders',
         label: 'Customer orders',
         description: 'List the most recent Shopify orders for the verified customer email address.',
-        method: 'GET',
-        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders.json?status=any&limit=5&fields=id,name,order_number,email,financial_status,fulfillment_status,total_price,currency,created_at&email={email}',
+        method: 'POST',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"query($q:String!){orders(first:5,query:$q,sortKey:CREATED_AT,reverse:true){nodes{id name email displayFinancialStatus displayFulfillmentStatus totalPriceSet{shopMoney{amount currencyCode}} createdAt}}}","variables":{"q":"email:${email:text}"}}',
         params: { email: "the verified customer's own email address" },
         identity: true,
       },
@@ -116,20 +120,22 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         label: 'Search products',
         description:
           'Search the Shopify product catalogue by title keyword. Returns product cards with images and prices to show the customer.',
-        method: 'GET',
-        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/products.json?title={query}&status=active&limit=8&fields=id,title,handle,vendor,product_type,images,variants',
+        method: 'POST',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"query($q:String!){products(first:8,query:$q){nodes{id title handle vendor productType featuredImage{url} variants(first:1){nodes{price}}}}}","variables":{"q":"status:active title:*${query:text}*"}}',
         params: { query: 'keyword to match in product titles' },
         widget: {
           type: 'cards',
-          items: 'products',
+          items: 'data.products.nodes',
           link_label: 'View product',
-          select_label: "I'm interested in the {title}",
+          select_label: "I'm interested in {title}",
           map: {
             title: 'title',
             subtitle: 'vendor',
-            image: 'images.0.src',
-            price: 'variants.0.price',
+            image: 'featuredImage.url',
+            price: 'variants.nodes.0.price',
             link: 'https://{{secrets.SHOPIFY_SHOP}}/products/{handle}',
           },
         },
@@ -138,11 +144,13 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_cancel_order',
         label: 'Cancel order',
         description:
-          'Cancel a Shopify order by its numeric order id (from shopify_lookup_order). Money-moving — needs a teammate to approve.',
+          'Cancel a Shopify order by its numeric order id (from shopify_lookup_order). Cancels with reason CUSTOMER, restocks items, and notifies the customer. Money-moving — needs a teammate to approve.',
         method: 'POST',
         approval: true,
-        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders/{order_id}/cancel.json',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"mutation($id:ID!){orderCancel(orderId:$id,restock:true,reason:CUSTOMER,notifyCustomer:true){job{id} orderCancelUserErrors{field message}}}","variables":{"id":"gid://shopify/Order/${order_id:text}"}}',
         params: { order_id: 'numeric Shopify order id (not the #number) from shopify_lookup_order' },
       },
       {
@@ -152,11 +160,13 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           'Create a Shopify draft order (custom sale, phone order, invoice). Needs a teammate to approve.',
         method: 'POST',
         approval: true,
-        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/draft_orders.json',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"mutation($input:DraftOrderInput!){draftOrderCreate(input:$input){draftOrder{id name invoiceUrl totalPriceSet{shopMoney{amount currencyCode}}} userErrors{field message}}}","variables":{"input":${draft_order}}}',
         params: {
           draft_order:
-            'JSON object, e.g. {"line_items":[{"title":"…","price":"19.99","quantity":1}],"email":"customer@email.com","note":"…"}',
+            'JSON object — a DraftOrderInput, e.g. {"lineItems":[{"title":"…","originalUnitPrice":"19.99","quantity":1}],"email":"customer@email.com","note":"…"}',
         },
       },
       {
@@ -164,26 +174,30 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         label: 'Update shipping address',
         description:
           'Change the shipping address on an unfulfilled Shopify order by numeric order id (from shopify_lookup_order). Needs a teammate to approve.',
-        method: 'PUT',
+        method: 'POST',
         approval: true,
-        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders/{order_id}.json',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"mutation($id:ID!,$a:MailingAddressInput!){orderUpdate(input:{id:$id,shippingAddress:$a}){order{id shippingAddress{address1 city province zip countryCodeV2}} userErrors{field message}}}","variables":{"id":"gid://shopify/Order/${order_id:text}","a":${shipping_address}}}',
         params: {
           order_id: 'numeric Shopify order id',
-          order:
-            'JSON object, e.g. {"id":123,"shipping_address":{"address1":"123 Main St","city":"Austin","province":"TX","zip":"78701","country_code":"US"}} — replaces the shipping address',
+          shipping_address:
+            'JSON object — a MailingAddressInput, e.g. {"address1":"123 Main St","city":"Austin","province":"TX","zip":"78701","countryCode":"US"}',
         },
       },
       {
         name: 'shopify_update_order_tags',
         label: 'Update order tags',
-        description: 'Set the tags on a Shopify order by numeric order id (from shopify_lookup_order).',
-        method: 'PUT',
-        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2024-10/orders/{order_id}.json',
+        description: 'Set the tags on a Shopify order by numeric order id (from shopify_lookup_order). Replaces all existing tags.',
+        method: 'POST',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"mutation($id:ID!,$tags:[String!]!){orderUpdate(input:{id:$id,tags:$tags}){order{id tags} userErrors{field message}}}","variables":{"id":"gid://shopify/Order/${order_id:text}","tags":${tags}}}',
         params: {
           order_id: 'numeric Shopify order id',
-          order: 'JSON object, e.g. {"id":123,"tags":"vip, follow-up"} — tags is a comma-separated string',
+          tags: 'JSON array of tag strings, e.g. ["vip","follow-up"] — replaces the order\'s whole tag list',
         },
       },
     ],
