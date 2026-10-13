@@ -292,3 +292,49 @@ describe('callTool bodyTemplate {key:text}', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('callTool bodyTemplate {key?} optional placeholders', () => {
+  const pagedTool: ToolDef = {
+    name: 'shopify_search_products',
+    description: 'd',
+    method: 'POST',
+    url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
+    headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+    bodyTemplate:
+      '{"query":"query($q:String!,$after:String){products(first:16,query:$q,after:$after){nodes{id}}}","variables":{"q":"${query:text}","after":${after?}}}',
+    params: { query: 'q', 'after?': 'a' },
+  };
+  const secrets = { SHOPIFY_SHOP: 's.myshopify.com', SHOPIFY_TOKEN: 'shpat_x' };
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(new Response('{"data":{}}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const sentBody = () => JSON.parse(fetchMock.mock.calls[0][1].body as string);
+
+  it('omitted optional arg → JSON null, no missing-arg error', async () => {
+    const out = await callTool(pagedTool, { query: 'status:active' }, secrets);
+    expect(out).toContain('"data"');
+    expect(sentBody().variables).toEqual({ q: 'status:active', after: null });
+  });
+
+  it('supplied cursor passes through for the next page', async () => {
+    await callTool(pagedTool, { query: 'status:active', after: 'eyJsYXN0' }, secrets);
+    expect(sentBody().variables.after).toBe('eyJsYXN0');
+  });
+
+  it('empty-string optional arg → null — first page, not an invalid cursor', async () => {
+    await callTool(pagedTool, { query: 'status:active', after: '' }, secrets);
+    expect(sentBody().variables.after).toBeNull();
+  });
+
+  it('required args still fail closed alongside an optional one', async () => {
+    const out = await callTool(pagedTool, { after: 'x' }, secrets);
+    expect(out).toContain('missing required args: query');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

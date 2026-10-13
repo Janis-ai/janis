@@ -222,11 +222,23 @@ export async function ensureShopForSession(
       .returning();
   }
 
-  // NB: we only exchange when there's no stored token — Shopify's `scope`
-  // response field lists explicit grants (write_orders implicitly covers
-  // read_orders) so it can't be diffed against configured scopes.
-  if (!row.accessTokenEnc) {
-    const tok = await exchangeOfflineToken(shop, sessionToken);
+  // Exchange on every embedded load, not just the first: a token's scope set
+  // is frozen at issuance, so an app-version scope bump (e.g. adding
+  // write_draft_orders) only reaches the shop's tools through a fresh
+  // exchange after the merchant re-consents. The exchange is cheap and the
+  // response carries the current grant — Shopify's `scope` field lists
+  // explicit grants (write_orders implicitly covers read_orders), so
+  // re-issuing each load also self-heals a token revoked or rotated
+  // elsewhere. If the exchange fails but a stored token exists, keep it —
+  // a stale-scoped token beats a dead embedded page.
+  let tok: OfflineToken | null = null;
+  try {
+    tok = await exchangeOfflineToken(shop, sessionToken);
+  } catch (err) {
+    if (!row.accessTokenEnc) throw err;
+    console.error(`shopify token re-exchange ${shop}:`, err);
+  }
+  if (tok) {
     const reinstall = row.state === 'uninstalled';
     const updates: Partial<ShopRow> = {
       accessTokenEnc: encryptSecret(tok.access_token),
@@ -248,7 +260,7 @@ export async function ensureShopForSession(
     await registerWebhooks(shop, tok.access_token).catch((err) =>
       console.error(`shopify webhook register ${shop}:`, err),
     );
-  } else if (row.state === 'linked' && row.agentId && row.workspaceId) {
+  } else if (row.state === 'linked' && row.agentId && row.workspaceId && row.accessTokenEnc) {
     // Re-mirror on every embedded load — a secret deleted since the link
     // self-heals here; upserts are cheap.
     await mirrorSecrets(db, row.agentId, row.workspaceId, shop, decryptSecret(row.accessTokenEnc));

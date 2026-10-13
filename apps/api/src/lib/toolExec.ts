@@ -205,23 +205,29 @@ export async function callTool(
     // reads as data, not a placeholder.
     const dollar = tool.bodyTemplate.includes('${');
     const PLACEHOLDER = dollar
-      ? /\$\{([A-Za-z_][A-Za-z0-9_]*)(:(text))?\}/g
-      : /\{([A-Za-z_][A-Za-z0-9_]*)(:(text))?\}/g;
-    const placeholders = [
-      ...new Set([...tool.bodyTemplate.matchAll(PLACEHOLDER)].map((m) => m[1])),
-    ];
-    const missingArgs = placeholders.filter((k) => args[k] === undefined || args[k] === null);
+      ? /\$\{([A-Za-z_][A-Za-z0-9_]*)(\?)?(:(text))?\}/g
+      : /\{([A-Za-z_][A-Za-z0-9_]*)(\?)?(:(text))?\}/g;
+    const matches = [...tool.bodyTemplate.matchAll(PLACEHOLDER)];
+    const placeholders = [...new Set(matches.map((m) => m[1]))];
+    const optional = new Set(matches.filter((m) => m[2] === '?').map((m) => m[1]));
+    const missingArgs = placeholders.filter(
+      (k) => !optional.has(k) && (args[k] === undefined || args[k] === null),
+    );
     if (missingArgs.length) {
       return `error: missing required args: ${missingArgs.join(', ')}`;
     }
     // {key} → arg as a JSON value (object/array strings parse first, same
     // as flat bodies). {key:text} → raw text escaped for a JSON string
     // context — builds compound values like GraphQL search clauses.
+    // {key?} → optional: emits JSON null when the arg is absent, so
+    // templates can offer params the model may legitimately omit
+    // (GraphQL pagination cursors, filters).
     const tpl = interpolateSecrets(tool.bodyTemplate, secrets).replace(
       PLACEHOLDER,
-      (_match, key: string, _colon?: string, mode?: string) => {
+      (_match, key: string, _q?: string, _colon?: string, mode?: string) => {
         const v = args[key];
         used.add(key);
+        if (v === undefined || v === null || (optional.has(key) && v === '')) return 'null';
         if (mode === 'text') return JSON.stringify(String(v)).slice(1, -1);
         return JSON.stringify(typeof v === 'string' ? jsonArg(v) : v);
       },

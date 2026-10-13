@@ -1737,10 +1737,16 @@ export async function complete(
           : t.description,
         parameters: {
           type: 'object',
+          // A param key ending in '?' is optional — stripped for the
+          // property name, dropped from `required` (pairs with {key?}
+          // placeholders in bodyTemplate, which emit null when absent).
           properties: Object.fromEntries(
-            Object.entries(t.params ?? {}).map(([k, d]) => [k, { type: 'string', description: d }]),
+            Object.entries(t.params ?? {}).map(([k, d]) => [
+              k.replace(/\?$/, ''),
+              { type: 'string', description: d },
+            ]),
           ),
-          required: Object.keys(t.params ?? {}),
+          required: Object.keys(t.params ?? {}).filter((k) => !k.endsWith('?')),
         },
       },
     })),
@@ -1753,9 +1759,12 @@ export async function complete(
         parameters: {
           type: 'object',
           properties: Object.fromEntries(
-            Object.entries(b.params ?? {}).map(([k, d]) => [k, { type: 'string', description: d }]),
+            Object.entries(b.params ?? {}).map(([k, d]) => [
+              k.replace(/\?$/, ''),
+              { type: 'string', description: d },
+            ]),
           ),
-          required: Object.keys(b.params ?? {}),
+          required: Object.keys(b.params ?? {}).filter((k) => !k.endsWith('?')),
         },
       },
     })),

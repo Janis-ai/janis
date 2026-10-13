@@ -118,15 +118,17 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_search_products',
         label: 'Search products',
         description:
-          'Search or browse the Shopify product catalogue. Returns up to 16 product cards with images and prices, plus productsCount — the TRUE total of matching products. When productsCount exceeds the cards returned, say so and offer to narrow the search. Each node also carries a short description you can summarise when they ask about a product.',
+          'Search or browse the Shopify product catalogue. Returns up to 16 product cards with images and prices, plus productsCount — the TRUE total of matching products (always quote THIS number when asked how many products there are, never the card count) and pageInfo. When productsCount exceeds the cards returned, say so — then either pass the endCursor as `after` for the next page ("show me more") or suggest narrowing the search. Each node also carries a short description you can summarise when they ask about a product.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
-          '{"query":"query($q:String!){productsCount(query:$q){count} products(first:16,query:$q){nodes{id title handle vendor productType tags description(truncateAt:160) featuredImage{url} priceRangeV2{minVariantPrice{amount currencyCode}}}}}","variables":{"q":"${query:text}"}}',
+          '{"query":"query($q:String!,$after:String){productsCount(query:$q){count} products(first:16,query:$q,after:$after){pageInfo{hasNextPage endCursor} nodes{id title handle vendor productType tags description(truncateAt:160) featuredImage{url} priceRangeV2{minVariantPrice{amount currencyCode}} variants(first:1){nodes{id}}}}}","variables":{"q":"${query:text}","after":${after?}}}',
         params: {
           query:
             'Shopify catalogue search string — "status:active" lists the whole catalogue (use it for "show me your products"); add " title:*snowboard*" to match a keyword, or " product_type:…" / " vendor:…" to filter',
+          'after?':
+            'optional — the previous result\'s pageInfo.endCursor; pass it (with the same query) to fetch the NEXT 16 products when the customer asks for more. Omit for the first page.',
         },
         widget: {
           type: 'cards',
@@ -158,7 +160,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_create_draft_order',
         label: 'Create draft order',
         description:
-          'Create a Shopify draft order (custom sale, phone order, invoice). Needs a teammate to approve.',
+          'Create a Shopify draft order (invoice the customer can pay — this IS how a customer buys a product in chat). When the customer has picked a product and confirmed they want it, do NOT re-show the product or ask them to confirm again: if their email is already known, call this straight away; otherwise ask once for their email, then call this. Needs a teammate to approve.',
         method: 'POST',
         approval: true,
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
@@ -167,7 +169,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           '{"query":"mutation($input:DraftOrderInput!){draftOrderCreate(input:$input){draftOrder{id name invoiceUrl totalPriceSet{shopMoney{amount currencyCode}}} userErrors{field message}}}","variables":{"input":${draft_order}}}',
         params: {
           draft_order:
-            'JSON object — a DraftOrderInput, e.g. {"lineItems":[{"title":"…","originalUnitPrice":"19.99","quantity":1}],"email":"customer@email.com","note":"…"}',
+            'JSON object — a DraftOrderInput. For a catalogue product use its variantId from shopify_search_products (variants.nodes[0].id), e.g. {"lineItems":[{"variantId":"gid://shopify/ProductVariant/…","quantity":1}],"email":"customer@email.com"}. For items not in the catalogue use {"title":"…","originalUnitPrice":"19.99","quantity":1} instead.',
         },
       },
       {

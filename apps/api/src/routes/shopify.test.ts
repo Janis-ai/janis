@@ -78,16 +78,18 @@ const webhook = (topic: string, payload: unknown, secret = SECRET, shop = SHOP) 
   });
 };
 
-const stubShopifyApi = () =>
+const stubShopifyApi = (opts: { token?: string; scope?: string; failExchange?: boolean } = {}) =>
   vi.stubGlobal(
     'fetch',
     vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (url.includes('/admin/oauth/access_token')) {
+        if (opts.failExchange)
+          return Promise.resolve(new Response('{"error":"server_error"}', { status: 500 }));
         return Promise.resolve(
           Response.json({
-            access_token: 'shpat_offline',
-            scope: 'read_orders,write_orders,read_products,read_customers',
+            access_token: opts.token ?? 'shpat_offline',
+            scope: opts.scope ?? 'read_orders,write_orders,read_products,read_customers',
           }),
         );
       }
@@ -191,14 +193,38 @@ describe('shopify embedded app — session', () => {
     expect(row.scopes).toBe('read_orders,write_orders,read_products,read_customers');
   });
 
-  it('a second embedded load keeps the stored token — no re-exchange', async () => {
+  it('a second embedded load re-exchanges — a scope bump self-heals', async () => {
     stubShopifyApi();
     await postSession(sessionJwt());
-    const fetchCalls = (fetch as ReturnType<typeof vi.fn>).mock.calls.length;
-    await postSession(sessionJwt());
-    // only the graphql register calls could have fired — none did the
-    // second time either since the token was already stored
-    expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(fetchCalls);
+    // App version gains write_draft_orders and the merchant re-consents —
+    // the next embedded load's exchange returns the expanded grant and the
+    // stored token+scopes row updates with no reinstall or manual refresh.
+    stubShopifyApi({
+      token: 'shpat_v2',
+      scope: 'read_orders,write_orders,write_draft_orders,read_products,read_customers',
+    });
+    const res = await postSession(sessionJwt());
+    expect(res.status).toBe(200);
+    const [row] = await db.select().from(shopifyShops).where(eq(shopifyShops.shop, SHOP));
+    expect(row.scopes).toBe('read_orders,write_orders,write_draft_orders,read_products,read_customers');
+    // Lazy import — env.ts must not evaluate before beforeAll sets the creds.
+    const { decryptSecret } = await import('../lib/secrets.js');
+    expect(decryptSecret(row.accessTokenEnc!)).toBe('shpat_v2');
+  });
+
+  it('a failed re-exchange keeps the stored token — the page still loads', async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt('failshop.myshopify.com'));
+    // A transient exchange failure on the next load must degrade to the
+    // stored token, not break the embedded page.
+    stubShopifyApi({ failExchange: true });
+    const res = await postSession(sessionJwt('failshop.myshopify.com'));
+    expect(res.status).toBe(200);
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'failshop.myshopify.com'));
+    expect(row.accessTokenEnc).toBeTruthy();
   });
 
   it('an unbound reinstall lands back on unlinked, not stuck on uninstalled', async () => {

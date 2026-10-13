@@ -151,7 +151,8 @@ export const env = {
   shopifyAppApiKey: process.env.SHOPIFY_APP_API_KEY ?? '',
   shopifyAppApiSecret: process.env.SHOPIFY_APP_API_SECRET ?? '',
   shopifyAppScopes:
-    process.env.SHOPIFY_APP_SCOPES ?? 'read_orders,write_orders,read_products,read_customers',
+    process.env.SHOPIFY_APP_SCOPES ??
+    'read_orders,write_orders,write_draft_orders,read_products,read_customers',
   calendlyRedirectUri:
     process.env.CALENDLY_REDIRECT_URI ??
     `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/calendly/callback`,
