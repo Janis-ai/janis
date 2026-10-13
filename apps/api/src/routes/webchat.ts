@@ -513,6 +513,8 @@ export function webchatRoutes(db: Db) {
       logo_border_width: creds.logo_border_width ?? null,
       logo_border_color: creds.logo_border_color ?? null,
       radius: creds.radius ?? null,
+      border_width: creds.border_width ?? null,
+      border_color: creds.border_color ?? null,
       // channel-level override wins; agent config is the default
       quick_replies: creds.quick_replies?.length ? creds.quick_replies : agentReplies,
       help_url: helpUrl,

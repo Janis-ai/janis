@@ -1966,6 +1966,11 @@
       // Corner radius — panel + teaser share the --janis-radius var.
       if (cfg.radius != null)
         document.documentElement.style.setProperty('--janis-radius', cfg.radius + 'px');
+      // Panel outline — width 0/absent means none; color falls back to a
+      // soft dark. Border-radius follows the --janis-radius var already.
+      panel.style.border = cfg.border_width
+        ? cfg.border_width + 'px solid ' + (cfg.border_color || '#d1d5db')
+        : '';
       // Typeface — set on the panel root; children inherit. The teaser is
       // a body-level sibling, so it gets its own assignment (plus the one
       // at creation in maybeTeaser, which can run after this).

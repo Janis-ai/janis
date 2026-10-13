@@ -48,6 +48,8 @@ export interface ChannelCredentials {
   logo_border_width?: number; // webchat: px outline on the header logo tile
   logo_border_color?: string; // webchat: outline color (falls back to soft dark)
   radius?: number; // webchat: panel + teaser corner radius px (default 14)
+  border_width?: number; // webchat: px outline around the panel (0/absent = none)
+  border_color?: string; // webchat: panel outline color (falls back to soft dark)
   quick_replies?: string[]; // tappable prompts — webchat chips; reply buttons on Meta greetings
   teaser_text?: string; // webchat: proactive teaser line by the launcher (falls back to greeting)
   proactive?: boolean; // webchat: show the teaser at all — default on

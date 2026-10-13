@@ -109,6 +109,9 @@ const patchChannel = z.object({
       logo_border_color: z.string().regex(/^#[0-9a-fA-F]{6}$/).or(z.literal('')).optional(),
       // panel/teaser corner radius px — 0 square … 24 round
       radius: z.number().int().min(0).max(24).optional(),
+      // panel outline — px int (0 = none) + hex color ('' clears)
+      border_width: z.number().int().min(0).max(4).optional(),
+      border_color: z.string().regex(/^#[0-9a-fA-F]{6}$/).or(z.literal('')).optional(),
       teaser_text: z.string().max(200).optional(), // '' clears → greeting used
       proactive: z.boolean().optional(),
       proactive_delay: z.number().int().min(0).max(300).optional(),
@@ -582,6 +585,11 @@ export function channelApiRoutes(db: Db) {
         else creds.logo_border_color = b.logo_border_color;
       }
       if (b.radius !== undefined) creds.radius = b.radius;
+      if (b.border_width !== undefined) creds.border_width = b.border_width;
+      if (b.border_color !== undefined) {
+        if (b.border_color === '') delete creds.border_color;
+        else creds.border_color = b.border_color;
+      }
       if (b.teaser_text !== undefined) {
         if (b.teaser_text === '') delete creds.teaser_text;
         else creds.teaser_text = b.teaser_text;

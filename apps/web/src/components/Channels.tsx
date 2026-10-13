@@ -865,6 +865,8 @@ function WebchatBranding({
     position: b.position ?? 'right',
     display: b.display ?? 'bubble',
     radius: b.radius ?? 14,
+    border_width: b.border_width ?? 0,
+    border_color: b.border_color ?? '#d1d5db',
     logo_url: b.logo_url ?? '',
     logo_padding: b.logo_padding ?? 2,
     logo_radius: b.logo_radius ?? 8,
@@ -963,6 +965,8 @@ function WebchatBranding({
             logo_border_width: f.logo_border_width,
             logo_border_color: f.logo_border_color,
             radius: f.radius,
+            border_width: f.border_width,
+            border_color: f.border_color,
             quick_replies: parseReplies(f.quick_replies),
             teaser_text: f.teaser_text,
             proactive: f.proactive,
@@ -1106,6 +1110,23 @@ function WebchatBranding({
                     />
                   </button>
                 ))}
+              </div>
+            </BubField>
+            <BubField label="Panel outline">
+              <div className="row" style={{ gap: 8 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                  <input
+                    type="number" min={0} max={4} style={{ width: 56 }}
+                    value={f.border_width}
+                    onChange={(e) => setF({ ...f, border_width: Math.max(0, Math.min(4, Number(e.target.value) || 0)) })}
+                  />
+                  px
+                </label>
+                <input
+                  type="color" className="swatch" value={f.border_color}
+                  disabled={!f.border_width}
+                  onChange={(e) => setF({ ...f, border_color: e.target.value })}
+                />
               </div>
             </BubField>
             <BubField
@@ -1356,6 +1377,8 @@ function WebchatBranding({
               ...( /^#[0-9a-fA-F]{6}$/.test(f.accent) ? { accent: f.accent } : {} ),
               position: f.position,
               radius: f.radius,
+              border_width: f.border_width,
+              border_color: f.border_color,
               logo_url: f.logo_url,
               logo_padding: f.logo_padding,
               logo_radius: f.logo_radius,

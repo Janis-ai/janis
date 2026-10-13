@@ -574,6 +574,9 @@ export const Channel = z.object({
         logo_border_color: z.string().optional(),
         // webchat: panel + teaser corner radius px (default 14)
         radius: z.number().optional(),
+        // webchat: panel outline — px width (0/absent = none) + color
+        border_width: z.number().optional(),
+        border_color: z.string().optional(),
         quick_replies: z.array(z.string()).optional(),
         teaser_text: z.string().optional(),
         proactive: z.boolean().optional(),
