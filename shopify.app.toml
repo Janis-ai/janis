@@ -1,0 +1,33 @@
+# Janis — Shopify App Store app config (Dev Dashboard apps are configured
+# via this file through the CLI; mandatory compliance webhooks are
+# toml-only in the new dashboard). `shopify app deploy` releases this as a
+# new app version — keep it in sync with the dashboard form.
+
+client_id = "cf22b09da8f49a7c7cdf7ff39b17fb87"
+name = "Janis"
+application_url = "https://app.janis.ai/shopify-app"
+embedded = true
+
+[build]
+# No shopify-managed build/dev — the app is our Cloud Run deploy.
+automatically_update_urls_on_dev = false
+
+[access_scopes]
+scopes = "read_orders,write_orders,read_products,read_customers"
+
+[auth]
+# Managed install (token exchange) — no OAuth redirect endpoints.
+redirect_urls = []
+
+[webhooks]
+api_version = "2026-10"
+
+# Mandatory GDPR compliance topics — all three POST to one endpoint;
+# the handler dispatches on x-shopify-topic. Required for App Store
+# distribution (and the only place they can be declared).
+[[webhooks.subscriptions]]
+compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+uri = "https://app.janis.ai/shopify/webhooks"
+
+[pos]
+embedded = false
