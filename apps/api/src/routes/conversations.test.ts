@@ -592,7 +592,7 @@ describe('attention-count', () => {
     const base = await app.request('/api/conversations/attention-count', {
       headers: { cookie: adminCookie },
     });
-    const before = (await base.json()) as { count: number; unread: number };
+    const before = (await base.json()) as { count: number; unread: number; attention: number };
     // A needs_human test thread — the safety-scenario path that was leaking
     // into the badge. Namespaced externalId marks it a test conversation.
     const test = await makeConversation(
@@ -610,9 +610,38 @@ describe('attention-count', () => {
     const res = await app.request('/api/conversations/attention-count', {
       headers: { cookie: adminCookie },
     });
-    const after = (await res.json()) as { count: number; unread: number };
+    const after = (await res.json()) as { count: number; unread: number; attention: number };
     // Only the real conversation moved the badge
     expect(after.count).toBe(before.count + 1);
     expect(after.unread).toBe(before.unread + 1);
+    expect(after.attention).toBe(before.attention + 1);
+  });
+
+  it('unseen-but-not-needing-human still badges; archived unread does not', async () => {
+    const base = await app.request('/api/conversations/attention-count', {
+      headers: { cookie: adminCookie },
+    });
+    const before = (await base.json()) as { count: number; unread: number; attention: number };
+    // An active conversation with an unseen inbound — the common case the
+    // needs_human-only badge missed.
+    const live = await makeConversation(`webchat:cust_attn_${Date.now()}x`);
+    await db
+      .update(conversations)
+      .set({ state: 'active', isUnread: true })
+      .where(eq(conversations.id, live.id));
+    // Put-away threads are out of the inbox — unread on an archived row
+    // is residue, not work waiting.
+    const dead = await makeConversation(`webchat:cust_attn_${Date.now()}y`);
+    await db
+      .update(conversations)
+      .set({ state: 'archived', isUnread: true })
+      .where(eq(conversations.id, dead.id));
+    const res = await app.request('/api/conversations/attention-count', {
+      headers: { cookie: adminCookie },
+    });
+    const after = (await res.json()) as { count: number; unread: number; attention: number };
+    expect(after.count).toBe(before.count);
+    expect(after.unread).toBe(before.unread + 1);
+    expect(after.attention).toBe(before.attention + 1);
   });
 });

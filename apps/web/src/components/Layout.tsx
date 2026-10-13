@@ -875,7 +875,7 @@ export default function Layout() {
   const hasWorkspace = Boolean(data?.workspace);
   const { data: attention } = useQuery({
     queryKey: ['attention-count'],
-    queryFn: () => api<{ count: number; unread: number }>('/api/conversations/attention-count'),
+    queryFn: () => api<{ count: number; unread: number; attention: number }>('/api/conversations/attention-count'),
     refetchInterval: 60_000,
     enabled: hasWorkspace,
   });
@@ -885,7 +885,7 @@ export default function Layout() {
   const { data: agentAttention } = useQuery({
     queryKey: ['attention-count', ctxAgent],
     queryFn: () =>
-      api<{ count: number; unread: number }>(
+      api<{ count: number; unread: number; attention: number }>(
         `/api/conversations/attention-count?agent_id=${ctxAgent}`,
       ),
     refetchInterval: 60_000,
@@ -1191,8 +1191,8 @@ export default function Layout() {
         )}
         <NavLink to="/conversations" className={({ isActive }) => `nav-indent${scopedActive('inbox')({ isActive }) ? ' active' : ''}`}>
           <span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>
-          {(ctxAgent ? agentAttention : attention)?.count ? (
-            <span className="nav-badge">{(ctxAgent ? agentAttention : attention)!.count}</span>
+          {(ctxAgent ? agentAttention : attention)?.attention ? (
+            <span className="nav-badge">{(ctxAgent ? agentAttention : attention)!.attention}</span>
           ) : null}
         </NavLink>
         <NavLink to="/agents" end className="nav-indent"><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>

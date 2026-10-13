@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lt, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -158,7 +158,7 @@ export function conversationRoutes(db: Db) {
       return c.json({ error: 'invalid agent_id' }, 400);
     }
     const agentCond = agentId ? [eq(conversations.agentId, agentId)] : [];
-    const [[{ count }], [{ count: unread }]] = await Promise.all([
+    const [[{ count }], [{ count: unread }], [{ count: attention }]] = await Promise.all([
       db
         .select({ count: sql<number>`count(*)::int` })
         .from(conversations)
@@ -184,12 +184,33 @@ export function conversationRoutes(db: Db) {
             ...scope,
             ...agentCond,
             eq(conversations.isUnread, true),
+            // archived threads are out of the inbox — put away, not unseen
+            ne(conversations.state, 'archived'),
+            sql`not ${TEST_CONV}`,
+            sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
+          ),
+        ),
+      // The nav badge previews "there's something to look at" — anything
+      // needing a human OR carrying unseen inbound, deduped into one number.
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(conversations)
+        .innerJoin(agents, eq(conversations.agentId, agents.id))
+        .where(
+          and(
+            ...scope,
+            ...agentCond,
+            ne(conversations.state, 'archived'),
+            or(
+              inArray(conversations.state, ['needs_human', 'human']),
+              eq(conversations.isUnread, true),
+            ),
             sql`not ${TEST_CONV}`,
             sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
           ),
         ),
     ]);
-    return c.json({ count, unread });
+    return c.json({ count, unread, attention });
   });
 
   // Batch operations on the conversations list — same field semantics as
