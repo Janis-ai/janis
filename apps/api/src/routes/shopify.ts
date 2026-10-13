@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, shopifyShops, workspaces } from '../db/schema.js';
+import { agents, channels, shopifyShops, workspaces } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import {
   bindShop,
@@ -79,6 +79,43 @@ export function shopifyPublicRoutes(db: Db) {
       out.workspace = ws?.name ?? null;
     }
     return c.json(out);
+  });
+
+  // Storefront loader — the theme app extension drops
+  //   <script src="/api/shopify/storefront.js?s=<shop>">
+  // on every page; we resolve shop → bound agent → its Bubble channel and
+  // emit the widget.js bootstrap. Deliberately a silent no-op until the
+  // merchant links (or if the channel was deleted) — a script 404/500 on
+  // a storefront is worse than no bubble.
+  app.get('/storefront.js', async (c) => {
+    const js = (body: string) =>
+      c.body(body, 200, {
+        'content-type': 'application/javascript; charset=utf-8',
+        'cache-control': 'public, max-age=60',
+      });
+    const noop = () => js('/* janis: no storefront widget for this shop */');
+    const shop = (c.req.query('s') ?? '').trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(shop)) return noop();
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, shop))
+      .limit(1);
+    if (row?.state !== 'linked' || !row.agentId) return noop();
+    const chans = await db
+      .select({ id: channels.id, credentials: channels.credentials })
+      .from(channels)
+      .where(and(eq(channels.agentId, row.agentId), eq(channels.kind, 'webchat')));
+    // Internal test-chat channels never serve a storefront.
+    const chan = chans.find(
+      (ch) => !(ch.credentials as { internal?: boolean } | null)?.internal,
+    );
+    if (!chan) return noop();
+    return js(
+      `(function(){var s=document.createElement('script');s.src=${JSON.stringify(
+        `${env.apiOrigin}/widget.js`,
+      )};s.async=true;s.setAttribute('data-janis-token',${JSON.stringify(chan.id)});document.head.appendChild(s);})();`,
+    );
   });
 
   return app;

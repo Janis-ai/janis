@@ -4,12 +4,13 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
 import { createHmac } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/client.js';
 import {
   agentSecrets,
   agents,
+  channels,
   contacts,
   conversations,
   memberships,
@@ -312,6 +313,101 @@ describe('shopify webhooks', () => {
     expect(
       (await db.select().from(messages).where(eq(messages.conversationId, conv.id))).length,
     ).toBe(0);
+  });
+});
+
+describe('storefront loader', () => {
+  const storefrontJs = (s: string) =>
+    app.request(`/api/shopify/storefront.js?s=${encodeURIComponent(s)}`);
+
+  it('bind creates a storefront Bubble and the loader emits its channel token', async () => {
+    stubShopifyApi();
+    const code = await linkCodeFor();
+    await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code, agent_id: agentId }),
+    });
+    const chans = await db
+      .select()
+      .from(channels)
+      .where(and(eq(channels.agentId, agentId), eq(channels.kind, 'webchat')));
+    const external = chans.filter(
+      (ch) => !(ch.credentials as { internal?: boolean }).internal,
+    );
+    expect(external.length).toBe(1);
+    expect(external[0].name).toBe('Shopify — dev-store');
+    const res = await storefrontJs(SHOP);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('javascript');
+    const js = await res.text();
+    expect(js).toContain('/widget.js');
+    expect(js).toContain(external[0].id);
+  });
+
+  it('a re-link reuses the existing Bubble — no duplicate channels', async () => {
+    stubShopifyApi();
+    const code = await linkCodeFor();
+    await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code, agent_id: agentId }),
+    });
+    const count = await db
+      .select({ id: channels.id })
+      .from(channels)
+      .where(and(eq(channels.agentId, agentId), eq(channels.kind, 'webchat')));
+    expect(count.length).toBe(1);
+  });
+
+  it('no-ops for unknown shops and non-shopify domains', async () => {
+    for (const s of ['never-installed.myshopify.com', 'evil.com', 'x.myshopify.com.evil.com']) {
+      const res = await storefrontJs(s);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain('no storefront widget');
+    }
+  });
+
+  it('no-ops when only an internal test channel exists', async () => {
+    stubShopifyApi();
+    const { hash, preview } = generateApiKey();
+    const [agent2] = await db
+      .insert(agents)
+      .values({ workspaceId, name: 'Bot2', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    await db.insert(channels).values({
+      workspaceId,
+      agentId: agent2.id,
+      kind: 'webchat',
+      name: `Test — ${agent2.name}`,
+      credentials: { internal: true },
+    });
+    const code = await linkCodeFor();
+    await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code, agent_id: agent2.id }),
+    });
+    // bind adds a real Bubble — delete it to simulate a merchant who
+    // removed the channel and left only the test chat behind
+    await db
+      .delete(channels)
+      .where(
+        and(
+          eq(channels.agentId, agent2.id),
+          eq(channels.kind, 'webchat'),
+          eq(channels.name, 'Shopify — dev-store'),
+        ),
+      );
+    const res = await storefrontJs(SHOP);
+    expect(await res.text()).toContain('no storefront widget');
+    // relink back to the primary agent for the tests that follow
+    const code2 = await linkCodeFor();
+    await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code2, agent_id: agentId }),
+    });
   });
 });
 

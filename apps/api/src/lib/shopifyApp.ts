@@ -2,9 +2,10 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agentSecrets, agents, contacts, shopifyShops } from '../db/schema.js';
+import { agentSecrets, agents, channels, contacts, shopifyShops } from '../db/schema.js';
 import { decryptSecret, encryptSecret } from './secrets.js';
 import { audit } from './audit.js';
+import { invalidateChannelCache } from './channels.js';
 import { purgeContactData } from './contacts.js';
 import { TOOL_TEMPLATES } from './toolTemplates.js';
 
@@ -325,6 +326,26 @@ export async function bindShop(
       .update(agents)
       .set({ config: { ...cfg, tools } })
       .where(eq(agents.id, binding.agentId));
+  }
+  // Storefront channel — the theme app extension's loader resolves the
+  // bound agent's Bubble; give it one if the agent doesn't already have a
+  // customer-facing webchat (internal test chats don't count).
+  const webchats = await db
+    .select({ id: channels.id, credentials: channels.credentials })
+    .from(channels)
+    .where(and(eq(channels.agentId, binding.agentId), eq(channels.kind, 'webchat')));
+  const external = webchats.filter(
+    (ch) => !(ch.credentials as { internal?: boolean } | null)?.internal,
+  );
+  if (!external.length) {
+    await db.insert(channels).values({
+      workspaceId: binding.workspaceId,
+      agentId: binding.agentId,
+      kind: 'webchat',
+      name: `Shopify — ${row.shop.replace(/\.myshopify\.com$/, '')}`,
+      credentials: {},
+    });
+    invalidateChannelCache();
   }
   await audit(db, {
     workspaceId: binding.workspaceId,

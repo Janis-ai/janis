@@ -52,6 +52,7 @@ async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopif
 
 export default function ShopifyApp() {
   const [state, setState] = useState<SessionState>({ kind: 'loading' });
+  const [apiKey, setApiKey] = useState(''); // client_id — theme-editor deep link
   const [tick, setTick] = useState(0); // "I've connected" re-check
 
   useEffect(() => {
@@ -67,6 +68,7 @@ export default function ShopifyApp() {
     (async () => {
       try {
         const cfg = await api<{ api_key: string }>('/api/shopify/app-config');
+        setApiKey(cfg.api_key);
         const bridge = await loadAppBridge(cfg.api_key);
         // Managed install also drops a session-token JWT on the iframe URL
         // (?id_token=) — use it when App Bridge didn't attach its global.
@@ -153,9 +155,19 @@ export default function ShopifyApp() {
               {state.workspace ? <span className="muted"> ({state.workspace})</span> : null}.
             </p>
             <p className="muted" style={{ fontSize: 13 }}>
-              Your agent now holds this shop's credentials — configure order lookups, product
-              answers, and the storefront chat widget in Janis.
+              Your agent now holds this shop's credentials and a storefront chat channel.
+              Turn on the "Janis chat" app embed in your theme to put the bubble on your
+              storefront.
             </p>
+            <a
+              className="btn primary"
+              style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
+              href={`https://${state.shop}/admin/themes/current/editor?context=apps&activateAppId=${apiKey}/janis-chat`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Enable storefront chat
+            </a>
             <a className="btn" style={{ display: 'block', marginTop: 8, textAlign: 'center' }} href="/conversations" target="_blank" rel="noreferrer">
               Open Janis
             </a>

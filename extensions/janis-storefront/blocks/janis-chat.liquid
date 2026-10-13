@@ -1,0 +1,16 @@
+{% comment %}
+  Janis storefront chat — an app embed the merchant toggles under
+  Theme Settings → App embeds. It pulls a shop-scoped loader from
+  app.janis.ai which resolves shop → bound agent → Bubble channel and
+  injects widget.js (a no-op until the shop is linked to an agent).
+  The block handle is `janis-chat` — referenced by the activation deep
+  link the embedded app renders (`activateAppId=<api_key>/janis-chat`).
+{% endcomment %}
+<script src="https://app.janis.ai/api/shopify/storefront.js?s={{ shop.permanent_domain }}" async></script>
+{% schema %}
+{
+  "name": "Janis chat",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}
