@@ -885,7 +885,19 @@ s(40) → whole widget nulled). Live probe: scripts/tmp/shopify-gql-tools
 + shopify-gql-mutations.ts — product search returns cards, all
 queries/mutations validate against the live schema.
 
-Open phases: 3 = theme app extension loads widget.js; 4 =
+Phase 3 DONE (985883f + 90ebab4, deployed janis-api-00769-hxv, extension
+released in janis-6): extensions/janis-storefront = theme app extension,
+one app embed block (handle janis-chat, target body) that loads
+/api/shopify/storefront.js?s={shop.permanent_domain} — the loader
+resolves linked shop → agent → non-internal webchat channel and emits
+the widget.js bootstrap (no-op for unbound shops). bindShop creates the
+"Shopify — <handle>" Bubble on link; the loader self-heals one when a
+bound agent lacks it (covers pre-feature binds). App embeds can't be
+auto-activated — the embedded app's linked state deep-links the merchant
+to themes/current/editor?context=apps&activateAppId=<client_id>/janis-chat.
+Extension uid is stamped in shopify.extension.toml (deploy-generated).
+
+Open phases: 4 =
 order/fulfillment/refund webhooks + catalog/policy knowledge sync;
 5 = AppSubscription billing rail (billingProvider flag per workspace —
 Stripe keeps existing users, Shopify Billing API for listing-acquired);
