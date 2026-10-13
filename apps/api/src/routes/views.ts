@@ -11,6 +11,9 @@ const viewBody = z.object({
   filters: z
     .object({
       state: z.string().max(40).optional(),
+      states: z.array(z.string().max(40)).max(12).optional(),
+      flags: z.array(z.string().max(40)).max(12).optional(),
+      signals: z.array(z.string().max(40)).max(12).optional(),
       agent_id: z.string().uuid().optional(),
       assignee: z.literal('me').optional(),
       attention: z.boolean().optional(),

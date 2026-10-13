@@ -54,6 +54,9 @@ export interface ConversationsPage {
 
 export function useConversations(filter: {
   state?: string;
+  states?: string;
+  flags?: string;
+  signals?: string;
   agent_id?: string;
   attention?: boolean;
   mine?: boolean;
@@ -63,6 +66,9 @@ export function useConversations(filter: {
 }) {
   const params = new URLSearchParams();
   if (filter.state) params.set('state', filter.state);
+  if (filter.states) params.set('states', filter.states);
+  if (filter.flags) params.set('flags', filter.flags);
+  if (filter.signals) params.set('signals', filter.signals);
   if (filter.agent_id) params.set('agent_id', filter.agent_id);
   if (filter.attention) params.set('attention', '1');
   if (filter.mine) params.set('assignee', 'me');
@@ -241,11 +247,14 @@ export function useDigests() {
 
 export function useSearch(
   q: string,
-  filter: { state?: string; agent_id?: string; attention?: boolean; mine?: boolean; intent?: string; from?: string; to?: string } = {},
+  filter: { state?: string; states?: string; flags?: string; signals?: string; agent_id?: string; attention?: boolean; mine?: boolean; intent?: string; from?: string; to?: string } = {},
 ) {
   const params = new URLSearchParams();
   params.set('q', q);
   if (filter.state) params.set('state', filter.state);
+  if (filter.states) params.set('states', filter.states);
+  if (filter.flags) params.set('flags', filter.flags);
+  if (filter.signals) params.set('signals', filter.signals);
   if (filter.agent_id) params.set('agent_id', filter.agent_id);
   if (filter.attention) params.set('attention', '1');
   if (filter.mine) params.set('assignee', 'me');

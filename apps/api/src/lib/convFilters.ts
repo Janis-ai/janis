@@ -1,15 +1,33 @@
-import { eq, gte, inArray, isNull, lt, ne, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { agents, alerts, channelBindings, channels, conversations } from '../db/schema.js';
 import { agentScopeCond, type AgentScope } from './access.js';
 
-/** Query params shared by the conversation list and search endpoints —
- * 'unread'/'starred' are flags and 'handoff_offer'/'failure' are open-alert
- * signals — all ride the same param as the four real lifecycle states. */
+/** Filter groups — 'unread'/'starred' are flags, 'snoozed' is a
+ * pseudo-state orthogonal to lifecycle, and the rest of the signals are
+ * open-alert kinds. Values inside a group OR together; groups AND. */
+export const CONV_STATES = ['active', 'needs_human', 'human', 'archived', 'snoozed'] as const;
+export const CONV_FLAGS = ['unread', 'starred'] as const;
+export const CONV_SIGNALS = ['handoff_offer', 'failure', 'overdue'] as const;
+
+const csvIn = (allowed: readonly string[]) =>
+  z
+    .string()
+    .max(200)
+    .transform((s) => s.split(',').map((v) => v.trim()).filter((v) => allowed.includes(v)))
+    .optional();
+
+/** Query params shared by the conversation list and search endpoints.
+ * `state` is the legacy single-select (v1 API + deep links); `states`,
+ * `flags` and `signals` are the multi-select csv params the console's
+ * filter popover speaks — a legacy `state` folds into the same buckets. */
 export const convListQuery = z.object({
   state: z
     .enum(['active', 'needs_human', 'human', 'archived', 'snoozed', 'unread', 'starred', 'handoff_offer', 'failure', 'overdue'])
     .optional(),
+  states: csvIn(CONV_STATES),
+  flags: csvIn(CONV_FLAGS),
+  signals: csvIn(CONV_SIGNALS),
   agent_id: z.string().uuid().optional(),
   attention: z.enum(['1', 'true']).optional(), // needs_human OR has open alerts
   assignee: z.enum(['me']).optional(), // only conversations assigned to the caller
@@ -53,42 +71,68 @@ export function convListConditions(
 ): SQL[] {
   const scoped = agentScopeCond(scope ?? null);
   const conditions: SQL[] = [eq(agents.workspaceId, workspaceId), ...(scoped ? [scoped] : [])];
-  if (q.state === 'unread') conditions.push(eq(conversations.isUnread, true));
-  else if (q.state === 'starred') conditions.push(eq(conversations.isStarred, true));
-  else if (q.state === 'handoff_offer' || q.state === 'failure')
-    // signal filter: any open alert of that type, whatever the lifecycle state
-    conditions.push(
-      sql`exists (
-        select 1 from ${alerts}
-        where ${alerts.conversationId} = ${conversations.id}
-          and ${alerts.status} = 'open'
-          and ${alerts.type} = ${q.state}
-      )`,
+  // Legacy single-select `state` folds into the same buckets the csv params
+  // feed — ?state=unread and ?flags=unread are the same filter.
+  const states = new Set(q.states ?? []);
+  const flags = new Set(q.flags ?? []);
+  const signals = new Set(q.signals ?? []);
+  if (q.state === 'unread' || q.state === 'starred') flags.add(q.state);
+  else if (q.state === 'handoff_offer' || q.state === 'failure' || q.state === 'overdue')
+    signals.add(q.state);
+  else if (q.state) states.add(q.state);
+
+  // State group — lifecycle states OR together; 'snoozed' rides along as the
+  // pseudo-state (anything snoozed into the future, whatever its real state)
+  const stateOrs: SQL[] = [];
+  const lifecycle = [...states].filter(
+    (s): s is Exclude<(typeof CONV_STATES)[number], 'snoozed'> => s !== 'snoozed',
+  );
+  if (lifecycle.length) stateOrs.push(inArray(conversations.state, lifecycle));
+  if (states.has('snoozed')) stateOrs.push(sql`${conversations.snoozedUntil} > now()`);
+  if (stateOrs.length) conditions.push(or(...stateOrs)!);
+
+  // Flags — unread/starred OR together
+  const flagOrs: SQL[] = [];
+  if (flags.has('unread')) flagOrs.push(eq(conversations.isUnread, true));
+  if (flags.has('starred')) flagOrs.push(eq(conversations.isStarred, true));
+  if (flagOrs.length) conditions.push(or(...flagOrs)!);
+
+  // Signals — open-alert kinds OR together, whatever the lifecycle state.
+  // 'overdue' keeps its compound definition: still waiting on a human past
+  // the agent's SLA (config.sla_minutes, default 15) — same as the Reports
+  // handoff card.
+  const openAlertOf = (type: string) =>
+    sql`exists (
+      select 1 from ${alerts}
+      where ${alerts.conversationId} = ${conversations.id}
+        and ${alerts.status} = 'open'
+        and ${alerts.type} = ${type}
+    )`;
+  const signalOrs: SQL[] = [];
+  if (signals.has('handoff_offer')) signalOrs.push(openAlertOf('handoff_offer'));
+  if (signals.has('failure')) signalOrs.push(openAlertOf('failure'));
+  if (signals.has('overdue'))
+    signalOrs.push(
+      and(
+        eq(conversations.state, 'needs_human'),
+        sql`exists (
+          select 1 from ${alerts}
+          where ${alerts.conversationId} = ${conversations.id}
+            and ${alerts.status} = 'open'
+            and ${alerts.createdAt} < now() - interval '1 minute' * coalesce((${agents.config} ->> 'sla_minutes')::int, 15)
+        )`,
+      )!,
     );
-  else if (q.state === 'overdue')
-    // still waiting on a human past the agent's SLA — same definition the
-    // Reports handoff card uses (config.sla_minutes, default 15)
-    conditions.push(
-      eq(conversations.state, 'needs_human'),
-      sql`exists (
-        select 1 from ${alerts}
-        where ${alerts.conversationId} = ${conversations.id}
-          and ${alerts.status} = 'open'
-          and ${alerts.createdAt} < now() - interval '1 minute' * coalesce((${agents.config} ->> 'sla_minutes')::int, 15)
-      )`,
-    );
-  else if (q.state === 'snoozed')
-    // pseudo-state: snoozed is orthogonal to lifecycle — anything snoozed
-    // into the future, whatever its real state
-    conditions.push(sql`${conversations.snoozedUntil} > now()`);
-  else if (q.state) conditions.push(eq(conversations.state, q.state));
-  // archived hidden unless filtered — but a topic drill-down wants the whole
-  // window (resolved convs are archived), so intent/from/to imply inclusion
-  else if (!q.intent && !q.from && !q.to) conditions.push(ne(conversations.state, 'archived'));
-  // actively-snoozed conversations hide from every queue except the Snoozed
-  // view itself (and archived — archive wins over snooze); drill-downs count
-  // everything in the window, snoozed or not
-  if (q.state !== 'snoozed' && q.state !== 'archived' && !q.intent && !q.from && !q.to) {
+  if (signalOrs.length) conditions.push(or(...signalOrs)!);
+
+  // archived hidden only in the unfiltered browse view — an explicit
+  // selection (any state/flag/signal) or a topic drill-down shows them
+  if (!stateOrs.length && !flagOrs.length && !signalOrs.length && !q.intent && !q.from && !q.to)
+    conditions.push(ne(conversations.state, 'archived'));
+  // actively-snoozed conversations hide from every queue except when Snoozed
+  // (or Archived — archive wins over snooze) is among the selected states;
+  // drill-downs count everything in the window, snoozed or not
+  if (!states.has('snoozed') && !states.has('archived') && !q.intent && !q.from && !q.to) {
     conditions.push(
       sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
     );

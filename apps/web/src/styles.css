@@ -492,6 +492,27 @@ button, input, select, textarea { font: inherit; }
 }
 .menu-pop button:hover:not(:disabled) { background: var(--panel-2); }
 .menu-pop button:disabled { color: var(--muted); cursor: default; }
+/* Inbox multi-select filter popover — checkbox groups instead of the old
+   single-select dropdown. Wider than a plain menu; groups separated. */
+.filter-pop { min-width: 220px; padding: 8px; }
+.filter-group { padding: 4px 0 6px; }
+.filter-group + .filter-group { border-top: 1px solid var(--border); }
+.filter-group-head {
+  display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--muted); cursor: pointer;
+}
+.filter-opt {
+  display: flex; align-items: center; gap: 8px; padding: 4px 10px 4px 24px;
+  font-size: 13px; color: var(--text); cursor: pointer; border-radius: 6px;
+}
+.filter-opt:hover { background: var(--panel-2); }
+.filter-pop input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
+.filter-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 8px 10px 2px; border-top: 1px solid var(--border);
+}
+.filter-hint { font-size: 11px; color: var(--muted); max-width: 170px; }
 /* Correct this — a real button under every agent reply on test surfaces,
    but invisible until hover/focus: a persistent pill on every message
    makes each reply look broken. Touch devices get it always-on but dim. */

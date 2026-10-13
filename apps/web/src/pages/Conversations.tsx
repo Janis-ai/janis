@@ -7,17 +7,27 @@ import { api } from '../api/client';
 import { Avatar, channelLabel, displayName, Empty, Md, StateBadge, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
-import { Bot, Cog, Headset, Moon, Save, Star, User, X } from 'lucide-react';
+import { Bot, Cog, Headset, ListFilter, Moon, Save, Star, User, X } from 'lucide-react';
 import { usePrompt } from '../components/Prompt';
 import { AgentScopePicker } from '../components/AgentScopePicker';
 import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
 import { isEditableTarget } from '../lib/keys';
 import { usePageTitle } from '../lib/title';
 
-/** Filter options grouped by kind — values map to the `state` list param.
+/** Multi-select filter model — each group's values ride its own csv list
+ * param (states/flags/signals); values OR inside a group, groups AND. An
+ * empty selection everywhere is the default browse view (no archived).
  * Labels match the conversation detail Status dropdown (Agent = agent-driven). */
-const STATE_GROUPS: { label: string; options: [value: string, label: string][] }[] = [
+type ConvFilters = { states: string[]; flags: string[]; signals: string[] };
+const EMPTY_FILTERS: ConvFilters = { states: [], flags: [], signals: [] };
+
+const FILTER_GROUPS: {
+  key: keyof ConvFilters;
+  label: string;
+  options: [value: string, label: string][];
+}[] = [
   {
+    key: 'states',
     label: 'State',
     options: [
       ['needs_human', 'Needs human'],
@@ -28,6 +38,15 @@ const STATE_GROUPS: { label: string; options: [value: string, label: string][] }
     ],
   },
   {
+    key: 'flags',
+    label: 'Flags',
+    options: [
+      ['unread', 'Unread'],
+      ['starred', 'Starred'],
+    ],
+  },
+  {
+    key: 'signals',
     label: 'Signals',
     options: [
       ['handoff_offer', 'Handoff offered'],
@@ -35,14 +54,24 @@ const STATE_GROUPS: { label: string; options: [value: string, label: string][] }
       ['overdue', 'Overdue'],
     ],
   },
-  {
-    label: 'Flags',
-    options: [
-      ['unread', 'Unread'],
-      ['starred', 'Starred'],
-    ],
-  },
 ];
+
+/** Map a legacy single-select `state` value (saved view, deep link, old
+ * sticky) onto the group bucket it belongs to. */
+function bucketFor(value: string): keyof ConvFilters | null {
+  for (const g of FILTER_GROUPS) if (g.options.some(([v]) => v === value)) return g.key;
+  return null;
+}
+
+function withFilterValue(f: ConvFilters, value: string): ConvFilters {
+  const key = bucketFor(value);
+  if (!key || f[key].includes(value)) return f;
+  return { ...f, [key]: [...f[key], value] };
+}
+
+function filterCount(f: ConvFilters): number {
+  return f.states.length + f.flags.length + f.signals.length;
+}
 
 /** Snooze presets for the bulk bar + detail page — values are minutes,
  * except 'morning'/'week' which are computed client-side. */
@@ -61,15 +90,18 @@ export function snoozeMinutes(minutes: number): number {
   return Math.max(1, Math.round((d.getTime() - Date.now()) / 60_000));
 }
 
-/** useState persisted to localStorage — filters survive navigation. */
-function useSticky<T>(key: string, initial: T): [T, (v: T) => void] {
+/** useState persisted to localStorage — filters survive navigation.
+ * `initial` may be lazy (a migration reader) — it only runs when nothing
+ * is stored under `key`. */
+function useSticky<T>(key: string, initial: T | (() => T)): [T, (v: T) => void] {
   const [v, setV] = useState<T>(() => {
     try {
       const s = localStorage.getItem(key);
-      return s !== null ? (JSON.parse(s) as T) : initial;
+      if (s !== null) return JSON.parse(s) as T;
     } catch {
-      return initial;
+      /* fall through to initial */
     }
+    return typeof initial === 'function' ? (initial as () => T)() : initial;
   });
   return [
     v,
@@ -162,7 +194,19 @@ function ConvRow({
 export default function Conversations({ agentId: scopeAgent }: { agentId?: string } = {}) {
   usePageTitle(scopeAgent ? 'Agent inbox' : 'Conversations');
   const [tab, setTab] = useSticky<'attention' | 'all'>('conv.tab', 'all');
-  const [state, setState] = useSticky('conv.state', '');
+  // Multi-select filter sets (states/flags/signals). The legacy conv.state
+  // sticky holds a single pre-popover value — migrate it on first read.
+  const [filters, setFilters] = useSticky<ConvFilters>('conv.filters', () => {
+    try {
+      const s = localStorage.getItem('conv.state');
+      localStorage.removeItem('conv.state');
+      const v = s ? (JSON.parse(s) as string) : '';
+      return v ? withFilterValue(EMPTY_FILTERS, v) : EMPTY_FILTERS;
+    } catch {
+      return EMPTY_FILTERS;
+    }
+  });
+  const [filterOpen, setFilterOpen] = useState(false);
   const [activeView, setActiveView] = useSticky('conv.view', '');
   // Deep links seed the filter (e.g. Reports' "N overdue" badge → ?state=overdue)
   const [params, setParams] = useSearchParams();
@@ -191,7 +235,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   useEffect(() => {
     const s = params.get('state');
     if (!s) return;
-    setState(s);
+    setFilters(withFilterValue(filters, s));
     params.delete('state');
     setParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -214,14 +258,19 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const qc = useQueryClient();
-  const { data, hasNextPage, fetchNextPage, isFetchingNextPage } = useConversations({
-    attention: tab === 'attention' || undefined,
-    state: state || undefined,
+  const filterParams = {
+    states: filters.states.join(',') || undefined,
+    flags: filters.flags.join(',') || undefined,
+    signals: filters.signals.join(',') || undefined,
     agent_id: agentId || undefined,
     mine,
     intent: drill?.intent || undefined,
     from: drill?.from || undefined,
     to: drill?.to || undefined,
+  };
+  const { data, hasNextPage, fetchNextPage, isFetchingNextPage } = useConversations({
+    attention: tab === 'attention' || undefined,
+    ...filterParams,
   });
   const convList = data?.pages.flatMap((p) => p.conversations);
   const knownTags = [...new Set((convList ?? []).flatMap((c) => c.tags ?? []))].sort();
@@ -229,12 +278,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const { data: views } = useViews();
   const { data: hits } = useSearch(query, {
     attention: tab === 'attention' || undefined,
-    state: state || undefined,
-    agent_id: agentId || undefined,
-    mine,
-    intent: drill?.intent || undefined,
-    from: drill?.from || undefined,
-    to: drill?.to || undefined,
+    ...filterParams,
   });
 
   const searching = query.trim().length > 0;
@@ -244,7 +288,15 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const applyView = (v: SavedView) => {
     const f = v.filters;
     setTab((f.tab as 'attention' | 'all') ?? 'all');
-    setState(f.state ?? '');
+    // New-shape arrays apply directly; a legacy single `state` value folds
+    // into its group bucket.
+    let next: ConvFilters = {
+      states: f.states ?? [],
+      flags: f.flags ?? [],
+      signals: f.signals ?? [],
+    };
+    if (f.state) next = withFilterValue(next, f.state);
+    setFilters(next);
     // A view's agent dimension is context, not a filter: one that names an
     // agent moves into it, one that doesn't is workspace-wide.
     if (f.agent_id) {
@@ -272,7 +324,9 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         name: name.trim(),
         filters: {
           ...(tab !== 'all' ? { tab } : {}),
-          ...(state ? { state } : {}),
+          ...(filters.states.length ? { states: filters.states } : {}),
+          ...(filters.flags.length ? { flags: filters.flags } : {}),
+          ...(filters.signals.length ? { signals: filters.signals } : {}),
           ...(agentId ? { agent_id: agentId } : {}),
           ...(mine ? { assignee: 'me' } : {}),
           ...(query.trim() ? { query: query.trim() } : {}),
@@ -304,7 +358,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   // Keyboard triage — j/k move, Enter opens, e archives, s stars, x selects.
   const navigate = useNavigate();
   const [focusIdx, setFocusIdx] = useState(-1);
-  useEffect(() => setFocusIdx(-1), [tab, state, agentId, mine, query]);
+  useEffect(() => setFocusIdx(-1), [tab, filters, agentId, mine, query]);
   const focused = focusIdx >= 0 ? list?.[focusIdx] : undefined;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -495,16 +549,69 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <select value={state} onChange={(e) => setState(e.target.value)}>
-          <option value="">All states</option>
-          {STATE_GROUPS.map((g) => (
-            <optgroup key={g.label} label={g.label}>
-              {g.options.map(([v, l]) => (
-                <option key={v} value={v}>{l}</option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+        <span className="src-menu-wrap">
+          <button
+            className={`btn${filterCount(filters) ? ' primary' : ''}`}
+            onClick={() => setFilterOpen((o) => !o)}
+            title="Filter conversations — states, flags and signals combine (each group's boxes are 'any of')"
+          >
+            <ListFilter size={14} style={{ verticalAlign: '-2px', marginRight: 4 }} />
+            {filterCount(filters) ? `Filter · ${filterCount(filters)}` : 'Filter'}
+          </button>
+          {filterOpen && (
+            <>
+              <div className="menu-backdrop" onClick={() => setFilterOpen(false)} />
+              <div className="menu-pop filter-pop">
+                {FILTER_GROUPS.map((g) => {
+                  const sel = filters[g.key];
+                  const values = g.options.map(([v]) => v);
+                  const all = values.every((v) => sel.includes(v));
+                  const some = values.some((v) => sel.includes(v));
+                  return (
+                    <div key={g.key} className="filter-group">
+                      <label className="check filter-group-head">
+                        <input
+                          type="checkbox"
+                          checked={all}
+                          ref={(el) => {
+                            if (el) el.indeterminate = some && !all;
+                          }}
+                          onChange={() =>
+                            setFilters({ ...filters, [g.key]: all ? [] : values })
+                          }
+                        />
+                        {g.label}
+                      </label>
+                      {g.options.map(([v, l]) => (
+                        <label key={v} className="check filter-opt">
+                          <input
+                            type="checkbox"
+                            checked={sel.includes(v)}
+                            onChange={() =>
+                              setFilters({
+                                ...filters,
+                                [g.key]: sel.includes(v)
+                                  ? sel.filter((x) => x !== v)
+                                  : [...sel, v],
+                              })
+                            }
+                          />
+                          {l}
+                        </label>
+                      ))}
+                    </div>
+                  );
+                })}
+                <div className="filter-foot">
+                  <button className="link small" onClick={() => setFilters(EMPTY_FILTERS)}>
+                    Clear all
+                  </button>
+                  <span className="filter-hint">Archived threads appear when Archived (or every state) is checked</span>
+                </div>
+              </div>
+            </>
+          )}
+        </span>
         {/* The agent dimension is whole-app context — this picker switches
             it everywhere (nav subsection, Copilot, the other shared pages),
             and "All agents" leaves context entirely. */}
@@ -592,7 +699,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             <Empty>
               {tab === 'attention'
                 ? 'No conversations need attention. When an agent fails or asks for help, it lands here.'
-                : state === 'snoozed'
+                : filters.states.length === 1 && filters.states[0] === 'snoozed'
                   ? 'No snoozed conversations.'
                   : 'No conversations.'}
             </Empty>

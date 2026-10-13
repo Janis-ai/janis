@@ -3,7 +3,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { createHmac } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -341,6 +341,11 @@ describe('webchat widget endpoints', () => {
       .where(eq(conversations.externalId, `webchat:${VISITOR}`));
     expect(conv.state).toBe('archived');
     expect(conv.archivedAt).not.toBeNull();
+    // seed saved visitor context — the new chat must NOT inherit it
+    await db
+      .update(conversations)
+      .set({ userProfile: { name: 'Sam', email: 'sam@example.com', metadata: { vip: 'yes' } } })
+      .where(eq(conversations.id, conv.id));
     // archive fires the CSAT prompt — it lands on the transcript for the
     // customer's next reply, and the resolve marker is flagged system-side
     const convMsgs = await db
@@ -365,6 +370,14 @@ describe('webchat widget endpoints', () => {
     const poll2 = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR}`);
     const body2 = await poll2.json();
     expect(body2.messages).toEqual([]);
+    // a new chat is a fresh context — saved profile facts (name, email,
+    // traits) stay on the archived thread instead of following the visitor
+    const [newConv] = await db
+      .select()
+      .from(conversations)
+      .where(sql`${conversations.externalId} like ${`webchat:${VISITOR}#%`}`);
+    expect(newConv).toBeDefined();
+    expect(newConv!.userProfile).toEqual({});
     // …while the archived thread keeps its transcript
     const stillThere = await db
       .select()

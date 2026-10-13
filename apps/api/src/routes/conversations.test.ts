@@ -369,6 +369,118 @@ describe('snooze', () => {
   });
 });
 
+describe('multi-select filters', () => {
+  const listIds = (qs = '') =>
+    app
+      .request(`/api/conversations${qs}`, { headers: { cookie: adminCookie } })
+      .then((r) => r.json())
+      .then((b: { conversations: { id: string }[] }) => b.conversations.map((c) => c.id));
+
+  it('?states= ORs lifecycle states and can include archived', async () => {
+    const active = await makeConversation('ms-active');
+    const archived = await makeConversation('ms-archived');
+    const needsHuman = await makeConversation('ms-needs-human');
+    await db
+      .update(conversations)
+      .set({ state: 'archived' })
+      .where(eq(conversations.id, archived.id));
+    await db
+      .update(conversations)
+      .set({ state: 'needs_human' })
+      .where(eq(conversations.id, needsHuman.id));
+
+    const all = await listIds('?states=active,archived,needs_human,human,snoozed');
+    expect(all).toContain(active.id);
+    expect(all).toContain(archived.id);
+    expect(all).toContain(needsHuman.id);
+
+    const two = await listIds('?states=needs_human,archived');
+    expect(two).toContain(archived.id);
+    expect(two).toContain(needsHuman.id);
+    expect(two).not.toContain(active.id);
+  });
+
+  it('?flags= ORs unread/starred; groups AND with states', async () => {
+    const unread = await makeConversation('ms-unread');
+    const starred = await makeConversation('ms-starred');
+    const plain = await makeConversation('ms-plain');
+    await db
+      .update(conversations)
+      .set({ isUnread: true })
+      .where(eq(conversations.id, unread.id));
+    await db
+      .update(conversations)
+      .set({ isStarred: true })
+      .where(eq(conversations.id, starred.id));
+
+    const flagged = await listIds('?flags=unread,starred');
+    expect(flagged).toContain(unread.id);
+    expect(flagged).toContain(starred.id);
+    expect(flagged).not.toContain(plain.id);
+
+    // state AND flag: needs_human + unread only
+    await db
+      .update(conversations)
+      .set({ state: 'needs_human' })
+      .where(eq(conversations.id, unread.id));
+    const both = await listIds('?states=needs_human&flags=unread');
+    expect(both).toContain(unread.id);
+    expect(both).not.toContain(starred.id);
+    expect(both).not.toContain(plain.id);
+  });
+
+  it('?signals= ORs open-alert kinds; legacy ?state= folds into buckets', async () => {
+    const handoff = await makeConversation('ms-handoff');
+    const failure = await makeConversation('ms-failure');
+    const quiet = await makeConversation('ms-quiet');
+    await db.insert(alerts).values([
+      { conversationId: handoff.id, type: 'handoff_offer', status: 'open' },
+      { conversationId: failure.id, type: 'failure', status: 'open' },
+    ]);
+
+    const signaled = await listIds('?signals=handoff_offer,failure');
+    expect(signaled).toContain(handoff.id);
+    expect(signaled).toContain(failure.id);
+    expect(signaled).not.toContain(quiet.id);
+
+    // the legacy single-value param maps onto the same group
+    const legacy = await listIds('?state=handoff_offer');
+    expect(legacy).toContain(handoff.id);
+    expect(legacy).not.toContain(failure.id);
+  });
+
+  it('multi-select keeps the snooze rules: snoozed hidden unless selected', async () => {
+    const snoozed = await makeConversation('ms-snoozed');
+    await db
+      .update(conversations)
+      .set({ snoozedUntil: new Date(Date.now() + 3600_000) })
+      .where(eq(conversations.id, snoozed.id));
+
+    expect(await listIds('?states=active')).not.toContain(snoozed.id);
+    expect(await listIds('?states=active,snoozed')).toContain(snoozed.id);
+    // archived selection still wins over snooze, like the legacy view
+    await db
+      .update(conversations)
+      .set({ state: 'archived' })
+      .where(eq(conversations.id, snoozed.id));
+    expect(await listIds('?states=archived')).toContain(snoozed.id);
+  });
+
+  it('unknown csv values are dropped; an all-invalid list is the default view', async () => {
+    const archived = await makeConversation('ms-unknown-archived');
+    await db
+      .update(conversations)
+      .set({ state: 'archived' })
+      .where(eq(conversations.id, archived.id));
+    const res = await app.request('/api/conversations?states=bogus', {
+      headers: { cookie: adminCookie },
+    });
+    expect(res.status).toBe(200);
+    const ids = (await res.json()).conversations.map((c: { id: string }) => c.id);
+    expect(ids).not.toContain(archived.id); // archived hidden = default view
+  });
+});
+
 describe('bulk actions', () => {
   const bulk = (body: unknown) =>
     post('/bulk', adminCookie, body);

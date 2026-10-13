@@ -671,6 +671,9 @@ export const SavedView = z.object({
   name: z.string(),
   filters: z.object({
     state: z.string().optional(),
+    states: z.array(z.string()).optional(),
+    flags: z.array(z.string()).optional(),
+    signals: z.array(z.string()).optional(),
     agent_id: z.string().optional(),
     assignee: z.string().optional(),
     attention: z.boolean().optional(),

@@ -1156,7 +1156,13 @@ export function webchatRoutes(db: Db) {
         .values({
           agentId: conv.agentId,
           externalId: `${conv.externalId}#${Date.now().toString(36)}`,
-          userProfile: conv.userProfile,
+          // The profile stays behind — a new chat is a fresh context, so the
+          // agent doesn't open already "knowing" the visitor's name, email,
+          // or traits they shared last time. Verified identity re-derives on
+          // the next inbound for signed-in/host-identified visitors. The
+          // contact link is different: it's the CRM spine for the same
+          // browser human (re-linked on first inbound anyway) and it feeds
+          // the verified-email anchor, not the model's prompt context.
           contactId: conv.contactId,
         })
         .returning();
