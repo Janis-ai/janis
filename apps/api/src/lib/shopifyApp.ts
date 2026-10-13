@@ -219,7 +219,13 @@ export async function ensureShopForSession(
       .returning();
   }
 
-  if (!row.accessTokenEnc) {
+  // Re-exchange when the grant drifted from the app's configured scopes —
+  // e.g. a scope that was withheld at install (protected-customer-data
+  // declaration missing) only lands on the next exchange, never by
+  // waiting. Compare sorted sets; Shopify returns comma-joined scopes.
+  const wantScopes = env.shopifyAppScopes.split(/[\s,]+/).filter(Boolean).sort().join(',');
+  const haveScopes = (row.scopes ?? '').split(/[\s,]+/).filter(Boolean).sort().join(',');
+  if (!row.accessTokenEnc || haveScopes !== wantScopes) {
     const tok = await exchangeOfflineToken(shop, sessionToken);
     const reinstall = row.state === 'uninstalled';
     const updates: Partial<ShopRow> = {

@@ -84,7 +84,10 @@ const stubShopifyApi = () =>
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (url.includes('/admin/oauth/access_token')) {
         return Promise.resolve(
-          Response.json({ access_token: 'shpat_offline', scope: 'read_orders,write_orders' }),
+          Response.json({
+            access_token: 'shpat_offline',
+            scope: 'read_orders,write_orders,read_products,read_customers',
+          }),
         );
       }
       if (url.includes('graphql.json')) {
@@ -184,7 +187,7 @@ describe('shopify embedded app — session', () => {
     expect(body.link_url).toContain('/shopify-link?code=');
     const [row] = await db.select().from(shopifyShops).where(eq(shopifyShops.shop, SHOP));
     expect(row.accessTokenEnc).toBeTruthy();
-    expect(row.scopes).toBe('read_orders,write_orders');
+    expect(row.scopes).toBe('read_orders,write_orders,read_products,read_customers');
   });
 
   it('a second embedded load keeps the stored token — no re-exchange', async () => {
@@ -195,6 +198,21 @@ describe('shopify embedded app — session', () => {
     // only the graphql register calls could have fired — none did the
     // second time either since the token was already stored
     expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(fetchCalls);
+  });
+
+  it('re-exchanges when stored scopes drift from the app config', async () => {
+    // e.g. read_orders withheld until protected-data access is declared —
+    // the next embedded load must pick up the widened grant.
+    stubShopifyApi();
+    await postSession(sessionJwt());
+    await db
+      .update(shopifyShops)
+      .set({ scopes: 'read_products,read_customers' })
+      .where(eq(shopifyShops.shop, SHOP));
+    const res = await postSession(sessionJwt());
+    expect(res.status).toBe(200);
+    const [row] = await db.select().from(shopifyShops).where(eq(shopifyShops.shop, SHOP));
+    expect(row.scopes).toBe('read_orders,write_orders,read_products,read_customers');
   });
 });
 
