@@ -872,13 +872,24 @@ window.shopify async (poll + ?id_token fallback), the token-exchange
 requested_token_type URN, and a never-mounted route group (regression
 test boots createApp now).
 
-Open phases: 2 = port shopify_* tools to GraphQL (new public apps can't
-use REST; REST stays for legacy PAT connections) — token verified working
-for orders/customers incl. PII fields on the dev store; 3 = theme app
-extension loads widget.js; 4 = order/fulfillment/refund webhooks +
-catalog/policy knowledge sync; 5 = AppSubscription billing rail
-(billingProvider flag per workspace — Stripe keeps existing users,
-Shopify Billing API for listing-acquired); 6 = listing assets + review.
+Phase 2 DONE + live-verified (30f1eeb): all seven shopify_* tools now
+POST {query,variables} to /admin/api/2026-10/graphql.json — same names,
+same SHOPIFY_SHOP/SHOPIFY_TOKEN secrets (PAT connections work on GraphQL
+too, so no REST/GraphQL split needed). toolExec bodyTemplate gained
+${param}/${param:text} placeholders — a template containing ${ treats
+{…} as literal (GraphQL selection sets) while {param} stays the legacy
+form; {:text} JSON-escapes raw text inside quoted strings for search
+clauses. bindShop auto-installs the catalog tools on link (merge by
+name). widgets select_label cap →160 ({title} interpolation overflowed
+s(40) → whole widget nulled). Live probe: scripts/tmp/shopify-gql-tools
++ shopify-gql-mutations.ts — product search returns cards, all
+queries/mutations validate against the live schema.
+
+Open phases: 3 = theme app extension loads widget.js; 4 =
+order/fulfillment/refund webhooks + catalog/policy knowledge sync;
+5 = AppSubscription billing rail (billingProvider flag per workspace —
+Stripe keeps existing users, Shopify Billing API for listing-acquired);
+6 = listing assets + review.
 
 Dashboard gaps hit (Shopify migration in progress): GDPR webhooks =
 toml-only; protected-customer-data request UI lives in Partner Dashboard
