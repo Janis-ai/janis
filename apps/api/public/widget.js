@@ -335,6 +335,12 @@
     '#janis-panel *::-webkit-scrollbar-track{background:transparent}' +
     '#janis-panel *::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:3px}' +
     '#janis-panel *::-webkit-scrollbar-thumb:hover{background:#9ca3af}' +
+    // UA stylesheets pin form elements to system fonts — one blanket rule so
+    // EVERY button/field (Send, icon buttons, chip removes, teaser ×, and
+    // anything added later) follows the configured typeface. Emoji glyphs
+    // still render via the stack's fallback.
+    '#janis-panel button,#janis-panel input,#janis-panel textarea,#janis-panel select,' +
+    '#janis-teaser button{font-family:inherit}' +
     '.janis-msg{max-width:80%;padding:8px 12px;border-radius:12px;line-height:1.4;word-wrap:break-word;white-space:pre-wrap}' +
     '.janis-msg.in{align-self:flex-end;background:var(--janis-accent);color:#fff;border-bottom-right-radius:4px}' +
     '.janis-msg.out,.janis-msg.human{align-self:flex-start;background:#e5e7eb;color:#1f2937;border-bottom-left-radius:4px}' +
