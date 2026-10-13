@@ -852,3 +852,37 @@ gate + provisioning caps, Stripe voice meter in checkout, email answer rules + s
 merge UI, webhook replay/DLQ UI, /status probe, audit log, outbound send +
 broadcast, campaigns v1, STOP opt-out, jobs queue, trials + annual billing,
 WorkOS SSO + Outlook channel (both behind env creds).
+
+## Shopify App Store track (started 2026-10-13)
+
+App: "Janis", client_id cf22b09da8f49a7c7cdf7ff39b17fb87, org "My Store"
+(id 238766671), dev store janis-store-sx5bpcd3.myshopify.com. Config lives
+in shopify.app.toml — `shopify app deploy` releases a new version (GDPR
+compliance webhooks are toml-only; dashboard has no fields for them).
+
+Phase 1 DONE + live-verified on the dev store: embedded managed install
+(App Bridge session-JWT → offline token exchange), shopify_shops binding,
+signed link-code → /shopify-link (login/signup → pick-or-create agent →
+mirrors SHOPIFY_SHOP/SHOPIFY_TOKEN agent secrets), app/uninstalled + all
+three GDPR webhooks at /shopify/webhooks, shared purgeContactData.
+Endpoint order matters: both route groups share /api/shopify — iframe
+session-token group AND console-authed link group (mounted inside the
+api subapp). Known prod-vs-stub gaps fixed: App Bridge attaches
+window.shopify async (poll + ?id_token fallback), the token-exchange
+requested_token_type URN, and a never-mounted route group (regression
+test boots createApp now).
+
+Open phases: 2 = port shopify_* tools to GraphQL (new public apps can't
+use REST; REST stays for legacy PAT connections) — token verified working
+for orders/customers incl. PII fields on the dev store; 3 = theme app
+extension loads widget.js; 4 = order/fulfillment/refund webhooks +
+catalog/policy knowledge sync; 5 = AppSubscription billing rail
+(billingProvider flag per workspace — Stripe keeps existing users,
+Shopify Billing API for listing-acquired); 6 = listing assets + review.
+
+Dashboard gaps hit (Shopify migration in progress): GDPR webhooks =
+toml-only; protected-customer-data request UI lives in Partner Dashboard
+only and partner orgs aren't auto-bridged — NOT needed on dev stores
+(get full PCD anyway), needed for phase 6; org rename has no UI —
+"My Store" shows under the app name on the merchant install screen, fix
+via support ticket or org transfer before listing.
