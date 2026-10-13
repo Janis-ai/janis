@@ -283,7 +283,10 @@ button, input, select, textarea { font: inherit; }
 .wgt-scroll.wgt-next { right: 2px; }
 .wgt-scroll:disabled { opacity: 0; pointer-events: none; }
 .wgt-card { flex: 0 0 150px; max-width: 150px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; display: flex; flex-direction: column; }
-.wgt-card img { width: 100%; height: 90px; object-fit: cover; display: block; }
+.wgt-card img { width: 100%; height: 110px; object-fit: contain; display: block; background: #f8fafc; }
+/* Mirrors .janis-wcard-imgph — keeps titles/buttons aligned across the
+   row when a product has no image. */
+.wgt-card-imgph { width: 100%; height: 110px; flex: 0 0 110px; background: #f3f4f6; }
 .wgt-card-body { padding: 8px; }
 .wgt-card-t { font-weight: 600; font-size: 13px; line-height: 1.3; }
 .wgt-card-s { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.3; }

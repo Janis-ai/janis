@@ -109,7 +109,7 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
       <div className="wgt-cards" ref={rowRef} onScroll={sync}>
       {w.items.map((item, i) => (
         <div key={i} className="wgt-card">
-          {item.image && <img src={item.image} alt="" loading="lazy" />}
+          {item.image ? <img src={item.image} alt="" loading="lazy" /> : <div className="wgt-card-imgph" />}
           <div className="wgt-card-body">
             <div className="wgt-card-t">{item.title}</div>
             {item.subtitle && <div className="wgt-card-s">{item.subtitle}</div>}
