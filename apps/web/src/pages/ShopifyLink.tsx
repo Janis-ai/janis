@@ -51,7 +51,9 @@ export default function ShopifyLink() {
     try {
       let id = agentId;
       if (creating) {
-        const { agent } = await api<{ agent: { id: string } }>('/api/agents', {
+        // /bootstrap, not /agents — only the bootstrap route turns purpose
+        // into a drafted config (system prompt, greeting, suggestions).
+        const { agent } = await api<{ agent: { id: string } }>('/api/agents/bootstrap', {
           method: 'POST',
           body: JSON.stringify({
             name: newName.trim(),
