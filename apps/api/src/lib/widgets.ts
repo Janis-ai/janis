@@ -265,15 +265,39 @@ function digPath(obj: unknown, path: string): unknown {
   return cur;
 }
 
+/** MoneyV2 formatting for the ":money" map modifier — "{…min.amount:money}"
+ *  formats the dug amount through Intl with the sibling currencyCode, so a
+ *  USD shop renders "$9.95" and a EUR one "€9.95" instead of "USD 9.95".
+ *  Codes Intl doesn't know degrade to "CHF 9.95"-style. */
+function formatMoney(amount: unknown, code: unknown): string | undefined {
+  const c = String(code ?? '').trim();
+  const n = typeof amount === 'number' ? amount : Number.parseFloat(String(amount ?? ''));
+  if (!Number.isFinite(n)) return undefined;
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: c || 'USD',
+      currencyDisplay: 'narrowSymbol',
+    }).format(n);
+  } catch {
+    return c ? `${c} ${n}` : String(n);
+  }
+}
+
 /** Map values may be a plain dot path ("variants.0.price") or a template
  *  with {path} placeholders ("https://shop/products/{handle}") — needed when
  *  the API returns handles, not URLs. {{secrets.X}} resolves too so store
- *  domains don't get hard-coded into mappings. */
+ *  domains don't get hard-coded into mappings. A "{path:money}" modifier
+ *  formats a MoneyV2-shaped amount ({amount, currencyCode} siblings). */
 function mapValue(row: unknown, expr: string, secrets: Record<string, string>): unknown {
   if (expr.includes('{')) {
     const t = expr.replace(/\{\{secrets\.([A-Za-z0-9_]+)\}\}/g, (_, k: string) => secrets[k] ?? '');
-    const out = t.replace(/\{([A-Za-z0-9_.]+)\}/g, (_, p: string) => {
+    const out = t.replace(/\{([A-Za-z0-9_.]+)(?::([a-z]+))?\}/g, (_, p: string, mod?: string) => {
       const v = digPath(row, p);
+      if (mod === 'money') {
+        const parent = p.slice(0, Math.max(0, p.lastIndexOf('.')));
+        return formatMoney(v, digPath(row, parent ? `${parent}.currencyCode` : 'currencyCode')) ?? '';
+      }
       return v == null ? '' : String(v);
     });
     return out.trim() ? out : undefined;

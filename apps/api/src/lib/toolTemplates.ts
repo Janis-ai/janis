@@ -136,7 +136,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
             title: 'title',
             subtitle: 'vendor',
             image: 'featuredImage.url',
-            price: '{priceRangeV2.minVariantPrice.currencyCode} {priceRangeV2.minVariantPrice.amount}',
+            price: '{priceRangeV2.minVariantPrice.amount:money}',
             link: 'https://{{secrets.SHOPIFY_SHOP}}/products/{handle}',
           },
         },

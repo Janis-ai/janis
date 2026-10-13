@@ -97,6 +97,39 @@ describe('widgetFromToolResult', () => {
     if (w?.type !== 'cards') return;
     expect(w.items).toHaveLength(1);
   });
+
+  it('"{path:money}" formats MoneyV2 rows with the currency symbol', () => {
+    const w = widgetFromToolResult(
+      {
+        type: 'cards',
+        items: 'data.products.nodes',
+        map: {
+          title: 'title',
+          price: '{priceRangeV2.minVariantPrice.amount:money}',
+        },
+      },
+      JSON.stringify({
+        data: {
+          products: {
+            nodes: [
+              {
+                title: 'Wax',
+                priceRangeV2: { minVariantPrice: { amount: '9.95', currencyCode: 'USD' } },
+              },
+              {
+                title: 'Board',
+                priceRangeV2: { minVariantPrice: { amount: '699.95', currencyCode: 'EUR' } },
+              },
+            ],
+          },
+        },
+      }),
+    );
+    expect(w?.type).toBe('cards');
+    if (w?.type !== 'cards') return;
+    expect(w.items[0].price).toBe('$9.95');
+    expect(w.items[1].price).toBe('€699.95');
+  });
 });
 
 describe('extractWidgets', () => {
