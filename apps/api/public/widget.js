@@ -413,7 +413,7 @@
     '.janis-wcard img{width:100%;height:110px;object-fit:contain;display:block;margin:0!important;max-width:none!important;max-height:110px!important;border-radius:0;background:#f8fafc}' +
     // Missing product image — same slot kept so every card's title, price
     // and buttons line up across the row.
-    '.janis-wcard-imgph{width:100%;height:110px;flex:0 0 110px;background:#f3f4f6}' +
+    '.janis-wcard-imgph{width:100%;height:110px;flex:0 0 110px;background:#e9edf2 url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2728%27 height=%2728%27 viewBox=%270 0 24 24%27 fill=%27none%27 stroke=%27%2394a3b8%27 stroke-width=%271.5%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Crect x=%273%27 y=%273%27 width=%2718%27 height=%2718%27 rx=%272%27/%3E%3Ccircle cx=%278.5%27 cy=%278.5%27 r=%271.5%27/%3E%3Cpath d=%27M21 15l-5-5L5 21%27/%3E%3C/svg%3E") center/28px no-repeat}' +
     '.janis-wcard-body{padding:8px}' +
     '.janis-wcard-t{font-weight:600;font-size:13px;line-height:1.3}' +
     '.janis-wcard-s{color:#6b7280;font-size:12px;margin-top:2px;line-height:1.3}' +

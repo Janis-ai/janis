@@ -118,12 +118,12 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_search_products',
         label: 'Search products',
         description:
-          'Search or browse the Shopify product catalogue. Returns product cards with images and prices to show the customer — each node also carries a short description you can summarise when they ask about a product.',
+          'Search or browse the Shopify product catalogue. Returns up to 16 product cards with images and prices, plus productsCount — the TRUE total of matching products. When productsCount exceeds the cards returned, say so and offer to narrow the search. Each node also carries a short description you can summarise when they ask about a product.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
-          '{"query":"query($q:String!){products(first:8,query:$q){nodes{id title handle vendor productType tags description(truncateAt:280) featuredImage{url} variants(first:1){nodes{price}} priceRangeV2{minVariantPrice{amount currencyCode}}}}}","variables":{"q":"${query:text}"}}',
+          '{"query":"query($q:String!){productsCount(query:$q){count} products(first:16,query:$q){nodes{id title handle vendor productType tags description(truncateAt:160) featuredImage{url} priceRangeV2{minVariantPrice{amount currencyCode}}}}}","variables":{"q":"${query:text}"}}',
         params: {
           query:
             'Shopify catalogue search string — "status:active" lists the whole catalogue (use it for "show me your products"); add " title:*snowboard*" to match a keyword, or " product_type:…" / " vendor:…" to filter',
