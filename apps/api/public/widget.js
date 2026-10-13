@@ -488,6 +488,15 @@
     '#janis-panel.janis-dark .janis-file{background:rgba(255,255,255,.12)}' +
     '#janis-panel.janis-dark .janis-loading{color:#6b7280}' +
     '#janis-teaser.janis-dark{background:#1f2937;color:#f3f4f6}' +
+    // Host pages inject global focus chrome (Shopify Dawn's *:focus-visible
+    // paints outline+box-shadow on every element) — strip it inside the panel
+    // and give keyboard users our own accent ring instead.
+    '#janis-panel input:focus,#janis-panel textarea:focus,#janis-panel select:focus,' +
+    '#janis-panel input:focus-visible,#janis-panel textarea:focus-visible,' +
+    '#janis-panel select:focus-visible{outline:none;box-shadow:none}' +
+    '#janis-panel button:focus,#janis-panel a:focus{outline:none;box-shadow:none}' +
+    '#janis-panel button:focus-visible,#janis-panel a:focus-visible{' +
+    'outline:2px solid var(--janis-accent,#5b21b6);outline-offset:1px;box-shadow:none}' +
     // iOS Safari zooms the whole page when a focused field is under 16px —
     // keep the input at 16px on touch devices so opening the widget doesn't
     // blow up the host site's layout.
