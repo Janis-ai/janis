@@ -23,7 +23,7 @@ type SessionState =
   | { kind: 'linked'; shop: string; agent: string | null; workspace: string | null }
   | { kind: 'uninstalled'; shop: string };
 
-async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopify']>> {
+async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopify']> | null> {
   // The meta tag MUST exist before the script evaluates — v4 reads its
   // config (api key + host param) off it at init.
   const meta = document.createElement('meta');
@@ -37,8 +37,17 @@ async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopif
     s.onerror = () => reject(new Error('Shopify App Bridge failed to load'));
     document.head.appendChild(s);
   });
-  if (!window.shopify?.idToken) throw new Error('open this app inside Shopify admin');
-  return window.shopify;
+  // The script tag firing onload ≠ the global being initialized — v4
+  // attaches window.shopify asynchronously. Poll briefly before giving up.
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    if (window.shopify?.idToken) return window.shopify;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  const keys = window.shopify ? Object.keys(window.shopify).join(',') || '(empty)' : 'missing';
+  const host = new URLSearchParams(window.location.search).get('host');
+  console.warn('[shopify-app] App Bridge did not initialize', { host: !!host, keys });
+  return null;
 }
 
 export default function ShopifyApp() {
@@ -59,7 +68,10 @@ export default function ShopifyApp() {
       try {
         const cfg = await api<{ api_key: string }>('/api/shopify/app-config');
         const bridge = await loadAppBridge(cfg.api_key);
-        const token = await bridge.idToken!();
+        // Managed install also drops a session-token JWT on the iframe URL
+        // (?id_token=) — use it when App Bridge didn't attach its global.
+        const token = bridge ? await bridge.idToken!() : params.get('id_token');
+        if (!token) throw new Error('no session token — open this app inside Shopify admin');
         const res = await api<{
           shop: string;
           state: string;
