@@ -326,12 +326,16 @@
   // Kept in a var so applyCfg can re-emit it scaled (branding.font_scale)
   // without losing the pristine rules.
   var baseCss =
-    '#janis-bubble{position:fixed;right:20px;bottom:20px;width:56px;height:56px;border-radius:50%;' +
-    'border:none;cursor:pointer;z-index:999998;display:flex;align-items:center;justify-content:center;' +
+    // z-index runs near the int32 ceiling — theme headers/sticky bars carry
+    // arbitrary values and a chat widget loses that fight by default.
+    // Backdrop < bubble < panel, same as before.
+    '#janis-bubble{position:fixed;right:calc(20px + env(safe-area-inset-right,0px));' +
+    'bottom:calc(20px + env(safe-area-inset-bottom,0px));width:56px;height:56px;border-radius:50%;' +
+    'border:none;cursor:pointer;z-index:2147483646;display:flex;align-items:center;justify-content:center;' +
     'box-shadow:0 4px 16px rgba(0,0,0,.3);font-size:24px;color:#fff}' +
     '#janis-panel{position:fixed;right:20px;bottom:88px;width:340px;max-width:calc(100vw - 40px);' +
     'height:480px;max-height:calc(100vh - 120px);background:#fff;border-radius:var(--janis-radius,14px);overflow:hidden;' +
-    'box-shadow:0 8px 32px rgba(0,0,0,.25);z-index:999999;display:none;flex-direction:column;' +
+    'box-shadow:0 8px 32px rgba(0,0,0,.25);z-index:2147483647;display:none;flex-direction:column;' +
     'font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1f2937;' +
     'transition:width .15s ease,height .15s ease}' +
     '#janis-panel.open{display:flex}' +
@@ -345,7 +349,7 @@
     // a dimmed page instead of docking to the corner. The bubble stays the
     // launcher; the backdrop click and Escape close. Rules sit after
     // janis-left so modal wins the same specificity.
-    '#janis-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999997;display:none}' +
+    '#janis-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:2147483645;display:none}' +
     '#janis-backdrop.open{display:block}' +
     '#janis-panel.janis-modal{left:50%;top:50%;right:auto;bottom:auto;transform:translate(-50%,-50%);' +
     'width:min(720px,calc(100vw - 32px));max-width:none;height:min(680px,calc(100vh - 64px));max-height:none}' +
@@ -538,7 +542,7 @@
     'background:#ef4444;color:#fff;font-size:12px;font-weight:700;line-height:22px;text-align:center;' +
     'padding:0 6px;box-sizing:border-box;display:none;box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:none}' +
     '@keyframes janis-pop{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}' +
-    '#janis-teaser{position:fixed;bottom:88px;right:20px;z-index:999998;max-width:250px;background:#fff;' +
+    '#janis-teaser{position:fixed;bottom:calc(88px + env(safe-area-inset-bottom,0px));right:20px;z-index:2147483646;max-width:250px;background:#fff;' +
     'border-radius:var(--janis-radius,14px);padding:11px 32px 11px 14px;box-shadow:0 6px 24px rgba(0,0,0,.2);font-size:13.5px;' +
     'line-height:1.45;color:#1f2937;cursor:pointer;animation:janis-pop .25s ease;' +
     'font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}' +
@@ -586,7 +590,21 @@
     // iOS Safari zooms the whole page when a focused field is under 16px —
     // keep the input at 16px on touch devices so opening the widget doesn't
     // blow up the host site's layout.
-    '@media (pointer:coarse){#janis-input{font-size:16px}}';
+    '@media (pointer:coarse){#janis-input{font-size:16px}}' +
+    // Phones: the open panel IS the page — full viewport above the fold,
+    // the widget's own header clears the notch, the form clears the home
+    // indicator, and nothing of the theme peeks through. Selector list must
+    // out-specify .janis-modal/.expanded geometry (all set position/size).
+    '@media (max-width:640px){' +
+    '#janis-panel.open,#janis-panel.open.expanded,' +
+    '#janis-panel.janis-modal.open,#janis-panel.janis-modal.open.expanded{' +
+    'inset:0;width:auto;max-width:none;height:auto;max-height:none;border-radius:0;transform:none}' +
+    '#janis-head{padding-top:calc(12px + env(safe-area-inset-top,0px))}' +
+    '#janis-form{padding-bottom:env(safe-area-inset-bottom,0px)}' +
+    '}' +
+    // Lock the page scroll behind the open panel on phones — otherwise the
+    // storefront scrolls under the chat.
+    'html.janis-mobile-open,html.janis-mobile-open body{overflow:hidden}';
   css.textContent = baseCss;
   document.head.appendChild(css);
 
@@ -2191,11 +2209,18 @@
     return state.pollPromise;
   }
 
+  // Phone-width → the open panel is full-viewport; lock the storefront's
+  // scroll behind it. Cleared on close (and harmless on desktop).
+  var mobileQ = typeof matchMedia === 'function' ? matchMedia('(max-width:640px)') : null;
   function setOpen(open) {
     if (PAGE && !open) return; // the page-mode panel is the surface — always open
     state.open = open;
     panel.classList.toggle('open', open);
     backdrop.classList.toggle('open', open && panel.classList.contains('janis-modal'));
+    document.documentElement.classList.toggle(
+      'janis-mobile-open',
+      !!open && !!mobileQ && mobileQ.matches,
+    );
     localStorage.setItem(LS_OPEN, open ? '1' : '0');
     if (open) {
       hideTeaser();
