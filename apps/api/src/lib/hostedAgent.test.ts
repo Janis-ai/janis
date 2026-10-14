@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -1931,5 +1931,67 @@ describe('save_user_profile facts → metadata.claimed', () => {
     );
     expect(out).toContain('saved');
     expect(out).toContain('fact:company');
+  });
+});
+
+describe('phantom-product guard', () => {
+  const terms = ['hidden snowboard', 'hidden'];
+
+  it('flags "yes we carry it" when the search returned zero rows', () => {
+    expect(
+      claimsPhantomProduct(
+        'Yes, we carry **The Hidden Snowboard** for $749.95. Here it is:',
+        terms,
+      ),
+    ).toBe(true);
+  });
+
+  it('passes a correct "not sold here" answer', () => {
+    expect(
+      claimsPhantomProduct(
+        "The Hidden Snowboard isn't available on our storefront right now — it is no longer published.",
+        terms,
+      ),
+    ).toBe(false);
+    expect(
+      claimsPhantomProduct(
+        "We don't carry the Hidden Snowboard in our catalogue anymore.",
+        terms,
+      ),
+    ).toBe(false);
+  });
+
+  it('passes a reply that never names the phantom item', () => {
+    expect(claimsPhantomProduct('We carry 13 snowboards starting at $499.', terms)).toBe(false);
+  });
+
+  it('strips only the claiming sentences', () => {
+    const out = stripPhantomClaims(
+      'Yes, we carry The Hidden Snowboard for $749.95. But let me show you real alternatives.',
+      terms,
+    );
+    expect(out).not.toContain('$749.95');
+    expect(out).toContain('real alternatives');
+  });
+});
+
+describe('catalogue-count guard', () => {
+  const totals = new Set([13]);
+
+  it('flags a wrong "we have N products" claim', () => {
+    expect(claimsWrongCount('We have 15 active products in total in our store.', totals)).toBe(true);
+    expect(claimsWrongCount('Our collection has 15 active items:', totals)).toBe(true);
+  });
+
+  it('passes the true total and non-catalogue counts', () => {
+    expect(claimsWrongCount('We have 13 active products in total.', totals)).toBe(false);
+    expect(claimsWrongCount('2 of them are out of stock right now.', totals)).toBe(false);
+    expect(claimsWrongCount('I found 3 snowboards under $500.', totals)).toBe(false);
+  });
+
+  it('corrects the number in place', () => {
+    expect(fixWrongCounts('We have 15 active products in total.', totals)).toBe(
+      'We have 13 active products in total.',
+    );
   });
 });

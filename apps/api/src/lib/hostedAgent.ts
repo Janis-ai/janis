@@ -18,7 +18,7 @@ import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolD
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
-import { dedupeWidgetList, extractWidgets, filterRowsByQuery, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, toolResultEmpty, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { dedupeWidgetList, extractWidgets, filterRowsByQuery, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -1253,9 +1253,14 @@ export function repairCardStock(
       }
       const flag = corpusAvailability(toolText, item.title);
       if (flag === null) continue;
-      if (flag === false && item.stock !== 'Out of stock') {
-        item.stock = 'Out of stock';
-        fixed++;
+      if (flag === false) {
+        // An OOS product is view-only — a model-typed variant id would put a
+        // dead Add to cart under the badge.
+        if (item.cart_variant_id) delete item.cart_variant_id;
+        if (item.stock !== 'Out of stock') {
+          item.stock = 'Out of stock';
+          fixed++;
+        }
       } else if (flag === true && item.stock) {
         delete item.stock;
         fixed++;
@@ -1490,6 +1495,100 @@ const BUTTON_LEN_GUARD_RETRY =
   'Your previous draft was not sent: a BUTTON: label was over 20 characters, which this channel cuts off. ' +
   'Rewrite it with every button label at 20 characters or fewer — count the characters including spaces ' +
   '("Something else" is 14, "No, try something else" is 22). Keep the reply text and any components the same.';
+
+// ── Phantom-product claims ───────────────────────────────────────────────
+// A search that returned zero rows means the item isn't sold here — yet the
+// model still answers from training knowledge ("Yes, we carry The Hidden
+// Snowboard for $749.95"). The empty result is annotated, but when the note
+// is ignored the reply guard catches the assertion: a sentence naming the
+// searched item AND asserting existence/price/availability regenerates once,
+// then gets stripped. Negated phrasing ("don't carry", "unavailable") is a
+// correct answer, not a claim.
+const PHANTOM_NEGATION =
+  /n't\b|\b(?:not|never|no longer|cannot|unavailable|out[- ]of[- ]stock|sold out|discontinued|don't sell|doesn't exist|retired)\b/i;
+const PHANTOM_ASSERT =
+  /(?:\$\s?\d|\bin stock\b|(?<![a-z])available\b|\bwe (?:carry|have|stock|sell)\b|\b(?:here|right) it is\b|\bin our (?:catalogue|catalog|store|collection|inventory|shop)\b|\badd(?:ed|ing)? to (?:your )?cart\b|\bbuy it\b|\bcheck ?out\b)/i;
+
+const normPhrase = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[*_`]+/g, ' ')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** Searched terms whose result came back with zero rows — pulled from the
+ *  run's tool calls (name → widget cfg → empty items array → args.query). */
+export function phantomTermsFor(
+  toolCalls: { name: string; outcome: string; args?: Record<string, unknown> }[],
+  toolTexts: string[],
+  toolDefs: ToolDef[],
+): string[] {
+  const terms: string[] = [];
+  toolCalls.forEach((t, i) => {
+    if (t.outcome !== 'ran') return;
+    const def = toolDefs.find((d) => d.name === t.name);
+    if (!def?.widget) return;
+    if (!toolResultEmpty(def.widget, toolTexts[i] ?? '')) return;
+    const q = normPhrase(String(t.args?.query ?? '').replace(/[a-z_]+:/gi, ' '));
+    if (q.length >= 3) terms.push(q);
+  });
+  return terms;
+}
+
+function isPhantomClaim(s: string, terms: string[]): boolean {
+  if (PHANTOM_NEGATION.test(s) || !terms.length) return false;
+  const hay = ` ${normPhrase(s)} `;
+  if (!terms.some((t) => hay.includes(` ${normPhrase(t)} `))) return false;
+  return PHANTOM_ASSERT.test(s);
+}
+export function claimsPhantomProduct(text: string, terms: string[]): boolean {
+  return sentencesOf(text).some((s) => isPhantomClaim(s, terms));
+}
+export function stripPhantomClaims(text: string, terms: string[]): string {
+  return stripSentencesByLine(text, (s) => isPhantomClaim(s, terms)).text;
+}
+
+// ── Catalogue-count claims ───────────────────────────────────────────────
+// "We have 15 products" when the tool's productsCount says 13 — the model
+// rounds, remembers a stale figure, or counts card rows. The total in the
+// result is the only truth; a disagreeing count regenerates once, then the
+// number gets corrected in place (one known total) or the sentence drops.
+export function claimsWrongCount(text: string, totals: Set<number>): boolean {
+  if (!totals.size) return false;
+  return sentencesOf(text).some((s) => wrongCountSentence(s, totals) !== null);
+}
+const COUNT_SCOPE =
+  /\b(?:totals?|catalogue|catalog|collection|store|active|all|we (?:have|carry|stock)|in all|there (?:are|is))\b/i;
+function wrongCountSentence(s: string, totals: Set<number>): string | null {
+  const m = /\b(\d+)\s+(?:active\s+|total\s+)?(?:products?|items?)\b/i.exec(s);
+  if (!m || !COUNT_SCOPE.test(s)) return null;
+  return totals.has(Number(m[1])) ? null : m[1];
+}
+export function fixWrongCounts(text: string, totals: Set<number>): string {
+  if (totals.size !== 1) return stripWrongCounts(text, totals);
+  const total = [...totals][0];
+  return text
+    .split('\n')
+    .map((line) => {
+      if (!wrongCountSentence(line, totals)) return line;
+      return line.replace(/\b(\d+)\s+((?:active\s+|total\s+)?(?:products?|items?)\b)/i, `${total} $2`);
+    })
+    .join('\n');
+}
+function stripWrongCounts(text: string, totals: Set<number>): string {
+  return stripSentencesByLine(text, (s) => wrongCountSentence(s, totals) !== null).text;
+}
+
+const PHANTOM_GUARD_RETRY =
+  'Your previous draft claimed a product exists (a price, "we carry it", "here it is") that the catalogue search ' +
+  'just returned ZERO results for — that claim was invented, likely from memory of another store. ' +
+  'Rewrite it: state plainly that the item is not sold on this storefront, and offer the closest real ' +
+  'alternatives from the results you actually got. Never state a price or availability for something the search did not return.';
+
+const COUNT_GUARD_RETRY =
+  'Your previous draft quoted a product count that disagrees with the tool result — the productsCount in the ' +
+  'search result is the only true total. Rewrite using that number.';
 
 /** Meta channels display-truncate button titles at 20 chars — a label past
  * that ships visibly cut. Pure predicate so the regen guard is testable. */
@@ -2178,6 +2277,11 @@ export async function complete(
       } catch {
         // leave args {} — the tool call below still runs and reports its own error
       }
+      // "*" means "everything" to a listing search — normalise it to "" so a
+      // browse call and its next-page call share one query string. Shopify
+      // cursors are bound to the exact query that minted them; "*" vs "" is
+      // the most common rephrase that silently resets pagination to page 1.
+      if (tool?.widget && String(args.query ?? '').trim() === '*') args.query = '';
       const callKey = `${call.function.name}::${call.function.arguments}`;
       try {
         // Customer-record tools hard-bind to the verified identity — a typed
@@ -2268,7 +2372,7 @@ export async function complete(
         }
         // Result-side facts the model must not guess — catalogue totals and
         // the verbatim next-page call (Shopify cursors reset on a new query).
-        result += toolResultNotes(result);
+        result += toolResultNotes(result, args);
         // A zero-row search means the item doesn't exist here — without a
         // mechanical note the model happily fills the gap from training
         // knowledge ("yes, we carry The Hidden Snowboard for $749.95").
@@ -3293,6 +3397,24 @@ async function replyAsHostedAgent(
         prompt += '\n\n' + LOOKUP_GUARD_RETRY;
         continue;
       }
+      // Phantom-product claim — the search returned zero rows for the named
+      // item but the draft still asserts it exists (a price, "we carry it").
+      // The result annotation warns; this is the guard for when it's ignored.
+      const phantomTerms = phantomTermsFor(gen.toolCalls, gen.toolTexts, agentToolDefs);
+      if (attempt === 0 && reply && claimsPhantomProduct(reply, phantomTerms)) {
+        console.warn(`[hosted] phantom-product claim conv=${convId} — regenerating`);
+        prompt += '\n\n' + PHANTOM_GUARD_RETRY;
+        continue;
+      }
+      // Catalogue-count lie — "we have 15 products" when productsCount is 13.
+      const catalogueTotals = new Set(
+        gen.toolTexts.map((r) => toolResultCount(r)).filter((n): n is number => n !== null),
+      );
+      if (attempt === 0 && reply && claimsWrongCount(reply, catalogueTotals)) {
+        console.warn(`[hosted] wrong catalogue count conv=${convId} — regenerating`);
+        prompt += '\n\n' + COUNT_GUARD_RETRY;
+        continue;
+      }
       if (reply || widgets.length || toolWidgets.length || buttons.length || attempt === 1) break;
       console.warn(`[hosted] empty completion conv=${convId} — retrying once`);
       prompt += '\n\n[your previous reply came back empty — reply to the user now in plain text]';
@@ -3337,6 +3459,27 @@ async function replyAsHostedAgent(
           console.error(`[hosted] stripped widget-claim mismatch conv=${convId}`);
           reply = stripped;
           widgetClaimStripped = true;
+        }
+      }
+    }
+    // Same belt-and-braces for phantom-product and count claims that
+    // survived the regen — strip the invented-product sentences, and
+    // correct the quoted total in place when it's unambiguous.
+    if (reply) {
+      const terms = phantomTermsFor(gen.toolCalls, gen.toolTexts, agentToolDefs);
+      const stripped = stripPhantomClaims(reply, terms).trim();
+      if (stripped !== reply.trim()) {
+        console.error(`[hosted] stripped phantom-product claim conv=${convId}`);
+        reply = stripped || reply;
+      }
+      const totals = new Set(
+        gen.toolTexts.map((r) => toolResultCount(r)).filter((n): n is number => n !== null),
+      );
+      if (claimsWrongCount(reply, totals)) {
+        const fixed = fixWrongCounts(reply, totals);
+        if (fixed !== reply) {
+          console.error(`[hosted] corrected catalogue count conv=${convId}`);
+          reply = fixed;
         }
       }
     }

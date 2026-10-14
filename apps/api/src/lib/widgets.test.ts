@@ -705,10 +705,10 @@ describe('toolResultEmpty / toolResultNotes', () => {
         },
       },
     });
-    const notes = toolResultNotes(result);
+    const notes = toolResultNotes(result, { query: 'snowboard' });
     expect(notes).toContain('total for this query is 13');
-    expect(notes).toContain('after:"CURSOR123"');
-    expect(notes).toContain('SAME arguments');
+    expect(notes).toContain('query:"snowboard" after:"CURSOR123"');
+    expect(notes).toContain('resets the cursor');
   });
 
   it('stays silent when there is no next page', () => {

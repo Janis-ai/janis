@@ -431,9 +431,13 @@ export function widgetFromToolResult(
               image: str(mapValue(r, map.image ?? 'image', secrets)),
               price: str(mapValue(r, map.price ?? 'price', secrets)),
               stock: map.stock ? str(mapValue(r, map.stock, secrets)) : undefined,
-              cart_variant_id: map.cart_variant_id
-                ? str(mapValue(r, map.cart_variant_id, secrets))
-                : undefined,
+              // An unavailable row renders for information only — its Add to
+              // cart would hit the same rejection the badge warns about.
+              cart_variant_id:
+                map.cart_variant_id &&
+                !(cfg.availability && digPath(r, cfg.availability.field) === false)
+                  ? str(mapValue(r, map.cart_variant_id, secrets))
+                  : undefined,
               link: str(mapValue(r, map.link ?? 'link', secrets)),
               link_label: label(cfg.link_label, r),
               select_label: label(cfg.select_label, r),
@@ -466,7 +470,7 @@ export function toolResultEmpty(cfg: ToolWidgetConfig, resultText: string): bool
  *  the exact args for the next page. Shopify cursors are bound to the query
  *  that produced them — "show me more" with a rephrased query silently
  *  resets to page one, so the note hands the model the call verbatim. */
-export function toolResultNotes(resultText: string): string {
+export function toolResultNotes(resultText: string, args: Record<string, unknown> = {}): string {
   let data: unknown;
   try {
     data = JSON.parse(resultText);
@@ -483,8 +487,11 @@ export function toolResultNotes(resultText: string): string {
       if (k === 'pageInfo' && v && typeof v === 'object') {
         const pi = v as { hasNextPage?: unknown; endCursor?: unknown };
         if (pi.hasNextPage === true && typeof pi.endCursor === 'string') {
+          // Verbatim — "same arguments" leaves the model room to rephrase the
+          // query, which silently resets the cursor to page one.
+          const q = args.query !== undefined ? `query:"${args.query}" ` : '';
           notes.push(
-            `more rows exist beyond this page — if the customer asks for more, call this tool again with the SAME arguments plus after:"${pi.endCursor}" (a different query resets the cursor to page one)`,
+            `more rows exist beyond this page — if the customer asks for more, call this tool again with ${q}after:"${pi.endCursor}" exactly (any other query resets the cursor to page one)`,
           );
         }
       }
@@ -493,6 +500,31 @@ export function toolResultNotes(resultText: string): string {
   };
   walk(data, 0);
   return notes.length ? `\n[facts: ${notes.join('; ')}]` : '';
+}
+
+/** First `{count: N}` total in the result (productsCount and friends) — the
+ *  reply guard checks the model's quoted catalogue size against it. */
+export function toolResultCount(resultText: string): number | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(resultText);
+  } catch {
+    return null;
+  }
+  let found: number | null = null;
+  const walk = (obj: unknown, depth: number) => {
+    if (found !== null || !obj || typeof obj !== 'object' || depth > 4) return;
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      if (found !== null) return;
+      if (k === 'count' && typeof v === 'number') {
+        found = v;
+        return;
+      }
+      walk(v, depth + 1);
+    }
+  };
+  walk(data, 0);
+  return found;
 }
 
 /** Write `value` at a dot path inside an object — mirrors digPath. */
