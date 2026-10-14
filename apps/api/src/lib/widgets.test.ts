@@ -316,20 +316,28 @@ describe('widgetFromToolResult', () => {
       items: 'data.products.nodes',
       map: { title: 'title' },
     };
-    const mk = (count: number, n: number) =>
+    const mk = (count: number, n: number, hasNext = true) =>
       JSON.stringify({
         data: {
           productsCount: { count },
-          products: { nodes: Array.from({ length: n }, (_, i) => ({ title: `P${i}` })) },
+          products: {
+            pageInfo: { hasNextPage: hasNext, endCursor: 'cur1' },
+            nodes: Array.from({ length: n }, (_, i) => ({ title: `P${i}` })),
+          },
         },
       });
-    // 13 in the catalogue, 10 rendered → total stamps for the "K of N" tile.
+    // 13 in the catalogue, 10 rendered, page 2 exists → total stamps.
     const w = widgetFromToolResult(cfg, mk(13, 12));
     expect(w?.type === 'cards' && w.items.length).toBe(10);
     expect(w?.type === 'cards' && w.total).toBe(13);
     // Everything fit → no total, no tile.
     const fit = widgetFromToolResult(cfg, mk(3, 3));
     expect(fit?.type === 'cards' && fit.total).toBeUndefined();
+    // Last page of a bigger set — count exceeds items but there's no next
+    // page, so no tile (it would just loop).
+    const lastPage = widgetFromToolResult(cfg, mk(13, 2, false));
+    expect(lastPage?.type === 'cards' && lastPage.items.length).toBe(2);
+    expect(lastPage?.type === 'cards' && lastPage.total).toBeUndefined();
     // only_arg views count rows the filter dropped — never a total.
     const cfgOnly = {
       ...cfg,
@@ -757,5 +765,23 @@ describe('toolResultEmpty / toolResultNotes', () => {
       data: { products: { pageInfo: { hasNextPage: false }, nodes: [{ title: 'X' }] } },
     });
     expect(toolResultNotes(result)).toBe('');
+  });
+
+  it('never promises more on the last page and never says "first" on a continuation', () => {
+    const lastPage = JSON.stringify({
+      data: {
+        productsCount: { count: 13 },
+        products: { pageInfo: { hasNextPage: false }, nodes: [{ title: 'X' }, { title: 'Y' }] },
+      },
+    });
+    // Count exceeds rendered but nothing follows — "ask for more" is a dead end.
+    const tail = toolResultNotes(lastPage, {}, 2);
+    expect(tail).toContain('do NOT promise more pages');
+    expect(tail).not.toContain('ask for more');
+    // A cursor call marks this as page 2+ — "the remaining", not "the first K".
+    const cont = toolResultNotes(lastPage, { query: '', after: 'cur1' }, 2);
+    expect(cont).toContain('continuation page');
+    expect(cont).toContain('the remaining items');
+    expect(cont).toContain('never "the first');
   });
 });

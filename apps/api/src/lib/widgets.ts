@@ -453,12 +453,16 @@ export function widgetFromToolResult(
   const parsed = WidgetComponent.safeParse(candidate);
   if (!parsed.success) return null;
   const widget = parsed.data;
-  // Stamp the query total when the carousel can't show it all — renderers
-  // get a "K of N" + load-more affordance, and the reply guard can catch a
-  // narration that claims the partial set is everything. Skipped for
-  // `only_arg` views (out-of-stock-only etc.): the query total counts rows
-  // the filter removed, so "3 of 13" would misdescribe the subset.
-  if (widget.type === 'cards' && !(cfg.availability?.only_arg && args[cfg.availability.only_arg])) {
+  // Stamp the query total when a real next page exists — renderers get a
+  // "K of N" + load-more tile, and the reply guard can catch a narration
+  // that claims the partial set is everything. Skipped on the last page
+  // (a tile there loops forever) and for `only_arg` views (the query total
+  // counts rows the filter removed, so "3 of 13" would misdescribe it).
+  if (
+    widget.type === 'cards' &&
+    toolResultHasNext(resultText) &&
+    !(cfg.availability?.only_arg && args[cfg.availability.only_arg])
+  ) {
     const total = toolResultCount(resultText);
     if (total !== null && total > widget.items.length) widget.total = total;
   }
@@ -498,14 +502,19 @@ export function toolResultNotes(
     return '';
   }
   const notes: string[] = [];
+  const hasNext = toolResultHasNext(resultText);
   const walk = (obj: unknown, depth: number) => {
     if (!obj || typeof obj !== 'object' || depth > 4) return;
     for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
       if (k === 'count' && typeof v === 'number') {
         notes.push(
-          shown !== undefined && shown < v
-            ? `the catalogue total for this query is ${v} but only ${shown} cards render — narrate "the first ${shown} of ${v}" (or similar) and point out the customer can ask for more; NEVER call this "all ${v}" or "every product"`
-            : `the catalogue total for this query is ${v} — quote that number, not a count of the rows shown`,
+          args.after !== undefined
+            ? `this is a continuation page — the ${v}-item total covers the whole query, not this page; narrate "the remaining items" (or similar), never "the first ${shown ?? v} of ${v}"`
+            : shown !== undefined && shown < v
+              ? hasNext
+                ? `the catalogue total for this query is ${v} but only ${shown} cards render — narrate "the first ${shown} of ${v}" (or similar) and point out the customer can ask for more; NEVER call this "all ${v}" or "every product"`
+                : `the catalogue total for this query is ${v} but only ${shown} cards render (the rest were filtered out — unavailable items); narrate "${shown} of ${v}" and do NOT promise more pages`
+              : `the catalogue total for this query is ${v} — quote that number, not a count of the rows shown`,
         );
       }
       if (k === 'pageInfo' && v && typeof v === 'object') {
@@ -528,6 +537,31 @@ export function toolResultNotes(
   };
   walk(data, 0);
   return notes.length ? `\n[facts: ${notes.join('; ')}]` : '';
+}
+
+/** pageInfo.hasNextPage in the result — the load-more tile must only exist
+ *  when a real next page does; on the last page "tap for more" loops. */
+export function toolResultHasNext(resultText: string): boolean {
+  let data: unknown;
+  try {
+    data = JSON.parse(resultText);
+  } catch {
+    return false;
+  }
+  let found = false;
+  const walk = (obj: unknown, depth: number) => {
+    if (found || !obj || typeof obj !== 'object' || depth > 4) return;
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      if (found) return;
+      if (k === 'hasNextPage' && v === true) {
+        found = true;
+        return;
+      }
+      walk(v, depth + 1);
+    }
+  };
+  walk(data, 0);
+  return found;
 }
 
 /** First `{count: N}` total in the result (productsCount and friends) — the
