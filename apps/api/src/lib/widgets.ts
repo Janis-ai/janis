@@ -647,9 +647,19 @@ export function toolResultNotes(
     );
   }
   const hasNext = toolResultHasNext(resultText);
+  const priced: { title: string; min: number; max: number }[] = [];
   const walk = (obj: unknown, depth: number) => {
     if (!obj || typeof obj !== 'object' || depth > 4) return;
-    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    const rec = obj as Record<string, unknown>;
+    const pr = rec.priceRangeV2 as { minVariantPrice?: { amount?: string }; maxVariantPrice?: { amount?: string } } | undefined;
+    if (typeof rec.title === 'string' && pr?.minVariantPrice?.amount !== undefined) {
+      priced.push({
+        title: rec.title,
+        min: Number(pr.minVariantPrice.amount),
+        max: Number(pr.maxVariantPrice?.amount),
+      });
+    }
+    for (const [k, v] of Object.entries(rec)) {
       if (k === 'count' && typeof v === 'number') {
         notes.push(
           args.after !== undefined
@@ -680,6 +690,15 @@ export function toolResultNotes(
     }
   };
   walk(data, 0);
+  // Grounded price extremes — a "cheapest" ask answered from memory picks
+  // the first row, not the cheapest one.
+  if (priced.length > 1) {
+    const lo = priced.reduce((a, b) => (b.min < a.min ? b : a));
+    const hi = priced.reduce((a, b) => (b.min > a.min ? b : a));
+    notes.push(
+      `cheapest of these results: "${lo.title}" from ${lo.min} — most expensive: "${hi.title}" from ${hi.max} (list prices; use these for cheapest/most-expensive asks)`,
+    );
+  }
   return notes.length ? `\n[facts: ${notes.join('; ')}]` : '';
 }
 

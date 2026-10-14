@@ -1,0 +1,30 @@
+import { createDb } from '../../src/db/client.js';
+import { agents } from '../../src/db/schema.js';
+import { eq } from 'drizzle-orm';
+import { callTool, toolsFor } from '../../src/lib/toolExec.js';
+import { loadSecretsMap } from '../../src/lib/secrets.js';
+import { connectionSecrets } from '../../src/lib/connections.js';
+const db = await createDb();
+const [a] = await db.select().from(agents).where(eq(agents.id, 'd408d7b5-fdad-49a4-a34d-11fa16e88135'));
+const tool = toolsFor(a!).find((x) => x.name === 'shopify_search_products')!;
+const secrets = { ...(await loadSecretsMap(db, a!.id)), ...(await connectionSecrets(db, a!.id)) };
+const corpus = await callTool(tool as never, { query: 'product_type:snowboard' }, secrets as never);
+const title = 'The Collection Snowboard: Liquid';
+const re = new RegExp('"title"\\s*:\\s*"' + title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"');
+const m = re.exec(corpus);
+console.log('match:', m?.index);
+const rest = corpus.slice(m!.index + m![0].length);
+let next = rest.search(/"id"\s*:\s*"gid:\/\/shopify\/Product\//);
+if (next === -1) next = rest.search(/\},\s*\{\s*"title"\s*:/);
+const span = next === -1 ? rest.slice(0, 8000) : rest.slice(0, next);
+const variants: { num: string; avail: boolean | null; price?: string }[] = [];
+const vre = /"id"\s*:\s*"gid:\/\/shopify\/ProductVariant\/(\d+)"/g;
+let vm;
+while ((vm = vre.exec(span))) {
+  const tail = span.slice(vm.index + vm[0].length, vm.index + vm[0].length + 400);
+  const av = /"availableForSale"\s*:\s*(true|false)/.exec(tail);
+  const pr = /"price"\s*:\s*"?([\d.]+)"?/.exec(tail);
+  variants.push({ num: vm[1], avail: av ? av[1] === 'true' : null, price: pr?.[1] });
+}
+console.log('variants:', variants);
+process.exit(0);

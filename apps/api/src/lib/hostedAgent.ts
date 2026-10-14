@@ -1315,9 +1315,13 @@ function corpusProductFields(
   // "title" key, which also appears inside collections, seo and variant
   // sub-objects and would cut the span before variants/price fields.
   // Real corpus nodes lead with a Product gid; fixture-shaped results
-  // without ids fall back to a `},{`-level node boundary.
+  // without any gids fall back to a `},{`-level node boundary — but only
+  // when the doc lacks product ids entirely, or a nested collection node
+  // (`},{"title":"Snowboards"}`) would cut the span before variants.
   let next = rest.search(/"id"\s*:\s*"gid:\/\/shopify\/Product\//);
-  if (next === -1) next = rest.search(/\},\s*\{\s*"title"\s*:/);
+  if (next === -1 && !/"gid:\/\/shopify\/Product\//.test(toolText)) {
+    next = rest.search(/\},\s*\{\s*"title"\s*:/);
+  }
   const span = next === -1 ? rest.slice(0, 8000) : rest.slice(0, next);
   // Variant triples in document order — the widget's pick rule (cheapest
   // AVAILABLE variant) must match exactly, or a hydrated card pairs the
