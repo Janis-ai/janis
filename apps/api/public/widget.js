@@ -1407,7 +1407,10 @@
         var priceEl = el('div', {}, { class: 'janis-opts-price' });
         bodyEl.appendChild(priceEl);
         var optionEls = [];
-        optionNames.forEach(function (name, oi) {
+        optionNames.forEach(function (opt, oi) {
+          // /products/handle.js options are {name, position, values}
+          // objects on newer themes but plain strings on older ones.
+          var name = typeof opt === 'string' ? opt : (opt && opt.name) || 'Options';
           if (name === 'Title' && variants.length <= 1) return;
           var group = el('div', {}, { class: 'janis-opts-group' });
           var lab = el('div', {}, { class: 'janis-opts-label' });
