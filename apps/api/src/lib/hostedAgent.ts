@@ -3208,7 +3208,21 @@ async function replyAsHostedAgent(
   const convId = conv.id;
   const externalId = conv.externalId;
   const t0 = Date.now();
-  const emit = (e: Parameters<typeof processEvents>[2]) => processEvents(db, agent, e);
+  // The newest inbound this run's transcript actually contained — stamped on
+  // every emitted message_out as covers_through so newestInboundIsPending can
+  // tell "the reply shipped after the inbound" from "the reply SAW it". Set
+  // right after transcriptFor loads; a mid-run arrival stays pending.
+  let coversThrough: string | undefined;
+  const emit = (e: Parameters<typeof processEvents>[2]) =>
+    processEvents(
+      db,
+      agent,
+      e.map((ev) =>
+        ev.type === 'message_out' && coversThrough
+          ? { ...ev, payload: { covers_through: coversThrough, ...(ev.payload ?? {}) } }
+          : ev,
+      ),
+    );
 
   try {
     // AI-spend circuit breaker — over the rolling-24h cap, escalate to a human
@@ -3239,6 +3253,13 @@ async function replyAsHostedAgent(
     const fileAnalysis = await fileAnalysisAllowed(db, agent.workspaceId);
     console.log(`[files] conv=${convId} analysis=${fileAnalysis}`);
     const history = await transcriptFor(db, convId, fileAnalysis);
+    {
+      const [{ lastIn }] = await db
+        .select({ lastIn: sql<Date | null>`max(${messages.createdAt})` })
+        .from(messages)
+        .where(and(eq(messages.conversationId, convId), eq(messages.direction, 'in')));
+      if (lastIn) coversThrough = new Date(lastIn).toISOString();
+    }
     const draftsOpted =
       ((agent.config ?? {}) as { builder?: { include_drafts_in_test?: boolean } }).builder
         ?.include_drafts_in_test === true;

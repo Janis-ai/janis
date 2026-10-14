@@ -189,6 +189,40 @@ describe('newestInboundIsPending', () => {
     await msg('out', 'sorry about that — how can I help?', 3);
     expect(await newestInboundIsPending(db, c.id)).toBe(false);
   });
+
+  it('a reply shipped after a mid-run inbound does not cover it', async () => {
+    const [base] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    const [c] = await db
+      .insert(conversations)
+      .values({ agentId: base.agentId, externalId: 'covers-test', state: 'active' })
+      .returning();
+    const t = Date.now();
+    const msg = (direction: string, text: string, offset: number, payload?: object) =>
+      db.insert(messages).values({
+        conversationId: c.id,
+        direction: direction as 'in' | 'out' | 'human',
+        text,
+        payload,
+        createdAt: new Date(t + offset),
+      });
+
+    // The reply was generated when the only inbound was t=0, but shipped at
+    // t=3 — after a t=2 inbound landed mid-run. Raw timestamps call t=2
+    // answered; covers_through (what the transcript actually contained) is
+    // the honest watermark and keeps it pending.
+    await msg('in', 'first question', 0);
+    await msg('out', 'answer to the first', 3, {
+      covers_through: new Date(t).toISOString(),
+    });
+    await msg('in', 'i want to buy the snowboard', 2);
+    expect(await newestInboundIsPending(db, c.id)).toBe(true);
+
+    // A follow-up reply that DID see t=2 clears it.
+    await msg('out', 'here is your checkout', 4, {
+      covers_through: new Date(t + 2).toISOString(),
+    });
+    expect(await newestInboundIsPending(db, c.id)).toBe(false);
+  });
 });
 
 describe('fileAnalysisAllowed', () => {

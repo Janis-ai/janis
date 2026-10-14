@@ -135,7 +135,13 @@ export async function newestInboundIsPending(db: Db, convId: string): Promise<bo
       // counting them makes a fresh inbound look replied-to and the run
       // silently skips. Flagged agent notes (failure/handoff) carry no
       // internal marker — they're real turns and do count.
-      lastReply: sql<Date | null>`max(case when ${messages.direction} <> 'in' and coalesce(${messages.payload}->>'internal', 'false') <> 'true' then ${messages.createdAt} end)`,
+      // A reply's coverage watermark (payload.covers_through = the newest
+      // inbound its transcript contained) — not its store time. A reply
+      // generated before a mid-run inbound still SHIPS after it, and the
+      // raw timestamp compare calls that unanswered message answered.
+      // Replies without the marker (older rows, human notes) fall back to
+      // created_at — the pre-watermark approximation.
+      lastReply: sql<Date | null>`max(case when ${messages.direction} <> 'in' and coalesce(${messages.payload}->>'internal', 'false') <> 'true' then coalesce((${messages.payload}->>'covers_through')::timestamptz, ${messages.createdAt}) end)`,
     })
     .from(messages)
     .where(sql`${messages.conversationId} = ${convId}`);
