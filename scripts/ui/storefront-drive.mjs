@@ -10,13 +10,25 @@ function tabRef() {
   const script = `tell application "Google Chrome"
   repeat with w from 1 to count windows
     repeat with t from 1 to count tabs of window w
-      if URL of tab t of window w contains "${SHOP}" and URL of tab t of window w does not contain "admin.shopify" then return (w & ":" & t) as text
+      try
+        if URL of tab t of window w contains "${SHOP}" and URL of tab t of window w does not contain "admin.shopify" then return (w & ":" & t) as text
+      end try
     end repeat
   end repeat
   return "0:0"
 end tell`;
-  const out = execFileSync('osascript', ['-e', script], { encoding: 'utf8' }).trim();
-  return out;
+  // The enumeration itself can hit "Invalid index" while Chrome shuffles
+  // tabs mid-navigation — retry briefly before giving up.
+  let lastErr;
+  for (let i = 0; i < 8; i++) {
+    try {
+      return execFileSync('osascript', ['-e', script], { encoding: 'utf8' }).trim();
+    } catch (e) {
+      lastErr = e;
+      execFileSync('sleep', ['0.3']);
+    }
+  }
+  throw lastErr;
 }
 
 /** Run JS in the storefront tab; returns the string result (eval last expr).

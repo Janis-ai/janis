@@ -2668,10 +2668,17 @@ export async function complete(
           args.after !== undefined && ctx?.chainCardTitles?.size
             ? ctx.chainCardTitles
             : ctx?.prevCardTitles;
+        const focusedAsk =
+          args.after === undefined && w?.type === 'cards' && w.items.length <= 3;
         if (
           w &&
           w.type === 'cards' &&
           replaySet?.size &&
+          // A focused re-ask ("do you have the gift card?") deserves its
+          // card even if it appeared earlier — suppressing it leaves a
+          // bare-text answer to a show-me question. Dedupe only matters
+          // for browse-sized replays and pagination.
+          !focusedAsk &&
           (args.after !== undefined ||
             w.items.every((i) => i.title && replaySet.has(i.title)))
         ) {
