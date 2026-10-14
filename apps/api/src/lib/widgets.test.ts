@@ -244,6 +244,31 @@ describe('widgetFromToolResult', () => {
     });
     expect(widgetFromToolResult(cfg, allOos)).toBeNull();
   });
+
+  it('row_limit_arg caps rendered rows for focused asks', () => {
+    const cfg = {
+      type: 'cards' as const,
+      items: 'data.products.nodes',
+      row_limit_arg: 'limit',
+      map: { title: 'title' },
+    };
+    const result = JSON.stringify({
+      data: {
+        products: {
+          nodes: [{ title: 'Match' }, { title: 'Neighbour A' }, { title: 'Neighbour B' }],
+        },
+      },
+    });
+    // Browse — no cap arg → every row renders.
+    const browse = widgetFromToolResult(cfg, result);
+    expect(browse?.type === 'cards' && browse.items.length).toBe(3);
+    // Photo/specific ask — limit narrows the cards, not the result text.
+    const one = widgetFromToolResult(cfg, result, {}, { limit: '1' });
+    expect(one?.type === 'cards' && one.items.map((i) => i.title)).toEqual(['Match']);
+    // Junk caps are ignored.
+    const bad = widgetFromToolResult(cfg, result, {}, { limit: 'all' });
+    expect(bad?.type === 'cards' && bad.items.length).toBe(3);
+  });
 });
 
 describe('extractWidgets', () => {

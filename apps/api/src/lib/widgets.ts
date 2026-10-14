@@ -281,6 +281,10 @@ export interface ToolWidgetConfig {
     /** Tool arg that disables the drop when set to a truthy string. */
     unless_arg: string;
   };
+  /** Cap rendered rows via a tool arg — a specific-product or photo-match
+   *  ask should show THE match, not a page of neighbours. The result text
+   *  still carries every row for narration; this only shapes the cards. */
+  row_limit_arg?: string;
 }
 
 /** Resolve a dot path ("a.b.0.c") against a row — numbers index arrays. */
@@ -383,6 +387,9 @@ export function widgetFromToolResult(
     list = list.filter((r) => digPath(r, field) !== false);
     if (!list.length) return null;
   }
+  // Focused-ask cap — `limit` narrows rendered rows, never the model's data.
+  const rowCap = cfg.row_limit_arg ? Number(args[cfg.row_limit_arg]) : NaN;
+  if (Number.isFinite(rowCap) && rowCap > 0) list = list.slice(0, Math.min(rowCap, 12));
   const map = cfg.map ?? {};
   // Label literals stay literal; a {path} in them resolves per-row, so a
   // card's select button can send "I'd like the Blue Tee", not just
