@@ -648,6 +648,46 @@ export async function storefrontProduct(
   return p;
 }
 
+/** Product search's `collection_id:<n>` clause only accepts the numeric
+ *  collection id — the model holds handles. Resolve via Admin GraphQL,
+ *  cached per (shop, handle); a miss resolves to null so the caller can
+ *  scope to an impossible id rather than silently unfiltered results. */
+const collectionIdCache = new Map<string, Promise<string | null>>();
+export async function shopifyCollectionId(
+  secrets: Record<string, string>,
+  handle: string,
+): Promise<string | null> {
+  if (/^\d+$/.test(handle)) return handle; // numeric id passed straight through
+  const shop = secrets.SHOPIFY_SHOP;
+  const token = secrets.SHOPIFY_TOKEN;
+  if (!shop || !token) return null;
+  const key = `${shop}:${handle}`;
+  let p = collectionIdCache.get(key);
+  if (!p) {
+    p = (async () => {
+      try {
+        const res = await fetch(`https://${shop}/admin/api/2026-10/graphql.json`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-shopify-access-token': token },
+          body: JSON.stringify({
+            query: 'query($h:String!){collectionByHandle(handle:$h){id}}',
+            variables: { h: handle },
+          }),
+          signal: AbortSignal.timeout(5_000),
+        });
+        const j = (await res.json()) as {
+          data?: { collectionByHandle?: { id?: string } | null };
+        };
+        return /\/(\d+)$/.exec(String(j?.data?.collectionByHandle?.id ?? ''))?.[1] ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    collectionIdCache.set(key, p);
+  }
+  return p;
+}
+
 /** Correct rendered card items against the storefront's own availability.
  *  mode 'badge' (default browse): mark unsellable items Out of stock, keep
  *  them visible. mode 'drop' (explicit in-stock ask): remove them — they
@@ -939,6 +979,11 @@ export function toolResultNotes(
     );
   }
   const hasNext = toolResultHasNext(resultText);
+  // Product results carry productsCount; collection results carry a top
+  // collectionsCount AND a per-node productsCount — only the first (top-
+  // level, query-order) count is the query total, so note just that one.
+  const isProductResult = !!(data as { data?: { products?: unknown } })?.data?.products;
+  let countNoted = false;
   const priced: { title: string; min: number; max: number }[] = [];
   const walk = (obj: unknown, depth: number) => {
     if (!obj || typeof obj !== 'object' || depth > 4) return;
@@ -952,15 +997,19 @@ export function toolResultNotes(
       });
     }
     for (const [k, v] of Object.entries(rec)) {
-      if (k === 'count' && typeof v === 'number') {
+      if (k === 'count' && typeof v === 'number' && !countNoted) {
+        countNoted = true;
+        const what = isProductResult ? 'catalogue' : 'result set';
         notes.push(
           args.after !== undefined
             ? `this is a continuation page — the ${v}-item total covers the whole query, not this page; narrate "the remaining items" (or similar), never "the first ${shown ?? v} of ${v}"`
             : shown !== undefined && shown < v
               ? hasNext
-                ? `the catalogue total for this query is ${v} but only ${shown} cards render — narrate "the first ${shown} of ${v}" (or similar) and point out the customer can ask for more; NEVER call this "all ${v}" or "every product"`
-                : `the catalogue total for this query is ${v} but only ${shown} cards render (the rest were filtered out — unavailable items); narrate "${shown} of ${v}" and do NOT promise more pages`
-              : `the catalogue total for this query is ${v} — quote that number, not a count of the rows shown`,
+                ? `the ${what} total for this query is ${v} but only ${shown} cards render — narrate "the first ${shown} of ${v}" (or similar) and point out the customer can ask for more; NEVER call this "all ${v}" or "every product"`
+                : isProductResult
+                  ? `the catalogue total for this query is ${v} but only ${shown} cards render (the rest were filtered out — unavailable items); narrate "${shown} of ${v}" and do NOT promise more pages`
+                  : `the ${what} total for this query is ${v} but only ${shown} cards render — narrate "${shown} of ${v}" and do NOT promise more pages`
+              : `the ${what} total for this query is ${v} — quote that number, not a count of the rows shown`,
         );
       }
       if (k === 'pageInfo' && v && typeof v === 'object') {

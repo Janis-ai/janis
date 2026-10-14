@@ -18,7 +18,7 @@ import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolD
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
-import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, purchaseOptionsLine, specProps, storefrontTruth, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, purchaseOptionsLine, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -2631,6 +2631,58 @@ export async function complete(
       // cursors are bound to the exact query that minted them; "*" vs "" is
       // the most common rephrase that silently resets pagination to page 1.
       if (tool?.widget && String(args.query ?? '').trim() === '*') args.query = '';
+      // Cards-widget sugar args the bodyTemplate can't express on its own:
+      // `collection` appends a collection:<handle> search clause; `sort`
+      // accepts shopper spellings ("popular", "newest") mapped onto real
+      // ProductSortKeys enums + direction; `reverse` coerces to a real
+      // boolean for the GraphQL variable. Pagination replay restores the
+      // already-merged args wholesale, so the includes() guard prevents a
+      // double-appended collection clause.
+      if (tool?.widget?.type === 'cards') {
+        // Shopify's products query only filters collections by NUMERIC id —
+        // a `collection:handle` clause silently matches everything. Resolve
+        // the handle first; an unresolvable one scopes to id 0 (matches
+        // nothing) rather than lying with the whole catalogue.
+        if (args.collection) {
+          const handle = String(args.collection).trim().toLowerCase();
+          const cid = await shopifyCollectionId(secrets, handle);
+          const clause = `collection_id:${cid ?? '0'}`;
+          const q = String(args.query ?? '').trim();
+          if (!q.toLowerCase().includes(clause))
+            args.query = `${q} ${clause}`.trim();
+        }
+        const SORT_ALIASES: Record<string, { key: string; rev?: boolean }> = {
+          best_selling: { key: 'BEST_SELLING' },
+          bestselling: { key: 'BEST_SELLING' },
+          popular: { key: 'BEST_SELLING' },
+          most_popular: { key: 'BEST_SELLING' },
+          newest: { key: 'CREATED_AT', rev: true },
+          latest: { key: 'CREATED_AT', rev: true },
+          oldest: { key: 'CREATED_AT' },
+          name: { key: 'TITLE' },
+          title: { key: 'TITLE' },
+          a_z: { key: 'TITLE' },
+          z_a: { key: 'TITLE', rev: true },
+          vendor: { key: 'VENDOR' },
+          most_stock: { key: 'INVENTORY_TOTAL', rev: true },
+          least_stock: { key: 'INVENTORY_TOTAL' },
+          updated: { key: 'UPDATED_AT', rev: true },
+          created_at: { key: 'CREATED_AT' },
+          inventory_total: { key: 'INVENTORY_TOTAL' },
+          updated_at: { key: 'UPDATED_AT' },
+        };
+        if (args.sort) {
+          const hit =
+            SORT_ALIASES[String(args.sort).toLowerCase().trim().replace(/[\s-]+/g, '_')];
+          if (hit) {
+            args.sort = hit.key;
+            if (hit.rev !== undefined) args.reverse = hit.rev;
+          }
+        }
+        if (args.reverse !== undefined)
+          args.reverse =
+            args.reverse === true || ['1', 'true', 'yes'].includes(String(args.reverse));
+      }
       // Pagination tap — the customer tapped the load-more tile, so the
       // continuation is fully determined already: replay the page-producing
       // args verbatim with the authoritative cursor. The model's own args
