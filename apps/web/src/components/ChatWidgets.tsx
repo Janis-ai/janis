@@ -149,6 +149,9 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
             {item.cart_variant_id && !item.stock && (
               <div className="wgt-card-cart">Add to cart</div>
             )}
+            {!item.cart_variant_id && item.options && !item.stock && (
+              <div className="wgt-card-cart">See options</div>
+            )}
           </div>
           {(item.link || item.select_label) && (
             <div className="wgt-card-btns">

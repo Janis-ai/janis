@@ -288,17 +288,20 @@ export interface ToolWidgetConfig {
     /** Row dot paths whose values are matched against the query. */
     fields: string[];
   };
-  /** Rows whose `field` resolves to === false are unpurchasable — drop them
-   *  from the rendered cards unless the model opted in via `unless_arg`
-   *  (e.g. the customer asked for that specific product). The model still
-   *  sees every row in the result text and can narrate OOS truthfully;
-   *  this only shapes the cards the customer sees. Browsing stays clean by
-   *  default — a widget can't hide stock a prompt instruction hoped for. */
+  /** Rows whose `field` resolves to === false are unpurchasable — they render
+   *  WITH an Out of stock badge by default (a browsable catalogue shouldn't
+   *  silently hide products) and are hidden only when the model passes
+   *  `in_stock_arg` for an explicit in-stock ask. `only_arg` flips to an
+   *  unavailable-only view. The model still sees every row in the result
+   *  text and can narrate OOS truthfully; this only shapes the cards. */
   availability?: {
     /** Row dot path holding the purchasable flag (=== false ⇒ hide). */
     field: string;
     /** Tool arg that disables the drop when set to a truthy string. */
     unless_arg: string;
+    /** Tool arg that drops unpurchasable rows when truthy — "items in
+     *  stock" asks render the sellable set only. */
+    in_stock_arg?: string;
     /** Tool arg that keeps ONLY the unavailable rows when truthy — "show me
      *  just the out-of-stock items" renders exactly those, badged. */
     only_arg?: string;
@@ -498,9 +501,9 @@ export function purchaseOptionsLine(
   };
 }
 
-/** Rows the availability filter hides — OOS products on a call that didn't
- *  opt into showing them. Used to tell the model "N more matched but are
- *  unavailable" so a 'show me everything' can surface them badged. */
+/** Rows the in-stock filter hid — nonzero only on an explicit in-stock ask.
+ *  Used to tell the model "N more matched but are unavailable" so it can
+ *  offer them rather than undercounting the catalogue. */
 export function availabilityDropped(
   cfg: ToolWidgetConfig,
   args: Record<string, unknown>,
@@ -509,7 +512,8 @@ export function availabilityDropped(
   const rel = cfg.availability;
   if (!rel) return 0;
   const truthy = (v: unknown) => ['1', 'true', 'yes'].includes(String(v ?? '').toLowerCase());
-  if (truthy(args[rel.unless_arg]) || (rel.only_arg && truthy(args[rel.only_arg]))) return 0;
+  if (!rel.in_stock_arg || !truthy(args[rel.in_stock_arg])) return 0;
+  if (rel.only_arg && truthy(args[rel.only_arg])) return 0;
   let data: unknown;
   try {
     data = JSON.parse(resultText);
@@ -526,6 +530,101 @@ export function availabilityDropped(
   // An all-OOS page renders its rows badged rather than dropping them —
   // nothing was actually hidden, so the "N more exist" note would lie.
   return hidden < rows.length ? hidden : 0;
+}
+
+// ---------------------------------------------------------------------------
+// Storefront truth — Admin's availableForSale says a product is sellable even
+// when the Online Store can't sell it (third-party fulfilment location stock:
+// sellableOnlineQuantity counts it, /cart/add.js 422s). The storefront's own
+// /products/{handle}.js answers in shopper-facing terms — fetch it server-
+// side per card (60s cache, one flight per handle) and correct the widget
+// BEFORE it ships, so badge and narration agree pre-hydration.
+
+interface SfVariant {
+  id: number;
+  available?: boolean;
+  price?: number;
+  compare_at_price?: number | null;
+  selling_plan_allocations?: { selling_plan_id: number; price: number }[];
+}
+interface SfProduct {
+  available?: boolean;
+  variants?: SfVariant[];
+}
+
+const SF_TTL = 60_000;
+const sfCache = new Map<string, { ts: number; data: SfProduct | null }>();
+const sfFlight = new Map<string, Promise<SfProduct | null>>();
+
+export function clearStorefrontCache(): void {
+  sfCache.clear();
+  sfFlight.clear();
+}
+
+export async function storefrontProduct(shopHost: string, handle: string): Promise<SfProduct | null> {
+  const key = `${shopHost}/${handle}`;
+  const hit = sfCache.get(key);
+  if (hit && Date.now() - hit.ts < SF_TTL) return hit.data;
+  const inflight = sfFlight.get(key);
+  if (inflight) return inflight;
+  const p = (async () => {
+    try {
+      const r = await fetch(`https://${shopHost}/products/${encodeURIComponent(handle)}.js`, {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(4_000),
+      });
+      const data = r.ok ? ((await r.json()) as SfProduct) : null;
+      sfCache.set(key, { ts: Date.now(), data });
+      return data;
+    } catch {
+      sfCache.set(key, { ts: Date.now(), data: null });
+      return null;
+    } finally {
+      sfFlight.delete(key);
+    }
+  })();
+  sfFlight.set(key, p);
+  return p;
+}
+
+/** Correct rendered card items against the storefront's own availability.
+ *  mode 'badge' (default browse): mark unsellable items Out of stock, keep
+ *  them visible. mode 'drop' (explicit in-stock ask): remove them — they
+ *  don't belong in an available-only carousel at all. Returns flips. */
+export async function storefrontTruth(
+  widget: WidgetComponent,
+  secrets: Record<string, string>,
+  mode: 'badge' | 'drop' = 'badge',
+): Promise<number> {
+  if (widget.type !== 'cards') return 0;
+  const shop = secrets.SHOPIFY_SHOP;
+  if (!shop) return 0;
+  const flip = new Set<(typeof widget.items)[number]>();
+  await Promise.all(
+    widget.items.map(async (it) => {
+      if (it.stock) return; // already badged
+      const m = /\/products\/([^/?#]+)/.exec(it.link ?? '');
+      if (!m) return;
+      const p = await storefrontProduct(shop, m[1]);
+      if (!p || !Array.isArray(p.variants)) return;
+      if (it.cart_variant_id) {
+        const v = p.variants.find((x) => String(x.id) === it.cart_variant_id);
+        if (v && v.available === false) flip.add(it);
+      } else if (p.available === false || (p.variants.length > 0 && !p.variants.some((v) => v.available !== false))) {
+        flip.add(it);
+      }
+    }),
+  );
+  if (!flip.size) return 0;
+  if (mode === 'drop') {
+    widget.items = widget.items.filter((i) => !flip.has(i));
+  } else {
+    for (const it of flip) {
+      it.stock = 'Out of stock';
+      delete it.cart_variant_id;
+    }
+  }
+  return flip.size;
 }
 
 /** Build a widget from a bound tool's JSON result. Null when the result
@@ -561,19 +660,23 @@ export function widgetFromToolResult(
   // unless the call explicitly opted in — the model narrates from the full
   // result either way. `list` keeps the array narrowing `rows` can't.
   const truthy = (v: unknown) => ['1', 'true', 'yes'].includes(String(v ?? '').toLowerCase());
-  const optedIn = cfg.availability && truthy(args[cfg.availability.unless_arg]);
   const onlyOos = cfg.availability?.only_arg ? truthy(args[cfg.availability.only_arg]) : false;
+  // Default catalogue view badges OOS rows rather than hiding them — the
+  // filter only activates on an explicit in-stock ask (or the flipped
+  // unavailable-only view).
+  const inStockOnly = cfg.availability?.in_stock_arg
+    ? truthy(args[cfg.availability.in_stock_arg])
+    : false;
   if (cfg.availability) {
     const field = cfg.availability.field;
     if (onlyOos) {
       list = list.filter((r) => digPath(r, field) === false);
       if (!list.length) return null;
-    } else if (!optedIn) {
-      const kept = list.filter((r) => digPath(r, field) !== false);
-      // Every matched row is unpurchasable — that IS what the customer asked
-      // about ("do you have the gift card?"), so render the rows badged rather
-      // than a blank answer that invites a model-authored card without one.
-      list = kept.length ? kept : list;
+    } else if (inStockOnly) {
+      list = list.filter((r) => digPath(r, field) !== false);
+      // An explicit in-stock ask with zero sellable rows renders no cards —
+      // the model narrates "everything is sold out" from the result.
+      if (!list.length) return null;
     }
   }
   // Focused-ask cap — `limit` narrows rendered rows, never the model's data.

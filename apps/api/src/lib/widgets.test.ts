@@ -201,11 +201,15 @@ describe('widgetFromToolResult', () => {
     expect(w.items[0].link_label).toBe('Complete your purchase');
   });
 
-  it('availability: hides availableForSale:false rows on browse, keeps them when the call opts in', () => {
+  it('availability: browse badges OOS rows by default; in_stock_only hides them', () => {
     const cfg = {
       type: 'cards' as const,
       items: 'data.products.nodes',
-      availability: { field: 'variants.nodes.0.availableForSale', unless_arg: 'include_unavailable' },
+      availability: {
+        field: 'variants.nodes.0.availableForSale',
+        unless_arg: 'include_unavailable',
+        in_stock_arg: 'in_stock_only',
+      },
       map: {
         title: 'title',
         stock: '{variants.nodes.0.availableForSale:stock}',
@@ -222,9 +226,17 @@ describe('widgetFromToolResult', () => {
         },
       },
     });
-    // Browse — the OOS gift card drops out; untracked inventory stays.
+    // Browse — everything renders; the gift card carries the OOS badge.
     const browse = widgetFromToolResult(cfg, result);
     expect(browse?.type === 'cards' && browse.items.map((i) => i.title)).toEqual([
+      'Gift Card',
+      'Snowboard',
+      'Untracked Tee',
+    ]);
+    expect(browse?.type === 'cards' && browse.items[0].stock).toBe('Out of stock');
+    // Explicit in-stock ask — the OOS row drops out entirely.
+    const inStock = widgetFromToolResult(cfg, result, {}, { in_stock_only: '1' });
+    expect(inStock?.type === 'cards' && inStock.items.map((i) => i.title)).toEqual([
       'Snowboard',
       'Untracked Tee',
     ]);
@@ -431,7 +443,10 @@ describe('widgetFromToolResult', () => {
       },
     });
     const w = widgetFromToolResult(cfg, result);
-    expect(w?.type === 'cards' && w.items.map((i) => i.title)).toEqual(['Ski Wax']);
+    expect(w?.type === 'cards' && w.items.map((i) => i.title)).toEqual([
+      'Ski Wax',
+      'All OOS Board',
+    ]);
     const item = w?.type === 'cards' ? w.items[0] : undefined;
     // Cheapest AVAILABLE is 1002 ($9.95) — the $4.95 one is out of stock.
     // Two purchasable variants → "from" pricing + an options line.
@@ -439,6 +454,10 @@ describe('widgetFromToolResult', () => {
     expect(item?.options).toBe('2 variants');
     expect(item?.cart_variant_id).toBe('1002');
     expect(item?.stock).toBeUndefined();
+    // The all-OOS row renders alongside, badged and unbuyable.
+    const oosItem = w?.type === 'cards' ? w.items[1] : undefined;
+    expect(oosItem?.stock).toBe('Out of stock');
+    expect(oosItem?.cart_variant_id).toBeUndefined();
     // All-OOS rows still render badged when they're the whole answer —
     // and the picked variant is the first (cheapest pool is empty).
     const allOos = JSON.stringify({
@@ -545,7 +564,11 @@ describe('availabilityDropped', () => {
   const cfg = {
     type: 'cards' as const,
     items: 'data.products.nodes',
-    availability: { field: 'variants.nodes.0.availableForSale', unless_arg: 'include_unavailable' },
+    availability: {
+      field: 'variants.nodes.0.availableForSale',
+      unless_arg: 'include_unavailable',
+      in_stock_arg: 'in_stock_only',
+    },
     map: { title: 'title' },
   };
   const result = JSON.stringify({
@@ -559,8 +582,11 @@ describe('availabilityDropped', () => {
       },
     },
   });
-  it('counts rows the filter hid on a browse call', () => {
-    expect(availabilityDropped(cfg, {}, result)).toBe(2);
+  it('counts rows the filter hid on an explicit in-stock ask', () => {
+    expect(availabilityDropped(cfg, { in_stock_only: '1' }, result)).toBe(2);
+  });
+  it('returns 0 on a plain browse — OOS rows render badged, nothing is hidden', () => {
+    expect(availabilityDropped(cfg, {}, result)).toBe(0);
   });
   it('returns 0 when the call opted into unavailable rows', () => {
     expect(availabilityDropped(cfg, { include_unavailable: '1' }, result)).toBe(0);
@@ -575,7 +601,11 @@ describe('availabilityDropped', () => {
     const pickCfg = {
       ...cfg,
       pick: { from: 'variants.nodes', into: '__v', by: 'price', require: 'availableForSale' },
-      availability: { field: '__v.availableForSale', unless_arg: 'include_unavailable' },
+      availability: {
+        field: '__v.availableForSale',
+        unless_arg: 'include_unavailable',
+        in_stock_arg: 'in_stock_only',
+      },
     };
     const r = JSON.stringify({
       data: {
@@ -596,7 +626,7 @@ describe('availabilityDropped', () => {
         },
       },
     });
-    expect(availabilityDropped(pickCfg, {}, r)).toBe(0);
+    expect(availabilityDropped(pickCfg, { in_stock_only: '1' }, r)).toBe(0);
   });
 });
 

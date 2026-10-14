@@ -18,7 +18,7 @@ import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolD
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
-import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, purchaseOptionsLine, specProps, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, purchaseOptionsLine, specProps, storefrontTruth, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -1752,6 +1752,10 @@ export function stripUnbackedCounts(text: string): string {
 function fullCatalogueSentence(s: string, shown: number, total: number): boolean {
   const m = /\ball (?:of )?(?:(?:the|our|these|your) )?(\d+)\b/i.exec(s);
   if (m) return Number(m[1]) === total;
+  // "the first 13 products" over a 10-card carousel — the model counted
+  // the result, not the render. An honest scoping says "first K of N".
+  const fm = /\bfirst (\d+)(?! of \d+)\b/i.exec(s);
+  if (fm && Number(fm[1]) !== shown && Number(fm[1]) <= total) return true;
   if (
     /\b(?:every|each) (?:single )?(?:product|item|one)\b/i.test(s) &&
     /\b(?:here|these|this|that'?s|show|we (?:have|carry|stock|sell|offer))\b/i.test(s)
@@ -1775,6 +1779,7 @@ export function fixFullCatalogueClaims(text: string, shown: number, total: numbe
       if (!fullCatalogueSentence(line, shown, total)) return line;
       return line
         .replace(/\ball (?:of )?(?:(?:the|our|these|your) )?(\d+)\b/i, `the first ${shown} of $1`)
+        .replace(/\bfirst \d+(?! of \d+)\b/i, `first ${shown} of ${total}`)
         .replace(
           /\b(?:every|each) (?:single )?(?:product|item|one)\b/i,
           `the first ${shown} of ${total} products`,
@@ -2839,6 +2844,23 @@ export async function complete(
               `the customer sees ${fresh.length} NEW card(s); say "these plus the ones already shown" rather than implying the new cards are the whole set.]`;
           }
         }
+        // Storefront truth pass — Admin can call a product sellable that the
+        // Online Store can't actually sell (third-party fulfilment stock).
+        // Correct the cards from the storefront's own product JSON before
+        // they ship so badge and narration agree without client hydration.
+        if (w?.type === 'cards') {
+          const inStockArg = tool.widget.availability?.in_stock_arg;
+          const inStockAsk =
+            !!inStockArg &&
+            ['1', 'true', 'yes'].includes(String(args[inStockArg] ?? '').toLowerCase());
+          const flips = await storefrontTruth(w, secrets, inStockAsk ? 'drop' : 'badge');
+          if (flips > 0) {
+            if (w.items.length === 0) w = null;
+            result += inStockAsk
+              ? `\n[${flips} product(s) Admin reported in stock cannot be sold on the Online Store — they were dropped from the in-stock cards; if asked, say the storefront can't fulfil them right now.]`
+              : `\n[${flips} card(s) are badged Out of stock because the Online Store can't actually sell them (e.g. stock sits at a third-party fulfilment location) even though Admin inventory shows quantity — call them unavailable in your text, matching the badge.]`;
+          }
+        }
         if (w) {
           toolWidgets.push(w);
           result += `\n[already rendered to the customer as a "${w.type}" component — do not restate it with a WIDGET: line; narrate it in text if needed]`;
@@ -2891,8 +2913,8 @@ export async function complete(
         }
         if (dropped > 0) {
           result +=
-            `\n[${dropped} more matching product(s) exist but were left off the cards because they're out of stock. ` +
-            `If the customer asked for every/all products, call this tool again with include_unavailable:"1" to render them badged ` +
+            `\n[${dropped} more matching product(s) were hidden because the call asked for in-stock only. ` +
+            `If the customer actually wants the full catalogue, call again WITHOUT in_stock_only — unavailable items render badged by default ` +
             `(or name them as out of stock in text if they only asked for a count).]`;
         }
         // A zero-row search means the item doesn't exist here — without a

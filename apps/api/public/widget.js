@@ -461,6 +461,25 @@
     '.janis-wcard-ca{color:#9ca3af;font-weight:400;font-size:12px;margin-left:5px}' +
     '.janis-wcard-sale{position:absolute;left:6px;bottom:6px;background:#14b8a6;color:#fff;' +
       'font-size:10px;font-weight:700;letter-spacing:.02em;padding:2px 8px;border-radius:20px;line-height:1.4}' +
+    // Options sheet — PDP-style variant/plan picker, a bottom sheet over
+    // the message area inside the chat panel.
+    '.janis-opts-wrap{position:absolute;inset:44px 0 0 0;z-index:6;display:flex;flex-direction:column;justify-content:flex-end}' +
+    '.janis-opts-back{position:absolute;inset:0;background:rgba(15,23,42,.35)}' +
+    '.janis-opts-sheet{position:relative;background:#fff;border-radius:14px 14px 0 0;' +
+      'box-shadow:0 -4px 24px rgba(0,0,0,.18);display:flex;flex-direction:column;max-height:96%;overflow:hidden}' +
+    '.janis-opts-head{padding:12px 14px 4px;font-weight:600;font-size:14px;color:#1f2937;display:flex;align-items:center;justify-content:space-between;gap:8px}' +
+    '.janis-opts-x{background:none;border:none;font-size:20px;line-height:1;color:#9ca3af;cursor:pointer;padding:0 2px}' +
+    '.janis-opts-body{overflow-y:auto;padding:4px 14px 14px}' +
+    '.janis-opts-price{font-weight:600;font-size:15px;color:#1f2937;margin-bottom:8px}' +
+    '.janis-opts-label{font-size:12px;font-weight:600;color:#6b7280;margin:10px 0 5px}' +
+    '.janis-opts-pills{display:flex;flex-wrap:wrap;gap:6px}' +
+    '.janis-opts-pill{border:1px solid #d1d5db;background:#fff;border-radius:6px;padding:5px 11px;font-size:12px;cursor:pointer;color:#1f2937;font-family:inherit}' +
+    '.janis-opts-pill.sel{border-color:#111827;background:#111827;color:#fff}' +
+    '.janis-opts-plan{display:flex;align-items:flex-start;gap:8px;font-size:13px;color:#1f2937;padding:6px 0;cursor:pointer}' +
+    '.janis-opts-plan input{margin-top:2px}' +
+    '.janis-opts-add{margin-top:12px;width:100%;padding:10px;background:var(--janis-accent);color:#fff;' +
+      'border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit}' +
+    '.janis-opts-add:disabled{opacity:.45;cursor:default}' +
     '.janis-wcard-stock{display:inline-block;font-size:11px;font-weight:600;color:#b45309;' +
       'background:#fef3c7;border-radius:4px;padding:1px 6px;margin-top:4px}' +
     '.janis-wcard-btns{display:flex;flex-direction:column;gap:4px;padding:0 8px 8px;margin-top:auto}' +
@@ -1085,12 +1104,13 @@
         body.appendChild(sb);
       }
       card.appendChild(body);
-      if (item.link || item.select_label || item.cart_variant_id) {
+      if (item.link || item.select_label || item.cart_variant_id || item.options) {
         var btns = el('div', {}, { class: 'janis-wcard-btns' });
         // Storefront add-to-cart — same-origin Shopify Ajax API (only
         // renders when the tool mapped a variant id and the card isn't
-        // flagged out of stock).
-        if (item.cart_variant_id && !item.stock && SHOPIFY && !PREVIEW && !PAGE) {
+        // flagged out of stock). Configurable products (options line) go
+        // through the options sheet instead of a silent one-tap add.
+        if (item.cart_variant_id && !item.stock && !item.options && SHOPIFY && !PREVIEW && !PAGE) {
           var cartBtn = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
           ref.cartBtn = cartBtn;
           wtext(cartBtn, 'Add to cart');
@@ -1126,6 +1146,14 @@
           if (item.cart_variant_id && /add to cart|add to bag|buy now/i.test(linkLabel)) linkLabel = 'View product';
           wtext(a, linkLabel);
           btns.appendChild(a);
+        }
+        // Configurable product — variant/purchase-option choices can't be
+        // made by one tap; open the PDP-style options sheet instead.
+        if (item.options && SHOPIFY && !PREVIEW && !PAGE) {
+          var optBtn = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
+          wtext(optBtn, 'See options');
+          optBtn.onclick = function () { openOptionsSheet(item); };
+          btns.appendChild(optBtn);
         }
         if (item.select_label) {
           // A select button labelled like a cart action next to a REAL add
@@ -1189,7 +1217,26 @@
   // PDP and charges THAT in the cart — a $949.95 card adding a $902.45
   // variant reads as a bait-and-switch. /products/{handle}.js answers in
   // this session's market context, so each card reconciles its price and
-  // availability with what the storefront will actually charge.
+  // availability with what the storefront will actually charge. The same
+  // payload feeds the options picker (variants + selling_plan_allocations).
+  var sfCache = {};
+  function fetchProduct(handle) {
+    if (!sfCache[handle]) {
+      sfCache[handle] = fetch('/products/' + encodeURIComponent(handle) + '.js', { headers: { accept: 'application/json' } })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); });
+    }
+    return sfCache[handle];
+  }
+  var sfCur = (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) || 'USD';
+  function fmt(cents) {
+    try {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency', currency: sfCur, currencyDisplay: 'narrowSymbol',
+      }).format(cents / 100);
+    } catch (e) {
+      return sfCur + ' ' + (cents / 100).toFixed(2);
+    }
+  }
   function hydrateCardPrices(refs) {
     if (!SHOPIFY || PREVIEW || PAGE) return;
     var byHandle = {};
@@ -1199,19 +1246,8 @@
       if (!m) return;
       (byHandle[m[1]] = byHandle[m[1]] || []).push(r);
     });
-    var cur = (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) || 'USD';
-    function fmt(cents) {
-      try {
-        return new Intl.NumberFormat('en-US', {
-          style: 'currency', currency: cur, currencyDisplay: 'narrowSymbol',
-        }).format(cents / 100);
-      } catch (e) {
-        return cur + ' ' + (cents / 100).toFixed(2);
-      }
-    }
     Object.keys(byHandle).forEach(function (handle) {
-      fetch('/products/' + encodeURIComponent(handle) + '.js', { headers: { accept: 'application/json' } })
-        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      fetchProduct(handle)
         .then(function (p) {
           var variants = (p && p.variants) || [];
           byHandle[handle].forEach(function (r) {
@@ -1306,6 +1342,207 @@
         })
         .catch(function () { /* catalogue fields stay — hydration is best-effort */ });
     });
+  }
+
+  // PDP-style options sheet — the chat can't silently pick a variant or a
+  // purchase plan, so configurable products open this instead of a bare Add
+  // to cart. Data is the storefront's own /products/{handle}.js (same
+  // payload hydration already fetched): variant options, availability,
+  // selling plans with per-variant allocation prices.
+  var optsSheet = null;
+  function closeOptionsSheet() {
+    if (optsSheet && optsSheet.parentNode) optsSheet.parentNode.removeChild(optsSheet);
+    optsSheet = null;
+  }
+  function openOptionsSheet(item) {
+    var m = /\/products\/([^/?#]+)/.exec(String(item.link || ''));
+    if (!m || !SHOPIFY) return;
+    closeOptionsSheet();
+    var wrap = el('div', {}, { class: 'janis-opts-wrap' });
+    var back = el('div', {}, { class: 'janis-opts-back' });
+    back.onclick = closeOptionsSheet;
+    var sheet = el('div', {}, { class: 'janis-opts-sheet' });
+    wrap.appendChild(back);
+    wrap.appendChild(sheet);
+    var head = el('div', {}, { class: 'janis-opts-head' });
+    wtext(head, item.title || 'Choose options');
+    var x = el('button', {}, { class: 'janis-opts-x', type: 'button', 'aria-label': 'Close' });
+    x.textContent = '×';
+    x.onclick = closeOptionsSheet;
+    head.appendChild(x);
+    sheet.appendChild(head);
+    var bodyEl = el('div', {}, { class: 'janis-opts-body' });
+    sheet.appendChild(bodyEl);
+    wtext(bodyEl, 'Loading options…');
+    panel.appendChild(wrap);
+    optsSheet = wrap;
+
+    fetchProduct(m[1])
+      .then(function (p) {
+        if (!optsSheet || optsSheet !== wrap) return;
+        bodyEl.textContent = '';
+        var variants = (p && p.variants) || [];
+        var optionNames = (p && p.options) || [];
+        var groups = (p && p.selling_plan_groups) || [];
+        var plans = [];
+        groups.forEach(function (g) {
+          ((g && g.selling_plans) || []).forEach(function (pl) {
+            plans.push({ id: pl.id, name: (g.name ? g.name + ' — ' : '') + (pl.name || 'Plan') });
+          });
+        });
+        // Preselect the card's displayed variant, else the first buyable.
+        var cur = null;
+        for (var i = 0; i < variants.length; i++) {
+          if (item.cart_variant_id && String(variants[i].id) === String(item.cart_variant_id)) { cur = variants[i]; break; }
+        }
+        if (!cur) {
+          for (var j = 0; j < variants.length; j++) {
+            if (variants[j].available !== false) { cur = variants[j]; break; }
+          }
+        }
+        if (!cur) cur = variants[0] || null;
+        var sel = (cur && cur.options) ? cur.options.slice() : [];
+        var planId = null;
+
+        var priceEl = el('div', {}, { class: 'janis-opts-price' });
+        bodyEl.appendChild(priceEl);
+        var optionEls = [];
+        optionNames.forEach(function (name, oi) {
+          if (name === 'Title' && variants.length <= 1) return;
+          var group = el('div', {}, { class: 'janis-opts-group' });
+          var lab = el('div', {}, { class: 'janis-opts-label' });
+          wtext(lab, name === 'Title' ? 'Options' : name);
+          group.appendChild(lab);
+          var pills = el('div', {}, { class: 'janis-opts-pills' });
+          var vals = [];
+          variants.forEach(function (v) {
+            var val = v.options && v.options[oi];
+            if (val !== undefined && vals.indexOf(val) === -1) vals.push(val);
+          });
+          vals.forEach(function (val) {
+            var pill = el('button', {}, { class: 'janis-opts-pill', type: 'button' });
+            wtext(pill, val);
+            if (sel[oi] === val) pill.classList.add('sel');
+            pill.onclick = function () {
+              sel[oi] = val;
+              sync();
+            };
+            pills.appendChild(pill);
+            optionEls.push({ oi: oi, val: val, el: pill });
+          });
+          group.appendChild(pills);
+          bodyEl.appendChild(group);
+        });
+
+        var planEls = [];
+        if (plans.length) {
+          var pLab = el('div', {}, { class: 'janis-opts-label' });
+          wtext(pLab, 'Purchase options');
+          bodyEl.appendChild(pLab);
+          var mkPlan = function (id, labelFn) {
+            var lab = el('label', {}, { class: 'janis-opts-plan' });
+            var r = el('input', {}, { type: 'radio', name: 'janis-plan' });
+            r.checked = id === null;
+            lab.appendChild(r);
+            var span = el('span', {}, {});
+            lab.appendChild(span);
+            lab.onclick = function () { planId = id; sync(); };
+            planEls.push({ id: id, input: r, labelFn: labelFn, span: span });
+            bodyEl.appendChild(lab);
+          };
+          mkPlan(null, function () { return 'One-time purchase'; });
+          plans.forEach(function (pl) {
+            mkPlan(pl.id, function (v, alloc) {
+              var t = pl.name;
+              if (alloc && typeof alloc.price === 'number') {
+                t += ' ' + fmt(alloc.price);
+                if (v && typeof v.price === 'number' && alloc.price < v.price) {
+                  t += ' (Save ' + Math.round((1 - alloc.price / v.price) * 100) + '%)';
+                }
+              }
+              return t;
+            });
+          });
+        }
+
+        var add = el('button', {}, { class: 'janis-opts-add', type: 'button' });
+        bodyEl.appendChild(add);
+
+        function pickVariant() {
+          for (var k = 0; k < variants.length; k++) {
+            var v = variants[k];
+            var ok = true;
+            for (var o = 0; o < sel.length && o < (v.options || []).length; o++) {
+              if (v.options[o] !== sel[o]) { ok = false; break; }
+            }
+            if (ok && (v.options || []).length === sel.length) return v;
+          }
+          return null;
+        }
+        function allocFor(v, id) {
+          var allocs = (v && v.selling_plan_allocations) || [];
+          for (var a = 0; a < allocs.length; a++) if (allocs[a].selling_plan_id === id) return allocs[a];
+          return null;
+        }
+        function sync() {
+          cur = pickVariant() || cur;
+          // Pill selection state.
+          optionEls.forEach(function (oe) { oe.el.classList.toggle('sel', sel[oe.oi] === oe.val); });
+          var v = pickVariant();
+          var alloc = v && planId !== null ? allocFor(v, planId) : null;
+          // Plan labels track the selected variant's allocation prices.
+          planEls.forEach(function (pe) {
+            pe.input.checked = pe.id === planId;
+            pe.span.textContent = '';
+            wtext(pe.span, pe.labelFn(v, v && pe.id !== null ? allocFor(v, pe.id) : null));
+            if (pe.id !== null && v && !allocFor(v, pe.id)) pe.span.textContent += ' — unavailable for this option';
+          });
+          if (!v) {
+            priceEl.textContent = '';
+            add.disabled = true;
+            add.textContent = 'Unavailable';
+            return;
+          }
+          var price = alloc && typeof alloc.price === 'number' ? alloc.price : v.price;
+          priceEl.textContent = '';
+          if (typeof price === 'number') wtext(priceEl, fmt(price));
+          var canAdd = v.available !== false && (planId === null || !!alloc);
+          add.disabled = !canAdd;
+          add.textContent = !canAdd
+            ? (v.available === false ? 'Out of stock' : 'Unavailable for this option')
+            : 'Add to cart' + (typeof price === 'number' ? ' — ' + fmt(price) : '');
+          add.onclick = canAdd ? function () {
+            add.disabled = true;
+            add.textContent = 'Adding…';
+            var payload = { items: [{ id: v.id, quantity: 1 }] };
+            if (planId !== null) payload.items[0].selling_plan = planId;
+            fetch('/cart/add.js', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', accept: 'application/json' },
+              body: JSON.stringify(payload),
+            })
+              .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+              .then(function () {
+                var planName = '';
+                if (planId !== null) {
+                  for (var pi = 0; pi < plans.length; pi++) if (plans[pi].id === planId) planName = plans[pi].name;
+                }
+                var desc = (v.title && v.title !== 'Default Title' ? v.title : '') + (planName ? (v.title && v.title !== 'Default Title' ? ', ' : '') + planName : '');
+                closeOptionsSheet();
+                sendText('I just added ' + (item.title || 'an item') + (desc ? ' (' + desc + ')' : '') + ' to my cart.', { of: (item.title || 'product') + ' — add to cart' });
+              })
+              .catch(function () {
+                add.disabled = false;
+                add.textContent = 'Add to cart';
+                sendText("I tried to add " + (item.title || 'an item') + ' to my cart but it failed.');
+              });
+          } : null;
+        }
+        sync();
+      })
+      .catch(function () {
+        if (bodyEl) { bodyEl.textContent = ''; wtext(bodyEl, 'Options are only available on the product page.'); }
+      });
   }
 
   function renderOptions(box, w) {
