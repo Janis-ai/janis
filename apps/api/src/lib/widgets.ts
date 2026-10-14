@@ -507,6 +507,46 @@ export function widgetFromToolResult(
   // Focused-ask cap — `limit` narrows rendered rows, never the model's data.
   const rowCap = cfg.row_limit_arg ? Number(args[cfg.row_limit_arg]) : NaN;
   if (Number.isFinite(rowCap) && rowCap > 0) list = list.slice(0, Math.min(rowCap, 12));
+  // Price-window filter — a "snowboards under $800" ask must never render
+  // an $973 card beside that narration. Two mechanical sources: a
+  // `variants.price:<op><n>` clause inside the search query itself, and
+  // dedicated price_min/price_max args. The picked variant's price is the
+  // one the card shows and the cart charges, so it's the one checked.
+  if (cfg.pick) {
+    let lo: number | null = null;
+    let hi: number | null = null;
+    let loIncl = true;
+    let hiIncl = true;
+    const clause = /variants\.price\s*:\s*(<=?|>=?|=)\s*([\d.]+)/.exec(String(args.query ?? ''));
+    if (clause) {
+      const n = Number(clause[2]);
+      if (clause[1] === '<' || clause[1] === '<=') {
+        hi = n;
+        hiIncl = clause[1] === '<=';
+      } else if (clause[1] === '>' || clause[1] === '>=') {
+        lo = n;
+        loIncl = clause[1] === '>=';
+      } else {
+        lo = n;
+        hi = n;
+      }
+    }
+    const amin = Number(args.price_min);
+    const amax = Number(args.price_max);
+    if (Number.isFinite(amin)) lo = lo === null ? amin : Math.max(lo, amin);
+    if (Number.isFinite(amax)) hi = hi === null ? amax : Math.min(hi, amax);
+    if (lo !== null || hi !== null) {
+      const L = lo, H = hi, loI = loIncl, hiI = hiIncl;
+      list = list.filter((r) => {
+        const p = Number(digPath(r, '__v.price'));
+        if (!Number.isFinite(p)) return false;
+        if (L !== null && (loI ? p < L : p <= L)) return false;
+        if (H !== null && (hiI ? p > H : p >= H)) return false;
+        return true;
+      });
+      if (!list.length) return null;
+    }
+  }
   const map = cfg.map ?? {};
   // Label literals stay literal; a {path} in them resolves per-row, so a
   // card's select button can send "I'd like the Blue Tee", not just

@@ -135,6 +135,10 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
             'optional — pass "1" when the customer asks to see JUST the out-of-stock / unavailable items ("what\'s out of stock?", "show me only sold-out products"): the rendered cards then contain ONLY the out-of-stock rows, each badged. Do not combine with include_unavailable.',
           'limit?':
             'optional — how many product cards to render (max 10). Omit for browse/list asks (shows up to 10). Pass "1"–"3" for a specific-product or photo-match ask so the shopper sees THE match, not a page of similar items.',
+          'price_min?':
+            'optional — for "over $X" asks, the lower bound as a bare number (e.g. "100"). Cards showing cheaper variants are mechanically dropped so the carousel never contradicts your "over $X" claim.',
+          'price_max?':
+            'optional — for "under $X" asks, the upper bound as a bare number (e.g. "800"). Cards above it are mechanically dropped — combine with a "product_type:…" query clause when the ask names a category.',
         },
         widget: {
           type: 'cards',

@@ -251,6 +251,33 @@ describe('widgetFromToolResult', () => {
     ).toBeNull();
   });
 
+  it('price window: "under $800" cards never render an over-limit product', () => {
+    const cfg = {
+      type: 'cards' as const,
+      items: 'data.products.nodes',
+      pick: { from: 'variants.nodes', into: '__v', by: 'price', require: 'availableForSale' },
+      map: { title: 'title', price: '{__v.price:money}' },
+    };
+    const result = JSON.stringify({
+      data: {
+        products: {
+          nodes: [
+            { title: 'Cheap Board', variants: { nodes: [{ id: 'v1', price: '600.00', availableForSale: true }] } },
+            { title: 'Pricey Board', variants: { nodes: [{ id: 'v2', price: '973.75', availableForSale: true }] } },
+          ],
+        },
+      },
+    });
+    // Dedicated arg…
+    const w1 = widgetFromToolResult(cfg, result, {}, { price_max: '800' });
+    expect(w1?.type === 'cards' && w1.items.map((i) => i.title)).toEqual(['Cheap Board']);
+    // …and a clause embedded in the search query itself.
+    const w2 = widgetFromToolResult(cfg, result, {}, { query: 'product_type:snowboard variants.price:<=800' });
+    expect(w2?.type === 'cards' && w2.items.map((i) => i.title)).toEqual(['Cheap Board']);
+    // Over-eager bound that empties the set → no carousel at all.
+    expect(widgetFromToolResult(cfg, result, {}, { price_max: '10' })).toBeNull();
+  });
+
   it('availability only_arg keeps JUST the unavailable rows badged', () => {
     const cfg = {
       type: 'cards' as const,
