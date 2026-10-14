@@ -11,15 +11,22 @@ we're creating a **new app, Public from the start** — still named "Janis".
 
 Mike's part:
 
-1. https://dev.shopify.com/dashboard/238766671/apps → **Create app** → name
-   `Janis` → distribution **Public** (if the creation flow doesn't offer a
-   distribution picker, set Home → Distribution → Public right after).
-2. If the name collides, rename the OLD app to `Janis (legacy)` first.
-3. Hand Devin the new **client_id** and **API secret key** (Settings →
-   Credentials), or paste them into `apps/api/.env.production` as
+1. **New partner org** — the app must NOT live under "My Store" (org id
+   238766671): orgs can't be renamed without a support ticket, and the org
+   name shows as the developer name on the merchant install screen.
+   partners.shopify.com → Organizations → **Create organization** → `Janis`.
+2. Switch the Dev Dashboard to the new org → **Create app** → name `Janis`
+   → distribution **Public** (if the creation flow doesn't offer a picker,
+   set Home → Distribution → Public right after). No name collision — the
+   old app lives in the other org.
+3. **New dev store under the new org** — test installs are org-scoped, and
+   the existing store belongs to "My Store". Partners → Stores → Add store →
+   Development store → tick **"Start with generated test data"** — that IS
+   our current catalog (the snowboard dataset is Shopify's standard fixture),
+   so the widget battery transfers verbatim.
+4. Hand Devin the new **client_id**, **API secret key**, and dev-store
+   domain — or paste into `apps/api/.env.production` as
    `SHOPIFY_APP_API_KEY` / `SHOPIFY_APP_API_SECRET`.
-4. Uninstall the OLD app from `janis-store-sx5bpcd3.myshopify.com` (admin →
-   Settings → Apps → remove) so the old embed stops.
 
 Devin's part once the new creds exist:
 
@@ -29,8 +36,9 @@ Devin's part once the new creds exist:
   toml carries scopes, GDPR webhooks, app proxy, `application_url` unchanged.
 - `shopify app deploy` to release config + extension on the new app.
 - Redeploy the API with the new key/secret (Secret Manager via deploy script).
-- Reinstall on the dev store → re-link the agent → verify storefront widget,
-  webhooks, and a test charge end-to-end.
+- Reinstall on the NEW dev store → re-link the agent → verify storefront
+  widget, webhooks, and a test charge end-to-end; update SHOP constants in
+  the tmp battery scripts to the new dev-store domain.
 
 Everything below applies to the NEW app once it exists.
 
