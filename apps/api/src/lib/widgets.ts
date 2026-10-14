@@ -641,6 +641,12 @@ export function clearStorefrontCache(): void {
   sfCookies.clear();
 }
 
+/** Storefront requests masquerade as a real shopper — Shopify's password
+ *  gate and bot throttles treat the default node-fetch UA as a crawler
+ *  (products/*.js bounces to /password even with a session cookie). */
+const SF_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+
 /** Password-protected storefronts bounce every request to /password.
  *  When the connection carries SHOPIFY_STOREFRONT_PASSWORD, POST the
  *  standard form to trade it for the session cookies (modern themes set
@@ -652,7 +658,7 @@ async function storefrontCookie(shopHost: string, password: string | undefined):
   try {
     const r = await fetch(`https://${shopHost}/password`, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': SF_UA },
       body: `form_type=storefront_password&utf8=%E2%9C%93&password=${encodeURIComponent(password)}`,
       redirect: 'manual',
       signal: AbortSignal.timeout(4_000),
@@ -690,7 +696,7 @@ export async function storefrontProduct(
     // /password under redirect:'follow' until the hop cap kills it, and
     // redirect detection is the signal that says "log in first".
     const get = async (cookie: string | null) => {
-      const headers = { accept: 'application/json', ...(cookie ? { cookie } : {}) };
+      const headers = { accept: 'application/json', 'user-agent': SF_UA, ...(cookie ? { cookie } : {}) };
       let r = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(4_000) });
       for (let hop = 0; hop < 3 && r.status >= 300 && r.status < 400; hop++) {
         const loc = r.headers.get('location') ?? '';
