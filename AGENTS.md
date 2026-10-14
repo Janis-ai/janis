@@ -886,12 +886,15 @@ WorkOS SSO + Outlook channel (both behind env creds).
 
 ## Shopify App Store track (started 2026-10-13)
 
-App: "Janis", org "My Store" (id 238766671), dev store
-janis-store-sx5bpcd3.myshopify.com. SUPERSEDED client_id
-cf22b09da8f49a7c7cdf7ff39b17fb87 — the migrated app lacks a distribution
-flag; a fresh Public app is being created (docs/shopify-app-listing.md
-step 0). Current client_id = whatever's in shopify.app.toml. Config lives
-in shopify.app.toml — `shopify app deploy` releases a new version (GDPR
+App: "Janis", NEW org "Janis" (id 240865640 — NOT "My Store"/238766671,
+which can't be renamed), app id 435599310849, client_id
+bbc74ee5092894c6b45e93e24db1ede6. SUPERSEDED: old app client_id
+cf22b09da8f49a7c7cdf7ff39b17fb87 under "My Store" (migrated app lacked a
+distribution flag). janis-2 released via `shopify app deploy` 2026-10-14.
+Dev store: janis-store-sx5bpcd3.myshopify.com (old org — a fresh dev store
+under the new org is pending Mike; update the SHOP const in
+scripts/tmp/widget-battery.ts when it lands). Config lives in
+shopify.app.toml — `shopify app deploy` releases a new version (GDPR
 compliance webhooks are toml-only; dashboard has no fields for them).
 
 Phase 1 DONE + live-verified on the dev store: embedded managed install

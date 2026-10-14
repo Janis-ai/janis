@@ -28,14 +28,22 @@ Mike's part:
    domain — or paste into `apps/api/.env.production` as
    `SHOPIFY_APP_API_KEY` / `SHOPIFY_APP_API_SECRET`.
 
-Devin's part once the new creds exist:
+Status 2026-10-14: DONE — new org "Janis" (240865640), app 435599310849,
+client_id `bbc74ee5092894c6b45e93e24db1ede6`, version `janis-2` released
+(435599310849/versions/1167529443329), API redeployed with new creds
+(janis-api-00857-tfd).
 
-- `shopify.app.toml` client_id → new; clear `uid` in
-  `extensions/janis-storefront/shopify.extension.toml` (old-app uid) so
-  `shopify app deploy` registers the extension fresh under the new app —
-  toml carries scopes, GDPR webhooks, app proxy, `application_url` unchanged.
-- `shopify app deploy` to release config + extension on the new app.
-- Redeploy the API with the new key/secret (Secret Manager via deploy script).
+Mike still needs to:
+
+- Confirm **distribution = Public** on the new app — the creation flow
+  showed no picker. Now that janis-2 is released, check
+  https://dev.shopify.com/dashboard/240865640/apps/435599310849 → Home /
+  left-nav Distribution → Public.
+- Create the new dev store under the new org (generated test data) and
+  hand Devin its domain.
+
+Devin's part once the new dev store exists:
+
 - Reinstall on the NEW dev store → re-link the agent → verify storefront
   widget, webhooks, and a test charge end-to-end; update SHOP constants in
   the tmp battery scripts to the new dev-store domain.
