@@ -621,6 +621,7 @@ export function toolResultNotes(
   resultText: string,
   args: Record<string, unknown> = {},
   shown?: number,
+  priceMapped?: boolean,
 ): string {
   let data: unknown;
   try {
@@ -629,6 +630,14 @@ export function toolResultNotes(
     return '';
   }
   const notes: string[] = [];
+  // Cards hydrate storefront-localized prices client-side, so the figures in
+  // the raw result are list prices that can differ from what this shopper
+  // sees and is charged. Quoting them verbatim contradicts the card.
+  if (priceMapped) {
+    notes.push(
+      'prices in this data are catalogue list prices — the shopper\'s market may adjust them, so the rendered card (and checkout) can differ; when quoting a price in text hedge it ("listed at $X", "from $X") and point at the card for the exact amount',
+    );
+  }
   const hasNext = toolResultHasNext(resultText);
   const walk = (obj: unknown, depth: number) => {
     if (!obj || typeof obj !== 'object' || depth > 4) return;

@@ -2726,7 +2726,12 @@ export async function complete(
         }
         // Result-side facts the model must not guess — catalogue totals and
         // the verbatim next-page call (Shopify cursors reset on a new query).
-        result += toolResultNotes(resultJson, args, w?.type === 'cards' ? w.items.length : undefined);
+        result += toolResultNotes(
+          resultJson,
+          args,
+          w?.type === 'cards' ? w.items.length : undefined,
+          !!tool.widget?.items && /\bprice\b/.test(JSON.stringify(tool.widget.items)),
+        );
         // Rows the availability filter hid — the customer asking "show me
         // everything" can't see these unless the model re-calls with the
         // include flag; silently dropping them under-counts the catalogue.
