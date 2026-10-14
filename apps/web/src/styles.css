@@ -1075,6 +1075,9 @@ textarea:disabled { opacity: .55; }
 /* …but not where a flex gap already spaces them — the margin double-spaces
    row 1 AND indents the first button of every wrapped row */
 .row .btn + .btn, .asset-row .btn + .btn { margin-left: 0; }
+/* …nor inside login/link cards, where full-width buttons stack vertically —
+   the 8px indent shifted the second button right and overflowed the card. */
+.login-card .btn + .btn { margin-left: 0; }
 .btn.sm { padding: 5px 12px; font-size: 13px; }
 /* Quiet text action — inline checklist actions, dismiss links. Was an
    undeclared class on existing buttons (they rendered as default boxes). */
