@@ -1,5 +1,5 @@
 const SHOP = 'janis-store-sx5bpcd3.myshopify.com';
-const TOKEN = '***REMOVED***';
+const TOKEN = process.env.SHOPIFY_TOKEN!;
 const q = async (query: string) => {
   const r = await fetch(`https://${SHOP}/admin/api/2026-10/graphql.json`, {
     method: 'POST',
