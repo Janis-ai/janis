@@ -2652,10 +2652,10 @@ export async function complete(
             args.query = `${q} ${clause}`.trim();
         }
         const SORT_ALIASES: Record<string, { key: string; rev?: boolean }> = {
-          best_selling: { key: 'BEST_SELLING' },
-          bestselling: { key: 'BEST_SELLING' },
-          popular: { key: 'BEST_SELLING' },
-          most_popular: { key: 'BEST_SELLING' },
+          // No popularity sort exists on Admin products() — ProductSortKeys
+          // lacks BEST_SELLING — so "popular"/"bestselling" intentionally
+          // fall through unmapped: Shopify errors descriptively and the
+          // stats tool is the honest path for sales ranking.
           newest: { key: 'CREATED_AT', rev: true },
           latest: { key: 'CREATED_AT', rev: true },
           oldest: { key: 'CREATED_AT' },
@@ -2664,12 +2664,16 @@ export async function complete(
           a_z: { key: 'TITLE' },
           z_a: { key: 'TITLE', rev: true },
           vendor: { key: 'VENDOR' },
+          product_type: { key: 'PRODUCT_TYPE' },
+          type: { key: 'PRODUCT_TYPE' },
           most_stock: { key: 'INVENTORY_TOTAL', rev: true },
           least_stock: { key: 'INVENTORY_TOTAL' },
           updated: { key: 'UPDATED_AT', rev: true },
           created_at: { key: 'CREATED_AT' },
           inventory_total: { key: 'INVENTORY_TOTAL' },
           updated_at: { key: 'UPDATED_AT' },
+          published_at: { key: 'PUBLISHED_AT' },
+          relevance: { key: 'RELEVANCE' },
         };
         if (args.sort) {
           const hit =
