@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, like, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import {
@@ -7,6 +7,7 @@ import {
   channels,
   contacts,
   conversations,
+  knowledgeFiles,
   messages,
   shopifyShops,
   workspaces,
@@ -461,6 +462,16 @@ export async function bindShop(
     .update(shopifyShops)
     .set({ workspaceId: null, agentId: null, state: 'unlinked', updatedAt: new Date() })
     .where(and(eq(shopifyShops.agentId, binding.agentId), sql`${shopifyShops.id} != ${row.id}`));
+  // The previously bound agent loses the store surface — its mirrored
+  // secrets were only ever a copy, and its shopify:// knowledge rows can
+  // never sync again. Tools stay: they degrade to a clean auth error and
+  // the agent can be re-linked later.
+  if (row.agentId && row.agentId !== binding.agentId) {
+    await clearMirroredSecrets(db, row.agentId);
+    await db
+      .delete(knowledgeFiles)
+      .where(and(eq(knowledgeFiles.agentId, row.agentId), like(knowledgeFiles.sourceUrl, 'shopify://%')));
+  }
   await db
     .update(shopifyShops)
     .set({
