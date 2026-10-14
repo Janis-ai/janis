@@ -359,6 +359,8 @@
     '#janis-expand:hover{opacity:1}' +
     '#janis-menu-btn{background:none;border:none;color:#fff;cursor:pointer;font-size:18px;padding:2px 4px;opacity:.85;line-height:1}' +
     '#janis-menu-btn:hover{opacity:1}' +
+    '#janis-close{background:none;border:none;color:#fff;cursor:pointer;font-size:15px;padding:4px 6px;opacity:.85;line-height:1}' +
+    '#janis-close:hover{opacity:1}' +
     '#janis-menu{display:none;position:absolute;top:44px;right:10px;background:#fff;border:1px solid #e5e7eb;' +
     'border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:10;min-width:150px;overflow:hidden}' +
     '#janis-menu.open{display:block}' +
@@ -631,7 +633,8 @@
   panel.innerHTML =
     '<div id="janis-head"><div><span id="janis-title">Chat</span><small id="janis-sub"></small></div>' +
     '<button id="janis-menu-btn" aria-label="Chat options" title="Options">⋯</button>' +
-    '<button id="janis-expand" aria-label="Expand chat" title="Expand">⤢</button></div>' +
+    '<button id="janis-expand" aria-label="Expand chat" title="Expand">⤢</button>' +
+    '<button id="janis-close" aria-label="Close chat" title="Close">✕</button></div>' +
     '<div id="janis-menu">' +
     '<button type="button" id="janis-menu-end">End chat</button>' +
     '<button type="button" id="janis-menu-new" style="display:none">Start a new chat</button>' +
@@ -663,7 +666,9 @@
   var emojiGrid = panel.querySelector('#janis-emoji');
   var fileInput = panel.querySelector('#janis-file');
   var expandBtn = panel.querySelector('#janis-expand');
-  if (PAGE) expandBtn.style.display = 'none';
+  var closeBtn = panel.querySelector('#janis-close');
+  if (PAGE) { expandBtn.style.display = 'none'; closeBtn.style.display = 'none'; }
+  closeBtn.onclick = function () { setOpen(false); };
   var sendBtn = panel.querySelector('#janis-send');
   var clipBtn = panel.querySelector('#janis-clip');
   var smileBtn = panel.querySelector('#janis-smile');
