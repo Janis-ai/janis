@@ -1025,14 +1025,18 @@
   function renderCards(box, w) {
     var wrap = el('div', {}, { class: 'janis-wcards-wrap' });
     var row = el('div', {}, { class: 'janis-wcards' });
+    var refs = [];
     (w.items || []).forEach(function (item) {
       var card = el('div', {}, { class: 'janis-wcard' });
+      var ref = { item: item, card: card, body: null, priceEl: null, cartBtn: null };
+      refs.push(ref);
       if (item.image) {
         card.appendChild(el('img', {}, { src: item.image, alt: '', loading: 'lazy' }));
       } else {
         card.appendChild(el('div', {}, { class: 'janis-wcard-imgph' }));
       }
       var body = el('div', {}, { class: 'janis-wcard-body' });
+      ref.body = body;
       var t = el('div', {}, { class: 'janis-wcard-t' });
       wtext(t, item.title);
       body.appendChild(t);
@@ -1045,6 +1049,7 @@
         var p = el('div', {}, { class: 'janis-wcard-p' });
         wtext(p, item.price);
         body.appendChild(p);
+        ref.priceEl = p;
       }
       if (item.stock) {
         var sb = el('div', {}, { class: 'janis-wcard-stock' });
@@ -1059,6 +1064,7 @@
         // flagged out of stock).
         if (item.cart_variant_id && !item.stock && SHOPIFY && !PREVIEW && !PAGE) {
           var cartBtn = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
+          ref.cartBtn = cartBtn;
           wtext(cartBtn, 'Add to cart');
           cartBtn.onclick = function () {
             cartBtn.disabled = true;
@@ -1137,6 +1143,63 @@
     }
     requestAnimationFrame(syncArrows);
     setTimeout(syncArrows, 300);
+    hydrateCardPrices(refs);
+  }
+
+  // Storefront truth pass — card data comes from the Admin API, which
+  // reports DEFAULT-market catalogue prices. A Markets price adjustment
+  // (or any contextual pricing) shows the shopper a different number on the
+  // PDP and charges THAT in the cart — a $949.95 card adding a $902.45
+  // variant reads as a bait-and-switch. /products/{handle}.js answers in
+  // this session's market context, so each card reconciles its price and
+  // availability with what the storefront will actually charge.
+  function hydrateCardPrices(refs) {
+    if (!SHOPIFY || PREVIEW || PAGE) return;
+    var byHandle = {};
+    refs.forEach(function (r) {
+      if (!r.item.cart_variant_id || !r.item.link) return;
+      var m = /\/products\/([^/?#]+)/.exec(String(r.item.link));
+      if (!m) return;
+      (byHandle[m[1]] = byHandle[m[1]] || []).push(r);
+    });
+    var cur = (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) || 'USD';
+    function fmt(cents) {
+      try {
+        return new Intl.NumberFormat('en-US', {
+          style: 'currency', currency: cur, currencyDisplay: 'narrowSymbol',
+        }).format(cents / 100);
+      } catch (e) {
+        return cur + ' ' + (cents / 100).toFixed(2);
+      }
+    }
+    Object.keys(byHandle).forEach(function (handle) {
+      fetch('/products/' + encodeURIComponent(handle) + '.js', { headers: { accept: 'application/json' } })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function (p) {
+          var variants = (p && p.variants) || [];
+          byHandle[handle].forEach(function (r) {
+            var v = null;
+            for (var i = 0; i < variants.length; i++) {
+              if (String(variants[i].id) === String(r.item.cart_variant_id)) { v = variants[i]; break; }
+            }
+            if (!v) return;
+            // Same truth as the PDP: price in cents, per-variant availability.
+            if (typeof v.price === 'number' && r.priceEl) {
+              var formatted = fmt(v.price);
+              if (formatted && r.priceEl.textContent !== formatted) r.priceEl.textContent = formatted;
+            }
+            if (v.available === false) {
+              if (r.cartBtn && r.cartBtn.parentNode) r.cartBtn.parentNode.removeChild(r.cartBtn);
+              if (!r.item.stock && r.body) {
+                var sb = el('div', {}, { class: 'janis-wcard-stock' });
+                wtext(sb, 'Out of stock');
+                r.body.appendChild(sb);
+              }
+            }
+          });
+        })
+        .catch(function () { /* catalogue fields stay — hydration is best-effort */ });
+    });
   }
 
   function renderOptions(box, w) {

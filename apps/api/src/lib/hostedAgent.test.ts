@@ -1040,6 +1040,34 @@ describe('repairCardStock', () => {
     expect((w[0].items[0] as { cart_variant_id?: string }).cart_variant_id).toBeUndefined();
     expect((w[0].items[0] as { stock?: string }).stock).toBe('Out of stock');
   });
+
+  it('hydrates the CHEAPEST AVAILABLE variant — same pick the card widget uses', () => {
+    const multi = JSON.stringify({
+      data: {
+        products: {
+          nodes: [
+            {
+              title: 'Ski Wax',
+              priceRangeV2: { minVariantPrice: { amount: '9.95', currencyCode: 'USD' } },
+              variants: {
+                nodes: [
+                  { id: 'gid://shopify/ProductVariant/1001', availableForSale: true, price: '24.95' },
+                  { id: 'gid://shopify/ProductVariant/1002', availableForSale: true, price: '9.95' },
+                  { id: 'gid://shopify/ProductVariant/1003', availableForSale: false, price: '4.95' },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    });
+    const w = [card([{ title: 'Ski Wax' }])];
+    repairCardStock(w, multi);
+    const item = w[0].items[0] as { cart_variant_id?: string; price?: string; stock?: string };
+    expect(item.cart_variant_id).toBe('1002');
+    expect(item.price).toBe('$9.95');
+    expect(item.stock).toBeUndefined();
+  });
 });
 
 describe('listsPricedItems / stripPricedLists', () => {

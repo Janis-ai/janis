@@ -277,6 +277,27 @@ export const AgentConfig = z.object({
             relevance: z
               .object({ arg: z.string(), fields: z.array(z.string()) })
               .optional(),
+            // unpurchasable-row filter — hide rows whose `field` is false
+            // unless `unless_arg` opts in; `only_arg` renders just them
+            availability: z
+              .object({
+                field: z.string(),
+                unless_arg: z.string(),
+                only_arg: z.string().optional(),
+              })
+              .optional(),
+            // variant pick — write the chosen node onto the row (`into`) so
+            // map paths and the availability field read it; `by` minimizes,
+            // `require` must not be false for a node to be eligible
+            pick: z
+              .object({
+                from: z.string(),
+                into: z.string(),
+                by: z.string().optional(),
+                require: z.string().optional(),
+              })
+              .optional(),
+            row_limit_arg: z.string().optional(),
           })
           .optional(),
         // catalog template id that installed this tool — managed via the

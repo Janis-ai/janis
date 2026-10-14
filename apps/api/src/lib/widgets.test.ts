@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { dedupeToolWidgets, dedupeWidgetList, filterRowsByQuery, toolResultEmpty, toolResultNotes, widgetFromToolResult } from './widgets.js';
+import { availabilityDropped, dedupeToolWidgets, dedupeWidgetList, filterRowsByQuery, toolResultEmpty, toolResultNotes, widgetFromToolResult } from './widgets.js';
 
 const products = JSON.stringify({
   products: [
@@ -357,6 +357,143 @@ describe('widgetFromToolResult', () => {
     const oos = widgetFromToolResult(cfgOnly, oosResult, {}, { only_unavailable: '1' });
     expect(oos?.type === 'cards' && oos.items.length).toBe(3);
     expect(oos?.type === 'cards' && oos.total).toBeUndefined();
+  });
+
+  it('pick: the card price and Add-to-cart id come from the SAME cheapest available variant', () => {
+    const cfg = {
+      type: 'cards' as const,
+      items: 'data.products.nodes',
+      pick: { from: 'variants.nodes', into: '__v', by: 'price', require: 'availableForSale' },
+      availability: { field: '__v.availableForSale', unless_arg: 'include_unavailable' },
+      map: {
+        title: 'title',
+        price: '{__v.price:money}',
+        stock: '{__v.availableForSale:stock}',
+        cart_variant_id: '{__v.id:gidnum}',
+      },
+    };
+    const result = JSON.stringify({
+      data: {
+        products: {
+          nodes: [
+            {
+              title: 'Ski Wax',
+              priceRangeV2: { minVariantPrice: { amount: '9.95', currencyCode: 'USD' } },
+              variants: {
+                nodes: [
+                  // Shopify returns cheapest-first here — but nodes[0] is
+                  // NOT always the min across stores, so the pick, not the
+                  // position, must decide.
+                  { id: 'gid://shopify/ProductVariant/1001', availableForSale: true, price: '24.95' },
+                  { id: 'gid://shopify/ProductVariant/1002', availableForSale: true, price: '9.95' },
+                  { id: 'gid://shopify/ProductVariant/1003', availableForSale: false, price: '4.95' },
+                ],
+              },
+            },
+            {
+              title: 'All OOS Board',
+              variants: {
+                nodes: [
+                  { id: 'gid://shopify/ProductVariant/2001', availableForSale: false, price: '99.95' },
+                  { id: 'gid://shopify/ProductVariant/2002', availableForSale: false, price: '89.95' },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    });
+    const w = widgetFromToolResult(cfg, result);
+    expect(w?.type === 'cards' && w.items.map((i) => i.title)).toEqual(['Ski Wax']);
+    const item = w?.type === 'cards' ? w.items[0] : undefined;
+    // Cheapest AVAILABLE is 1002 ($9.95) — the $4.95 one is out of stock.
+    expect(item?.price).toBe('$9.95');
+    expect(item?.cart_variant_id).toBe('1002');
+    expect(item?.stock).toBeUndefined();
+    // All-OOS rows still render badged when they're the whole answer —
+    // and the picked variant is the first (cheapest pool is empty).
+    const allOos = JSON.stringify({
+      data: { products: { nodes: [JSON.parse(result).data.products.nodes[1]] } },
+    });
+    const w2 = widgetFromToolResult(cfg, allOos);
+    expect(w2?.type === 'cards' && w2.items[0].stock).toBe('Out of stock');
+    expect(w2?.type === 'cards' && w2.items[0].cart_variant_id).toBeUndefined();
+  });
+
+  it('end_cursor stamps on non-final pages so a fumbled `after` can recover', () => {
+    const cfg = { type: 'cards' as const, items: 'data.products.nodes', map: { title: 'title' } };
+    const mk = (hasNext: boolean) =>
+      JSON.stringify({
+        data: {
+          products: {
+            pageInfo: { hasNextPage: hasNext, endCursor: 'REAL_CURSOR_9' },
+            nodes: [{ title: 'P1' }],
+          },
+        },
+      });
+    const w = widgetFromToolResult(cfg, mk(true));
+    expect(w?.type === 'cards' && w.end_cursor).toBe('REAL_CURSOR_9');
+    const last = widgetFromToolResult(cfg, mk(false));
+    expect(last?.type === 'cards' && last.end_cursor).toBeUndefined();
+  });
+});
+
+describe('availabilityDropped', () => {
+  const cfg = {
+    type: 'cards' as const,
+    items: 'data.products.nodes',
+    availability: { field: 'variants.nodes.0.availableForSale', unless_arg: 'include_unavailable' },
+    map: { title: 'title' },
+  };
+  const result = JSON.stringify({
+    data: {
+      products: {
+        nodes: [
+          { title: 'Gift Card', variants: { nodes: [{ availableForSale: false }] } },
+          { title: 'Snowboard', variants: { nodes: [{ availableForSale: true }] } },
+          { title: 'OOS Board', variants: { nodes: [{ availableForSale: false }] } },
+        ],
+      },
+    },
+  });
+  it('counts rows the filter hid on a browse call', () => {
+    expect(availabilityDropped(cfg, {}, result)).toBe(2);
+  });
+  it('returns 0 when the call opted into unavailable rows', () => {
+    expect(availabilityDropped(cfg, { include_unavailable: '1' }, result)).toBe(0);
+  });
+  it('returns 0 when EVERY row is OOS — they render badged, nothing is hidden', () => {
+    const allOos = JSON.stringify({
+      data: { products: { nodes: [{ title: 'G', variants: { nodes: [{ availableForSale: false }] } }] } },
+    });
+    expect(availabilityDropped(cfg, {}, allOos)).toBe(0);
+  });
+  it('evaluates availability on the picked variant, not nodes[0]', () => {
+    const pickCfg = {
+      ...cfg,
+      pick: { from: 'variants.nodes', into: '__v', by: 'price', require: 'availableForSale' },
+      availability: { field: '__v.availableForSale', unless_arg: 'include_unavailable' },
+    };
+    const r = JSON.stringify({
+      data: {
+        products: {
+          nodes: [
+            // nodes[0] is OOS but a later variant is buyable → row is NOT
+            // hidden, must not count as dropped.
+            {
+              title: 'Mixed',
+              variants: {
+                nodes: [
+                  { id: 'gid://shopify/ProductVariant/1', availableForSale: false, price: '5.00' },
+                  { id: 'gid://shopify/ProductVariant/2', availableForSale: true, price: '9.00' },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(availabilityDropped(pickCfg, {}, r)).toBe(0);
   });
 });
 

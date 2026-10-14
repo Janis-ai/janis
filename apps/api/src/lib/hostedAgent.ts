@@ -18,7 +18,7 @@ import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolD
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
-import { dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -1304,15 +1304,40 @@ function corpusProductFields(
   if (!m) return null;
   const rest = toolText.slice(m.index + m[0].length);
   const next = rest.search(/"title"\s*:/);
-  const span = next === -1 ? rest.slice(0, 3000) : rest.slice(0, next);
-  const avail = /"availableForSale"\s*:\s*(true|false)/.exec(span);
-  const vid = /"id"\s*:\s*"gid:\/\/shopify\/ProductVariant\/(\d+)"/.exec(span);
-  const price = /"price"\s*:\s*"([\d.]+)"/.exec(span);
+  const span = next === -1 ? rest.slice(0, 8000) : rest.slice(0, next);
+  // Variant triples in document order — the widget's pick rule (cheapest
+  // AVAILABLE variant) must match exactly, or a hydrated card pairs the
+  // $9.95 price with a $24.95 variant id all over again.
+  const variants: { num: string; avail: boolean | null; price?: string }[] = [];
+  const vre = /"id"\s*:\s*"gid:\/\/shopify\/ProductVariant\/(\d+)"/g;
+  let vm: RegExpExecArray | null;
+  while ((vm = vre.exec(span))) {
+    const tail = span.slice(vm.index + vm[0].length, vm.index + vm[0].length + 400);
+    const av = /"availableForSale"\s*:\s*(true|false)/.exec(tail);
+    const pr = /"price"\s*:\s*"?([\d.]+)"?/.exec(tail);
+    variants.push({ num: vm[1], avail: av ? av[1] === 'true' : null, price: pr?.[1] });
+  }
+  const pool = variants.filter((v) => v.avail !== false);
+  const usable = pool.length ? pool : variants;
+  let picked = usable[0];
+  for (const v of usable) {
+    const n = Number(v.price);
+    if (v.price !== undefined && Number.isFinite(n) && (picked.price === undefined || n < Number(picked.price))) {
+      picked = v;
+    }
+  }
+  const avail = variants.length
+    ? picked.avail
+    : (() => {
+        const a = /"availableForSale"\s*:\s*(true|false)/.exec(span);
+        return a ? a[1] === 'true' : null;
+      })();
+  const price = picked?.price ?? /"price"\s*:\s*"?([\d.]+)"?/.exec(span)?.[1];
   const cur = /"currencyCode"\s*:\s*"([A-Z]{3})"/.exec(span);
   return {
-    avail: avail ? avail[1] === 'true' : null,
-    variantNum: vid?.[1],
-    price: price?.[1],
+    avail,
+    variantNum: picked?.num,
+    price,
     currency: cur?.[1],
   };
 }
@@ -1907,6 +1932,10 @@ export interface AgentRunContext {
    *  tool call whose cursor was rejected replays page one verbatim, and
    *  without this the same carousel ships twice. */
   prevCardTitles?: Set<string>;
+  /** The real endCursor from the last outbound cards widget — when a
+   *  model-typed `after` replays page one (Shopify treats a bogus cursor as
+   *  "start over", silently), this is the authoritative retry token. */
+  prevEndCursor?: string;
 }
 
 /** Channel kinds where the sender address is verified by the mailbox —
@@ -2567,11 +2596,15 @@ export async function complete(
       // model it rendered — otherwise it dutifully re-emits the same data
       // as a WIDGET: line and the customer sees the row twice.
       if (tool?.widget && outcome === 'ran') {
-        let w = widgetFromToolResult(tool.widget, result, secrets, args);
+        // Result-side checks (count, cursor, emptiness, dropped rows) must
+        // parse the pristine tool JSON — the notes below APPEND text to
+        // `result`, which silently zeroes every JSON.parse downstream.
+        const resultJson = result;
+        let w = widgetFromToolResult(tool.widget, resultJson, secrets, args);
         // Page-replay detection: an `after` cursor Shopify rejected (or
         // partially honoured) replays rows already shown. Drop the repeats
         // from the carousel; when nothing new survives, suppress it and tell
-        // the model the catalogue ran out.
+        // the model how to recover — NOT that the catalogue ran out.
         if (
           w &&
           w.type === 'cards' &&
@@ -2581,9 +2614,27 @@ export async function complete(
           const fresh = w.items.filter((i) => i.title && !ctx.prevCardTitles!.has(i.title));
           if (!fresh.length) {
             w = null;
-            result +=
-              `\n[the page cursor did not advance — these are the same products already shown. ` +
-              `Do NOT repeat them; tell the customer this was the whole matching set (or suggest narrowing the search).]`;
+            // A bogus cursor replays page one WHILE hasNextPage stays true —
+            // the set is not exhausted. Hand the model the authoritative
+            // cursor (the last rendered page's own endCursor, or the one
+            // stamped on the previous widget) so it retries instead of
+            // declaring completion.
+            const retryCursor = toolResultEndCursor(resultJson) ?? ctx?.prevEndCursor;
+            if (retryCursor && toolResultHasNext(resultJson)) {
+              const q = args.query !== undefined ? `query:"${args.query}" ` : '';
+              const flags = ['include_unavailable', 'only_unavailable', 'limit']
+                .filter((k) => args[k] !== undefined)
+                .map((k) => `${k}:"${args[k]}" `)
+                .join('');
+              result +=
+                `\n[the page cursor was rejected — the storefront replayed the first page (these are the same products already shown). ` +
+                `The catalogue is NOT exhausted: call this tool again with ${q}${flags}after:"${retryCursor}" exactly. ` +
+                `Only if that call ALSO replays the same items should you treat the set as complete.]`;
+            } else {
+              result +=
+                `\n[the page cursor did not advance — these are the same products already shown. ` +
+                `Do NOT repeat them; tell the customer this was the whole matching set (or suggest narrowing the search).]`;
+            }
           } else if (fresh.length < w.items.length) {
             w.items = fresh;
             result +=
@@ -2596,11 +2647,21 @@ export async function complete(
         }
         // Result-side facts the model must not guess — catalogue totals and
         // the verbatim next-page call (Shopify cursors reset on a new query).
-        result += toolResultNotes(result, args, w?.type === 'cards' ? w.items.length : undefined);
+        result += toolResultNotes(resultJson, args, w?.type === 'cards' ? w.items.length : undefined);
+        // Rows the availability filter hid — the customer asking "show me
+        // everything" can't see these unless the model re-calls with the
+        // include flag; silently dropping them under-counts the catalogue.
+        const dropped = availabilityDropped(tool.widget, args, resultJson);
+        if (dropped > 0) {
+          result +=
+            `\n[${dropped} more matching product(s) exist but were left off the cards because they're out of stock. ` +
+            `If the customer asked for every/all products, call this tool again with include_unavailable:"1" to render them badged ` +
+            `(or name them as out of stock in text if they only asked for a count).]`;
+        }
         // A zero-row search means the item doesn't exist here — without a
         // mechanical note the model happily fills the gap from training
         // knowledge ("yes, we carry The Hidden Snowboard for $749.95").
-        if (!w && toolResultEmpty(tool.widget, result)) {
+        if (!w && toolResultEmpty(tool.widget, resultJson)) {
           result += `\n[0 rows matched — the named item is NOT sold on this storefront. Do not claim it exists, has a price, or can be ordered; say it isn't available and offer the closest thing that did come back in earlier results.]`;
         }
       }
@@ -3477,6 +3538,7 @@ async function replyAsHostedAgent(
     // replays the same cards, and the tool loop suppresses the duplicate
     // carousel when every rendered title was already shown.
     const prevCardTitles = new Set<string>();
+    let prevEndCursor: string | undefined;
     {
       const prevOut = await db
         .select({ payload: messages.payload })
@@ -3485,8 +3547,12 @@ async function replyAsHostedAgent(
         .orderBy(desc(messages.createdAt))
         .limit(3);
       for (const row of prevOut) {
-        const ws = ((row.payload ?? {}) as { widgets?: { type?: string; items?: { title?: string }[] }[] }).widgets ?? [];
-        for (const w of ws) if (w.type === 'cards') for (const i of w.items ?? []) if (i.title) prevCardTitles.add(i.title);
+        const ws = ((row.payload ?? {}) as { widgets?: { type?: string; items?: { title?: string }[]; end_cursor?: string }[] }).widgets ?? [];
+        for (const w of ws) {
+          if (w.type !== 'cards') continue;
+          if (!prevEndCursor && w.end_cursor) prevEndCursor = w.end_cursor;
+          for (const i of w.items ?? []) if (i.title) prevCardTitles.add(i.title);
+        }
       }
     }
     const ctx: AgentRunContext = {
@@ -3496,6 +3562,7 @@ async function replyAsHostedAgent(
       agent,
       identity: await verifiedIdentityFor(db, conv, agent.workspaceId),
       prevCardTitles,
+      prevEndCursor,
     };
     // One escalation lookup feeds the prompt (pending offer) AND the
     // post-generation decline check below.

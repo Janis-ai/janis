@@ -1,4 +1,25 @@
 steps:
+  # Warm the layer cache: pull the previous image so docker can --cache-from
+  # it. Each Cloud Build run is a fresh VM — without this every deploy
+  # redoes npm ci and all four workspace builds from scratch.
   - name: gcr.io/cloud-builders/docker
-    args: ['build', '-f', 'Dockerfile.api', '-t', 'gcr.io/$PROJECT_ID/janis-api', '.']
-images: ['gcr.io/$PROJECT_ID/janis-api']
+    entrypoint: bash
+    args: ['-c', 'docker pull gcr.io/$PROJECT_ID/janis-api:latest || true']
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.api
+      - --cache-from
+      - gcr.io/$PROJECT_ID/janis-api:latest
+      - -t
+      - gcr.io/$PROJECT_ID/janis-api:latest
+      - -t
+      - gcr.io/$PROJECT_ID/janis-api:$BUILD_ID
+      - .
+images:
+  - gcr.io/$PROJECT_ID/janis-api:latest
+  - gcr.io/$PROJECT_ID/janis-api:$BUILD_ID
+options:
+  # Default builder is 1 vCPU — npm ci + vite/tsc dominate build time.
+  machineType: E2_HIGHCPU_8

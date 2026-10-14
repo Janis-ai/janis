@@ -123,7 +123,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
-          '{"query":"query($q:String!,$after:String){productsCount(query:$q){count} products(first:12,query:$q,after:$after){pageInfo{hasNextPage endCursor} nodes{title handle vendor productType tags description(truncateAt:80) featuredImage{url} priceRangeV2{minVariantPrice{amount currencyCode}} variants(first:1){nodes{id availableForSale price}}}}}","variables":{"q":"${query:text} status:active published_status:published","after":${after?}}}',
+          '{"query":"query($q:String!,$after:String){productsCount(query:$q){count} products(first:12,query:$q,after:$after){pageInfo{hasNextPage endCursor} nodes{title handle vendor productType tags description(truncateAt:80) featuredImage{url} priceRangeV2{minVariantPrice{amount currencyCode}} variants(first:10){nodes{id availableForSale price}}}}}","variables":{"q":"${query:text} status:active published_status:published","after":${after?}}}',
         params: {
           query:
             'Shopify catalogue search string — use "title:*snowboard*" to match a keyword, or " product_type:…" / " vendor:…" to filter. Leave it empty ("") to browse the whole catalogue. The search is mechanically constrained to active products published to the Online Store — draft, archived and unpublished products NEVER appear (their product page and Add to cart would 404 anyway). If a customer names a product that comes back empty, it is not sold on the storefront — say it isn\'t available rather than claiming it never existed.',
@@ -140,8 +140,12 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           type: 'cards',
           items: 'data.products.nodes',
           link_label: 'View product',
+          // One variant answers the price AND the Add button — the cheapest
+          // available one ("from" price + a button that adds it). First-
+          // variant pricing showed $24.95 for a product whose card read $9.95.
+          pick: { from: 'variants.nodes', into: '__v', by: 'price', require: 'availableForSale' },
           availability: {
-            field: 'variants.nodes.0.availableForSale',
+            field: '__v.availableForSale',
             unless_arg: 'include_unavailable',
             only_arg: 'only_unavailable',
           },
@@ -154,9 +158,9 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
             // can belong to a DIFFERENT variant (a $949.95 card adding a
             // $902.45 variant is a bait-and-switch the cart then exposes).
             // Variant price is a scalar Money; :money borrows the row's code.
-            price: '{variants.nodes.0.price:money}',
-            stock: '{variants.nodes.0.availableForSale:stock}',
-            cart_variant_id: '{variants.nodes.0.id:gidnum}',
+            price: '{__v.price:money}',
+            stock: '{__v.availableForSale:stock}',
+            cart_variant_id: '{__v.id:gidnum}',
             link: 'https://{{secrets.SHOPIFY_SHOP}}/products/{handle}',
           },
         },

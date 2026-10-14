@@ -47,6 +47,9 @@ export const WidgetComponent = z.discriminatedUnion('type', [
     // lie. Renderers show "K of N" plus a load-more affordance; narrators
     // must say "the first K of N", never "all N".
     total: z.number().int().optional(),
+    // The source result's pageInfo.endCursor — internal plumbing so a later
+    // turn can recover a fumbled `after` argument; renderers ignore it.
+    end_cursor: s(200).optional(),
   }),
   // Booking-slot style picker — one tap sends the label as a message.
   z.object({
@@ -293,6 +296,21 @@ export interface ToolWidgetConfig {
    *  ask should show THE match, not a page of neighbours. The result text
    *  still carries every row for narration; this only shapes the cards. */
   row_limit_arg?: string;
+  /** Multi-variant rows need ONE node to price the card AND fill the Add
+   *  button — picking variants[0] can pair a $9.95 min-price narrative with
+   *  a $24.95 add. `by` picks the cheapest node where `require` isn't false
+   *  (cheapest AVAILABLE variant); all failing → first node. Runs before
+   *  the availability filter so `field` can point at the picked node. */
+  pick?: {
+    /** Dot path to the per-row nodes array (e.g. "variants.nodes"). */
+    from: string;
+    /** Key the picked node is written to on the row (e.g. "__variant"). */
+    into: string;
+    /** Node dot path minimized (e.g. "price") — omit for first-fit. */
+    by?: string;
+    /** Node dot path that must not be === false for a node to be eligible. */
+    require?: string;
+  };
 }
 
 /** Resolve a dot path ("a.b.0.c") against a row — numbers index arrays. */
@@ -376,6 +394,64 @@ function mapValue(row: unknown, expr: string, secrets: Record<string, string>): 
 const str = (v: unknown): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim().slice(0, 500) : v == null ? undefined : String(v).slice(0, 500);
 
+/** Apply cfg.pick to one row — returns a new row with the chosen node at
+ *  `into`. Cheapest eligible node wins; when none qualify (all OOS), the
+ *  first node is picked so the row still describes a real variant. */
+export function applyRowPick(
+  row: unknown,
+  pick: NonNullable<ToolWidgetConfig['pick']>,
+): unknown {
+  if (!row || typeof row !== 'object') return row;
+  const nodes = digPath(row, pick.from);
+  if (!Array.isArray(nodes) || !nodes.length) return row;
+  const usable = pick.require
+    ? nodes.filter((n) => digPath(n, pick.require!) !== false)
+    : nodes;
+  const pool = usable.length ? usable : nodes;
+  let best = pool[0];
+  if (pick.by) {
+    let bestN = Infinity;
+    for (const n of pool) {
+      const v = Number(digPath(n, pick.by));
+      if (Number.isFinite(v) && v < bestN) {
+        bestN = v;
+        best = n;
+      }
+    }
+  }
+  return { ...(row as Record<string, unknown>), [pick.into]: best };
+}
+
+/** Rows the availability filter hides — OOS products on a call that didn't
+ *  opt into showing them. Used to tell the model "N more matched but are
+ *  unavailable" so a 'show me everything' can surface them badged. */
+export function availabilityDropped(
+  cfg: ToolWidgetConfig,
+  args: Record<string, unknown>,
+  resultText: string,
+): number {
+  const rel = cfg.availability;
+  if (!rel) return 0;
+  const truthy = (v: unknown) => ['1', 'true', 'yes'].includes(String(v ?? '').toLowerCase());
+  if (truthy(args[rel.unless_arg]) || (rel.only_arg && truthy(args[rel.only_arg]))) return 0;
+  let data: unknown;
+  try {
+    data = JSON.parse(resultText);
+  } catch {
+    return 0;
+  }
+  let rows: unknown = cfg.items != null ? digPath(data, cfg.items) : undefined;
+  if (rows && typeof rows === 'object' && !Array.isArray(rows)) rows = [rows];
+  if (!Array.isArray(rows)) return 0;
+  const hidden = rows.filter((r) => {
+    const row = cfg.pick ? applyRowPick(r, cfg.pick) : r;
+    return digPath(row, rel.field) === false;
+  }).length;
+  // An all-OOS page renders its rows badged rather than dropping them —
+  // nothing was actually hidden, so the "N more exist" note would lie.
+  return hidden < rows.length ? hidden : 0;
+}
+
 /** Build a widget from a bound tool's JSON result. Null when the result
  *  isn't usable (truncated at the 8k tool cap, non-JSON, or no mappable
  *  rows) — the model's own narration still carries the answer. */
@@ -402,10 +478,12 @@ export function widgetFromToolResult(
     rows = Object.values(data as Record<string, unknown>).find(Array.isArray);
   }
   if (!Array.isArray(rows) || !rows.length) return null;
+  // Variant selection before availability — the picked node answers both
+  // "is this row buyable" and "what does the Add button send".
+  let list: unknown[] = cfg.pick ? rows.map((r) => applyRowPick(r, cfg.pick!)) : rows;
   // Unpurchasable rows (availableForSale === false) drop out of the cards
   // unless the call explicitly opted in — the model narrates from the full
   // result either way. `list` keeps the array narrowing `rows` can't.
-  let list: unknown[] = rows;
   const truthy = (v: unknown) => ['1', 'true', 'yes'].includes(String(v ?? '').toLowerCase());
   const optedIn = cfg.availability && truthy(args[cfg.availability.unless_arg]);
   const onlyOos = cfg.availability?.only_arg ? truthy(args[cfg.availability.only_arg]) : false;
@@ -472,20 +550,50 @@ export function widgetFromToolResult(
   const parsed = WidgetComponent.safeParse(candidate);
   if (!parsed.success) return null;
   const widget = parsed.data;
-  // Stamp the query total when a real next page exists — renderers get a
-  // "K of N" + load-more tile, and the reply guard can catch a narration
-  // that claims the partial set is everything. Skipped on the last page
+  // Stamp the query total + page cursor when a real next page exists —
+  // renderers get a "K of N" + load-more tile, the reply guard can catch a
+  // narration claiming the partial set is everything, and next turn's run
+  // can recover when the model fumbles `after`. Skipped on the last page
   // (a tile there loops forever) and for `only_arg` views (the query total
   // counts rows the filter removed, so "3 of 13" would misdescribe it).
-  if (
-    widget.type === 'cards' &&
-    toolResultHasNext(resultText) &&
-    !(cfg.availability?.only_arg && args[cfg.availability.only_arg])
-  ) {
-    const total = toolResultCount(resultText);
-    if (total !== null && total > widget.items.length) widget.total = total;
+  if (widget.type === 'cards' && toolResultHasNext(resultText)) {
+    const cur = toolResultEndCursor(resultText);
+    if (cur) widget.end_cursor = cur;
+    if (!(cfg.availability?.only_arg && args[cfg.availability.only_arg])) {
+      const total = toolResultCount(resultText);
+      if (total !== null && total > widget.items.length) widget.total = total;
+    }
   }
   return widget;
+}
+
+/** The result's pageInfo.endCursor when another page exists — the
+ *  authoritative next-page token, carried on the widget so a later turn
+ *  can recover from a model-invented cursor. */
+export function toolResultEndCursor(resultText: string): string | undefined {
+  let data: unknown;
+  try {
+    data = JSON.parse(resultText);
+  } catch {
+    return undefined;
+  }
+  let found: string | undefined;
+  const walk = (obj: unknown, depth: number) => {
+    if (found || !obj || typeof obj !== 'object' || depth > 4) return;
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      if (found) return;
+      if (k === 'pageInfo' && v && typeof v === 'object') {
+        const pi = v as { hasNextPage?: unknown; endCursor?: unknown };
+        if (pi.hasNextPage === true && typeof pi.endCursor === 'string') {
+          found = pi.endCursor;
+          return;
+        }
+      }
+      walk(v, depth + 1);
+    }
+  };
+  walk(data, 0);
+  return found;
 }
 
 /** True when the result's rows array resolved to empty — the caller uses it
