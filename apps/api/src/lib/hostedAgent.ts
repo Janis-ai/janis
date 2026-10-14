@@ -4269,6 +4269,30 @@ async function replyAsHostedAgent(
           reply = fixed;
         }
       }
+      // Filtered-view counts: an in-stock ask's true sellable count isn't
+      // the catalogue total and isn't knowable past the rendered page — a
+      // "12 items in stock" claim that matches neither the rendered card
+      // count nor the result total is invented arithmetic. Strip it.
+      const inStockAsk = gen.toolCalls.some((t) =>
+        ['1', 'true', 'yes'].includes(
+          String((t.args as Record<string, unknown> | undefined)?.in_stock_only ?? '').toLowerCase(),
+        ),
+      );
+      if (inStockAsk) {
+        // Only the rendered count is honest here — the catalogue total
+        // counts filtered-out rows, and the sellable remainder is unknown
+        // until later pages load.
+        const legal = new Set<number>([shown]);
+        const stripped = stripSentencesByLine(reply, (s) => {
+          const m = /\b(\d+)\s+(?:of\s+(?:our|the)\s+)?(?:currently\s+|available\s+|in-stock\s+)*(?:items?|products?)\s+(?:in stock|available)\b/i.exec(s)
+            ?? /\b(\d+)\s+(?:items?|products?)\s+(?:in stock|available)\b/i.exec(s);
+          return !!m && !legal.has(Number(m[1]));
+        }).text.trim();
+        if (stripped !== reply.trim()) {
+          console.error(`[hosted] stripped invented in-stock count conv=${convId}`);
+          reply = stripped || 'Here are the available items:';
+        }
+      }
       // A confirmed-add denial that survived the regen gets its denying
       // sentences stripped — the add happened; there's nothing to disclaim.
       if (confirmedAddTap && deniesConfirmedAdd(reply)) {
