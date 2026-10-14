@@ -14,7 +14,7 @@ interface CardItem { title?: string; stock?: string; price?: string; link?: stri
 interface Widget { type: string; items?: CardItem[] }
 // GET /chat/:token/messages maps components to TOP-LEVEL message fields
 // (widgets/quick_replies/greeting) — the stored payload shape differs.
-interface Msg { direction: string; text?: string; created_at?: string; widgets?: Widget[]; quick_replies?: (string | { title?: string })[]; greeting?: boolean }
+interface Msg { id?: string; direction: string; text?: string; created_at?: string; widgets?: Widget[]; quick_replies?: (string | { title?: string })[]; greeting?: boolean }
 interface Turn { send: string; expect?: (r: Reply) => string[] }
 interface Reply { text: string; cards: CardItem[]; widgetTypes: string[]; chips: string[]; raw: Msg }
 
@@ -31,7 +31,11 @@ async function send(visitor: string, text: string): Promise<void> {
   if (!res.ok) throw new Error(`send ${res.status}: ${(await res.text()).slice(0, 120)}`);
 }
 
-async function waitReply(visitor: string, since: string, timeoutMs = 90_000): Promise<Reply> {
+// Compare server created_at to server created_at — a local-clock `since`
+// races the server and re-reads the previous reply as the new one.
+const lastSeen = new Map<string, string>();
+
+async function waitReply(visitor: string, timeoutMs = 90_000): Promise<Reply> {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     const res = await fetch(`${API}/chat/${CHANNEL}/messages?visitor_id=${visitor}`);
@@ -42,13 +46,14 @@ async function waitReply(visitor: string, since: string, timeoutMs = 90_000): Pr
         (m) =>
           m.direction === 'out' &&
           m.text &&
-          (m.created_at ?? '') > since &&
+          (m.created_at ?? '') > (lastSeen.get(visitor) ?? '') &&
           !m.greeting &&
           !/negative sentiment|still working|hang tight|one moment/i.test(m.text ?? ''),
       )
       .sort((a, b) => (a.created_at! < b.created_at! ? -1 : 1));
     const last = out[out.length - 1];
     if (last && last.text && !/typing/i.test(last.text)) {
+      for (const m of messages) if ((m.created_at ?? '') > (lastSeen.get(visitor) ?? '')) lastSeen.set(visitor, m.created_at!);
       const widgets = last.widgets ?? [];
       const cards = widgets.filter((w) => w.type === 'cards').flatMap((w) => w.items ?? []);
       const chips = (last.quick_replies ?? []).map((q) => (typeof q === 'string' ? q : q.title ?? ''));
@@ -60,15 +65,19 @@ async function waitReply(visitor: string, since: string, timeoutMs = 90_000): Pr
 }
 
 async function turn(visitor: string, text: string): Promise<Reply> {
-  const since = new Date(Date.now() - 1000).toISOString();
+  if (!lastSeen.has(visitor)) {
+    // Prime the watermark with the newest server-side timestamp on the thread.
+    const res = await fetch(`${API}/chat/${CHANNEL}/messages?visitor_id=${visitor}`);
+    const { messages } = (await res.json()) as { messages: Msg[] };
+    const max = messages.reduce((a, m) => ((m.created_at ?? '') > a ? m.created_at! : a), '');
+    lastSeen.set(visitor, max);
+  }
   await send(visitor, text);
-  return waitReply(visitor, since);
+  return waitReply(visitor);
 }
 
 // ---- expectation helpers ----------------------------------------------------
 const cardTitles = (r: Reply) => r.cards.map((c) => (c.title ?? '').toLowerCase());
-const hasOOS = (r: Reply) => r.cards.some((c) => c.stock);
-const oosTitles = (r: Reply) => r.cards.filter((c) => c.stock).map((c) => c.title);
 const issues = (...list: (string | false | undefined)[]) => list.filter(Boolean) as string[];
 
 const KNOWN_CATALOG = [
@@ -79,7 +88,19 @@ const KNOWN_CATALOG = [
   'the collection snowboard: liquid', 'the minimal snowboard', 'the hidden snowboard', 'the archived snowboard',
 ];
 const UNPUBLISHED = ['the hidden snowboard', 'the minimal snowboard', 'the archived snowboard'];
-const OOS_PRODUCTS = ['gift card', 'the out of stock snowboard'];
+// Storefront-truth OOS: gift card denominations at zero; the 3p product's stock
+// sits at a fulfilment location with no shipping zones.
+const OOS_PRODUCTS = ['gift card', 'the out of stock snowboard', 'the 3p fulfilled snowboard'];
+// A known-OOS card rendered unbadged or still purchasable is a real failure.
+const oosBadges = (r: Reply) =>
+  issues(
+    ...r.cards
+      .filter((c) => c.title && OOS_PRODUCTS.some((k) => c.title!.toLowerCase().includes(k)))
+      .flatMap((c) => [
+        !c.stock ? `OOS card rendered WITHOUT badge: ${c.title}` : false,
+        c.cart_variant_id ? `OOS card still has add-to-cart: ${c.title}` : false,
+      ]),
+  );
 
 function unknownCards(r: Reply) {
   return r.cards.filter((c) => c.title && !KNOWN_CATALOG.some((k) => c.title!.toLowerCase().includes(k))).map((c) => c.title);
@@ -88,11 +109,11 @@ function unknownCards(r: Reply) {
 // ---- probes ------------------------------------------------------------------
 const PROBES: { name: string; turns: Turn[] }[] = [
   {
-    name: 'browse — only purchasable cards',
+    name: 'browse — OOS allowed but badged',
     turns: [{
       send: 'show me your products',
       expect: (r) => issues(
-        hasOOS(r) && `OOS card rendered on browse: ${oosTitles(r)}`,
+        ...oosBadges(r),
         ...r.cards.filter((c) => UNPUBLISHED.includes((c.title ?? '').toLowerCase())).map((c) => `unpublished product carded: ${c.title}`),
         ...unknownCards(r).map((t) => `unknown product card: ${t}`),
         r.cards.length === 0 && 'no cards rendered for a browse ask',
@@ -187,7 +208,7 @@ const PROBES: { name: string; turns: Turn[] }[] = [
         send: 'show me the rest',
         expect: (r) => issues(
           r.cards.length === 0 && 'second page returned no cards',
-          hasOOS(r) && `OOS on page 2: ${oosTitles(r)}`,
+          ...oosBadges(r),
         ),
       },
     ],
