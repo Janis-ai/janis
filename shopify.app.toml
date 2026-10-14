@@ -17,7 +17,12 @@ automatically_update_urls_on_dev = false
 # write_returns (chat return requests), write_customers (self-serve
 # account updates), write_discounts (approval-gated save-the-sale codes),
 # read_checkouts (abandoned-checkout webhooks).
-scopes = "read_orders,write_orders,write_draft_orders,read_products,read_customers,read_legal_policies,write_returns,write_customers,write_discounts,read_checkouts"
+# Bundled so the merchant re-consents once, not per-feature:
+# write_returns (chat return requests), write_customers (self-serve
+# account updates), write_discounts (approval-gated save-the-sale codes),
+# read_checkouts (abandoned-checkout webhooks), read_reports (ShopifyQL
+# sales analytics — exact bestseller/sell-through stats).
+scopes = "read_orders,write_orders,write_draft_orders,read_products,read_customers,read_legal_policies,write_returns,write_customers,write_discounts,read_checkouts,read_reports"
 
 [auth]
 # Managed install (token exchange) — no OAuth redirect endpoints.
