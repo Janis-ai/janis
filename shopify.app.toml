@@ -3,7 +3,7 @@
 # toml-only in the new dashboard). `shopify app deploy` releases this as a
 # new app version — keep it in sync with the dashboard form.
 
-client_id = "cf22b09da8f49a7c7cdf7ff39b17fb87"
+client_id = "bbc74ee5092894c6b45e93e24db1ede6"
 name = "Janis"
 application_url = "https://app.janis.ai/shopify-app"
 embedded = true
