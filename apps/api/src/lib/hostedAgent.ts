@@ -651,7 +651,7 @@ export function systemPrompt(
             ? '\n{"type":"form","title","submit_label","fields":[{"name","label","type":"text|email|tel|textarea|select","options":[...],"required":true}]} — collects fields and submits them as a message you\'ll receive.' +
               '\n{"type":"status","title","steps":[{"label","state":"done|current|todo","note"}]} — order/application tracker.' +
               '\n{"type":"receipt","title","rows":[{"label","value"}],"total":{"label","value"}} — order summary.' +
-              '\n{"type":"cart","title"} — Shopify storefronts only: renders the shopper\'s LIVE cart (items, quantity controls, remove, subtotal, a checkout button) read from the store itself — emit it when they ask what\'s in their cart or want to check out; it carries no items, you never list them yourself.'
+              '\n{"type":"cart","title"} — Shopify storefronts only: renders the shopper\'s LIVE cart (items, quantity controls, remove, subtotal, a checkout button) read from the store itself — emit it when they ask what\'s in their cart, want to check out, or confirm an add-to-cart; it carries no items, you never list them yourself.'
             : '') +
           '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. For a card about a specific page or listing, use only the "Image:" URL attached to that page\'s knowledge — never reuse another document\'s image, and omit "image" if the page has none. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.' +
           '\nNever rebuild a product card by hand — catalogue cards come ONLY from the product-search tool (re-call it if you need them). And once the customer has picked an item and confirmed, act on the pick — buy it, book it, apply it with the right tool — instead of re-rendering the same card or a card whose only action sends their own words back to you.' +
@@ -1252,22 +1252,39 @@ export function repairCardStock(
   toolText: string,
   skip: Set<WidgetComponent> = new Set(),
 ): number {
-  if (!toolText) return 0;
   let fixed = 0;
   for (const w of widgets) {
     if (w.type !== 'cards' || skip.has(w)) continue;
     for (const item of w.items) {
       if (!item.title) continue;
+      // Field hygiene runs with or without a corpus — a model-authored
+      // card on a zero-tool-call turn still ships, and it can't be
+      // allowed to render raw.
       if (
         item.subtitle &&
         (item.subtitle === item.price ||
           // A bare price pasted into the subtitle ("USD 600.0") duplicates
           // the price field unformatted — drop it.
-          /^(?:[A-Z]{3}\s*[\d,.]+|[\d,.]+\s*[A-Z]{3}|[$£€]\s*[\d,.]+)$/.test(item.subtitle))
+          /^(?:[A-Z]{3}\s*[\d,.]+|[\d,.]+\s*[A-Z]{3}|[$£€]\s*[\d,.]+)$/i.test(item.subtitle))
       ) {
         delete item.subtitle;
         fixed++;
       }
+      // "USD 10.0"/"from USD 10.0" model-typed prices → storefront money
+      // format. Only currency-coded forms get rewritten — a bare number
+      // or an already-symbol price is left alone.
+      for (const k of ['price', 'compare_at'] as const) {
+        const pm = /^(from\s+)?([A-Z]{3})\s+([\d,.]+)$/i.exec(item[k] ?? '');
+        if (pm) {
+          const fmt = formatMoney(pm[3], pm[2].toUpperCase());
+          const want = fmt ? `${pm[1] ? 'from ' : ''}${fmt}` : undefined;
+          if (want && want !== item[k]) {
+            item[k] = want;
+            fixed++;
+          }
+        }
+      }
+      if (!toolText) continue;
       const f = corpusProductFields(toolText, item.title);
       if (!f) continue;
       // Same purchase-option rules as tool-built cards: selling plans kill
@@ -4423,6 +4440,13 @@ async function replyAsHostedAgent(
     // "here are both items" backed by a model-typed six-product carousel is
     // a hallucination the customer acts on. Dropped entirely → regenerate.
     widgets = mergeCardWidgets(dedupeWidgetList([...toolWidgets, ...widgets])).slice(0, 3);
+    // A confirmed add-to-cart tap ends in the shopper's live cart — attach
+    // it mechanically. The widget hydrates from the store's own /cart.js so
+    // it can't fabricate contents, and the model isn't depended on to
+    // remember to emit one.
+    if (confirmedAddTap && !widgets.some((w) => w.type === 'cart')) {
+      widgets.push({ type: 'cart' });
+    }
     // A markdown list restating the rendered cards is noise — drop runs of
     // list lines that just name card titles (they've also smuggled phantoms
     // the carousel correctly refused).

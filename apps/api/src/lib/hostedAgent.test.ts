@@ -1045,6 +1045,16 @@ describe('repairCardStock', () => {
     expect((w[0].items[0] as { subtitle?: string }).subtitle).toBeUndefined();
   });
 
+  it('still cleans hygiene fields on a zero-tool-call turn (empty corpus)', () => {
+    const w = [card([{ title: 'Gift Card', subtitle: 'USD 10.0', price: 'USD 10.0', stock: 'Out of stock' }])];
+    repairCardStock(w, '');
+    const it0 = w[0].items[0] as { subtitle?: string; price?: string; stock?: string };
+    expect(it0.subtitle).toBeUndefined();
+    expect(it0.price).toBe('$10.00');
+    // no corpus to contradict it — the model-typed badge survives
+    expect(it0.stock).toBe('Out of stock');
+  });
+
   it('hydrates the variant id onto a buyable hand-authored card', () => {
     const w = [card([{ title: 'The Snowboard', price: 'USD 885.95' }])];
     repairCardStock(w, TOOL_TEXT);
