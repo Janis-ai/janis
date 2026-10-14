@@ -1,0 +1,16 @@
+import { createDb } from '../../src/db/client.js';
+import { agents } from '../../src/db/schema.js';
+import { eq } from 'drizzle-orm';
+import { callTool } from '../../src/lib/toolExec.js';
+import { loadSecretsMap } from '../../src/lib/secrets.js';
+import { connectionSecrets } from '../../src/lib/connections.js';
+const db = await createDb();
+const [a] = await db.select().from(agents).where(eq(agents.id, 'd408d7b5-fdad-49a4-a34d-11fa16e88135'));
+const cfg = a?.config as { tools?: { name: string }[] };
+const tool = (cfg?.tools ?? []).find((x) => x.name === 'shopify_search_products')!;
+const secrets = { ...(await loadSecretsMap(db, a!.id)), ...(await connectionSecrets(db, a!.id)) };
+const r = await callTool(tool as never, { query: '' }, secrets as never);
+console.log('len:', r.length);
+console.log(r.slice(0, 400));
+console.log('...tail:', r.slice(-200));
+process.exit(0);

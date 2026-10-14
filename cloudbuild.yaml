@@ -20,6 +20,6 @@ steps:
 images:
   - gcr.io/$PROJECT_ID/janis-api:latest
   - gcr.io/$PROJECT_ID/janis-api:$BUILD_ID
-options:
-  # Default builder is 1 vCPU — npm ci + vite/tsc dominate build time.
-  machineType: E2_HIGHCPU_8
+# Note: deliberately on the default e2-medium builder — 120 free build-min/day.
+# A non-default machineType (e.g. E2_HIGHCPU_8) bills every minute with no free
+# tier, which at this repo's deploy cadence costs more than the time saved.

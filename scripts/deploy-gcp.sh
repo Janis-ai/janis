@@ -61,9 +61,15 @@ if db_url:
                         '--project', PROJECT, '--replication-policy', 'automatic',
                         '--data-file', '-'], input=db_url.encode(), check=True)
     else:
-        subprocess.run(['gcloud', 'secrets', 'versions', 'add', 'janis-database-url',
-                        '--project', PROJECT, '--data-file', '-'],
-                       input=db_url.encode(), check=True)
+        # Only add a version when the value actually changed — an unconditional
+        # 'versions add' per deploy accumulated 800+ billed versions.
+        cur = subprocess.run(['gcloud', 'secrets', 'versions', 'access', 'latest',
+                              '--secret', 'janis-database-url', '--project', PROJECT],
+                             capture_output=True)
+        if cur.stdout.decode().strip() != db_url.strip():
+            subprocess.run(['gcloud', 'secrets', 'versions', 'add', 'janis-database-url',
+                            '--project', PROJECT, '--data-file', '-'],
+                           input=db_url.encode(), check=True)
     # Runtime service account (default compute SA) needs read access
     subprocess.run(['gcloud', 'secrets', 'add-iam-policy-binding', 'janis-database-url',
                     '--project', PROJECT,
@@ -94,9 +100,13 @@ if twilio_token:
                         '--project', PROJECT, '--replication-policy', 'automatic',
                         '--data-file', '-'], input=twilio_token.encode(), check=True)
     else:
-        subprocess.run(['gcloud', 'secrets', 'versions', 'add', 'janis-twilio-auth-token',
-                        '--project', PROJECT, '--data-file', '-'],
-                       input=twilio_token.encode(), check=True)
+        cur = subprocess.run(['gcloud', 'secrets', 'versions', 'access', 'latest',
+                              '--secret', 'janis-twilio-auth-token', '--project', PROJECT],
+                             capture_output=True)
+        if cur.stdout.decode().strip() != twilio_token.strip():
+            subprocess.run(['gcloud', 'secrets', 'versions', 'add', 'janis-twilio-auth-token',
+                            '--project', PROJECT, '--data-file', '-'],
+                           input=twilio_token.encode(), check=True)
     subprocess.run(['gcloud', 'secrets', 'add-iam-policy-binding', 'janis-twilio-auth-token',
                     '--project', PROJECT,
                     '--member', f'serviceAccount:{PROJECT_NUMBER}-compute@developer.gserviceaccount.com',

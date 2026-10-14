@@ -85,7 +85,7 @@ function toolUrlAllowed(raw: string): boolean {
   }
 }
 
-const MAX_TOOL_RESPONSE = 8_000;
+const MAX_TOOL_RESPONSE = 32_000;
 
 const EMAIL_IN_TEXT = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 /** Provider ids a tool result can "produce" — an identity-scoped arg is
@@ -282,8 +282,15 @@ export async function callTool(
     ...(body ? { body } : {}),
     signal: AbortSignal.timeout(10_000),
   });
-  const text = (await res.text()).slice(0, MAX_TOOL_RESPONSE);
-  return res.ok ? text : `error: HTTP ${res.status} ${text.slice(0, 300)}`;
+  const raw = await res.text();
+  const text = raw.slice(0, MAX_TOOL_RESPONSE);
+  // A truncated JSON body can't be parsed into a widget and half-a-rows
+  // tail reads like real data to the model — say so plainly.
+  const truncNote =
+    raw.length > MAX_TOOL_RESPONSE && text.startsWith('{')
+      ? '\n[result truncated — do NOT enumerate or quote items from this result]'
+      : '';
+  return res.ok ? text + truncNote : `error: HTTP ${res.status} ${text.slice(0, 300)}`;
 }
 
 export type { Db };

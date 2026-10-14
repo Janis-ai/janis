@@ -99,6 +99,11 @@ const snap = (label) => {
 
 // ---- go -----------------------------------------------------------------
 console.log('tab:', tabRef());
+if (process.env.FRESH === '1') {
+  js(`(() => { Object.keys(localStorage).filter(k=>/janis/i.test(k)).forEach(k=>localStorage.removeItem(k)); location.reload(); return 'reset'; })()`);
+  await sleep(5000);
+  await waitFor(`!!document.querySelector('#janis-bubble')`, 30_000, 'widget reload');
+}
 js(`document.querySelector('#janis-bubble')?.click(); 'opened'`);
 await sleep(1200);
 await waitFor(`document.querySelector('#janis-input')`, 10_000, 'input');
@@ -139,13 +144,43 @@ console.log(`  cart rows rendered: ${s4.cartRows} | body: ${(s4.cartBody||'').re
 await send('show me every product you have');
 snap('all products');
 
-// 6. load more via tile click → next page
-if (js(`!!document.querySelector('.janis-wmore')`) === 'true') {
-  js(`document.querySelector('.janis-wmore').click()`);
+// 6. load more via tile click → next page (scope to the LATEST reply —
+//    earlier tiles stay live DOM in the scrollback)
+const hasMore = js(`(() => { const m=[...document.querySelectorAll('${OUT_SEL}')].pop(); const t=m?.querySelector('.janis-wmore'); if(t){t.click();return true} return false; })()`);
+if (hasMore === 'true') {
   console.log('  clicked the tile — waiting for page 2');
   await waitFor(`document.querySelectorAll('.janis-msg.out:not(.typing)').length > ${await outCount()}`, 75_000, 'page 2 reply');
   await sleep(2000);
   snap('after load-more');
+} else {
+  console.log('  no load-more tile on latest reply');
 }
+
+// 7. the reported failure — "in stock" ask must not badge-mismatch
+await send('show me your items that are in stock');
+const s7 = snap('in-stock ask');
+const badged = (s7.cards || []).filter((c) => c.stock && /out/i.test(c.stock)).length;
+console.log(`  cards: ${(s7.cards||[]).length}, out-of-stock badged: ${badged}`);
+
+// 8. tap "show me more" again if a tile exists — chain walk must not repeat
+const hasMore2 = js(`(() => { const m=[...document.querySelectorAll('${OUT_SEL}')].pop(); const t=m?.querySelector('.janis-wmore'); if(t){t.click();return true} return false; })()`);
+if (hasMore2 === 'true') {
+  await waitFor(`document.querySelectorAll('.janis-msg.out:not(.typing)').length > ${await outCount()}`, 75_000, 'page-3 reply');
+  await sleep(2000);
+  snap('after second load-more');
+}
+
+// 9. specific out-of-stock product — badged card, no Add button
+await send('do you have the out of stock snowboard');
+const s9 = snap('oos-specific');
+console.log(`  oos card stock label: ${JSON.stringify((s9.cards||[]).map(c=>c.stock))}`);
+
+// 10. hallucination probe
+await send('do you have a flying snowboard');
+snap('nonexistent product');
+
+// 11. price-sensitive ask — narration must defer to card price
+await send("what's your cheapest product");
+snap('cheapest');
 
 console.log('\nDone — window stays yours.');
