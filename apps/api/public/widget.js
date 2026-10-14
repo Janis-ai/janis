@@ -1062,7 +1062,8 @@
           wtext(cartBtn, 'Add to cart');
           cartBtn.onclick = function () {
             cartBtn.disabled = true;
-            wtext(cartBtn, 'Adding…');
+            // textContent, not wtext — wtext appends; state labels replace.
+            cartBtn.textContent = 'Adding…';
             fetch('/cart/add.js', {
               method: 'POST',
               headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -1070,14 +1071,14 @@
             })
               .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
               .then(function () {
-                wtext(cartBtn, 'Added ✓');
+                cartBtn.textContent = 'Added ✓';
                 // tap marker — the model sees this as a component action on
                 // the product card (an add-to-cart event), not typed text.
                 sendText('I just added ' + (item.title || 'an item') + ' to my cart.', { of: (item.title || 'product') + ' — add to cart' });
               })
               .catch(function () {
                 cartBtn.disabled = false;
-                wtext(cartBtn, 'Add to cart');
+                cartBtn.textContent = 'Add to cart';
                 sendText("I tried to add " + (item.title || 'an item') + ' to my cart but it failed.');
               });
           };
@@ -1271,7 +1272,7 @@
     }
     function money(cents, cur) { return (cur || '') + ' ' + (cents / 100).toFixed(2); }
     function load() {
-      wtext(body, 'Loading your cart…');
+      body.textContent = 'Loading your cart…';
       fetch('/cart.js', { credentials: 'same-origin' })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (cart) {
@@ -1324,7 +1325,7 @@
           wtext(co, 'Check out — ' + money(cart.total_price, cart.currency));
           body.appendChild(co);
         })
-        .catch(function () { wtext(body, 'Could not load your cart.'); });
+        .catch(function () { body.textContent = 'Could not load your cart.'; });
     }
     load();
   }

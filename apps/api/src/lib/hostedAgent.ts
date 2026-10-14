@@ -1730,6 +1730,44 @@ export function stripPricedLists(text: string): string {
   return lines.filter((_, i) => !drop.has(i)).join('\n');
 }
 
+/** A markdown list that just restates the rendered cards is noise — the
+ *  carousel already shows them, and the list is a fabrication vector (it
+ *  once added "The Hidden Snowboard" the carousel truthfully omitted).
+ *  Drop a run where ≥half the lines name a rendered card title. */
+export function stripRedundantCardLists(text: string, cardTitles: Set<string>): string {
+  if (!cardTitles.size) return text;
+  const lines = text.split('\n');
+  const drop = new Set<number>();
+  const titleOf = (l: string) =>
+    l
+      .replace(/^\s*(?:[-*•]|\d+[.)]\s)\s*/, '')
+      .replace(/\s*[—–-]\s*\$?[\d,.]+\s*$/, '')
+      .replace(/\s*\([^)]*\)\s*$/, '')
+      .replace(/\s*\$[\d,.]+\s*$/, '')
+      .trim()
+      .toLowerCase();
+  let run: number[] = [];
+  const flush = () => {
+    if (run.length >= 2) {
+      const hits = run.filter((i) => cardTitles.has(titleOf(lines[i]))).length;
+      if (hits >= Math.ceil(run.length / 2)) run.forEach((i) => drop.add(i));
+    }
+    run = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if (LIST_LINE.test(lines[i])) run.push(i);
+    else if (lines[i].trim() !== '') flush();
+  }
+  flush();
+  for (let i = 0; i < lines.length; i++) {
+    if (drop.has(i) || !lines[i].trim() || !/:\s*$/.test(lines[i])) continue;
+    let j = i + 1;
+    while (j < lines.length && !lines[j].trim()) j++;
+    if (j < lines.length && drop.has(j)) drop.add(i);
+  }
+  return lines.filter((_, i) => !drop.has(i)).join('\n');
+}
+
 const FAILED_TOOLS_GUARD_RETRY =
   'Every tool call in your previous attempt failed — you have no catalogue data right now, so the product list ' +
   'and prices you wrote came from memory and cannot be trusted. Rewrite it: say the store data is temporarily ' +
@@ -3857,6 +3895,22 @@ async function replyAsHostedAgent(
     // "here are both items" backed by a model-typed six-product carousel is
     // a hallucination the customer acts on. Dropped entirely → regenerate.
     widgets = mergeCardWidgets(dedupeWidgetList([...toolWidgets, ...widgets])).slice(0, 3);
+    // A markdown list restating the rendered cards is noise — drop runs of
+    // list lines that just name card titles (they've also smuggled phantoms
+    // the carousel correctly refused).
+    if (reply) {
+      const cardTitles = new Set(
+        widgets
+          .filter((w) => w.type === 'cards')
+          .flatMap((w) => w.items.map((i) => (i.title ?? '').trim().toLowerCase()))
+          .filter(Boolean),
+      );
+      const unlisted = stripRedundantCardLists(reply, cardTitles).trim();
+      if (unlisted !== reply.trim()) {
+        console.error(`[hosted] stripped card-restating list conv=${convId}`);
+        reply = unlisted || 'Here you go — tap any card for a closer look.';
+      }
+    }
     const genMs = Date.now() - tGen;
     if (genMs > 10_000)
       console.warn(`[hosted] slow generateReply conv=${convId} ${genMs}ms`);

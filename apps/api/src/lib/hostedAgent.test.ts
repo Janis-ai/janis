@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -1066,6 +1066,34 @@ describe('listsPricedItems / stripPricedLists', () => {
   it('keeps an unpriced list and priced prose', () => {
     expect(stripPricedLists('Options:\n- red\n- blue')).toBe('Options:\n- red\n- blue');
     expect(stripPricedLists('It costs $10.00 total.')).toBe('It costs $10.00 total.');
+  });
+});
+
+describe('stripRedundantCardLists', () => {
+  const titles = new Set(['the videographer snowboard', 'the complete snowboard']);
+  const dupe =
+    'Here are some of our available products:\n' +
+    '- The Videographer Snowboard ($885.95)\n' +
+    '- The Complete Snowboard ($699.95)\n' +
+    'Want a closer look at either?';
+
+  it('drops a list that restates the rendered cards, lead-in included', () => {
+    const out = stripRedundantCardLists(dupe, titles);
+    expect(out).not.toContain('Videographer Snowboard ($');
+    expect(out).not.toContain('available products:');
+    expect(out).toContain('Want a closer look at either?');
+  });
+
+  it('keeps lists that are not the carousel', () => {
+    const other = 'Steps:\n- pick a size\n- add to cart';
+    expect(stripRedundantCardLists(other, titles)).toBe(other);
+    // a single matching line inside a mostly-other list survives
+    const mixed = '- The Videographer Snowboard\n- some accessory\n- another thing';
+    expect(stripRedundantCardLists(mixed, titles)).toBe(mixed);
+  });
+
+  it('returns text unchanged with no cards', () => {
+    expect(stripRedundantCardLists(dupe, new Set())).toBe(dupe);
   });
 });
 
