@@ -2623,11 +2623,21 @@ export async function complete(
         if (
           w &&
           w.type === 'cards' &&
-          args.after !== undefined &&
-          ctx?.prevCardTitles?.size
+          ctx?.prevCardTitles?.size &&
+          (args.after !== undefined ||
+            w.items.every((i) => i.title && ctx.prevCardTitles!.has(i.title)))
         ) {
           const fresh = w.items.filter((i) => i.title && !ctx.prevCardTitles!.has(i.title));
-          if (!fresh.length) {
+          if (!fresh.length && args.after === undefined) {
+            // A fresh (non-paginated) call returned exactly the set already
+            // on screen — e.g. the model searched again on a cart ask. The
+            // carousel adds nothing; tell the model to reference the cards
+            // already shown instead of repeating them.
+            w = null;
+            result +=
+              `\n[this search returned only products whose cards are already visible to the customer above — ` +
+              `do NOT re-render or restate them; reference the cards already shown and answer the actual question.]`;
+          } else if (!fresh.length) {
             w = null;
             const retryCursor = toolResultEndCursor(resultJson) ?? ctx?.prevEndCursor;
             let recovered = false;
