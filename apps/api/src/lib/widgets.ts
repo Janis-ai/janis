@@ -373,14 +373,15 @@ export function widgetFromToolResult(
   if (!Array.isArray(rows) || !rows.length) return null;
   // Unpurchasable rows (availableForSale === false) drop out of the cards
   // unless the call explicitly opted in — the model narrates from the full
-  // result either way.
+  // result either way. `list` keeps the array narrowing `rows` can't.
+  let list: unknown[] = rows;
   const optedIn =
     cfg.availability &&
     ['1', 'true', 'yes'].includes(String(args[cfg.availability.unless_arg] ?? '').toLowerCase());
   if (cfg.availability && !optedIn) {
     const field = cfg.availability.field;
-    rows = rows.filter((r) => digPath(r, field) !== false);
-    if (!rows.length) return null;
+    list = list.filter((r) => digPath(r, field) !== false);
+    if (!list.length) return null;
   }
   const map = cfg.map ?? {};
   // Label literals stay literal; a {path} in them resolves per-row, so a
@@ -394,7 +395,7 @@ export function widgetFromToolResult(
       ? {
           type: 'options',
           title: cfg.title,
-          items: rows
+          items: list
             .slice(0, 12)
             .map((r) => ({
               label: str(mapValue(r, map.label ?? 'label', secrets)) ?? str(mapValue(r, map.title ?? 'title', secrets)),
@@ -404,7 +405,7 @@ export function widgetFromToolResult(
         }
       : {
           type: 'cards',
-          items: rows
+          items: list
             .slice(0, 10)
             .map((r) => ({
               title: str(mapValue(r, map.title ?? 'title', secrets)) ?? str(mapValue(r, map.label ?? 'label', secrets)),
