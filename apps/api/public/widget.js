@@ -462,6 +462,11 @@
     'border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit;text-align:center}' +
     '.janis-wcard-btns .janis-wbtn{display:block;width:100%;box-sizing:border-box}' +
     '.janis-wbtn.janis-wbtn-primary{background:var(--janis-accent);color:#fff}' +
+    // Load-more tile under a partial carousel — "Showing 10 of 13". The
+    // count comes from the tool result, not the model, so it can't drift.
+    '.janis-wmore{display:block;width:100%;box-sizing:border-box;margin-top:8px;padding:9px;border:1px dashed #d1d5db;' +
+      'border-radius:10px;background:#fff;font-size:12.5px;color:var(--janis-accent);cursor:pointer;text-align:center;font-family:inherit}' +
+    '.janis-wmore:hover{background:#f8fafc}' +
     '.janis-wtitle{font-weight:600;margin-bottom:6px;color:#374151}' +
     '.janis-wlist{margin:4px 0;padding-left:18px;display:block}' +
     '.janis-wlist li{margin:2px 0}' +
@@ -1115,6 +1120,15 @@
     wrap.appendChild(prev);
     wrap.appendChild(next);
     box.appendChild(wrap);
+    // Partial page of a larger result — the tool stamped w.total, so a
+    // "Showing K of N" tile gives the shopper a real load-more affordance
+    // instead of the carousel pretending to be the whole catalogue.
+    if (typeof w.total === 'number' && w.total > w.items.length) {
+      var more = el('button', {}, { class: 'janis-wmore', type: 'button' });
+      wtext(more, 'Showing ' + w.items.length + ' of ' + w.total + ' — tap for more');
+      more.onclick = function () { sendText('Show me more', { of: 'pagination' }); };
+      box.appendChild(more);
+    }
     // The panel may be closed (scrollWidth 0) when the cards render, and the
     // window can resize — observe so arrows track real overflow.
     if (typeof ResizeObserver !== 'undefined') {

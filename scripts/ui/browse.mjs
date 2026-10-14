@@ -32,6 +32,16 @@ await page.waitForTimeout(2500); // greeting lands
 
 const outCount = () => page.locator('.janis-msg.out').count();
 
+// debug: catch reloads, request bodies, and console errors
+page.on('framenavigated', (f) => {
+  if (f === page.mainFrame()) console.log('[browse] NAVIGATED →', f.url());
+});
+page.on('pageerror', (e) => console.log('[browse] pageerror:', e.message));
+page.on('request', (r) => {
+  if (r.method() === 'POST' && r.url().includes('/messages'))
+    console.log('[browse] POST body:', r.postData()?.slice(0, 120));
+});
+
 for (const text of TURNS) {
   const before = await outCount();
   console.log(`[browse] typing: ${text}`);
@@ -39,6 +49,7 @@ for (const text of TURNS) {
   await input.click();
   await input.pressSequentially(text, { delay: TYPE_DELAY });
   await page.waitForTimeout(400);
+  console.log(`[browse] input value at send: ${JSON.stringify(await input.inputValue())}`);
   await page.locator('#janis-send').click();
   // wait for the AGENT's bubble (your own .in bubble doesn't count), then a
   // quiet period so widgets/chips finish rendering before the next turn —

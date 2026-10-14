@@ -42,6 +42,11 @@ export const WidgetComponent = z.discriminatedUnion('type', [
       )
       .min(1)
       .max(10),
+    // Query total when it exceeds the rendered items — cards cap at 10 while
+    // the catalogue may hold more, and "all 13" over a 10-card carousel is a
+    // lie. Renderers show "K of N" plus a load-more affordance; narrators
+    // must say "the first K of N", never "all N".
+    total: z.number().int().optional(),
   }),
   // Booking-slot style picker — one tap sends the label as a message.
   z.object({
@@ -446,7 +451,18 @@ export function widgetFromToolResult(
         };
 
   const parsed = WidgetComponent.safeParse(candidate);
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) return null;
+  const widget = parsed.data;
+  // Stamp the query total when the carousel can't show it all — renderers
+  // get a "K of N" + load-more affordance, and the reply guard can catch a
+  // narration that claims the partial set is everything. Skipped for
+  // `only_arg` views (out-of-stock-only etc.): the query total counts rows
+  // the filter removed, so "3 of 13" would misdescribe the subset.
+  if (widget.type === 'cards' && !(cfg.availability?.only_arg && args[cfg.availability.only_arg])) {
+    const total = toolResultCount(resultText);
+    if (total !== null && total > widget.items.length) widget.total = total;
+  }
+  return widget;
 }
 
 /** True when the result's rows array resolved to empty — the caller uses it
@@ -470,7 +486,11 @@ export function toolResultEmpty(cfg: ToolWidgetConfig, resultText: string): bool
  *  the exact args for the next page. Shopify cursors are bound to the query
  *  that produced them — "show me more" with a rephrased query silently
  *  resets to page one, so the note hands the model the call verbatim. */
-export function toolResultNotes(resultText: string, args: Record<string, unknown> = {}): string {
+export function toolResultNotes(
+  resultText: string,
+  args: Record<string, unknown> = {},
+  shown?: number,
+): string {
   let data: unknown;
   try {
     data = JSON.parse(resultText);
@@ -482,7 +502,11 @@ export function toolResultNotes(resultText: string, args: Record<string, unknown
     if (!obj || typeof obj !== 'object' || depth > 4) return;
     for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
       if (k === 'count' && typeof v === 'number') {
-        notes.push(`the catalogue total for this query is ${v} — quote that number, not a count of the rows shown`);
+        notes.push(
+          shown !== undefined && shown < v
+            ? `the catalogue total for this query is ${v} but only ${shown} cards render — narrate "the first ${shown} of ${v}" (or similar) and point out the customer can ask for more; NEVER call this "all ${v}" or "every product"`
+            : `the catalogue total for this query is ${v} — quote that number, not a count of the rows shown`,
+        );
       }
       if (k === 'pageInfo' && v && typeof v === 'object') {
         const pi = v as { hasNextPage?: unknown; endCursor?: unknown };

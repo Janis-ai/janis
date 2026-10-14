@@ -309,6 +309,47 @@ describe('widgetFromToolResult', () => {
     const bad = widgetFromToolResult(cfg, result, {}, { limit: 'all' });
     expect(bad?.type === 'cards' && bad.items.length).toBe(3);
   });
+
+  it('stamps total when the query outgrows the carousel (and not otherwise)', () => {
+    const cfg = {
+      type: 'cards' as const,
+      items: 'data.products.nodes',
+      map: { title: 'title' },
+    };
+    const mk = (count: number, n: number) =>
+      JSON.stringify({
+        data: {
+          productsCount: { count },
+          products: { nodes: Array.from({ length: n }, (_, i) => ({ title: `P${i}` })) },
+        },
+      });
+    // 13 in the catalogue, 10 rendered → total stamps for the "K of N" tile.
+    const w = widgetFromToolResult(cfg, mk(13, 12));
+    expect(w?.type === 'cards' && w.items.length).toBe(10);
+    expect(w?.type === 'cards' && w.total).toBe(13);
+    // Everything fit → no total, no tile.
+    const fit = widgetFromToolResult(cfg, mk(3, 3));
+    expect(fit?.type === 'cards' && fit.total).toBeUndefined();
+    // only_arg views count rows the filter dropped — never a total.
+    const cfgOnly = {
+      ...cfg,
+      availability: { field: 'variants.nodes.0.availableForSale', unless_arg: 'include_unavailable', only_arg: 'only_unavailable' },
+    };
+    const oosResult = JSON.stringify({
+      data: {
+        productsCount: { count: 13 },
+        products: {
+          nodes: Array.from({ length: 3 }, (_, i) => ({
+            title: `OOS ${i}`,
+            variants: { nodes: [{ availableForSale: false }] },
+          })),
+        },
+      },
+    });
+    const oos = widgetFromToolResult(cfgOnly, oosResult, {}, { only_unavailable: '1' });
+    expect(oos?.type === 'cards' && oos.items.length).toBe(3);
+    expect(oos?.type === 'cards' && oos.total).toBeUndefined();
+  });
 });
 
 describe('extractWidgets', () => {

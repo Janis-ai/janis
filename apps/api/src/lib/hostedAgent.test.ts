@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -121,6 +121,23 @@ describe('transcriptFor file analysis', () => {
     const last = history.at(-1)!;
     expect(last.role).toBe('user');
     expect(last.content as string).toBe('Choose Free [tapped "Free"]');
+  });
+
+  it('marks an add-to-cart tap as a confirmed storefront success', async () => {
+    // prod incident: "I just added X" arrived annotated only as a pick and
+    // the model replied "it's out of stock, it couldn't be added" — a
+    // fabricated failure over an event /cart/add.js had already accepted.
+    await db.insert(messages).values({
+      conversationId: convId,
+      direction: 'in',
+      text: 'I just added The Inventory Not Tracked Snowboard to my cart.',
+      payload: { tap: true, tap_of: 'The Inventory Not Tracked Snowboard — add to cart' },
+      createdAt: new Date(),
+    });
+    const history = await transcriptFor(db, convId, true);
+    const last = history.at(-1)!;
+    expect(last.content as string).toContain('[added to cart "The Inventory Not Tracked Snowboard"');
+    expect(last.content as string).toContain('confirmed');
   });
 
   it('drops out-direction audit lines but keeps flagged markers and human whispers', async () => {
@@ -2040,5 +2057,40 @@ describe('unbacked catalogue count', () => {
     expect(
       stripUnbackedCounts('We have 15 products in total! Want me to show you some?'),
     ).toBe('Want me to show you some?');
+  });
+});
+
+describe('full-catalogue overclaim guard', () => {
+  const totals = new Set([13]);
+
+  it('flags "all 13" and completeness claims over a 10-card render', () => {
+    expect(claimsFullCatalogue('Here are all 13 products available in our store:', 10, totals)).toBe(true);
+    expect(claimsFullCatalogue('Here is our full product range:', 10, totals)).toBe(true);
+    expect(claimsFullCatalogue('I can show you every product we carry.', 10, totals)).toBe(true);
+  });
+
+  it('passes honest scoping, subset counts, and complete renders', () => {
+    expect(claimsFullCatalogue('Here are the first 10 of 13 products:', 10, totals)).toBe(false);
+    expect(claimsFullCatalogue('Here are all 3 out-of-stock items:', 3, totals)).toBe(false);
+    expect(claimsFullCatalogue('Here are all 13 products:', 13, totals)).toBe(false);
+    expect(claimsFullCatalogue('Here are some products:', 10, totals)).toBe(false);
+    expect(claimsFullCatalogue('Here are all 13 products:', 10, new Set())).toBe(false);
+  });
+
+  it('rewrites the claim to the honest K of N', () => {
+    expect(fixFullCatalogueClaims('Here are all 13 products available in our store:', 10, 13)).toBe(
+      'Here are the first 10 of 13 products available in our store:',
+    );
+    expect(fixFullCatalogueClaims('Take a look at our full product range:', 10, 13)).toBe(
+      'Take a look at our first 10 of 13 products:',
+    );
+  });
+});
+
+describe('confirmed-add denial guard', () => {
+  it('flags a failure/stock denial answering an add-to-cart tap', () => {
+    expect(deniesConfirmedAdd("That item is out of stock right now, so it couldn't be added to your cart.")).toBe(true);
+    expect(deniesConfirmedAdd('The add failed — sorry about that.')).toBe(true);
+    expect(deniesConfirmedAdd('Added! Your cart has 2 items — want to check out?')).toBe(false);
   });
 });

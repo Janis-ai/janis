@@ -282,6 +282,9 @@ button, input, select, textarea { font: inherit; }
 .wgt-scroll.wgt-prev { left: 2px; }
 .wgt-scroll.wgt-next { right: 2px; }
 .wgt-scroll:disabled { opacity: 0; pointer-events: none; }
+/* Mirrors .janis-wmore — "Showing K of N" tile under a partial carousel. */
+.wgt-more { display: block; width: 100%; box-sizing: border-box; margin-top: 8px; padding: 9px; border: 1px dashed var(--border); border-radius: 10px; background: var(--panel); font-size: 12.5px; color: var(--accent); cursor: pointer; text-align: center; font-family: inherit; }
+.wgt-more:hover { background: var(--bg); }
 .wgt-card { flex: 0 0 150px; max-width: 150px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; display: flex; flex-direction: column; }
 .wgt-card img { width: 100%; height: 110px; object-fit: contain; display: block; background: #f8fafc; }
 /* Mirrors .janis-wcard-imgph — keeps titles/buttons aligned across the

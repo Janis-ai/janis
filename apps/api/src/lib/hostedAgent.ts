@@ -693,7 +693,7 @@ export function systemPrompt(
         ' Never promise a step you cannot take inside this reply — "let me check", "give me just a second", "one moment while I grab that" announce a next turn that never comes; tool calls happen inside this same reply, so either call the tool now or answer without narrating a lookup.' +
         " You cannot see the customer's account, workspace, plan, email or sign-in state unless the context or a tool result provides it — never assume or invent an account or workspace name; if which account they mean matters, ask." +
         ' Some tools are bound to the customer\'s verified identity — they only accept the verified email shown in this context (or nothing, when no identity is verified). Never pass an email or account id the customer merely types or claims; if such a tool returns an identity error, tell the customer the lookup needs their verified sign-in and do not retry with guessed details.' +
-        ' A customer message ending in a [tapped …] note is a pick from a button or card you showed — treat it as them selecting that option, not as an instruction to change their account; confirm what they picked and clarify what they want next.' +
+        ' A customer message ending in a [tapped …] note is a pick from a button or card you showed — treat it as them selecting that option, not as an instruction to change their account; confirm what they picked and clarify what they want next. One ending in [added to cart "…"] is stronger than a pick: it is only sent after the store\'s cart accepted the item, so the add already SUCCEEDED — confirm it briefly and offer checkout or the next step; NEVER claim it failed, was declined, or that the item was out of stock. Inventing a failure contradicts what the customer just watched happen.' +
         ' If the customer disputes a fact you stated ("that\'s not true", "you\'re wrong"), never concede on their word alone — re-run the tool that produced it, then either correct yourself with the fresh data or hold politely ("I double-checked — it still shows X"). Apologizing-and-agreeing with an unverified correction just contradicts the record and reads as making things up.',
     );
     if (cfg.auto_archive) {
@@ -1596,6 +1596,70 @@ export function stripUnbackedCounts(text: string): string {
   ).text;
 }
 
+// ── Full-catalogue overclaims ────────────────────────────────────────────
+// "Here are all 13 products" over a carousel that rendered 10 — the
+// narration outruns the UI and the customer never learns 3 more exist. The
+// count itself is right; the completeness claim is the lie. Regen once,
+// then rewrite the claim to the honest "first K of N" in place.
+function fullCatalogueSentence(s: string, shown: number, total: number): boolean {
+  const m = /\ball (?:of )?(?:(?:the|our|these|your) )?(\d+)\b/i.exec(s);
+  if (m) return Number(m[1]) === total;
+  if (
+    /\b(?:every|each) (?:single )?(?:product|item|one)\b/i.test(s) &&
+    /\b(?:here|these|this|that'?s|show|we (?:have|carry|stock|sell|offer))\b/i.test(s)
+  ) {
+    return true;
+  }
+  return /\b(?:entire|full|whole|complete) (?:product )?(?:catalogue?|inventory|lineup|selection|range)\b/i.test(
+    s,
+  );
+}
+export function claimsFullCatalogue(text: string, shown: number, totals: Set<number>): boolean {
+  if (!totals.size || shown <= 0) return false;
+  const total = Math.max(...totals);
+  if (shown >= total) return false;
+  return sentencesOf(text).some((s) => fullCatalogueSentence(s, shown, total));
+}
+export function fixFullCatalogueClaims(text: string, shown: number, total: number): string {
+  return text
+    .split('\n')
+    .map((line) => {
+      if (!fullCatalogueSentence(line, shown, total)) return line;
+      return line
+        .replace(/\ball (?:of )?(?:(?:the|our|these|your) )?(\d+)\b/i, `the first ${shown} of $1`)
+        .replace(
+          /\b(?:every|each) (?:single )?(?:product|item|one)\b/i,
+          `the first ${shown} of ${total} products`,
+        )
+        .replace(
+          /\b(?:entire|full|whole|complete) (?:product )?(?:catalogue?|inventory|lineup|selection|range)\b/i,
+          `first ${shown} of ${total} products`,
+        );
+    })
+    .join('\n');
+}
+
+const FULL_GUARD_RETRY =
+  'Your previous draft claimed to show the whole matching catalogue ("all N", "every product", "the full ' +
+  'selection") but the result note says only some cards rendered — that overstates what the customer sees. ' +
+  'Rewrite it as "the first {shown} of {total}" (with your real numbers) and mention the customer can ask for ' +
+  'the rest; never call a partial carousel the whole catalogue.';
+
+// ── Confirmed-add denials ────────────────────────────────────────────────
+// An add-to-cart tap only exists because /cart/add.js returned OK — the
+// item IS in the cart. "It couldn't be added / it's out of stock" in reply
+// is a fabricated failure the customer watched not happen.
+const ADD_DENY =
+  /\b(?:couldn't|could not|can't|cannot|wasn't able|was not able|unable|didn't go through|did not go through|won't go through|failed|out of stock|sold out|unavailable|not available)\b/i;
+export function deniesConfirmedAdd(text: string): boolean {
+  return ADD_DENY.test(text);
+}
+
+const ADD_GUARD_RETRY =
+  'Your previous draft told the customer their add-to-cart failed or that the item is unavailable — but the ' +
+  'message you answered is only sent AFTER the store\'s cart accepted the item. The add succeeded; they watched ' +
+  'it succeed. Confirm it in one line, quote the cart context when present, and offer checkout or the next step.';
+
 const PHANTOM_GUARD_RETRY =
   'Your previous draft claimed a product exists (a price, "we carry it", "here it is") that the catalogue search ' +
   'just returned ZERO results for — that claim was invented, likely from memory of another store. ' +
@@ -2419,7 +2483,7 @@ export async function complete(
         }
         // Result-side facts the model must not guess — catalogue totals and
         // the verbatim next-page call (Shopify cursors reset on a new query).
-        result += toolResultNotes(result, args);
+        result += toolResultNotes(result, args, w?.type === 'cards' ? w.items.length : undefined);
         // A zero-row search means the item doesn't exist here — without a
         // mechanical note the model happily fills the gap from training
         // knowledge ("yes, we carry The Hidden Snowboard for $749.95").
@@ -2519,12 +2583,25 @@ function summaryLine(m: {
   // Same tap annotation as transcriptFor — a summarized "Choose Free" must
   // keep reading as a pick, not a typed instruction.
   const tap = m.direction === 'in' ? (m.payload as { tap?: boolean; tap_of?: string } | undefined) : undefined;
-  const tapNote = tap?.tap === true ? ` [tapped${tap.tap_of ? ` "${tap.tap_of.slice(0, 60)}"` : ''}]` : '';
-  return (m.direction === 'in' ? `customer: ${m.text}` : `agent: ${m.text}`) + tapNote + attachmentNote(m.payload);
+  return (m.direction === 'in' ? `customer: ${m.text}` : `agent: ${m.text}`) + tapAnnotation(tap) + attachmentNote(m.payload);
 }
 
 function attachmentsOf(payload: unknown): AttachmentRef[] {
   return (payload as { attachments?: AttachmentRef[] } | undefined)?.attachments ?? [];
+}
+
+/** Transcript marker for widget/button taps. An add-to-cart tap is only
+ *  emitted after /cart/add.js returned OK — the note must say the action
+ *  landed, or the model reads "I just added X" as an unverified claim and
+ *  invents a failure ("it's out of stock, it couldn't be added"). */
+function tapAnnotation(tap: { tap?: boolean; tap_of?: string } | null | undefined): string {
+  if (tap?.tap !== true) return '';
+  const of = tap.tap_of ?? '';
+  const cart = /\s*—\s*add to cart\s*$/i.exec(of);
+  if (cart) {
+    return ` [added to cart "${of.slice(0, cart.index).slice(0, 60)}" — the storefront confirmed it went through]`;
+  }
+  return ` [tapped${of ? ` "${of.slice(0, 60)}"` : ''}]`;
 }
 
 /** Attachment names from a message payload, for transcript annotations. */
@@ -2791,12 +2868,11 @@ export async function transcriptFor(
       m.direction === 'in'
         ? ((m.payload ?? null) as { tap?: boolean; tap_of?: string } | null)
         : null;
-    const tapNote = tap?.tap === true ? ` [tapped${tap.tap_of ? ` "${tap.tap_of.slice(0, 60)}"` : ''}]` : '';
     out.push({
       role: m.direction === 'in' ? 'user' : 'assistant',
       content:
         (m.direction === 'human' ? `(human operator) ${m.text}` : m.text!) +
-        tapNote +
+        tapAnnotation(tap) +
         attachmentNote(m.payload),
     });
   }
@@ -3213,6 +3289,10 @@ async function replyAsHostedAgent(
   // tell "the reply shipped after the inbound" from "the reply SAW it". Set
   // right after transcriptFor loads; a mid-run arrival stays pending.
   let coversThrough: string | undefined;
+  // The newest inbound's add-to-cart tap (when that's what it was) — the
+  // widget only emits it on a successful /cart/add.js, so a reply denying
+  // the add contradicts a confirmed storefront fact and regenerates.
+  let confirmedAddTap: string | undefined;
   const emit = (e: Parameters<typeof processEvents>[2]) =>
     processEvents(
       db,
@@ -3254,11 +3334,20 @@ async function replyAsHostedAgent(
     console.log(`[files] conv=${convId} analysis=${fileAnalysis}`);
     const history = await transcriptFor(db, convId, fileAnalysis);
     {
-      const [{ lastIn }] = await db
-        .select({ lastIn: sql<Date | null>`max(${messages.createdAt})` })
+      const lastIns = await db
+        .select({ createdAt: messages.createdAt, payload: messages.payload })
         .from(messages)
-        .where(and(eq(messages.conversationId, convId), eq(messages.direction, 'in')));
-      if (lastIn) coversThrough = new Date(lastIn).toISOString();
+        .where(and(eq(messages.conversationId, convId), eq(messages.direction, 'in')))
+        .orderBy(desc(messages.createdAt))
+        .limit(1);
+      const lastIn = lastIns[0];
+      if (lastIn) {
+        coversThrough = new Date(lastIn.createdAt).toISOString();
+        const p = (lastIn.payload ?? {}) as { tap?: boolean; tap_of?: string };
+        if (p.tap === true && /\s*—\s*add to cart\s*$/i.test(p.tap_of ?? '')) {
+          confirmedAddTap = p.tap_of!;
+        }
+      }
     }
     const draftsOpted =
       ((agent.config ?? {}) as { builder?: { include_drafts_in_test?: boolean } }).builder
@@ -3508,6 +3597,25 @@ async function replyAsHostedAgent(
         prompt += '\n\n' + (catalogueTotals.size ? COUNT_GUARD_RETRY : COUNT_GUARD_RETRY_NO_TOOL);
         continue;
       }
+      // Confirmed-add denial — the inbound was a successful add-to-cart
+      // tap, so "it couldn't be added / it's out of stock" contradicts an
+      // event the storefront already accepted (and the customer watched).
+      if (attempt === 0 && reply && confirmedAddTap && deniesConfirmedAdd(reply)) {
+        console.warn(`[hosted] denied a confirmed add-to-cart conv=${convId} — regenerating`);
+        prompt += '\n\n' + ADD_GUARD_RETRY;
+        continue;
+      }
+      // Full-catalogue overclaim — "all 13 products" over a carousel that
+      // rendered 10. The cards cap at 10, so the narration must scope
+      // itself: "the first 10 of 13", plus the load-more affordance.
+      const cardsShown = toolWidgets
+        .filter((w) => w.type === 'cards')
+        .reduce((n, w) => Math.max(n, w.items.length), 0);
+      if (attempt === 0 && reply && claimsFullCatalogue(reply, cardsShown, catalogueTotals)) {
+        console.warn(`[hosted] full-catalogue overclaim conv=${convId} — regenerating`);
+        prompt += '\n\n' + FULL_GUARD_RETRY;
+        continue;
+      }
       if (reply || widgets.length || toolWidgets.length || buttons.length || attempt === 1) break;
       console.warn(`[hosted] empty completion conv=${convId} — retrying once`);
       prompt += '\n\n[your previous reply came back empty — reply to the user now in plain text]';
@@ -3573,6 +3681,28 @@ async function replyAsHostedAgent(
         if (fixed !== reply) {
           console.error(`[hosted] corrected catalogue count conv=${convId}`);
           reply = fixed || 'Here is what I found — tell me if you want a closer look at anything.';
+        }
+      }
+      // Same for a full-catalogue overclaim that survived the regen —
+      // rewrite "all 13" to "the first 10 of 13" in place rather than ship
+      // the overstatement.
+      const shown = toolWidgets
+        .filter((w) => w.type === 'cards')
+        .reduce((n, w) => Math.max(n, w.items.length), 0);
+      if (claimsFullCatalogue(reply, shown, totals)) {
+        const fixed = fixFullCatalogueClaims(reply, shown, Math.max(...totals));
+        if (fixed !== reply) {
+          console.error(`[hosted] corrected full-catalogue overclaim conv=${convId}`);
+          reply = fixed;
+        }
+      }
+      // A confirmed-add denial that survived the regen gets its denying
+      // sentences stripped — the add happened; there's nothing to disclaim.
+      if (confirmedAddTap && deniesConfirmedAdd(reply)) {
+        const stripped = stripSentencesByLine(reply, (s) => ADD_DENY.test(s)).text.trim();
+        if (stripped !== reply.trim()) {
+          console.error(`[hosted] stripped confirmed-add denial conv=${convId}`);
+          reply = stripped || 'Added to your cart — want me to help you check out?';
         }
       }
     }
@@ -3746,9 +3876,10 @@ async function replyAsHostedAgent(
     const lastCustomerText = contentText(
       [...history].reverse().find((m) => m.role === 'user')?.content ?? null,
     )
-      // Widget taps carry a `[tapped …]` annotation — strip it before the
-      // exact-match check so a tapped "No thanks" still de-escalates.
-      ?.replace(/\s*\[tapped[^\]]*\]$/i, '')
+      // Widget taps carry a `[tapped …]`/`[added to cart …]` annotation —
+      // strip it before the exact-match check so a tapped "No thanks"
+      // still de-escalates.
+      ?.replace(/\s*\[(?:tapped|added to cart)[^\]]*\]$/i, '')
       .trim()
       .toLowerCase();
     const declineTapped = lastCustomerText === 'no thanks' && pendingEscalation;

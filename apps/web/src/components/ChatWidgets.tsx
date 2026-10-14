@@ -33,7 +33,7 @@ export interface WidgetStep {
   note?: string;
 }
 export type ChatWidget =
-  | { type: 'cards'; items: WidgetCardItem[] }
+  | { type: 'cards'; items: WidgetCardItem[]; total?: number }
   | { type: 'options'; title?: string; items: WidgetOption[] }
   | { type: 'form'; title?: string; submit_label?: string; fields: WidgetField[] }
   | { type: 'status'; title?: string; steps: WidgetStep[] }
@@ -178,6 +178,15 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
             ›
           </button>
         </>
+      )}
+      {typeof w.total === 'number' && w.total > w.items.length && (
+        <button
+          type="button"
+          className="wgt-more"
+          onClick={() => onSend('Show me more', { of: 'pagination' })}
+        >
+          Showing {w.items.length} of {w.total} — tap for more
+        </button>
       )}
     </div>
   );
