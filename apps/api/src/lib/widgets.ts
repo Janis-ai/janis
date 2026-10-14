@@ -392,6 +392,9 @@ function mapValue(row: unknown, expr: string, secrets: Record<string, string>): 
       // {flag:stock} — 'Out of stock' only when the source flag is a real
       // false; true/absent (untracked inventory, gift cards) stays silent.
       if (mod === 'stock') return v === false ? 'Out of stock' : '';
+      // {n:s} — plural suffix: 's' unless the value is exactly 1, so a
+      // subtitle like "{count} item{count:s}" reads "1 item"/"8 items".
+      if (mod === 's') return Number(v) === 1 ? '' : 's';
       // {path:gidnum} — the numeric tail of a Shopify gid
       // (gid://shopify/ProductVariant/123 → '123') for the Ajax cart API.
       if (mod === 'gidnum') {

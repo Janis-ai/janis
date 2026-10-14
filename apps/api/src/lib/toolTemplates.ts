@@ -198,7 +198,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_list_collections',
         label: 'List collections',
         description:
-          'List the shop\'s collections (the product groupings the store maintains — custom and smart/automated). Returns collection cards: each shows its product count and tapping one sends "show me the X collection" — then call shopify_search_products with `collection` set to that collection\'s handle (the card\'s link ends with /collections/<handle>). Use when the customer asks what collections/categories/departments exist, or wants to browse a named one.',
+          'List the shop\'s collections (the product groupings the store maintains — custom and smart/automated). Returns collection cards: each shows its product count and tapping one sends "show me the X collection" — then call shopify_search_products with `collection` set to that collection\'s handle (the card\'s link ends with /collections/<handle>). Use when the customer asks what collections/categories/departments exist — when they already NAME a collection, skip this tool and go straight to shopify_search_products with `collection` so the carousel isn\'t padded with a redundant collections list.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
@@ -211,7 +211,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           link_label: 'View collection',
           map: {
             title: 'title',
-            subtitle: '{productsCount.count} products',
+            subtitle: '{productsCount.count} product{productsCount.count:s}',
             image: 'image.url',
             link: 'https://{{secrets.SHOPIFY_SHOP}}/collections/{handle}',
             select_label: 'Show me the {title} collection',
@@ -222,7 +222,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_sales_stats',
         label: 'Sales stats',
         description:
-          'Pull the newest 50 orders\' line items (quantity + product title per line) plus the lifetime ordersCount — the raw material for popularity and sell-through asks ("what sells best?", "top products?", "sell-through rate?"). AGGREGATE yourself: sum lineItems.nodes.quantity per product title to rank bestsellers; a product missing from the result sold zero units in the window. SELL-THROUGH ≈ units-sold ÷ (units-sold + current on-hand inventoryQuantity from shopify_search_products) — Shopify exposes no goods-received history, so always label it an approximation and name the window ("across the newest 50 orders" — quote ordersCount for how much of lifetime sales that covers). EMPTY result = no orders yet: say there is no sales data to rank by — never fabricate a ranking or a percentage.',
+          'Pull the newest 50 orders\' line items (quantity + product title per line) plus the lifetime ordersCount — the raw material for popularity and sell-through asks ("what sells best?", "top products?", "sell-through rate?"). AGGREGATE yourself: sum lineItems.nodes.quantity per product title to rank bestsellers; a product missing from the result sold zero units in the window. SELL-THROUGH ≈ units-sold ÷ (units-sold + current on-hand inventoryQuantity from shopify_search_products) — Shopify exposes no goods-received history, so always label it an approximation and name the window ("across the newest 50 orders" — quote ordersCount for how much of lifetime sales that covers). EMPTY result = no orders yet: say there is no sales data to rank by — never fabricate a ranking or percentage, and do NOT call any product "popular"/"a bestseller"/"top-selling" — with zero orders nothing is a bestseller; offer the catalogue instead.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
