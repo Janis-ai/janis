@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
@@ -110,6 +110,120 @@ export function verifyWebhookHmac(raw: string, header: string | undefined): bool
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/* ── Storefront app proxy — verified shopper identity ──────────────────
+ *
+ * The theme embed's widget fetches /apps/janis/session on the SHOP domain.
+ * Shopify proxies it to /api/shopify/proxy/session, signing the request
+ * itself: `signature` is a hex HMAC-SHA256 (app secret) of the sorted
+ * query params, and Shopify adds logged_in_customer_id when the visitor
+ * holds a customer-account session. A valid signature is therefore real
+ * proof of the shopper's store login — unlike the theme embed's
+ * cid/cemail params, which are forgeable and stay self-reported. */
+
+/** Verify a proxied request: drop `signature`, sort remaining params by
+ *  key, render each `key=v1,v2` (multi-values sorted + comma-joined),
+ *  concatenate, HMAC-SHA256 hex with the app secret. */
+export function verifyProxySig(q: Record<string, string | string[] | undefined>): boolean {
+  const sigRaw = q.signature;
+  const sig = Array.isArray(sigRaw) ? sigRaw[0] : sigRaw;
+  if (!sig || !env.shopifyAppApiSecret) return false;
+  const pairs = Object.keys(q)
+    .filter((k) => k !== 'signature')
+    .sort()
+    .map((k) => {
+      const v = q[k];
+      const vals = (Array.isArray(v) ? v : [v])
+        .filter((x): x is string => typeof x === 'string')
+        .sort();
+      return `${k}=${vals.join(',')}`;
+    });
+  const expected = createHmac('sha256', env.shopifyAppApiSecret)
+    .update(pairs.join(''))
+    .digest('hex');
+  return (
+    expected.length === sig.length &&
+    timingSafeEqual(Buffer.from(expected), Buffer.from(sig))
+  );
+}
+
+export interface ShopifyIdentityClaim {
+  id: string;
+  email?: string;
+  name?: string;
+  sig: string;
+}
+
+// The claim only changes when the customer edits their record — cache per
+// shop+cid so a page-view-heavy storefront doesn't hit the Admin API per
+// load. Single-instance deploy keeps an in-process map honest.
+const claimCache = new Map<string, { at: number; claim: ShopifyIdentityClaim | null }>();
+const CLAIM_TTL_MS = 5 * 60_000;
+
+/** Mint a channel-signed identity claim for a Shopify-signed customer id.
+ *  The proxy proved the login; the Admin API supplies the authoritative
+ *  email/name; the channel's identity_secret signs the claim the widget
+ *  sends → identity_verified + external_id 'shopify:<cid>' on the
+ *  conversation, unlocking identity-bound tools for the real customer. */
+export async function shopifyCustomerClaim(
+  db: Db,
+  shop: string,
+  cid: string,
+): Promise<ShopifyIdentityClaim | null> {
+  const cacheKey = `${shop}:${cid}`;
+  const hit = claimCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < CLAIM_TTL_MS) return hit.claim;
+
+  const finish = (claim: ShopifyIdentityClaim | null) => {
+    claimCache.set(cacheKey, { at: Date.now(), claim });
+    return claim;
+  };
+
+  const [row] = await db
+    .select()
+    .from(shopifyShops)
+    .where(eq(shopifyShops.shop, shop))
+    .limit(1);
+  if (row?.state !== 'linked' || !row.agentId || !row.accessTokenEnc) return finish(null);
+  const chans = await db
+    .select({ id: channels.id, credentials: channels.credentials })
+    .from(channels)
+    .where(and(eq(channels.agentId, row.agentId), eq(channels.kind, 'webchat')));
+  const chan = chans.find(
+    (ch) => !(ch.credentials as { internal?: boolean } | null)?.internal,
+  );
+  if (!chan) return finish(null);
+
+  // Identity claims need a signing secret — Shopify-linked channels get one
+  // lazily here rather than at a separate setup step.
+  const creds = (chan.credentials ?? {}) as { identity_secret?: string };
+  let secret = creds.identity_secret;
+  if (!secret) {
+    secret = randomBytes(24).toString('hex');
+    await db
+      .update(channels)
+      .set({ credentials: { ...creds, identity_secret: secret } })
+      .where(eq(channels.id, chan.id));
+    invalidateChannelCache();
+  }
+
+  const res = await shopifyGraphql(
+    shop,
+    decryptSecret(row.accessTokenEnc),
+    `query{customer(id:"gid://shopify/Customer/${cid}"){email displayName firstName lastName}}`,
+  );
+  const cust = (res.data as { customer?: { email?: string; displayName?: string; firstName?: string; lastName?: string } } | undefined)?.customer;
+  if (!cust) return finish(null);
+  const name =
+    cust.displayName?.trim() ||
+    [cust.firstName, cust.lastName].filter(Boolean).join(' ').trim() ||
+    undefined;
+  const claim = { id: `shopify:${cid}`, email: cust.email || undefined, name };
+  const sig = createHmac('sha256', secret)
+    .update(`${claim.id}|${claim.email ?? ''}|${claim.name ?? ''}`)
+    .digest('hex');
+  return finish({ ...claim, sig });
+}
+
 /* ── Token exchange + Admin API calls ───────────────────────────────── */
 
 interface OfflineToken {
@@ -142,7 +256,7 @@ async function exchangeOfflineToken(shop: string, sessionToken: string): Promise
   return { access_token: data.access_token, scope: data.scope ?? '' };
 }
 
-async function shopifyGraphql(
+export async function shopifyGraphql(
   shop: string,
   token: string,
   query: string,

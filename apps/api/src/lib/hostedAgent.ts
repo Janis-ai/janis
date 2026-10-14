@@ -655,6 +655,8 @@ export function systemPrompt(
             : '') +
           '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. For a card about a specific page or listing, use only the "Image:" URL attached to that page\'s knowledge — never reuse another document\'s image, and omit "image" if the page has none. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.' +
           '\nNever rebuild a product card by hand — catalogue cards come ONLY from the product-search tool (re-call it if you need them). And once the customer has picked an item and confirmed, act on the pick — buy it, book it, apply it with the right tool — instead of re-rendering the same card or a card whose only action sends their own words back to you.' +
+          '\nCards show exactly what the customer asked to see — every item you emit is a claim about a real thing, so render only items a tool result this turn returned (unverifiable items are stripped). Asked to show specific products ("just the two", "the red ones")? Include ALL of them — and only them — in ONE cards widget; never pad the row with unrelated items. Show cards only when they answer the ask: a "yes" to your offer of help is not a browse request, and a single named product deserves one card, not the whole catalogue. Never re-render a card already shown this conversation unless the customer asks or its data changed.' +
+          '\nNever paste a product, cart, checkout or pay URL as a bare link in your text — the card carries the link and the button. If the customer needs a page and no card carries it, name the page and offer to show the item instead.' +
           '\nA message reporting an item added to the cart ("I just added … to my cart", a tap on an add-to-cart button) is a cart event — the add already happened in the store, so acknowledge it in one line, quote the current cart contents from the cart context trait when present, and offer the next step (checkout at the store\'s /cart page, or a draft order if they want it done for them). Never re-run a product search, re-verify stock, or re-render the product card in reply to a cart event.' +
           '\nWhen the customer asks to see products, plans or options that carry data (price, image, description), prefer a "cards" or "options" widget over a BUTTON: list — and when a tool call returns list data (search results, products, availability), render it as a widget rather than retelling it as text. Some tool results arrive already rendered as a component — the result says so; never emit a WIDGET: line restating data that was already rendered. Always pair a widget with a one-line lead-in ("Here are our plans:") — never emit a WIDGET: line alone.' +
           metaOnly +
@@ -691,7 +693,8 @@ export function systemPrompt(
         ' Never promise a step you cannot take inside this reply — "let me check", "give me just a second", "one moment while I grab that" announce a next turn that never comes; tool calls happen inside this same reply, so either call the tool now or answer without narrating a lookup.' +
         " You cannot see the customer's account, workspace, plan, email or sign-in state unless the context or a tool result provides it — never assume or invent an account or workspace name; if which account they mean matters, ask." +
         ' Some tools are bound to the customer\'s verified identity — they only accept the verified email shown in this context (or nothing, when no identity is verified). Never pass an email or account id the customer merely types or claims; if such a tool returns an identity error, tell the customer the lookup needs their verified sign-in and do not retry with guessed details.' +
-        ' A customer message ending in a [tapped …] note is a pick from a button or card you showed — treat it as them selecting that option, not as an instruction to change their account; confirm what they picked and clarify what they want next.',
+        ' A customer message ending in a [tapped …] note is a pick from a button or card you showed — treat it as them selecting that option, not as an instruction to change their account; confirm what they picked and clarify what they want next.' +
+        ' If the customer disputes a fact you stated ("that\'s not true", "you\'re wrong"), never concede on their word alone — re-run the tool that produced it, then either correct yourself with the fresh data or hold politely ("I double-checked — it still shows X"). Apologizing-and-agreeing with an unverified correction just contradicts the record and reads as making things up.',
     );
     if (cfg.auto_archive) {
       parts.push(
@@ -1101,7 +1104,13 @@ export function extractButtons(text: string): {
 export function cardsCoverQuickReplies(chan: string, widgets: WidgetComponent[]): boolean {
   return (
     ['webchat', 'messenger', 'instagram', 'whatsapp'].includes(chan) &&
-    widgets.some((w) => w.type === 'cards' && w.items.some((i) => !!i.select_label))
+    widgets.some(
+      (w) =>
+        w.type === 'cards' &&
+        // select_label taps send a message; cart_variant_id renders the
+        // storefront add-to-cart — either is already the reply's CTA layer.
+        w.items.some((i) => !!i.select_label || !!i.cart_variant_id),
+    )
   );
 }
 
@@ -1152,6 +1161,54 @@ export function repairCardImages(
       }
     }
   }
+}
+
+/** Model-authored "cards" items carrying catalog-tool fields (a variant id
+ *  or a stock badge) are claims about real products — they only render when
+ *  this run's tool results actually produced them. An invented item (fake
+ *  variant id, a product the search never returned) drops out; a widget
+ *  emptied entirely is removed. Items without catalog fields — editorial
+ *  cards, plan lists — aren't checked. `skip` holds ref-resolved specs. */
+export function verifyCardItems(
+  widgets: WidgetComponent[],
+  toolText: string,
+  skip: Set<WidgetComponent> = new Set(),
+): number {
+  let dropped = 0;
+  for (let i = widgets.length - 1; i >= 0; i--) {
+    const w = widgets[i];
+    if (w.type !== 'cards' || skip.has(w)) continue;
+    const kept = w.items.filter((item) => {
+      if (!item.cart_variant_id && !item.stock) return true;
+      if (item.cart_variant_id && toolText.includes(item.cart_variant_id)) return true;
+      return toolText.includes(item.title);
+    });
+    dropped += w.items.length - kept.length;
+    if (kept.length) {
+      (w as { items: unknown[] }).items = kept;
+    } else {
+      widgets.splice(i, 1);
+      dropped += 0; // widget removal counted via items
+    }
+  }
+  return dropped;
+}
+
+/** Two "cards" widgets in one reply render as two carousels — the model
+ *  splits "show me both" into a widget per item. Merge adjacent card
+ *  widgets into one so the customer sees a single row. */
+export function mergeCardWidgets(widgets: WidgetComponent[]): WidgetComponent[] {
+  const out: WidgetComponent[] = [];
+  for (const w of widgets) {
+    const prev = out[out.length - 1];
+    if (w.type === 'cards' && prev?.type === 'cards') {
+      prev.items.push(...w.items);
+      prev.items = prev.items.slice(0, 10);
+    } else {
+      out.push(w);
+    }
+  }
+  return out;
 }
 
 /** Meta display-caps button titles at 20 chars, but that truncation belongs
@@ -1381,11 +1438,11 @@ export async function generateReply(
   ctx: AgentRunContext | undefined,
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
-): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[]; producedIds: Set<string>; actionCards: number; toolUrls: string[] }> {
+): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[]; producedIds: Set<string>; actionCards: number; toolUrls: string[]; toolTexts: string[] }> {
   const first = await complete(llm, prompt, msgs, tools, secrets, ctx, builtins, onStall);
   const draft = first.text;
   if (!draft) {
-    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, fixed: [], stripped: [], verified: [], unverified: [] };
+    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, toolTexts: first.toolTexts, fixed: [], stripped: [], verified: [], unverified: [] };
   }
   // The linkable corpus grows inside the tool loop — results carry URLs and
   // ids the model may cite (conversation links, channel pages). Blessed =
@@ -1407,7 +1464,7 @@ export async function generateReply(
       : undefined;
   const guard = await guardReplyLinks(draft, allBlessed, { ids, exists });
   if (!guard.stripped.length) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, toolTexts: first.toolTexts, ...guard };
   }
   const retry = await complete(
     llm,
@@ -1423,7 +1480,7 @@ export async function generateReply(
     builtins,
   ).catch(() => null);
   if (!retry?.text) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards + (retry?.actionCards ?? 0), toolUrls: [...first.toolUrls, ...(retry?.toolUrls ?? [])], ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards + (retry?.actionCards ?? 0), toolUrls: [...first.toolUrls, ...(retry?.toolUrls ?? [])], toolTexts: [...first.toolTexts, ...(retry?.toolTexts ?? [])], ...guard };
   }
   for (const id of retry.contextIds) ids.add(id);
   const allBlessed2 = retry.toolUrls.length ? [...allBlessed, ...retry.toolUrls] : allBlessed;
@@ -1437,6 +1494,7 @@ export async function generateReply(
     producedIds: new Set([...first.producedIds, ...retry.producedIds]),
     actionCards: first.actionCards + retry.actionCards,
     toolUrls: [...first.toolUrls, ...retry.toolUrls],
+    toolTexts: [...first.toolTexts, ...retry.toolTexts],
     ...g2,
   };
 }
@@ -1671,6 +1729,9 @@ interface Completion {
   /** URLs tool results returned this run — blessed for the link guard so a
    *  tool-emitted deep link passes verbatim. */
   toolUrls: string[];
+  /** Raw tool result bodies this run — the evidence corpus card-item
+   *  verification checks catalog fields (variant ids, titles) against. */
+  toolTexts: string[];
   /** Uuids (dash-normalized) that appeared in tool results — the id corpus
    *  the link guard validates console links against. */
   contextIds: Set<string>;
@@ -1743,7 +1804,7 @@ export async function complete(
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
 ): Promise<Completion> {
-  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[], producedIds: new Set<string>(), toolUrls: [] as string[], contextIds: new Set<string>(), actionCards: 0 };
+  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[], producedIds: new Set<string>(), toolUrls: [] as string[], toolTexts: [] as string[], contextIds: new Set<string>(), actionCards: 0 };
   if (!llm.apiKey) return empty;
 
   const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
@@ -1835,6 +1896,9 @@ export async function complete(
   // identity-scoped tools may accept (see identityBlockReason).
   const producedIds = new Set<string>();
   const toolUrls: string[] = [];
+  // Raw result corpus — card-item verification checks catalog fields
+  // (variant ids, titles) trace to real output, not model memory.
+  const toolTexts: string[] = [];
   const contextIds = new Set<string>();
   let actionCards = 0;
   // Calls (name+args) that already failed this run — an identical retry can
@@ -2004,6 +2068,7 @@ export async function complete(
         widgets: toolWidgets,
         producedIds,
         toolUrls,
+        toolTexts,
         contextIds,
         actionCards,
       };
@@ -2095,6 +2160,7 @@ export async function complete(
       // URLs/uuids a tool emitted are the model's linkable corpus — the
       // reply guard blesses them and rejects id segments it never saw.
       toolUrls.push(...extractUrls(result));
+      toolTexts.push(result);
       extractIds(result, contextIds);
       toolCalls.push({
         name: call.function.name,
@@ -2154,13 +2220,13 @@ export async function complete(
       const text = (json.choices?.[0]?.message?.content ?? '').trim() || null;
       if (text) {
         console.warn(`[hosted] tool-storm salvage — forced text after ${toolCalls.length} calls`);
-        return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, contextIds, actionCards };
+        return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, toolTexts, contextIds, actionCards };
       }
     }
   } catch {
     // fall through — the null-text path escalates as before
   }
-  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, contextIds, actionCards };
+  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, toolTexts, contextIds, actionCards };
 }
 
 const RECENT_WINDOW = 20;
@@ -3150,6 +3216,13 @@ async function replyAsHostedAgent(
         stripped ||
         "I'm not able to make that change directly in this chat — I can flag it for a teammate, or point you to where you can do it yourself.";
     }
+    // Catalog-shaped card items must trace to this run's tool output —
+    // "here are both items" backed by a model-typed six-product carousel is
+    // a hallucination the customer acts on. Runs before the claim check so
+    // an emptied widget also strips its dangling "here are the cards" lead-in.
+    const bogusItems = verifyCardItems(widgets, gen.toolTexts.join('\n'), refResolved);
+    if (bogusItems)
+      console.warn(`[hosted] stripped ${bogusItems} unverified card item(s) conv=${convId}`);
     // Same belt-and-braces for widget-truth claims that survived the regen.
     let widgetClaimStripped = false;
     if (reply) {
@@ -3197,6 +3270,7 @@ async function replyAsHostedAgent(
     if (actionClaimStripped) runIssues.push('stripped an unbacked action claim');
     if (widgetClaimStripped) runIssues.push('stripped a widget-claim mismatch');
     if (lookupPromiseStripped) runIssues.push('stripped an unbacked lookup narration');
+    if (bogusItems) runIssues.push(`stripped ${bogusItems} unverified card item(s)`);
     if (gen.stripped.length)
       runIssues.push(`link guard stripped ${gen.stripped.length} URL(s)`);
     if (runIssues.length)
@@ -3209,7 +3283,10 @@ async function replyAsHostedAgent(
     // injected docs before anything ships (tool-result URLs count as
     // context; ref-resolved specs are exempt).
     repairCardImages(widgets, docs, [...blessedUrls, ...gen.toolUrls], refResolved);
-    widgets = dedupeWidgetList([...toolWidgets, ...widgets]).slice(0, 3);
+    // Catalog-shaped card items must trace to this run's tool output —
+    // "here are both items" backed by a model-typed six-product carousel is
+    // a hallucination the customer acts on. Dropped entirely → regenerate.
+    widgets = mergeCardWidgets(dedupeWidgetList([...toolWidgets, ...widgets])).slice(0, 3);
     const genMs = Date.now() - tGen;
     if (genMs > 10_000)
       console.warn(`[hosted] slow generateReply conv=${convId} ${genMs}ms`);

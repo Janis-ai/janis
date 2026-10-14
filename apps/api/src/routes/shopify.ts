@@ -13,10 +13,12 @@ import {
   handleShopifyWebhook,
   shopBilling,
   shopifyAppConfigured,
+  shopifyCustomerClaim,
   startBillingSubscription,
   signLinkCode,
   unbindShop,
   verifyLinkCode,
+  verifyProxySig,
   verifySessionToken,
   verifyWebhookHmac,
 } from '../lib/shopifyApp.js';
@@ -198,6 +200,34 @@ export function shopifyPublicRoutes(db: Db) {
         `${env.apiOrigin}/widget.js`,
       )};s.async=true;s.setAttribute('data-janis-token',${JSON.stringify(chan.id)});s.setAttribute('data-janis-cart','1');${attrs.join('')}document.head.appendChild(s);})();`,
     );
+  });
+
+  // Storefront app proxy — the widget calls /apps/janis/session on the
+  // SHOP domain and Shopify forwards it here as /api/shopify/proxy/session
+  // with its own signature + logged_in_customer_id when the shopper is
+  // logged into their store account. A verified signature is real proof of
+  // that login, so we answer with an identity claim signed by the channel's
+  // identity_secret — self-reported context upgrades to verified identity
+  // (external_id shopify:<cid>) and identity-bound tools unlock. See
+  // shopify.app.toml [app_proxy] and lib/shopifyApp.ts verifyProxySig.
+  app.get('/proxy/session', async (c) => {
+    const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+    const q = c.req.queries();
+    if (!shopifyAppConfigured() || !verifyProxySig(q))
+      return c.json({ error: 'bad signature' }, 401);
+    // The signature proves Shopify generated this request, but a captured
+    // URL would replay forever — bound it to a fresh proxy timestamp.
+    const ts = Number(first(q.timestamp) ?? NaN);
+    if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300)
+      return c.json({ error: 'stale signature' }, 401);
+    const shop = (first(q.shop) ?? '').trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(shop))
+      return c.json({ error: 'bad shop' }, 400);
+    const cid = (first(q.logged_in_customer_id) ?? '').trim();
+    if (!cid) return c.json({ claim: null }); // visitor not logged in
+    if (!/^\d+$/.test(cid)) return c.json({ error: 'bad customer id' }, 400);
+    const claim = await shopifyCustomerClaim(db, shop, cid);
+    return c.json({ claim });
   });
 
   return app;

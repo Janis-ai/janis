@@ -117,6 +117,19 @@
       if (claim && (claim.id || claim.email || claim.name)) window.Janis.identify(claim);
     } catch (e) {}
   })();
+  // Verified tier: on a Shopify storefront the app proxy
+  // (/apps/janis/session) is signed by Shopify itself and answers with an
+  // identity claim signed by the channel secret when the shopper holds a
+  // customer-account session. A signed claim upgrades the unsigned one —
+  // identity_verified + account tools for the real customer.
+  if (SHOPIFY && !PREVIEW && !PAGE) {
+    fetch('/apps/janis/session', { headers: { accept: 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (d && d.claim && d.claim.sig) window.Janis.identify(d.claim);
+      })
+      .catch(function () {});
+  }
   // Teardown for host SPAs (the Janis console dogfoods the widget on the
   // landing page) — clears the poll/teaser timers and removes every janis-*
   // node so nothing leaks onto console routes after unmount.
@@ -444,9 +457,10 @@
     '.janis-wcard-p{font-weight:600;font-size:13px;margin-top:4px}' +
     '.janis-wcard-stock{display:inline-block;font-size:11px;font-weight:600;color:#b45309;' +
       'background:#fef3c7;border-radius:4px;padding:1px 6px;margin-top:4px}' +
-    '.janis-wcard-btns{display:flex;gap:4px;padding:0 8px 8px;flex-wrap:wrap;justify-content:flex-start;margin-top:auto}' +
+    '.janis-wcard-btns{display:flex;flex-direction:column;gap:4px;padding:0 8px 8px;margin-top:auto}' +
     '.janis-wbtn{display:inline-block;border:1px solid var(--janis-accent);color:var(--janis-accent);background:#fff;' +
-    'border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit}' +
+    'border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit;text-align:center}' +
+    '.janis-wcard-btns .janis-wbtn{display:block;width:100%;box-sizing:border-box}' +
     '.janis-wbtn.janis-wbtn-primary{background:var(--janis-accent);color:#fff}' +
     '.janis-wtitle{font-weight:600;margin-bottom:6px;color:#374151}' +
     '.janis-wlist{margin:4px 0;padding-left:18px;display:block}' +

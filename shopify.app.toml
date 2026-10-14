@@ -23,6 +23,16 @@ scopes = "read_orders,write_orders,write_draft_orders,read_products,read_custome
 # Managed install (token exchange) — no OAuth redirect endpoints.
 redirect_urls = []
 
+# Storefront app proxy — https://<shop>/apps/janis/* forwards to the API
+# with Shopify's own signature (incl. logged_in_customer_id when the
+# shopper holds a customer-account session). The widget's /session call is
+# how a logged-in shopper gets a VERIFIED identity claim — see
+# /api/shopify/proxy/session.
+[app_proxy]
+url = "https://app.janis.ai/api/shopify/proxy"
+subpath = "janis"
+prefix = "apps"
+
 [webhooks]
 api_version = "2026-10"
 

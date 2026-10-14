@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, promisesLookup, rankDocs, repairCardImages, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -753,6 +753,17 @@ describe('cardsCoverQuickReplies', () => {
     expect(cardsCoverQuickReplies('webchat', cards(false))).toBe(false);
   });
 
+  it('suppresses chips when cards carry a storefront add-to-cart action', () => {
+    const w = [
+      {
+        type: 'cards' as const,
+        items: [{ title: 'T', cart_variant_id: '123' }],
+      },
+    ];
+    expect(cardsCoverQuickReplies('webchat', w)).toBe(true);
+    expect(cardsCoverQuickReplies('sms', w)).toBe(false);
+  });
+
   it('keeps chips on channels where cards do not render', () => {
     expect(cardsCoverQuickReplies('sms', cards(true))).toBe(false);
     expect(cardsCoverQuickReplies('email', cards(true))).toBe(false);
@@ -826,6 +837,75 @@ describe('repairCardImages', () => {
     const w = [card([{ title: 'Designed', link: DOC_URL, image: 'https://assets.example/hero.png' }])];
     repairCardImages(w, docs, [], new Set(w));
     expect(w[0].items[0]).toMatchObject({ image: 'https://assets.example/hero.png' });
+  });
+});
+
+describe('verifyCardItems', () => {
+  // The tool-result corpus a Shopify product search produces — items check
+  // their catalog fields against it.
+  const TOOL_TEXT = JSON.stringify({
+    data: {
+      products: {
+        nodes: [
+          { title: 'Gift Card', handle: 'gift-card', variants: { nodes: [{ id: 'gid://shopify/ProductVariant/111', availableForSale: false }] } },
+          { title: 'The Snowboard', handle: 'the-snowboard', variants: { nodes: [{ id: 'gid://shopify/ProductVariant/222', availableForSale: true }] } },
+        ],
+      },
+    },
+  });
+  const card = (items: Record<string, unknown>[]) => ({ type: 'cards' as const, items: items as never });
+
+  it('keeps catalog items that trace to the run\u2019s tool results', () => {
+    const w = [card([{ title: 'Gift Card', cart_variant_id: '111', stock: 'Out of stock' }])];
+    expect(verifyCardItems(w, TOOL_TEXT)).toBe(0);
+    expect(w[0].items).toHaveLength(1);
+  });
+
+  it('drops items whose variant id was never in a tool result', () => {
+    const w = [
+      card([
+        { title: 'Gift Card', cart_variant_id: '111' },
+        { title: 'Invented Board', cart_variant_id: '999' },
+      ]),
+    ];
+    expect(verifyCardItems(w, TOOL_TEXT)).toBe(1);
+    expect(w[0].items).toHaveLength(1);
+    expect((w[0].items[0] as { title: string }).title).toBe('Gift Card');
+  });
+
+  it('drops the whole widget when every catalog item is unverifiable', () => {
+    const w = [card([{ title: 'Fake', cart_variant_id: '999', stock: 'Out of stock' }])];
+    verifyCardItems(w, TOOL_TEXT);
+    expect(w).toHaveLength(0);
+  });
+
+  it('leaves non-catalog items alone (editorial cards, plans)', () => {
+    const w = [card([{ title: 'Pro Plan', price: '$29', link: 'https://site.example/pro' }])];
+    expect(verifyCardItems(w, '')).toBe(0);
+    expect(w[0].items).toHaveLength(1);
+  });
+
+  it('leaves resolved saved-component specs alone', () => {
+    const w = [card([{ title: 'Fake', cart_variant_id: '999' }])];
+    expect(verifyCardItems(w, TOOL_TEXT, new Set(w))).toBe(0);
+    expect(w[0].items).toHaveLength(1);
+  });
+});
+
+describe('mergeCardWidgets', () => {
+  const card = (items: Record<string, unknown>[]) => ({ type: 'cards' as const, items: items as never });
+
+  it('merges adjacent cards widgets into one carousel', () => {
+    const out = mergeCardWidgets([
+      card([{ title: 'A' }]),
+      card([{ title: 'B' }]),
+      { type: 'options' as const, items: [{ label: 'x' }] },
+      card([{ title: 'C' }]),
+    ]);
+    expect(out).toHaveLength(3);
+    expect(out[0].type === 'cards' && out[0].items.map((i) => i.title)).toEqual(['A', 'B']);
+    // Non-adjacent cards stay separate (an options widget sits between).
+    expect(out[2].type === 'cards' && out[2].items[0].title).toBe('C');
   });
 });
 

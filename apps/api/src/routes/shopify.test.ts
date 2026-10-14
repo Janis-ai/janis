@@ -839,6 +839,95 @@ describe('shopify billing rail', () => {
   });
 });
 
+describe('app proxy — verified shopper identity', () => {
+  // Shopify's app-proxy signature: sorted key=value pairs, concatenated,
+  // HMAC-SHA256 hex with the app secret. This mirrors verifyProxySig.
+  const proxyUrl = (params: Record<string, string>, secret = SECRET) => {
+    const body = Object.keys(params)
+      .sort()
+      .map((k) => `${k}=${params[k]}`)
+      .join('');
+    const signature = createHmac('sha256', secret).update(body).digest('hex');
+    return `/api/shopify/proxy/session?${new URLSearchParams({ ...params, signature })}`;
+  };
+  const ts = () => String(Math.floor(Date.now() / 1000));
+
+  it('rejects unsigned and badly-signed requests', async () => {
+    expect((await app.request('/api/shopify/proxy/session')).status).toBe(401);
+    expect(
+      (await app.request(proxyUrl({ shop: SHOP, timestamp: ts() }, 'wrong'))).status,
+    ).toBe(401);
+    // Valid signature, stale timestamp — replayed URLs die.
+    expect(
+      (await app.request(proxyUrl({ shop: SHOP, timestamp: '1000000' }))).status,
+    ).toBe(401);
+  });
+
+  it('returns claim:null for a signed request with no logged-in customer', async () => {
+    const res = await app.request(proxyUrl({ shop: SHOP, timestamp: ts() }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).claim).toBeNull();
+  });
+
+  it('mints a channel-signed claim for a Shopify-verified customer', async () => {
+    // Link a shop + give the agent a customer-facing webchat channel.
+    const PROXY_SHOP = 'proxy-store.myshopify.com';
+    const { encryptSecret } = await import('../lib/secrets.js');
+    await db.insert(schema.shopifyShops).values({
+      shop: PROXY_SHOP,
+      state: 'linked',
+      agentId,
+      workspaceId,
+      accessTokenEnc: encryptSecret('shpat_test'),
+    });
+    const [chan] = await db
+      .insert(schema.channels)
+      .values({
+        workspaceId,
+        agentId,
+        kind: 'webchat',
+        name: 'Proxy Bubble',
+        credentials: {},
+      })
+      .returning();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes('graphql.json'))
+          return Promise.resolve(
+            Response.json({
+              data: { customer: { email: 'shopper@store.com', displayName: 'Shop Patron' } },
+            }),
+          );
+        return Promise.resolve(new Response('{}', { status: 404 }));
+      }),
+    );
+    const res = await app.request(
+      proxyUrl({ shop: PROXY_SHOP, timestamp: ts(), logged_in_customer_id: '777' }),
+    );
+    expect(res.status).toBe(200);
+    const { claim } = (await res.json()) as { claim: { id: string; email?: string; name?: string; sig: string } | null };
+    expect(claim?.id).toBe('shopify:777');
+    expect(claim?.email).toBe('shopper@store.com');
+    // The claim must verify exactly like a host-signed identify claim —
+    // against whichever of the agent's webchat channels minted it (the
+    // loader picks the first non-internal one).
+    const chans = await db
+      .select()
+      .from(schema.channels)
+      .where(and(eq(schema.channels.agentId, agentId), eq(schema.channels.kind, 'webchat')));
+    const secrets = chans
+      .map((c) => (c.credentials as { identity_secret?: string }).identity_secret)
+      .filter((s): s is string => !!s);
+    expect(secrets.length).toBeGreaterThan(0);
+    const expected = (secret: string) =>
+      createHmac('sha256', secret).update('shopify:777|shopper@store.com|Shop Patron').digest('hex');
+    expect(secrets.some((s) => expected(s) === claim?.sig)).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});
+
 describe('app wiring', () => {
   it('the real app mounts the console link endpoints under /api/shopify', async () => {
     // The suite above mounts the route groups on a scratch Hono — this
