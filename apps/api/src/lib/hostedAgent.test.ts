@@ -1673,6 +1673,60 @@ describe('testRun tool stubbing', () => {
     expect(cards?.type === 'cards' && cards.items.map((i) => i.title)).toEqual(['Liquid']);
     expect(r.text).toContain('Liquid');
   });
+
+  it('a FRESH ask re-renders products already shown earlier — never a blank carousel', async () => {
+    // Live incident: "show me just the snowboards" after a browse that had
+    // already shown them → the replay dedupe emptied the widget and the
+    // shopper got "Here are our snowboards:" over nothing. Dedupe is for
+    // pagination; a new question renders its answer.
+    const searchTool = {
+      name: 'shopify_search_products',
+      description: 'search products',
+      method: 'POST' as const,
+      url: 'https://shop.example/admin/api/2026-10/graphql.json',
+      bodyTemplate: '{"q":{query}}',
+      params: { query: 'search clause' },
+      widget: { type: 'cards' as const, items: 'data.products.nodes', map: { title: 'title' } },
+    };
+    const boards = Array.from({ length: 8 }, (_, i) => ({ title: `Board ${i}` }));
+    const result = JSON.stringify({
+      data: { products: { pageInfo: { hasNextPage: false }, nodes: boards } },
+    });
+    let llmHits = 0;
+    fetchMock.mockImplementation((url: unknown) => {
+      if (String(url).includes('llm.example')) {
+        llmHits++;
+        return Promise.resolve(
+          llmHits === 1
+            ? reply({
+                tool_calls: [
+                  { id: 'c1', function: { name: 'shopify_search_products', arguments: '{"query":"product_type:snowboard"}' } },
+                ],
+              })
+            : reply({ content: 'Here are our snowboards:' }),
+        );
+      }
+      return Promise.resolve(new Response(result, { status: 200 }));
+    });
+    const r = await complete(
+      llm,
+      'sys',
+      [{ role: 'user', content: 'show me just the snowboards' }],
+      [searchTool],
+      {},
+      {
+        db,
+        convId: 'c',
+        workspaceId: wsId,
+        // Every board already appeared earlier in the thread.
+        prevCardTitles: new Set(boards.map((n) => n.title)),
+        chainCardTitles: new Set(boards.map((n) => n.title)),
+        inboundText: 'show me just the snowboards',
+      },
+    );
+    const cards = r.widgets?.find((w) => w.type === 'cards');
+    expect(cards?.type === 'cards' && cards.items.length).toBe(8);
+  });
 });
 
 describe('identity-scoped customer-record tools', () => {

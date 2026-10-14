@@ -2809,41 +2809,33 @@ export async function complete(
         // carousel; when nothing new survives, don't ASK the model to retry
         // (it often won't) — re-issue the call ourselves with the
         // authoritative cursor and narrate that result.
-        // Paginated calls dedupe against the current chain only — items
-        // from an earlier browse round legitimately re-render on a fresh
-        // chain. Non-paginated full repeats dedupe against everything
-        // recently on screen.
-        const replaySet =
-          args.after !== undefined && ctx?.chainCardTitles?.size
-            ? ctx.chainCardTitles
-            : ctx?.prevCardTitles;
-        const focusedAsk =
-          args.after === undefined && w?.type === 'cards' && w.items.length <= 3;
+        // Replay dedupe applies to PAGINATION ONLY. A continuation that
+        // replays rows already in this chain is a real bug (a rejected or
+        // forgotten cursor) and gets repaired below. A fresh ask whose
+        // rows happen to have appeared earlier in the thread is NOT a
+        // replay — "show me the snowboards" renders the snowboards even if
+        // they scrolled by three turns ago; suppressing them left the
+        // shopper staring at "Here are our snowboards:" over nothing.
+        // The one non-paged exception: the shopper literally asked for
+        // MORE and the model forgot `after` — page 1 replayed. That is a
+        // pagination failure in disguise and gets the same cursor repair.
+        const replaySet = ctx?.chainCardTitles?.size ? ctx.chainCardTitles : ctx?.prevCardTitles;
+        const paged = args.after !== undefined;
+        const moreAsk =
+          !paged &&
+          !!ctx?.inboundText &&
+          /\b(more|next|another|continue|rest|remaining|load|keep going|further|additional)\b/i.test(
+            ctx.inboundText,
+          );
         if (
           w &&
           w.type === 'cards' &&
           replaySet?.size &&
-          // A focused re-ask ("do you have the gift card?") deserves its
-          // card even if it appeared earlier — suppressing it leaves a
-          // bare-text answer to a show-me question. Dedupe only matters
-          // for browse-sized replays and pagination.
-          !focusedAsk &&
-          (args.after !== undefined ||
-            w.items.every((i) => i.title && replaySet.has(i.title)))
+          (paged || (moreAsk && w.items.every((i) => i.title && replaySet.has(i.title))))
         ) {
           const fresh = w.items.filter((i) => i.title && !replaySet.has(i.title));
           if (!fresh.length) {
             w = null;
-            // "show me more" with no `after` replays page 1 — same failure
-            // as a rejected cursor, and the same fix applies: fetch the
-            // next page ourselves with the result's own endCursor.
-            const paged = args.after !== undefined;
-            const moreAsk =
-              !paged &&
-              !!ctx?.inboundText &&
-              /\b(more|next|another|continue|rest|remaining|else|others?|load|keep going|further|additional)\b/i.test(
-                ctx.inboundText,
-              );
             const retryCursor = toolResultEndCursor(resultJson) ?? (paged ? ctx?.prevEndCursor : undefined);
             let recovered = false;
             if (
@@ -4274,20 +4266,6 @@ async function replyAsHostedAgent(
         if (w.type !== 'cards') continue;
         w.items = w.items.filter((it) => !it.title || !ctx.prevCardTitles!.has(it.title));
         if (!w.items.length) widgets.splice(i, 1);
-      }
-    }
-    // Same suppression on a non-paged replay: the tool widget was emptied by
-    // dedupe but the model re-authored a carousel of already-shown items —
-    // that re-renders the identical row the dedupe just removed. Keep a
-    // focused re-ask (≤3 items — "show me the gift card again" deserves its
-    // card); drop a broad all-repeat carousel entirely.
-    if (!paged && ctx?.prevCardTitles?.size) {
-      for (let i = widgets.length - 1; i >= 0; i--) {
-        const w = widgets[i];
-        if (w.type !== 'cards' || refResolved.has(w) || toolWidgets.includes(w)) continue;
-        if (w.items.length > 3 && w.items.every((it) => it.title && ctx.prevCardTitles!.has(it.title))) {
-          widgets.splice(i, 1);
-        }
       }
     }
     // Surviving model cards get their stock badge reconciled with the
