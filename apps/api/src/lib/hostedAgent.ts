@@ -1950,6 +1950,10 @@ export interface AgentRunContext {
    *  model-typed `after` replays page one (Shopify treats a bogus cursor as
    *  "start over", silently), this is the authoritative retry token. */
   prevEndCursor?: string;
+  /** Text of the newest inbound message — "show me more"-style asks let the
+   *  replay-suppression path distinguish pagination intent from a plain
+   *  re-browse. */
+  inboundText?: string;
 }
 
 /** Channel kinds where the sender address is verified by the mailbox —
@@ -2616,9 +2620,10 @@ export async function complete(
         let resultJson = result;
         let w = widgetFromToolResult(tool.widget, resultJson, secrets, args);
         // Page-replay detection: an `after` cursor Shopify rejected (or
-        // partially honoured) replays rows already shown. Drop the repeats
-        // from the carousel; when nothing new survives, don't ASK the model
-        // to retry (it often won't) — re-issue the call ourselves with the
+        // partially honoured) — or a "more" ask that forgot `after`
+        // entirely — replays rows already shown. Drop the repeats from the
+        // carousel; when nothing new survives, don't ASK the model to retry
+        // (it often won't) — re-issue the call ourselves with the
         // authoritative cursor and narrate that result.
         if (
           w &&
@@ -2628,20 +2633,27 @@ export async function complete(
             w.items.every((i) => i.title && ctx.prevCardTitles!.has(i.title)))
         ) {
           const fresh = w.items.filter((i) => i.title && !ctx.prevCardTitles!.has(i.title));
-          if (!fresh.length && args.after === undefined) {
-            // A fresh (non-paginated) call returned exactly the set already
-            // on screen — e.g. the model searched again on a cart ask. The
-            // carousel adds nothing; tell the model to reference the cards
-            // already shown instead of repeating them.
+          if (!fresh.length) {
             w = null;
-            result +=
-              `\n[this search returned only products whose cards are already visible to the customer above — ` +
-              `do NOT re-render or restate them; reference the cards already shown and answer the actual question.]`;
-          } else if (!fresh.length) {
-            w = null;
-            const retryCursor = toolResultEndCursor(resultJson) ?? ctx?.prevEndCursor;
+            // "show me more" with no `after` replays page 1 — same failure
+            // as a rejected cursor, and the same fix applies: fetch the
+            // next page ourselves with the result's own endCursor.
+            const paged = args.after !== undefined;
+            const moreAsk =
+              !paged &&
+              !!ctx?.inboundText &&
+              /\b(more|next|another|continue|rest|remaining|else|others?|load|keep going|further|additional)\b/i.test(
+                ctx.inboundText,
+              );
+            const retryCursor = toolResultEndCursor(resultJson) ?? (paged ? ctx?.prevEndCursor : undefined);
             let recovered = false;
-            if (retryCursor && String(args.after) !== retryCursor && toolResultHasNext(resultJson) && !gated) {
+            if (
+              (paged || moreAsk) &&
+              retryCursor &&
+              String(args.after) !== retryCursor &&
+              toolResultHasNext(resultJson) &&
+              !gated
+            ) {
               try {
                 const retryArgs = { ...args, after: retryCursor };
                 let r2 = await callTool(tool, retryArgs, secrets);
@@ -2684,14 +2696,21 @@ export async function complete(
               }
             }
             if (!recovered) {
-              if (retryCursor && toolResultHasNext(resultJson)) {
+              if ((paged || moreAsk) && retryCursor && toolResultHasNext(resultJson)) {
                 result +=
                   `\n[the page cursor was rejected — the storefront replayed the first page (these are the same products already shown). ` +
                   `The catalogue is NOT exhausted: the next page could not be fetched this turn; do NOT repeat the shown items or claim the set is complete — offer to load more.]`;
-              } else {
+              } else if (paged || moreAsk) {
                 result +=
                   `\n[the page cursor did not advance — these are the same products already shown. ` +
                   `Do NOT repeat them; tell the customer this was the whole matching set (or suggest narrowing the search).]`;
+              } else {
+                // A plain repeat of the set already on screen (e.g. the
+                // model searched again on a cart ask) — the carousel adds
+                // nothing; reference the visible cards instead.
+                result +=
+                  `\n[this search returned only products whose cards are already visible to the customer above — ` +
+                  `do NOT re-render or restate them; reference the cards already shown and answer the actual question.]`;
               }
             }
           } else if (fresh.length < w.items.length) {
@@ -3607,7 +3626,7 @@ async function replyAsHostedAgent(
         .from(messages)
         .where(and(eq(messages.conversationId, convId), eq(messages.direction, 'out')))
         .orderBy(desc(messages.createdAt))
-        .limit(3);
+        .limit(10);
       for (const row of prevOut) {
         const ws = ((row.payload ?? {}) as { widgets?: { type?: string; items?: { title?: string }[]; end_cursor?: string }[] }).widgets ?? [];
         for (const w of ws) {
@@ -3625,6 +3644,7 @@ async function replyAsHostedAgent(
       identity: await verifiedIdentityFor(db, conv, agent.workspaceId),
       prevCardTitles,
       prevEndCursor,
+      inboundText: lastInboundText,
     };
     // One escalation lookup feeds the prompt (pending offer) AND the
     // post-generation decline check below.
