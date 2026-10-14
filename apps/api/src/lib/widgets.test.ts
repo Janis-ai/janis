@@ -434,7 +434,9 @@ describe('widgetFromToolResult', () => {
     expect(w?.type === 'cards' && w.items.map((i) => i.title)).toEqual(['Ski Wax']);
     const item = w?.type === 'cards' ? w.items[0] : undefined;
     // Cheapest AVAILABLE is 1002 ($9.95) — the $4.95 one is out of stock.
-    expect(item?.price).toBe('$9.95');
+    // Two purchasable variants → "from" pricing + an options line.
+    expect(item?.price).toBe('from $9.95');
+    expect(item?.options).toBe('2 variants');
     expect(item?.cart_variant_id).toBe('1002');
     expect(item?.stock).toBeUndefined();
     // All-OOS rows still render badged when they're the whole answer —
@@ -445,6 +447,80 @@ describe('widgetFromToolResult', () => {
     const w2 = widgetFromToolResult(cfg, allOos);
     expect(w2?.type === 'cards' && w2.items[0].stock).toBe('Out of stock');
     expect(w2?.type === 'cards' && w2.items[0].cart_variant_id).toBeUndefined();
+  });
+
+  it('selling plans suppress the Add button and surface on the options line', () => {
+    const cfg = {
+      type: 'cards' as const,
+      items: 'data.products.nodes',
+      pick: { from: 'variants.nodes', into: '__v', by: 'price', require: 'availableForSale' },
+      map: {
+        title: 'title',
+        price: '{__v.price:money}',
+        cart_variant_id: '{__v.id:gidnum}',
+      },
+    };
+    const result = JSON.stringify({
+      data: {
+        products: {
+          nodes: [
+            {
+              title: 'Sub Wax',
+              variants: {
+                nodes: [
+                  { id: 'gid://shopify/ProductVariant/3001', availableForSale: true, price: '9.45' },
+                  { id: 'gid://shopify/ProductVariant/3002', availableForSale: true, price: '47.45' },
+                ],
+              },
+              sellingPlanGroups: {
+                nodes: [
+                  { name: 'Subscription', sellingPlans: { nodes: [{ name: 'Weekly wax' }] } },
+                  { name: 'Preorder', sellingPlans: { nodes: [{ name: 'Early drop' }] } },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    });
+    const w = widgetFromToolResult(cfg, result);
+    const item = w?.type === 'cards' ? w.items[0] : undefined;
+    // A subscription product one-tap-added as one-time purchase is a silent
+    // contract choice — the button must not exist; the plans must show.
+    expect(item?.cart_variant_id).toBeUndefined();
+    expect(item?.price).toBe('from $9.45');
+    expect(item?.options).toContain('Subscription');
+    expect(item?.options).toContain('Preorder');
+    expect(item?.options).toContain('2 variants');
+  });
+
+  it('named product options render on the options line', () => {
+    const cfg = {
+      type: 'cards' as const,
+      items: 'data.products.nodes',
+      pick: { from: 'variants.nodes', into: '__v', by: 'price', require: 'availableForSale' },
+      map: { title: 'title', price: '{__v.price:money}', cart_variant_id: '{__v.id:gidnum}' },
+    };
+    const result = JSON.stringify({
+      data: {
+        products: {
+          nodes: [
+            {
+              title: 'Gift Card',
+              options: [{ name: 'Denominations', values: ['$10', '$25', '$50', '$100'] }],
+              variants: {
+                nodes: [{ id: 'gid://shopify/ProductVariant/4001', availableForSale: true, price: '10.00' }],
+              },
+            },
+          ],
+        },
+      },
+    });
+    const w = widgetFromToolResult(cfg, result);
+    const item = w?.type === 'cards' ? w.items[0] : undefined;
+    expect(item?.options).toBe('Denominations: $10·$25·$50·$100');
+    // No selling plans → a plain add is still offered (it adds the shown variant).
+    expect(item?.cart_variant_id).toBe('4001');
   });
 
   it('end_cursor stamps on non-final pages so a fumbled `after` can recover', () => {

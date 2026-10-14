@@ -10,6 +10,9 @@ export const env = {
   // boot against an already-current schema instead of racing the migrator.
   // Local/PGlite mode still migrates at boot.
   skipDbMigrate: process.env.SKIP_DB_MIGRATE === '1',
+  // DIGESTS_DISABLED=1 stops the daily workspace digest loop entirely —
+  // temporary switch while imported-legacy notification surfaces settle.
+  digestsDisabled: process.env.DIGESTS_DISABLED === '1',
   sessionSecret: process.env.SESSION_SECRET ?? 'dev-insecure-secret',
   webOrigin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
   apiOrigin: process.env.API_ORIGIN ?? 'http://localhost:8787',

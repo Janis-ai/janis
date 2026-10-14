@@ -1051,6 +1051,11 @@
         body.appendChild(p);
         ref.priceEl = p;
       }
+      if (item.options) {
+        var oEl = el('div', {}, { class: 'janis-wcard-s' });
+        wtext(oEl, item.options);
+        body.appendChild(oEl);
+      }
       if (item.stock) {
         var sb = el('div', {}, { class: 'janis-wcard-stock' });
         wtext(sb, item.stock);
@@ -1166,7 +1171,7 @@
     if (!SHOPIFY || PREVIEW || PAGE) return;
     var byHandle = {};
     refs.forEach(function (r) {
-      if (!r.item.cart_variant_id || !r.item.link) return;
+      if (!r.item.link) return;
       var m = /\/products\/([^/?#]+)/.exec(String(r.item.link));
       if (!m) return;
       (byHandle[m[1]] = byHandle[m[1]] || []).push(r);
@@ -1187,17 +1192,7 @@
         .then(function (p) {
           var variants = (p && p.variants) || [];
           byHandle[handle].forEach(function (r) {
-            var v = null;
-            for (var i = 0; i < variants.length; i++) {
-              if (String(variants[i].id) === String(r.item.cart_variant_id)) { v = variants[i]; break; }
-            }
-            if (!v) return;
-            // Same truth as the PDP: price in cents, per-variant availability.
-            if (typeof v.price === 'number' && r.priceEl) {
-              var formatted = fmt(v.price);
-              if (formatted && r.priceEl.textContent !== formatted) r.priceEl.textContent = formatted;
-            }
-            if (v.available === false) {
+            function oos() {
               if (r.cartBtn && r.cartBtn.parentNode) r.cartBtn.parentNode.removeChild(r.cartBtn);
               if (!r.item.stock && r.body) {
                 var sb = el('div', {}, { class: 'janis-wcard-stock' });
@@ -1205,6 +1200,49 @@
                 r.body.appendChild(sb);
               }
             }
+            // "from $X" cards cover multiple variants — the floor is the
+            // cheapest AVAILABLE variant, not whatever id the card carries.
+            if (/^from\s/i.test(String(r.item.price || ''))) {
+              var best = null;
+              for (var j = 0; j < variants.length; j++) {
+                var cand = variants[j];
+                if (cand.available === false) continue;
+                if (typeof cand.price === 'number' && (best === null || cand.price < best)) best = cand.price;
+              }
+              if (best !== null && r.priceEl) {
+                var ft = 'from ' + fmt(best);
+                if (r.priceEl.textContent !== ft) r.priceEl.textContent = ft;
+              }
+              if (best === null && variants.length) oos();
+              return;
+            }
+            var v = null;
+            for (var i = 0; i < variants.length; i++) {
+              if (String(variants[i].id) === String(r.item.cart_variant_id)) { v = variants[i]; break; }
+            }
+            if (!v) {
+              // No variant id (subscription/options product) — the floor
+              // price still hydrates, and the whole product can be OOS.
+              var any = variants.some(function (c) { return c.available !== false; });
+              if (variants.length && !any) oos();
+              var low = null;
+              for (var k = 0; k < variants.length; k++) {
+                var cv = variants[k];
+                if (cv.available === false || typeof cv.price !== 'number') continue;
+                if (low === null || cv.price < low) low = cv.price;
+              }
+              if (low !== null && r.priceEl) {
+                var lf = fmt(low);
+                if (r.priceEl.textContent !== lf) r.priceEl.textContent = lf;
+              }
+              return;
+            }
+            // Same truth as the PDP: price in cents, per-variant availability.
+            if (typeof v.price === 'number' && r.priceEl) {
+              var formatted = fmt(v.price);
+              if (formatted && r.priceEl.textContent !== formatted) r.priceEl.textContent = formatted;
+            }
+            if (v.available === false) oos();
           });
         })
         .catch(function () { /* catalogue fields stay — hydration is best-effort */ });

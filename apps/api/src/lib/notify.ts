@@ -2,7 +2,14 @@ import webpush from 'web-push';
 import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import { friendlyName, mathToUnicode } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agentMembers, channelBindings, channels, pushSubscriptions, users } from '../db/schema.js';
+import {
+  agentMembers,
+  channelBindings,
+  channels,
+  pushSubscriptions,
+  sessions,
+  users,
+} from '../db/schema.js';
 import { workspaceMembers } from './members.js';
 import { env } from '../env.js';
 
@@ -264,7 +271,23 @@ export async function notifyWorkspace(
   const prefsOf = (m: { id: string }) => prefs(m.id);
 
   const pushUserIds = recipients.filter((m) => prefsOf(m).push !== false).map((m) => m.id);
-  const emailAddrs = recipients.filter((m) => prefsOf(m).email !== false).map((m) => m.email);
+  // Email only to accounts that have actually logged in — the Sept-21 legacy
+  // import created member rows for fleet owners who never signed up, and
+  // digest/failure emails to them are unsolicited mail that dents sender
+  // reputation. Session rows persist past expiry, so presence ≈ "claimed".
+  const activated = new Set(
+    recipients.length
+      ? (
+          await db
+            .select({ userId: sessions.userId })
+            .from(sessions)
+            .where(inArray(sessions.userId, recipients.map((m) => m.id)))
+        ).map((r) => r.userId)
+      : [],
+  );
+  const emailAddrs = recipients
+    .filter((m) => prefsOf(m).email !== false && activated.has(m.id))
+    .map((m) => m.email);
   const silentUsers = new Set(
     recipients.filter((m) => prefsOf(m).sound === false).map((m) => m.id),
   );

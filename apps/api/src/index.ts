@@ -19,7 +19,7 @@ startSweeper(db);
 setInterval(() => {
   void acquireLock(db, 'digest', 2 * 60 * 60 * 1000)
     .then(async (won) => {
-      if (won) await emitDueDigests(db);
+      if (won && !env.digestsDisabled) await emitDueDigests(db);
     })
     .catch(() => {});
 }, 60 * 60 * 1000); // hourly check — leader-locked so N instances emit once

@@ -940,6 +940,7 @@ export async function guardReplyLinks(
   const tidy = (s: string) =>
     s
       .replace(/\[([^\]]*)\]\(\s*\)/g, '$1') // markdown link emptied by a strip
+      .replace(/ ?\[\]\(\s*https?:[^)\s]*\)/g, '') // empty-anchor link — renders as nothing
       .replace(/ {2,}/g, ' ')
       .replace(/ +([.,;:!?])/g, '$1');
 
@@ -2767,7 +2768,8 @@ export async function complete(
             const dropped = w.items.length - fresh.length;
             w.items = fresh;
             result +=
-              `\n[${dropped} row(s) repeated the previous page and were dropped from the cards — narrate only the ${fresh.length} new item(s).]`;
+              `\n[${dropped} of the matching rows are already on screen from earlier replies and were dropped from this carousel — ` +
+              `the customer sees ${fresh.length} NEW card(s); say "these plus the ones already shown" rather than implying the new cards are the whole set.]`;
           }
         }
         if (w) {
@@ -2794,6 +2796,16 @@ export async function complete(
           result +=
             `\n[${badged} of the rendered cards show an Out of stock badge — call those items out as unavailable in your text; ` +
             `never describe a badged card as in stock, and don't count it toward an in-stock list.]`;
+        }
+        const optItems = w?.type === 'cards' ? w.items.filter((i) => i.options).length : 0;
+        if (optItems > 0) {
+          const pickOnly = w && w.type === 'cards' ? w.items.filter((i) => i.options && !i.cart_variant_id).length : 0;
+          result +=
+            `\n[${optItems} card(s) carry a variants/options line — quote "from" prices and name the options instead of one flat price` +
+            (pickOnly > 0
+              ? `; ${pickOnly} of them have NO Add to cart button because a choice (variant/subscription/preorder) must be made — point those at "View" / the product page`
+              : '') +
+            `.]`;
         }
         const dropped = availabilityDropped(tool.widget, args, resultJson);
         // Catalogue availability is Admin-side truth — a product stocked at

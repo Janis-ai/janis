@@ -5,8 +5,16 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentMembers, agents, memberships, users, workspaces } from '../db/schema.js';
-import { alertNotification, eventForAlertType, resolveNotifyRecipients } from './notify.js';
+import {
+  agentMembers,
+  agents,
+  memberships,
+  sessions,
+  users,
+  workspaces,
+} from '../db/schema.js';
+import { alertNotification, eventForAlertType, notifyWorkspace, resolveNotifyRecipients } from './notify.js';
+import { env } from '../env.js';
 
 let db: Db;
 let ws: typeof workspaces.$inferSelect;
@@ -121,6 +129,54 @@ describe('resolveNotifyRecipients', () => {
     expect(r.prefs(muted.id).events?.digest).toBe(false);
     expect(r.prefs(overridden.id).events?.keyword).toBe(true);
     expect(r.prefs(overridden.id).events?.sentiment).toBe(false);
+  });
+});
+
+describe('notifyWorkspace email gate', () => {
+  it('emails only members who have logged in (a session row exists)', async () => {
+    const calls: { to: string[] }[] = [];
+    const origFetch = globalThis.fetch;
+    const resend = { key: env.resendApiKey, from: env.emailFrom, origin: env.webOrigin };
+    env.resendApiKey = 're_test';
+    env.emailFrom = 'alerts@test.dev';
+    env.webOrigin = 'https://app.test';
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes('api.resend.com/emails')) {
+        calls.push(JSON.parse(String(init?.body)));
+        return new Response('{}', { status: 200 });
+      }
+      return origFetch(url as never, init);
+    }) as typeof fetch;
+    try {
+      const [ws2] = await db.insert(workspaces).values({ name: 'Gate' }).returning();
+      const [ghost] = await db
+        .insert(users)
+        .values({ email: 'ghost@x.c', name: 'G', notifyPrefs: { email: true } })
+        .returning();
+      const [real] = await db
+        .insert(users)
+        .values({ email: 'real@x.c', name: 'R', notifyPrefs: { email: true } })
+        .returning();
+      for (const u of [ghost, real]) {
+        await db.insert(memberships).values({
+          userId: u.id,
+          workspaceId: ws2.id,
+          role: 'member',
+          acceptedAt: new Date(),
+        });
+      }
+      await db
+        .insert(sessions)
+        .values({ id: 'sess-real', userId: real.id, expiresAt: new Date(Date.now() - 1000) });
+      await notifyWorkspace(db, ws2.id, { title: 'T', body: 'B' }, { event: 'digest' });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].to).toEqual(['real@x.c']);
+    } finally {
+      globalThis.fetch = origFetch;
+      env.resendApiKey = resend.key;
+      env.emailFrom = resend.from;
+      env.webOrigin = resend.origin;
+    }
   });
 });
 

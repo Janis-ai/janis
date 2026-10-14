@@ -33,6 +33,10 @@ export const WidgetComponent = z.discriminatedUnion('type', [
           // :gidnum map modifier strips the gid:// wrapper. widget.js
           // renders an "Add to cart" button when present (storefront only).
           cart_variant_id: s(30).optional(),
+          // Variant / purchase-option summary ("3 styles · Subscription,
+          // Preorder available") — a silent one-variant Add to cart on a
+          // configurable product is a contract the chat can't represent.
+          options: s(240).optional(),
           link: url.optional(),
           link_label: s(30).optional(),
           // Interpolated labels carry a full title ("I'm interested in the
@@ -426,6 +430,59 @@ export function applyRowPick(
   return { ...(row as Record<string, unknown>), [pick.into]: best };
 }
 
+/** Variant + purchase-option summary for a product row. Three facts decide
+ *  the card's shape: how many variants are purchasable ("from" pricing),
+ *  what options exist (the display line), and whether selling plans apply
+ *  (an Add-to-cart must not silently pick one-time over subscription). */
+function purchaseOptionInfo(row: unknown): { text?: string; suppressAdd?: boolean; multi?: boolean } {
+  const variants = digPath(row, 'variants.nodes');
+  const varr = Array.isArray(variants) ? variants : [];
+  const purchasable = varr.filter((v) => (v as { availableForSale?: unknown }).availableForSale !== false);
+  const opts = digPath(row, 'options');
+  const optArr = Array.isArray(opts) ? opts : [];
+  const groups = digPath(row, 'sellingPlanGroups.nodes');
+  const garr = Array.isArray(groups) ? groups : [];
+  const planNames = [
+    ...new Set(
+      garr
+        .map((g) => String((g as { name?: unknown }).name ?? ''))
+        .filter(Boolean),
+    ),
+  ];
+  const parts: string[] = [];
+  // Shopify synthesizes a "Title: Default Title" option on option-less
+  // products — that's schema noise, not a choice. Real multi-value Title
+  // options are variant names; "Options:" labels them better than "Title:".
+  const optLines = optArr
+    .map((o) => ({
+      name: String((o as { name?: unknown }).name ?? ''),
+      vals: Array.isArray((o as { values?: unknown }).values)
+        ? ((o as { values?: unknown[] }).values as unknown[]).map(String)
+        : [],
+    }))
+    .filter((o) => !(o.name === 'Title' && o.vals.length === 1 && o.vals[0] === 'Default Title'));
+  if (optLines.length) {
+    parts.push(
+      optLines
+        .slice(0, 3)
+        .map((o) => {
+          const label = o.name === 'Title' ? 'Options' : o.name;
+          const vl = o.vals.slice(0, 4).join('·');
+          return vl ? `${label}: ${vl}` : label;
+        })
+        .join(' · '),
+    );
+  } else if (purchasable.length > 1) {
+    parts.push(`${purchasable.length} variants`);
+  }
+  if (planNames.length) parts.push(`${planNames.join(', ')} available`);
+  return {
+    text: parts.join(' — ') || undefined,
+    suppressAdd: planNames.length > 0,
+    multi: purchasable.length > 1,
+  };
+}
+
 /** Rows the availability filter hides — OOS products on a call that didn't
  *  opt into showing them. Used to tell the model "N more matched but are
  *  unavailable" so a 'show me everything' can surface them badged. */
@@ -571,23 +628,34 @@ export function widgetFromToolResult(
           type: 'cards',
           items: list
             .slice(0, 10)
-            .map((r) => ({
-              title: str(mapValue(r, map.title ?? 'title', secrets)) ?? str(mapValue(r, map.label ?? 'label', secrets)),
-              subtitle: str(mapValue(r, map.subtitle ?? 'subtitle', secrets)),
-              image: str(mapValue(r, map.image ?? 'image', secrets)),
-              price: str(mapValue(r, map.price ?? 'price', secrets)),
-              stock: map.stock ? str(mapValue(r, map.stock, secrets)) : undefined,
-              // An unavailable row renders for information only — its Add to
-              // cart would hit the same rejection the badge warns about.
-              cart_variant_id:
-                map.cart_variant_id &&
-                !(cfg.availability && digPath(r, cfg.availability.field) === false)
-                  ? str(mapValue(r, map.cart_variant_id, secrets))
-                  : undefined,
-              link: str(mapValue(r, map.link ?? 'link', secrets)),
-              link_label: label(cfg.link_label, r),
-              select_label: label(cfg.select_label, r),
-            }))
+            .map((r) => {
+              const opt = purchaseOptionInfo(r);
+              const price = str(mapValue(r, map.price ?? 'price', secrets));
+              return {
+                title: str(mapValue(r, map.title ?? 'title', secrets)) ?? str(mapValue(r, map.label ?? 'label', secrets)),
+                subtitle: str(mapValue(r, map.subtitle ?? 'subtitle', secrets)),
+                image: str(mapValue(r, map.image ?? 'image', secrets)),
+                // Multi-variant rows sell "from" the picked price — a flat
+                // "$24.95" implies every variant costs that.
+                price: price && opt.multi ? `from ${price}` : price,
+                stock: map.stock ? str(mapValue(r, map.stock, secrets)) : undefined,
+                options: opt.text,
+                // An unavailable row renders for information only — its Add to
+                // cart would hit the same rejection the badge warns about.
+                // Selling-plan rows drop the button too: one-tap adding a
+                // subscription product silently picks one-time purchase —
+                // the PDP is the only place that choice exists.
+                cart_variant_id:
+                  map.cart_variant_id &&
+                  !opt.suppressAdd &&
+                  !(cfg.availability && digPath(r, cfg.availability.field) === false)
+                    ? str(mapValue(r, map.cart_variant_id, secrets))
+                    : undefined,
+                link: str(mapValue(r, map.link ?? 'link', secrets)),
+                link_label: label(cfg.link_label, r),
+                select_label: label(cfg.select_label, r),
+              };
+            })
             .filter((it) => it.title),
         };
 
