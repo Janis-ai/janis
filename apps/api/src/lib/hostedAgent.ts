@@ -2880,11 +2880,11 @@ export async function complete(
         // narration — the badge is the truth the customer sees, so the text
         // has to match it (and the storefront's live availability can flag
         // a row this data called sellable).
-        const badged = w?.type === 'cards' ? w.items.filter((i) => i.stock).length : 0;
-        if (badged > 0) {
+        const badged = w?.type === 'cards' ? w.items.filter((i) => i.stock) : [];
+        if (badged.length) {
           result +=
-            `\n[${badged} of the rendered cards show an Out of stock badge — call those items out as unavailable in your text; ` +
-            `never describe a badged card as in stock, and don't count it toward an in-stock list.]`;
+            `\n[the cards for ${badged.map((i) => `"${i.title}"`).join(', ')} show an Out of stock badge — call THOSE items out as unavailable by name in your text; ` +
+            `never describe a badged card as in stock, don't count it toward an in-stock list, and don't name a different product as the unavailable one.]`;
         }
         const optItems = w?.type === 'cards' ? w.items.filter((i) => i.options).length : 0;
         if (optItems > 0) {

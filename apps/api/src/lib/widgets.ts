@@ -855,7 +855,11 @@ export function widgetFromToolResult(
     // (no cursor) — that's what marks them as members of the pagination
     // chain when a later turn walks the history.
     if (cur || args.after !== undefined) widget.page_args = { ...args };
-    if (cur && !(cfg.availability?.only_arg && args[cfg.availability.only_arg])) {
+    const availFiltered =
+      !!cfg.availability &&
+      !!((cfg.availability.only_arg && args[cfg.availability.only_arg]) ||
+        (cfg.availability.in_stock_arg && args[cfg.availability.in_stock_arg]));
+    if (cur && !availFiltered) {
       const total = toolResultCount(resultText);
       if (total !== null && total > widget.items.length) widget.total = total;
     }
