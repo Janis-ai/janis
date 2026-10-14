@@ -4200,6 +4200,20 @@ async function replyAsHostedAgent(
         if (!w.items.length) widgets.splice(i, 1);
       }
     }
+    // Same suppression on a non-paged replay: the tool widget was emptied by
+    // dedupe but the model re-authored a carousel of already-shown items —
+    // that re-renders the identical row the dedupe just removed. Keep a
+    // focused re-ask (≤3 items — "show me the gift card again" deserves its
+    // card); drop a broad all-repeat carousel entirely.
+    if (!paged && ctx?.prevCardTitles?.size) {
+      for (let i = widgets.length - 1; i >= 0; i--) {
+        const w = widgets[i];
+        if (w.type !== 'cards' || refResolved.has(w) || toolWidgets.includes(w)) continue;
+        if (w.items.length > 3 && w.items.every((it) => it.title && ctx.prevCardTitles!.has(it.title))) {
+          widgets.splice(i, 1);
+        }
+      }
+    }
     // Surviving model cards get their stock badge reconciled with the
     // corpus — an OOS product rendered buyable (or vice versa) is a lie the
     // customer clicks on.
