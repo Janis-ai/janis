@@ -10,6 +10,11 @@ export interface WidgetCardItem {
   subtitle?: string;
   image?: string;
   price?: string;
+  // "Was" price of the shown variant — struck through next to the sale
+  // price, plus a Sale pill on the image.
+  compare_at?: string;
+  // Variant / purchase-option summary line (sizes, subscription plans…).
+  options?: string;
   stock?: string;
   cart_variant_id?: string;
   link?: string;
@@ -116,21 +121,30 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
       <div className="wgt-cards" ref={rowRef} onScroll={sync}>
       {w.items.map((item, i) => (
         <div key={i} className="wgt-card">
-          {item.image ? (
-            <img src={item.image} alt="" loading="lazy" />
-          ) : (
-            <div className="wgt-card-imgph">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <path d="M21 15l-5-5L5 21" />
-              </svg>
-            </div>
-          )}
+          <div className="wgt-card-imgwrap">
+            {item.image ? (
+              <img src={item.image} alt="" loading="lazy" />
+            ) : (
+              <div className="wgt-card-imgph">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <path d="M21 15l-5-5L5 21" />
+                </svg>
+              </div>
+            )}
+            {item.compare_at && <span className="wgt-card-sale">Sale</span>}
+          </div>
           <div className="wgt-card-body">
             <div className="wgt-card-t">{item.title}</div>
             {item.subtitle && <div className="wgt-card-s">{item.subtitle}</div>}
-            {item.price && <div className="wgt-card-p">{item.price}</div>}
+            {item.price && (
+              <div className="wgt-card-p">
+                {item.price}
+                {item.compare_at && <s className="wgt-card-ca">{item.compare_at}</s>}
+              </div>
+            )}
+            {item.options && <div className="wgt-card-s">{item.options}</div>}
             {item.stock && <div className="wgt-card-stock">{item.stock}</div>}
             {item.cart_variant_id && !item.stock && (
               <div className="wgt-card-cart">Add to cart</div>

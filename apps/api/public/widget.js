@@ -455,6 +455,12 @@
     '.janis-wcard-t{font-weight:600;font-size:13px;line-height:1.3}' +
     '.janis-wcard-s{color:#6b7280;font-size:12px;margin-top:2px;line-height:1.3}' +
     '.janis-wcard-p{font-weight:600;font-size:13px;margin-top:4px}' +
+    '.janis-wcard-imgwrap{position:relative}' +
+    // Sale affordance — struck compare-at beside the sale price plus a pill
+    // on the image, same shape as storefront theme badges.
+    '.janis-wcard-ca{color:#9ca3af;font-weight:400;font-size:12px;margin-left:5px}' +
+    '.janis-wcard-sale{position:absolute;left:6px;bottom:6px;background:#14b8a6;color:#fff;' +
+      'font-size:10px;font-weight:700;letter-spacing:.02em;padding:2px 8px;border-radius:20px;line-height:1.4}' +
     '.janis-wcard-stock{display:inline-block;font-size:11px;font-weight:600;color:#b45309;' +
       'background:#fef3c7;border-radius:4px;padding:1px 6px;margin-top:4px}' +
     '.janis-wcard-btns{display:flex;flex-direction:column;gap:4px;padding:0 8px 8px;margin-top:auto}' +
@@ -1028,13 +1034,16 @@
     var refs = [];
     (w.items || []).forEach(function (item) {
       var card = el('div', {}, { class: 'janis-wcard' });
-      var ref = { item: item, card: card, body: null, priceEl: null, cartBtn: null };
+      var ref = { item: item, card: card, body: null, priceEl: null, cartBtn: null, compareEl: null, saleEl: null, imgWrap: null };
       refs.push(ref);
+      var imgWrap = el('div', {}, { class: 'janis-wcard-imgwrap' });
+      ref.imgWrap = imgWrap;
       if (item.image) {
-        card.appendChild(el('img', {}, { src: item.image, alt: '', loading: 'lazy' }));
+        imgWrap.appendChild(el('img', {}, { src: item.image, alt: '', loading: 'lazy' }));
       } else {
-        card.appendChild(el('div', {}, { class: 'janis-wcard-imgph' }));
+        imgWrap.appendChild(el('div', {}, { class: 'janis-wcard-imgph' }));
       }
+      card.appendChild(imgWrap);
       var body = el('div', {}, { class: 'janis-wcard-body' });
       ref.body = body;
       var t = el('div', {}, { class: 'janis-wcard-t' });
@@ -1047,9 +1056,23 @@
       }
       if (item.price) {
         var p = el('div', {}, { class: 'janis-wcard-p' });
-        wtext(p, item.price);
+        // priceEl is a span — hydration rewrites just the sale price and
+        // leaves the struck compare-at sibling intact.
+        var pSpan = el('span', {}, {});
+        wtext(pSpan, item.price);
+        p.appendChild(pSpan);
+        ref.priceEl = pSpan;
+        if (item.compare_at) {
+          var ca = el('s', {}, { class: 'janis-wcard-ca' });
+          wtext(ca, item.compare_at);
+          p.appendChild(ca);
+          ref.compareEl = ca;
+          var sale = el('span', {}, { class: 'janis-wcard-sale' });
+          wtext(sale, 'Sale');
+          imgWrap.appendChild(sale);
+          ref.saleEl = sale;
+        }
         body.appendChild(p);
-        ref.priceEl = p;
       }
       if (item.options) {
         var oEl = el('div', {}, { class: 'janis-wcard-s' });
@@ -1200,19 +1223,50 @@
                 r.body.appendChild(sb);
               }
             }
+            // Storefront compare_at_price (cents, possibly null) — the Sale
+            // badge + struck "was" price follow the live value, appearing
+            // or disappearing as the market context dictates.
+            function setCompare(cents) {
+              if (typeof cents === 'number' && cents > 0) {
+                var txt = fmt(cents);
+                if (r.compareEl) {
+                  if (r.compareEl.textContent !== txt) r.compareEl.textContent = txt;
+                } else if (r.priceEl && r.priceEl.parentNode) {
+                  r.compareEl = el('s', {}, { class: 'janis-wcard-ca' });
+                  wtext(r.compareEl, txt);
+                  r.priceEl.parentNode.appendChild(r.compareEl);
+                }
+                if (!r.saleEl && r.imgWrap) {
+                  r.saleEl = el('span', {}, { class: 'janis-wcard-sale' });
+                  wtext(r.saleEl, 'Sale');
+                  r.imgWrap.appendChild(r.saleEl);
+                }
+              } else {
+                if (r.compareEl && r.compareEl.parentNode) r.compareEl.parentNode.removeChild(r.compareEl);
+                if (r.saleEl && r.saleEl.parentNode) r.saleEl.parentNode.removeChild(r.saleEl);
+                r.compareEl = null;
+                r.saleEl = null;
+              }
+            }
             // "from $X" cards cover multiple variants — the floor is the
             // cheapest AVAILABLE variant, not whatever id the card carries.
             if (/^from\s/i.test(String(r.item.price || ''))) {
               var best = null;
+              var bestCmp = null;
               for (var j = 0; j < variants.length; j++) {
                 var cand = variants[j];
                 if (cand.available === false) continue;
-                if (typeof cand.price === 'number' && (best === null || cand.price < best)) best = cand.price;
+                if (typeof cand.price === 'number' && (best === null || cand.price < best)) {
+                  best = cand.price;
+                  bestCmp = cand.compare_at_price;
+                }
               }
               if (best !== null && r.priceEl) {
                 var ft = 'from ' + fmt(best);
                 if (r.priceEl.textContent !== ft) r.priceEl.textContent = ft;
               }
+              if (best !== null && typeof bestCmp === 'number' && bestCmp > best) setCompare(bestCmp);
+              else setCompare(null);
               if (best === null && variants.length) oos();
               return;
             }
@@ -1226,21 +1280,26 @@
               var any = variants.some(function (c) { return c.available !== false; });
               if (variants.length && !any) oos();
               var low = null;
+              var lowCmp = null;
               for (var k = 0; k < variants.length; k++) {
                 var cv = variants[k];
                 if (cv.available === false || typeof cv.price !== 'number') continue;
-                if (low === null || cv.price < low) low = cv.price;
+                if (low === null || cv.price < low) { low = cv.price; lowCmp = cv.compare_at_price; }
               }
               if (low !== null && r.priceEl) {
                 var lf = fmt(low);
                 if (r.priceEl.textContent !== lf) r.priceEl.textContent = lf;
               }
+              if (low !== null && typeof lowCmp === 'number' && lowCmp > low) setCompare(lowCmp);
+              else setCompare(null);
               return;
             }
             // Same truth as the PDP: price in cents, per-variant availability.
             if (typeof v.price === 'number' && r.priceEl) {
               var formatted = fmt(v.price);
               if (formatted && r.priceEl.textContent !== formatted) r.priceEl.textContent = formatted;
+              if (typeof v.compare_at_price === 'number' && v.compare_at_price > v.price) setCompare(v.compare_at_price);
+              else setCompare(null);
             }
             if (v.available === false) oos();
           });

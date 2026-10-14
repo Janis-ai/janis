@@ -166,6 +166,9 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
             // $902.45 variant is a bait-and-switch the cart then exposes).
             // Variant price is a scalar Money; :money borrows the row's code.
             price: '{__v.price:money}',
+            // Same variant's compare-at — a set value means the card's
+            // price IS a sale price; renderers strike it + "Sale" badge.
+            compare_at: '{__v.compareAtPrice:money}',
             stock: '{__v.availableForSale:stock}',
             cart_variant_id: '{__v.id:gidnum}',
             link: 'https://{{secrets.SHOPIFY_SHOP}}/products/{handle}',

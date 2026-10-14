@@ -1313,6 +1313,19 @@ export function repairCardStock(
           fixed++;
         }
       }
+      // Compare-at ("was") price — a model-invented strike price is a fake
+      // sale; hydrate the real one and strip fabrications.
+      const cmp =
+        f.compareAt && f.price && Number(f.compareAt) > Number(f.price)
+          ? formatMoney(f.compareAt, f.currency)
+          : null;
+      if (cmp && item.compare_at !== cmp) {
+        item.compare_at = cmp;
+        fixed++;
+      } else if (!cmp && item.compare_at) {
+        delete item.compare_at;
+        fixed++;
+      }
     }
   }
   return fixed;
@@ -1326,6 +1339,8 @@ interface CorpusFields {
   avail: boolean | null;
   variantNum?: string;
   price?: string;
+  /** Compare-at ("was") of the picked variant — null means known absent */
+  compareAt?: string | null;
   currency?: string;
   /** Named product options (filtered of Shopify's Title placeholder) */
   options?: { name: string; vals: string[] }[];
@@ -1357,14 +1372,15 @@ function corpusProductFields(toolText: string, title: string): CorpusFields | nu
   // Variant triples in document order — the widget's pick rule (cheapest
   // AVAILABLE variant) must match exactly, or a hydrated card pairs the
   // $9.95 price with a $24.95 variant id all over again.
-  const variants: { num: string; avail: boolean | null; price?: string }[] = [];
+  const variants: { num: string; avail: boolean | null; price?: string; compareAt?: string | null }[] = [];
   const vre = /"id"\s*:\s*"gid:\/\/shopify\/ProductVariant\/(\d+)"/g;
   let vm: RegExpExecArray | null;
   while ((vm = vre.exec(span))) {
     const tail = span.slice(vm.index + vm[0].length, vm.index + vm[0].length + 400);
     const av = /"availableForSale"\s*:\s*(true|false)/.exec(tail);
     const pr = /"price"\s*:\s*"?([\d.]+)"?/.exec(tail);
-    variants.push({ num: vm[1], avail: av ? av[1] === 'true' : null, price: pr?.[1] });
+    const cp = /"compareAtPrice"\s*:\s*(?:"?([\d.]+)"?|null)/.exec(tail);
+    variants.push({ num: vm[1], avail: av ? av[1] === 'true' : null, price: pr?.[1], compareAt: cp ? (cp[1] ?? null) : undefined });
   }
   const pool = variants.filter((v) => v.avail !== false);
   const usable = pool.length ? pool : variants;
@@ -1410,6 +1426,7 @@ function corpusProductFields(toolText: string, title: string): CorpusFields | nu
     avail,
     variantNum: picked?.num,
     price,
+    compareAt: picked?.compareAt,
     currency: cur?.[1],
     options: optLines,
     plans,
@@ -2856,6 +2873,11 @@ export async function complete(
               ? `; ${pickOnly} of them have NO Add to cart button because a choice (variant/subscription/preorder) must be made — point those at "View" / the product page`
               : '') +
             `.]`;
+        }
+        const onSale = w?.type === 'cards' ? w.items.filter((i) => i.compare_at).length : 0;
+        if (onSale > 0) {
+          result +=
+            `\n[${onSale} card(s) carry a struck-through "was" price — those products are ON SALE; if you quote a price, quote the sale price and mention the saving rather than the old price.]`;
         }
         const dropped = availabilityDropped(tool.widget, args, resultJson);
         // Catalogue availability is Admin-side truth — a product stocked at

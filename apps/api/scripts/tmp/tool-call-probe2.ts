@@ -13,6 +13,7 @@ if (w?.type !== 'cards') { console.log('no widget', text.slice(0,300)); process.
 for (const i of w.items) {
   console.log(`\n${i.title} | ${i.price ?? '-'} | cvid:${i.cart_variant_id ?? 'NONE'} | stock:${i.stock ?? '-'}`);
   if (i.options) console.log(`   options: ${i.options}`);
+  if (i.compare_at) console.log(`   was: ${i.compare_at}`);
 }
 console.log('\ntotal:', w.total, 'cursor:', !!w.end_cursor);
 process.exit(0);

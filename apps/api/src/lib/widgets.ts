@@ -37,6 +37,9 @@ export const WidgetComponent = z.discriminatedUnion('type', [
           // Preorder available") — a silent one-variant Add to cart on a
           // configurable product is a contract the chat can't represent.
           options: s(240).optional(),
+          // Compare-at ("was") price of the shown variant — a real one
+          // means the product is on sale; renderers strike it through.
+          compare_at: s(40).optional(),
           link: url.optional(),
           link_label: s(30).optional(),
           // Interpolated labels carry a full title ("I'm interested in the
@@ -650,6 +653,7 @@ export function widgetFromToolResult(
                 // Multi-variant rows sell "from" the picked price — a flat
                 // "$24.95" implies every variant costs that.
                 price: price && opt.multi ? `from ${price}` : price,
+                compare_at: map.compare_at ? str(mapValue(r, map.compare_at, secrets)) : undefined,
                 stock: map.stock ? str(mapValue(r, map.stock, secrets)) : undefined,
                 options: opt.text,
                 // An unavailable row renders for information only — its Add to
