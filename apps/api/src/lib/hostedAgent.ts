@@ -1946,10 +1946,21 @@ export interface AgentRunContext {
    *  tool call whose cursor was rejected replays page one verbatim, and
    *  without this the same carousel ships twice. */
   prevCardTitles?: Set<string>;
+  /** Titles in the CURRENT pagination chain only (the newest cards widget
+   *  plus its ancestors back to the page-1 call). An `after` result that
+   *  repeats these is a replay; items from an earlier browse round are
+   *  legitimately re-shown on a new chain. */
+  chainCardTitles?: Set<string>;
   /** The real endCursor from the last outbound cards widget — when a
    *  model-typed `after` replays page one (Shopify treats a bogus cursor as
    *  "start over", silently), this is the authoritative retry token. */
   prevEndCursor?: string;
+  /** Args that produced the current chain's tail page — a pagination tap
+   *  replays them verbatim so the model can't drift the query. */
+  prevPageArgs?: Record<string, unknown>;
+  /** The newest inbound is the load-more tile's tap — the continuation is
+   *  already fully determined (prevPageArgs + prevEndCursor). */
+  paginationTap?: boolean;
   /** Text of the newest inbound message — "show me more"-style asks let the
    *  replay-suppression path distinguish pagination intent from a plain
    *  re-browse. */
@@ -2531,6 +2542,14 @@ export async function complete(
       // cursors are bound to the exact query that minted them; "*" vs "" is
       // the most common rephrase that silently resets pagination to page 1.
       if (tool?.widget && String(args.query ?? '').trim() === '*') args.query = '';
+      // Pagination tap — the customer tapped the load-more tile, so the
+      // continuation is fully determined already: replay the page-producing
+      // args verbatim with the authoritative cursor. The model's own args
+      // (fresh query, invented cursor) are exactly how "show me more" kept
+      // landing back on page 1.
+      if (ctx?.paginationTap && tool?.widget?.type === 'cards' && ctx.prevEndCursor) {
+        args = { ...(ctx.prevPageArgs ?? {}), after: ctx.prevEndCursor };
+      }
       const callKey = `${call.function.name}::${call.function.arguments}`;
       try {
         // Customer-record tools hard-bind to the verified identity — a typed
@@ -2625,14 +2644,22 @@ export async function complete(
         // carousel; when nothing new survives, don't ASK the model to retry
         // (it often won't) — re-issue the call ourselves with the
         // authoritative cursor and narrate that result.
+        // Paginated calls dedupe against the current chain only — items
+        // from an earlier browse round legitimately re-render on a fresh
+        // chain. Non-paginated full repeats dedupe against everything
+        // recently on screen.
+        const replaySet =
+          args.after !== undefined && ctx?.chainCardTitles?.size
+            ? ctx.chainCardTitles
+            : ctx?.prevCardTitles;
         if (
           w &&
           w.type === 'cards' &&
-          ctx?.prevCardTitles?.size &&
+          replaySet?.size &&
           (args.after !== undefined ||
-            w.items.every((i) => i.title && ctx.prevCardTitles!.has(i.title)))
+            w.items.every((i) => i.title && replaySet.has(i.title)))
         ) {
-          const fresh = w.items.filter((i) => i.title && !ctx.prevCardTitles!.has(i.title));
+          const fresh = w.items.filter((i) => i.title && !replaySet.has(i.title));
           if (!fresh.length) {
             w = null;
             // "show me more" with no `after` replays page 1 — same failure
@@ -2670,7 +2697,7 @@ export async function complete(
                   if (tool.widget?.relevance) r2 = filterRowsByQuery(tool.widget, retryArgs, r2);
                   const w2 = widgetFromToolResult(tool.widget, r2, secrets, retryArgs);
                   if (w2?.type === 'cards') {
-                    const fresh2 = w2.items.filter((i) => i.title && !ctx.prevCardTitles!.has(i.title));
+                    const fresh2 = w2.items.filter((i) => i.title && !replaySet.has(i.title));
                     w2.items = fresh2;
                   }
                   // The retried page must join the corpus — card-item
@@ -2735,6 +2762,16 @@ export async function complete(
         // Rows the availability filter hid — the customer asking "show me
         // everything" can't see these unless the model re-calls with the
         // include flag; silently dropping them under-counts the catalogue.
+        // Cards carrying an Out of stock badge contradict an "in stock"
+        // narration — the badge is the truth the customer sees, so the text
+        // has to match it (and the storefront's live availability can flag
+        // a row this data called sellable).
+        const badged = w?.type === 'cards' ? w.items.filter((i) => i.stock).length : 0;
+        if (badged > 0) {
+          result +=
+            `\n[${badged} of the rendered cards show an Out of stock badge — call those items out as unavailable in your text; ` +
+            `never describe a badged card as in stock, and don't count it toward an in-stock list.]`;
+        }
         const dropped = availabilityDropped(tool.widget, args, resultJson);
         if (dropped > 0) {
           result +=
@@ -3552,6 +3589,7 @@ async function replyAsHostedAgent(
   // the add contradicts a confirmed storefront fact and regenerates.
   let confirmedAddTap: string | undefined;
   let lastInboundText: string | undefined;
+  let paginationTap = false;
   const emit = (e: Parameters<typeof processEvents>[2]) =>
     processEvents(
       db,
@@ -3607,6 +3645,7 @@ async function replyAsHostedAgent(
         if (p.tap === true && /\s*—\s*add to cart\s*$/i.test(p.tap_of ?? '')) {
           confirmedAddTap = p.tap_of!;
         }
+        if (p.tap === true && p.tap_of === 'pagination') paginationTap = true;
       }
     }
     const draftsOpted =
@@ -3620,11 +3659,16 @@ async function replyAsHostedAgent(
       ...(await loadSecretsMap(db, agent.id)),
       ...(await connectionSecrets(db, agent.id)),
     };
-    // Card titles from the last outbound message — a rejected page cursor
-    // replays the same cards, and the tool loop suppresses the duplicate
-    // carousel when every rendered title was already shown.
+    // Card titles from recent outbound messages. `prevCardTitles` is the
+    // broad union (repeat-carousel suppression); `chainCardTitles` is the
+    // CURRENT pagination chain only — walking back from the newest
+    // end_cursor-carrying cards widget through its `after`-marked ancestors
+    // to the page-1 root. Replays of earlier browse rounds are legitimately
+    // re-shown on a new chain; only same-chain repeats are replays.
     const prevCardTitles = new Set<string>();
+    const chainCardTitles = new Set<string>();
     let prevEndCursor: string | undefined;
+    let prevPageArgs: Record<string, unknown> | undefined;
     {
       const prevOut = await db
         .select({ payload: messages.payload })
@@ -3632,12 +3676,46 @@ async function replyAsHostedAgent(
         .where(and(eq(messages.conversationId, convId), eq(messages.direction, 'out')))
         .orderBy(desc(messages.createdAt))
         .limit(10);
+      const cardWidgets: {
+        type?: string;
+        items?: { title?: string }[];
+        end_cursor?: string;
+        page_args?: Record<string, unknown>;
+      }[] = [];
       for (const row of prevOut) {
-        const ws = ((row.payload ?? {}) as { widgets?: { type?: string; items?: { title?: string }[]; end_cursor?: string }[] }).widgets ?? [];
+        const ws =
+          ((row.payload ?? {}) as { widgets?: (typeof cardWidgets)[number][] }).widgets ?? [];
         for (const w of ws) {
           if (w.type !== 'cards') continue;
-          if (!prevEndCursor && w.end_cursor) prevEndCursor = w.end_cursor;
+          cardWidgets.push(w);
           for (const i of w.items ?? []) if (i.title) prevCardTitles.add(i.title);
+        }
+      }
+      // Walk newest→oldest. A continuation page (page_args.after set)
+      // belongs to the current chain; the chain ends at its page-1 root
+      // (no `after`) — older widgets belong to previous browse rounds.
+      // end_cursor is only stamped when a next page exists, so the chain's
+      // LAST page carries `after` but no cursor — take the cursor from the
+      // newest widget that has one.
+      let inChain = false;
+      for (const cw of cardWidgets) {
+        if (cw.page_args?.after) {
+          inChain = true;
+        } else if (inChain || cw.end_cursor) {
+          inChain = true;
+          for (const i of cw.items ?? []) if (i.title) chainCardTitles.add(i.title);
+          if (!prevEndCursor && cw.end_cursor) {
+            prevEndCursor = cw.end_cursor;
+            prevPageArgs = cw.page_args;
+          }
+          break; // page-1 root — the chain ends here
+        } else {
+          break; // unrelated widget before any chain evidence
+        }
+        for (const i of cw.items ?? []) if (i.title) chainCardTitles.add(i.title);
+        if (!prevEndCursor && cw.end_cursor) {
+          prevEndCursor = cw.end_cursor;
+          prevPageArgs = cw.page_args;
         }
       }
     }
@@ -3648,7 +3726,10 @@ async function replyAsHostedAgent(
       agent,
       identity: await verifiedIdentityFor(db, conv, agent.workspaceId),
       prevCardTitles,
+      chainCardTitles,
       prevEndCursor,
+      prevPageArgs,
+      paginationTap,
       inboundText: lastInboundText,
     };
     // One escalation lookup feeds the prompt (pending offer) AND the
@@ -3919,7 +4000,10 @@ async function replyAsHostedAgent(
         attempt < 2 &&
         catalogCapable &&
         gen.toolCalls.length === 0 &&
-        (pricedCards.length > 0 || catalogAsk || (reply !== null && listsPricedItems(reply)))
+        (pricedCards.length > 0 ||
+          catalogAsk ||
+          paginationTap ||
+          (reply !== null && listsPricedItems(reply)))
       ) {
         console.warn(
           `[hosted] memory catalogue — cards=${pricedCards.length} ask=${catalogAsk} calls=0 conv=${convId} — regenerating`,

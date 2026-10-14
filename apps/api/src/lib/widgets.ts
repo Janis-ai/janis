@@ -50,6 +50,10 @@ export const WidgetComponent = z.discriminatedUnion('type', [
     // The source result's pageInfo.endCursor — internal plumbing so a later
     // turn can recover a fumbled `after` argument; renderers ignore it.
     end_cursor: s(200).optional(),
+    // The tool args that produced this page — internal plumbing; a "show me
+    // more" tap replays them verbatim with `after: end_cursor` so the
+    // continuation can't drift to a different query. Renderers ignore it.
+    page_args: z.record(z.unknown()).optional(),
   }),
   // Booking-slot style picker — one tap sends the label as a message.
   z.object({
@@ -556,10 +560,14 @@ export function widgetFromToolResult(
   // can recover when the model fumbles `after`. Skipped on the last page
   // (a tile there loops forever) and for `only_arg` views (the query total
   // counts rows the filter removed, so "3 of 13" would misdescribe it).
-  if (widget.type === 'cards' && toolResultHasNext(resultText)) {
-    const cur = toolResultEndCursor(resultText);
+  if (widget.type === 'cards') {
+    const cur = toolResultHasNext(resultText) ? toolResultEndCursor(resultText) : null;
     if (cur) widget.end_cursor = cur;
-    if (!(cfg.availability?.only_arg && args[cfg.availability.only_arg])) {
+    // Continuation pages keep their producing args even on the LAST page
+    // (no cursor) — that's what marks them as members of the pagination
+    // chain when a later turn walks the history.
+    if (cur || args.after !== undefined) widget.page_args = { ...args };
+    if (cur && !(cfg.availability?.only_arg && args[cfg.availability.only_arg])) {
       const total = toolResultCount(resultText);
       if (total !== null && total > widget.items.length) widget.total = total;
     }
