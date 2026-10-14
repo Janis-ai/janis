@@ -788,21 +788,39 @@ export function shopBilling(row: ShopRow): ShopBilling {
   return ((row.billing ?? {}) as ShopBilling) ?? {};
 }
 
+/** Dev stores REQUIRE test:true on app charges; real stores REJECT it — the
+ *  only correct value is "is this a development store". Derive it live from
+ *  shop.plan so a forgotten global flag can't leak test charges into prod.
+ *  Unexplained → true: a charge that moves no money, never a silent real one. */
+export async function shopIsDevelopment(row: ShopRow): Promise<boolean> {
+  if (!row.accessTokenEnc) return false;
+  const res = await shopifyGraphql(
+    row.shop,
+    decryptSecret(row.accessTokenEnc),
+    `{ shop { plan { partnerDevelopment } } }`,
+  );
+  return (
+    (res.data as { shop?: { plan?: { partnerDevelopment?: boolean } } })?.shop?.plan
+      ?.partnerDevelopment ?? true
+  );
+}
+
 export async function startBillingSubscription(
   db: Db,
   row: ShopRow,
   planKey: string,
-): Promise<{ confirmationUrl: string }> {
+): Promise<{ confirmationUrl: string; test: boolean }> {
   const plan = PLANS[planKey];
   if (!plan || plan.baseCents <= 0) throw new Error(`not a Shopify-billable plan: ${planKey}`);
   if (!row.accessTokenEnc) throw new Error('shop has no offline token');
   if (!row.workspaceId) throw new Error('shop is not linked to a workspace');
   const token = decryptSecret(row.accessTokenEnc);
+  const test = await shopIsDevelopment(row);
   const amount = (plan.baseCents / 100).toFixed(2);
   const res = await shopifyGraphql(
     row.shop,
     token,
-    `mutation { appSubscriptionCreate(name: ${JSON.stringify(`Janis ${plan.name}`)}, returnUrl: ${JSON.stringify(`${env.webOrigin}/shopify-app`)}, test: ${env.shopifyBillingTest}, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: ${amount}, currencyCode: USD}, interval: EVERY_30_DAYS}}}]) { confirmationUrl appSubscription { id status } userErrors { field message } } }`,
+    `mutation { appSubscriptionCreate(name: ${JSON.stringify(`Janis ${plan.name}`)}, returnUrl: ${JSON.stringify(`${env.webOrigin}/shopify-app`)}, test: ${test}, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: ${amount}, currencyCode: USD}, interval: EVERY_30_DAYS}}}]) { confirmationUrl appSubscription { id status } userErrors { field message } } }`,
   );
   const out = (res.data as {
     appSubscriptionCreate?: {
@@ -827,7 +845,7 @@ export async function startBillingSubscription(
       updatedAt: new Date(),
     })
     .where(eq(shopifyShops.id, row.id));
-  return { confirmationUrl: out.confirmationUrl };
+  return { confirmationUrl: out.confirmationUrl, test };
 }
 
 /** checkouts/update — the abandonment signal. One note per checkout on a

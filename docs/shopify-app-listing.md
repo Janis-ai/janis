@@ -92,10 +92,11 @@ Draft justification text for the form:
 
 - [ ] Select **Public** distribution (step 1 — gate for everything below)
 - [ ] Partner profile: developer name, support email, privacy policy URL
-- [ ] Confirm `SHOPIFY_BILLING_TEST` is **removed** from prod env — public
-      apps must run real charges; test:true is rejected on non-dev stores
+- [x] Charge test mode — **automatic**: derived per-shop from
+      `shop.plan.partnerDevelopment` (dev stores → test:true, real installs →
+      live charges). No env flag to forget.
 - [ ] Verify a real `appSubscriptionCreate` on the dev store (test:true
-      still applies to dev stores) → approve → `app_subscriptions/update`
+      auto-applies) → approve → `app_subscriptions/update`
       webhook flips `workspaces.plan` — billing rail proven end-to-end
 - [ ] Re-approve the app in the dev store admin so the token picks up the
       bundled scopes — `read_legal_policies`, `write_returns`,

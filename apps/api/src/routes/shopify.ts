@@ -13,6 +13,7 @@ import {
   handleShopifyWebhook,
   shopBilling,
   shopifyAppConfigured,
+  shopIsDevelopment,
   shopifyCustomerClaim,
   startBillingSubscription,
   signLinkCode,
@@ -300,7 +301,7 @@ export function shopifyApiRoutes(db: Db) {
       provider: ws?.billingProvider ?? 'stripe',
       plan: ws?.plan ?? 'free',
       shop: row ? { id: row.id, shop: row.shop, subscription: shopBilling(row) } : null,
-      test_mode: env.shopifyBillingTest,
+      test_mode: row ? await shopIsDevelopment(row) : false,
     });
   });
 
@@ -317,8 +318,8 @@ export function shopifyApiRoutes(db: Db) {
         .limit(1);
       if (!row) return c.json({ error: 'no linked Shopify shop — connect a store first' }, 409);
       try {
-        const { confirmationUrl } = await startBillingSubscription(db, row, plan);
-        return c.json({ confirmation_url: confirmationUrl, test_mode: env.shopifyBillingTest });
+        const { confirmationUrl, test } = await startBillingSubscription(db, row, plan);
+        return c.json({ confirmation_url: confirmationUrl, test_mode: test });
       } catch (e) {
         return c.json({ error: e instanceof Error ? e.message : 'billing start failed' }, 502);
       }

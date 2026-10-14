@@ -837,6 +837,44 @@ describe('shopify billing rail', () => {
     });
     expect(res.status).toBe(400); // zod — free/internal never reach Shopify
   });
+
+  it('charge test mode follows shop.plan.partnerDevelopment — never a global flag', async () => {
+    await link();
+    const [row] = await db.select().from(shopifyShops).where(eq(shopifyShops.shop, SHOP));
+    const { startBillingSubscription } = await import('../lib/shopifyApp.js');
+    for (const dev of [true, false]) {
+      const bodies: string[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+          const url =
+            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+          const body = typeof init?.body === 'string' ? init.body : '';
+          bodies.push(body);
+          if (url.includes('graphql.json') && body.includes('partnerDevelopment'))
+            return Promise.resolve(
+              Response.json({ data: { shop: { plan: { partnerDevelopment: dev } } } }),
+            );
+          if (url.includes('graphql.json'))
+            return Promise.resolve(
+              Response.json({
+                data: {
+                  appSubscriptionCreate: {
+                    confirmationUrl: 'https://admin.shopify.com/store/dev-store/charges/1/confirm',
+                    appSubscription: { id: 'gid://shopify/AppSubscription/1', status: 'PENDING' },
+                    userErrors: [],
+                  },
+                },
+              }),
+            );
+          return Promise.resolve(new Response('{}', { status: 404 }));
+        }),
+      );
+      await startBillingSubscription(db, row, 'starter');
+      const mutation = bodies.find((b) => b.includes('appSubscriptionCreate'))!;
+      expect(mutation).toContain(`test: ${dev}`);
+    }
+  });
 });
 
 describe('app proxy — verified shopper identity', () => {
