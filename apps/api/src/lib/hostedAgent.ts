@@ -630,7 +630,7 @@ export function systemPrompt(
       (chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp'
         ? ' This channel hard-cuts button labels at 20 characters — a longer label ships visibly truncated, so count them.'
         : '') +
-      ' They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps, but a reply that ends by asking the customer to pick between a few likely answers ("want me to set one up?", "which plan?") should almost always offer those answers as buttons.' +
+      ' They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps, but a reply that ends by asking the customer to pick between a few likely answers ("want me to set one up?", "which plan?") should almost always offer those answers as buttons. An OFFER to do something (create a draft order, send an invoice, file a return, apply a discount, look into a problem) that the customer still has to say yes to MUST come with a BUTTON: chip for the yes — a tappable offer, not a sentence they have to type back to.' +
       ' Never tell the customer you cannot show buttons, cards or other components — you always can here; emit the BUTTON:/WIDGET: line rather than claiming it is impossible.' +
       '\nIf you need the customer\'s email or phone number, end your reply with a line "ASK: email" or "ASK: phone" — it becomes a one-tap share control where the channel supports it (otherwise they can type it). Still ask in the text — never rely on the control alone.',
     );
