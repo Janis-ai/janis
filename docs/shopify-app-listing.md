@@ -2,18 +2,37 @@
 
 One-time dashboard steps Mike must take (can't be done from code/CLI):
 
-## 1. Distribution — REQUIRED NOW (unblocks billing + the listing itself)
+## 0. Fresh app — REPLACES the old migrated app (decided 2026-10-14)
 
-Dev Dashboard → app `430996553729` (Janis) → **Home → Distribution card →
-Select distribution method → Public**.
+The migrated app (`430996553729`, client_id `cf22b09da8f49a7c7cdf7ff39b17fb87`)
+came out of the Dev Dashboard migration without an explicit distribution flag
+and `appSubscriptionCreate` fails on it. Rather than fight migration state,
+we're creating a **new app, Public from the start** — still named "Janis".
 
-Without this, `appSubscriptionCreate` fails with "application is currently
-owned by a Shop" — verified live 2026-10-13. Shopify staff confirmed this is
-the fix; the Dev Dashboard migration left the app without an explicit
-distribution flag. Selecting Public also unlocks "Manage Shopify App Store
-listing" (the Phase 6 form). **This is irreversible** — public is correct here.
+Mike's part:
 
-Direct link: https://dev.shopify.com/dashboard/238766671/apps/430996553729
+1. https://dev.shopify.com/dashboard/238766671/apps → **Create app** → name
+   `Janis` → distribution **Public** (if the creation flow doesn't offer a
+   distribution picker, set Home → Distribution → Public right after).
+2. If the name collides, rename the OLD app to `Janis (legacy)` first.
+3. Hand Devin the new **client_id** and **API secret key** (Settings →
+   Credentials), or paste them into `apps/api/.env.production` as
+   `SHOPIFY_APP_API_KEY` / `SHOPIFY_APP_API_SECRET`.
+4. Uninstall the OLD app from `janis-store-sx5bpcd3.myshopify.com` (admin →
+   Settings → Apps → remove) so the old embed stops.
+
+Devin's part once the new creds exist:
+
+- `shopify.app.toml` client_id → new; clear `uid` in
+  `extensions/janis-storefront/shopify.extension.toml` (old-app uid) so
+  `shopify app deploy` registers the extension fresh under the new app —
+  toml carries scopes, GDPR webhooks, app proxy, `application_url` unchanged.
+- `shopify app deploy` to release config + extension on the new app.
+- Redeploy the API with the new key/secret (Secret Manager via deploy script).
+- Reinstall on the dev store → re-link the agent → verify storefront widget,
+  webhooks, and a test charge end-to-end.
+
+Everything below applies to the NEW app once it exists.
 
 ## 2. Organization / partner profile
 
@@ -90,7 +109,8 @@ Draft justification text for the form:
 
 ## 6. Review checklist (order of operations)
 
-- [ ] Select **Public** distribution (step 1 — gate for everything below)
+- [ ] Create the new **Janis** app, distribution **Public** (step 0 — gate
+      for everything below); hand Devin the new client_id + API secret
 - [ ] Partner profile: developer name, support email, privacy policy URL
 - [x] Charge test mode — **automatic**: derived per-shop from
       `shop.plan.partnerDevelopment` (dev stores → test:true, real installs →

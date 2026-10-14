@@ -886,8 +886,11 @@ WorkOS SSO + Outlook channel (both behind env creds).
 
 ## Shopify App Store track (started 2026-10-13)
 
-App: "Janis", client_id cf22b09da8f49a7c7cdf7ff39b17fb87, org "My Store"
-(id 238766671), dev store janis-store-sx5bpcd3.myshopify.com. Config lives
+App: "Janis", org "My Store" (id 238766671), dev store
+janis-store-sx5bpcd3.myshopify.com. SUPERSEDED client_id
+cf22b09da8f49a7c7cdf7ff39b17fb87 — the migrated app lacks a distribution
+flag; a fresh Public app is being created (docs/shopify-app-listing.md
+step 0). Current client_id = whatever's in shopify.app.toml. Config lives
 in shopify.app.toml — `shopify app deploy` releases a new version (GDPR
 compliance webhooks are toml-only; dashboard has no fields for them).
 
