@@ -183,7 +183,10 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           relevance: {
             arg: 'query',
             fields: ['title', 'description'],
-            strong_fields: ['title', 'productType', 'tags', 'vendor'],
+            // Vendor is deliberately absent — real stores fill it with junk
+            // like "Snowboard Vendor" on gift cards, which would re-admit
+            // the exact filler this filter exists to drop.
+            strong_fields: ['title', 'productType', 'tags'],
           },
           map: {
             title: 'title',

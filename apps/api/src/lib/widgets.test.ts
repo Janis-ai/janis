@@ -1125,7 +1125,7 @@ describe('filterRowsByQuery — strong_fields (Shopify product search)', () => {
     relevance: {
       arg: 'query',
       fields: ['title', 'description'],
-      strong_fields: ['title', 'productType', 'tags', 'vendor'],
+      strong_fields: ['title', 'productType', 'tags'],
     },
   };
   const result = JSON.stringify({
