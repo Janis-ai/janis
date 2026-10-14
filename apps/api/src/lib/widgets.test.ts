@@ -200,6 +200,50 @@ describe('widgetFromToolResult', () => {
     expect(w.items[0].link).toBe('https://shop.example/invoices/abc');
     expect(w.items[0].link_label).toBe('Complete your purchase');
   });
+
+  it('availability: hides availableForSale:false rows on browse, keeps them when the call opts in', () => {
+    const cfg = {
+      type: 'cards' as const,
+      items: 'data.products.nodes',
+      availability: { field: 'variants.nodes.0.availableForSale', unless_arg: 'include_unavailable' },
+      map: {
+        title: 'title',
+        stock: '{variants.nodes.0.availableForSale:stock}',
+      },
+    };
+    const result = JSON.stringify({
+      data: {
+        products: {
+          nodes: [
+            { title: 'Gift Card', variants: { nodes: [{ availableForSale: false }] } },
+            { title: 'Snowboard', variants: { nodes: [{ availableForSale: true }] } },
+            { title: 'Untracked Tee', variants: { nodes: [] } },
+          ],
+        },
+      },
+    });
+    // Browse — the OOS gift card drops out; untracked inventory stays.
+    const browse = widgetFromToolResult(cfg, result);
+    expect(browse?.type === 'cards' && browse.items.map((i) => i.title)).toEqual([
+      'Snowboard',
+      'Untracked Tee',
+    ]);
+    // Opted in (specific-product ask) — the OOS card renders WITH the badge.
+    const asked = widgetFromToolResult(cfg, result, {}, { include_unavailable: '1' });
+    expect(asked?.type === 'cards' && asked.items.map((i) => i.title)).toEqual([
+      'Gift Card',
+      'Snowboard',
+      'Untracked Tee',
+    ]);
+    expect(
+      asked?.type === 'cards' && asked.items[0].stock,
+    ).toBe('Out of stock');
+    // All rows OOS on a browse → no widget, the model narrates instead.
+    const allOos = JSON.stringify({
+      data: { products: { nodes: [{ title: 'X', variants: { nodes: [{ availableForSale: false }] } }] } },
+    });
+    expect(widgetFromToolResult(cfg, allOos)).toBeNull();
+  });
 });
 
 describe('extractWidgets', () => {

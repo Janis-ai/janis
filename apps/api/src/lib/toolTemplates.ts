@@ -118,7 +118,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_search_products',
         label: 'Search products',
         description:
-          'Search or browse the Shopify product catalogue. Returns up to 12 product cards with images and prices, plus productsCount — the TRUE total of matching products (always quote THIS number when asked how many products there are, never the card count) and pageInfo. When productsCount exceeds the cards returned, say so — then either pass the endCursor as `after` for the next page ("show me more") or suggest narrowing the search. Each node also carries a short description you can summarise when they ask about a product, and variants.nodes[0].availableForSale — if it is FALSE the item is out of stock: the card badges it automatically, you say so plainly, and you do NOT move toward a purchase of it. TRUE means purchasable — NEVER call a product out of stock on a true or missing flag (untracked inventory returns true; a title like "Not Tracked" says nothing about stock). When browsing ("what do you have"), lead with in-stock items and skip out-of-stock ones unless nothing else matches — but when the customer asks for a specific product that IS out of stock, still show it and call out the badge ("it is out of stock right now — want the closest alternative?"). If the customer sends a PHOTO asking for something similar, describe what you see in concrete attributes (product type, colour, material, use) and pass those as the query — that is the photo-search path; never claim you cannot look at images when one is attached. On a Shopify storefront each rendered card also carries an "Add to cart" button the shopper can tap themselves — for a buy-it ask you can point them at it or at their cart (the /cart page on the store), and still create a draft order when they want you to do it all for them.',
+          'Search or browse the Shopify product catalogue. Returns up to 12 product cards with images and prices, plus productsCount — the TRUE total of matching products (always quote THIS number when asked how many products there are, never the card count) and pageInfo. When productsCount exceeds the cards returned, say so — then either pass the endCursor as `after` for the next page ("show me more") or suggest narrowing the search. Each node also carries a short description you can summarise when they ask about a product, and variants.nodes[0].availableForSale — if it is FALSE the item is out of stock: say so plainly and do NOT move toward a purchase of it. TRUE means purchasable — NEVER call a product out of stock on a true or missing flag (untracked inventory returns true; a title like "Not Tracked" says nothing about stock). STOCK RULES — mechanically enforced on the cards: out-of-stock products are hidden from the rendered cards on browse/search calls UNLESS you pass include_unavailable:"1" — do that ONLY when the customer asked about a specific product by name (their card then renders with the Out of stock badge and you call it out: "it\'s out of stock right now — want the closest alternative?") or explicitly wants to see unavailable items. If an expected product is missing from a browse result, it may be out of stock — say so rather than claiming it doesn\'t exist. If the customer sends a PHOTO asking for something similar, describe what you see in concrete attributes (product type, colour, material, use) and pass those as the query — that is the photo-search path; never claim you cannot look at images when one is attached. On a Shopify storefront each rendered card also carries an "Add to cart" button the shopper can tap themselves — for a buy-it ask you can point them at it or at their cart (the /cart page on the store), and still create a draft order when they want you to do it all for them.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
@@ -129,11 +129,17 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
             'Shopify catalogue search string — "status:active" lists the whole catalogue (use it for "show me your products"); add " title:*snowboard*" to match a keyword, or " product_type:…" / " vendor:…" to filter',
           'after?':
             'optional — the previous result\'s pageInfo.endCursor; pass it (with the same query) to fetch the NEXT page of products when the customer asks for more. Omit for the first page.',
+          'include_unavailable?':
+            'optional — pass "1" ONLY when the customer named a specific product that may be out of stock, or explicitly asked to see out-of-stock items: their card then renders WITH the Out of stock badge. Omit for any browse/list request — out-of-stock products are hidden from the cards.',
         },
         widget: {
           type: 'cards',
           items: 'data.products.nodes',
           link_label: 'View product',
+          availability: {
+            field: 'variants.nodes.0.availableForSale',
+            unless_arg: 'include_unavailable',
+          },
           map: {
             title: 'title',
             subtitle: 'vendor',

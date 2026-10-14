@@ -269,6 +269,18 @@ export interface ToolWidgetConfig {
     /** Row dot paths whose values are matched against the query. */
     fields: string[];
   };
+  /** Rows whose `field` resolves to === false are unpurchasable — drop them
+   *  from the rendered cards unless the model opted in via `unless_arg`
+   *  (e.g. the customer asked for that specific product). The model still
+   *  sees every row in the result text and can narrate OOS truthfully;
+   *  this only shapes the cards the customer sees. Browsing stays clean by
+   *  default — a widget can't hide stock a prompt instruction hoped for. */
+  availability?: {
+    /** Row dot path holding the purchasable flag (=== false ⇒ hide). */
+    field: string;
+    /** Tool arg that disables the drop when set to a truthy string. */
+    unless_arg: string;
+  };
 }
 
 /** Resolve a dot path ("a.b.0.c") against a row — numbers index arrays. */
@@ -340,6 +352,7 @@ export function widgetFromToolResult(
   cfg: ToolWidgetConfig,
   resultText: string,
   secrets: Record<string, string> = {},
+  args: Record<string, unknown> = {},
 ): WidgetComponent | null {
   let data: unknown;
   try {
@@ -358,6 +371,17 @@ export function widgetFromToolResult(
     rows = Object.values(data as Record<string, unknown>).find(Array.isArray);
   }
   if (!Array.isArray(rows) || !rows.length) return null;
+  // Unpurchasable rows (availableForSale === false) drop out of the cards
+  // unless the call explicitly opted in — the model narrates from the full
+  // result either way.
+  const optedIn =
+    cfg.availability &&
+    ['1', 'true', 'yes'].includes(String(args[cfg.availability.unless_arg] ?? '').toLowerCase());
+  if (cfg.availability && !optedIn) {
+    const field = cfg.availability.field;
+    rows = rows.filter((r) => digPath(r, field) !== false);
+    if (!rows.length) return null;
+  }
   const map = cfg.map ?? {};
   // Label literals stay literal; a {path} in them resolves per-row, so a
   // card's select button can send "I'd like the Blue Tee", not just

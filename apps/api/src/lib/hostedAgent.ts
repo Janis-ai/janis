@@ -2174,7 +2174,7 @@ export async function complete(
       // model it rendered — otherwise it dutifully re-emits the same data
       // as a WIDGET: line and the customer sees the row twice.
       if (tool?.widget && outcome === 'ran') {
-        const w = widgetFromToolResult(tool.widget, result, secrets);
+        const w = widgetFromToolResult(tool.widget, result, secrets, args);
         if (w) {
           toolWidgets.push(w);
           result += `\n[already rendered to the customer as a "${w.type}" component — do not restate it with a WIDGET: line; narrate it in text if needed]`;
