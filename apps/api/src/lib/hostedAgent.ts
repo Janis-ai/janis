@@ -4449,9 +4449,16 @@ async function replyAsHostedAgent(
     // row already in this run's corpus re-renders its real card; a name
     // the searches never surfaced gets a targeted fetch (the call is real
     // catalogue data, so nothing invents). Named items lead the carousel.
+    // Any cards-producing catalogue search tool qualifies — not just the
+    // Shopify one; the query arg name comes from the tool's own relevance
+    // config so a WooCommerce/custom connector gets the same protection.
     const productSearch = agentToolDefs.find(
-      (t) => t.name === 'shopify_search_products' && t.widget?.type === 'cards' && t.widget.items,
+      (t) =>
+        t.widget?.type === 'cards' &&
+        t.widget.items &&
+        (t.widget.relevance?.arg || Object.keys(t.params ?? {}).includes('query')),
     );
+    const searchQueryArg = productSearch?.widget?.relevance?.arg ?? 'query';
     if (reply && productSearch?.widget) {
       try {
         type CardItem = Extract<WidgetComponent, { type: 'cards' }>['items'][number];
@@ -4474,10 +4481,12 @@ async function replyAsHostedAgent(
             continue;
           }
           try {
-            let r = await callTool(productSearch, { query: name, limit: '3' }, secrets);
+            const fetchArgs: Record<string, unknown> = { [searchQueryArg]: name };
+            if (Object.keys(productSearch.params ?? {}).includes('limit')) fetchArgs.limit = '3';
+            let r = await callTool(productSearch, fetchArgs, secrets);
             if (!r.startsWith('{')) continue;
-            r = filterRowsByQuery(productSearch.widget, { query: name }, r);
-            const w3 = widgetFromToolResult(productSearch.widget, r, secrets, { query: name });
+            r = filterRowsByQuery(productSearch.widget, { [searchQueryArg]: name }, r);
+            const w3 = widgetFromToolResult(productSearch.widget, r, secrets, { [searchQueryArg]: name });
             const hit =
               w3?.type === 'cards' ? w3.items.find((i) => titlesMatch(i.title ?? '', name)) : undefined;
             if (hit) promoted.push(hit);

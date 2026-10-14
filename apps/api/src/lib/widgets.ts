@@ -1196,6 +1196,13 @@ export function filterRowsByQuery(
   if (!rel) return resultText;
   const q = String(args[rel.arg] ?? '').trim().toLowerCase();
   if (!q) return resultText;
+  // Accent-fold so "café" and "cafe" tokenize identically.
+  const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '');
+  const qTokens = [...new Set(fold(q).split(/[^a-z0-9]+/).filter((t) => t.length > 1))];
+  // A query with no latin-alphanumeric tokens (CJK, Cyrillic, emoji) can't
+  // be token-matched at all — trust the upstream search rather than
+  // dropping every row into an empty carousel.
+  if (!qTokens.length) return resultText;
   let data: unknown;
   try {
     data = JSON.parse(resultText);
@@ -1208,19 +1215,22 @@ export function filterRowsByQuery(
   const rows = digPath(data, path);
   if (!Array.isArray(rows)) return resultText;
   const obj = data as Record<string, unknown>;
-  const qTokens = [...new Set(q.split(/[^a-z0-9]+/).filter((t) => t.length > 1))];
   const strong = rel.strong_fields;
   const kept = rows.filter((r) => {
-    const hay = rel.fields
-      .map((f) => String(digPath(r, f) ?? ''))
-      .join(' ')
-      .toLowerCase();
+    const hay = fold(
+      rel.fields
+        .map((f) => String(digPath(r, f) ?? ''))
+        .join(' ')
+        .toLowerCase(),
+    );
     if (!hay.trim()) return false;
     // Word-bounded, trailing-'s' tolerant: "snowboard" must not match
     // "snowboarder" prose, but must match a "Snowboards" productType.
     const tokRe = (t: string) =>
       new RegExp(
-        `\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/s$/, '')}s?\\b`,
+        `\\b${fold(t)
+          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          .replace(/s$/, '')}s?\\b`,
       );
     // Whole-phrase match must be word-bounded too — plain `includes` lets a
     // "snowboard" query keep a row whose only hit is "snowboarder" in prose.
@@ -1229,10 +1239,12 @@ export function filterRowsByQuery(
       // Identifying columns must carry a query token — title/type/tags are
       // what a shopper means by "snowboards"; description prose doesn't
       // count (a gift card mentioning "snowboarders" isn't a snowboard).
-      const strongHay = strong
-        .map((f) => String(digPath(r, f) ?? ''))
-        .join(' ')
-        .toLowerCase();
+      const strongHay = fold(
+        strong
+          .map((f) => String(digPath(r, f) ?? ''))
+          .join(' ')
+          .toLowerCase(),
+      );
       return qTokens.some((t) => tokRe(t).test(strongHay));
     }
     const hits = qTokens.filter((t) => tokRe(t).test(hay));

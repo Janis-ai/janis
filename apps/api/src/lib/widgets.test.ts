@@ -1184,3 +1184,34 @@ describe('titlesMatch / namedProductsInReply', () => {
     expect(named).not.toContain('$10.00');
   });
 });
+
+describe('filterRowsByQuery — store-general cases', () => {
+  const cfg = {
+    type: 'cards' as const,
+    items: 'rows',
+    relevance: {
+      arg: 'query',
+      fields: ['title', 'description'],
+      strong_fields: ['title', 'productType', 'tags'],
+    },
+  };
+  const result = JSON.stringify({
+    rows: [
+      { title: 'Gift Card', productType: 'Gift Cards', tags: [], description: 'x' },
+      { title: 'スノーボード Deluxe', productType: 'Boards', tags: [], description: 'x' },
+      { title: 'Café Mug', productType: 'Mugs', tags: [], description: 'x' },
+    ],
+  });
+
+  it('passes CJK/non-latin queries through untouched — tokenising is impossible', () => {
+    // A スノーボード query produces zero latin tokens; filtering would empty
+    // the carousel for a whole class of storefront languages.
+    const out = JSON.parse(filterRowsByQuery(cfg, { query: 'スノーボード' }, result));
+    expect(out.rows).toHaveLength(3);
+  });
+
+  it('folds accents — "cafe" matches "Café Mug"', () => {
+    const out = JSON.parse(filterRowsByQuery(cfg, { query: 'cafe mug' }, result));
+    expect(out.rows.map((r: { title: string }) => r.title)).toEqual(['Café Mug']);
+  });
+});
