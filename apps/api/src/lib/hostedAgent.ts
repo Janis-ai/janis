@@ -18,7 +18,7 @@ import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolD
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
-import { dedupeWidgetList, extractWidgets, filterRowsByQuery, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { dedupeWidgetList, extractWidgets, filterRowsByQuery, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, toolResultEmpty, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -1107,11 +1107,47 @@ export function cardsCoverQuickReplies(chan: string, widgets: WidgetComponent[])
     widgets.some(
       (w) =>
         w.type === 'cards' &&
-        // select_label taps send a message; cart_variant_id renders the
-        // storefront add-to-cart — either is already the reply's CTA layer.
-        w.items.some((i) => !!i.select_label || !!i.cart_variant_id),
+        // select_label taps send a message — they ARE the reply's choice
+        // layer, so chips alongside them are a competing second UI.
+        w.items.some((i) => !!i.select_label),
     )
   );
+}
+
+/** Chips that merely restate a card's own tappable action ("View product",
+ *  "Add to cart", or an item title) are the same CTA rendered twice — drop
+ *  those but keep chips doing something the card can't, like a yes/no offer
+ *  ("Yes, set it up") a cart card would otherwise swallow. */
+export function filterChipsAgainstCards<T extends string | { type: string }>(
+  buttons: T[],
+  widgets: WidgetComponent[],
+): T[] {
+  const covered = new Set<string>();
+  for (const w of widgets) {
+    if (w.type !== 'cards') continue;
+    for (const i of w.items) {
+      for (const v of [i.title, i.link_label, i.select_label]) {
+        const s = String(v ?? '').trim().toLowerCase();
+        if (s) covered.add(s);
+      }
+      if (i.cart_variant_id) covered.add('add to cart');
+      if (i.link) covered.add('view product');
+    }
+  }
+  if (!covered.size) return buttons;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return buttons.filter((b) => {
+    if (typeof b !== 'string') return true; // collect-chips (email/phone) never dupe a card
+    const n = norm(b);
+    if (!n) return false;
+    for (const c of covered) {
+      const cn = norm(c);
+      // Exact match always drops; substring only when the shorter side is
+      // long enough that containment can't be coincidence ("yes" ⊂ "eyes").
+      if (cn && (n === cn || (Math.min(n.length, cn.length) >= 4 && (n.includes(cn) || cn.includes(n))))) return false;
+    }
+    return true;
+  });
 }
 
 /** Card images are model-typed URLs — a one-character slip in a 200-char
@@ -2229,6 +2265,15 @@ export async function complete(
         if (w) {
           toolWidgets.push(w);
           result += `\n[already rendered to the customer as a "${w.type}" component — do not restate it with a WIDGET: line; narrate it in text if needed]`;
+        }
+        // Result-side facts the model must not guess — catalogue totals and
+        // the verbatim next-page call (Shopify cursors reset on a new query).
+        result += toolResultNotes(result);
+        // A zero-row search means the item doesn't exist here — without a
+        // mechanical note the model happily fills the gap from training
+        // knowledge ("yes, we carry The Hidden Snowboard for $749.95").
+        if (!w && toolResultEmpty(tool.widget, result)) {
+          result += `\n[0 rows matched — the named item is NOT sold on this storefront. Do not claim it exists, has a price, or can be ordered; say it isn't available and offer the closest thing that did come back in earlier results.]`;
         }
       }
       msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
@@ -3351,8 +3396,10 @@ async function replyAsHostedAgent(
     const learnFlag = learns.length ? { learn: learns } : {};
     const cardsTap = cardsCoverQuickReplies(channelKeyFor(conv), widgets);
     // model-emitted tappable choices ride payload.quick_replies → native
-    // buttons on Messenger/WhatsApp, chips on webchat
-    const buttonFlag = buttons.length && !cardsTap ? { quick_replies: buttons } : {};
+    // buttons on Messenger/WhatsApp, chips on webchat. Chips that just restate
+    // a card's own button are dropped; offers the card can't answer stay.
+    const keptButtons = cardsTap ? [] : filterChipsAgainstCards(buttons, widgets);
+    const buttonFlag = keptButtons.length ? { quick_replies: keptButtons } : {};
     // interactive components render inside the widget on webchat
     const widgetFlag = widgets.length ? { widgets } : {};
     // "Why did it say that?" — model/token/tool trace stamped on the stored

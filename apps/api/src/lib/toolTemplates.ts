@@ -128,9 +128,11 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           query:
             'Shopify catalogue search string — use "title:*snowboard*" to match a keyword, or " product_type:…" / " vendor:…" to filter. Leave it empty ("") to browse the whole catalogue. The search is mechanically constrained to active products published to the Online Store — draft, archived and unpublished products NEVER appear (their product page and Add to cart would 404 anyway). If a customer names a product that comes back empty, it is not sold on the storefront — say it isn\'t available rather than claiming it never existed.',
           'after?':
-            'optional — the previous result\'s pageInfo.endCursor; pass it (with the same query) to fetch the NEXT page of products when the customer asks for more. Omit for the first page.',
+            'optional — the previous result\'s pageInfo.endCursor; pass it to fetch the NEXT page when the customer asks for more. You MUST repeat the EXACT SAME `query` you used for the page before — the cursor is bound to it; a rephrased or emptied query silently restarts at page one and shows the same products again. Omit for the first page.',
           'include_unavailable?':
             'optional — ALWAYS pass "1" when the customer names a specific product or asks about availability of a named item: it can do no harm (in-stock results are unchanged) and it is the ONLY way an out-of-stock product can render its card — without it the row is filtered out and no card exists. Also pass it when they explicitly ask to see unavailable items. Omit only for browse/list requests — out-of-stock products are hidden from those cards. This relaxes STOCK only — unpublished/draft products are never returned at all.',
+          'only_unavailable?':
+            'optional — pass "1" when the customer asks to see JUST the out-of-stock / unavailable items ("what\'s out of stock?", "show me only sold-out products"): the rendered cards then contain ONLY the out-of-stock rows, each badged. Do not combine with include_unavailable.',
           'limit?':
             'optional — how many product cards to render (max 10). Omit for browse/list asks (shows up to 10). Pass "1"–"3" for a specific-product or photo-match ask so the shopper sees THE match, not a page of similar items.',
         },
@@ -141,6 +143,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           availability: {
             field: 'variants.nodes.0.availableForSale',
             unless_arg: 'include_unavailable',
+            only_arg: 'only_unavailable',
           },
           row_limit_arg: 'limit',
           map: {

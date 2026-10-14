@@ -280,6 +280,9 @@ export interface ToolWidgetConfig {
     field: string;
     /** Tool arg that disables the drop when set to a truthy string. */
     unless_arg: string;
+    /** Tool arg that keeps ONLY the unavailable rows when truthy — "show me
+     *  just the out-of-stock items" renders exactly those, badged. */
+    only_arg?: string;
   };
   /** Cap rendered rows via a tool arg — a specific-product or photo-match
    *  ask should show THE match, not a page of neighbours. The result text
@@ -379,13 +382,21 @@ export function widgetFromToolResult(
   // unless the call explicitly opted in — the model narrates from the full
   // result either way. `list` keeps the array narrowing `rows` can't.
   let list: unknown[] = rows;
-  const optedIn =
-    cfg.availability &&
-    ['1', 'true', 'yes'].includes(String(args[cfg.availability.unless_arg] ?? '').toLowerCase());
-  if (cfg.availability && !optedIn) {
+  const truthy = (v: unknown) => ['1', 'true', 'yes'].includes(String(v ?? '').toLowerCase());
+  const optedIn = cfg.availability && truthy(args[cfg.availability.unless_arg]);
+  const onlyOos = cfg.availability?.only_arg ? truthy(args[cfg.availability.only_arg]) : false;
+  if (cfg.availability) {
     const field = cfg.availability.field;
-    list = list.filter((r) => digPath(r, field) !== false);
-    if (!list.length) return null;
+    if (onlyOos) {
+      list = list.filter((r) => digPath(r, field) === false);
+      if (!list.length) return null;
+    } else if (!optedIn) {
+      const kept = list.filter((r) => digPath(r, field) !== false);
+      // Every matched row is unpurchasable — that IS what the customer asked
+      // about ("do you have the gift card?"), so render the rows badged rather
+      // than a blank answer that invites a model-authored card without one.
+      list = kept.length ? kept : list;
+    }
   }
   // Focused-ask cap — `limit` narrows rendered rows, never the model's data.
   const rowCap = cfg.row_limit_arg ? Number(args[cfg.row_limit_arg]) : NaN;
@@ -432,6 +443,56 @@ export function widgetFromToolResult(
 
   const parsed = WidgetComponent.safeParse(candidate);
   return parsed.success ? parsed.data : null;
+}
+
+/** True when the result's rows array resolved to empty — the caller uses it
+ *  to warn the model not to fabricate the asked-for item's existence. */
+export function toolResultEmpty(cfg: ToolWidgetConfig, resultText: string): boolean {
+  let data: unknown;
+  try {
+    data = JSON.parse(resultText);
+  } catch {
+    return false;
+  }
+  let rows: unknown =
+    cfg.items != null ? digPath(data, cfg.items) : Array.isArray(data) ? data : undefined;
+  if (!Array.isArray(rows) && data && typeof data === 'object' && !Array.isArray(data)) {
+    rows = Object.values(data as Record<string, unknown>).find(Array.isArray);
+  }
+  return Array.isArray(rows) && rows.length === 0;
+}
+
+/** Result-side facts the model must not guess: an authoritative total and
+ *  the exact args for the next page. Shopify cursors are bound to the query
+ *  that produced them — "show me more" with a rephrased query silently
+ *  resets to page one, so the note hands the model the call verbatim. */
+export function toolResultNotes(resultText: string): string {
+  let data: unknown;
+  try {
+    data = JSON.parse(resultText);
+  } catch {
+    return '';
+  }
+  const notes: string[] = [];
+  const walk = (obj: unknown, depth: number) => {
+    if (!obj || typeof obj !== 'object' || depth > 4) return;
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      if (k === 'count' && typeof v === 'number') {
+        notes.push(`the catalogue total for this query is ${v} — quote that number, not a count of the rows shown`);
+      }
+      if (k === 'pageInfo' && v && typeof v === 'object') {
+        const pi = v as { hasNextPage?: unknown; endCursor?: unknown };
+        if (pi.hasNextPage === true && typeof pi.endCursor === 'string') {
+          notes.push(
+            `more rows exist beyond this page — if the customer asks for more, call this tool again with the SAME arguments plus after:"${pi.endCursor}" (a different query resets the cursor to page one)`,
+          );
+        }
+      }
+      walk(v, depth + 1);
+    }
+  };
+  walk(data, 0);
+  return notes.length ? `\n[facts: ${notes.join('; ')}]` : '';
 }
 
 /** Write `value` at a dot path inside an object — mirrors digPath. */

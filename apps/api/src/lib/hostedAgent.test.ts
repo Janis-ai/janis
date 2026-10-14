@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -753,15 +753,14 @@ describe('cardsCoverQuickReplies', () => {
     expect(cardsCoverQuickReplies('webchat', cards(false))).toBe(false);
   });
 
-  it('suppresses chips when cards carry a storefront add-to-cart action', () => {
+  it('keeps chips on cart cards — their dupes are filtered per-label instead', () => {
     const w = [
       {
         type: 'cards' as const,
         items: [{ title: 'T', cart_variant_id: '123' }],
       },
     ];
-    expect(cardsCoverQuickReplies('webchat', w)).toBe(true);
-    expect(cardsCoverQuickReplies('sms', w)).toBe(false);
+    expect(cardsCoverQuickReplies('webchat', w)).toBe(false);
   });
 
   it('keeps chips on channels where cards do not render', () => {
@@ -771,6 +770,47 @@ describe('cardsCoverQuickReplies', () => {
 
   it('keeps chips when there are no widgets at all', () => {
     expect(cardsCoverQuickReplies('webchat', [])).toBe(false);
+  });
+});
+
+describe('filterChipsAgainstCards', () => {
+  const productCards = [
+    {
+      type: 'cards' as const,
+      items: [
+        {
+          title: 'The Videographer Snowboard',
+          link: 'https://shop.example/products/videographer',
+          link_label: 'View product',
+          cart_variant_id: '123',
+        },
+      ],
+    },
+  ];
+
+  it('drops chips that restate a card action, keeps offers the card can\'t answer', () => {
+    const kept = filterChipsAgainstCards(
+      ['View product', 'Add to cart', 'Yes, set it up'],
+      productCards,
+    );
+    expect(kept).toEqual(['Yes, set it up']);
+  });
+
+  it('drops a chip that restates the product title', () => {
+    expect(
+      filterChipsAgainstCards(['Buy The Videographer Snowboard'], productCards),
+    ).toEqual([]);
+  });
+
+  it('keeps short yes/no chips — substring coincidence is guarded', () => {
+    expect(filterChipsAgainstCards(['Yes', 'No thanks'], productCards)).toEqual([
+      'Yes',
+      'No thanks',
+    ]);
+  });
+
+  it('passes everything through when no cards render', () => {
+    expect(filterChipsAgainstCards(['View product'], [])).toEqual(['View product']);
   });
 });
 

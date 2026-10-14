@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { dedupeToolWidgets, dedupeWidgetList, filterRowsByQuery, widgetFromToolResult } from './widgets.js';
+import { dedupeToolWidgets, dedupeWidgetList, filterRowsByQuery, toolResultEmpty, toolResultNotes, widgetFromToolResult } from './widgets.js';
 
 const products = JSON.stringify({
   products: [
@@ -238,11 +238,51 @@ describe('widgetFromToolResult', () => {
     expect(
       asked?.type === 'cards' && asked.items[0].stock,
     ).toBe('Out of stock');
-    // All rows OOS on a browse → no widget, the model narrates instead.
+    // All rows OOS on a named ask → the result IS the answer; render the
+    // rows badged rather than a blank that invites a badge-less model card.
     const allOos = JSON.stringify({
       data: { products: { nodes: [{ title: 'X', variants: { nodes: [{ availableForSale: false }] } }] } },
     });
-    expect(widgetFromToolResult(cfg, allOos)).toBeNull();
+    const oos = widgetFromToolResult(cfg, allOos);
+    expect(oos?.type === 'cards' && oos.items[0].stock).toBe('Out of stock');
+    // A truly empty result still renders nothing — the model narrates.
+    expect(
+      widgetFromToolResult(cfg, JSON.stringify({ data: { products: { nodes: [] } } })),
+    ).toBeNull();
+  });
+
+  it('availability only_arg keeps JUST the unavailable rows badged', () => {
+    const cfg = {
+      type: 'cards' as const,
+      items: 'data.products.nodes',
+      availability: {
+        field: 'variants.nodes.0.availableForSale',
+        unless_arg: 'include_unavailable',
+        only_arg: 'only_unavailable',
+      },
+      map: {
+        title: 'title',
+        stock: '{variants.nodes.0.availableForSale:stock}',
+      },
+    };
+    const result = JSON.stringify({
+      data: {
+        products: {
+          nodes: [
+            { title: 'Gift Card', variants: { nodes: [{ availableForSale: false }] } },
+            { title: 'Snowboard', variants: { nodes: [{ availableForSale: true }] } },
+          ],
+        },
+      },
+    });
+    const w = widgetFromToolResult(cfg, result, {}, { only_unavailable: '1' });
+    expect(w?.type === 'cards' && w.items.map((i) => i.title)).toEqual(['Gift Card']);
+    expect(w?.type === 'cards' && w.items[0].stock).toBe('Out of stock');
+    // Nothing unavailable in the set → no widget at all.
+    const allIn = JSON.stringify({
+      data: { products: { nodes: [{ title: 'Snowboard', variants: { nodes: [{ availableForSale: true }] } }] } },
+    });
+    expect(widgetFromToolResult(cfg, allIn, {}, { only_unavailable: '1' })).toBeNull();
   });
 
   it('row_limit_arg caps rendered rows for focused asks', () => {
@@ -641,5 +681,40 @@ describe('filterRowsByQuery', () => {
     expect(out.results).toEqual([
       { trackName: 'Snow', collectionName: 'X', artistName: 'Y' },
     ]);
+  });
+});
+
+describe('toolResultEmpty / toolResultNotes', () => {
+  const cfg = { type: 'cards' as const, items: 'data.products.nodes' };
+
+  it('flags a zero-row result, not a populated or unparseable one', () => {
+    expect(toolResultEmpty(cfg, JSON.stringify({ data: { products: { nodes: [] } } }))).toBe(true);
+    expect(
+      toolResultEmpty(cfg, JSON.stringify({ data: { products: { nodes: [{ title: 'X' }] } } })),
+    ).toBe(false);
+    expect(toolResultEmpty(cfg, 'not json')).toBe(false);
+  });
+
+  it('surfaces the authoritative count and the verbatim next-page call', () => {
+    const result = JSON.stringify({
+      data: {
+        productsCount: { count: 13 },
+        products: {
+          pageInfo: { hasNextPage: true, endCursor: 'CURSOR123' },
+          nodes: [{ title: 'X' }],
+        },
+      },
+    });
+    const notes = toolResultNotes(result);
+    expect(notes).toContain('total for this query is 13');
+    expect(notes).toContain('after:"CURSOR123"');
+    expect(notes).toContain('SAME arguments');
+  });
+
+  it('stays silent when there is no next page', () => {
+    const result = JSON.stringify({
+      data: { products: { pageInfo: { hasNextPage: false }, nodes: [{ title: 'X' }] } },
+    });
+    expect(toolResultNotes(result)).toBe('');
   });
 });
