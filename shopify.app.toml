@@ -21,8 +21,10 @@ automatically_update_urls_on_dev = false
 # read_locations (per-location stock truth — "is it at my store", and the
 # only way to see stock that can't fulfill online orders), read_product_listings
 # (sales-channel publication status — Admin 'availableForSale' ≠ Online
-# Store availability).
-scopes = "read_orders,write_orders,write_draft_orders,read_products,read_customers,read_legal_policies,write_returns,write_customers,write_discounts,read_checkouts,read_reports,read_inventory,read_locations,read_product_listings"
+# Store availability), read_markets (market → catalog bindings — the only
+# way to see a market whose catalog excludes products, which the storefront
+# reports as "sold out" for everything).
+scopes = "read_orders,write_orders,write_draft_orders,read_products,read_customers,read_legal_policies,write_returns,write_customers,write_discounts,read_checkouts,read_reports,read_inventory,read_locations,read_product_listings,read_markets"
 
 [auth]
 # Managed install (token exchange) — no OAuth redirect endpoints.
