@@ -16,13 +16,13 @@ automatically_update_urls_on_dev = false
 # Bundled so the merchant re-consents once, not per-feature:
 # write_returns (chat return requests), write_customers (self-serve
 # account updates), write_discounts (approval-gated save-the-sale codes),
-# read_checkouts (abandoned-checkout webhooks).
-# Bundled so the merchant re-consents once, not per-feature:
-# write_returns (chat return requests), write_customers (self-serve
-# account updates), write_discounts (approval-gated save-the-sale codes),
 # read_checkouts (abandoned-checkout webhooks), read_reports (ShopifyQL
-# sales analytics — exact bestseller/sell-through stats).
-scopes = "read_orders,write_orders,write_draft_orders,read_products,read_customers,read_legal_policies,write_returns,write_customers,write_discounts,read_checkouts,read_reports"
+# sales analytics — exact bestseller/sell-through stats), read_inventory +
+# read_locations (per-location stock truth — "is it at my store", and the
+# only way to see stock that can't fulfill online orders), read_product_listings
+# (sales-channel publication status — Admin 'availableForSale' ≠ Online
+# Store availability).
+scopes = "read_orders,write_orders,write_draft_orders,read_products,read_customers,read_legal_policies,write_returns,write_customers,write_discounts,read_checkouts,read_reports,read_inventory,read_locations,read_product_listings"
 
 [auth]
 # Managed install (token exchange) — no OAuth redirect endpoints.
