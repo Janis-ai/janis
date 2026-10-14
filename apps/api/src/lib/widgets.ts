@@ -566,7 +566,8 @@ export function clearStorefrontCache(): void {
 
 /** Password-protected storefronts bounce every request to /password.
  *  When the connection carries SHOPIFY_STOREFRONT_PASSWORD, POST the
- *  standard form to trade it for a storefront_digest cookie (cached). */
+ *  standard form to trade it for the session cookies (modern themes set
+ *  _shopify_essential, older ones storefront_digest) and reuse them. */
 async function storefrontCookie(shopHost: string, password: string | undefined): Promise<string | null> {
   if (!password) return null;
   const hit = sfCookies.get(shopHost);
@@ -579,9 +580,15 @@ async function storefrontCookie(shopHost: string, password: string | undefined):
       redirect: 'manual',
       signal: AbortSignal.timeout(4_000),
     });
-    const set = r.headers.get('set-cookie') ?? '';
-    const m = /storefront_digest=[^;]+/.exec(set);
-    const cookie = m ? m[0] : null;
+    // Node's fetch collapses set-cookie — getSetCookie() splits them; the
+    // Cookie header wants every name=value pair, joined.
+    const setCookies =
+      (r.headers as { getSetCookie?: () => string[] }).getSetCookie?.() ??
+      [r.headers.get('set-cookie') ?? ''].filter(Boolean);
+    const cookie = setCookies
+      .map((c) => /^[^;]+/.exec(c)?.[0])
+      .filter((c): c is string => !!c)
+      .join('; ') || null;
     sfCookies.set(shopHost, { ts: Date.now(), cookie });
     return cookie;
   } catch {
@@ -601,19 +608,33 @@ export async function storefrontProduct(
   const inflight = sfFlight.get(key);
   if (inflight) return inflight;
   const p = (async () => {
-    const get = (cookie: string | null) =>
-      fetch(`https://${shopHost}/products/${encodeURIComponent(handle)}.js`, {
-        headers: { accept: 'application/json', ...(cookie ? { cookie } : {}) },
-        signal: AbortSignal.timeout(4_000),
-      });
-    try {
-      let r = await get(null);
-      // /password redirect → login once with the configured secret, retry.
-      if (r.redirected && /\/password/.test(r.url)) {
-        r = await get(await storefrontCookie(shopHost, password));
+    const url = `https://${shopHost}/products/${encodeURIComponent(handle)}.js`;
+    // Follow redirects manually — a passworded shop loops /password →
+    // /password under redirect:'follow' until the hop cap kills it, and
+    // redirect detection is the signal that says "log in first".
+    const get = async (cookie: string | null) => {
+      const headers = { accept: 'application/json', ...(cookie ? { cookie } : {}) };
+      let r = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(4_000) });
+      for (let hop = 0; hop < 3 && r.status >= 300 && r.status < 400; hop++) {
+        const loc = r.headers.get('location') ?? '';
+        if (/\/password/.test(loc)) return { r: null as Response | null, passworded: true };
+        if (!loc) break;
+        r = await fetch(new URL(loc, url).href, {
+          headers,
+          redirect: 'manual',
+          signal: AbortSignal.timeout(4_000),
+        });
       }
-      if (r.redirected && /\/password/.test(r.url)) throw new Error('passworded');
-      const data = r.ok ? ((await r.json()) as SfProduct) : null;
+      return { r, passworded: false };
+    };
+    try {
+      let { r, passworded } = await get(null);
+      if (passworded) {
+        const cookie = await storefrontCookie(shopHost, password);
+        if (cookie) ({ r, passworded } = await get(cookie));
+      }
+      if (passworded || !r?.ok) throw new Error('unreachable');
+      const data = (await r.json()) as SfProduct;
       sfCache.set(key, { ts: Date.now(), data });
       return data;
     } catch {
