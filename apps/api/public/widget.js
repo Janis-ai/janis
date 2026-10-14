@@ -1153,10 +1153,10 @@
                 // the product card (an add-to-cart event), not typed text.
                 sendText('I just added ' + (item.title || 'an item') + ' to my cart.', { of: (item.title || 'product') + ' — add to cart' });
               })
-              .catch(function () {
+              .catch(function (status) {
                 cartBtn.disabled = false;
                 cartBtn.textContent = 'Add to cart';
-                sendText("I tried to add " + (item.title || 'an item') + ' to my cart but it failed.');
+                cartFail(item, status);
               });
           };
           btns.appendChild(cartBtn);
@@ -1560,10 +1560,10 @@
                 closeOptionsSheet();
                 sendText('I just added ' + (item.title || 'an item') + (desc ? ' (' + desc + ')' : '') + ' to my cart.', { of: (item.title || 'product') + ' — add to cart' });
               })
-              .catch(function () {
+              .catch(function (status) {
                 add.disabled = false;
                 add.textContent = 'Add to cart';
-                sendText("I tried to add " + (item.title || 'an item') + ' to my cart but it failed.');
+                cartFail(item, status);
               });
           } : null;
         }
@@ -1955,6 +1955,16 @@
   // `tap` marks component-originated sends (card button, option pick, chip,
   // form submit) — the agent sees them as picks with context, not typed
   // commands. `tap.of` names the card/widget it came from.
+  // Cart-add failure — the 401 case is a password-locked (dev) storefront;
+  // naming it lets the agent explain instead of shrugging.
+  function cartFail(item, status) {
+    sendText(
+      "I tried to add " + (item.title || 'an item') + ' to my cart but it failed' +
+        (status === 401 ? ' — the storefront is locked behind a password' : '') + '.',
+      { of: (item.title || 'product') + ' — add to cart' }
+    );
+  }
+
   function sendText(text, tap) {
     var body = { visitor_id: visitor, text: text, user: state.user || undefined, attachments: [] };
     if (tap) {

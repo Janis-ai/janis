@@ -82,7 +82,11 @@ export function shopifyPublicRoutes(db: Db) {
           .limit(1),
       ]);
       out.agent = agent?.name ?? null;
+      out.agent_id = row.agentId;
       out.workspace = ws?.name ?? null;
+      // A linked shop can still re-enter the link flow — the console page
+      // rebinds to whichever agent the merchant picks (or creates).
+      out.link_url = `${env.webOrigin}/shopify-link?code=${signLinkCode(row.id)}`;
     }
     return c.json(out);
   });

@@ -20,7 +20,7 @@ type SessionState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'unlinked'; shop: string; link_url: string }
-  | { kind: 'linked'; shop: string; agent: string | null; workspace: string | null }
+  | { kind: 'linked'; shop: string; agent: string | null; agentId: string | null; workspace: string | null; linkUrl: string }
   | { kind: 'uninstalled'; shop: string };
 
 async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopify']> | null> {
@@ -83,11 +83,19 @@ export default function ShopifyApp() {
           state: string;
           link_url?: string;
           agent?: string | null;
+          agent_id?: string | null;
           workspace?: string | null;
         }>('/api/shopify/session', { method: 'POST', body: JSON.stringify({ token }) });
         if (cancelled) return;
         if (res.state === 'linked') {
-          setState({ kind: 'linked', shop: res.shop, agent: res.agent ?? null, workspace: res.workspace ?? null });
+          setState({
+            kind: 'linked',
+            shop: res.shop,
+            agent: res.agent ?? null,
+            agentId: res.agent_id ?? null,
+            workspace: res.workspace ?? null,
+            linkUrl: res.link_url ?? '',
+          });
           if (localStorage.getItem(`janis:embed-opened:${res.shop}`) === '1') setEmbedOpened(true);
         } else if (res.state === 'uninstalled') {
           setState({ kind: 'uninstalled', shop: res.shop });
@@ -150,7 +158,7 @@ export default function ShopifyApp() {
 
         {state.kind === 'linked' && (
           <>
-            <p>
+            <p style={{ fontSize: 14, marginBottom: 4 }}>
               <strong>{state.shop}</strong> is connected
               {state.agent ? (
                 <>
@@ -159,42 +167,54 @@ export default function ShopifyApp() {
               ) : null}
               {state.workspace ? <span className="muted"> ({state.workspace})</span> : null}.
             </p>
+            <p className="muted" style={{ fontSize: 13 }}>
+              Two steps left — tune the agent, then put it on the storefront.
+            </p>
+
+            <a
+              className="btn primary"
+              style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
+              href={state.agentId ? `/agents/${state.agentId}` : '/agents'}
+              target="_blank"
+              rel="noreferrer"
+            >
+              1 · Configure your agent
+            </a>
+            <p className="muted" style={{ fontSize: 12.5, margin: '4px 0 8px' }}>
+              Instructions, knowledge, voice — opens the Janis agent editor.
+            </p>
+
             {embedOpened ? (
               <>
-                <p className="muted" style={{ fontSize: 13 }}>
-                  Theme editor opened in a new tab — toggle the <strong>Janis chat</strong> app
-                  embed on and hit <strong>Save</strong>. The bubble appears on your storefront
-                  the moment it saves.
+                <a
+                  className="btn"
+                  style={{ display: 'block', marginTop: 4, textAlign: 'center' }}
+                  href={`https://${state.shop}/admin/themes/current/editor?context=apps&activateAppId=${apiKey}/janis-chat`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  2 · Re-open the theme editor
+                </a>
+                <p className="muted" style={{ fontSize: 12.5, margin: '4px 0 8px' }}>
+                  Toggle the <strong>Janis chat</strong> app embed on and hit{' '}
+                  <strong>Save</strong> — the bubble appears on your storefront the moment it
+                  saves.
                 </p>
                 <a
                   className="btn primary"
-                  style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
+                  style={{ display: 'block', marginTop: 4, textAlign: 'center' }}
                   href={`https://${state.shop}`}
                   target="_blank"
                   rel="noreferrer"
                 >
                   Open your storefront
                 </a>
-                <a
-                  className="btn"
-                  style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
-                  href={`https://${state.shop}/admin/themes/current/editor?context=apps&activateAppId=${apiKey}/janis-chat`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Re-open the theme editor
-                </a>
               </>
             ) : (
               <>
-                <p className="muted" style={{ fontSize: 13 }}>
-                  Your agent now holds this shop's credentials and a storefront chat channel.
-                  Turn on the "Janis chat" app embed in your theme to put the bubble on your
-                  storefront.
-                </p>
                 <a
                   className="btn primary"
-                  style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
+                  style={{ display: 'block', marginTop: 4, textAlign: 'center' }}
                   href={`https://${state.shop}/admin/themes/current/editor?context=apps&activateAppId=${apiKey}/janis-chat`}
                   target="_blank"
                   rel="noreferrer"
@@ -203,13 +223,22 @@ export default function ShopifyApp() {
                     localStorage.setItem(`janis:embed-opened:${state.shop}`, '1');
                   }}
                 >
-                  Enable storefront chat
+                  2 · Enable storefront chat
                 </a>
+                <p className="muted" style={{ fontSize: 12.5, margin: '4px 0 8px' }}>
+                  Opens your theme editor — toggle on the "Janis chat" app embed and save.
+                </p>
               </>
             )}
-            <a className="btn" style={{ display: 'block', marginTop: 8, textAlign: 'center' }} href="/conversations" target="_blank" rel="noreferrer">
-              Open Janis
-            </a>
+
+            {state.linkUrl ? (
+              <p className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
+                Serving the wrong agent or workspace?{' '}
+                <a href={state.linkUrl} target="_blank" rel="noreferrer">
+                  Switch or create an agent
+                </a>
+              </p>
+            ) : null}
           </>
         )}
 
