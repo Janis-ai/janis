@@ -1195,9 +1195,11 @@
     // Partial page of a larger result — the tool stamped w.total, so a
     // "Showing K of N" tile gives the shopper a real load-more affordance
     // instead of the carousel pretending to be the whole catalogue.
-    if (typeof w.total === 'number' && w.total > w.items.length) {
+    if (typeof w.end_cursor === 'string' && w.end_cursor) {
       var more = el('button', {}, { class: 'janis-wmore', type: 'button' });
-      wtext(more, 'Showing ' + w.items.length + ' of ' + w.total + ' — tap for more');
+      wtext(more, typeof w.total === 'number' && w.total > w.items.length
+        ? 'Showing ' + w.items.length + ' of ' + w.total + ' — tap for more'
+        : 'Tap for more');
       more.onclick = function () { sendText('Show me more', { of: 'pagination' }); };
       box.appendChild(more);
     }
