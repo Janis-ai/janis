@@ -1956,12 +1956,15 @@
   // form submit) — the agent sees them as picks with context, not typed
   // commands. `tap.of` names the card/widget it came from.
   // Cart-add failure — the 401 case is a password-locked (dev) storefront;
-  // naming it lets the agent explain instead of shrugging.
+  // naming it lets the agent explain instead of shrugging. The '— failed'
+  // suffix keeps the tap marker out of the confirmed-success path — a bare
+  // '— add to cart' marker annotates as "the storefront confirmed it went
+  // through" and the model would claim a rejected add landed.
   function cartFail(item, status) {
     sendText(
       "I tried to add " + (item.title || 'an item') + ' to my cart but it failed' +
         (status === 401 ? ' — the storefront is locked behind a password' : '') + '.',
-      { of: (item.title || 'product') + ' — add to cart' }
+      { of: (item.title || 'product') + ' — add to cart — failed' }
     );
   }
 

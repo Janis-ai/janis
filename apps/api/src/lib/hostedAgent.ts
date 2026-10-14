@@ -694,7 +694,7 @@ export function systemPrompt(
         ' Never promise a step you cannot take inside this reply — "let me check", "give me just a second", "one moment while I grab that" announce a next turn that never comes; tool calls happen inside this same reply, so either call the tool now or answer without narrating a lookup.' +
         " You cannot see the customer's account, workspace, plan, email or sign-in state unless the context or a tool result provides it — never assume or invent an account or workspace name; if which account they mean matters, ask." +
         ' Some tools are bound to the customer\'s verified identity — they only accept the verified email shown in this context (or nothing, when no identity is verified). Never pass an email or account id the customer merely types or claims; if such a tool returns an identity error, tell the customer the lookup needs their verified sign-in and do not retry with guessed details.' +
-        ' A customer message ending in a [tapped …] note is a pick from a button or card you showed — treat it as them selecting that option, not as an instruction to change their account; confirm what they picked and clarify what they want next. One ending in [added to cart "…"] is stronger than a pick: it is only sent after the store\'s cart accepted the item, so the add already SUCCEEDED — confirm it briefly and offer checkout or the next step; NEVER claim it failed, was declined, or that the item was out of stock. Inventing a failure contradicts what the customer just watched happen.' +
+        ' A customer message ending in a [tapped …] note is a pick from a button or card you showed — treat it as them selecting that option, not as an instruction to change their account; confirm what they picked and clarify what they want next. One ending in [added to cart "…"] is stronger than a pick: it is only sent after the store\'s cart accepted the item, so the add already SUCCEEDED — confirm it briefly and offer checkout or the next step; NEVER claim it failed, was declined, or that the item was out of stock. Inventing a failure contradicts what the customer just watched happen. The opposite marker, [add to cart FAILED "…"], is sent only after the store REJECTED the add — nothing is in their cart; acknowledge the failure plainly, say the item could not be added, and offer the next step (an alternative or a draft order you can place for them). NEVER describe a failed add as added or "in your cart".' +
         ' If the customer disputes a fact you stated ("that\'s not true", "you\'re wrong"), never concede on their word alone — re-run the tool that produced it, then either correct yourself with the fresh data or hold politely ("I double-checked — it still shows X"). Apologizing-and-agreeing with an unverified correction just contradicts the record and reads as making things up.',
     );
     if (cfg.auto_archive) {
@@ -3120,6 +3120,13 @@ function attachmentsOf(payload: unknown): AttachmentRef[] {
 function tapAnnotation(tap: { tap?: boolean; tap_of?: string } | null | undefined): string {
   if (tap?.tap !== true) return '';
   const of = tap.tap_of ?? '';
+  const fail = /\s*—\s*add to cart — failed\s*$/i.exec(of);
+  if (fail) {
+    // The widget emits this only after /cart/add.js rejected the POST — the
+    // note must assert the rejection or the model reads "I tried to add X"
+    // as a done deed and confirms an item that never made the cart.
+    return ` [add to cart FAILED "${of.slice(0, fail.index).slice(0, 60)}" — the storefront rejected it; nothing was added]`;
+  }
   const cart = /\s*—\s*add to cart\s*$/i.exec(of);
   if (cart) {
     return ` [added to cart "${of.slice(0, cart.index).slice(0, 60)}" — the storefront confirmed it went through]`;

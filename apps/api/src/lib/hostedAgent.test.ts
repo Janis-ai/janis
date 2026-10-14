@@ -140,6 +140,23 @@ describe('transcriptFor file analysis', () => {
     expect(last.content as string).toContain('confirmed');
   });
 
+  it('marks a failed add-to-cart tap as a storefront rejection, not a success', async () => {
+    // prod incident: cartFail sent the same '— add to cart' marker as a
+    // success, the annotation asserted "the storefront confirmed it went
+    // through", and the agent told the shopper the item was in their cart.
+    await db.insert(messages).values({
+      conversationId: convId,
+      direction: 'in',
+      text: 'I tried to add The Compare at Price Snowboard to my cart but it failed.',
+      payload: { tap: true, tap_of: 'The Compare at Price Snowboard — add to cart — failed' },
+      createdAt: new Date(),
+    });
+    const history = await transcriptFor(db, convId, true);
+    const last = history.at(-1)!;
+    expect(last.content as string).toContain('[add to cart FAILED "The Compare at Price Snowboard"');
+    expect(last.content as string).not.toContain('confirmed it went through');
+  });
+
   it('drops out-direction audit lines but keeps flagged markers and human whispers', async () => {
     // prod incident: a rule_trigger systemNote ('out' + internal) landed after
     // the inbound; transcriptFor fed it as an assistant turn and the reply
