@@ -1311,7 +1311,13 @@ function corpusProductFields(
   const m = re.exec(toolText);
   if (!m) return null;
   const rest = toolText.slice(m.index + m[0].length);
-  const next = rest.search(/"title"\s*:/);
+  // The product object ends at the NEXT product node — not the next
+  // "title" key, which also appears inside collections, seo and variant
+  // sub-objects and would cut the span before variants/price fields.
+  // Real corpus nodes lead with a Product gid; fixture-shaped results
+  // without ids fall back to a `},{`-level node boundary.
+  let next = rest.search(/"id"\s*:\s*"gid:\/\/shopify\/Product\//);
+  if (next === -1) next = rest.search(/\},\s*\{\s*"title"\s*:/);
   const span = next === -1 ? rest.slice(0, 8000) : rest.slice(0, next);
   // Variant triples in document order — the widget's pick rule (cheapest
   // AVAILABLE variant) must match exactly, or a hydrated card pairs the
