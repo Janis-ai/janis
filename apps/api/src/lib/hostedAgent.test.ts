@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsWidgetShown, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -889,6 +889,44 @@ describe('verifyCardItems', () => {
     const w = [card([{ title: 'Fake', cart_variant_id: '999' }])];
     expect(verifyCardItems(w, TOOL_TEXT, new Set(w))).toBe(0);
     expect(w[0].items).toHaveLength(1);
+  });
+});
+
+describe('repairCardStock', () => {
+  const TOOL_TEXT = JSON.stringify({
+    data: {
+      products: {
+        nodes: [
+          { title: 'Gift Card', variants: { nodes: [{ availableForSale: false }] } },
+          { title: 'The Snowboard', variants: { nodes: [{ availableForSale: true }] } },
+        ],
+      },
+    },
+  });
+  const card = (items: Record<string, unknown>[]) => ({ type: 'cards' as const, items: items as never });
+
+  it('forces the Out of stock badge onto a buyable-looking card for an OOS product', () => {
+    const w = [card([{ title: 'Gift Card', price: '$10.00', link: 'https://s.test/p/gc' }])];
+    expect(repairCardStock(w, TOOL_TEXT)).toBe(1);
+    expect((w[0].items[0] as { stock?: string }).stock).toBe('Out of stock');
+  });
+
+  it('strips a fabricated Out of stock badge from an in-stock product', () => {
+    const w = [card([{ title: 'The Snowboard', stock: 'Out of stock' }])];
+    expect(repairCardStock(w, TOOL_TEXT)).toBe(1);
+    expect((w[0].items[0] as { stock?: string }).stock).toBeUndefined();
+  });
+
+  it('leaves cards for products the corpus does not know alone', () => {
+    const w = [card([{ title: 'Pro Plan', price: '$29' }])];
+    expect(repairCardStock(w, TOOL_TEXT)).toBe(0);
+    expect(w[0].items).toHaveLength(1);
+  });
+
+  it('drops a subtitle that duplicates the price', () => {
+    const w = [card([{ title: 'Gift Card', subtitle: 'USD 10.0', price: 'USD 10.0', stock: 'Out of stock' }])];
+    repairCardStock(w, TOOL_TEXT);
+    expect((w[0].items[0] as { subtitle?: string }).subtitle).toBeUndefined();
   });
 });
 

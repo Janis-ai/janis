@@ -1194,6 +1194,57 @@ export function verifyCardItems(
   return dropped;
 }
 
+/** Stock-badge truth on model-authored cards — when the tool corpus knows
+ *  the product, the card must agree with the tool's availability: OOS in
+ *  the result ⇒ the badge is forced on (which also suppresses Add to cart);
+ *  in-stock ⇒ a fabricated "out of stock" badge is stripped. toolText is raw
+ *  tool JSON, so availability is read inside the matched product's object
+ *  span (its title … the next title). `skip` holds ref-resolved specs. */
+export function repairCardStock(
+  widgets: WidgetComponent[],
+  toolText: string,
+  skip: Set<WidgetComponent> = new Set(),
+): number {
+  if (!toolText) return 0;
+  let fixed = 0;
+  for (const w of widgets) {
+    if (w.type !== 'cards' || skip.has(w)) continue;
+    for (const item of w.items) {
+      if (!item.title) continue;
+      if (item.subtitle && item.subtitle === item.price) {
+        delete item.subtitle;
+        fixed++;
+      }
+      const flag = corpusAvailability(toolText, item.title);
+      if (flag === null) continue;
+      if (flag === false && item.stock !== 'Out of stock') {
+        item.stock = 'Out of stock';
+        fixed++;
+      } else if (flag === true && item.stock) {
+        delete item.stock;
+        fixed++;
+      }
+    }
+  }
+  return fixed;
+}
+
+/** Read `availableForSale` out of the raw tool JSON for the product whose
+ *  title matches — the flag lives inside that product's object, so the
+ *  search window ends at the next title. */
+function corpusAvailability(toolText: string, title: string): boolean | null {
+  const re = new RegExp(
+    '"title"\\s*:\\s*"' + title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"',
+  );
+  const m = re.exec(toolText);
+  if (!m) return null;
+  const rest = toolText.slice(m.index + m[0].length);
+  const next = rest.search(/"title"\s*:/);
+  const span = next === -1 ? rest.slice(0, 3000) : rest.slice(0, next);
+  const f = /"availableForSale"\s*:\s*(true|false)/.exec(span);
+  return f ? f[1] === 'true' : null;
+}
+
 /** Two "cards" widgets in one reply render as two carousels — the model
  *  splits "show me both" into a widget per item. Merge adjacent card
  *  widgets into one so the customer sees a single row. */
@@ -3220,7 +3271,12 @@ async function replyAsHostedAgent(
     // "here are both items" backed by a model-typed six-product carousel is
     // a hallucination the customer acts on. Runs before the claim check so
     // an emptied widget also strips its dangling "here are the cards" lead-in.
-    const bogusItems = verifyCardItems(widgets, gen.toolTexts.join('\n'), refResolved);
+    const toolCorpus = gen.toolTexts.join('\n');
+    const bogusItems = verifyCardItems(widgets, toolCorpus, refResolved);
+    // Surviving model cards get their stock badge reconciled with the
+    // corpus — an OOS product rendered buyable (or vice versa) is a lie the
+    // customer clicks on.
+    const stockFixed = repairCardStock(widgets, toolCorpus, refResolved);
     if (bogusItems)
       console.warn(`[hosted] stripped ${bogusItems} unverified card item(s) conv=${convId}`);
     // Same belt-and-braces for widget-truth claims that survived the regen.
@@ -3271,6 +3327,7 @@ async function replyAsHostedAgent(
     if (widgetClaimStripped) runIssues.push('stripped a widget-claim mismatch');
     if (lookupPromiseStripped) runIssues.push('stripped an unbacked lookup narration');
     if (bogusItems) runIssues.push(`stripped ${bogusItems} unverified card item(s)`);
+    if (stockFixed) runIssues.push(`repaired ${stockFixed} card field(s)`);
     if (gen.stripped.length)
       runIssues.push(`link guard stripped ${gen.stripped.length} URL(s)`);
     if (runIssues.length)
