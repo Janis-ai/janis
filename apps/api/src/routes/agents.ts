@@ -1529,7 +1529,7 @@ export function agentRoutes(db: Db) {
       const { template, fields } = c.req.valid('json');
       const tpl = TOOL_TEMPLATES.find((t) => t.id === template);
       if (!tpl) return c.json({ error: 'unknown template' }, 404);
-      const missing = tpl.fields.filter((f) => !fields[f.key]?.trim()).map((f) => f.label);
+      const missing = tpl.fields.filter((f) => !f.optional && !fields[f.key]?.trim()).map((f) => f.label);
       if (missing.length) return c.json({ error: `missing: ${missing.join(', ')}` }, 400);
 
       // OAuth templates: store the credentials and mint a token now so a bad

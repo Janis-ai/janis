@@ -902,6 +902,7 @@ export const ToolTemplateField = z.object({
   label: z.string(),
   placeholder: z.string().optional(),
   help: z.string().optional(),
+  optional: z.boolean().optional(),
 });
 export type ToolTemplateField = z.infer<typeof ToolTemplateField>;
 

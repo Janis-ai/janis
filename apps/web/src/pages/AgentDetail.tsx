@@ -2750,7 +2750,7 @@ function IntegrationCards({
               <div className="row" style={{ marginTop: 2 }}>
                 <button
                   className="btn primary"
-                  disabled={install.isPending || t.fields.some((f) => !fields[f.key]?.trim())}
+                  disabled={install.isPending || t.fields.some((f) => !f.optional && !fields[f.key]?.trim())}
                   onClick={() => install.mutate(t)}
                 >
                   {install.isPending ? 'Connecting…' : 'Connect'}

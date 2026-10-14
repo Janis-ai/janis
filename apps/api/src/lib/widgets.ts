@@ -553,26 +553,66 @@ interface SfProduct {
 }
 
 const SF_TTL = 60_000;
+const SF_COOKIE_TTL = 3_600_000;
 const sfCache = new Map<string, { ts: number; data: SfProduct | null }>();
 const sfFlight = new Map<string, Promise<SfProduct | null>>();
+const sfCookies = new Map<string, { ts: number; cookie: string | null }>();
 
 export function clearStorefrontCache(): void {
   sfCache.clear();
   sfFlight.clear();
+  sfCookies.clear();
 }
 
-export async function storefrontProduct(shopHost: string, handle: string): Promise<SfProduct | null> {
+/** Password-protected storefronts bounce every request to /password.
+ *  When the connection carries SHOPIFY_STOREFRONT_PASSWORD, POST the
+ *  standard form to trade it for a storefront_digest cookie (cached). */
+async function storefrontCookie(shopHost: string, password: string | undefined): Promise<string | null> {
+  if (!password) return null;
+  const hit = sfCookies.get(shopHost);
+  if (hit && Date.now() - hit.ts < SF_COOKIE_TTL) return hit.cookie;
+  try {
+    const r = await fetch(`https://${shopHost}/password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: `form_type=storefront_password&utf8=%E2%9C%93&password=${encodeURIComponent(password)}`,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(4_000),
+    });
+    const set = r.headers.get('set-cookie') ?? '';
+    const m = /storefront_digest=[^;]+/.exec(set);
+    const cookie = m ? m[0] : null;
+    sfCookies.set(shopHost, { ts: Date.now(), cookie });
+    return cookie;
+  } catch {
+    sfCookies.set(shopHost, { ts: Date.now(), cookie: null });
+    return null;
+  }
+}
+
+export async function storefrontProduct(
+  shopHost: string,
+  handle: string,
+  password?: string,
+): Promise<SfProduct | null> {
   const key = `${shopHost}/${handle}`;
   const hit = sfCache.get(key);
   if (hit && Date.now() - hit.ts < SF_TTL) return hit.data;
   const inflight = sfFlight.get(key);
   if (inflight) return inflight;
   const p = (async () => {
-    try {
-      const r = await fetch(`https://${shopHost}/products/${encodeURIComponent(handle)}.js`, {
-        headers: { accept: 'application/json' },
+    const get = (cookie: string | null) =>
+      fetch(`https://${shopHost}/products/${encodeURIComponent(handle)}.js`, {
+        headers: { accept: 'application/json', ...(cookie ? { cookie } : {}) },
         signal: AbortSignal.timeout(4_000),
       });
+    try {
+      let r = await get(null);
+      // /password redirect → login once with the configured secret, retry.
+      if (r.redirected && /\/password/.test(r.url)) {
+        r = await get(await storefrontCookie(shopHost, password));
+      }
+      if (r.redirected && /\/password/.test(r.url)) throw new Error('passworded');
       const data = r.ok ? ((await r.json()) as SfProduct) : null;
       sfCache.set(key, { ts: Date.now(), data });
       return data;
@@ -605,7 +645,7 @@ export async function storefrontTruth(
       if (it.stock) return; // already badged
       const m = /\/products\/([^/?#]+)/.exec(it.link ?? '');
       if (!m) return;
-      const p = await storefrontProduct(shop, m[1]);
+      const p = await storefrontProduct(shop, m[1], secrets.SHOPIFY_STOREFRONT_PASSWORD);
       if (!p || !Array.isArray(p.variants)) return;
       if (it.cart_variant_id) {
         const v = p.variants.find((x) => String(x.id) === it.cart_variant_id);

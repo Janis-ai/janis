@@ -31,7 +31,7 @@ export interface ToolTemplate {
   blurb: string;
   docs_url?: string;
   /** Credential/setup inputs the user fills in at connect time. */
-  fields: { key: string; label: string; placeholder?: string; help?: string }[];
+  fields: { key: string; label: string; placeholder?: string; help?: string; optional?: boolean }[];
   /** name → value stored in agent_secrets at install. Derived values are
    *  allowed (e.g. Zendesk basic-auth = base64(email/token:key)). */
   secrets: (fields: Record<string, string>) => Record<string, string>;
@@ -81,10 +81,20 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         placeholder: 'e.g. shpat_…',
         help: 'Shopify admin → Settings → Apps and sales channels → Develop apps (enable app development if prompted) → Create an app → Admin API scopes: read_orders + write_orders (write covers cancels/draft orders/tags) → Install app → API credentials → copy the Admin API access token.',
       },
+      {
+        key: 'storefront_password',
+        label: 'Storefront password (if enabled)',
+        optional: true,
+        placeholder: 'Online store password',
+        help: 'Only needed if the store is password-protected (Online Store → Preferences → password protection). Lets the server check real shopper-facing availability/prices behind the wall.',
+      },
     ],
     secrets: (f) => ({
       SHOPIFY_SHOP: normHost(f.shop, '.myshopify.com'),
       SHOPIFY_TOKEN: f.token.trim(),
+      ...(f.storefront_password?.trim()
+        ? { SHOPIFY_STOREFRONT_PASSWORD: f.storefront_password.trim() }
+        : {}),
     }),
     tools: [
       {
