@@ -309,7 +309,7 @@ function digPath(obj: unknown, path: string): unknown {
  *  formats the dug amount through Intl with the sibling currencyCode, so a
  *  USD shop renders "$9.95" and a EUR one "€9.95" instead of "USD 9.95".
  *  Codes Intl doesn't know degrade to "CHF 9.95"-style. */
-function formatMoney(amount: unknown, code: unknown): string | undefined {
+export function formatMoney(amount: unknown, code: unknown): string | undefined {
   const c = String(code ?? '').trim();
   const n = typeof amount === 'number' ? amount : Number.parseFloat(String(amount ?? ''));
   if (!Number.isFinite(n)) return undefined;
@@ -324,6 +324,18 @@ function formatMoney(amount: unknown, code: unknown): string | undefined {
   }
 }
 
+/** First `currencyCode` string anywhere in a row — the shop's currency is
+ *  uniform per result, so a scalar Money field borrows its sibling's code. */
+function firstCurrencyCode(obj: unknown, depth = 0): string | undefined {
+  if (!obj || typeof obj !== 'object' || depth > 5) return undefined;
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    if (k === 'currencyCode' && typeof v === 'string' && v) return v;
+    const found = firstCurrencyCode(v, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 /** Map values may be a plain dot path ("variants.0.price") or a template
  *  with {path} placeholders ("https://shop/products/{handle}") — needed when
  *  the API returns handles, not URLs. {{secrets.X}} resolves too so store
@@ -336,7 +348,14 @@ function mapValue(row: unknown, expr: string, secrets: Record<string, string>): 
       const v = digPath(row, p);
       if (mod === 'money') {
         const parent = p.slice(0, Math.max(0, p.lastIndexOf('.')));
-        return formatMoney(v, digPath(row, parent ? `${parent}.currencyCode` : 'currencyCode')) ?? '';
+        // Sibling currencyCode first (MoneyV2), then the row's own, then any
+        // currencyCode in the row — a scalar Money field (ProductVariant.price)
+        // has no sibling, but the row's priceRange still carries the code.
+        const code =
+          digPath(row, parent ? `${parent}.currencyCode` : 'currencyCode') ??
+          digPath(row, 'currencyCode') ??
+          firstCurrencyCode(row);
+        return formatMoney(v, code) ?? '';
       }
       // {flag:stock} — 'Out of stock' only when the source flag is a real
       // false; true/absent (untracked inventory, gift cards) stays silent.

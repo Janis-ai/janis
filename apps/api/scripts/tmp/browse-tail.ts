@@ -1,0 +1,10 @@
+import { createDb } from '../../src/db/client.js';
+import { messages, conversations } from '../../src/db/schema.js';
+import { eq, asc } from 'drizzle-orm';
+const db = await createDb();
+const msgs = await db.select().from(messages).where(eq(messages.conversationId, 'a44407e1-89ee-4bf4-aabb-24455eb3251e')).orderBy(asc(messages.createdAt));
+console.log('total msgs:', msgs.length, '| last dir:', msgs.at(-1)?.direction, '| last at:', msgs.at(-1)?.createdAt.toISOString());
+for (const m of msgs.slice(-3)) console.log(`${m.direction} ${m.createdAt.toISOString().slice(11,19)} ${(m.text??'').slice(0,90)}`);
+const [c] = await db.select().from(conversations).where(eq(conversations.id, 'a44407e1-89ee-4bf4-aabb-24455eb3251e'));
+console.log('conv lastMessageDirection:', c?.lastMessageDirection, '| state:', c?.state);
+process.exit(0);

@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -989,7 +989,11 @@ describe('repairCardStock', () => {
       products: {
         nodes: [
           { title: 'Gift Card', variants: { nodes: [{ availableForSale: false }] } },
-          { title: 'The Snowboard', variants: { nodes: [{ availableForSale: true }] } },
+          {
+            title: 'The Snowboard',
+            priceRangeV2: { minVariantPrice: { amount: '885.95', currencyCode: 'USD' } },
+            variants: { nodes: [{ id: 'gid://shopify/ProductVariant/222', availableForSale: true, price: '885.95' }] },
+          },
         ],
       },
     },
@@ -1004,8 +1008,11 @@ describe('repairCardStock', () => {
 
   it('strips a fabricated Out of stock badge from an in-stock product', () => {
     const w = [card([{ title: 'The Snowboard', stock: 'Out of stock' }])];
-    expect(repairCardStock(w, TOOL_TEXT)).toBe(1);
+    // badge stripped + variant id + formatted price hydrated
+    expect(repairCardStock(w, TOOL_TEXT)).toBe(3);
     expect((w[0].items[0] as { stock?: string }).stock).toBeUndefined();
+    expect((w[0].items[0] as { cart_variant_id?: string }).cart_variant_id).toBe('222');
+    expect((w[0].items[0] as { price?: string }).price).toBe('$885.95');
   });
 
   it('leaves cards for products the corpus does not know alone', () => {
@@ -1018,6 +1025,47 @@ describe('repairCardStock', () => {
     const w = [card([{ title: 'Gift Card', subtitle: 'USD 10.0', price: 'USD 10.0', stock: 'Out of stock' }])];
     repairCardStock(w, TOOL_TEXT);
     expect((w[0].items[0] as { subtitle?: string }).subtitle).toBeUndefined();
+  });
+
+  it('hydrates the variant id onto a buyable hand-authored card', () => {
+    const w = [card([{ title: 'The Snowboard', price: 'USD 885.95' }])];
+    repairCardStock(w, TOOL_TEXT);
+    expect((w[0].items[0] as { cart_variant_id?: string }).cart_variant_id).toBe('222');
+    expect((w[0].items[0] as { price?: string }).price).toBe('$885.95');
+  });
+
+  it('never hydrates a variant id onto an out-of-stock card', () => {
+    const w = [card([{ title: 'Gift Card', cart_variant_id: '999' }])];
+    repairCardStock(w, TOOL_TEXT);
+    expect((w[0].items[0] as { cart_variant_id?: string }).cart_variant_id).toBeUndefined();
+    expect((w[0].items[0] as { stock?: string }).stock).toBe('Out of stock');
+  });
+});
+
+describe('listsPricedItems / stripPricedLists', () => {
+  const dump =
+    'Here are our products:\n' +
+    '- The 3p Fulfilled Snowboard ($2629.95)\n' +
+    '- The Collection Snowboard: Hydrogen ($600.00)\n' +
+    '- The Hidden Snowboard ($749.95)\n' +
+    'Anything else I can help with?';
+
+  it('flags a priced catalogue dump, not prose or a one-item line', () => {
+    expect(listsPricedItems(dump)).toBe(true);
+    expect(listsPricedItems('We carry a great snowboard — want a look?')).toBe(false);
+    expect(listsPricedItems('- The Snowboard ($885.95)')).toBe(false);
+  });
+
+  it('drops the whole run and its dangling lead-in', () => {
+    const out = stripPricedLists(dump);
+    expect(out).not.toContain('Snowboard ($');
+    expect(out).not.toContain('Here are our products:');
+    expect(out).toContain('Anything else I can help with?');
+  });
+
+  it('keeps an unpriced list and priced prose', () => {
+    expect(stripPricedLists('Options:\n- red\n- blue')).toBe('Options:\n- red\n- blue');
+    expect(stripPricedLists('It costs $10.00 total.')).toBe('It costs $10.00 total.');
   });
 });
 

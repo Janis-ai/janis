@@ -18,7 +18,7 @@ import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolD
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
-import { dedupeWidgetList, extractWidgets, filterRowsByQuery, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -1230,12 +1230,14 @@ export function verifyCardItems(
   return dropped;
 }
 
-/** Stock-badge truth on model-authored cards — when the tool corpus knows
- *  the product, the card must agree with the tool's availability: OOS in
- *  the result ⇒ the badge is forced on (which also suppresses Add to cart);
- *  in-stock ⇒ a fabricated "out of stock" badge is stripped. toolText is raw
- *  tool JSON, so availability is read inside the matched product's object
- *  span (its title … the next title). `skip` holds ref-resolved specs. */
+/** Field truth on model-authored cards — when the tool corpus knows the
+ *  product, the card must agree with it: OOS in the result ⇒ the badge is
+ *  forced on (and a model-typed variant id dropped — a dead Add to cart);
+ *  in-stock ⇒ a fabricated badge is stripped and the real variant id
+ *  hydrated so the card is buyable again; prices normalize to the corpus's
+ *  formatted amount ("USD 1025.0" → "$1,025.00"). toolText is raw tool JSON,
+ *  read inside the matched product's object span (its title … the next
+ *  title). `skip` holds ref-resolved specs. */
 export function repairCardStock(
   widgets: WidgetComponent[],
   toolText: string,
@@ -1251,9 +1253,9 @@ export function repairCardStock(
         delete item.subtitle;
         fixed++;
       }
-      const flag = corpusAvailability(toolText, item.title);
-      if (flag === null) continue;
-      if (flag === false) {
+      const f = corpusProductFields(toolText, item.title);
+      if (!f) continue;
+      if (f.avail === false) {
         // An OOS product is view-only — a model-typed variant id would put a
         // dead Add to cart under the badge.
         if (item.cart_variant_id) delete item.cart_variant_id;
@@ -1261,19 +1263,40 @@ export function repairCardStock(
           item.stock = 'Out of stock';
           fixed++;
         }
-      } else if (flag === true && item.stock) {
-        delete item.stock;
-        fixed++;
+      } else if (f.avail === true) {
+        if (item.stock) {
+          delete item.stock;
+          fixed++;
+        }
+        // Hand-authored cards lose the add path — hydrate the variant the
+        // tool actually returned so a truthful card is buyable again.
+        if (!item.cart_variant_id && f.variantNum) {
+          item.cart_variant_id = f.variantNum;
+          fixed++;
+        }
+      }
+      // Model-typed prices are free-form ("USD 1025.0", "1025") — when the
+      // corpus carries the variant price the card shows it, formatted.
+      if (f.price) {
+        const want = formatMoney(f.price, f.currency) ?? item.price;
+        if (want && item.price !== want) {
+          item.price = want;
+          fixed++;
+        }
       }
     }
   }
   return fixed;
 }
 
-/** Read `availableForSale` out of the raw tool JSON for the product whose
- *  title matches — the flag lives inside that product's object, so the
- *  search window ends at the next title. */
-function corpusAvailability(toolText: string, title: string): boolean | null {
+/** Read the product's authoritative fields out of the raw tool JSON — they
+ *  live inside that product's object, so the search window ends at the next
+ *  title. Model-authored cards keep only titles verbatim; every other field
+ *  (price format, variant id, availability) needs hydrating from here. */
+function corpusProductFields(
+  toolText: string,
+  title: string,
+): { avail: boolean | null; variantNum?: string; price?: string; currency?: string } | null {
   const re = new RegExp(
     '"title"\\s*:\\s*"' + title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"',
   );
@@ -1282,8 +1305,16 @@ function corpusAvailability(toolText: string, title: string): boolean | null {
   const rest = toolText.slice(m.index + m[0].length);
   const next = rest.search(/"title"\s*:/);
   const span = next === -1 ? rest.slice(0, 3000) : rest.slice(0, next);
-  const f = /"availableForSale"\s*:\s*(true|false)/.exec(span);
-  return f ? f[1] === 'true' : null;
+  const avail = /"availableForSale"\s*:\s*(true|false)/.exec(span);
+  const vid = /"id"\s*:\s*"gid:\/\/shopify\/ProductVariant\/(\d+)"/.exec(span);
+  const price = /"price"\s*:\s*"([\d.]+)"/.exec(span);
+  const cur = /"currencyCode"\s*:\s*"([A-Z]{3})"/.exec(span);
+  return {
+    avail: avail ? avail[1] === 'true' : null,
+    variantNum: vid?.[1],
+    price: price?.[1],
+    currency: cur?.[1],
+  };
 }
 
 /** Two "cards" widgets in one reply render as two carousels — the model
@@ -1659,6 +1690,50 @@ const ADD_GUARD_RETRY =
   'Your previous draft told the customer their add-to-cart failed or that the item is unavailable — but the ' +
   'message you answered is only sent AFTER the store\'s cart accepted the item. The add succeeded; they watched ' +
   'it succeed. Confirm it in one line, quote the cart context when present, and offer checkout or the next step.';
+
+// ── Catalogue lists from a dead run ─────────────────────────────────────
+// Every tool call failed but the draft still recites a priced item list —
+// that's memory, not data, and it fabricates products and prices alike.
+const LIST_LINE = /^\s*(?:[-*•]|\d+[.)]\s)\s*\S/;
+const NUMERIC = /\$?\d[\d,]*(?:\.\d{1,2})?/;
+/** Line indexes that form a mostly-priced list run — the catalogue-dump
+ *  shape — plus a bare "lead-in:" line directly above one. */
+function pricedListIndexes(lines: string[]): Set<number> {
+  const drop = new Set<number>();
+  let run: number[] = [];
+  const flush = () => {
+    if (run.length >= 2) {
+      const priced = run.filter((i) => NUMERIC.test(lines[i])).length;
+      if (priced >= Math.ceil(run.length / 2)) run.forEach((i) => drop.add(i));
+    }
+    run = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if (LIST_LINE.test(lines[i])) run.push(i);
+    else if (lines[i].trim() !== '') flush();
+  }
+  flush();
+  for (let i = 0; i < lines.length; i++) {
+    if (drop.has(i) || !/:\s*$/.test(lines[i]) || !lines[i].trim()) continue;
+    let j = i + 1;
+    while (j < lines.length && !lines[j].trim()) j++;
+    if (j < lines.length && drop.has(j)) drop.add(i);
+  }
+  return drop;
+}
+export function listsPricedItems(text: string): boolean {
+  return pricedListIndexes(text.split('\n')).size >= 2;
+}
+export function stripPricedLists(text: string): string {
+  const lines = text.split('\n');
+  const drop = pricedListIndexes(lines);
+  return lines.filter((_, i) => !drop.has(i)).join('\n');
+}
+
+const FAILED_TOOLS_GUARD_RETRY =
+  'Every tool call in your previous attempt failed — you have no catalogue data right now, so the product list ' +
+  'and prices you wrote came from memory and cannot be trusted. Rewrite it: say the store data is temporarily ' +
+  'unreachable and offer to try again shortly. Never list products, prices, or stock status you did not just fetch.';
 
 const PHANTOM_GUARD_RETRY =
   'Your previous draft claimed a product exists (a price, "we carry it", "here it is") that the catalogue search ' +
@@ -3605,10 +3680,22 @@ async function replyAsHostedAgent(
         prompt += '\n\n' + ADD_GUARD_RETRY;
         continue;
       }
+      // Dead-run catalogue dump — every tool call failed and the draft
+      // answered with a priced product list anyway: pure memory. A broken
+      // upstream is bad enough; an invented catalogue is worse.
+      const allCallsFailed =
+        gen.toolCalls.length > 0 && gen.toolCalls.every((t) => t.outcome === 'failed');
+      if (attempt === 0 && reply && allCallsFailed && listsPricedItems(reply)) {
+        console.warn(`[hosted] priced list over dead tools conv=${convId} — regenerating`);
+        prompt += '\n\n' + FAILED_TOOLS_GUARD_RETRY;
+        continue;
+      }
       // Full-catalogue overclaim — "all 13 products" over a carousel that
       // rendered 10. The cards cap at 10, so the narration must scope
-      // itself: "the first 10 of 13", plus the load-more affordance.
-      const cardsShown = toolWidgets
+      // itself: "the first 10 of 13", plus the load-more affordance. Model-
+      // authored carousels count too — a hand-built 3-card widget under an
+      // "all 13" claim is the same lie.
+      const cardsShown = [...toolWidgets, ...widgets]
         .filter((w) => w.type === 'cards')
         .reduce((n, w) => Math.max(n, w.items.length), 0);
       if (attempt === 0 && reply && claimsFullCatalogue(reply, cardsShown, catalogueTotals)) {
@@ -3686,7 +3773,7 @@ async function replyAsHostedAgent(
       // Same for a full-catalogue overclaim that survived the regen —
       // rewrite "all 13" to "the first 10 of 13" in place rather than ship
       // the overstatement.
-      const shown = toolWidgets
+      const shown = [...toolWidgets, ...widgets]
         .filter((w) => w.type === 'cards')
         .reduce((n, w) => Math.max(n, w.items.length), 0);
       if (claimsFullCatalogue(reply, shown, totals)) {
@@ -3703,6 +3790,21 @@ async function replyAsHostedAgent(
         if (stripped !== reply.trim()) {
           console.error(`[hosted] stripped confirmed-add denial conv=${convId}`);
           reply = stripped || 'Added to your cart — want me to help you check out?';
+        }
+      }
+      // A priced catalogue list that survived with every tool call dead
+      // loses the list — the narration came from memory, not the store.
+      if (
+        gen.toolCalls.length > 0 &&
+        gen.toolCalls.every((t) => t.outcome === 'failed') &&
+        listsPricedItems(reply)
+      ) {
+        const stripped = stripPricedLists(reply).trim();
+        if (stripped !== reply.trim()) {
+          console.error(`[hosted] stripped dead-run priced list conv=${convId}`);
+          reply =
+            stripped ||
+            "I'm having trouble reaching the store's catalogue right now — want me to try again?";
         }
       }
     }
