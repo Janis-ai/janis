@@ -1051,6 +1051,11 @@ export const shopifyShops = pgTable('shopify_shops', {
   // Offline Admin API token from the token exchange — encrypted like
   // agent secrets. Null after uninstall (Shopify revokes it anyway).
   accessTokenEnc: text('access_token_enc'),
+  // New public apps get EXPIRING offline tokens (1h) with a rotating
+  // refresh token (90d) — adminToken() refreshes and rewrites both.
+  // Null expiry = legacy non-expiring token (dev-scaffolded installs).
+  refreshTokenEnc: text('refresh_token_enc'),
+  tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }),
   scopes: text('scopes').notNull().default(''), // granted scope list
   // 'unlinked' = installed-not-bound | 'linked' = serving | 'uninstalled'.
   state: text('state').notNull().default('unlinked'),

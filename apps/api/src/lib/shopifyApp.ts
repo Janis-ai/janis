@@ -1,9 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import {
-  agentSecrets,
   agents,
   channels,
   contacts,
@@ -13,7 +12,8 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { PLANS } from './plans.js';
-import { decryptSecret, encryptSecret } from './secrets.js';
+import { encryptSecret } from './secrets.js';
+import { adminToken, clearMirroredSecrets, mirrorSecrets } from './shopifyToken.js';
 import { audit } from './audit.js';
 import { dispatchAlert, openAlertOnce } from './alerts.js';
 import { invalidateChannelCache } from './channels.js';
@@ -44,9 +44,6 @@ import { TOOL_TEMPLATES } from './toolTemplates.js';
 // Same version the shopify_* tool defs target (toolTemplates.ts) — probe-verified live.
 const SHOPIFY_API_VERSION = '2026-10';
 const LINK_CODE_TTL_MS = 30 * 60 * 1000;
-/** Agent-secret names the link mirrors — same names the PAT template uses,
- *  so tool defs are connection-agnostic. */
-const MIRROR_SECRETS = ['SHOPIFY_SHOP', 'SHOPIFY_TOKEN'] as const;
 
 export function shopifyAppConfigured(): boolean {
   return Boolean(env.shopifyAppApiKey && env.shopifyAppApiSecret);
@@ -206,9 +203,11 @@ export async function shopifyCustomerClaim(
     invalidateChannelCache();
   }
 
+  const tok = await adminToken(db, row).catch(() => null);
+  if (!tok) return finish(null);
   const res = await shopifyGraphql(
     shop,
-    decryptSecret(row.accessTokenEnc),
+    tok,
     `query{customer(id:"gid://shopify/Customer/${cid}"){email displayName firstName lastName}}`,
   );
   const cust = (res.data as { customer?: { email?: string; displayName?: string; firstName?: string; lastName?: string } } | undefined)?.customer;
@@ -229,9 +228,15 @@ export async function shopifyCustomerClaim(
 interface OfflineToken {
   access_token: string;
   scope: string;
+  // Present only on expiring-token responses (public apps MUST request
+  // `expiring: 1` — Shopify rejects non-expiring tokens on the Admin API).
+  expires_in?: number;
+  refresh_token?: string;
 }
 
-/** Session token → offline Admin API token (managed install). */
+/** Session token → offline Admin API token (managed install). Requests an
+ *  expiring token — 1h access token + 90d refresh token; adminToken()
+ *  refreshes through the refresh_token grant when it ages out. */
 async function exchangeOfflineToken(shop: string, sessionToken: string): Promise<OfflineToken> {
   const res = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: 'POST',
@@ -243,6 +248,7 @@ async function exchangeOfflineToken(shop: string, sessionToken: string): Promise
       subject_token: sessionToken,
       subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
       requested_token_type: 'urn:shopify:params:oauth:token-type:offline-access-token',
+      expiring: 1,
     }),
     signal: AbortSignal.timeout(10_000),
   });
@@ -253,7 +259,12 @@ async function exchangeOfflineToken(shop: string, sessionToken: string): Promise
   if (!res.ok || !data.access_token) {
     throw new Error(data.error_description ?? data.error ?? `token exchange failed (${res.status})`);
   }
-  return { access_token: data.access_token, scope: data.scope ?? '' };
+  return {
+    access_token: data.access_token,
+    scope: data.scope ?? '',
+    expires_in: data.expires_in,
+    refresh_token: data.refresh_token,
+  };
 }
 
 export async function shopifyGraphql(
@@ -393,6 +404,14 @@ export async function ensureShopForSession(
       scopes: tok.scope,
       updatedAt: new Date(),
     };
+    // Expiring-token pair (public apps always get one); a legacy
+    // non-expiring exchange leaves both null → adminToken() returns the
+    // stored token without refreshing, exactly as before.
+    updates.tokenExpiresAt =
+      tok.expires_in && tok.expires_in > 0
+        ? new Date(Date.now() + tok.expires_in * 1000)
+        : null;
+    updates.refreshTokenEnc = tok.refresh_token ? encryptSecret(tok.refresh_token) : null;
     // A reinstall with a surviving binding relinks straight away; with no
     // binding it must fall back to 'unlinked' or the embedded page is
     // stuck showing "install was removed" forever.
@@ -410,8 +429,9 @@ export async function ensureShopForSession(
     );
   } else if (row.state === 'linked' && row.agentId && row.workspaceId && row.accessTokenEnc) {
     // Re-mirror on every embedded load — a secret deleted since the link
-    // self-heals here; upserts are cheap.
-    await mirrorSecrets(db, row.agentId, row.workspaceId, shop, decryptSecret(row.accessTokenEnc));
+    // self-heals here; adminToken() refreshes an aged-out token first so
+    // the mirror never carries an expired value.
+    await mirrorSecrets(db, row.agentId, row.workspaceId, shop, await adminToken(db, row));
   }
   // Idempotent shopify:// knowledge rows — covers installs bound before
   // the catalog/policy sync existed.
@@ -423,41 +443,6 @@ export async function ensureShopForSession(
   return row;
 }
 
-/** Agent-secret upsert for the SHOPIFY_* mirror — encrypted at rest like
- *  every other secret. */
-async function setAgentSecret(
-  db: Db,
-  agentId: string,
-  workspaceId: string,
-  name: string,
-  value: string,
-): Promise<void> {
-  await db
-    .insert(agentSecrets)
-    .values({ workspaceId, agentId, name, valueEnc: encryptSecret(value) })
-    .onConflictDoUpdate({
-      target: [agentSecrets.agentId, agentSecrets.name],
-      set: { valueEnc: encryptSecret(value), updatedAt: new Date() },
-    });
-}
-
-async function mirrorSecrets(
-  db: Db,
-  agentId: string,
-  workspaceId: string,
-  shop: string,
-  token: string,
-): Promise<void> {
-  await setAgentSecret(db, agentId, workspaceId, 'SHOPIFY_SHOP', shop);
-  await setAgentSecret(db, agentId, workspaceId, 'SHOPIFY_TOKEN', token);
-}
-
-async function clearMirroredSecrets(db: Db, agentId: string): Promise<void> {
-  await db
-    .delete(agentSecrets)
-    .where(and(eq(agentSecrets.agentId, agentId), inArray(agentSecrets.name, [...MIRROR_SECRETS])));
-}
-
 /** Console link — bind the shop to a workspace agent and hand the agent
  *  the shop credentials as secrets. */
 export async function bindShop(
@@ -465,7 +450,17 @@ export async function bindShop(
   row: ShopRow,
   binding: { workspaceId: string; agentId: string },
 ): Promise<void> {
-  const token = row.accessTokenEnc ? decryptSecret(row.accessTokenEnc) : '';
+  // adminToken() refreshes an expiring token on the way out — the bind
+  // shouldn't fail on a transient refresh hiccup, so degrade to no-mirror
+  // (the next embedded load re-mirrors).
+  const token = row.accessTokenEnc ? await adminToken(db, row).catch(() => '') : '';
+  // One agent ↔ one shop: unlink any other row still pointing at this
+  // agent so loaders/webhooks/catalog renders can't be served by a shop
+  // the merchant moved away from.
+  await db
+    .update(shopifyShops)
+    .set({ workspaceId: null, agentId: null, state: 'unlinked', updatedAt: new Date() })
+    .where(and(eq(shopifyShops.agentId, binding.agentId), sql`${shopifyShops.id} != ${row.id}`));
   await db
     .update(shopifyShops)
     .set({
@@ -582,7 +577,14 @@ export async function uninstallShop(db: Db, shop: string): Promise<void> {
   if (row.agentId) await clearMirroredSecrets(db, row.agentId);
   await db
     .update(shopifyShops)
-    .set({ accessTokenEnc: null, scopes: '', state: 'uninstalled', updatedAt: new Date() })
+    .set({
+      accessTokenEnc: null,
+      refreshTokenEnc: null,
+      tokenExpiresAt: null,
+      scopes: '',
+      state: 'uninstalled',
+      updatedAt: new Date(),
+    })
     .where(eq(shopifyShops.id, row.id));
   if (row.workspaceId) {
     await audit(db, {
@@ -714,7 +716,7 @@ async function orderEventNote(
     try {
       const data = await shopifyGraphql(
         row.shop,
-        decryptSecret(row.accessTokenEnc),
+        await adminToken(db, row),
         `query{order(id:"gid://shopify/Order/${payload.order_id}"){name email currentTotalPriceSet{shopMoney{amount currencyCode}}}}`,
       );
       const o = (
@@ -792,11 +794,13 @@ export function shopBilling(row: ShopRow): ShopBilling {
  *  only correct value is "is this a development store". Derive it live from
  *  shop.plan so a forgotten global flag can't leak test charges into prod.
  *  Unexplained → true: a charge that moves no money, never a silent real one. */
-export async function shopIsDevelopment(row: ShopRow): Promise<boolean> {
+export async function shopIsDevelopment(db: Db, row: ShopRow): Promise<boolean> {
   if (!row.accessTokenEnc) return false;
+  const token = await adminToken(db, row).catch(() => null);
+  if (!token) return true; // refresh unreachable → unexplained → dev-side
   const res = await shopifyGraphql(
     row.shop,
-    decryptSecret(row.accessTokenEnc),
+    token,
     `{ shop { plan { partnerDevelopment } } }`,
   );
   return (
@@ -814,8 +818,8 @@ export async function startBillingSubscription(
   if (!plan || plan.baseCents <= 0) throw new Error(`not a Shopify-billable plan: ${planKey}`);
   if (!row.accessTokenEnc) throw new Error('shop has no offline token');
   if (!row.workspaceId) throw new Error('shop is not linked to a workspace');
-  const token = decryptSecret(row.accessTokenEnc);
-  const test = await shopIsDevelopment(row);
+  const token = await adminToken(db, row);
+  const test = await shopIsDevelopment(db, row);
   const amount = (plan.baseCents / 100).toFixed(2);
   const res = await shopifyGraphql(
     row.shop,

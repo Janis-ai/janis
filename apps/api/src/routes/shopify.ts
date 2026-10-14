@@ -301,7 +301,7 @@ export function shopifyApiRoutes(db: Db) {
       provider: ws?.billingProvider ?? 'stripe',
       plan: ws?.plan ?? 'free',
       shop: row ? { id: row.id, shop: row.shop, subscription: shopBilling(row) } : null,
-      test_mode: row ? await shopIsDevelopment(row) : false,
+      test_mode: row ? await shopIsDevelopment(db, row) : false,
     });
   });
 

@@ -1,7 +1,7 @@
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { knowledgeFiles, shopifyShops } from '../db/schema.js';
-import { decryptSecret } from './secrets.js';
+import { adminToken } from './shopifyToken.js';
 
 /**
  * Shopify → knowledge sync (Phase 4). A bound shop gets two URL-backed
@@ -126,13 +126,17 @@ export async function fetchShopifySourceText(
   db: Db,
   file: typeof knowledgeFiles.$inferSelect,
 ): Promise<{ text: string; sizeBytes: number; imageUrl: null; finalUrl: string }> {
+  // Only a LIVE binding can render — an uninstalled/unlinked row's dead
+  // token must never win the pick; most recent wins if an agent was
+  // rebound across shops.
   const [row] = await db
     .select()
     .from(shopifyShops)
-    .where(eq(shopifyShops.agentId, file.agentId))
+    .where(and(eq(shopifyShops.agentId, file.agentId), eq(shopifyShops.state, 'linked')))
+    .orderBy(desc(shopifyShops.updatedAt))
     .limit(1);
   if (!row?.accessTokenEnc) throw new Error('no Shopify shop bound to this agent');
-  const token = decryptSecret(row.accessTokenEnc);
+  const token = await adminToken(db, row);
   const text =
     file.sourceUrl === SHOPIFY_CATALOG_URL
       ? await catalogText(row.shop, token)

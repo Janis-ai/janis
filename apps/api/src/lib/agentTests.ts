@@ -21,6 +21,7 @@ import {
   type LlmSettings,
 } from './hostedAgent.js';
 import { loadSecretsMap } from './secrets.js';
+import { freshShopifyToken } from './shopifyToken.js';
 import { toolsFor } from './toolExec.js';
 import { recordLlmUsage } from './usage.js';
 
@@ -266,6 +267,7 @@ export async function runAgentTest(
     kb: docs.map((d) => d.name),
     knowledge: (Array.isArray(acfg.knowledge) ? acfg.knowledge : []).slice(0, 20),
   };
+  await freshShopifyToken(db, agent.id);
   const secrets = {
     ...(await loadSecretsMap(db, agent.id)),
     ...(await connectionSecrets(db, agent.id)),

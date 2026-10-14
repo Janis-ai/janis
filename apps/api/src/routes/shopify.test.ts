@@ -80,18 +80,47 @@ const webhook = (topic: string, payload: unknown, secret = SECRET, shop = SHOP) 
   });
 };
 
-const stubShopifyApi = (opts: { token?: string; scope?: string; failExchange?: boolean } = {}) =>
+const stubShopifyApi = (
+  opts: {
+    token?: string;
+    scope?: string;
+    failExchange?: boolean;
+    // Exchange returns an expiring pair (public-app installs always get one).
+    expires_in?: number;
+    refresh_token?: string;
+    // Reply to grant_type=refresh_token; may rotate the refresh token.
+    refreshReply?: { access_token: string; refresh_token?: string; expires_in?: number };
+    onTokenRequest?: (fields: Record<string, unknown>) => void;
+  } = {},
+) =>
   vi.stubGlobal(
     'fetch',
-    vi.fn().mockImplementation((input: RequestInfo | URL) => {
+    vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (url.includes('/admin/oauth/access_token')) {
+        // Exchange posts JSON; the refresh grant posts form-encoded fields.
+        const body = init?.body;
+        const fields: Record<string, unknown> =
+          body instanceof URLSearchParams
+            ? Object.fromEntries(body)
+            : typeof body === 'string'
+              ? (JSON.parse(body) as Record<string, unknown>)
+              : {};
+        opts.onTokenRequest?.(fields);
+        if (fields.grant_type === 'refresh_token') {
+          return Promise.resolve(
+            Response.json(opts.refreshReply ?? { access_token: 'refreshed_tok', expires_in: 3600 }),
+          );
+        }
         if (opts.failExchange)
           return Promise.resolve(new Response('{"error":"server_error"}', { status: 500 }));
         return Promise.resolve(
           Response.json({
             access_token: opts.token ?? 'shpat_offline',
             scope: opts.scope ?? 'read_orders,write_orders,read_products,read_customers',
+            ...(opts.expires_in
+              ? { expires_in: opts.expires_in, refresh_token: opts.refresh_token ?? 'rt_1' }
+              : {}),
           }),
         );
       }
@@ -244,6 +273,142 @@ describe('shopify embedded app — session', () => {
     const body = (await res.json()) as { state: string; link_url?: string };
     expect(body.state).toBe('unlinked');
     expect(body.link_url).toContain('/shopify-link?code=');
+  });
+});
+
+describe('expiring offline tokens (public apps)', () => {
+  const decrypt = async (enc: string) => (await import('../lib/secrets.js')).decryptSecret(enc);
+
+  it('exchange sends expiring:1 and persists the refresh pair', async () => {
+    let seen: Record<string, unknown> = {};
+    stubShopifyApi({
+      token: 'tok_a',
+      expires_in: 3600,
+      refresh_token: 'rt_1',
+      onTokenRequest: (f) => {
+        seen = f;
+      },
+    });
+    const res = await postSession(sessionJwt('exp.myshopify.com'));
+    expect(res.status).toBe(200);
+    expect(seen.expiring).toBe(1);
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'exp.myshopify.com'));
+    expect(row.tokenExpiresAt).toBeTruthy();
+    expect(row.tokenExpiresAt!.getTime()).toBeGreaterThan(Date.now());
+    expect(await decrypt(row.refreshTokenEnc!)).toBe('rt_1');
+    expect(await decrypt(row.accessTokenEnc!)).toBe('tok_a');
+  });
+
+  it('adminToken refreshes an expired token — rotates the refresh token and re-mirrors the agent secret', async () => {
+    stubShopifyApi({ expires_in: 3600, refresh_token: 'rt_old', token: 'tok_stale' });
+    await postSession(sessionJwt('stale.myshopify.com'));
+    const { encryptSecret } = await import('../lib/secrets.js');
+    const [row0] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'stale.myshopify.com'));
+    await db
+      .update(shopifyShops)
+      .set({
+        workspaceId,
+        agentId,
+        state: 'linked',
+        tokenExpiresAt: new Date(Date.now() - 60_000), // force-expired
+      })
+      .where(eq(shopifyShops.id, row0.id));
+
+    let refreshFields: Record<string, unknown> = {};
+    stubShopifyApi({
+      refreshReply: { access_token: 'tok_new', refresh_token: 'rt_new', expires_in: 3600 },
+      onTokenRequest: (f) => {
+        refreshFields = f;
+      },
+    });
+    const { adminToken } = await import('../lib/shopifyToken.js');
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'stale.myshopify.com'));
+    expect(await adminToken(db, row)).toBe('tok_new');
+    expect(refreshFields.grant_type).toBe('refresh_token');
+    expect(refreshFields.refresh_token).toBe('rt_old');
+    expect(refreshFields.client_id).toBe(KEY);
+
+    const [row2] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'stale.myshopify.com'));
+    expect(await decrypt(row2.accessTokenEnc!)).toBe('tok_new');
+    expect(await decrypt(row2.refreshTokenEnc!)).toBe('rt_new'); // rotation persisted
+    expect(row2.tokenExpiresAt!.getTime()).toBeGreaterThan(Date.now());
+
+    // The linked agent's SHOPIFY_TOKEN secret tracked the refresh — tools
+    // can't be stranded on an hour-old token.
+    const [sec] = await db
+      .select()
+      .from(agentSecrets)
+      .where(and(eq(agentSecrets.agentId, agentId), eq(agentSecrets.name, 'SHOPIFY_TOKEN')));
+    expect(await decrypt(sec.valueEnc)).toBe('tok_new');
+    // Hand-linked rows pollute the shared workspace for later tests.
+    await db
+      .update(shopifyShops)
+      .set({ workspaceId: null, agentId: null, state: 'unlinked' })
+      .where(eq(shopifyShops.shop, 'stale.myshopify.com'));
+  });
+
+  it('a still-valid token returns without a Shopify round-trip', async () => {
+    stubShopifyApi({ expires_in: 3600, refresh_token: 'rt_1', token: 'tok_v' });
+    await postSession(sessionJwt('valid.myshopify.com'));
+    let refreshHits = 0;
+    stubShopifyApi({
+      onTokenRequest: (f) => {
+        if (f.grant_type === 'refresh_token') refreshHits++;
+      },
+    });
+    const { adminToken } = await import('../lib/shopifyToken.js');
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'valid.myshopify.com'));
+    expect(await adminToken(db, row)).toBe('tok_v');
+    expect(refreshHits).toBe(0);
+  });
+
+  it('a legacy non-expiring token is returned as-is (no expiry metadata)', async () => {
+    stubShopifyApi(); // no expires_in in the exchange reply
+    await postSession(sessionJwt('legacy.myshopify.com'));
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'legacy.myshopify.com'));
+    expect(row.tokenExpiresAt).toBeNull();
+    expect(row.refreshTokenEnc).toBeNull();
+    let refreshHits = 0;
+    stubShopifyApi({
+      onTokenRequest: (f) => {
+        if (f.grant_type === 'refresh_token') refreshHits++;
+      },
+    });
+    const { adminToken } = await import('../lib/shopifyToken.js');
+    expect(await adminToken(db, row)).toBe('shpat_offline');
+    expect(refreshHits).toBe(0);
+  });
+
+  it('uninstall clears the refresh pair with the access token', async () => {
+    stubShopifyApi({ expires_in: 3600, refresh_token: 'rt_1' });
+    await postSession(sessionJwt('gone.myshopify.com'));
+    await webhook('app/uninstalled', {}, SECRET, 'gone.myshopify.com');
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'gone.myshopify.com'));
+    expect(row.state).toBe('uninstalled');
+    expect(row.accessTokenEnc).toBeNull();
+    expect(row.refreshTokenEnc).toBeNull();
+    expect(row.tokenExpiresAt).toBeNull();
   });
 });
 

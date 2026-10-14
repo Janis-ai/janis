@@ -7,6 +7,7 @@ import { dispatchAlert, openAlertOnce, resolveOpenAlerts } from './alerts.js';
 import { transitionConversation } from './conversationOps.js';
 import { toMessage } from './serializers.js';
 import { loadSecretsMap } from './secrets.js';
+import { freshShopifyToken } from './shopifyToken.js';
 import { connectionSecrets } from './connections.js';
 import { callTool, type ToolDef } from './toolExec.js';
 
@@ -201,6 +202,7 @@ export async function decidePendingAction(
             .catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`)
         : `error: unknown builtin ${builtinName}`;
     } else {
+      await freshShopifyToken(db, agent.id);
       const secrets = {
         ...(await loadSecretsMap(db, agent.id)),
         ...(await connectionSecrets(db, agent.id)),

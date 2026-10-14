@@ -8,6 +8,7 @@ import { fireErrorAlert } from './ruleAlerts.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage, llmSpendOverCap } from './usage.js';
 import { loadSecretsMap } from './secrets.js';
+import { freshShopifyToken } from './shopifyToken.js';
 import { connectionSecrets } from './connections.js';
 import { enabledBuiltins, type BuiltinTool } from './builtinTools.js';
 import { bus } from './bus.js';
@@ -3461,6 +3462,7 @@ export async function runHostedEvent(
       includeDrafts: draftsOpted && (await isTestConversation(db, conv)),
       reservedChars: notesReserved(agent),
     });
+    await freshShopifyToken(db, agent.id); // re-mirrors an expiring shop token before the map loads
     const secrets = {
       ...(await loadSecretsMap(db, agent.id)),
       ...(await connectionSecrets(db, agent.id)),
@@ -3882,6 +3884,7 @@ async function replyAsHostedAgent(
       includeDrafts: draftsOpted && (await isTestConversation(db, conv)),
       reservedChars: notesReserved(agent),
     });
+    await freshShopifyToken(db, agent.id); // re-mirrors an expiring shop token before the map loads
     const secrets = {
       ...(await loadSecretsMap(db, agent.id)),
       ...(await connectionSecrets(db, agent.id)),
