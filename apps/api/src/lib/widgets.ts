@@ -515,6 +515,63 @@ export function purchaseOptionsLine(
   };
 }
 
+/** Sales-analytics results are merchant-internal data — units sold, order
+ *  tallies, revenue. Anything the model can see it can quote to a shopper,
+ *  so these tools' raw results are reshaped server-side into an ordered
+ *  product-title list BEFORE they reach the model: a number that never
+ *  enters context is a number that can't leak. Returns undefined when the
+ *  result isn't a parseable analytics payload (errors pass through). */
+export function internalDataResult(toolName: string, result: string): string | undefined {
+  if (!result.startsWith('{')) return undefined;
+  let data: Record<string, unknown> | undefined;
+  try {
+    data = (JSON.parse(result) as { data?: Record<string, unknown> }).data;
+  } catch {
+    return undefined;
+  }
+  if (!data) return undefined;
+  if (toolName === 'shopify_analytics') {
+    const q = data.shopifyqlQuery as
+      | { tableData?: { rows?: unknown }; parseErrors?: unknown; parseWarnings?: unknown }
+      | undefined;
+    if (!q) return undefined;
+    const errs = Array.isArray(q.parseErrors) && q.parseErrors.length ? q.parseErrors : undefined;
+    if (errs) return JSON.stringify({ parseErrors: errs });
+    let ranked: string[] = [];
+    try {
+      const rows =
+        typeof q.tableData?.rows === 'string' ? JSON.parse(q.tableData.rows) : q.tableData?.rows;
+      if (Array.isArray(rows))
+        ranked = rows
+          .map((r) => String((r as { product_title?: unknown }).product_title ?? ''))
+          .filter(Boolean);
+    } catch {
+      /* unparseable rows scalar → empty ranking */
+    }
+    return JSON.stringify({ ranked_products: ranked });
+  }
+  if (toolName === 'shopify_sales_stats') {
+    const orders = (data.orders as { nodes?: unknown[] } | undefined)?.nodes;
+    if (!Array.isArray(orders)) return undefined;
+    const tally = new Map<string, number>();
+    for (const o of orders) {
+      const items = (o as { lineItems?: { nodes?: unknown[] } }).lineItems?.nodes ?? [];
+      for (const li of items) {
+        const title = String(
+          (li as { product?: { title?: unknown }; title?: unknown }).product?.title ??
+            (li as { title?: unknown }).title ??
+            '',
+        );
+        const qty = Number((li as { quantity?: unknown }).quantity) || 0;
+        if (title) tally.set(title, (tally.get(title) ?? 0) + qty);
+      }
+    }
+    const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
+    return JSON.stringify({ ranked_products: ranked });
+  }
+  return undefined;
+}
+
 /** Rows the in-stock filter hid — nonzero only on an explicit in-stock ask.
  *  Used to tell the model "N more matched but are unavailable" so it can
  *  offer them rather than undercounting the catalogue. */

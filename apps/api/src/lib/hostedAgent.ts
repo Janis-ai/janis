@@ -18,7 +18,7 @@ import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolD
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
-import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, purchaseOptionsLine, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, internalDataResult, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, purchaseOptionsLine, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -2777,6 +2777,9 @@ export async function complete(
       // cards render ("Now and Then" shouldn't show Drive My Car).
       if (outcome === 'ran' && tool?.widget?.relevance)
         result = filterRowsByQuery(tool.widget, args, result);
+      // Sales-analytics payloads are merchant-internal — collapse them to a
+      // ranked title list so units/revenue can never be quoted to a shopper.
+      if (outcome === 'ran') result = internalDataResult(call.function.name, result) ?? result;
       if (outcome === 'ran' || outcome === 'proposed') harvestProducedIds(result, producedIds);
       // URLs/uuids a tool emitted are the model's linkable corpus — the
       // reply guard blesses them and rejects id segments it never saw.

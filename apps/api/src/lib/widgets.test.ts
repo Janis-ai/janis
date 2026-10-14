@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { availabilityDropped, dedupeToolWidgets, dedupeWidgetList, filterRowsByQuery, toolResultEmpty, toolResultNotes, widgetFromToolResult } from './widgets.js';
+import { availabilityDropped, dedupeToolWidgets, dedupeWidgetList, filterRowsByQuery, internalDataResult, toolResultEmpty, toolResultNotes, widgetFromToolResult } from './widgets.js';
 
 const products = JSON.stringify({
   products: [
@@ -1053,5 +1053,67 @@ describe('toolResultEmpty / toolResultNotes', () => {
     expect(cont).toContain('continuation page');
     expect(cont).toContain('the remaining items');
     expect(cont).toContain('never "the first');
+  });
+});
+
+describe('internalDataResult — sales analytics minimization', () => {
+  it('strips units_sold from ShopifyQL rows, leaving ranked titles only', () => {
+    const raw = JSON.stringify({
+      data: {
+        shopifyqlQuery: {
+          tableData: {
+            rows: JSON.stringify([
+              { product_title: 'Wax', units_sold: 42 },
+              { product_title: 'Board', units_sold: 7 },
+            ]),
+          },
+          parseErrors: [],
+          parseWarnings: [],
+        },
+      },
+    });
+    const out = internalDataResult('shopify_analytics', raw);
+    expect(JSON.parse(out!)).toEqual({ ranked_products: ['Wax', 'Board'] });
+    expect(out).not.toContain('units_sold');
+    expect(out).not.toContain('42');
+  });
+
+  it('surfaces parseErrors so a broken query still narrates honestly', () => {
+    const raw = JSON.stringify({
+      data: {
+        shopifyqlQuery: { tableData: null, parseErrors: [{ code: 'X', message: 'bad field' }] },
+      },
+    });
+    expect(JSON.parse(internalDataResult('shopify_analytics', raw)!)).toEqual({
+      parseErrors: [{ code: 'X', message: 'bad field' }],
+    });
+  });
+
+  it('aggregates sales_stats orders into ranked titles — no counts, no order fields', () => {
+    const raw = JSON.stringify({
+      data: {
+        ordersCount: { count: 3 },
+        orders: {
+          nodes: [
+            { createdAt: 'd1', lineItems: { nodes: [{ quantity: 2, product: { title: 'Wax' } }] } },
+            {
+              createdAt: 'd2',
+              lineItems: {
+                nodes: [{ quantity: 5, product: { title: 'Board' } }, { quantity: 1, product: { title: 'Wax' } }],
+              },
+            },
+          ],
+        },
+      },
+    });
+    const out = internalDataResult('shopify_sales_stats', raw);
+    expect(JSON.parse(out!)).toEqual({ ranked_products: ['Board', 'Wax'] });
+    expect(out).not.toContain('quantity');
+    expect(out).not.toContain('ordersCount');
+  });
+
+  it('passes non-analytics tools and non-JSON results through untouched', () => {
+    expect(internalDataResult('shopify_search_products', '{"data":{}}')).toBeUndefined();
+    expect(internalDataResult('shopify_analytics', 'error: timeout')).toBeUndefined();
   });
 });
