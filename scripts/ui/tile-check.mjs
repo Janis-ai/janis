@@ -1,0 +1,14 @@
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ headless: true });
+const page = await (await browser.newContext()).newPage();
+await page.goto('https://app.janis.ai/chat/dd416836-710e-4be7-806e-b2196669e1c5/page', { waitUntil: 'domcontentloaded' });
+await page.waitForSelector('#janis-input', { timeout: 30000 });
+await page.waitForTimeout(2000);
+await page.locator('#janis-input').fill('show me your products');
+await page.locator('#janis-send').click();
+await page.waitForSelector('.janis-wmore', { timeout: 60000 });
+const tile = await page.locator('.janis-wmore').textContent();
+const cards = await page.locator('.janis-wcard').count();
+console.log('cards rendered:', cards, '| tile:', JSON.stringify(tile));
+await page.screenshot({ path: '/tmp/kofn-tile.png' });
+await browser.close();
