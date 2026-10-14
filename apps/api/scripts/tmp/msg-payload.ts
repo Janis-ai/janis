@@ -1,0 +1,11 @@
+import { createDb } from '../../src/db/client.js';
+import { messages } from '../../src/db/schema.js';
+import { eq, asc } from 'drizzle-orm';
+const db = await createDb();
+const rows = await db.select().from(messages).where(eq(messages.conversationId, process.argv[2]!)).orderBy(asc(messages.createdAt));
+const last = rows[rows.length - 1];
+const p = (last.payload ?? {}) as any;
+console.log('TEXT:', last.text);
+console.log('TOOLS:', JSON.stringify(p.inspector?.tools ?? [], null, 1).slice(0, 2000));
+console.log('WIDGETS:', JSON.stringify(p.widgets ?? [], null, 1).slice(0, 3000));
+process.exit(0);

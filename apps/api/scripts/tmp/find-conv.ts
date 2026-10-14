@@ -1,10 +1,9 @@
-import { desc, sql } from 'drizzle-orm';
 import { createDb } from '../../src/db/client.js';
 import { conversations } from '../../src/db/schema.js';
+import { eq, desc } from 'drizzle-orm';
 const db = await createDb();
-const rows = await db.execute(sql`select id, agent_id, state, last_message_at from conversations where id::text like 'ac153999%'`);
-console.log(JSON.stringify(rows, null, 1));
-const recent = await db.select({ id: conversations.id, agent: conversations.agentId, at: conversations.lastMessageAt })
-  .from(conversations).orderBy(desc(conversations.lastMessageAt)).limit(8);
-for (const r of recent) console.log(r.id, r.agent, r.at?.toISOString());
+const rows = await db.select().from(conversations)
+  .where(eq(conversations.agentId, 'd408d7b5-fdad-49a4-a34d-11fa16e88135'))
+  .orderBy(desc(conversations.lastMessageAt)).limit(5);
+for (const c of rows) console.log(c.id, c.lastMessageAt?.toISOString(), c.externalId?.slice(0,50));
 process.exit(0);

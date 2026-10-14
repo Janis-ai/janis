@@ -2599,12 +2599,13 @@ export async function complete(
         // Result-side checks (count, cursor, emptiness, dropped rows) must
         // parse the pristine tool JSON — the notes below APPEND text to
         // `result`, which silently zeroes every JSON.parse downstream.
-        const resultJson = result;
+        let resultJson = result;
         let w = widgetFromToolResult(tool.widget, resultJson, secrets, args);
         // Page-replay detection: an `after` cursor Shopify rejected (or
         // partially honoured) replays rows already shown. Drop the repeats
-        // from the carousel; when nothing new survives, suppress it and tell
-        // the model how to recover — NOT that the catalogue ran out.
+        // from the carousel; when nothing new survives, don't ASK the model
+        // to retry (it often won't) — re-issue the call ourselves with the
+        // authoritative cursor and narrate that result.
         if (
           w &&
           w.type === 'cards' &&
@@ -2614,31 +2615,66 @@ export async function complete(
           const fresh = w.items.filter((i) => i.title && !ctx.prevCardTitles!.has(i.title));
           if (!fresh.length) {
             w = null;
-            // A bogus cursor replays page one WHILE hasNextPage stays true —
-            // the set is not exhausted. Hand the model the authoritative
-            // cursor (the last rendered page's own endCursor, or the one
-            // stamped on the previous widget) so it retries instead of
-            // declaring completion.
             const retryCursor = toolResultEndCursor(resultJson) ?? ctx?.prevEndCursor;
-            if (retryCursor && toolResultHasNext(resultJson)) {
-              const q = args.query !== undefined ? `query:"${args.query}" ` : '';
-              const flags = ['include_unavailable', 'only_unavailable', 'limit']
-                .filter((k) => args[k] !== undefined)
-                .map((k) => `${k}:"${args[k]}" `)
-                .join('');
-              result +=
-                `\n[the page cursor was rejected — the storefront replayed the first page (these are the same products already shown). ` +
-                `The catalogue is NOT exhausted: call this tool again with ${q}${flags}after:"${retryCursor}" exactly. ` +
-                `Only if that call ALSO replays the same items should you treat the set as complete.]`;
-            } else {
-              result +=
-                `\n[the page cursor did not advance — these are the same products already shown. ` +
-                `Do NOT repeat them; tell the customer this was the whole matching set (or suggest narrowing the search).]`;
+            let recovered = false;
+            if (retryCursor && String(args.after) !== retryCursor && toolResultHasNext(resultJson) && !gated) {
+              try {
+                const retryArgs = { ...args, after: retryCursor };
+                let r2 = await callTool(tool, retryArgs, secrets);
+                let retryOk = !r2.startsWith('error') && !r2.startsWith('{"error"');
+                if (retryOk && r2.startsWith('{')) {
+                  try {
+                    const errs = (JSON.parse(r2) as { errors?: unknown }).errors;
+                    if (Array.isArray(errs) && errs.length) retryOk = false;
+                  } catch {
+                    // truncated — treat as usable
+                  }
+                }
+                if (retryOk) {
+                  if (tool.widget?.relevance) r2 = filterRowsByQuery(tool.widget, retryArgs, r2);
+                  const w2 = widgetFromToolResult(tool.widget, r2, secrets, retryArgs);
+                  if (w2?.type === 'cards') {
+                    const fresh2 = w2.items.filter((i) => i.title && !ctx.prevCardTitles!.has(i.title));
+                    w2.items = fresh2;
+                  }
+                  // The retried page must join the corpus — card-item
+                  // verification and id/url anchors read only this run's
+                  // tool texts.
+                  toolTexts.push(r2);
+                  toolUrls.push(...extractUrls(r2));
+                  extractIds(r2, contextIds);
+                  harvestProducedIds(r2, producedIds);
+                  resultJson = r2;
+                  result = r2;
+                  args = retryArgs;
+                  w = w2 && w2.type === 'cards' && w2.items.length ? w2 : null;
+                  recovered = true;
+                  result += w
+                    ? `\n[the earlier page cursor was rejected by the storefront — this result is the corrected next page fetched with the real cursor; ` +
+                      `narrate these items as the continuation (the previously shown ones were already filtered out).]`
+                    : `\n[the earlier page cursor was rejected — the corrected next page held only items already shown (or none); ` +
+                      `the matching set IS complete — say so briefly instead of repeating cards.]`;
+                }
+              } catch {
+                // retry failed — fall through to the suppressed-path note
+              }
+            }
+            if (!recovered) {
+              if (retryCursor && toolResultHasNext(resultJson)) {
+                result +=
+                  `\n[the page cursor was rejected — the storefront replayed the first page (these are the same products already shown). ` +
+                  `The catalogue is NOT exhausted: the next page could not be fetched this turn; do NOT repeat the shown items or claim the set is complete — offer to load more.]`;
+              } else {
+                result +=
+                  `\n[the page cursor did not advance — these are the same products already shown. ` +
+                  `Do NOT repeat them; tell the customer this was the whole matching set (or suggest narrowing the search).]`;
+              }
             }
           } else if (fresh.length < w.items.length) {
+            const dropped = w.items.length - fresh.length;
             w.items = fresh;
             result +=
-              `\n[${w.items.length - fresh.length} row(s) repeated the previous page and were dropped from the cards — narrate only the ${fresh.length} new item(s).]`;
+              `\n[${dropped} row(s) repeated the previous page and were dropped from the cards — narrate only the ${fresh.length} new item(s).]`;
           }
         }
         if (w) {
@@ -3833,6 +3869,21 @@ async function replyAsHostedAgent(
     // an emptied widget also strips its dangling "here are the cards" lead-in.
     const toolCorpus = gen.toolTexts.join('\n');
     const bogusItems = verifyCardItems(widgets, toolCorpus, refResolved);
+    // Continuation turn (an `after:` call ran): a model-authored card
+    // repeating a title the previous reply already rendered is pagination
+    // noise — the tool widget dedupes against prevCardTitles, and model
+    // cards must too, or a fumbled page regurgitates old products.
+    const paged = gen.toolCalls.some(
+      (t) => (t.args as Record<string, unknown> | undefined)?.after !== undefined,
+    );
+    if (paged && ctx?.prevCardTitles?.size) {
+      for (let i = widgets.length - 1; i >= 0; i--) {
+        const w = widgets[i];
+        if (w.type !== 'cards') continue;
+        w.items = w.items.filter((it) => !it.title || !ctx.prevCardTitles!.has(it.title));
+        if (!w.items.length) widgets.splice(i, 1);
+      }
+    }
     // Surviving model cards get their stock badge reconciled with the
     // corpus — an OOS product rendered buyable (or vice versa) is a lie the
     // customer clicks on.

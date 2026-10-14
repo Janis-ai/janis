@@ -62,14 +62,24 @@ async function send(text) {
 }
 
 const snap = (label) => {
-  const s = js(`JSON.stringify({
-    cards: [...document.querySelectorAll('.janis-wcard')].slice(-12).map(c => c.innerText.replace(/\\n+/g,' | ').slice(0,90)),
-    addBtns: [...document.querySelectorAll('.janis-wbtn')].filter(b => /add to cart/i.test(b.textContent)).length,
-    more: (document.querySelector('.janis-wmore')||{}).textContent || null,
-    cartRows: document.querySelectorAll('.janis-cart-row').length,
-    cartBody: (document.querySelector('.janis-cart-body')||{innerText:''}).innerText.slice(0,300),
-    chips: [...document.querySelectorAll('.janis-qr')].map(b => b.textContent),
-  })`);
+  const s = js(`JSON.stringify((() => {
+    const lastOut = [...document.querySelectorAll('${OUT_SEL}')].pop();
+    const scope = lastOut || document;
+    return {
+      replyText: lastOut ? lastOut.innerText.replace(/\\n+/g,' | ').slice(0,220) : null,
+      cards: [...scope.querySelectorAll('.janis-wcard')].map(c => ({
+        t: (c.querySelector('.janis-wcard-t')||{}).textContent,
+        p: (c.querySelector('.janis-wcard-p')||{}).textContent || null,
+        stock: (c.querySelector('.janis-wcard-stock')||{}).textContent || null,
+        btns: [...c.querySelectorAll('.janis-wbtn')].map(b => b.textContent.slice(0,20)),
+      })),
+      addBtns: [...scope.querySelectorAll('.janis-wbtn')].filter(b => /add to cart/i.test(b.textContent)).length,
+      more: (scope.querySelector('.janis-wmore')||{}).textContent || null,
+      cartRows: scope.querySelectorAll('.janis-cart-row').length,
+      cartBody: (scope.querySelector('.janis-cart-body')||{innerText:''}).innerText.slice(0,300),
+      chips: [...document.querySelectorAll('.janis-qr')].map(b => b.textContent),
+    };
+  })())`);
   console.log(`\n[${label}]`, s);
   return JSON.parse(s);
 };

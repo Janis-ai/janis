@@ -1524,6 +1524,85 @@ describe('testRun tool stubbing', () => {
       { name: 'update_agent', gated: false, outcome: 'ran', args: { greeting: 'hi' } },
     ]);
   });
+
+  it('auto-retries a rejected page cursor instead of asking the model to', async () => {
+    // Prod incident (janis-store): the model invented `after` cursors,
+    // Shopify silently replayed page 1, and asking the model to retry the
+    // verbatim cursor was ignored — it hand-authored a card widget with
+    // last turn's products instead. The loop re-issues the call itself
+    // with the page's own endCursor.
+    const searchTool = {
+      name: 'shopify_search_products',
+      description: 'search products',
+      method: 'POST' as const,
+      url: 'https://shop.example/admin/api/2026-10/graphql.json',
+      bodyTemplate: '{"after":{after?}}',
+      params: { query: 'search clause' },
+      widget: {
+        type: 'cards' as const,
+        items: 'data.products.nodes',
+        map: { title: 'title' },
+      },
+    };
+    const shown = Array.from({ length: 12 }, (_, i) => ({ title: `P${i}` }));
+    const page1Replay = JSON.stringify({
+      data: {
+        products: {
+          pageInfo: { hasNextPage: true, endCursor: 'REAL_CURSOR' },
+          nodes: shown,
+        },
+      },
+    });
+    const page2 = JSON.stringify({
+      data: {
+        products: {
+          pageInfo: { hasNextPage: false, endCursor: 'END' },
+          nodes: [{ title: 'Liquid' }],
+        },
+      },
+    });
+    let toolHits = 0;
+    fetchMock.mockImplementation((url: unknown) => {
+      if (String(url).includes('llm.example')) {
+        return Promise.resolve(
+          toolHits === 0
+            ? reply({
+                tool_calls: [
+                  {
+                    id: 'c1',
+                    function: { name: 'shopify_search_products', arguments: '{"after":"BOGUS"}' },
+                  },
+                ],
+              })
+            : reply({ content: 'Here is the last product: Liquid.' }),
+        );
+      }
+      toolHits++;
+      return Promise.resolve(new Response(toolHits === 1 ? page1Replay : page2, { status: 200 }));
+    });
+    const r = await complete(
+      llm,
+      'sys',
+      [{ role: 'user', content: 'show me more' }],
+      [searchTool],
+      {},
+      {
+        db,
+        convId: 'c',
+        workspaceId: wsId,
+        prevCardTitles: new Set(shown.map((n) => n.title)),
+      },
+    );
+    expect(toolHits).toBe(2);
+    const retryBody = JSON.parse(
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes('shop.example'))[1][1]
+        .body as string,
+    );
+    expect(retryBody.after).toBe('REAL_CURSOR');
+    const cards = r.widgets?.find((w) => w.type === 'cards');
+    expect(cards?.type === 'cards' && cards.items.map((i) => i.title)).toEqual(['Liquid']);
+    expect(r.text).toContain('Liquid');
+  });
 });
 
 describe('identity-scoped customer-record tools', () => {
