@@ -1579,6 +1579,22 @@ export function fixWrongCounts(text: string, totals: Set<number>): string {
 function stripWrongCounts(text: string, totals: Set<number>): string {
   return stripSentencesByLine(text, (s) => wrongCountSentence(s, totals) !== null).text;
 }
+/** A scope-y "N products/items" sentence exists at all — used when no tool
+ *  ran this turn so there is no total to compare; the number came from
+ *  memory, not the catalogue. */
+export function claimsAnyCatalogueCount(text: string): boolean {
+  return sentencesOf(text).some((s) => {
+    if (!/\b\d+\s+(?:active\s+|total\s+)?(?:products?|items?)\b/i.test(s)) return false;
+    return COUNT_SCOPE.test(s);
+  });
+}
+/** Strip a count sentence when there is no tool total to correct it with. */
+export function stripUnbackedCounts(text: string): string {
+  return stripSentencesByLine(
+    text,
+    (s) => /\b\d+\s+(?:active\s+|total\s+)?(?:products?|items?)\b/i.test(s) && COUNT_SCOPE.test(s),
+  ).text;
+}
 
 const PHANTOM_GUARD_RETRY =
   'Your previous draft claimed a product exists (a price, "we carry it", "here it is") that the catalogue search ' +
@@ -1589,6 +1605,11 @@ const PHANTOM_GUARD_RETRY =
 const COUNT_GUARD_RETRY =
   'Your previous draft quoted a product count that disagrees with the tool result — the productsCount in the ' +
   'search result is the only true total. Rewrite using that number.';
+
+const COUNT_GUARD_RETRY_NO_TOOL =
+  'Your previous draft quoted a product count without searching the catalogue this turn — that number came ' +
+  'from memory, not the store, and stock changes constantly. Either call the search tool now and quote its ' +
+  'productsCount, or answer without quoting a number.';
 
 /** Meta channels display-truncate button titles at 20 chars — a label past
  * that ships visibly cut. Pure predicate so the regen guard is testable. */
@@ -1705,6 +1726,10 @@ export interface AgentRunContext {
    *  block. Never trust typed emails, contact records, or profile fields
    *  the customer could claim. */
   identity?: { emails: Set<string>; operator: boolean };
+  /** Card titles shown in the most recent outbound message — a paginated
+   *  tool call whose cursor was rejected replays page one verbatim, and
+   *  without this the same carousel ships twice. */
+  prevCardTitles?: Set<string>;
 }
 
 /** Channel kinds where the sender address is verified by the mailbox —
@@ -2365,7 +2390,22 @@ export async function complete(
       // model it rendered — otherwise it dutifully re-emits the same data
       // as a WIDGET: line and the customer sees the row twice.
       if (tool?.widget && outcome === 'ran') {
-        const w = widgetFromToolResult(tool.widget, result, secrets, args);
+        let w = widgetFromToolResult(tool.widget, result, secrets, args);
+        // Page-replay detection: an `after` cursor Shopify rejected silently
+        // returns page one, so every rendered title was already shown. Suppress
+        // the duplicated carousel and tell the model the catalogue ran out.
+        if (
+          w &&
+          w.type === 'cards' &&
+          args.after !== undefined &&
+          ctx?.prevCardTitles?.size &&
+          w.items.every((i) => i.title && ctx.prevCardTitles!.has(i.title))
+        ) {
+          w = null;
+          result +=
+            `\n[the page cursor did not advance — these are the same products already shown. ` +
+            `Do NOT repeat them; tell the customer this was the whole matching set (or suggest narrowing the search).]`;
+        }
         if (w) {
           toolWidgets.push(w);
           result += `\n[already rendered to the customer as a "${w.type}" component — do not restate it with a WIDGET: line; narrate it in text if needed]`;
@@ -3203,12 +3243,29 @@ async function replyAsHostedAgent(
       ...(await loadSecretsMap(db, agent.id)),
       ...(await connectionSecrets(db, agent.id)),
     };
+    // Card titles from the last outbound message — a rejected page cursor
+    // replays the same cards, and the tool loop suppresses the duplicate
+    // carousel when every rendered title was already shown.
+    const prevCardTitles = new Set<string>();
+    {
+      const prevOut = await db
+        .select({ payload: messages.payload })
+        .from(messages)
+        .where(and(eq(messages.conversationId, convId), eq(messages.direction, 'out')))
+        .orderBy(desc(messages.createdAt))
+        .limit(3);
+      for (const row of prevOut) {
+        const ws = ((row.payload ?? {}) as { widgets?: { type?: string; items?: { title?: string }[] }[] }).widgets ?? [];
+        for (const w of ws) if (w.type === 'cards') for (const i of w.items ?? []) if (i.title) prevCardTitles.add(i.title);
+      }
+    }
     const ctx: AgentRunContext = {
       db,
       convId,
       workspaceId: agent.workspaceId,
       agent,
       identity: await verifiedIdentityFor(db, conv, agent.workspaceId),
+      prevCardTitles,
     };
     // One escalation lookup feeds the prompt (pending offer) AND the
     // post-generation decline check below.
@@ -3406,13 +3463,21 @@ async function replyAsHostedAgent(
         prompt += '\n\n' + PHANTOM_GUARD_RETRY;
         continue;
       }
-      // Catalogue-count lie — "we have 15 products" when productsCount is 13.
+      // Catalogue-count lie — "we have 15 products" when productsCount is
+      // 13, or any catalogue-size quote from a turn that never searched
+      // (the number then comes from memory, not the store).
       const catalogueTotals = new Set(
         gen.toolTexts.map((r) => toolResultCount(r)).filter((n): n is number => n !== null),
       );
-      if (attempt === 0 && reply && claimsWrongCount(reply, catalogueTotals)) {
-        console.warn(`[hosted] wrong catalogue count conv=${convId} — regenerating`);
-        prompt += '\n\n' + COUNT_GUARD_RETRY;
+      if (
+        attempt === 0 &&
+        reply &&
+        (catalogueTotals.size
+          ? claimsWrongCount(reply, catalogueTotals)
+          : claimsAnyCatalogueCount(reply))
+      ) {
+        console.warn(`[hosted] ${catalogueTotals.size ? 'wrong' : 'unbacked'} catalogue count conv=${convId} — regenerating`);
+        prompt += '\n\n' + (catalogueTotals.size ? COUNT_GUARD_RETRY : COUNT_GUARD_RETRY_NO_TOOL);
         continue;
       }
       if (reply || widgets.length || toolWidgets.length || buttons.length || attempt === 1) break;
@@ -3475,11 +3540,11 @@ async function replyAsHostedAgent(
       const totals = new Set(
         gen.toolTexts.map((r) => toolResultCount(r)).filter((n): n is number => n !== null),
       );
-      if (claimsWrongCount(reply, totals)) {
-        const fixed = fixWrongCounts(reply, totals);
+      if (totals.size ? claimsWrongCount(reply, totals) : claimsAnyCatalogueCount(reply)) {
+        const fixed = totals.size ? fixWrongCounts(reply, totals) : stripUnbackedCounts(reply).trim();
         if (fixed !== reply) {
           console.error(`[hosted] corrected catalogue count conv=${convId}`);
-          reply = fixed;
+          reply = fixed || 'Here is what I found — tell me if you want a closer look at anything.';
         }
       }
     }

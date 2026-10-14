@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripTranscriptNotes, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -1993,5 +1993,18 @@ describe('catalogue-count guard', () => {
     expect(fixWrongCounts('We have 15 active products in total.', totals)).toBe(
       'We have 13 active products in total.',
     );
+  });
+});
+
+describe('unbacked catalogue count', () => {
+  it('flags a count claim with no tool total to back it', () => {
+    expect(claimsAnyCatalogueCount('We currently have 15 active products in our store catalog.')).toBe(true);
+    expect(claimsAnyCatalogueCount('Here are some products:')).toBe(false);
+    expect(claimsAnyCatalogueCount('2 of them are out of stock.')).toBe(false);
+  });
+  it('strips the unverifiable sentence', () => {
+    expect(
+      stripUnbackedCounts('We have 15 products in total! Want me to show you some?'),
+    ).toBe('Want me to show you some?');
   });
 });
