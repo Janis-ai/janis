@@ -1100,10 +1100,15 @@
           btns.appendChild(a);
         }
         if (item.select_label) {
-          var b = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
-          wtext(b, item.select_label);
-          b.onclick = function () { sendText(item.select_label, { of: item.title }); };
-          btns.appendChild(b);
+          // A select button labelled like a cart action next to a REAL add
+          // button is a fake — tapping it only sends a chat message. Drop it.
+          var fakeCartAction = item.cart_variant_id && /add to cart|add to bag|buy now/i.test(item.select_label);
+          if (!fakeCartAction) {
+            var b = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
+            wtext(b, item.select_label);
+            b.onclick = function () { sendText(item.select_label, { of: item.title }); };
+            btns.appendChild(b);
+          }
         }
         card.appendChild(btns);
       }

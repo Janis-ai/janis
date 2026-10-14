@@ -635,7 +635,7 @@ export function toolResultNotes(
   // sees and is charged. Quoting them verbatim contradicts the card.
   if (priceMapped) {
     notes.push(
-      'prices in this data are catalogue list prices — the shopper\'s market may adjust them, so the rendered card (and checkout) can differ; when quoting a price in text hedge it ("listed at $X", "from $X") and point at the card for the exact amount',
+      'prices in this data are catalogue list prices — the shopper\'s market may adjust them, so the rendered card (and checkout) can differ; never quote a bare price in text — hedge it ("listed at $X", "from $X") or defer to the card ("the card shows today\'s price")',
     );
   }
   const hasNext = toolResultHasNext(resultText);
