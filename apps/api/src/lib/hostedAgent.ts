@@ -3517,6 +3517,7 @@ async function replyAsHostedAgent(
   // widget only emits it on a successful /cart/add.js, so a reply denying
   // the add contradicts a confirmed storefront fact and regenerates.
   let confirmedAddTap: string | undefined;
+  let lastInboundText: string | undefined;
   const emit = (e: Parameters<typeof processEvents>[2]) =>
     processEvents(
       db,
@@ -3559,7 +3560,7 @@ async function replyAsHostedAgent(
     const history = await transcriptFor(db, convId, fileAnalysis);
     {
       const lastIns = await db
-        .select({ createdAt: messages.createdAt, payload: messages.payload })
+        .select({ createdAt: messages.createdAt, payload: messages.payload, text: messages.text })
         .from(messages)
         .where(and(eq(messages.conversationId, convId), eq(messages.direction, 'in')))
         .orderBy(desc(messages.createdAt))
@@ -3567,6 +3568,7 @@ async function replyAsHostedAgent(
       const lastIn = lastIns[0];
       if (lastIn) {
         coversThrough = new Date(lastIn.createdAt).toISOString();
+        lastInboundText = lastIn.text ?? undefined;
         const p = (lastIn.payload ?? {}) as { tap?: boolean; tap_of?: string };
         if (p.tap === true && /\s*—\s*add to cart\s*$/i.test(p.tap_of ?? '')) {
           confirmedAddTap = p.tap_of!;
@@ -3868,13 +3870,25 @@ async function replyAsHostedAgent(
       const pricedCards = authoredCards
         .flatMap((x) => (x.type === 'cards' ? x.items : []))
         .filter((i) => i.price || i.cart_variant_id || i.stock);
+      // An explicit browse/products ask answered with zero tool calls is
+      // memory either way — even when the reply carries no priced items
+      // ("show me your products" answered with a bare cart widget). Cart,
+      // order and account asks legitimately render tool-free, so this keys
+      // on catalogue nouns only.
+      const catalogAsk =
+        !!lastInboundText &&
+        /\b(products?|items?|catalogue?|collections?|inventory|merch(andise)?|in stock|stock(?:ed)?|sell|carry|browse|shop for|gift cards?)\b/i.test(
+          lastInboundText,
+        );
       if (
         attempt === 0 &&
         catalogCapable &&
         gen.toolCalls.length === 0 &&
-        (pricedCards.length > 0 || (reply !== null && listsPricedItems(reply)))
+        (pricedCards.length > 0 || catalogAsk || (reply !== null && listsPricedItems(reply)))
       ) {
-        console.warn(`[hosted] memory catalogue — ${pricedCards.length} hand-authored cards, 0 calls conv=${convId} — regenerating`);
+        console.warn(
+          `[hosted] memory catalogue — cards=${pricedCards.length} ask=${catalogAsk} calls=0 conv=${convId} — regenerating`,
+        );
         prompt += '\n\n' + MEMORY_CATALOGUE_GUARD_RETRY;
         continue;
       }

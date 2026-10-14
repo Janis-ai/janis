@@ -19,17 +19,30 @@ end tell`;
   return out;
 }
 
-/** Run JS in the storefront tab; returns the string result (eval last expr). */
+/** Run JS in the storefront tab; returns the string result (eval last expr).
+ *  Tabs can shift between resolving the index and executing — retry on
+ *  the "Invalid index" class of AppleScript errors with a fresh resolve. */
 function js(code) {
-  const ref = tabRef();
-  if (ref === '0:0') throw new Error('no storefront tab open');
-  const [w, t] = ref.split(':');
   const b64 = Buffer.from(code, 'utf8').toString('base64');
-  const out = execFileSync('osascript', [
-    '-e',
-    `tell application "Google Chrome" to tell tab ${t} of window ${w} to execute javascript "eval(atob(\\"${b64}\\\"))"`,
-  ], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
-  return out.trim();
+  let lastErr;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const ref = tabRef();
+    if (ref === '0:0') throw new Error('no storefront tab open');
+    const [w, t] = ref.split(':');
+    try {
+      const out = execFileSync('osascript', [
+        '-e',
+        `tell application "Google Chrome" to tell tab ${t} of window ${w} to execute javascript "eval(atob(\\"${b64}\\\"))"`,
+      ], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+      return out.trim();
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e.stderr || e.message || e);
+      if (!/Invalid index|Can't get tab|1719|1728/.test(msg)) throw e;
+      execFileSync('sleep', ['0.4']);
+    }
+  }
+  throw lastErr;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -96,8 +109,9 @@ await send('show me your products');
 const s1 = snap('after browse');
 console.log(`  ✓ add-to-cart buttons: ${s1.addBtns}, tile: ${s1.more}`);
 
-// 2. add-to-cart — click the first card's button, verify agent confirms
-js(`(() => { const b = [...document.querySelectorAll('.janis-wcard .janis-wbtn')].find(x => /add to cart/i.test(x.textContent) && !x.disabled); if (b) { b.click(); return b.closest('.janis-wcard').querySelector('.janis-wcard-t').textContent; } return null; })()`);
+// 2. add-to-cart — click a button in the LATEST reply's carousel only
+//    (scrollback carousels stay live DOM; clicking them measures stale data)
+js(`(() => { const m=[...document.querySelectorAll('${OUT_SEL}')].pop(); const scope = m||document; const b = [...scope.querySelectorAll('.janis-wcard .janis-wbtn')].find(x => /add to cart/i.test(x.textContent) && !x.disabled); if (b) { b.click(); return b.closest('.janis-wcard').querySelector('.janis-wcard-t').textContent; } return null; })()`);
 console.log('  clicked Add to cart on first card');
 await sleep(2000);
 const addedTitle = js(`(() => { const m=[...document.querySelectorAll('.janis-msg.in')].pop(); return m?m.innerText.slice(0,120):'' })()`);
