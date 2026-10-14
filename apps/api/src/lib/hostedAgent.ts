@@ -2391,20 +2391,27 @@ export async function complete(
       // as a WIDGET: line and the customer sees the row twice.
       if (tool?.widget && outcome === 'ran') {
         let w = widgetFromToolResult(tool.widget, result, secrets, args);
-        // Page-replay detection: an `after` cursor Shopify rejected silently
-        // returns page one, so every rendered title was already shown. Suppress
-        // the duplicated carousel and tell the model the catalogue ran out.
+        // Page-replay detection: an `after` cursor Shopify rejected (or
+        // partially honoured) replays rows already shown. Drop the repeats
+        // from the carousel; when nothing new survives, suppress it and tell
+        // the model the catalogue ran out.
         if (
           w &&
           w.type === 'cards' &&
           args.after !== undefined &&
-          ctx?.prevCardTitles?.size &&
-          w.items.every((i) => i.title && ctx.prevCardTitles!.has(i.title))
+          ctx?.prevCardTitles?.size
         ) {
-          w = null;
-          result +=
-            `\n[the page cursor did not advance — these are the same products already shown. ` +
-            `Do NOT repeat them; tell the customer this was the whole matching set (or suggest narrowing the search).]`;
+          const fresh = w.items.filter((i) => i.title && !ctx.prevCardTitles!.has(i.title));
+          if (!fresh.length) {
+            w = null;
+            result +=
+              `\n[the page cursor did not advance — these are the same products already shown. ` +
+              `Do NOT repeat them; tell the customer this was the whole matching set (or suggest narrowing the search).]`;
+          } else if (fresh.length < w.items.length) {
+            w.items = fresh;
+            result +=
+              `\n[${w.items.length - fresh.length} row(s) repeated the previous page and were dropped from the cards — narrate only the ${fresh.length} new item(s).]`;
+          }
         }
         if (w) {
           toolWidgets.push(w);

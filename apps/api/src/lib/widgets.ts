@@ -490,8 +490,12 @@ export function toolResultNotes(resultText: string, args: Record<string, unknown
           // Verbatim — "same arguments" leaves the model room to rephrase the
           // query, which silently resets the cursor to page one.
           const q = args.query !== undefined ? `query:"${args.query}" ` : '';
+          const flags = ['include_unavailable', 'only_unavailable', 'limit']
+            .filter((k) => args[k] !== undefined)
+            .map((k) => `${k}:"${args[k]}" `)
+            .join('');
           notes.push(
-            `more rows exist beyond this page — if the customer asks for more, call this tool again with ${q}after:"${pi.endCursor}" exactly (any other query resets the cursor to page one)`,
+            `more rows exist beyond this page — if the customer asks for more, call this tool again with ${q}${flags}after:"${pi.endCursor}" exactly (repeat every argument — a changed or dropped one resets the cursor or reshapes the list)`,
           );
         }
       }
