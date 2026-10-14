@@ -485,18 +485,29 @@ export function purchaseOptionsLine(
   if (optLines.length) {
     parts.push(
       optLines
-        .slice(0, 3)
+        .slice(0, 2)
         .map((o) => {
           const label = o.name === 'Title' ? 'Options' : o.name;
           const vl = o.vals.slice(0, 4).join('·');
-          return vl ? `${label}: ${vl}` : label;
+          // Variant names that embed the product title ("Special Selling
+          // Plans Ski Wax") repeat the card's own title — count them
+          // instead of wrapping a wall of text around the image.
+          if (vl.length > 40) return `${o.vals.length} variants`;
+          const extra = o.vals.length > 4 ? ` +${o.vals.length - 4}` : '';
+          return vl ? `${label}: ${vl}${extra}` : label;
         })
         .join(' · '),
     );
   } else if (purchasableCount > 1) {
     parts.push(`${purchasableCount} variants`);
   }
-  if (planNames.length) parts.push(`${planNames.join(', ')} available`);
+  // Plan names can be long ("Try Before You Buy") — a compact count keeps
+  // the card scannable when they won't fit; the picker sheet carries the
+  // full list anyway.
+  if (planNames.length) {
+    const joined = planNames.join(', ');
+    parts.push(joined.length > 34 ? `${planNames.length} purchase options` : `${joined} available`);
+  }
   return {
     text: parts.join(' — ') || undefined,
     suppressAdd: planNames.length > 0,
