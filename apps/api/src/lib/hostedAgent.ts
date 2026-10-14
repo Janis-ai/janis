@@ -18,7 +18,7 @@ import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolD
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
-import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, internalDataResult, interpolateSpec, itemsFromResult, namedProductsInReply, normTitle, normWidgetRef, propsFromResult, purchaseOptionsLine, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, titlesMatch, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, internalDataResult, interpolateSpec, itemsFromResult, namedProductsInReply, normTitle, normWidgetRef, propsFromResult, purchaseOptionsLine, reconcilePagedResult, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, titlesMatch, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -2775,8 +2775,29 @@ export async function complete(
       // Fuzzy-search tools pad results with off-query filler — drop rows
       // that don't match the query before the model narrates them or the
       // cards render ("Now and Then" shouldn't show Drive My Car).
-      if (outcome === 'ran' && tool?.widget?.relevance)
-        result = filterRowsByQuery(tool.widget, args, result);
+      // For paged card results the drop is reconciled further: pages are
+      // chased until the carousel fills or the match set exhausts, the
+      // productsCount is rewritten to the filtered total, and the stamped
+      // cursor becomes the last RENDERED row's edge — otherwise a filtered
+      // row both shorts the page and inflates "K of N" forever.
+      if (outcome === 'ran' && tool?.widget?.relevance) {
+        result = await reconcilePagedResult(
+          tool.widget,
+          args,
+          result,
+          gated
+            ? undefined
+            : async (after) => {
+                try {
+                  const r = await callTool(tool, { ...args, after }, secrets);
+                  return /^\s*(error|\{"error)/.test(r) ? null : r;
+                } catch {
+                  return null;
+                }
+              },
+          { priorShown: ctx?.chainCardTitles?.size ?? 0 },
+        );
+      }
       // Sales-analytics payloads are merchant-internal — collapse them to a
       // ranked title list so units/revenue can never be quoted to a shopper.
       if (outcome === 'ran') result = internalDataResult(call.function.name, result) ?? result;

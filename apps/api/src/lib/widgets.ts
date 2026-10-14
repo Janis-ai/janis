@@ -978,7 +978,10 @@ export function widgetFromToolResult(
         (cfg.availability.in_stock_arg && args[cfg.availability.in_stock_arg]));
     if (cur && !availFiltered) {
       const total = toolResultCount(resultText);
-      if (total !== null && total > widget.items.length) widget.total = total;
+      // A floor count can't render as an exact "K of N" — skip the stamp;
+      // the load-more tile still appears via end_cursor.
+      const floor = (JSON.parse(resultText) as { __countFloor?: unknown }).__countFloor === true;
+      if (!floor && total !== null && total > widget.items.length) widget.total = total;
     }
   }
   return widget;
@@ -1060,6 +1063,11 @@ export function toolResultNotes(
   // collectionsCount AND a per-node productsCount — only the first (top-
   // level, query-order) count is the query total, so note just that one.
   const isProductResult = !!(data as { data?: { products?: unknown } })?.data?.products;
+  // The pagination reconciler rewrites the count to the filtered total once
+  // the match set is exhausted; when the scan hit its page budget the count
+  // is only a confirmed floor — narrate "more than N", never an exact total
+  // the carousel can't deliver.
+  const countFloor = (data as { __countFloor?: unknown }).__countFloor === true;
   let countNoted = false;
   const priced: { title: string; min: number; max: number }[] = [];
   const walk = (obj: unknown, depth: number) => {
@@ -1078,7 +1086,9 @@ export function toolResultNotes(
         countNoted = true;
         const what = isProductResult ? 'catalogue' : 'result set';
         notes.push(
-          args.after !== undefined
+          countFloor
+            ? `more than ${v} items match this query — ${v} is a confirmed lower bound (the rest weren't scanned); narrate "more than ${v}" or "the first ${shown ?? v} of at least ${v}", never quote ${v} as the exact total`
+            : args.after !== undefined
             ? `this is a continuation page — the ${v}-item total covers the whole query, not this page; narrate "the remaining items" (or similar), never "the first ${shown ?? v} of ${v}"`
             : shown !== undefined && shown < v
               ? hasNext
@@ -1187,36 +1197,33 @@ function setPath(obj: Record<string, unknown>, path: string, value: unknown) {
  *  ≥50% token overlap (word-boundary — "now" doesn't match "know"). All rows
  *  failing means no real match: the array empties so the agent reports that
  *  instead of narrating filler. */
-export function filterRowsByQuery(
+/** The row predicate behind filterRowsByQuery — shared with the pagination
+ *  reconciler so every page applies the identical relevance rule. Returns
+ *  null when the query can't be evaluated (empty, or no latin tokens — CJK,
+ *  Cyrillic, emoji queries pass through to the upstream search rather than
+ *  emptying the carousel). */
+export function relevanceRowPredicate(
   cfg: ToolWidgetConfig,
   args: Record<string, unknown>,
-  resultText: string,
-): string {
+): ((r: unknown) => boolean) | null {
   const rel = cfg.relevance;
-  if (!rel) return resultText;
+  if (!rel) return null;
   const q = String(args[rel.arg] ?? '').trim().toLowerCase();
-  if (!q) return resultText;
+  if (!q) return null;
   // Accent-fold so "café" and "cafe" tokenize identically.
   const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '');
   const qTokens = [...new Set(fold(q).split(/[^a-z0-9]+/).filter((t) => t.length > 1))];
-  // A query with no latin-alphanumeric tokens (CJK, Cyrillic, emoji) can't
-  // be token-matched at all — trust the upstream search rather than
-  // dropping every row into an empty carousel.
-  if (!qTokens.length) return resultText;
-  let data: unknown;
-  try {
-    data = JSON.parse(resultText);
-  } catch {
-    return resultText;
-  }
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return resultText;
-  const path = cfg.items;
-  if (!path) return resultText;
-  const rows = digPath(data, path);
-  if (!Array.isArray(rows)) return resultText;
-  const obj = data as Record<string, unknown>;
+  if (!qTokens.length) return null;
   const strong = rel.strong_fields;
-  const kept = rows.filter((r) => {
+  // Word-bounded, trailing-'s' tolerant: "snowboard" must not match
+  // "snowboarder" prose, but must match a "Snowboards" productType.
+  const tokRe = (t: string) =>
+    new RegExp(
+      `\\b${fold(t)
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/s$/, '')}s?\\b`,
+    );
+  return (r) => {
     const hay = fold(
       rel.fields
         .map((f) => String(digPath(r, f) ?? ''))
@@ -1224,14 +1231,6 @@ export function filterRowsByQuery(
         .toLowerCase(),
     );
     if (!hay.trim()) return false;
-    // Word-bounded, trailing-'s' tolerant: "snowboard" must not match
-    // "snowboarder" prose, but must match a "Snowboards" productType.
-    const tokRe = (t: string) =>
-      new RegExp(
-        `\\b${fold(t)
-          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-          .replace(/s$/, '')}s?\\b`,
-      );
     // Whole-phrase match must be word-bounded too — plain `includes` lets a
     // "snowboard" query keep a row whose only hit is "snowboarder" in prose.
     if (tokRe(q).test(hay)) return true;
@@ -1249,10 +1248,195 @@ export function filterRowsByQuery(
     }
     const hits = qTokens.filter((t) => tokRe(t).test(hay));
     return qTokens.length > 0 && hits.length / qTokens.length >= 0.5;
-  });
+  };
+}
+
+export function filterRowsByQuery(
+  cfg: ToolWidgetConfig,
+  args: Record<string, unknown>,
+  resultText: string,
+): string {
+  const pred = relevanceRowPredicate(cfg, args);
+  if (!pred) return resultText;
+  let data: unknown;
+  try {
+    data = JSON.parse(resultText);
+  } catch {
+    return resultText;
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return resultText;
+  const path = cfg.items;
+  if (!path) return resultText;
+  const rows = digPath(data, path);
+  if (!Array.isArray(rows)) return resultText;
+  const kept = rows.filter(pred);
   if (kept.length === rows.length) return resultText;
+  const obj = data as Record<string, unknown>;
   setPath(obj, path, kept);
   if (typeof obj.resultCount === 'number') obj.resultCount = kept.length;
+  return JSON.stringify(obj);
+}
+
+/** First `{count: N}` in the result rewritten in place — the relevance
+ *  reconciler replaces the raw match count with the post-filter total so
+ *  the stamped "K of N" and every narration guard agree with the cards. */
+function setFirstResultCount(data: Record<string, unknown>, n: number): void {
+  const walk = (o: unknown, depth: number): boolean => {
+    if (!o || typeof o !== 'object' || depth > 4) return false;
+    for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+      if (k === 'count' && typeof v === 'number') {
+        (o as Record<string, unknown>)[k] = n;
+        return true;
+      }
+      if (walk(v, depth + 1)) return true;
+    }
+    return false;
+  };
+  walk(data, 0);
+}
+
+/** Relevance filtering happens AFTER Shopify counts and pages its fuzzy
+ *  matches, so a dropped row both shorts the carousel ("9 of 12") and
+ *  inflates the stamped total. When a keyworded query dropped rows and the
+ *  connection exposes per-edge cursors (pageInfo + parallel edges array),
+ *  chase the next pages to refill the page to `cap`, then rewrite the
+ *  result so everything downstream sees filtered truth:
+ *   - nodes/edges hold only the first `cap` surviving rows, in order
+ *   - pageInfo.endCursor is the LAST RENDERED row's own edge cursor — a
+ *     mid-page resume point so the next `after` call picks up exactly where
+ *     the shopper's carousel stopped (dropped and surplus rows re-arrive or
+ *     stay filtered, no gaps, no repeats)
+ *   - productsCount becomes the filtered total once the set is exhausted
+ *     (priorShown makes continuation pages count the whole chain); when the
+ *     scan is truncated by the page budget the count is a lower bound and
+ *     `__countFloor` tells narration to say "more than N" — never an exact
+ *     number the cards can't back up. */
+export async function reconcilePagedResult(
+  cfg: ToolWidgetConfig,
+  args: Record<string, unknown>,
+  resultText: string,
+  refetch?: (after: string) => Promise<string | null>,
+  opts: { cap?: number; maxPages?: number; priorShown?: number } = {},
+): Promise<string> {
+  const pred = relevanceRowPredicate(cfg, args);
+  if (!pred) return resultText;
+  let data: unknown;
+  try {
+    data = JSON.parse(resultText);
+  } catch {
+    return resultText;
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return resultText;
+  const itemsPath = cfg.items;
+  if (!itemsPath) return resultText;
+  const dot = itemsPath.lastIndexOf('.');
+  if (dot < 0) return resultText;
+  const parentPath = itemsPath.slice(0, dot);
+  const itemsKey = itemsPath.slice(dot + 1);
+  const parent = digPath(data, parentPath);
+  if (!parent || typeof parent !== 'object' || Array.isArray(parent)) return resultText;
+  const parentObj = parent as Record<string, unknown>;
+  const rows = parentObj[itemsKey];
+  if (!Array.isArray(rows)) return resultText;
+  const edges = parentObj.edges;
+  const pageInfo = parentObj.pageInfo;
+  const obj = data as Record<string, unknown>;
+  const pairs = rows
+    .map((r, i) => ({
+      row: r,
+      cursor:
+        Array.isArray(edges) && edges[i] && typeof edges[i] === 'object'
+          ? (edges[i] as { cursor?: unknown }).cursor
+          : undefined,
+    }))
+    .filter((p) => pred(p.row))
+    .map((p) => ({ row: p.row, cursor: typeof p.cursor === 'string' ? p.cursor : undefined }));
+  const dropped = pairs.length !== rows.length;
+  const aligned = Array.isArray(edges) && edges.length === rows.length;
+  const piObj =
+    pageInfo && typeof pageInfo === 'object' ? (pageInfo as Record<string, unknown>) : null;
+  // No pagination metadata → the plain filter is all we can do.
+  if (!aligned || !piObj) {
+    if (!dropped) return resultText;
+    setPath(obj, itemsPath, pairs.map((p) => p.row));
+    if (typeof obj.resultCount === 'number') obj.resultCount = pairs.length;
+    return JSON.stringify(obj);
+  }
+  const prior = args.after !== undefined ? (opts.priorShown ?? 0) : 0;
+  // Only skip work when the whole matching set fit in one clean page — no
+  // drops AND no next page means the raw count already equals filtered.
+  // Any next page can hide drops, so a paged result is always reconciled.
+  if (!dropped && prior === 0 && piObj.hasNextPage !== true) return resultText;
+  const rowCapArg = cfg.row_limit_arg ? Number(args[cfg.row_limit_arg]) : NaN;
+  const cap = Math.max(
+    1,
+    Math.min(Number.isFinite(rowCapArg) && rowCapArg > 0 ? rowCapArg : 10, opts.cap ?? 10),
+  );
+  let hasNext = piObj.hasNextPage === true;
+  let cursor = typeof piObj.endCursor === 'string' ? piObj.endCursor : undefined;
+  let pages = 1;
+  const maxPages = opts.maxPages ?? 5;
+  let sawDrop = dropped;
+  while (hasNext && pages < maxPages && cursor && refetch) {
+    const next = await refetch(cursor);
+    if (!next) break;
+    let d2: unknown;
+    try {
+      d2 = JSON.parse(next);
+    } catch {
+      break;
+    }
+    if (!d2 || typeof d2 !== 'object' || Array.isArray(d2)) break;
+    const errs = (d2 as { errors?: unknown }).errors;
+    if (Array.isArray(errs) && errs.length) break;
+    const p2 = digPath(d2, parentPath);
+    if (!p2 || typeof p2 !== 'object') break;
+    const rows2 = (p2 as Record<string, unknown>)[itemsKey];
+    if (!Array.isArray(rows2)) break;
+    const edges2 = (p2 as Record<string, unknown>).edges;
+    const pi2 = (p2 as Record<string, unknown>).pageInfo;
+    const before = pairs.length;
+    rows2.forEach((r, i) => {
+      if (pred(r)) {
+        const c =
+          Array.isArray(edges2) && edges2[i] && typeof edges2[i] === 'object'
+            ? (edges2[i] as { cursor?: unknown }).cursor
+            : undefined;
+        pairs.push({ row: r, cursor: typeof c === 'string' ? c : undefined });
+      }
+    });
+    if (pairs.length - before !== rows2.length) sawDrop = true;
+    pages++;
+    hasNext = !!(pi2 && typeof pi2 === 'object' && (pi2 as { hasNextPage?: unknown }).hasNextPage === true);
+    const ec = pi2 && typeof pi2 === 'object' ? (pi2 as { endCursor?: unknown }).endCursor : undefined;
+    cursor = typeof ec === 'string' ? ec : undefined;
+  }
+  const rendered = pairs.slice(0, cap);
+  const moreToShow = pairs.length > rendered.length || hasNext;
+  // The continuation cursor must resume after the last RENDERED row. When a
+  // next page should exist but that row carries no edge cursor, trim the
+  // tail back to the last cursor-bearing row — its unrendered neighbours
+  // are re-fetched by the next `after` call rather than skipped forever.
+  if (moreToShow) {
+    while (rendered.length && !rendered[rendered.length - 1].cursor) rendered.pop();
+  }
+  setPath(obj, itemsPath, rendered.map((p) => p.row));
+  if (aligned) setPath(obj, `${parentPath}.edges`, rendered.map((p) => ({ cursor: p.cursor })));
+  const lastRendered = rendered[rendered.length - 1]?.cursor;
+  if (lastRendered) piObj.endCursor = lastRendered;
+  piObj.hasNextPage = moreToShow;
+  // Continuation without chain context: the raw count still covers the
+  // whole query better than a remaining-rows figure — leave it alone.
+  // And when a chase that scanned ahead saw no drops at all, the raw count
+  // was never contradicted — don't replace a real number with a floor.
+  if (args.after === undefined || prior > 0) {
+    if (sawDrop || prior > 0) {
+      setFirstResultCount(obj, prior + pairs.length);
+      if (hasNext) obj.__countFloor = true;
+      else delete obj.__countFloor;
+    }
+  }
+  if (typeof obj.resultCount === 'number') obj.resultCount = rendered.length;
   return JSON.stringify(obj);
 }
 

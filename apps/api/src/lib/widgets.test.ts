@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { availabilityDropped, dedupeToolWidgets, dedupeWidgetList, filterRowsByQuery, internalDataResult, namedProductsInReply, titlesMatch, toolResultEmpty, toolResultNotes, widgetFromToolResult } from './widgets.js';
+import { availabilityDropped, dedupeToolWidgets, dedupeWidgetList, filterRowsByQuery, internalDataResult, namedProductsInReply, reconcilePagedResult, titlesMatch, toolResultEmpty, toolResultNotes, widgetFromToolResult } from './widgets.js';
 
 const products = JSON.stringify({
   products: [
@@ -1213,5 +1213,105 @@ describe('filterRowsByQuery — store-general cases', () => {
   it('folds accents — "cafe" matches "Café Mug"', () => {
     const out = JSON.parse(filterRowsByQuery(cfg, { query: 'cafe mug' }, result));
     expect(out.rows.map((r: { title: string }) => r.title)).toEqual(['Café Mug']);
+  });
+});
+
+describe('reconcilePagedResult — filtered pages stay honest', () => {
+  const cfg = {
+    type: 'cards' as const,
+    items: 'data.products.nodes',
+    relevance: {
+      arg: 'query',
+      fields: ['title', 'description'],
+      strong_fields: ['title', 'productType', 'tags'],
+    },
+  };
+  const board = (i: number) => ({
+    title: `Snowboard ${i}`,
+    productType: 'Snowboards',
+    tags: ['snowboard'],
+    description: 'x',
+  });
+  const page = (nodes: unknown[], hasNextPage: boolean, startCur = 0) =>
+    JSON.stringify({
+      data: {
+        productsCount: { count: 12 },
+        products: {
+          pageInfo: { hasNextPage, endCursor: `c${startCur + nodes.length - 1}` },
+          edges: nodes.map((_, i) => ({ cursor: `c${startCur + i}` })),
+          nodes,
+        },
+      },
+    });
+
+  it('backfills a shorted page and rewrites the count to the filtered total', async () => {
+    // Shopify matched 12: 11 snowboards + a gift card dropped by relevance.
+    const p1 = page(
+      [{ title: 'Gift Card', productType: 'Gift Cards', tags: [], description: 'x' },
+        ...Array.from({ length: 9 }, (_, i) => board(i))],
+      true,
+    );
+    const p2 = page([board(9), board(10)], false, 10);
+    const out = JSON.parse(
+      await reconcilePagedResult(cfg, { query: 'snowboard' }, p1, async () => p2),
+    );
+    const titles = out.data.products.nodes.map((r: { title: string }) => r.title);
+    expect(titles).toHaveLength(10);
+    expect(titles[0]).toBe('Snowboard 0');
+    // Rendered rows come from both pages; the stamped cursor is the LAST
+    // RENDERED row (Snowboard 9 on page 2), not the raw page endCursor — the
+    // next `after` call resumes mid-page so the surplus row isn't skipped.
+    expect(out.data.products.pageInfo.endCursor).toBe('c10');
+    expect(out.data.products.pageInfo.hasNextPage).toBe(true);
+    expect(out.data.productsCount.count).toBe(11);
+  });
+
+  it('page 2 of the same query renders the one remaining row', async () => {
+    const p2 = page([board(10)], false, 10);
+    const out = JSON.parse(
+      await reconcilePagedResult(cfg, { query: 'snowboard', after: 'c10' }, p2, async () => null, {
+        priorShown: 10,
+      }),
+    );
+    expect(out.data.products.nodes).toHaveLength(1);
+    expect(out.data.productsCount.count).toBe(11);
+    expect(out.data.products.pageInfo.hasNextPage).toBe(false);
+  });
+
+  it('is a no-op when a clean single page already equals the count', async () => {
+    const p = page([board(1)], false, 0);
+    const out = await reconcilePagedResult(cfg, { query: 'snowboard' }, p, async () => {
+      throw new Error('must not fetch');
+    });
+    expect(out).toBe(p);
+  });
+
+  it('marks the count a floor when the match set outlasts the scan budget', async () => {
+    // Page 1: gift card dropped, 9 boards. Every chased page keeps returning
+    // hasNextPage so the budget (5 pages) truncates the scan.
+    const p1 = page(
+      [{ title: 'Gift Card', productType: 'Gift Cards', tags: [], description: 'x' },
+        ...Array.from({ length: 9 }, (_, i) => board(i))],
+      true,
+    );
+    const big = page(Array.from({ length: 10 }, (_, i) => board(10 + i)), true, 10);
+    const out = JSON.parse(
+      await reconcilePagedResult(cfg, { query: 'snowboard' }, p1, async () => big, { maxPages: 3 }),
+    );
+    expect(out.data.products.nodes).toHaveLength(10);
+    expect(out.data.productsCount.count).toBe(29); // 9 kept + 10+10 scanned
+    expect(out.__countFloor).toBe(true);
+    expect(out.data.products.pageInfo.hasNextPage).toBe(true);
+  });
+
+  it('leaves an uncontradicted raw count alone — chase saw no drops', async () => {
+    const p1 = page(Array.from({ length: 10 }, (_, i) => board(i)), true);
+    const p2 = page(Array.from({ length: 10 }, (_, i) => board(10 + i)), true, 10);
+    const out = JSON.parse(
+      await reconcilePagedResult(cfg, { query: 'snowboard' }, p1, async () => p2, { maxPages: 2 }),
+    );
+    // No drops anywhere → the raw productsCount stands (12 in the fixture).
+    expect(out.data.productsCount.count).toBe(12);
+    expect(out.__countFloor).toBeUndefined();
   });
 });
