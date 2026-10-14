@@ -1081,10 +1081,52 @@ describe('repairCardStock', () => {
     });
     const w = [card([{ title: 'Ski Wax' }])];
     repairCardStock(w, multi);
-    const item = w[0].items[0] as { cart_variant_id?: string; price?: string; stock?: string };
+    const item = w[0].items[0] as {
+      cart_variant_id?: string;
+      price?: string;
+      stock?: string;
+      options?: string;
+    };
     expect(item.cart_variant_id).toBe('1002');
-    expect(item.price).toBe('$9.95');
+    // Two purchasable variants → "from" pricing + options line, same as a
+    // tool-built card.
+    expect(item.price).toBe('from $9.95');
+    expect(item.options).toBe('2 variants');
     expect(item.stock).toBeUndefined();
+  });
+
+  it('strips the Add button and shows plans on a selling-plan product', () => {
+    const corpus = JSON.stringify({
+      data: {
+        products: {
+          nodes: [
+            {
+              title: 'Sub Wax',
+              variants: {
+                nodes: [
+                  { id: 'gid://shopify/ProductVariant/3001', availableForSale: true, price: '9.45' },
+                  { id: 'gid://shopify/ProductVariant/3002', availableForSale: true, price: '47.45' },
+                ],
+              },
+              options: [{ name: 'Title', values: ['Sample', 'Standard'] }],
+              sellingPlanGroups: {
+                nodes: [
+                  { name: 'Subscription', sellingPlans: { nodes: [{ name: 'Weekly' }] } },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    });
+    const w = [card([{ title: 'Sub Wax', cart_variant_id: '3001', price: '$9.45' }])];
+    repairCardStock(w, corpus);
+    const item = w[0].items[0] as { cart_variant_id?: string; price?: string; options?: string };
+    // A one-tap add would silently pick one-time purchase — the button goes.
+    expect(item.cart_variant_id).toBeUndefined();
+    expect(item.price).toBe('from $9.45');
+    expect(item.options).toContain('Subscription');
+    expect(item.options).toContain('Sample');
   });
 });
 

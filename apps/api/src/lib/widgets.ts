@@ -449,7 +449,6 @@ function purchaseOptionInfo(row: unknown): { text?: string; suppressAdd?: boolea
         .filter(Boolean),
     ),
   ];
-  const parts: string[] = [];
   // Shopify synthesizes a "Title: Default Title" option on option-less
   // products — that's schema noise, not a choice. Real multi-value Title
   // options are variant names; "Options:" labels them better than "Title:".
@@ -461,6 +460,19 @@ function purchaseOptionInfo(row: unknown): { text?: string; suppressAdd?: boolea
         : [],
     }))
     .filter((o) => !(o.name === 'Title' && o.vals.length === 1 && o.vals[0] === 'Default Title'));
+  return purchaseOptionsLine(optLines, planNames, purchasable.length);
+}
+
+/** Format the options line + Add-suppression decision from the extracted
+ *  pieces — shared between widget-built cards and the model-authored card
+ *  repair path (a hand-written "Add to cart" under a subscription product
+ *  is the same silent contract either way). */
+export function purchaseOptionsLine(
+  optLines: { name: string; vals: string[] }[],
+  planNames: string[],
+  purchasableCount: number,
+): { text?: string; suppressAdd?: boolean; multi?: boolean } {
+  const parts: string[] = [];
   if (optLines.length) {
     parts.push(
       optLines
@@ -472,14 +484,14 @@ function purchaseOptionInfo(row: unknown): { text?: string; suppressAdd?: boolea
         })
         .join(' · '),
     );
-  } else if (purchasable.length > 1) {
-    parts.push(`${purchasable.length} variants`);
+  } else if (purchasableCount > 1) {
+    parts.push(`${purchasableCount} variants`);
   }
   if (planNames.length) parts.push(`${planNames.join(', ')} available`);
   return {
     text: parts.join(' — ') || undefined,
     suppressAdd: planNames.length > 0,
-    multi: purchasable.length > 1,
+    multi: purchasableCount > 1,
   };
 }
 

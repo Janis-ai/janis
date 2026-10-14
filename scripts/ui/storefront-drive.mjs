@@ -95,6 +95,7 @@ const snap = (label) => {
       cards: [...scope.querySelectorAll('.janis-wcard')].map(c => ({
         t: (c.querySelector('.janis-wcard-t')||{}).textContent,
         p: (c.querySelector('.janis-wcard-p')||{}).textContent || null,
+        opts: [...c.querySelectorAll('.janis-wcard-s')].map(o => o.textContent).join(' | ') || null,
         stock: (c.querySelector('.janis-wcard-stock')||{}).textContent || null,
         btns: [...c.querySelectorAll('.janis-wbtn')].map(b => b.textContent.slice(0,20)),
       })),
@@ -186,6 +187,13 @@ if (hasMore2 === 'true') {
 await send('do you have the out of stock snowboard');
 const s9 = snap('oos-specific');
 console.log(`  oos card stock label: ${JSON.stringify((s9.cards||[]).map(c=>c.stock))}`);
+
+// 9b. the subscription product — options line, "from" price, NO Add button
+await send('tell me about the selling plans ski wax');
+const s9b = snap('selling-plans product');
+const wax = (s9b.cards || []).find((c) => /ski wax/i.test(c.t || ''));
+console.log(`  wax card: price=${wax?.p} opts=${wax?.opts} btns=${JSON.stringify(wax?.btns)}`);
+console.log(wax && !/add to cart/i.test((wax.btns || []).join(' ')) ? '  ✓ no silent add on a plans product' : '  ✗ ADD BUTTON ON A PLANS PRODUCT');
 
 // 10. hallucination probe
 await send('do you have a flying snowboard');

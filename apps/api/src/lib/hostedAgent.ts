@@ -18,7 +18,7 @@ import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolD
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
-import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, specProps, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, purchaseOptionsLine, specProps, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -1270,6 +1270,18 @@ export function repairCardStock(
       }
       const f = corpusProductFields(toolText, item.title);
       if (!f) continue;
+      // Same purchase-option rules as tool-built cards: selling plans kill
+      // a model-typed Add to cart (silent one-time-vs-subscription pick),
+      // the options line hydrates, and multi-variant prices read "from".
+      const opt = purchaseOptionsLine(f.options ?? [], f.plans ?? [], f.purchasable ?? 0);
+      if (opt.suppressAdd && item.cart_variant_id) {
+        delete item.cart_variant_id;
+        fixed++;
+      }
+      if (opt.text && !item.options) {
+        item.options = opt.text;
+        fixed++;
+      }
       if (f.avail === false) {
         // An OOS product is view-only — a model-typed variant id would put a
         // dead Add to cart under the badge.
@@ -1285,7 +1297,8 @@ export function repairCardStock(
         }
         // Hand-authored cards lose the add path — hydrate the variant the
         // tool actually returned so a truthful card is buyable again.
-        if (!item.cart_variant_id && f.variantNum) {
+        // Selling-plan products stay button-less on purpose.
+        if (!item.cart_variant_id && f.variantNum && !opt.suppressAdd) {
           item.cart_variant_id = f.variantNum;
           fixed++;
         }
@@ -1293,7 +1306,8 @@ export function repairCardStock(
       // Model-typed prices are free-form ("USD 1025.0", "1025") — when the
       // corpus carries the variant price the card shows it, formatted.
       if (f.price) {
-        const want = formatMoney(f.price, f.currency) ?? item.price;
+        let want = formatMoney(f.price, f.currency) ?? item.price;
+        if (want && opt.multi && !/^from\s/i.test(want)) want = `from ${want}`;
         if (want && item.price !== want) {
           item.price = want;
           fixed++;
@@ -1308,10 +1322,20 @@ export function repairCardStock(
  *  live inside that product's object, so the search window ends at the next
  *  title. Model-authored cards keep only titles verbatim; every other field
  *  (price format, variant id, availability) needs hydrating from here. */
-function corpusProductFields(
-  toolText: string,
-  title: string,
-): { avail: boolean | null; variantNum?: string; price?: string; currency?: string } | null {
+interface CorpusFields {
+  avail: boolean | null;
+  variantNum?: string;
+  price?: string;
+  currency?: string;
+  /** Named product options (filtered of Shopify's Title placeholder) */
+  options?: { name: string; vals: string[] }[];
+  /** Selling-plan group names — any present means no silent Add to cart */
+  plans?: string[];
+  /** Count of variants that aren't flagged unavailable */
+  purchasable?: number;
+}
+
+function corpusProductFields(toolText: string, title: string): CorpusFields | null {
   const re = new RegExp(
     '"title"\\s*:\\s*"' + title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"',
   );
@@ -1359,11 +1383,37 @@ function corpusProductFields(
       })();
   const price = picked?.price ?? /"price"\s*:\s*"?([\d.]+)"?/.exec(span)?.[1];
   const cur = /"currencyCode"\s*:\s*"([A-Z]{3})"/.exec(span);
+  // options + sellingPlanGroups ride along so a repaired card follows the
+  // same rules as a tool-built one: plans → no Add button, multi-variant
+  // → "from" pricing. Group names are the "name" keys immediately followed
+  // by "sellingPlans" (plan names themselves sit inside that sub-object).
+  const optLines = (() => {
+    const m = /"options"\s*:\s*(\[.*?\}\s*\])/.exec(span);
+    if (!m) return [] as CorpusFields['options'];
+    try {
+      const arr = JSON.parse(m[1]) as { name?: unknown; values?: unknown }[];
+      return arr
+        .map((o) => ({
+          name: String(o.name ?? ''),
+          vals: Array.isArray(o.values) ? o.values.map(String) : [],
+        }))
+        .filter((o) => !(o.name === 'Title' && o.vals.length === 1 && o.vals[0] === 'Default Title'));
+    } catch {
+      return [] as CorpusFields['options'];
+    }
+  })();
+  const plans: string[] = [];
+  const gm = /"name"\s*:\s*"([^"]+)"\s*,\s*"sellingPlans"/g;
+  let g: RegExpExecArray | null;
+  while ((g = gm.exec(span))) plans.push(g[1]);
   return {
     avail,
     variantNum: picked?.num,
     price,
     currency: cur?.[1],
+    options: optLines,
+    plans,
+    purchasable: usable.length,
   };
 }
 
@@ -4037,9 +4087,15 @@ async function replyAsHostedAgent(
       // on catalogue nouns only.
       const catalogAsk =
         !!lastInboundText &&
-        /\b(products?|items?|catalogue?|collections?|inventory|merch(andise)?|in stock|stock(?:ed)?|sell|carry|browse|shop for|gift cards?)\b/i.test(
+        (/\b(products?|items?|catalogue?|collections?|inventory|merch(andise)?|in stock|stock(?:ed)?|sell|carry|browse|shop for|gift cards?)\b/i.test(
           lastInboundText,
-        );
+        ) ||
+          // Named-product detail asks carry no catalogue noun — "tell me
+          // about the ski wax" is memory-answer bait on a catalogue-capable
+          // agent the same way "show me your products" is.
+          /\b(tell me about|what about|details? (?:on|about|for)|info(?:rmation)? (?:on|about)|how much (?:is|does|are)|price of|do you (?:have|carry|sell))\b/i.test(
+            lastInboundText,
+          ));
       if (
         attempt < 2 &&
         catalogCapable &&
