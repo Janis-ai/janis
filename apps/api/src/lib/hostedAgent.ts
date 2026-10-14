@@ -1209,15 +1209,23 @@ export function verifyCardItems(
   widgets: WidgetComponent[],
   toolText: string,
   skip: Set<WidgetComponent> = new Set(),
+  strict = false,
 ): number {
   let dropped = 0;
   for (let i = widgets.length - 1; i >= 0; i--) {
     const w = widgets[i];
     if (w.type !== 'cards' || skip.has(w)) continue;
     const kept = w.items.filter((item) => {
-      if (!item.cart_variant_id && !item.stock) return true;
+      // Items with no sellable fields are editorial cards — plans, docs
+      // pages — free pass. Sellable-shaped fields (variant id, stock badge)
+      // always need a corpus trace. A bare price is trusted on catalogue-
+      // less agents (priced tier cards exist), but when the agent owns a
+      // cards-producing tool a priced item must trace too — otherwise a
+      // memory-built "Hidden Snowboard $749.95" slips in on turns where the
+      // model skipped the tool entirely and the corpus is empty.
+      if (!item.cart_variant_id && !item.stock && !(strict && item.price)) return true;
       if (item.cart_variant_id && toolText.includes(item.cart_variant_id)) return true;
-      return toolText.includes(item.title);
+      return !!item.title && toolText.includes(item.title);
     });
     dropped += w.items.length - kept.length;
     if (kept.length) {
@@ -1797,6 +1805,12 @@ const FAILED_TOOLS_GUARD_RETRY =
   'Every tool call in your previous attempt failed — you have no catalogue data right now, so the product list ' +
   'and prices you wrote came from memory and cannot be trusted. Rewrite it: say the store data is temporarily ' +
   'unreachable and offer to try again shortly. Never list products, prices, or stock status you did not just fetch.';
+
+const MEMORY_CATALOGUE_GUARD_RETRY =
+  'Your previous draft showed product cards or a priced product list but you never called the catalogue search ' +
+  'tool — that data came from memory or the transcript, which may be stale or flat-out invented. Call the product ' +
+  'search tool for this request and let IT render the cards; never write product widgets, prices, or stock ' +
+  'details yourself.';
 
 const PHANTOM_GUARD_RETRY =
   'Your previous draft claimed a product exists (a price, "we carry it", "here it is") that the catalogue search ' +
@@ -3844,6 +3858,26 @@ async function replyAsHostedAgent(
         prompt += '\n\n' + FULL_GUARD_RETRY;
         continue;
       }
+      // Memory catalogue — the agent owns a cards-producing search tool and
+      // the model answered a product ask from KB/transcript recall instead:
+      // zero calls ran yet the reply hand-authored priced cards (or a priced
+      // list). Force a real call so data comes from the store, not memory
+      // — including the store's own earlier hallucinations in transcript.
+      const catalogCapable = agentToolDefs.some((t) => t.widget?.type === 'cards' && !!t.widget.items);
+      const authoredCards = widgets.filter((x) => x.type === 'cards' && !refResolved.has(x));
+      const pricedCards = authoredCards
+        .flatMap((x) => (x.type === 'cards' ? x.items : []))
+        .filter((i) => i.price || i.cart_variant_id || i.stock);
+      if (
+        attempt === 0 &&
+        catalogCapable &&
+        gen.toolCalls.length === 0 &&
+        (pricedCards.length > 0 || (reply !== null && listsPricedItems(reply)))
+      ) {
+        console.warn(`[hosted] memory catalogue — ${pricedCards.length} hand-authored cards, 0 calls conv=${convId} — regenerating`);
+        prompt += '\n\n' + MEMORY_CATALOGUE_GUARD_RETRY;
+        continue;
+      }
       if (reply || widgets.length || toolWidgets.length || buttons.length || attempt === 1) break;
       console.warn(`[hosted] empty completion conv=${convId} — retrying once`);
       prompt += '\n\n[your previous reply came back empty — reply to the user now in plain text]';
@@ -3868,7 +3902,12 @@ async function replyAsHostedAgent(
     // a hallucination the customer acts on. Runs before the claim check so
     // an emptied widget also strips its dangling "here are the cards" lead-in.
     const toolCorpus = gen.toolTexts.join('\n');
-    const bogusItems = verifyCardItems(widgets, toolCorpus, refResolved);
+    const bogusItems = verifyCardItems(
+      widgets,
+      toolCorpus,
+      refResolved,
+      agentToolDefs.some((t) => t.widget?.type === 'cards' && !!t.widget.items),
+    );
     // Continuation turn (an `after:` call ran): a model-authored card
     // repeating a title the previous reply already rendered is pagination
     // noise — the tool widget dedupes against prevCardTitles, and model

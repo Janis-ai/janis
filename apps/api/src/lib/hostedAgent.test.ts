@@ -981,6 +981,24 @@ describe('verifyCardItems', () => {
     expect(verifyCardItems(w, TOOL_TEXT, new Set(w))).toBe(0);
     expect(w[0].items).toHaveLength(1);
   });
+
+  it('strict mode (catalogue-tool agent): priced items need a corpus trace even on empty corpus', () => {
+    // Live incident: model answered "show me more" from memory — no tool
+    // calls, empty corpus — and shipped a hand-authored widget containing a
+    // phantom product ("The Hidden Snowboard", $749.95).
+    const w = [
+      card([
+        { title: 'The Hidden Snowboard', price: '$749.95' },
+        { title: 'Getting Started guide', link: 'https://docs.example/x' },
+      ]),
+    ];
+    expect(verifyCardItems(w, '', new Set(), true)).toBe(1);
+    expect(w[0].items).toHaveLength(1);
+    expect((w[0].items[0] as { title: string }).title).toBe('Getting Started guide');
+    // And when the corpus DOES carry the product, the priced item stays.
+    const w2 = [card([{ title: 'The Snowboard', price: '$885.95' }])];
+    expect(verifyCardItems(w2, TOOL_TEXT, new Set(), true)).toBe(0);
+  });
 });
 
 describe('repairCardStock', () => {
