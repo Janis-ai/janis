@@ -18,7 +18,7 @@ import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolD
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
-import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, internalDataResult, interpolateSpec, itemsFromResult, normWidgetRef, propsFromResult, purchaseOptionsLine, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, internalDataResult, interpolateSpec, itemsFromResult, namedProductsInReply, normTitle, normWidgetRef, propsFromResult, purchaseOptionsLine, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, titlesMatch, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -4443,6 +4443,73 @@ async function replyAsHostedAgent(
     // "here are both items" backed by a model-typed six-product carousel is
     // a hallucination the customer acts on. Dropped entirely → regenerate.
     widgets = mergeCardWidgets(dedupeWidgetList([...toolWidgets, ...widgets])).slice(0, 3);
+    // Narration↔carousel agreement: when the reply NAMES products, the
+    // cards must contain them — "the Liquid is the match" under three
+    // unrelated cards reads as the widget contradicting the text. A named
+    // row already in this run's corpus re-renders its real card; a name
+    // the searches never surfaced gets a targeted fetch (the call is real
+    // catalogue data, so nothing invents). Named items lead the carousel.
+    const productSearch = agentToolDefs.find(
+      (t) => t.name === 'shopify_search_products' && t.widget?.type === 'cards' && t.widget.items,
+    );
+    if (reply && productSearch?.widget) {
+      try {
+        type CardItem = Extract<WidgetComponent, { type: 'cards' }>['items'][number];
+        const corpusCards = new Map<string, CardItem>();
+        for (const t of gen.toolTexts) {
+          const cw = widgetFromToolResult(productSearch.widget, t, secrets, {});
+          if (cw?.type === 'cards')
+            for (const i of cw.items) if (i.title) corpusCards.set(normTitle(i.title), i);
+        }
+        const named = namedProductsInReply(reply, [...corpusCards.keys()]);
+        const promoted: CardItem[] = [];
+        for (const name of named.slice(0, 4)) {
+          const onScreen = widgets.some(
+            (w) => w.type === 'cards' && w.items.some((i) => titlesMatch(i.title ?? '', name)),
+          );
+          if (onScreen) continue;
+          const corpusHit = [...corpusCards.entries()].find(([t]) => titlesMatch(t, name));
+          if (corpusHit) {
+            promoted.push(corpusHit[1]);
+            continue;
+          }
+          try {
+            let r = await callTool(productSearch, { query: name, limit: '3' }, secrets);
+            if (!r.startsWith('{')) continue;
+            r = filterRowsByQuery(productSearch.widget, { query: name }, r);
+            const w3 = widgetFromToolResult(productSearch.widget, r, secrets, { query: name });
+            const hit =
+              w3?.type === 'cards' ? w3.items.find((i) => titlesMatch(i.title ?? '', name)) : undefined;
+            if (hit) promoted.push(hit);
+          } catch {
+            /* lookup miss — the text stands alone; no invented card */
+          }
+        }
+        if (promoted.length) {
+          const firstCards = widgets.find((w) => w.type === 'cards');
+          if (firstCards && firstCards.type === 'cards') {
+            const have = new Set(firstCards.items.map((i) => normTitle(i.title ?? '')));
+            firstCards.items = [
+              ...promoted.filter((i) => !have.has(normTitle(i.title ?? ''))),
+              ...firstCards.items,
+            ].slice(0, 10);
+          } else {
+            widgets.unshift({ type: 'cards', items: promoted.slice(0, 10) });
+          }
+        }
+        if (named.length)
+          for (const w of widgets) {
+            if (w.type !== 'cards') continue;
+            w.items = [...w.items].sort(
+              (a, b) =>
+                Number(named.some((n) => titlesMatch(b.title ?? '', n))) -
+                Number(named.some((n) => titlesMatch(a.title ?? '', n))),
+            );
+          }
+      } catch (e) {
+        console.warn(`[hosted] named-product promotion failed conv=${convId}`, e);
+      }
+    }
     // A confirmed add-to-cart tap ends in the shopper's live cart — attach
     // it mechanically. The widget hydrates from the store's own /cart.js so
     // it can't fabricate contents, and the model isn't depended on to

@@ -287,6 +287,12 @@ export interface ToolWidgetConfig {
     arg: string;
     /** Row dot paths whose values are matched against the query. */
     fields: string[];
+    /** When set, a row survives on ANY query-token hit in these fields (the
+     *  identifying columns — title/type/tags) or a whole-phrase hit in
+     *  `fields`; the ≥50% rule isn't used. Descriptive multi-term queries
+     *  ("snowboard blue cloud") can't pass a 50% bar on real rows, but a
+     *  "snowboard" query must still not return a gift card. */
+    strong_fields?: string[];
   };
   /** Rows whose `field` resolves to === false are unpurchasable — they render
    *  WITH an Out of stock badge by default (a browsable catalogue shouldn't
@@ -1203,16 +1209,33 @@ export function filterRowsByQuery(
   if (!Array.isArray(rows)) return resultText;
   const obj = data as Record<string, unknown>;
   const qTokens = [...new Set(q.split(/[^a-z0-9]+/).filter((t) => t.length > 1))];
+  const strong = rel.strong_fields;
   const kept = rows.filter((r) => {
     const hay = rel.fields
       .map((f) => String(digPath(r, f) ?? ''))
       .join(' ')
       .toLowerCase();
     if (!hay.trim()) return false;
-    if (hay.includes(q)) return true;
-    const hits = qTokens.filter((t) =>
-      new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(hay),
-    );
+    // Word-bounded, trailing-'s' tolerant: "snowboard" must not match
+    // "snowboarder" prose, but must match a "Snowboards" productType.
+    const tokRe = (t: string) =>
+      new RegExp(
+        `\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/s$/, '')}s?\\b`,
+      );
+    // Whole-phrase match must be word-bounded too — plain `includes` lets a
+    // "snowboard" query keep a row whose only hit is "snowboarder" in prose.
+    if (tokRe(q).test(hay)) return true;
+    if (strong) {
+      // Identifying columns must carry a query token — title/type/tags are
+      // what a shopper means by "snowboards"; description prose doesn't
+      // count (a gift card mentioning "snowboarders" isn't a snowboard).
+      const strongHay = strong
+        .map((f) => String(digPath(r, f) ?? ''))
+        .join(' ')
+        .toLowerCase();
+      return qTokens.some((t) => tokRe(t).test(strongHay));
+    }
+    const hits = qTokens.filter((t) => tokRe(t).test(hay));
     return qTokens.length > 0 && hits.length / qTokens.length >= 0.5;
   });
   if (kept.length === rows.length) return resultText;
@@ -1221,6 +1244,49 @@ export function filterRowsByQuery(
   return JSON.stringify(obj);
 }
 
+
+/** Normalised product title — punctuation, case and the leading article
+ *  stripped so narration matching isn't defeated by markdown or colons
+ *  ("The Collection Snowboard: Liquid" ≡ "collection snowboard liquid"). */
+export function normTitle(t: string): string {
+  return t
+    .toLowerCase()
+    .replace(/^the\s+/, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/** Loose title equality — containment either way or ≥60% token overlap.
+ *  Narration shortens ("the Liquid" for "The Collection Snowboard: Liquid")
+ *  and a stored corpus row keeps its full name. */
+export function titlesMatch(a: string, b: string): boolean {
+  const na = normTitle(a);
+  const nb = normTitle(b);
+  if (!na || !nb) return false;
+  if (na === nb || na.includes(nb) || nb.includes(na)) return true;
+  const ta = new Set(na.split(' '));
+  const tb = new Set(nb.split(' '));
+  const hits = [...ta].filter((t) => tb.has(t)).length;
+  return hits / tb.size >= 0.6 || hits / ta.size >= 0.6;
+}
+
+/** Product names the reply text claims: titles from this run's tool corpus
+ *  that appear in the reply, plus **bolded** spans (the channel's
+ *  product-name convention). Bold spans that aren't products are cheap
+ *  misses — a lookup finds nothing and nothing renders. */
+export function namedProductsInReply(reply: string, corpusTitles: string[]): string[] {
+  const named = new Set<string>();
+  const hay = ` ${normTitle(reply)} `;
+  for (const t of corpusTitles) {
+    if (t && hay.includes(` ${t} `)) named.add(t);
+  }
+  for (const m of reply.matchAll(/\*\*([^*\n]{3,80})\*\*/g)) {
+    const s = m[1].trim();
+    if (/^[\d#.,\s$]+$/.test(s)) continue; // "**#1001**", "**$12.00**" — not products
+    named.add(s);
+  }
+  return [...named];
+}
 
 /** A WIDGET_REF capture — the normalised name plus the model's optional
  *  inline data object (props for placeholders, args for a bound tool, or a

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { availabilityDropped, dedupeToolWidgets, dedupeWidgetList, filterRowsByQuery, internalDataResult, toolResultEmpty, toolResultNotes, widgetFromToolResult } from './widgets.js';
+import { availabilityDropped, dedupeToolWidgets, dedupeWidgetList, filterRowsByQuery, internalDataResult, namedProductsInReply, titlesMatch, toolResultEmpty, toolResultNotes, widgetFromToolResult } from './widgets.js';
 
 const products = JSON.stringify({
   products: [
@@ -1115,5 +1115,72 @@ describe('internalDataResult — sales analytics minimization', () => {
   it('passes non-analytics tools and non-JSON results through untouched', () => {
     expect(internalDataResult('shopify_search_products', '{"data":{}}')).toBeUndefined();
     expect(internalDataResult('shopify_analytics', 'error: timeout')).toBeUndefined();
+  });
+});
+
+describe('filterRowsByQuery — strong_fields (Shopify product search)', () => {
+  const cfg = {
+    type: 'cards' as const,
+    items: 'data.products.nodes',
+    relevance: {
+      arg: 'query',
+      fields: ['title', 'description'],
+      strong_fields: ['title', 'productType', 'tags', 'vendor'],
+    },
+  };
+  const result = JSON.stringify({
+    data: {
+      products: {
+        nodes: [
+          { title: 'Gift Card', productType: 'Gift Cards', tags: [], description: 'For any snowboarder' },
+          { title: 'The Collection Snowboard: Liquid', productType: 'Snowboards', tags: ['snowboard'], description: 'Blue top graphic, purple base' },
+          { title: 'The Videographer Snowboard', productType: 'Snowboards', tags: ['snow'], description: 'All-mountain' },
+        ],
+      },
+    },
+  });
+
+  it('drops rows whose identifying fields share no token with the query', () => {
+    const out = JSON.parse(filterRowsByQuery(cfg, { query: 'snowboard' }, result));
+    const titles = out.data.products.nodes.map((r: { title: string }) => r.title);
+    expect(titles).toEqual(['The Collection Snowboard: Liquid', 'The Videographer Snowboard']);
+  });
+
+  it('keeps title-token rows on descriptive multi-term queries (no 50% bar)', () => {
+    const out = JSON.parse(
+      filterRowsByQuery(cfg, { query: 'snowboard blue cloud purple sale' }, result),
+    );
+    const titles = out.data.products.nodes.map((r: { title: string }) => r.title);
+    // Both snowboards keep their 'snowboard' title token; the gift card's
+    // only hit was prose/description — not an identifying field.
+    expect(titles).toEqual(['The Collection Snowboard: Liquid', 'The Videographer Snowboard']);
+  });
+
+  it('still matches whole phrases in the loose fields', () => {
+    const out = JSON.parse(
+      filterRowsByQuery(cfg, { query: 'for any snowboarder' }, result),
+    );
+    const titles = out.data.products.nodes.map((r: { title: string }) => r.title);
+    expect(titles).toEqual(['Gift Card']);
+  });
+});
+
+describe('titlesMatch / namedProductsInReply', () => {
+  it('matches full titles, articles, colons and short forms', () => {
+    expect(titlesMatch('**The Collection Snowboard: Liquid**', 'The Collection Snowboard: Liquid')).toBe(true);
+    expect(titlesMatch('Collection Snowboard Liquid', 'The Collection Snowboard: Liquid')).toBe(true);
+    expect(titlesMatch('Liquid', 'The Collection Snowboard: Liquid')).toBe(true);
+    expect(titlesMatch('Gift Card', 'The Collection Snowboard: Liquid')).toBe(false);
+  });
+
+  it('finds corpus titles mentioned in the reply plus bold spans', () => {
+    const named = namedProductsInReply(
+      'The match is **The Collection Snowboard: Liquid** — others might be **Hydrogen** or **Oxygen**. Total: **$10.00**.',
+      ['collection snowboard liquid', 'the videographer snowboard'],
+    );
+    expect(named).toContain('collection snowboard liquid');
+    expect(named).toContain('Hydrogen');
+    expect(named).not.toContain('the videographer snowboard');
+    expect(named).not.toContain('$10.00');
   });
 });

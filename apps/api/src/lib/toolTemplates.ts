@@ -136,7 +136,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           '{"query":"query($q:String!,$after:String,$sort:ProductSortKeys,$reverse:Boolean){productsCount(query:$q){count} products(first:12,query:$q,after:$after,sortKey:$sort,reverse:$reverse){pageInfo{hasNextPage endCursor} nodes{id title handle status vendor productType tags totalInventory description(truncateAt:120) onlineStoreUrl featuredImage{url} images(first:3){nodes{url}} collections(first:3){nodes{title}} category{fullName} options{name values} sellingPlanGroups(first:5){nodes{name sellingPlans(first:3){nodes{name}}}} seo{title description} priceRangeV2{minVariantPrice{amount currencyCode} maxVariantPrice{amount currencyCode}} compareAtPriceRange{minVariantCompareAtPrice{amount currencyCode} maxVariantCompareAtPrice{amount currencyCode}} variants(first:10){nodes{id title sku price compareAtPrice availableForSale inventoryQuantity inventoryPolicy selectedOptions{name value} inventoryItem{tracked requiresShipping measurement{weight{value unit}}}}} metafields(first:10){nodes{namespace key value type}}}}}","variables":{"q":"${query:text} status:active published_status:published","after":${after?},"sort":${sort?},"reverse":${reverse?}}}',
         params: {
           query:
-            'Shopify catalogue search string — use "title:*snowboard*" to match a keyword, or " product_type:…" / " vendor:…" to filter. Leave it empty ("") to browse the whole catalogue. The search is mechanically constrained to active products published to the Online Store — draft, archived and unpublished products NEVER appear (their product page and Add to cart would 404 anyway). If a customer names a product that comes back empty, it is not sold on the storefront — say it isn\'t available rather than claiming it never existed.',
+            'Shopify catalogue search string — use "title:*snowboard*" to match a keyword, or " product_type:…" / " vendor:…" to filter. Leave it empty ("") to browse the whole catalogue. The search is mechanically constrained to active products published to the Online Store — draft, archived and unpublished products NEVER appear (their product page and Add to cart would 404 anyway). If a customer names a product that comes back empty, it is not sold on the storefront — say it isn\'t available rather than claiming it never existed. WHEN YOUR REPLY NAMES A PRODUCT — an item you identified from a photo, a product you call the match, alternates you list by name ("it could also be the Hydrogen or Oxygen") — the cards MUST contain those products: search each product\'s own name ("title:*Collection Snowboard Liquid*"), because a broad category query buries the named match behind unrelated filler and the carousel then contradicts your text.',
           'after?':
             'optional — the previous result\'s pageInfo.endCursor; pass it to fetch the NEXT page when the customer asks for more. You MUST repeat the EXACT SAME `query` you used for the page before — the cursor is bound to it; a rephrased or emptied query silently restarts at page one and shows the same products again. Omit for the first page.',
           'in_stock_only?':
@@ -176,6 +176,15 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
             only_arg: 'only_unavailable',
           },
           row_limit_arg: 'limit',
+          // Shopify's own text search is loose enough to answer a
+          // "snowboard" query with a gift card. A row needs the query in
+          // its identifying fields — title/type/tags/vendor — or the whole
+          // phrase in title+description, so filler can't crowd the cards.
+          relevance: {
+            arg: 'query',
+            fields: ['title', 'description'],
+            strong_fields: ['title', 'productType', 'tags', 'vendor'],
+          },
           map: {
             title: 'title',
             subtitle: 'vendor',
