@@ -3916,7 +3916,7 @@ async function replyAsHostedAgent(
           lastInboundText,
         );
       if (
-        attempt === 0 &&
+        attempt < 2 &&
         catalogCapable &&
         gen.toolCalls.length === 0 &&
         (pricedCards.length > 0 || catalogAsk || (reply !== null && listsPricedItems(reply)))

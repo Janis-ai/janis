@@ -1092,7 +1092,11 @@
         }
         if (item.link) {
           var a = el('a', {}, { class: 'janis-wbtn', href: item.link, target: '_blank', rel: 'noopener noreferrer' });
-          wtext(a, item.link_label || 'View');
+          // A PDP link labelled "Add to cart" next to a REAL add button is a
+          // fake — the link only navigates. Coerce the label to what it does.
+          var linkLabel = item.link_label || 'View';
+          if (item.cart_variant_id && /add to cart|add to bag|buy now/i.test(linkLabel)) linkLabel = 'View product';
+          wtext(a, linkLabel);
           btns.appendChild(a);
         }
         if (item.select_label) {
