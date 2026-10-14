@@ -192,6 +192,9 @@ function emptySpec(type: ChatWidget['type']): ChatWidget {
       return { type, title: 'Order #1234', steps: [{ label: 'Ordered', state: 'done' }, { label: 'Shipped', state: 'current' }, { label: 'Delivered', state: 'todo' }] };
     case 'receipt':
       return { type, title: 'Order summary', rows: [{ label: 'Widget', value: '$29.00' }], total: { label: 'Total', value: '$29.00' } };
+    // Not in TYPES — the agent emits cart widgets; it isn't authored here.
+    case 'cart':
+      return { type, title: 'Your cart' };
   }
 }
 

@@ -259,6 +259,16 @@ describe('extractWidgets', () => {
     expect(out.widgets).toHaveLength(0);
     expect(out.dropped).toBe(2);
   });
+
+  it('accepts an itemless cart widget — and dedupe survives it', async () => {
+    const { extractWidgets, dedupeToolWidgets } = await import('./widgets.js');
+    const out = extractWidgets('Your cart:\nWIDGET: {"type":"cart","title":"Your cart"}');
+    expect(out.widgets).toEqual([{ type: 'cart', title: 'Your cart' }]);
+    // widgetItemKeys returns [] for cart — no crash against a tool list.
+    expect(
+      dedupeToolWidgets([{ type: 'cart' as const }], out.widgets),
+    ).toHaveLength(1);
+  });
 });
 
 describe('specProps / interpolateSpec / stripEmptyStrings', () => {

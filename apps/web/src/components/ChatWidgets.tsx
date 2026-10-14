@@ -42,7 +42,11 @@ export type ChatWidget =
       title?: string;
       rows: { label: string; value: string }[];
       total?: { label: string; value: string };
-    };
+    }
+  // Storefront cart — hydrates from the shop's /cart.js in widget.js; the
+  // console renders a transcript placeholder since the operator has no
+  // access to the shopper's live cart.
+  | { type: 'cart'; title?: string };
 
 export function Widgets({
   widgets,
@@ -68,6 +72,7 @@ function Widget({ w, onSend }: { w: ChatWidget; onSend: (t: string, tap?: { of?:
       {w.type === 'form' && <WForm w={w} onSend={onSend} />}
       {w.type === 'status' && <Status w={w} />}
       {w.type === 'receipt' && <Receipt w={w} />}
+      {w.type === 'cart' && <Cart w={w} />}
     </div>
   );
 }
@@ -290,6 +295,17 @@ function Receipt({ w }: { w: Extract<ChatWidget, { type: 'receipt' }> }) {
           <span className="wgt-v">{w.total.value}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+function Cart({ w }: { w: Extract<ChatWidget, { type: 'cart' }> }) {
+  return (
+    <div className="wgt-receipt">
+      <div className="wgt-title">{w.title || 'Your cart'}</div>
+      <div className="wgt-row">
+        <span>Shopper's live cart — rendered on the storefront with quantity controls and checkout.</span>
+      </div>
     </div>
   );
 }

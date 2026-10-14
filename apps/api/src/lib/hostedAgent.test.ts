@@ -1502,6 +1502,38 @@ describe('verifiedIdentityFor', () => {
   });
 });
 
+describe('procedures', () => {
+  it('injects authored runbooks stepwise into the system prompt', () => {
+    const fakeAgent = {
+      name: 'Bot',
+      config: {
+        procedures: [
+          {
+            name: 'Returns & exchanges',
+            when: 'the customer wants to send something back',
+            steps: [
+              'Ask for the order number and the email it was placed under',
+              'Run shopify_lookup_order to verify',
+              'Run shopify_request_return with the items they pick',
+            ],
+          },
+        ],
+      },
+    } as never;
+    const p = systemPrompt(fakeAgent, [], undefined, {});
+    expect(p).toContain('Procedures — authored workflows');
+    expect(p).toContain('Returns & exchanges');
+    expect(p).toContain('use when: the customer wants to send something back');
+    expect(p).toContain('1. Ask for the order number');
+    expect(p).toContain('3. Run shopify_request_return');
+  });
+
+  it('omits the section when no procedures are configured', () => {
+    const p = systemPrompt({ name: 'Bot', config: {} } as never, [], undefined, {});
+    expect(p).not.toContain('Procedures');
+  });
+});
+
 describe('handoff opt-out', () => {
   it('systemPrompt drops the escalation ladder when handoff_enabled is false', () => {
     const fakeAgent = { name: 'Bot', config: { handoff_enabled: false } } as never;

@@ -106,6 +106,17 @@
       body: JSON.stringify({ visitor_id: visitor, user: state.user || {} }),
     }).catch(function () {});
   };
+  // Shopify storefront loader passes the logged-in shop customer as an
+  // UNSIGNED claim (data-janis-user) — self-reported tier: name/email
+  // prefill and greeting context, never proof for account actions.
+  (function () {
+    var raw = script.getAttribute('data-janis-user');
+    if (!raw) return;
+    try {
+      var claim = JSON.parse(raw);
+      if (claim && (claim.id || claim.email || claim.name)) window.Janis.identify(claim);
+    } catch (e) {}
+  })();
   // Teardown for host SPAs (the Janis console dogfoods the widget on the
   // landing page) — clears the poll/teaser timers and removes every janis-*
   // node so nothing leaks onto console routes after unmount.
@@ -466,6 +477,17 @@
     '.janis-wrow{display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:13px}' +
     '.janis-wrow .janis-wv{text-align:right;font-weight:500;white-space:pre-line}' +
     '.janis-wrow.janis-wtotal{border-top:1px solid #e5e7eb;margin-top:6px;padding-top:7px;font-weight:700}' +
+    '.janis-wcart{border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#fff;color:#1f2937}' +
+    '.janis-cart-row{display:flex;gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid #f3f4f6}' +
+    '.janis-cart-img{width:38px;height:38px;object-fit:cover;border-radius:6px;flex:none}' +
+    '.janis-cart-info{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis}' +
+    '.janis-cart-info small{display:block;color:#6b7280;font-size:11.5px}' +
+    '.janis-cart-qty{display:flex;align-items:center;gap:6px;flex:none}' +
+    '.janis-cart-qty button{width:22px;height:22px;border:1px solid #e5e7eb;border-radius:5px;background:#fff;' +
+    'color:#374151;font-size:13px;line-height:1;cursor:pointer;padding:0}' +
+    '.janis-cart-qty button:disabled{opacity:.4;cursor:default}' +
+    '.janis-cart-qty span{min-width:16px;text-align:center;font-size:13px}' +
+    '.janis-cart-checkout{display:block;text-align:center;margin-top:9px;padding:9px;border-radius:8px;text-decoration:none}' +
     '#janis-badge{position:absolute;top:-5px;left:-5px;min-width:22px;height:22px;border-radius:11px;' +
     'background:#ef4444;color:#fff;font-size:12px;font-weight:700;line-height:22px;text-align:center;' +
     'padding:0 6px;box-sizing:border-box;display:none;box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:none}' +
@@ -1207,6 +1229,78 @@
     box.appendChild(card);
   }
 
+  // Live storefront cart — hydrates from the shop's same-origin Ajax API.
+  // Itemless spec: the shopper's real cart is the data, so nothing here can
+  // be fabricated by the model. Qty steppers + remove hit /cart/change.js;
+  // checkout goes to the store's native checkout.
+  function renderCart(box, w) {
+    wTitle(box, w.title || 'Your cart');
+    var body = el('div', {}, { class: 'janis-cart-body' });
+    box.appendChild(body);
+    if (!SHOPIFY) {
+      wtext(body, 'Cart is only available on the store site.');
+      return;
+    }
+    function money(cents, cur) { return (cur || '') + ' ' + (cents / 100).toFixed(2); }
+    function load() {
+      wtext(body, 'Loading your cart…');
+      fetch('/cart.js', { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (cart) {
+          body.innerHTML = '';
+          if (!cart || !cart.item_count) { wtext(body, 'Your cart is empty.'); return; }
+          (cart.items || []).forEach(function (it) {
+            var row = el('div', {}, { class: 'janis-cart-row' });
+            if (it.image) {
+              var img = document.createElement('img');
+              img.src = it.image; img.alt = ''; img.className = 'janis-cart-img';
+              row.appendChild(img);
+            }
+            var info = el('div', {}, { class: 'janis-cart-info' });
+            wtext(info, it.title);
+            var sub = document.createElement('small');
+            wtext(sub, money(it.price, cart.currency) + ' each');
+            info.appendChild(sub);
+            row.appendChild(info);
+            var stepper = el('div', {}, { class: 'janis-cart-qty' });
+            var minus = el('button', {}, { type: 'button' });
+            wtext(minus, '−');
+            var qty = el('span', {});
+            wtext(qty, String(it.quantity));
+            var plus = el('button', {}, { type: 'button' });
+            wtext(plus, '+');
+            var change = function (n) {
+              minus.disabled = plus.disabled = true;
+              fetch('/cart/change.js', {
+                method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: it.key, quantity: n }),
+              }).then(function (r) {
+                if (!r.ok) throw new Error('change failed');
+                load();
+              }).catch(function () { minus.disabled = plus.disabled = false; });
+            };
+            minus.onclick = function () { change(it.quantity - 1); };
+            plus.onclick = function () { change(it.quantity + 1); };
+            stepper.appendChild(minus); stepper.appendChild(qty); stepper.appendChild(plus);
+            row.appendChild(stepper);
+            body.appendChild(row);
+          });
+          var total = el('div', {}, { class: 'janis-wrow janis-wtotal' });
+          var tl = el('span', {}); wtext(tl, 'Subtotal');
+          var tv = el('span', {}, { class: 'janis-wv' });
+          wtext(tv, money(cart.total_price, cart.currency));
+          total.appendChild(tl); total.appendChild(tv);
+          body.appendChild(total);
+          var co = el('a', {}, { class: 'janis-wbtn janis-wbtn-primary janis-cart-checkout', href: '/checkout' });
+          wtext(co, 'Check out — ' + money(cart.total_price, cart.currency));
+          body.appendChild(co);
+        })
+        .catch(function () { wtext(body, 'Could not load your cart.'); });
+    }
+    load();
+  }
+
   function renderWidgets(msgEl, widgets) {
     widgets.forEach(function (w) {
       if (!w || typeof w !== 'object' || typeof w.type !== 'string') return;
@@ -1217,6 +1311,7 @@
         else if (w.type === 'form') renderForm(box, w);
         else if (w.type === 'status') renderStatus(box, w);
         else if (w.type === 'receipt') renderReceipt(box, w);
+        else if (w.type === 'cart') renderCart(box, w);
         else return;
         msgEl.classList.add('janis-hasw');
         msgEl.appendChild(box);

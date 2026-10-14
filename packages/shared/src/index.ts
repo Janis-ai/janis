@@ -192,6 +192,23 @@ export type IngestResponse = z.infer<typeof IngestResponse>;
 export const AgentConfig = z.object({
   system_prompt: z.string().optional(),
   knowledge: z.array(z.string()).optional(), // facts/snippets injected into the prompt
+  // Procedures — authored step-by-step runbooks the agent follows in order
+  // when a request matches `when` (returns, warranty intake, onboarding).
+  // Steps can name the tool to call inline ("2. shopify_lookup_order with
+  // the order number"). A deterministic scaffold vs hoping the system
+  // prompt's prose ordering holds.
+  procedures: z
+    .array(
+      z.object({
+        // Lenient at write (a half-filled editor row mustn't 400 the whole
+        // save) — blank names/empty steps are dropped at prompt-build time.
+        name: z.string().max(80),
+        when: z.string().max(240).optional(), // the trigger — "customer wants to return"
+        steps: z.array(z.string().max(300)).max(25),
+      }),
+    )
+    .max(12)
+    .optional(),
   tone: z.string().optional(),
   // Per-agent help-center domain override — beats the workspace-level
   // help_domain when both are set. Bare domain only (help.acme.com).

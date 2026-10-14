@@ -148,6 +148,21 @@ export function shopifyPublicRoutes(db: Db) {
       const v = (q[param] ?? '').trim().slice(0, 500);
       if (v) attrs.push(`s.setAttribute(${JSON.stringify(attr)},${JSON.stringify(v)});`);
     }
+    // Signed-in shopper context — the theme embed passes the logged-in
+    // Shopify customer as params. We forward them as an UNSIGNED identity
+    // claim (self-reported tier: greeting/prefill, never proof — signing
+    // raw params would make this endpoint a forgery oracle). Account-level
+    // actions still verify via the order+email pair.
+    const cid = (q.cid ?? '').trim();
+    const cemail = (q.cemail ?? '').trim().slice(0, 200);
+    const cname = (q.cname ?? '').trim().slice(0, 80);
+    if (/^\d+$/.test(cid) || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cemail)) {
+      const claim: Record<string, string> = {};
+      if (/^\d+$/.test(cid)) claim.id = `shopify:${cid}`;
+      if (cemail) claim.email = cemail;
+      if (cname) claim.name = cname;
+      attrs.push(`s.setAttribute('data-janis-user',${JSON.stringify(JSON.stringify(claim))});`);
+    }
     // Theme → channel sync: non-empty theme overrides persist into the
     // channel's branding so the console Bubble editor shows the same
     // effective values (blank always means "channel default", so absent

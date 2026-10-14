@@ -517,6 +517,7 @@ export function systemPrompt(
   const cfg = (agent.config ?? {}) as {
     system_prompt?: string;
     knowledge?: string[];
+    procedures?: { name: string; when?: string; steps: string[] }[];
     tone?: string;
     auto_archive?: boolean;
     handoff_enabled?: boolean;
@@ -550,6 +551,31 @@ export function systemPrompt(
       used += k.length;
     }
     parts.push(`\nKnowledge base:\n${lines.join('\n')}`);
+  }
+  // Procedures — operator-authored runbooks. Structured so the model runs
+  // them stepwise (gather inputs → named tool calls → outcome) instead of
+  // hoping prose ordering in the system prompt holds.
+  if (Array.isArray(cfg.procedures) && cfg.procedures.length) {
+    // Half-edited rows survive the lenient schema — drop blank names and
+    // empty steps here so they never reach the prompt.
+    const procs = cfg.procedures
+      .filter((p) => p.name.trim() && p.steps.some((s) => s.trim()))
+      .slice(0, 12);
+    if (procs.length) {
+      parts.push(
+        '\nProcedures — authored workflows you MUST run stepwise. When the customer\'s request matches a procedure\'s trigger, work it in order: collect whatever a step needs (ask the customer if it\'s missing), call the named tool where a step says to, and never skip, reorder, merge or improvise steps. If the customer already supplied a step\'s input, do not re-ask — just do the step.\n' +
+          procs
+            .map(
+              (p) =>
+                `### ${sanitizeSourceText(p.name)}${p.when?.trim() ? ` — use when: ${sanitizeSourceText(p.when)}` : ''}\n` +
+                p.steps
+                  .filter((s) => s.trim())
+                  .map((s, i) => `${i + 1}. ${sanitizeSourceText(s)}`)
+                  .join('\n'),
+            )
+            .join('\n\n'),
+      );
+    }
   }
   if (docs.length) {
     parts.push(
@@ -624,7 +650,8 @@ export function systemPrompt(
           (chan === 'webchat'
             ? '\n{"type":"form","title","submit_label","fields":[{"name","label","type":"text|email|tel|textarea|select","options":[...],"required":true}]} — collects fields and submits them as a message you\'ll receive.' +
               '\n{"type":"status","title","steps":[{"label","state":"done|current|todo","note"}]} — order/application tracker.' +
-              '\n{"type":"receipt","title","rows":[{"label","value"}],"total":{"label","value"}} — order summary.'
+              '\n{"type":"receipt","title","rows":[{"label","value"}],"total":{"label","value"}} — order summary.' +
+              '\n{"type":"cart","title"} — Shopify storefronts only: renders the shopper\'s LIVE cart (items, quantity controls, remove, subtotal, a checkout button) read from the store itself — emit it when they ask what\'s in their cart or want to check out; it carries no items, you never list them yourself.'
             : '') +
           '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. For a card about a specific page or listing, use only the "Image:" URL attached to that page\'s knowledge — never reuse another document\'s image, and omit "image" if the page has none. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.' +
           '\nNever rebuild a product card by hand — catalogue cards come ONLY from the product-search tool (re-call it if you need them). And once the customer has picked an item and confirmed, act on the pick — buy it, book it, apply it with the right tool — instead of re-rendering the same card or a card whose only action sends their own words back to you.' +

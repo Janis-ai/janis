@@ -40,6 +40,13 @@ as a push notification, and on the workspace Slack alert channel).
    and that the SSE stream delivers a live event. Run this **before telling the
    user to reload the Devin preview** — it catches dead servers, CORS breaks,
    and endpoint regressions.
+4. `npm run test:ui` — Playwright click-around (scripts/ui/): console login →
+   inbox → agent page → Ask Janis round-trip, screenshots to scripts/ui/out/.
+   Env: UI_BASE (point at preview/prod), UI_HEADED=1 (watch it click),
+   UI_CHANNEL=chrome (system Chrome, not bundled), UI_EXPECT_REPLY=1 (fail
+   when no LLM reply), single step: `node scripts/ui/smoke.mjs ask-janis`.
+   Note: `/` is the public landing even when authed — smoke probes must hit
+   console routes (/conversations, /ask), not `/`.
 
 ## Caveats
 
@@ -203,7 +210,31 @@ drizzle-kit/workbox-build, nothing to drop directly).
     "changed at" signal); stale-source alert event on knowledge 'degraded'
     rows (alert-rules system already exists — 'degraded' status +
     last-good retention shipped 2026-10, so the signal to fire on is
-    already there).
+    already there). Also from the 2026-10-12 audit: SSRF guard on
+    fetchUrlText + helpCentreImport — reuse publiclyFetchable
+    (hostedAgent.ts) plus a DNS resolve (public hostname → private IP is
+    the real hole); URL normalization at add-time (docs.google.com/…/edit
+    → export?format=txt, github.com/…/blob/… → raw.githubusercontent.com)
+    so the two worst silent-index footguns can't be pasted wrong.
+47. Customer-data plumbing gaps (2026-10-12 session): save_user_profile
+    and PATCH /v1/conversations/:id/user write
+    conversations.user_profile only — they never enrich the contact, so
+    agent-collected email/phone can't merge identities or feed campaign
+    reachability (campaigns resolve contact.email). Fix: enrichContact/
+    contactForBinding on save when conv.contact_id exists. Related:
+    first-class collect-data action (Chatbase parity) — conversational
+    or form, custom fields, per-channel toggles, destinations
+    (CRM/webhook/email notify); save_user_profile is the thin version.
+48. Procedures/runbooks (Chatbase parity — the interesting borrow):
+    numbered plain-language SOPs the agent follows stepwise with tool
+    calls invoked inline at named steps, vs hoping system-prompt prose
+    ordering holds. Deterministic scaffolds for multi-step flows
+    (returns, warranty, intake) — platform-wide, not just e-comm.
+49. Full Slack process audit — walk every Slack surface end-to-end like
+    the 2026-10-03 alert matrix did: transcript mirroring fidelity,
+    alert delivery + dedup, interactive buttons (approve/assign/
+    snooze), context cards, markdown→mrkdwn rendering, takeover from
+    Slack, per-event notify-prefs coverage.
 
 *F. Writing/marketing (non-code)*
 33. Reactivation email sequence — 3 emails (approvals-led), subjects/

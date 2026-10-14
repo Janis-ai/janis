@@ -433,6 +433,9 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
           {(sub === 'instructions' || sub === 'greeting') && (
             <GreetingSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
+          {sub === 'instructions' && janisBrain(agent) && (
+            <ProceduresSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+          )}
         </>
       )}
       {section === 'knowledge' && janisBrain(agent) && (
@@ -910,6 +913,102 @@ export function InstructionsSection({
         value={cfg.tone ?? ''}
         onChange={(e) => setCfg({ ...cfg, tone: e.target.value })}
       />
+      </ReadOnly>
+    </div>
+  );
+}
+
+/** Steps editor — keeps raw text while typing (a trailing newline isn't a
+ *  step), syncs filtered steps into cfg on blur. */
+function StepsEditor({
+  steps,
+  onChange,
+}: {
+  steps: string[];
+  onChange: (steps: string[]) => void;
+}) {
+  const [text, setText] = useState(steps.join('\n'));
+  return (
+    <textarea
+      rows={Math.min(10, Math.max(3, text.split('\n').length + 1))}
+      placeholder={'Steps, one per line — e.g.\nAsk for the order number and the email it was placed under\nRun shopify_lookup_order to verify\nRun shopify_request_return with the items they pick'}
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => onChange(text.split('\n').map((s) => s.trim()).filter(Boolean))}
+    />
+  );
+}
+
+/** Procedures — authored runbooks the agent runs stepwise when a request
+ *  matches the trigger (returns, warranty, intake). */
+export function ProceduresSection({
+  cfg,
+  setCfg,
+  isAdmin,
+}: {
+  cfg: AgentConfig;
+  setCfg: (c: AgentConfig) => void;
+  isAdmin: boolean;
+}) {
+  const procs = cfg.procedures ?? [];
+  const update = (i: number, patch: Partial<NonNullable<AgentConfig['procedures']>[number]>) =>
+    setCfg({ ...cfg, procedures: procs.map((p, j) => (j === i ? { ...p, ...patch } : p)) });
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+      <strong>Procedures</strong>
+      <span className="muted" style={{ fontSize: 13 }}>
+        Step-by-step workflows the agent follows in order when a request matches — returns,
+        warranty intake, onboarding. Steps can name a tool to call (e.g. shopify_lookup_order).
+        Rules and policies still belong in Instructions and knowledge.
+      </span>
+      <ReadOnly off={!isAdmin}>
+        {procs.map((p, i) => (
+          <div
+            key={i}
+            style={{
+              border: '1px solid var(--border, #e5e7eb)',
+              borderRadius: 8,
+              padding: 10,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+            }}
+          >
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                style={{ flex: 1 }}
+                placeholder="Name — e.g. Returns & exchanges"
+                value={p.name}
+                onChange={(e) => update(i, { name: e.target.value })}
+              />
+              <button className="ghost" type="button" onClick={() =>
+                setCfg({ ...cfg, procedures: procs.filter((_, j) => j !== i) })
+              }>
+                Remove
+              </button>
+            </div>
+            <input
+              placeholder="Use when — e.g. the customer wants to return or exchange an item"
+              value={p.when ?? ''}
+              onChange={(e) => update(i, { when: e.target.value })}
+            />
+            <StepsEditor steps={p.steps} onChange={(steps) => update(i, { steps })} />
+          </div>
+        ))}
+        {procs.length < 12 && (
+          <button
+            className="ghost"
+            type="button"
+            onClick={() =>
+              setCfg({
+                ...cfg,
+                procedures: [...procs, { name: '', when: '', steps: [] }],
+              })
+            }
+          >
+            + Add procedure
+          </button>
+        )}
       </ReadOnly>
     </div>
   );

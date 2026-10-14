@@ -210,11 +210,12 @@ describe('GET /api/reports/timeline', () => {
     expect(body.deflection_rate).toBe(50);
     expect(body.median_frt_min).not.toBeNull();
     expect(body.median_resolution_min).not.toBeNull();
-    const today = new Date().toISOString().slice(0, 10);
-    const bucket = body.series.find((d) => d.date === today);
-    expect(bucket?.resolutions).toBe(2);
-    expect(bucket?.ai_resolved).toBe(1);
-    expect(bucket?.human_resolved).toBe(1);
+    // A created an hour ago can land in yesterday's UTC bucket near midnight
+    // — assert the window totals, not one day's bucket.
+    const series = body.series;
+    expect(series.reduce((s, d) => s + d.resolutions, 0)).toBe(2);
+    expect(series.reduce((s, d) => s + d.ai_resolved, 0)).toBe(1);
+    expect(series.reduce((s, d) => s + d.human_resolved, 0)).toBe(1);
   });
 });
 

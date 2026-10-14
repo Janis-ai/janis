@@ -92,6 +92,15 @@ export const WidgetComponent = z.discriminatedUnion('type', [
     rows: z.array(z.object({ label: s(80), value: s(160) })).min(1).max(15),
     total: z.object({ label: s(80), value: s(60) }).optional(),
   }),
+  // Live storefront cart (Shopify only) — widget.js hydrates it from the
+  // shop's same-origin /cart.js: real line items with quantity steppers,
+  // remove buttons, subtotal and a checkout button that opens the native
+  // checkout. Intentionally itemless — the shopper's actual cart is the
+  // data source, so the model can't fabricate cart contents.
+  z.object({
+    type: z.literal('cart'),
+    title: s(120).optional(),
+  }),
 ]);
 export type WidgetComponent = z.infer<typeof WidgetComponent>;
 
@@ -522,6 +531,8 @@ export function extractWidgets(text: string): {
 
 /** Per-item identity — what the component actually shows the customer. */
 function widgetItemKeys(w: WidgetComponent): string[] {
+  // Itemless components (cart — hydrated client-side) have nothing to key.
+  if (w.type === 'cart') return [];
   const items: Record<string, unknown>[] =
     w.type === 'cards' || w.type === 'options'
       ? w.items
@@ -571,7 +582,8 @@ export function dedupeToolWidgets(
       if (items.length) result.push({ ...m, items } as WidgetComponent);
       continue; // fully restated — the tool row already says it
     }
-    if (mine.filter((k) => toolKeys.has(k)).length < Math.ceil(mine.length * 0.6))
+    // Itemless components (cart) carry no repeatable content — never drop.
+    if (mine.length === 0 || mine.filter((k) => toolKeys.has(k)).length < Math.ceil(mine.length * 0.6))
       result.push(m);
   }
   return result;
