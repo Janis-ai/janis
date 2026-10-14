@@ -54,6 +54,10 @@ export default function ShopifyApp() {
   const [state, setState] = useState<SessionState>({ kind: 'loading' });
   const [apiKey, setApiKey] = useState(''); // client_id — theme-editor deep link
   const [tick, setTick] = useState(0); // "I've connected" re-check
+  // "Enable storefront chat" opens the theme editor in a NEW tab — this tab
+  // would otherwise still show the CTA afterwards. Track the click (and
+  // persist it per shop) so the view advances to next-steps.
+  const [embedOpened, setEmbedOpened] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -84,6 +88,7 @@ export default function ShopifyApp() {
         if (cancelled) return;
         if (res.state === 'linked') {
           setState({ kind: 'linked', shop: res.shop, agent: res.agent ?? null, workspace: res.workspace ?? null });
+          if (localStorage.getItem(`janis:embed-opened:${res.shop}`) === '1') setEmbedOpened(true);
         } else if (res.state === 'uninstalled') {
           setState({ kind: 'uninstalled', shop: res.shop });
         } else {
@@ -154,20 +159,54 @@ export default function ShopifyApp() {
               ) : null}
               {state.workspace ? <span className="muted"> ({state.workspace})</span> : null}.
             </p>
-            <p className="muted" style={{ fontSize: 13 }}>
-              Your agent now holds this shop's credentials and a storefront chat channel.
-              Turn on the "Janis chat" app embed in your theme to put the bubble on your
-              storefront.
-            </p>
-            <a
-              className="btn primary"
-              style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
-              href={`https://${state.shop}/admin/themes/current/editor?context=apps&activateAppId=${apiKey}/janis-chat`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Enable storefront chat
-            </a>
+            {embedOpened ? (
+              <>
+                <p className="muted" style={{ fontSize: 13 }}>
+                  Theme editor opened in a new tab — toggle the <strong>Janis chat</strong> app
+                  embed on and hit <strong>Save</strong>. The bubble appears on your storefront
+                  the moment it saves.
+                </p>
+                <a
+                  className="btn primary"
+                  style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
+                  href={`https://${state.shop}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open your storefront
+                </a>
+                <a
+                  className="btn"
+                  style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
+                  href={`https://${state.shop}/admin/themes/current/editor?context=apps&activateAppId=${apiKey}/janis-chat`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Re-open the theme editor
+                </a>
+              </>
+            ) : (
+              <>
+                <p className="muted" style={{ fontSize: 13 }}>
+                  Your agent now holds this shop's credentials and a storefront chat channel.
+                  Turn on the "Janis chat" app embed in your theme to put the bubble on your
+                  storefront.
+                </p>
+                <a
+                  className="btn primary"
+                  style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
+                  href={`https://${state.shop}/admin/themes/current/editor?context=apps&activateAppId=${apiKey}/janis-chat`}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={() => {
+                    setEmbedOpened(true);
+                    localStorage.setItem(`janis:embed-opened:${state.shop}`, '1');
+                  }}
+                >
+                  Enable storefront chat
+                </a>
+              </>
+            )}
             <a className="btn" style={{ display: 'block', marginTop: 8, textAlign: 'center' }} href="/conversations" target="_blank" rel="noreferrer">
               Open Janis
             </a>
