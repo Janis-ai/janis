@@ -1257,7 +1257,13 @@ export function repairCardStock(
     if (w.type !== 'cards' || skip.has(w)) continue;
     for (const item of w.items) {
       if (!item.title) continue;
-      if (item.subtitle && item.subtitle === item.price) {
+      if (
+        item.subtitle &&
+        (item.subtitle === item.price ||
+          // A bare price pasted into the subtitle ("USD 600.0") duplicates
+          // the price field unformatted — drop it.
+          /^(?:[A-Z]{3}\s*[\d,.]+|[\d,.]+\s*[A-Z]{3}|[$£€]\s*[\d,.]+)$/.test(item.subtitle))
+      ) {
         delete item.subtitle;
         fixed++;
       }
@@ -2783,6 +2789,15 @@ export async function complete(
             `never describe a badged card as in stock, and don't count it toward an in-stock list.]`;
         }
         const dropped = availabilityDropped(tool.widget, args, resultJson);
+        // Catalogue availability is Admin-side truth — a product stocked at
+        // a third-party fulfilment location reads sellable here while the
+        // storefront marks it unavailable. The rendered card badge is
+        // authoritative; narrate it if one flips.
+        if (tool.widget?.availability && w?.type === 'cards' && w.items.length) {
+          result +=
+            `\n[availability here is catalogue-level — a card can still render "Out of stock" if the storefront can't actually sell it (e.g. third-party fulfilment); ` +
+            `if any rendered card carries that badge, name it unavailable rather than in stock.]`;
+        }
         if (dropped > 0) {
           result +=
             `\n[${dropped} more matching product(s) exist but were left off the cards because they're out of stock. ` +
