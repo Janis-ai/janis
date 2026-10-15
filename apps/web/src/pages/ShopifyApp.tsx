@@ -940,6 +940,43 @@ export default function ShopifyApp() {
                     {setupSaving ? 'Saving…' : briefSaved ? 'Saved ✓' : 'Save changes'}
                   </button>
                 </div>
+                <div
+                  style={{
+                    marginTop: 14,
+                    padding: 12,
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 8,
+                    textAlign: 'left',
+                  }}
+                >
+                  <label
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={state.settings.nudge}
+                      onChange={(e) =>
+                        void saveSettings({ nudge: e.target.checked }).catch(() => {})
+                      }
+                    />
+                    Abandoned-checkout nudge
+                  </label>
+                  <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+                    When a shopper chats, then starts checkout but doesn't finish, your agent sends
+                    one friendly follow-up in the chat
+                    {state.settings.nudge
+                      ? ` — about ${state.settings.nudge_after_minutes} minutes later`
+                      : ''}
+                    .
+                  </p>
+                </div>
                 <p className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
                   Knowledge base, tools, channels, evals and more live in the full console —{' '}
                   <a
@@ -1611,37 +1648,6 @@ export default function ShopifyApp() {
                 )}
               </div>
             ) : null}
-
-            <div
-              style={{
-                marginTop: 12,
-                padding: 12,
-                border: '1px solid #e5e7eb',
-                borderRadius: 8,
-                textAlign: 'left',
-              }}
-            >
-              <label
-                style={{ fontSize: 13, fontWeight: 600, display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}
-              >
-                <input
-                  type="checkbox"
-                  checked={state.settings.nudge}
-                  onChange={(e) =>
-                    void saveSettings({ nudge: e.target.checked }).catch(() => {})
-                  }
-                />
-                Abandoned-checkout nudge
-              </label>
-              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
-                When a shopper chats, then starts checkout but doesn't finish, your agent sends one
-                friendly follow-up in the chat
-                {state.settings.nudge
-                  ? ` — about ${state.settings.nudge_after_minutes} minutes later`
-                  : ''}
-                .
-              </p>
-            </div>
 
             <div
               style={{
