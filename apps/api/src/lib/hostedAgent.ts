@@ -2662,6 +2662,7 @@ export async function complete(
   // of matching a text description to a title (look-alike products are
   // indistinguishable by title alone).
   const matchCandidates: { title: string; image: string }[] = [];
+  let matchCardsTool: ToolDef | undefined;
   let matchSent = false;
 
   // Truncated replies (finish_reason 'length') resume as a continuation
@@ -3169,6 +3170,7 @@ export async function complete(
         if (w) {
           toolWidgets.push(w);
           if (w.type === 'cards') {
+            if (tool) matchCardsTool ??= tool;
             for (const i of w.items) {
               if (i.image && !matchCandidates.some((c) => c.image === i.image))
                 matchCandidates.push({ title: i.title, image: i.image });
@@ -3251,6 +3253,25 @@ export async function complete(
         Array.isArray(lastUser?.content) &&
         (lastUser.content as ContentPart[]).some((p) => p.type === 'image_url');
       if (hasPhoto) {
+        // A photo ask that ran a title: search has already decided the
+        // answer — the candidate pool would contain only the model's own
+        // guess (self-confirming query). Broaden it with an unscoped browse
+        // so the compare has real alternatives; best-effort, one extra call.
+        if (matchCardsTool?.widget) {
+          try {
+            const qArg = matchCardsTool.widget.relevance?.arg ?? 'query';
+            const broad = await callTool(matchCardsTool, { [qArg]: '' }, secrets);
+            if (broad.startsWith('{')) {
+              const bw = widgetFromToolResult(matchCardsTool.widget, broad, secrets, { [qArg]: '' });
+              if (bw?.type === 'cards')
+                for (const i of bw.items)
+                  if (i.image && !matchCandidates.some((c) => c.image === i.image))
+                    matchCandidates.push({ title: i.title, image: i.image });
+            }
+          } catch {
+            /* supplemental browse is best-effort */
+          }
+        }
         const parts: ContentPart[] = [];
         for (const c of matchCandidates.slice(0, MATCH_IMAGE_MAX)) {
           const img = await fetchMatchImage(c.image);
@@ -3263,11 +3284,12 @@ export async function complete(
           parts.unshift({
             type: 'text',
             text:
-              '[product photos for the results just shown follow — compare the image in the ' +
-              "customer's last message against each candidate and name the closest match by its " +
-              'title; visible cues like sale badges, colors and graphics are part of the match. ' +
-              'If none resembles it, run one broader catalogue search (product type or colour, ' +
-              'never a title: guess) and compare again — say "no match" only after that.]',
+              '[product photos for catalogue items follow — including items beyond your search ' +
+              'results. Compare the image in the customer\'s last message against EACH candidate ' +
+              'carefully: the correct product may not be the one you searched for, and a training- ' +
+              'data guess at the title is often wrong — the pixels decide. Name the closest match ' +
+              'by its exact title, or say none resembles it. Visible cues like sale badges, colors ' +
+              'and graphics are part of the match.]',
           });
           msgs.push({ role: 'user', content: parts });
         }
@@ -3469,7 +3491,7 @@ async function attachmentContent(
 /** Cap on a catalog candidate photo fetched for the visual-match pass —
  *  storefront thumbs are small, anything bigger is not worth the round-trip. */
 const MATCH_IMAGE_BYTES = 2 * 1024 * 1024;
-const MATCH_IMAGE_MAX = 4;
+const MATCH_IMAGE_MAX = 6;
 
 /** Fetch one remote product photo into a base64 image_url part for the
  *  visual-match injection (the Gemini shim rejects remote URLs). Returns
