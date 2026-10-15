@@ -82,13 +82,29 @@ when a keyword trips.
   go to your team in the Janis inbox with full context.
 - One-click theme app embed — the chat bubble goes live with zero theme edits.
 - Every agent reply is logged, reviewable, and testable before it ships.
+- Recovers abandoned carts two ways: a friendly chat follow-up while the
+  shopper is still browsing, then an email sequence (1 hour / 1 day / 3
+  days) with a link back to their saved checkout — recovered revenue is
+  tracked right in the app.
 
 **Pricing blurb (if asked to describe pricing model):**
 Monthly subscription via Shopify Billing — Starter $29/mo (2,000 messages),
 Pro $99/mo (20,000 messages), Scale $299/mo (100,000 messages). Usage beyond
 included messages bills per 1,000 on the same subscription.
 
-## 4. Screenshots to capture (1600×1200 min, PNG)
+## 4. Merchant setup note — duplicate recovery emails
+
+Janis's recovery sequence and Shopify's built-in abandoned-checkout email
+(Settings → Checkout → "Abandoned checkout emails", or a Checkout/FLOW
+automation) overlap: we can't detect whether the merchant has Shopify's
+version on, and both will fire for the same shopper. Setup copy and the
+Agent-tab toggle description should say: **use one or the other** —
+ours is agent-voiced and references the chat they had; Shopify's is a
+fixed template. Merchants keeping Shopify's can flip "Abandoned-cart
+recovery emails" off in the Agent tab. Same for any Klaviyo/Mailchimp
+abandoned-cart flow — ours should be disabled if one of those is live.
+
+## 5. Screenshots to capture (1600×1200 min, PNG)
 
 1. Storefront chat: a shopper asks about a product → agent renders a product
    card with price + image.
@@ -98,7 +114,7 @@ included messages bills per 1,000 on the same subscription.
 4. Agent editor: knowledge panel showing synced catalog + policies.
 5. Embedded app home in Shopify admin (the link/activate screen).
 
-## 5. Protected customer data (PCD) declaration
+## 6. Protected customer data (PCD) declaration
 
 App Store review asks which protected data the app accesses and why. Our
 honest answers, mapped to what the code actually does:
@@ -123,7 +139,7 @@ Draft justification text for the form:
 > GDPR redact webhooks (customers/redact, shop/redact) which we already
 > handle.
 
-## 6. Review checklist (order of operations)
+## 7. Review checklist (order of operations)
 
 - [ ] Create the new **Janis** app, distribution **Public** (step 0 — gate
       for everything below); hand Devin the new client_id + API secret
@@ -138,8 +154,8 @@ Draft justification text for the form:
       bundled scopes — `read_legal_policies`, `write_returns`,
       `write_customers`, `write_discounts`, `read_checkouts` (janis-10) —
       one consent covers all five
-- [ ] Screenshots (step 4)
-- [ ] PCD declaration (step 5)
+- [ ] Screenshots (step 5)
+- [ ] PCD declaration (step 6)
 - [ ] Demo video — review requires a walkthrough: install → link agent →
       storefront chat → order lookup → draft order → inbox handoff
 - [ ] App listing submitted for review

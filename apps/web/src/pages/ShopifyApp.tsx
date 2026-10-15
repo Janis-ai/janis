@@ -1009,7 +1009,8 @@ export default function ShopifyApp() {
                     If they leave without ordering, your agent emails them — a reminder after about
                     an hour, then follow-ups at 1 and 3 days, each linking back to their saved
                     checkout. Sent in the store's daytime hours only, and stops the moment they
-                    order.
+                    order. If you already send abandoned-checkout emails (Shopify's built-in or an
+                    app like Klaviyo), turn this off — use one or the other.
                   </p>
                 </div>
                 <p className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
