@@ -295,18 +295,19 @@ export default function ShopifyApp() {
   useEffect(() => {
     if (state.kind === 'linked') setAskConv(state.askConv);
   }, [state]);
+  // Typing dots while the newest staff message is unanswered — copilot
+  // runs with tool calls can take a few seconds. Approval cards count as
+  // a response (they're the reply's visible artifact).
+  const applyAskMsgs = (msgs: InboxMsg[]) => {
+    setAskMsgs(msgs);
+    const last = msgs.filter((m) => !m.payload?.internal || m.payload?.action).at(-1);
+    setAskWaiting(last?.direction === 'in');
+  };
   const loadAsk = async (convId: string) => {
     const res = await shopifyApi<{ messages: InboxMsg[] }>('/api/shopify/inbox/thread', {
       conversation_id: convId,
     });
-    setAskMsgs(res.messages);
-    // Typing dots while the newest staff message is unanswered — copilot
-    // runs with tool calls can take a few seconds. Approval cards count as
-    // a response (they're the reply's visible artifact).
-    const last = res.messages
-      .filter((m) => !m.payload?.internal || m.payload?.action)
-      .at(-1);
-    setAskWaiting(last?.direction === 'in');
+    applyAskMsgs(res.messages);
   };
   // Poll while the Ask tab is open — fast enough to catch the reply the
   // in-flight question triggered without a push channel.
@@ -318,7 +319,7 @@ export default function ShopifyApp() {
         const res = await shopifyApi<{ messages: InboxMsg[] }>('/api/shopify/inbox/thread', {
           conversation_id: askConv,
         });
-        if (!dead) setAskMsgs(res.messages);
+        if (!dead) applyAskMsgs(res.messages);
       } catch {
         /* keep the last snapshot */
       }
