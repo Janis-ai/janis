@@ -3583,7 +3583,12 @@ export async function transcriptFor(
       const text =
         m.text! +
         extraText +
-        (skipped.length ? ` [attachments: ${skipped.join(', ')}]` : '');
+        // A skipped attachment (oversize image, unsupported type, over the
+        // per-message cap) left only its name — telling the model it can't
+        // see the contents is what keeps it from describing the file anyway.
+        (skipped.length
+          ? ` [not viewable — contents didn't load: ${skipped.join(', ')}]`
+          : '');
       out.push(
         parts.length
           ? { role: 'user', content: [{ type: 'text' as const, text }, ...parts] }
