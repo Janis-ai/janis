@@ -167,54 +167,44 @@ export default function ShopifyApp() {
               ) : null}
               {state.workspace ? <span className="muted"> ({state.workspace})</span> : null}.
             </p>
-            <p className="muted" style={{ fontSize: 13 }}>
-              Two steps left — tune the agent, then put it on the storefront.
-            </p>
-
-            <a
-              className="btn primary"
-              style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
-              href={state.agentId ? `/agents/${state.agentId}` : '/agents'}
-              target="_blank"
-              rel="noreferrer"
-            >
-              1 · Configure your agent
-            </a>
-            <p className="muted" style={{ fontSize: 12.5, margin: '4px 0 8px' }}>
-              Instructions, knowledge, voice — opens the Janis agent editor.
-            </p>
-
             {embedOpened ? (
+              // Returning visit — embed link was opened once, so the CTA
+              // flips to day-2 actions: tune the agent, edit the embed.
               <>
                 <a
+                  className="btn primary"
+                  style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
+                  href={state.agentId ? `/agents/${state.agentId}` : '/agents'}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Configure your agent
+                </a>
+                <a
                   className="btn"
-                  style={{ display: 'block', marginTop: 4, textAlign: 'center' }}
+                  style={{ display: 'block', marginTop: 10, textAlign: 'center' }}
                   href={`https://${state.shop}/admin/themes/current/editor?context=apps&activateAppId=${apiKey}/janis-chat`}
                   target="_blank"
                   rel="noreferrer"
                 >
-                  2 · Re-open the theme editor
+                  Edit storefront chat
                 </a>
-                <p className="muted" style={{ fontSize: 12.5, margin: '4px 0 8px' }}>
-                  Toggle the <strong>Janis chat</strong> app embed on and hit{' '}
-                  <strong>Save</strong> — the bubble appears on your storefront the moment it
-                  saves.
+                <p className="muted" style={{ fontSize: 12.5, marginTop: 10, textAlign: 'center' }}>
+                  <a href={`https://${state.shop}`} target="_blank" rel="noreferrer">
+                    Open your storefront ↗
+                  </a>
+                </p>
+              </>
+            ) : (
+              // Fresh link — the storefront embed is THE next step; nothing
+              // else competes with it.
+              <>
+                <p className="muted" style={{ fontSize: 13 }}>
+                  One step left — turn on the storefront chat.
                 </p>
                 <a
                   className="btn primary"
-                  style={{ display: 'block', marginTop: 4, textAlign: 'center' }}
-                  href={`https://${state.shop}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open your storefront
-                </a>
-              </>
-            ) : (
-              <>
-                <a
-                  className="btn primary"
-                  style={{ display: 'block', marginTop: 4, textAlign: 'center' }}
+                  style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
                   href={`https://${state.shop}/admin/themes/current/editor?context=apps&activateAppId=${apiKey}/janis-chat`}
                   target="_blank"
                   rel="noreferrer"
@@ -223,10 +213,11 @@ export default function ShopifyApp() {
                     localStorage.setItem(`janis:embed-opened:${state.shop}`, '1');
                   }}
                 >
-                  2 · Enable storefront chat
+                  Enable storefront chat
                 </a>
-                <p className="muted" style={{ fontSize: 12.5, margin: '4px 0 8px' }}>
-                  Opens your theme editor — toggle on the "Janis chat" app embed and save.
+                <p className="muted" style={{ fontSize: 12.5, margin: '6px 0 8px' }}>
+                  Opens your theme editor — toggle on the "Janis chat" app embed and hit{' '}
+                  <strong>Save</strong>; the bubble appears on your storefront immediately.
                 </p>
               </>
             )}

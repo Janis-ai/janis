@@ -38,6 +38,12 @@ export default function ShopifyLink() {
     retry: false,
   });
   const agents = useAgents();
+  // client_id — needed for the theme-editor deep link on the done card.
+  const appCfg = useQuery({
+    queryKey: ['shopify-app-cfg'],
+    queryFn: () => api<{ api_key: string }>('/api/shopify/app-config'),
+    staleTime: Infinity,
+  });
 
   const shop = info.data?.shop ?? '';
   const shopHandle = shop.replace(/\.myshopify\.com$/, '');
@@ -90,6 +96,10 @@ export default function ShopifyLink() {
   }
 
   if (done) {
+    // Post-link, the storefront embed is THE next step — the chat bubble is
+    // what the merchant installed for. One button, no competing actions;
+    // configure/admin are quiet text links underneath.
+    const embedUrl = `https://${shop}/admin/themes/current/editor?context=apps&activateAppId=${appCfg.data?.api_key ?? ''}/janis-chat`;
     return (
       <div className="login-wrap">
         <div className="card login-card">
@@ -97,18 +107,26 @@ export default function ShopifyLink() {
             <BrandImg alt="Janis" style={{ height: 40, marginBottom: 6 }} />
           </div>
           <p>
-            <strong>{shop}</strong> is connected — its credentials now live on the agent.
+            <strong>{shop}</strong> is connected — one step left: turn on the storefront chat.
           </p>
-          <a className="btn primary" style={{ display: 'block', textAlign: 'center' }} href={`/agents/${done}`}>
-            Configure the agent
-          </a>
           <a
-            className="btn"
-            style={{ display: 'block', margin: '8px 0 0', textAlign: 'center' }}
-            href={`https://${shop}/admin`}
+            className="btn primary"
+            style={{ display: 'block', textAlign: 'center' }}
+            href={embedUrl}
+            target="_blank"
+            rel="noreferrer"
           >
-            Back to Shopify admin
+            Enable storefront chat
           </a>
+          <p className="muted" style={{ fontSize: 12.5, margin: '8px 0 0' }}>
+            Toggle the <strong>Janis chat</strong> app embed on and hit <strong>Save</strong> — the
+            bubble appears on your storefront immediately.
+          </p>
+          <p className="muted" style={{ fontSize: 13, marginTop: 16, textAlign: 'center' }}>
+            <a href={`/agents/${done}`}>Configure your agent</a>
+            {' · '}
+            <a href={`https://${shop}/admin`}>Back to Shopify admin</a>
+          </p>
         </div>
       </div>
     );
