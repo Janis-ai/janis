@@ -3285,11 +3285,11 @@ export async function complete(
             type: 'text',
             text:
               '[product photos for catalogue items follow — including items beyond your search ' +
-              'results. Compare the image in the customer\'s last message against EACH candidate ' +
-              'carefully: the correct product may not be the one you searched for, and a training- ' +
-              'data guess at the title is often wrong — the pixels decide. Name the closest match ' +
-              'by its exact title, or say none resembles it. Visible cues like sale badges, colors ' +
-              'and graphics are part of the match.]',
+              'results. Before replying, go through EVERY candidate and decide match or no-match ' +
+              'by what is actually in the pixels — board shape, colors, graphic, badges — not by ' +
+              'what title you expected. Your first guess from memory is often wrong: the correct ' +
+              'product may not be the one you searched for. Then name the one matching candidate ' +
+              'by its exact title, or say none resembles the photo.]',
           });
           msgs.push({ role: 'user', content: parts });
         }
@@ -3491,7 +3491,9 @@ async function attachmentContent(
 /** Cap on a catalog candidate photo fetched for the visual-match pass —
  *  storefront thumbs are small, anything bigger is not worth the round-trip. */
 const MATCH_IMAGE_BYTES = 2 * 1024 * 1024;
-const MATCH_IMAGE_MAX = 6;
+// Sized to a full browse page — cutting the true match out of the pool is
+// the failure this pass exists to prevent.
+const MATCH_IMAGE_MAX = 10;
 
 /** Fetch one remote product photo into a base64 image_url part for the
  *  visual-match injection (the Gemini shim rejects remote URLs). Returns
