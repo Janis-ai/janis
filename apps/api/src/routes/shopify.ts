@@ -32,6 +32,7 @@ import {
   embedEnabled,
   ensureShopForSession,
   handleShopifyWebhook,
+  mintEmbeddedSession,
   provisionShopWorkspace,
   shopBilling,
   shopifyAppConfigured,
@@ -92,7 +93,13 @@ export function shopifyPublicRoutes(db: Db) {
       return c.json({ error: `install failed: ${(err as Error).message}` }, 502);
     }
 
-    const out: Record<string, unknown> = { shop: row.shop, state: row.state };
+    const out: Record<string, unknown> = {
+      shop: row.shop,
+      state: row.state,
+      // The Shopify JWT is only a bootstrap credential — the iframe runs on
+      // this Janis-minted session so App Bridge expiry can't kill it.
+      janis_token: mintEmbeddedSession(sess.shop, sess.sub),
+    };
     if (row.state === 'unlinked' && !row.provisionedAt) {
       // Zero-login install — the App Bridge token is the credential, so the
       // merchant never sees a Janis login: provision the workspace + agent

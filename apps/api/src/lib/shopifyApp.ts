@@ -51,6 +51,11 @@ import { generateDraft } from './agentBuilder.js';
 // Same version the shopify_* tool defs target (toolTemplates.ts) — probe-verified live.
 const SHOPIFY_API_VERSION = '2026-10';
 const LINK_CODE_TTL_MS = 30 * 60 * 1000;
+// The Shopify session token is a ~90s bootstrap credential — once /session
+// verifies it we hand back this Janis-minted JWT so the iframe's subsequent
+// calls never depend on App Bridge minting (idToken can serve stale cache
+// entries in a backgrounded iframe).
+const EMBEDDED_SESSION_TTL_S = 12 * 3600;
 
 export function shopifyAppConfigured(): boolean {
   return Boolean(env.shopifyAppApiKey && env.shopifyAppApiSecret);
@@ -111,9 +116,33 @@ export function verifySessionToken(token: string): { shop: string; sub?: string 
   // Session tokens always identify the shop by its myshopify domain even
   // when the storefront runs on a custom domain — pin both claims to it.
   if (!shop.endsWith('.myshopify.com')) return reject('dest', { dest: claims.dest });
-  if (host(claims.iss) !== shop)
+  // Our own embedded session: iss is 'janis-embedded', not the shop admin —
+  // same signature/exp/aud/dest guarantees, no iss pinning.
+  if (claims.iss !== 'janis-embedded' && host(claims.iss) !== shop)
     return reject('iss', { iss: claims.iss, dest: claims.dest });
   return { shop, sub: claims.sub != null ? String(claims.sub) : undefined };
+}
+
+const b64u = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url');
+
+/** Mint the embedded session JWT — verified by the same verifySessionToken
+ *  path (iss='janis-embedded'), valid 12h, carries the staff sub so inbox
+ *  replies keep their attribution across Shopify token refreshes. */
+export function mintEmbeddedSession(shop: string, sub?: string): string {
+  const now = Math.floor(Date.now() / 1000);
+  const h = b64u({ alg: 'HS256', typ: 'JWT' });
+  const p = b64u({
+    iss: 'janis-embedded',
+    dest: `https://${shop}`,
+    aud: env.shopifyAppApiKey,
+    iat: now,
+    exp: now + EMBEDDED_SESSION_TTL_S,
+    ...(sub != null ? { sub } : {}),
+  });
+  const s = createHmac('sha256', env.shopifyAppApiSecret!)
+    .update(`${h}.${p}`)
+    .digest('base64url');
+  return `${h}.${p}.${s}`;
 }
 
 /* ── Webhook HMAC ────────────────────────────────────────────────────── */

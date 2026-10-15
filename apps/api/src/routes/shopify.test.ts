@@ -236,6 +236,45 @@ const linkCodeFor = async (): Promise<string> => {
   return signLinkCode(row.id);
 };
 
+describe('janis embedded session token', () => {
+  it('/session returns a janis_token accepted by the session-token endpoints', async () => {
+    stubShopifyApi();
+    // Distinct shop — this must not consume SHOP's first-load provision.
+    const res = await postSession(sessionJwt('janis-tok.myshopify.com'));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { janis_token?: string };
+    expect(body.janis_token).toBeTruthy();
+    // The Shopify JWT is only a bootstrap credential — after /session the
+    // iframe runs entirely on the Janis-minted token, same auth surface.
+    const inbox = await app.request('/api/shopify/inbox', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: body.janis_token }),
+    });
+    expect(inbox.status).toBe(200);
+  });
+
+  it('an expired janis session is rejected — and a forged iss alone does not pass', async () => {
+    const dead = jwt({
+      iss: 'janis-embedded',
+      dest: `https://${SHOP}`,
+      aud: KEY,
+      exp: Math.floor(Date.now() / 1000) - 3600,
+    });
+    expect((await postSession(dead)).status).toBe(401);
+    const wrongSecret = jwt(
+      {
+        iss: 'janis-embedded',
+        dest: `https://${SHOP}`,
+        aud: KEY,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      },
+      'wrong',
+    );
+    expect((await postSession(wrongSecret)).status).toBe(401);
+  });
+});
+
 describe('shopify embedded app — session', () => {
   it('rejects a token signed with the wrong secret', async () => {
     const res = await postSession(sessionJwt(SHOP, {}, 'wrong'));

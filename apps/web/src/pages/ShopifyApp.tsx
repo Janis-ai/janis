@@ -459,6 +459,7 @@ export default function ShopifyApp() {
           api<{
             shop: string;
             state: string;
+            janis_token?: string;
             link_url?: string;
             claim_url?: string;
             claimed?: boolean;
@@ -490,6 +491,10 @@ export default function ShopifyApp() {
         });
         if (cancelled) return;
         sessionStorage.removeItem('janis:tok-reload'); // healthy boot — allow future auto-recovery
+        // The Shopify JWT was only a bootstrap credential — run the rest of
+        // the session on the Janis-minted 12h token so App Bridge expiry /
+        // idle-cache staleness can't kill mid-session calls.
+        if (res.janis_token) sessionToken.current = res.janis_token;
         if (res.state === 'linked') {
           // Auto-provisioned shops (claimed=false) get the brief-approval
           // step in place of the old link wizard — editable name, purpose
