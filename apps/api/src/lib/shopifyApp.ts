@@ -635,12 +635,18 @@ export async function provisionShopWorkspace(db: Db, row: ShopRow): Promise<Shop
           .from(agents)
           .where(eq(agents.id, agent.id))
           .limit(1);
+        const existing = (a?.config ?? {}) as Record<string, unknown>;
+        // The setup card may have already saved a different purpose or a
+        // hand-edited greeting — the provision draft must not overwrite it.
+        if (existing.purpose && existing.purpose !== purpose) return;
         const config = {
-          ...((a?.config ?? {}) as Record<string, unknown>),
+          ...existing,
           purpose,
           ...(draft.system_prompt ? { system_prompt: draft.system_prompt } : {}),
           ...(draft.tone ? { tone: draft.tone } : {}),
-          ...(draft.greeting ? { greeting: draft.greeting, greeting_enabled: true } : {}),
+          ...(draft.greeting && !existing.greeting
+            ? { greeting: draft.greeting, greeting_enabled: true }
+            : {}),
           builder: { description: purpose, generated_at: new Date().toISOString() },
         };
         await db.update(agents).set({ config }).where(eq(agents.id, agent.id));

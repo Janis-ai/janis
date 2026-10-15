@@ -558,6 +558,65 @@ describe('shopify zero-login provisioning', () => {
   });
 });
 
+describe('shopify in-frame agent setup', () => {
+  const postAgent = (body: Record<string, unknown>) =>
+    app.request('/api/shopify/agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('edits the provisioned agent — name + greeting save through the session token', async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt('setup-shop.myshopify.com'));
+    const res = await postAgent({
+      token: sessionJwt('setup-shop.myshopify.com'),
+      name: 'Shop Bot',
+      greeting: 'Hey there!',
+    });
+    expect(res.status).toBe(200);
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'setup-shop.myshopify.com'));
+    const [agent] = await db.select().from(agents).where(eq(agents.id, row.agentId!));
+    expect(agent.name).toBe('Shop Bot');
+    const cfg = agent.config as { greeting?: string; greeting_enabled?: boolean };
+    expect(cfg.greeting).toBe('Hey there!');
+    expect(cfg.greeting_enabled).toBe(true);
+  });
+
+  it('saves a changed purpose even when the draft generator is unavailable', async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt('purpose-shop.myshopify.com'));
+    const res = await postAgent({
+      token: sessionJwt('purpose-shop.myshopify.com'),
+      purpose: 'Only answer shipping questions.',
+    });
+    expect(res.status).toBe(200);
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'purpose-shop.myshopify.com'));
+    const [agent] = await db.select().from(agents).where(eq(agents.id, row.agentId!));
+    expect((agent.config as { purpose?: string }).purpose).toBe('Only answer shipping questions.');
+  });
+
+  it('rejects a foreign session token and an unlinked shop', async () => {
+    expect(
+      (await postAgent({ token: sessionJwt(SHOP, {}, 'wrong'), name: 'x' })).status,
+    ).toBe(401);
+    const [bare] = await db
+      .insert(shopifyShops)
+      .values({ shop: 'no-agent.myshopify.com', provisionedAt: new Date() })
+      .returning();
+    expect(bare.agentId).toBeNull();
+    expect(
+      (await postAgent({ token: sessionJwt('no-agent.myshopify.com'), name: 'x' })).status,
+    ).toBe(409);
+  });
+});
+
 describe('shopify claim', () => {
   const postClaim = (code: string) =>
     app.request('/api/shopify/claim', {

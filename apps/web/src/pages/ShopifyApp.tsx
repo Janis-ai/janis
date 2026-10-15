@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { BrandImg } from '../components/bits';
 
@@ -25,6 +25,15 @@ type SessionState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'unlinked'; shop: string; link_url: string }
+  | {
+      kind: 'setup';
+      shop: string;
+      agentId: string | null;
+      name: string;
+      purpose: string;
+      greeting: string;
+      linkUrl: string;
+    }
   | { kind: 'linked'; shop: string; agent: string | null; agentId: string | null; workspace: string | null; linkUrl: string; claimUrl: string; claimed: boolean }
   | { kind: 'uninstalled'; shop: string };
 
@@ -63,6 +72,49 @@ export default function ShopifyApp() {
   // they come back this page would otherwise still show the CTA. Track the
   // click (persisted per shop) so the view advances to next-steps.
   const [embedOpened, setEmbedOpened] = useState(false);
+  // Setup-card edit fields — initialized from the session payload when the
+  // setup state first renders.
+  const [setupName, setSetupName] = useState('');
+  const [setupPurpose, setSetupPurpose] = useState('');
+  const [setupGreeting, setSetupGreeting] = useState('');
+  const [setupSaving, setSetupSaving] = useState(false);
+  const [setupError, setSetupError] = useState('');
+  // The App Bridge token doubles as the credential for /api/shopify/agent —
+  // kept in memory only, sent on the setup-save POST.
+  const sessionToken = useRef('');
+
+  useEffect(() => {
+    if (state.kind === 'setup') {
+      setSetupName(state.name);
+      setSetupPurpose(state.purpose);
+      setSetupGreeting(state.greeting);
+    }
+  }, [state]);
+
+  const approveSetup = async () => {
+    if (state.kind !== 'setup' || setupSaving) return;
+    setSetupSaving(true);
+    setSetupError('');
+    try {
+      // Only send changed fields — an unchanged purpose must not trigger a
+      // re-draft.
+      const body: Record<string, string> = {};
+      if (setupName.trim() && setupName.trim() !== state.name) body.name = setupName.trim();
+      if (setupPurpose.trim() !== state.purpose) body.purpose = setupPurpose.trim();
+      if (setupGreeting.trim() !== state.greeting) body.greeting = setupGreeting.trim();
+      if (Object.keys(body).length) {
+        await api('/api/shopify/agent', {
+          method: 'POST',
+          body: JSON.stringify({ token: sessionToken.current, ...body }),
+        });
+      }
+      localStorage.setItem(`janis:setup-done:${state.shop}`, '1');
+      setTick((t) => t + 1); // reload → linked card
+    } catch (err) {
+      setSetupError(err instanceof Error ? err.message : 'save failed');
+      setSetupSaving(false);
+    }
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -83,6 +135,7 @@ export default function ShopifyApp() {
         // (?id_token=) — use it when App Bridge didn't attach its global.
         const token = bridge ? await bridge.idToken!() : params.get('id_token');
         if (!token) throw new Error('no session token — open this app inside Shopify admin');
+        sessionToken.current = token;
         const res = await api<{
           shop: string;
           state: string;
@@ -92,19 +145,41 @@ export default function ShopifyApp() {
           agent?: string | null;
           agent_id?: string | null;
           workspace?: string | null;
+          purpose?: string | null;
+          greeting?: string | null;
         }>('/api/shopify/session', { method: 'POST', body: JSON.stringify({ token }) });
         if (cancelled) return;
         if (res.state === 'linked') {
-          setState({
-            kind: 'linked',
-            shop: res.shop,
-            agent: res.agent ?? null,
-            agentId: res.agent_id ?? null,
-            workspace: res.workspace ?? null,
-            linkUrl: res.link_url ?? '',
-            claimUrl: res.claim_url ?? '',
-            claimed: res.claimed ?? false,
-          });
+          // Auto-provisioned shops (claimed=false) get the brief-approval
+          // step in place of the old link wizard — editable name, purpose
+          // and greeting. Once approved (flag persisted per shop) or once
+          // the workspace is claimed, loads land on the normal linked card.
+          const setupDone =
+            localStorage.getItem(`janis:setup-done:${res.shop}`) === '1';
+          if (!res.claimed && !setupDone) {
+            setState({
+              kind: 'setup',
+              shop: res.shop,
+              agentId: res.agent_id ?? null,
+              name: res.agent ?? '',
+              purpose:
+                res.purpose ??
+                `You are the AI shopping assistant for ${res.shop}, a Shopify store. Help visitors find products, check order status, and answer questions about shipping, returns and store policies — and help them complete purchases.`,
+              greeting: res.greeting ?? '',
+              linkUrl: res.link_url ?? '',
+            });
+          } else {
+            setState({
+              kind: 'linked',
+              shop: res.shop,
+              agent: res.agent ?? null,
+              agentId: res.agent_id ?? null,
+              workspace: res.workspace ?? null,
+              linkUrl: res.link_url ?? '',
+              claimUrl: res.claim_url ?? '',
+              claimed: res.claimed ?? false,
+            });
+          }
           if (localStorage.getItem(`janis:embed-opened:${res.shop}`) === '1') setEmbedOpened(true);
         } else if (res.state === 'uninstalled') {
           setState({ kind: 'uninstalled', shop: res.shop });
@@ -162,6 +237,52 @@ export default function ShopifyApp() {
                 Refresh this app
               </a>
             </p>
+          </>
+        )}
+
+        {state.kind === 'setup' && (
+          <>
+            <p style={{ fontSize: 14, marginBottom: 4 }}>
+              <strong>{state.shop}</strong> — your assistant is ready. Check the brief and adjust
+              anything:
+            </p>
+            <label>Assistant name</label>
+            <input
+              value={setupName}
+              onChange={(e) => setSetupName(e.target.value)}
+              style={{ width: '100%' }}
+            />
+            <label>What should it do for your customers?</label>
+            <textarea
+              value={setupPurpose}
+              onChange={(e) => setSetupPurpose(e.target.value)}
+              rows={5}
+              style={{ width: '100%' }}
+            />
+            <label>Greeting shoppers see</label>
+            <input
+              value={setupGreeting}
+              onChange={(e) => setSetupGreeting(e.target.value)}
+              placeholder="Hi there! How can I help you today?"
+              style={{ width: '100%' }}
+            />
+            {setupError && <div className="error">{setupError}</div>}
+            <button
+              className="btn primary"
+              style={{ width: '100%', marginTop: 12 }}
+              onClick={approveSetup}
+              disabled={setupSaving || !setupName.trim() || !setupPurpose.trim()}
+            >
+              {setupSaving ? 'Saving…' : 'Looks good — continue'}
+            </button>
+            {state.linkUrl ? (
+              <p className="muted" style={{ fontSize: 12.5, marginTop: 12, textAlign: 'center' }}>
+                Rather use an existing agent?{' '}
+                <a href={state.linkUrl} target="_top" rel="noreferrer">
+                  Pick or create one
+                </a>
+              </p>
+            ) : null}
           </>
         )}
 

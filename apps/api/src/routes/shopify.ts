@@ -7,6 +7,7 @@ import { env } from '../env.js';
 import { agents, channels, memberships, shopifyShops, workspaces } from '../db/schema.js';
 import { audit } from '../lib/audit.js';
 import { invalidateChannelCache } from '../lib/channels.js';
+import { generateDraft } from '../lib/agentBuilder.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import {
   bindShop,
@@ -90,7 +91,11 @@ export function shopifyPublicRoutes(db: Db) {
       out.link_url = `${env.webOrigin}/shopify-link?code=${signLinkCode(row.id)}`;
     } else if (row.state === 'linked' && row.agentId) {
       const [[agent], [ws]] = await Promise.all([
-        db.select({ name: agents.name }).from(agents).where(eq(agents.id, row.agentId)).limit(1),
+        db
+          .select({ name: agents.name, config: agents.config })
+          .from(agents)
+          .where(eq(agents.id, row.agentId))
+          .limit(1),
         db
           .select({ name: workspaces.name, ownerUserId: workspaces.ownerUserId })
           .from(workspaces)
@@ -104,6 +109,11 @@ export function shopifyPublicRoutes(db: Db) {
       // console-bound clicks through claim_url so the merchant picks up
       // membership instead of 403ing on a workspace they can't see.
       out.claimed = Boolean(ws?.ownerUserId);
+      // Setup-card fields — the in-frame brief approval edits these via
+      // POST /api/shopify/agent.
+      const cfg = (agent?.config ?? {}) as { purpose?: string; greeting?: string };
+      out.purpose = cfg.purpose ?? null;
+      out.greeting = cfg.greeting ?? null;
       // A linked shop can still re-enter the link flow — the console page
       // rebinds to whichever agent the merchant picks (or creates).
       out.link_url = `${env.webOrigin}/shopify-link?code=${signLinkCode(row.id)}`;
@@ -113,6 +123,72 @@ export function shopifyPublicRoutes(db: Db) {
     }
     return c.json(out);
   });
+
+  // The setup step — the provisioned agent's name/purpose/greeting are
+  // editable in-frame before the merchant enables the storefront embed.
+  // A changed purpose re-drafts the hosted config (system prompt, tone,
+  // greeting) through the same generator the console bootstrap uses; a
+  // greeting edit applies directly without a regen.
+  app.post(
+    '/agent',
+    zValidator(
+      'json',
+      z.object({
+        token: z.string(),
+        name: z.string().min(1).max(120).optional(),
+        purpose: z.string().max(4000).optional(),
+        greeting: z.string().max(2000).optional(),
+      }),
+    ),
+    async (c) => {
+      if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+      const sess = await sessionShop(c);
+      if (!sess) return c.json({ error: 'invalid session token' }, 401);
+      const body = c.req.valid('json');
+      const [row] = await db
+        .select()
+        .from(shopifyShops)
+        .where(eq(shopifyShops.shop, sess.shop))
+        .limit(1);
+      if (!row || row.state !== 'linked' || !row.agentId) {
+        return c.json({ error: 'no bound agent' }, 409);
+      }
+      const [agent] = await db.select().from(agents).where(eq(agents.id, row.agentId)).limit(1);
+      if (!agent) return c.json({ error: 'agent not found' }, 404);
+
+      const cfg = (agent.config ?? {}) as Record<string, unknown>;
+      const nextCfg = { ...cfg };
+      if (body.greeting !== undefined && body.greeting !== cfg.greeting) {
+        nextCfg.greeting = body.greeting;
+        if (body.greeting) nextCfg.greeting_enabled = true;
+      }
+      if (body.purpose && body.purpose !== cfg.purpose) {
+        nextCfg.purpose = body.purpose;
+        const draft = await generateDraft(body.purpose).catch(() => null);
+        if (draft) {
+          if (draft.system_prompt) nextCfg.system_prompt = draft.system_prompt;
+          if (draft.tone) nextCfg.tone = draft.tone;
+          if (draft.greeting && body.greeting === undefined) {
+            nextCfg.greeting = draft.greeting;
+            nextCfg.greeting_enabled = true;
+          }
+          nextCfg.builder = { description: body.purpose, generated_at: new Date().toISOString() };
+        }
+      }
+      await db
+        .update(agents)
+        .set({ ...(body.name ? { name: body.name } : {}), config: nextCfg })
+        .where(eq(agents.id, agent.id));
+      await audit(db, {
+        workspaceId: row.workspaceId!,
+        action: 'shopify.agent_setup',
+        targetType: 'agent',
+        targetId: agent.id,
+        meta: { shop: row.shop, renamed: Boolean(body.name), redrafted: body.purpose !== cfg.purpose },
+      });
+      return c.json({ ok: true, greeting: (nextCfg.greeting as string) ?? null });
+    },
+  );
 
   // Storefront loader — the theme app extension drops
   //   <script src="/api/shopify/storefront.js?s=<shop>">
