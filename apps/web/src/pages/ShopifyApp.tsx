@@ -4,12 +4,15 @@ import { BrandImg } from '../components/bits';
 
 /**
  * The embedded app — loaded inside Shopify admin's iframe (App URL). App
- * Bridge v4 hands us a session-token JWT; /api/shopify/session verifies it
- * and answers with the shop's link state. Unlinked shops get a "Connect
- * your Janis workspace" button that takes over the whole tab (target=_top
- * escapes the iframe so the Janis session works — same window, not a
- * popup). Theme-editor links use _top too: the editor lives inside admin,
- * so Back returns to this app.
+ * Bridge v4 hands us a session-token JWT; /api/shopify/session verifies it,
+ * auto-provisions a workspace+agent on first install (zero-login — the JWT
+ * IS the credential), and answers with the shop's link state. Provisioned
+ * shops see "Enable storefront chat" immediately; the ownerless workspace
+ * is claimed later via claim_url when the merchant wants the console.
+ * The manual link flow is now the fallback: deliberate unlinks and
+ * provisioning failures still get a "Connect your Janis workspace" button
+ * (target=_top escapes the iframe so the Janis session works). Theme-editor
+ * links use _top too: the editor lives inside admin, so Back returns here.
  */
 
 declare global {
@@ -22,7 +25,7 @@ type SessionState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'unlinked'; shop: string; link_url: string }
-  | { kind: 'linked'; shop: string; agent: string | null; agentId: string | null; workspace: string | null; linkUrl: string }
+  | { kind: 'linked'; shop: string; agent: string | null; agentId: string | null; workspace: string | null; linkUrl: string; claimUrl: string; claimed: boolean }
   | { kind: 'uninstalled'; shop: string };
 
 async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopify']> | null> {
@@ -84,6 +87,8 @@ export default function ShopifyApp() {
           shop: string;
           state: string;
           link_url?: string;
+          claim_url?: string;
+          claimed?: boolean;
           agent?: string | null;
           agent_id?: string | null;
           workspace?: string | null;
@@ -97,6 +102,8 @@ export default function ShopifyApp() {
             agentId: res.agent_id ?? null,
             workspace: res.workspace ?? null,
             linkUrl: res.link_url ?? '',
+            claimUrl: res.claim_url ?? '',
+            claimed: res.claimed ?? false,
           });
           if (localStorage.getItem(`janis:embed-opened:${res.shop}`) === '1') setEmbedOpened(true);
         } else if (res.state === 'uninstalled') {
@@ -176,7 +183,10 @@ export default function ShopifyApp() {
                 <a
                   className="btn primary"
                   style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
-                  href={state.agentId ? `/agents/${state.agentId}` : '/agents'}
+                  // Unclaimed (auto-provisioned) workspaces route through the
+                  // claim flow first — a direct /agents link would land the
+                  // merchant on a workspace they aren't a member of.
+                  href={state.claimed ? (state.agentId ? `/agents/${state.agentId}` : '/agents') : state.claimUrl}
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -224,6 +234,13 @@ export default function ShopifyApp() {
               </>
             )}
 
+            {!state.claimed && state.claimUrl ? (
+              <p className="muted" style={{ fontSize: 12.5, marginTop: 12, textAlign: 'center' }}>
+                <a href={state.claimUrl} target="_blank" rel="noreferrer">
+                  Manage this store in the Janis console →
+                </a>
+              </p>
+            ) : null}
             {state.linkUrl ? (
               <p className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
                 Serving the wrong agent or workspace?{' '}

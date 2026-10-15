@@ -1,9 +1,11 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { and, desc, eq, like, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, like, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import {
+  agentSecrets,
   agents,
+  auditLog,
   channels,
   contacts,
   conversations,
@@ -24,6 +26,8 @@ import { systemNote } from './systemNote.js';
 import { bus } from './bus.js';
 import { toMessage } from './serializers.js';
 import { TOOL_TEMPLATES } from './toolTemplates.js';
+import { generateWebhookSecret } from './crypto.js';
+import { generateDraft } from './agentBuilder.js';
 
 /**
  * Shopify App Store install plumbing — the embedded app (Partner Dashboard,
@@ -556,6 +560,123 @@ export async function bindShop(
   });
 }
 
+/** Zero-login install — an embedded session found an unlinked shop, so we
+ *  provision the workspace + agent right there and bind it. The merchant's
+ *  App Bridge token is the only credential involved; the workspace sits
+ *  ownerless until they claim it via POST /api/shopify/claim. Billing rides
+ *  the shop's AppSubscription (billing_provider='shopify'), never Stripe.
+ *  provisioned_at is the atomic gate — parallel session loads can't
+ *  double-provision, and unbindShop stamps it so a deliberate unlink is
+ *  never auto-rebound on the next embedded load. */
+export async function provisionShopWorkspace(db: Db, row: ShopRow): Promise<ShopRow> {
+  const [claimed] = await db
+    .update(shopifyShops)
+    .set({ provisionedAt: new Date() })
+    .where(and(eq(shopifyShops.id, row.id), isNull(shopifyShops.provisionedAt)))
+    .returning();
+  if (!claimed) return row; // a concurrent load is already provisioning
+
+  let ws: typeof workspaces.$inferSelect | undefined;
+  try {
+    const token = row.accessTokenEnc ? await adminToken(db, row).catch(() => '') : '';
+    let shopName = row.shop.replace(/\.myshopify\.com$/, '');
+    if (token) {
+      try {
+        const res = await fetch(`https://${row.shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-shopify-access-token': token },
+          body: JSON.stringify({ query: '{shop{name}}' }),
+        });
+        const json = (await res.json()) as { data?: { shop?: { name?: string } } };
+        shopName = json.data?.shop?.name || shopName;
+      } catch {
+        /* the handle-derived name is fine */
+      }
+    }
+
+    [ws] = await db
+      .insert(workspaces)
+      .values({
+        name: shopName,
+        plan: env.defaultPlan,
+        billingProvider: 'shopify',
+        config: { data_retention_days: 365, shopify_provisioned: true },
+      })
+      .returning();
+    const [agent] = await db
+      .insert(agents)
+      .values({
+        workspaceId: ws.id,
+        name: shopName.slice(0, 120),
+        hosted: true,
+        webhookSecret: generateWebhookSecret(),
+        autoResumeMinutes: 10,
+      })
+      .returning();
+    await bindShop(db, row, { workspaceId: ws.id, agentId: agent.id });
+    await audit(db, {
+      workspaceId: ws.id,
+      action: 'shopify.provisioned',
+      targetType: 'shopify_shop',
+      targetId: row.id,
+      meta: { shop: row.shop, workspace_id: ws.id, agent_id: agent.id },
+    });
+
+    // Purpose-drafted config lands a beat later — the agent already works
+    // (tools + catalog knowledge from bindShop); the draft just sharpens
+    // the prompt, greeting and builder suggestions. Failure leaves the
+    // bare agent, which is fine.
+    const purpose = `You are the AI shopping assistant for ${shopName}, a Shopify store. Help visitors find products, check order status, and answer questions about shipping, returns and store policies — and help them complete purchases.`;
+    void generateDraft(purpose)
+      .then(async (draft) => {
+        if (!draft) return;
+        const [a] = await db
+          .select({ config: agents.config })
+          .from(agents)
+          .where(eq(agents.id, agent.id))
+          .limit(1);
+        const config = {
+          ...((a?.config ?? {}) as Record<string, unknown>),
+          purpose,
+          ...(draft.system_prompt ? { system_prompt: draft.system_prompt } : {}),
+          ...(draft.tone ? { tone: draft.tone } : {}),
+          ...(draft.greeting ? { greeting: draft.greeting, greeting_enabled: true } : {}),
+          builder: { description: purpose, generated_at: new Date().toISOString() },
+        };
+        await db.update(agents).set({ config }).where(eq(agents.id, agent.id));
+      })
+      .catch((err) => console.error(`shopify provision draft ${row.shop}:`, err));
+  } catch (err) {
+    // Un-stamp the gate so the next embedded load retries — without this a
+    // transient failure would strand the shop on the manual link flow. Take
+    // the orphaned workspace down too: nothing references it yet, so the
+    // child rows provision wrote (secrets/channels/knowledge) delete in
+    // dependency order.
+    await db.update(shopifyShops).set({ provisionedAt: null }).where(eq(shopifyShops.id, row.id));
+    if (ws) {
+      try {
+        const agIds = (
+          await db.select({ id: agents.id }).from(agents).where(eq(agents.workspaceId, ws.id))
+        ).map((a) => a.id);
+        for (const id of agIds) {
+          await db.delete(agentSecrets).where(eq(agentSecrets.agentId, id));
+          await db.delete(channels).where(eq(channels.agentId, id));
+          await db.delete(knowledgeFiles).where(eq(knowledgeFiles.agentId, id));
+        }
+        await db.delete(agents).where(eq(agents.workspaceId, ws.id));
+        await db.delete(auditLog).where(eq(auditLog.workspaceId, ws.id));
+        await db.delete(workspaces).where(eq(workspaces.id, ws.id));
+      } catch {
+        /* residue is an empty ownerless workspace — harmless */
+      }
+    }
+    throw err;
+  }
+
+  const [fresh] = await db.select().from(shopifyShops).where(eq(shopifyShops.id, row.id)).limit(1);
+  return fresh;
+}
+
 /** Console unlink — the shop stays installed, the binding + mirrored
  *  secrets go away. */
 export async function unbindShop(db: Db, row: ShopRow): Promise<void> {
@@ -566,6 +687,10 @@ export async function unbindShop(db: Db, row: ShopRow): Promise<void> {
       workspaceId: null,
       agentId: null,
       state: 'unlinked',
+      // Stamp the provision gate — a deliberate unlink means the merchant
+      // wants manual control; the next embedded load must not auto-provision
+      // a fresh workspace and silently rebind.
+      provisionedAt: new Date(),
       updatedAt: new Date(),
     })
     .where(eq(shopifyShops.id, row.id));

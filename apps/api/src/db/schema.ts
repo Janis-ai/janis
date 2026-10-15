@@ -1059,6 +1059,10 @@ export const shopifyShops = pgTable('shopify_shops', {
   scopes: text('scopes').notNull().default(''), // granted scope list
   // 'unlinked' = installed-not-bound | 'linked' = serving | 'uninstalled'.
   state: text('state').notNull().default('unlinked'),
+  // Auto-provision gate — stamped when the embedded session created the
+  // shop's workspace+agent itself (zero-login install), and also stamped by
+  // unbindShop so a deliberate unlink is never auto-rebound on next load.
+  provisionedAt: timestamp('provisioned_at', { withTimezone: true }),
   // Shopify Billing state (phase 5): {subscription_id, capped_amount_cents…}
   billing: jsonb('billing').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

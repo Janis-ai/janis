@@ -1,0 +1,1 @@
+ALTER TABLE "shopify_shops" ADD COLUMN "provisioned_at" timestamp with time zone;

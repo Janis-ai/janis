@@ -28,6 +28,7 @@ import Campaigns from './pages/Campaigns';
 import ChannelPage from './pages/ChannelPage';
 import ShopifyApp from './pages/ShopifyApp';
 import ShopifyLink from './pages/ShopifyLink';
+import ShopifyClaim from './pages/ShopifyClaim';
 import { finishOpenRouterCallback } from './lib/openrouterAuth';
 import { reportClientError } from './lib/errorReporter';
 
@@ -184,6 +185,7 @@ export default function App() {
         {/* The link flow's console half — authed but outside Layout, an
             interstitial like the OAuth callbacks. */}
         <Route path="/shopify-link" element={<RequireAuth><ShopifyLink /></RequireAuth>} />
+        <Route path="/shopify-claim" element={<RequireAuth><ShopifyClaim /></RequireAuth>} />
         <Route path="/help/:agentId" element={<HelpCenter />} />
         <Route path="/help/:agentId/:articleId" element={<HelpArticle />} />
         <Route

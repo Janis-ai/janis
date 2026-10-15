@@ -4,13 +4,15 @@ import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channels, shopifyShops, workspaces } from '../db/schema.js';
+import { agents, channels, memberships, shopifyShops, workspaces } from '../db/schema.js';
+import { audit } from '../lib/audit.js';
 import { invalidateChannelCache } from '../lib/channels.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import {
   bindShop,
   ensureShopForSession,
   handleShopifyWebhook,
+  provisionShopWorkspace,
   shopBilling,
   shopifyAppConfigured,
   shopIsDevelopment,
@@ -70,13 +72,27 @@ export function shopifyPublicRoutes(db: Db) {
     }
 
     const out: Record<string, unknown> = { shop: row.shop, state: row.state };
+    if (row.state === 'unlinked' && !row.provisionedAt) {
+      // Zero-login install — the App Bridge token is the credential, so the
+      // merchant never sees a Janis login: provision the workspace + agent
+      // on the spot and come back bound. unbindShop stamps provisionedAt,
+      // so a deliberate unlink falls through to the manual link flow.
+      try {
+        row = await provisionShopWorkspace(db, row);
+        out.state = row.state;
+        out.provisioned = row.state === 'linked';
+      } catch (err) {
+        console.error(`shopify auto-provision ${row.shop}:`, err);
+        out.provision_error = (err as Error).message;
+      }
+    }
     if (row.state === 'unlinked') {
       out.link_url = `${env.webOrigin}/shopify-link?code=${signLinkCode(row.id)}`;
     } else if (row.state === 'linked' && row.agentId) {
       const [[agent], [ws]] = await Promise.all([
         db.select({ name: agents.name }).from(agents).where(eq(agents.id, row.agentId)).limit(1),
         db
-          .select({ name: workspaces.name })
+          .select({ name: workspaces.name, ownerUserId: workspaces.ownerUserId })
           .from(workspaces)
           .where(eq(workspaces.id, row.workspaceId!))
           .limit(1),
@@ -84,9 +100,16 @@ export function shopifyPublicRoutes(db: Db) {
       out.agent = agent?.name ?? null;
       out.agent_id = row.agentId;
       out.workspace = ws?.name ?? null;
+      // Ownerless = provisioned but never claimed — the iframe sends
+      // console-bound clicks through claim_url so the merchant picks up
+      // membership instead of 403ing on a workspace they can't see.
+      out.claimed = Boolean(ws?.ownerUserId);
       // A linked shop can still re-enter the link flow — the console page
       // rebinds to whichever agent the merchant picks (or creates).
       out.link_url = `${env.webOrigin}/shopify-link?code=${signLinkCode(row.id)}`;
+      // Zero-login installs land on an ownerless workspace — this signed
+      // link lets the merchant claim it into their Janis account.
+      out.claim_url = `${env.webOrigin}/shopify-claim?code=${signLinkCode(row.id)}`;
     }
     return c.json(out);
   });
@@ -372,6 +395,71 @@ export function shopifyApiRoutes(db: Db) {
 
       await bindShop(db, row, { workspaceId, agentId: agent_id });
       return c.json({ ok: true, shop: row.shop });
+    },
+  );
+
+  // Claim a provisioned workspace — a zero-login install created the shop's
+  // workspace ownerless; the merchant opens the signed claim link while
+  // signed in to Janis and becomes admin + owner of it. sessionAuth only
+  // (not adminOnly): the claimant's role in their *current* workspace is
+  // irrelevant — the link code is the credential, same as the link flow.
+  app.post(
+    '/claim',
+    zValidator('json', z.object({ code: z.string() })),
+    async (c) => {
+      const { code } = c.req.valid('json');
+      const v = verifyLinkCode(code);
+      if (!v) return c.json({ error: 'invalid or expired claim link' }, 400);
+      const [row] = await db
+        .select()
+        .from(shopifyShops)
+        .where(eq(shopifyShops.id, v.shopId))
+        .limit(1);
+      if (!row) return c.json({ error: 'shop not found' }, 404);
+      if (row.state !== 'linked' || !row.workspaceId) {
+        return c.json({ error: 'shop is not bound to a workspace — nothing to claim' }, 409);
+      }
+
+      const user = c.get('user');
+      // Idempotent — repeat claims just keep you a member.
+      await db
+        .insert(memberships)
+        .values({
+          userId: user.id,
+          workspaceId: row.workspaceId,
+          role: 'admin',
+          acceptedAt: new Date(),
+        })
+        .onConflictDoNothing();
+      // Take ownership of an ownerless (provisioned) workspace; a workspace
+      // that already has an owner just gains another admin.
+      const [ws] = await db
+        .select({ ownerUserId: workspaces.ownerUserId, name: workspaces.name })
+        .from(workspaces)
+        .where(eq(workspaces.id, row.workspaceId))
+        .limit(1);
+      if (ws && !ws.ownerUserId) {
+        await db
+          .update(workspaces)
+          .set({ ownerUserId: user.id })
+          .where(eq(workspaces.id, row.workspaceId));
+      }
+      await audit(db, {
+        workspaceId: row.workspaceId,
+        userId: user.id,
+        userName: user.name,
+        action: 'shopify.claim',
+        targetType: 'shopify_shop',
+        targetId: row.id,
+        meta: { shop: row.shop },
+      });
+      return c.json({
+        ok: true,
+        shop: row.shop,
+        workspace_id: row.workspaceId,
+        workspace: ws?.name ?? null,
+        agent_id: row.agentId,
+      });
     },
   );
 

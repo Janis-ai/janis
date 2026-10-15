@@ -211,17 +211,28 @@ describe('shopify embedded app — session', () => {
     expect(res.status).toBe(401);
   });
 
-  it('installs the shop — token exchange + unlinked row + link url', async () => {
+  it('installs the shop — token exchange + zero-login provision binds it', async () => {
     stubShopifyApi();
     const res = await postSession(sessionJwt());
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { shop: string; state: string; link_url?: string };
+    const body = (await res.json()) as {
+      shop: string;
+      state: string;
+      provisioned?: boolean;
+      claimed?: boolean;
+      claim_url?: string;
+    };
     expect(body.shop).toBe(SHOP);
-    expect(body.state).toBe('unlinked');
-    expect(body.link_url).toContain('/shopify-link?code=');
+    // First embedded load auto-provisions — the merchant lands on "linked"
+    // with no Janis login in the path at all.
+    expect(body.state).toBe('linked');
+    expect(body.provisioned).toBe(true);
+    expect(body.claimed).toBe(false);
+    expect(body.claim_url).toContain('/shopify-claim?code=');
     const [row] = await db.select().from(shopifyShops).where(eq(shopifyShops.shop, SHOP));
     expect(row.accessTokenEnc).toBeTruthy();
     expect(row.scopes).toBe('read_orders,write_orders,read_products,read_customers');
+    expect(row.provisionedAt).toBeTruthy();
   });
 
   it('a second embedded load re-exchanges — a scope bump self-heals', async () => {
@@ -258,21 +269,27 @@ describe('shopify embedded app — session', () => {
     expect(row.accessTokenEnc).toBeTruthy();
   });
 
-  it('an unbound reinstall lands back on unlinked, not stuck on uninstalled', async () => {
+  it('a provisioned shop relinks on reinstall — no reprovision', async () => {
     stubShopifyApi();
-    // Fresh row with a token, then uninstall (unbound — no agent linked)
+    // First load provisions and binds; uninstall keeps the binding.
     await postSession(sessionJwt('fresh.myshopify.com'));
+    const wsCount = (await db.select({ id: workspaces.id }).from(workspaces)).length;
     await webhook('app/uninstalled', {}, SECRET, 'fresh.myshopify.com');
     let [row] = await db
       .select()
       .from(shopifyShops)
       .where(eq(shopifyShops.shop, 'fresh.myshopify.com'));
     expect(row.state).toBe('uninstalled');
-    // Reinstall → session exchange must restore the link flow
+    // Reinstall → session exchange restores 'linked' with the SAME binding —
+    // the shop must not double-provision a second workspace.
     const res = await postSession(sessionJwt('fresh.myshopify.com'));
-    const body = (await res.json()) as { state: string; link_url?: string };
-    expect(body.state).toBe('unlinked');
-    expect(body.link_url).toContain('/shopify-link?code=');
+    const body = (await res.json()) as { state: string; provisioned?: boolean };
+    expect(body.state).toBe('linked');
+    [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'fresh.myshopify.com'));
+    expect((await db.select({ id: workspaces.id }).from(workspaces)).length).toBe(wsCount);
   });
 });
 
@@ -472,6 +489,118 @@ describe('shopify link flow', () => {
       body: JSON.stringify({ code, agent_id: '00000000-0000-0000-0000-000000000000' }),
     });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('shopify zero-login provisioning', () => {
+  it('first load provisions a hosted agent bound to an ownerless shopify workspace', async () => {
+    stubShopifyApi();
+    const res = await postSession(sessionJwt('new-shop.myshopify.com'));
+    const body = (await res.json()) as { state: string; provisioned?: boolean };
+    expect(body.state).toBe('linked');
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'new-shop.myshopify.com'));
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId!));
+    expect(ws.ownerUserId).toBeNull();
+    expect(ws.billingProvider).toBe('shopify');
+    expect((ws.config as { shopify_provisioned?: boolean }).shopify_provisioned).toBe(true);
+    const [agent] = await db.select().from(agents).where(eq(agents.id, row.agentId!));
+    expect(agent.hosted).toBe(true);
+    // bindShop did the heavy lifting — secrets + catalog tools + knowledge.
+    const secrets = await db
+      .select({ name: agentSecrets.name })
+      .from(agentSecrets)
+      .where(eq(agentSecrets.agentId, row.agentId!));
+    expect(secrets.map((s) => s.name).sort()).toEqual(['SHOPIFY_SHOP', 'SHOPIFY_TOKEN']);
+    const kf = await db
+      .select({ sourceUrl: knowledgeFiles.sourceUrl })
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.agentId, row.agentId!));
+    expect(kf.map((f) => f.sourceUrl).sort()).toEqual(['shopify://catalog', 'shopify://policies']);
+  });
+
+  it('repeat loads keep the same binding — no duplicate workspaces', async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt('repeat.myshopify.com'));
+    const wsCount = (await db.select({ id: workspaces.id }).from(workspaces)).length;
+    const res = await postSession(sessionJwt('repeat.myshopify.com'));
+    expect(((await res.json()) as { state: string }).state).toBe('linked');
+    expect((await db.select({ id: workspaces.id }).from(workspaces)).length).toBe(wsCount);
+  });
+
+  it('a deliberate unlink stamps the gate — next load stays on the manual link flow', async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt('unlink-me.myshopify.com'));
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'unlink-me.myshopify.com'));
+    // Rebind to the signed-in workspace so /unlink applies to it.
+    const link = await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code: signLinkCode(row.id), agent_id: agentId }),
+    });
+    expect(link.status).toBe(200);
+    const unlink = await app.request('/api/shopify/unlink', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ shop_id: row.id }),
+    });
+    expect(unlink.status).toBe(200);
+    // Next embedded load: still unlinked, manual link flow — no silent rebind.
+    const res = await postSession(sessionJwt('unlink-me.myshopify.com'));
+    const body = (await res.json()) as { state: string; link_url?: string };
+    expect(body.state).toBe('unlinked');
+    expect(body.link_url).toContain('/shopify-link?code=');
+  });
+});
+
+describe('shopify claim', () => {
+  const postClaim = (code: string) =>
+    app.request('/api/shopify/claim', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code }),
+    });
+
+  it('makes the signed-in user admin + owner of the provisioned workspace', async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt('claim-me.myshopify.com'));
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'claim-me.myshopify.com'));
+    const res = await postClaim(signLinkCode(row.id));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; workspace_id: string; agent_id: string };
+    expect(body.workspace_id).toBe(row.workspaceId);
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId!));
+    const [u] = await db.select().from(users).where(eq(users.email, 'a@x.test'));
+    expect(ws.ownerUserId).toBe(u.id);
+    const [m] = await db
+      .select()
+      .from(memberships)
+      .where(and(eq(memberships.userId, u.id), eq(memberships.workspaceId, row.workspaceId!)));
+    expect(m.role).toBe('admin');
+    // Idempotent — a repeat claim is a no-op, not a membership error.
+    expect((await postClaim(signLinkCode(row.id))).status).toBe(200);
+  });
+
+  it('rejects a forged claim code', async () => {
+    const res = await postClaim('forged.sig');
+    expect(res.status).toBe(400);
+  });
+
+  it('409s when the shop is not bound to a workspace', async () => {
+    const [row] = await db
+      .insert(shopifyShops)
+      .values({ shop: 'bare.myshopify.com', provisionedAt: new Date() })
+      .returning();
+    const res = await postClaim(signLinkCode(row.id));
+    expect(res.status).toBe(409);
   });
 });
 
