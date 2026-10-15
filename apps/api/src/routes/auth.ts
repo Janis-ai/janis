@@ -141,7 +141,12 @@ export function authRoutes(db: Db) {
     await db.transaction(async (tx) => {
       const [ws] = await tx
         .insert(workspaces)
-        .values({ name: `${base}'s workspace`, plan: env.defaultPlan, ownerUserId: u.id })
+        .values({
+          name: `${base}'s workspace`,
+          plan: env.defaultPlan,
+          ownerUserId: u.id,
+          config: { data_retention_days: 365 },
+        })
         .returning();
       await tx.insert(memberships).values({
         userId: u.id,
@@ -481,6 +486,7 @@ export function authRoutes(db: Db) {
           ownerUserId: row.user.id,
           parentWorkspaceId: parentId,
           parentContact,
+          config: { data_retention_days: 365 },
         })
         .returning();
       await db.insert(memberships).values({

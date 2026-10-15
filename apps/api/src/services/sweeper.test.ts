@@ -5,11 +5,11 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alerts, conversations, memberships, messages, users, workspaces } from '../db/schema.js';
+import { agents, alerts, conversations, memberships, messages, pendingActions, usageEvents, users, workspaces } from '../db/schema.js';
 import { generateApiKey, hashPassword } from '../lib/crypto.js';
 import { processEvents } from './ingest.js';
 import { takeover, humanReply, agentSend } from './takeover.js';
-import { sweepAutoResume, sweepSla } from './sweeper.js';
+import { sweepAutoResume, sweepRetention, sweepSla } from './sweeper.js';
 
 let db: Db;
 let agent: typeof agents.$inferSelect;
@@ -299,6 +299,116 @@ describe('sweepSla', () => {
       createdAt: new Date(), // just now — inside the 10m window
     });
     expect(await sweepSla(db)).toBe(0);
+  });
+});
+
+describe('sweepRetention', () => {
+  const DAY = 86_400_000;
+
+  async function makeRetentionWorkspace(days: number | null) {
+    const [ws] = await db
+      .insert(workspaces)
+      .values({
+        name: `Ret-${days ?? 'off'}-${Math.random().toString(36).slice(2, 8)}`,
+        config: days === null ? {} : { data_retention_days: days },
+      })
+      .returning();
+    const [a] = await db
+      .insert(agents)
+      .values({
+        workspaceId: ws.id,
+        name: 'Ret Bot',
+        apiKeyHash: generateApiKey().hash,
+        apiKeyPreview: 'r',
+      })
+      .returning();
+    return { ws, agent: a };
+  }
+
+  it('deletes conversations idle past the policy, keeps fresh ones', async () => {
+    const { agent: a } = await makeRetentionWorkspace(30);
+    const [old] = await db
+      .insert(conversations)
+      .values({
+        agentId: a.id,
+        externalId: 'ret-old',
+        lastMessageAt: new Date(Date.now() - 40 * DAY),
+      })
+      .returning();
+    await db.insert(messages).values({ conversationId: old.id, direction: 'in', text: 'stale' });
+    await db.insert(alerts).values({ conversationId: old.id, type: 'help_request' });
+    await db.insert(pendingActions).values({
+      workspaceId: a.workspaceId,
+      agentId: a.id,
+      conversationId: old.id,
+      toolName: 't',
+      tool: { name: 't' },
+      args: {},
+    });
+    await db.insert(usageEvents).values({
+      workspaceId: a.workspaceId,
+      agentId: a.id,
+      conversationId: old.id,
+      kind: 'llm_tokens',
+      period: '2026-01',
+      expiresAt: new Date(Date.now() + DAY),
+    });
+    const [fresh] = await db
+      .insert(conversations)
+      .values({ agentId: a.id, externalId: 'ret-fresh', lastMessageAt: new Date() })
+      .returning();
+
+    expect(await sweepRetention(db)).toBe(1);
+
+    expect(await db.select().from(conversations).where(eq(conversations.id, old.id)))
+      .toHaveLength(0);
+    expect(await db.select().from(messages).where(eq(messages.conversationId, old.id)))
+      .toHaveLength(0);
+    expect(await db.select().from(alerts).where(eq(alerts.conversationId, old.id)))
+      .toHaveLength(0);
+    expect(await db.select().from(pendingActions).where(eq(pendingActions.conversationId, old.id)))
+      .toHaveLength(0);
+    // billing rows survive with the conversation link nulled
+    const ue = await db.select().from(usageEvents).where(eq(usageEvents.agentId, a.id));
+    expect(ue).toHaveLength(1);
+    expect(ue[0].conversationId).toBeNull();
+    // fresh conversation untouched
+    expect(await db.select().from(conversations).where(eq(conversations.id, fresh.id)))
+      .toHaveLength(1);
+  });
+
+  it('leaves conversations alone when the workspace has no policy', async () => {
+    const { agent: a } = await makeRetentionWorkspace(null);
+    const [old] = await db
+      .insert(conversations)
+      .values({
+        agentId: a.id,
+        externalId: 'ret-nopolicy',
+        lastMessageAt: new Date(Date.now() - 400 * DAY),
+      })
+      .returning();
+    expect(await sweepRetention(db)).toBe(0);
+    expect(await db.select().from(conversations).where(eq(conversations.id, old.id)))
+      .toHaveLength(1);
+  });
+
+  it('scopes deletion to the workspace that set the policy', async () => {
+    const { agent: a1 } = await makeRetentionWorkspace(30);
+    const { agent: a2 } = await makeRetentionWorkspace(null);
+    const stamp = new Date(Date.now() - 40 * DAY);
+    const [victim] = await db
+      .insert(conversations)
+      .values({ agentId: a1.id, externalId: 'ret-victim', lastMessageAt: stamp })
+      .returning();
+    const [neighbor] = await db
+      .insert(conversations)
+      .values({ agentId: a2.id, externalId: 'ret-neighbor', lastMessageAt: stamp })
+      .returning();
+    expect(await sweepRetention(db)).toBe(1);
+    expect(await db.select().from(conversations).where(eq(conversations.id, victim.id)))
+      .toHaveLength(0);
+    expect(await db.select().from(conversations).where(eq(conversations.id, neighbor.id)))
+      .toHaveLength(1);
   });
 });
 

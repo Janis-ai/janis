@@ -497,6 +497,7 @@ export default function Settings() {
 
       {me?.user.role === 'admin' && <DefaultLlmCard />}
       {me?.user.role === 'admin' && <CrmCard />}
+      {me?.user.role === 'admin' && <RetentionCard />}
         </>
       )}
 
@@ -1095,6 +1096,91 @@ function DefaultLlmCard() {
 }
 
 type CsatSettings = { enabled?: boolean; prompt?: string; thanks?: string };
+
+/** Workspace data retention — conversations idle longer than the policy are
+ *  permanently deleted (transcripts carry customer PII). The card shows the
+ *  current blast radius so the merchant sees what changes before saving.
+ *  Admin-only. */
+const RETENTION_OPTIONS: { days: number | null; label: string }[] = [
+  { days: null, label: 'Keep forever' },
+  { days: 30, label: '30 days' },
+  { days: 90, label: '90 days' },
+  { days: 180, label: '180 days' },
+  { days: 365, label: '1 year' },
+  { days: 730, label: '2 years' },
+];
+
+function RetentionCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['workspace'],
+    queryFn: () =>
+      api<{
+        workspace: {
+          data_retention_days?: number | null;
+          retention_expiring_count?: number | null;
+        };
+      }>('/api/workspace'),
+  });
+  const saved = data?.workspace.data_retention_days ?? null;
+  const [draft, setDraft] = useState<number | null | undefined>(undefined);
+  const [msg, setMsg] = useState('');
+  const selected = draft === undefined ? saved : draft;
+  const dirty = selected !== saved;
+  const save = useMutation({
+    mutationFn: () =>
+      api('/api/workspace', {
+        method: 'PATCH',
+        body: JSON.stringify({ data_retention_days: selected }),
+      }),
+    onSuccess: () => {
+      setDraft(undefined);
+      setMsg('Saved — expired conversations are deleted within a minute of the sweep.');
+      void qc.invalidateQueries({ queryKey: ['workspace'] });
+    },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+  const expiring = data?.workspace.retention_expiring_count;
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <strong>Conversation data retention</strong>
+      <div className="muted" style={{ fontSize: 13 }}>
+        Transcripts carry your customers' personal data — automatically delete
+        conversations that have been idle longer than the period you choose.
+        Deletion is permanent and applies to every agent in this workspace.
+      </div>
+      <div className="row" style={{ gap: 8 }}>
+        <select
+          value={selected === null ? 'forever' : String(selected)}
+          onChange={(e) =>
+            setDraft(e.target.value === 'forever' ? null : Number(e.target.value))
+          }
+        >
+          {RETENTION_OPTIONS.map((o) => (
+            <option key={o.label} value={o.days === null ? 'forever' : String(o.days)}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <button
+          className="btn primary"
+          disabled={!dirty || save.isPending}
+          onClick={() => save.mutate()}
+        >
+          {save.isPending ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      {saved !== null && expiring !== null && expiring !== undefined && (
+        <div className="muted" style={{ fontSize: 12 }}>
+          {expiring === 0
+            ? 'No conversations are currently past the retention period.'
+            : `${expiring} conversation${expiring === 1 ? '' : 's'} older than ${saved} days will be deleted.`}
+        </div>
+      )}
+      {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
+    </div>
+  );
+}
 
 /** Workspace default for human escalation — off steers every agent away
  *  from offering or requesting a human (they resolve what they can and say

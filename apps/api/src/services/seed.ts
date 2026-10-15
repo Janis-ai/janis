@@ -22,7 +22,12 @@ export async function ensureSeed(db: Db): Promise<void> {
     .returning();
   const [workspace] = await db
     .insert(workspaces)
-    .values({ name: 'Default', plan: env.defaultPlan, ownerUserId: admin.id })
+    .values({
+      name: 'Default',
+      plan: env.defaultPlan,
+      ownerUserId: admin.id,
+      config: { data_retention_days: 365 },
+    })
     .returning();
   await db.insert(memberships).values({
     userId: admin.id,

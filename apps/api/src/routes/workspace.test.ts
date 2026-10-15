@@ -192,6 +192,52 @@ describe('PATCH /api/workspace', () => {
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, wsId));
     expect(ws.name).toBe('Renamed Co');
   });
+
+  it('sets data_retention_days and reports the expiring count', async () => {
+    const [a] = await db
+      .insert(agents)
+      .values({
+        workspaceId: wsId,
+        name: 'Ret Bot',
+        apiKeyHash: generateApiKey().hash,
+        apiKeyPreview: 'r',
+      })
+      .returning();
+    await db.insert(conversations).values({
+      agentId: a.id,
+      externalId: 'ret-old',
+      lastMessageAt: new Date(Date.now() - 40 * 86_400_000),
+    });
+
+    const res = await app.request('/api/workspace', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ data_retention_days: 30 }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.workspace.data_retention_days).toBe(30);
+    expect(body.workspace.retention_expiring_count).toBeGreaterThanOrEqual(1);
+
+    // clearing disables retention and the count
+    const off = await app.request('/api/workspace', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ data_retention_days: null }),
+    });
+    const offBody = await off.json();
+    expect(offBody.workspace.data_retention_days).toBeNull();
+    expect(offBody.workspace.retention_expiring_count).toBeNull();
+  });
+
+  it('rejects retention periods under a week', async () => {
+    const res = await app.request('/api/workspace', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ data_retention_days: 3 }),
+    });
+    expect(res.status).toBe(400);
+  });
 });
 
 describe('DELETE /api/workspace', () => {

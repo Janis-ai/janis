@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alertRules, alerts, busEvents, conversations, knowledgeFiles, rateLimits, sweeperLocks, typingState, webhookDeliveries } from '../db/schema.js';
+import { agents, alertRules, alerts, busEvents, channelBindings, conversations, knowledgeFiles, messages, pendingActions, rateLimits, slackThreads, suggestions, sweeperLocks, typingState, usageEvents, webhookDeliveries, workspaces } from '../db/schema.js';
 import { bus, INSTANCE_ID } from '../lib/bus.js';
 import { dispatchAlert, openAlertOnce } from '../lib/alerts.js';
 import { opsAlert } from '../lib/opsAlert.js';
@@ -93,6 +93,7 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
       void sweepEmailDomainStatus(db).catch((err) =>
         console.error('sweepEmailDomainStatus error:', err),
       );
+      void sweepRetention(db).catch((err) => console.error('sweepRetention error:', err));
       void db
         .delete(busEvents)
         .where(lt(busEvents.createdAt, new Date(Date.now() - 10 * 60_000)))
@@ -403,6 +404,57 @@ export async function sweepSla(db: Db): Promise<number> {
  * writes the real next slot). Slow crawls run on the jobs path, not inside
  * the sweep; a crashed job re-enqueues on the next tick. Bounded per tick.
  */
+/**
+ * Data retention: workspaces with config.data_retention_days lose every
+ * conversation whose LAST activity is older than the policy — transcripts
+ * (and their quoted order/customer data) are the PII Shopify's protected-
+ * customer-data review asks about, so "not kept longer than needed" has to
+ * be enforced, not promised. The clock runs on lastMessageAt (createdAt
+ * fallback) so a live thread never dies mid-conversation. Children have no
+ * FK cascade — same delete order as DELETE /conversations/:id, with
+ * pending_actions added and usage_events nulled so billing rows survive.
+ * Bounded per tick; an expired backlog drains over successive sweeps.
+ */
+export async function sweepRetention(db: Db, perWorkspace = 25): Promise<number> {
+  const policies = (await db.select({ id: workspaces.id, config: workspaces.config }).from(workspaces))
+    .map((w) => ({
+      id: w.id,
+      days: (w.config as { data_retention_days?: number } | null)?.data_retention_days,
+    }))
+    .filter((w): w is { id: string; days: number } => typeof w.days === 'number' && w.days > 0);
+  let deleted = 0;
+  for (const ws of policies) {
+    const cutoff = new Date(Date.now() - ws.days * 86_400_000);
+    const due = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(
+        and(
+          eq(agents.workspaceId, ws.id),
+          lt(
+            sql`coalesce(${conversations.lastMessageAt}, ${conversations.createdAt})`,
+            cutoff,
+          ),
+        ),
+      )
+      .limit(perWorkspace);
+    if (!due.length) continue;
+    const ids = due.map((d) => d.id);
+    await db.delete(messages).where(inArray(messages.conversationId, ids));
+    await db.delete(alerts).where(inArray(alerts.conversationId, ids));
+    await db.delete(suggestions).where(inArray(suggestions.conversationId, ids));
+    await db.delete(pendingActions).where(inArray(pendingActions.conversationId, ids));
+    await db.delete(slackThreads).where(inArray(slackThreads.conversationId, ids));
+    await db.delete(channelBindings).where(inArray(channelBindings.conversationId, ids));
+    await db.update(usageEvents).set({ conversationId: null }).where(inArray(usageEvents.conversationId, ids));
+    await db.delete(conversations).where(inArray(conversations.id, ids));
+    deleted += ids.length;
+    console.log(`retention: deleted ${ids.length} conversations older than ${ws.days}d in workspace ${ws.id}`);
+  }
+  return deleted;
+}
+
 export async function sweepKnowledge(db: Db, limit = 5): Promise<number> {
   const due = await db
     .select({ id: knowledgeFiles.id, workspaceId: knowledgeFiles.workspaceId })

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { randomBytes } from 'node:crypto';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import { meteredModelOf, type LlmConfigBlock } from '../lib/llm.js';
@@ -85,6 +85,10 @@ const updateWorkspace = z.object({
   // offering/requesting a human (they resolve or say they can't). Agents
   // inherit unless their own config.handoff_enabled overrides.
   handoff_enabled: z.boolean().nullable().optional(),
+  // Conversation data retention — conversations idle longer than this many
+  // days are permanently deleted (transcripts carry customer PII). null =
+  // keep forever. Enforced by the retention sweeper.
+  data_retention_days: z.number().int().min(7).max(3650).nullable().optional(),
   llm_config: z
     .object({
       provider: z.string().optional(),
@@ -97,6 +101,52 @@ const updateWorkspace = z.object({
     .nullable()
     .optional(),
 });
+
+type WorkspaceRow = typeof workspaces.$inferSelect;
+
+/** Shared response shape for GET and PATCH — retention includes the
+ *  blast-radius count (conversations the policy would delete today). */
+async function workspaceView(db: Db, ws: WorkspaceRow) {
+  const days = (ws.config as { data_retention_days?: number } | undefined)
+    ?.data_retention_days;
+  let expiring: number | null = null;
+  if (typeof days === 'number' && days > 0) {
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(
+        and(
+          eq(agents.workspaceId, ws.id),
+          lt(
+            sql`coalesce(${conversations.lastMessageAt}, ${conversations.createdAt})`,
+            cutoff,
+          ),
+        ),
+      );
+    expiring = row?.n ?? 0;
+  }
+  return {
+    id: ws.id,
+    name: ws.name,
+    llm_config: scrubLlmBlock(ws.llmConfig),
+    event_webhook_url:
+      (ws.config as { event_webhook_url?: string } | undefined)?.event_webhook_url ?? null,
+    help_domain:
+      (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
+    send_policy: (ws.config as { send_policy?: unknown } | undefined)?.send_policy ?? null,
+    csat: (ws.config as { csat?: unknown } | undefined)?.csat ?? null,
+    auto_archive:
+      (ws.config as { auto_archive?: boolean } | undefined)?.auto_archive ?? null,
+    handoff_enabled:
+      (ws.config as { handoff_enabled?: boolean } | undefined)?.handoff_enabled ?? null,
+    event_token:
+      (ws.config as { event_token?: string } | undefined)?.event_token ?? null,
+    data_retention_days: days ?? null,
+    retention_expiring_count: expiring,
+  };
+}
 
 export function workspaceRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
@@ -113,22 +163,8 @@ export function workspaceRoutes(db: Db) {
     if (!ws) return c.json({ error: 'not found' }, 404);
     return c.json({
       workspace: {
-        id: ws.id,
-        name: ws.name,
+        ...(await workspaceView(db, ws)),
         plan: await effectivePlanKey(db, ws.id),
-        llm_config: scrubLlmBlock(ws.llmConfig),
-        event_webhook_url:
-          (ws.config as { event_webhook_url?: string } | undefined)?.event_webhook_url ?? null,
-        help_domain:
-          (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
-        send_policy: (ws.config as { send_policy?: unknown } | undefined)?.send_policy ?? null,
-        csat: (ws.config as { csat?: unknown } | undefined)?.csat ?? null,
-        auto_archive:
-          (ws.config as { auto_archive?: boolean } | undefined)?.auto_archive ?? null,
-        handoff_enabled:
-          (ws.config as { handoff_enabled?: boolean } | undefined)?.handoff_enabled ?? null,
-        event_token:
-          (ws.config as { event_token?: string } | undefined)?.event_token ?? null,
       },
     });
   });
@@ -195,7 +231,8 @@ export function workspaceRoutes(db: Db) {
       body.send_policy !== undefined ||
       body.csat !== undefined ||
       body.auto_archive !== undefined ||
-      body.handoff_enabled !== undefined
+      body.handoff_enabled !== undefined ||
+      body.data_retention_days !== undefined
     ) {
       const config = {
         ...(ws.config as Record<string, unknown>),
@@ -223,6 +260,10 @@ export function workspaceRoutes(db: Db) {
         delete (config as Record<string, unknown>).handoff_enabled;
       else if (body.handoff_enabled !== undefined)
         (config as Record<string, unknown>).handoff_enabled = body.handoff_enabled;
+      if (body.data_retention_days === null)
+        delete (config as Record<string, unknown>).data_retention_days;
+      else if (body.data_retention_days !== undefined)
+        (config as Record<string, unknown>).data_retention_days = body.data_retention_days;
       await db.update(workspaces).set({ config }).where(eq(workspaces.id, workspaceId));
       ws.config = config;
     }
@@ -264,25 +305,7 @@ export function workspaceRoutes(db: Db) {
         workspace: { id: ws.id, name: ws.name, llm_config: scrubLlmBlock(next) },
       });
     }
-    return c.json({
-      workspace: {
-        id: ws.id,
-        name: ws.name,
-        llm_config: scrubLlmBlock(ws.llmConfig),
-        event_webhook_url:
-          (ws.config as { event_webhook_url?: string } | undefined)?.event_webhook_url ?? null,
-        help_domain:
-          (ws.config as { help_domain?: string } | undefined)?.help_domain ?? null,
-        send_policy: (ws.config as { send_policy?: unknown } | undefined)?.send_policy ?? null,
-        csat: (ws.config as { csat?: unknown } | undefined)?.csat ?? null,
-        auto_archive:
-          (ws.config as { auto_archive?: boolean } | undefined)?.auto_archive ?? null,
-        handoff_enabled:
-          (ws.config as { handoff_enabled?: boolean } | undefined)?.handoff_enabled ?? null,
-        event_token:
-          (ws.config as { event_token?: string } | undefined)?.event_token ?? null,
-      },
-    });
+    return c.json({ workspace: await workspaceView(db, ws) });
   });
 
   // GET /api/workspace/audit-log — admin only. Every security/billing
