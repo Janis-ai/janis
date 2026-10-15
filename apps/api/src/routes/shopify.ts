@@ -154,9 +154,14 @@ export function shopifyPublicRoutes(db: Db) {
       out.claimed = Boolean(ws?.ownerUserId);
       // Setup-card fields — the in-frame brief approval edits these via
       // POST /api/shopify/agent.
-      const cfg = (agent?.config ?? {}) as { purpose?: string; greeting?: string };
+      const cfg = (agent?.config ?? {}) as {
+        purpose?: string;
+        greeting?: string;
+        quick_replies?: string[];
+      };
       out.purpose = cfg.purpose ?? null;
       out.greeting = cfg.greeting ?? null;
+      out.quick_replies = cfg.quick_replies ?? [];
       // Billing + usage state for the plan card: current plan, this period's
       // message count, cap status, and any pending/active AppSubscription.
       const [cap, enabled] = await Promise.all([
@@ -224,6 +229,7 @@ export function shopifyPublicRoutes(db: Db) {
         name: z.string().min(1).max(120).optional(),
         purpose: z.string().max(4000).optional(),
         greeting: z.string().max(2000).optional(),
+        quick_replies: z.array(z.string().trim().min(1).max(80)).max(8).optional(),
       }),
     ),
     async (c) => {
@@ -247,6 +253,13 @@ export function shopifyPublicRoutes(db: Db) {
       if (body.greeting !== undefined && body.greeting !== cfg.greeting) {
         nextCfg.greeting = body.greeting;
         if (body.greeting) nextCfg.greeting_enabled = true;
+      }
+      // Agent-level starter chips — the widget falls back to these when the
+      // channel carries no quick_replies of its own (theme embeds can
+      // still override per-storefront).
+      if (body.quick_replies !== undefined) {
+        if (body.quick_replies.length) nextCfg.quick_replies = body.quick_replies;
+        else delete nextCfg.quick_replies;
       }
       if (body.purpose && body.purpose !== cfg.purpose) {
         nextCfg.purpose = body.purpose;
@@ -996,6 +1009,15 @@ export function shopifyPublicRoutes(db: Db) {
       const v = (q[param] ?? '').trim().slice(0, 500);
       if (v) attrs.push(`s.setAttribute(${JSON.stringify(attr)},${JSON.stringify(v)});`);
     }
+    // Comma-separated starter chips — the theme editor is single-line text,
+    // so the merchant types "Track order, Returns, Talk to a human".
+    const qrs = (q.qrs ?? '')
+      .split(',')
+      .map((s) => s.trim().slice(0, 80))
+      .filter(Boolean)
+      .slice(0, 8);
+    if (qrs.length)
+      attrs.push(`s.setAttribute('data-janis-replies',${JSON.stringify(JSON.stringify(qrs))});`);
     // Signed-in shopper context — the theme embed passes the logged-in
     // Shopify customer as params. We forward them as an UNSIGNED identity
     // claim (self-reported tier: greeting/prefill, never proof — signing
@@ -1012,31 +1034,36 @@ export function shopifyPublicRoutes(db: Db) {
       attrs.push(`s.setAttribute('data-janis-user',${JSON.stringify(JSON.stringify(claim))});`);
     }
     // Theme → channel sync: non-empty theme overrides persist into the
-    // channel's branding so the console Bubble editor shows the same
+    // channel's credentials so the console Bubble editor shows the same
     // effective values (blank always means "channel default", so absent
     // params never clear a stored value). Write only on change — this
     // endpoint is hot (every storefront page load).
     {
-      const branding = ((chan.credentials ?? {}) as { branding?: Record<string, unknown> }).branding ?? {};
+      // Early deploys stored these under credentials.branding — a nested
+      // blob nothing reads (flat keys are canonical). Fold leftovers into
+      // the flat shape and drop the key so past theme edits finally land.
+      const flat = { ...((chan.credentials ?? {}) as Record<string, unknown>) };
+      const legacy = (flat.branding ?? {}) as Record<string, unknown>;
+      const hadNested = 'branding' in flat;
+      delete flat.branding;
+      const current = { ...legacy, ...flat }; // flat wins over legacy nested
       const next: Record<string, unknown> = {};
       // Same validation as the attrs above — junk theme values are dropped,
-      // not persisted into channel branding.
+      // not persisted into channel credentials.
       if (/^#[0-9a-fA-F]{6}$/.test(accent)) next.accent = accent;
       if (position === 'left' || position === 'right') next.position = position;
       const teaser = (q.teaser ?? '').trim().slice(0, 200);
       if (teaser) next.teaser_text = teaser;
       const greeting = (q.greeting ?? '').trim().slice(0, 500);
       if (greeting) next.greeting = greeting;
-      const changed = Object.entries(next).some(([k, v]) => branding[k] !== v);
+      if (qrs.length) next.quick_replies = qrs;
+      const changed =
+        hadNested ||
+        Object.entries(next).some(([k, v]) => JSON.stringify(current[k]) !== JSON.stringify(v));
       if (changed)
         void db
           .update(channels)
-          .set({
-            credentials: {
-              ...(chan.credentials as Record<string, unknown>),
-              branding: { ...branding, ...next },
-            },
-          } as never)
+          .set({ credentials: { ...current, ...next } } as never)
           .where(eq(channels.id, chan.id))
           .then(() => invalidateChannelCache())
           .catch((e) => console.error('shopify theme→channel sync:', e));

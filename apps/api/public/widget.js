@@ -28,6 +28,7 @@
     position: script.getAttribute('data-janis-position'),
     teaser: script.getAttribute('data-janis-teaser'),
     greeting: script.getAttribute('data-janis-greeting'),
+    replies: script.getAttribute('data-janis-replies'),
   };
   // Shopify storefront mode (the theme app-embed loader sets this) — the
   // widget may read the shopper's real cart via the same-origin Ajax API
@@ -2660,6 +2661,12 @@
     if (OVR.position) cfg.position = OVR.position;
     if (OVR.teaser) cfg.teaser_text = OVR.teaser;
     if (OVR.greeting) cfg.greeting = OVR.greeting;
+    if (OVR.replies) {
+      try {
+        var ovReplies = JSON.parse(OVR.replies);
+        if (Array.isArray(ovReplies) && ovReplies.length) cfg.quick_replies = ovReplies;
+      } catch (e) { /* malformed override — keep channel config */ }
+    }
     state.config = cfg;
     var darkQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
     var applyTheme = function () {

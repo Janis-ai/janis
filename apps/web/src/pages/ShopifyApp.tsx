@@ -44,6 +44,7 @@ type SessionState =
       name: string;
       purpose: string;
       greeting: string;
+      quickReplies: string[];
       linkUrl: string;
     }
   | {
@@ -57,6 +58,7 @@ type SessionState =
       claimed: boolean;
       purpose: string;
       greeting: string;
+      quickReplies: string[];
       plan: string;
       usage: { used: number; included: number; capped: boolean } | null;
       billing: { status?: string; plan?: string } | null;
@@ -149,6 +151,7 @@ export default function ShopifyApp() {
   const [setupName, setSetupName] = useState('');
   const [setupPurpose, setSetupPurpose] = useState('');
   const [setupGreeting, setSetupGreeting] = useState('');
+  const [setupReplies, setSetupReplies] = useState('');
   const [setupSaving, setSetupSaving] = useState(false);
   const [setupError, setSetupError] = useState('');
   // The App Bridge token doubles as the credential for the session-token
@@ -541,12 +544,14 @@ export default function ShopifyApp() {
       setSetupName(state.name);
       setSetupPurpose(state.purpose);
       setSetupGreeting(state.greeting);
+      setSetupReplies(state.quickReplies.join(', '));
     } else if (state.kind === 'linked') {
       // The Agent tab edits the same fields — keep them in sync with the
       // served values whenever the session reloads.
       setSetupName(state.agent ?? '');
       setSetupPurpose(state.purpose);
       setSetupGreeting(state.greeting);
+      setSetupReplies(state.quickReplies.join(', '));
     }
   }, [state]);
 
@@ -561,10 +566,16 @@ export default function ShopifyApp() {
     try {
       // Only send changed fields — an unchanged purpose must not trigger a
       // re-draft.
-      const body: Record<string, string> = {};
+      const body: Record<string, unknown> = {};
       if (setupName.trim() && setupName.trim() !== currentName) body.name = setupName.trim();
       if (setupPurpose.trim() !== state.purpose) body.purpose = setupPurpose.trim();
       if (setupGreeting.trim() !== state.greeting) body.greeting = setupGreeting.trim();
+      const replies = setupReplies
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .slice(0, 8);
+      if (replies.join(', ') !== state.quickReplies.join(', ')) body.quick_replies = replies;
       if (Object.keys(body).length) {
         await shopifyApi('/api/shopify/agent', body);
       }
@@ -598,6 +609,16 @@ export default function ShopifyApp() {
         placeholder="Hi there! How can I help you today?"
         style={{ width: '100%' }}
       />
+      <label>Quick replies</label>
+      <input
+        value={setupReplies}
+        onChange={(e) => setSetupReplies(e.target.value)}
+        placeholder="Track my order, Returns, Talk to a human"
+        style={{ width: '100%' }}
+      />
+      <p className="muted" style={{ fontSize: 12, marginTop: -6 }}>
+        Comma-separated starter chips shown when the chat opens (up to 8).
+      </p>
       {setupError && <div className="error">{setupError}</div>}
     </>
   );
@@ -655,6 +676,7 @@ export default function ShopifyApp() {
             workspace?: string | null;
             purpose?: string | null;
             greeting?: string | null;
+            quick_replies?: string[];
             plan?: string;
             usage?: { used: number; included: number; capped: boolean } | null;
             billing?: { status?: string; plan?: string } | null;
@@ -717,6 +739,7 @@ export default function ShopifyApp() {
                 res.purpose ??
                 `You are the AI shopping assistant for ${res.shop}, a Shopify store. Help visitors find products, check order status, and answer questions about shipping, returns and store policies — and help them complete purchases.`,
               greeting: res.greeting ?? '',
+              quickReplies: res.quick_replies ?? [],
               linkUrl: res.link_url ?? '',
             });
           } else {
@@ -731,6 +754,7 @@ export default function ShopifyApp() {
               claimed: res.claimed ?? false,
               purpose: res.purpose ?? '',
               greeting: res.greeting ?? '',
+              quickReplies: res.quick_replies ?? [],
               plan: res.plan ?? 'free',
               usage: res.usage ?? null,
               billing: res.billing ?? null,

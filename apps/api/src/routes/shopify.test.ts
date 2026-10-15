@@ -1460,7 +1460,7 @@ describe('storefront loader', () => {
       body: JSON.stringify({ code, agent_id: agentId }),
     });
     const res = await app.request(
-      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&position=left&teaser=Hi!&greeting=Hello&bogus=ignored&accent2=notahex`,
+      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&position=left&teaser=Hi!&greeting=Hello&qrs=${encodeURIComponent('Track order, Returns')}&bogus=ignored&accent2=notahex`,
     );
     const js = await res.text();
     expect(js).toContain('data-janis-accent');
@@ -1469,9 +1469,36 @@ describe('storefront loader', () => {
     expect(js).toContain('"left"');
     expect(js).toContain('data-janis-teaser');
     expect(js).toContain('data-janis-greeting');
+    expect(js).toContain('data-janis-replies');
+    expect(js).toContain('Track order');
     // unwhitelisted/invalid params never reach the tag
     expect(js).not.toContain('bogus');
     expect(js).not.toContain('notahex');
+  });
+
+  it('theme-embed settings persist onto flat channel credentials', async () => {
+    stubShopifyApi();
+    const code = await linkCodeFor();
+    await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code, agent_id: agentId }),
+    });
+    await app.request(
+      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&teaser=${encodeURIComponent('Need help?')}&qrs=${encodeURIComponent('Track order, Returns')}`,
+    );
+    // The sync write is fire-and-forget — give it a tick to land.
+    await new Promise((r) => setTimeout(r, 50));
+    const [chan] = await db
+      .select()
+      .from(channels)
+      .where(and(eq(channels.agentId, agentId), eq(channels.kind, 'webchat')));
+    const creds = chan.credentials as Record<string, unknown>;
+    // Flat keys are what the widget bootstrap + console editor read.
+    expect(creds.accent).toBe('#aabbcc');
+    expect(creds.teaser_text).toBe('Need help?');
+    expect(creds.quick_replies).toEqual(['Track order', 'Returns']);
+    expect(creds.branding).toBeUndefined();
   });
 
   it('a re-link reuses the existing Bubble — no duplicate channels', async () => {
