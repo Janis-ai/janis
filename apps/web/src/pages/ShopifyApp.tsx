@@ -144,6 +144,7 @@ export default function ShopifyApp() {
     hasMore: boolean;
   } | null>(null);
   const threadId = useRef<string | null>(null);
+  const threadBox = useRef<HTMLDivElement | null>(null);
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
   const [inboxError, setInboxError] = useState('');
@@ -159,6 +160,13 @@ export default function ShopifyApp() {
     });
     setThread({ conv: res.conversation, messages: res.messages, hasMore: res.has_more });
   };
+
+  // New messages land at the bottom — pin the thread view there whenever
+  // content changes (load, poll, sent reply).
+  useEffect(() => {
+    const el = threadBox.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [thread?.messages.length]);
 
   useEffect(() => {
     if (state.kind !== 'linked' || tab !== 'inbox') return;
@@ -512,6 +520,7 @@ export default function ShopifyApp() {
                     )}
                   </div>
                   <div
+                    ref={threadBox}
                     style={{
                       maxHeight: 320,
                       overflowY: 'auto',
