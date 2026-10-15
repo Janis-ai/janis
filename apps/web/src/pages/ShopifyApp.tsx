@@ -537,13 +537,16 @@ export default function ShopifyApp() {
                               padding: '6px 10px',
                               borderRadius: 12,
                               background: mine ? '#dcf0ff' : '#f1f1f4',
+                              // The page is dark-themed — inherited text is
+                              // white-on-light without an explicit color.
+                              color: '#1f2937',
                               fontSize: 13,
                               textAlign: 'left',
                               whiteSpace: 'pre-wrap',
                             }}
                           >
                             {m.direction === 'human' ? (
-                              <span className="muted" style={{ fontSize: 11, display: 'block' }}>
+                              <span style={{ fontSize: 11, display: 'block', color: '#6b7280' }}>
                                 Staff reply
                               </span>
                             ) : null}
