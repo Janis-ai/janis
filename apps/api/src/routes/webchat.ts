@@ -173,6 +173,10 @@ const postMessage = z
     // sends a one-line summary so the agent can answer "what's in my cart"
     // from the shopper's real cart. Lands on user_profile.metadata.cart.
     cart: z.string().max(300).optional(),
+    // Shopper's resolved Shopify market (Shopify.country, two-letter code) —
+    // multi-market stores price/stock per market; the server-side
+    // availability check must probe in THIS market, not the API's geography.
+    market: z.string().regex(/^[A-Za-z]{2}$/).optional(),
     // Copilot thread key (t<rand>) — scopes a signed-in concierge chat to
     // its own conversation; ignored for anonymous visitors.
     thread: z.string().max(48).optional(),
@@ -570,7 +574,7 @@ export function webchatRoutes(db: Db) {
   app.post('/:token/messages', zValidator('json', postMessage), async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
-    const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of, cart, thread } =
+    const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of, cart, market, thread } =
       c.req.valid('json');
     const threadKey = threadFor(thread);
     // Inbound throttle — anonymous widgets are the spam/cost surface. Two
@@ -638,6 +642,7 @@ export function webchatRoutes(db: Db) {
       payload: {
         ...(client_id ? { client_id } : {}),
         ...(tap ? { tap: true, ...(tap_of ? { tap_of } : {}) } : {}),
+        ...(market ? { market: market.toUpperCase() } : {}),
       },
     }).catch((err) => {
       console.error('[webchat] message ingress failed:', err);

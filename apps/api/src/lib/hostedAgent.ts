@@ -2072,6 +2072,11 @@ export interface AgentRunContext {
    *  replay-suppression path distinguish pagination intent from a plain
    *  re-browse. */
   inboundText?: string;
+  /** The shopper's resolved Shopify market (Shopify.country on the widget's
+   *  page, two-letter code). Multi-market stores price/stock per market —
+   *  the storefront truth probe must answer for THIS market, not wherever
+   *  the API's IP lands. */
+  shopperMarket?: string;
 }
 
 /** Channel kinds where the sender address is verified by the mailbox —
@@ -2943,7 +2948,7 @@ export async function complete(
           const inStockAsk =
             !!inStockArg &&
             ['1', 'true', 'yes'].includes(String(args[inStockArg] ?? '').toLowerCase());
-          const flips = await storefrontTruth(w, secrets, inStockAsk ? 'drop' : 'badge');
+          const flips = await storefrontTruth(w, secrets, inStockAsk ? 'drop' : 'badge', ctx?.shopperMarket);
           if (flips > 0) {
             if (w.items.length === 0) w = null;
             result += inStockAsk
@@ -3825,6 +3830,7 @@ async function replyAsHostedAgent(
   // the add contradicts a confirmed storefront fact and regenerates.
   let confirmedAddTap: string | undefined;
   let lastInboundText: string | undefined;
+  let shopperMarket: string | undefined;
   let paginationTap = false;
   const emit = (e: Parameters<typeof processEvents>[2]) =>
     processEvents(
@@ -3877,11 +3883,12 @@ async function replyAsHostedAgent(
       if (lastIn) {
         coversThrough = new Date(lastIn.createdAt).toISOString();
         lastInboundText = lastIn.text ?? undefined;
-        const p = (lastIn.payload ?? {}) as { tap?: boolean; tap_of?: string };
+        const p = (lastIn.payload ?? {}) as { tap?: boolean; tap_of?: string; market?: string };
         if (p.tap === true && /\s*—\s*add to cart\s*$/i.test(p.tap_of ?? '')) {
           confirmedAddTap = p.tap_of!;
         }
         if (p.tap === true && p.tap_of === 'pagination') paginationTap = true;
+        if (typeof p.market === 'string') shopperMarket = p.market;
       }
     }
     const draftsOpted =
@@ -3968,6 +3975,7 @@ async function replyAsHostedAgent(
       prevPageArgs,
       paginationTap,
       inboundText: lastInboundText,
+      shopperMarket,
     };
     // One escalation lookup feeds the prompt (pending offer) AND the
     // post-generation decline check below.

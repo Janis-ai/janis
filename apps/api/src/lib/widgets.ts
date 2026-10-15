@@ -680,12 +680,21 @@ async function storefrontCookie(shopHost: string, password: string | undefined):
   }
 }
 
+/** The shopper's resolved market country (Shopify.country) drives
+ *  availability — a market whose catalog excludes the product reports
+ *  `available:false` for EVERY variant, including untracked stock. The
+ *  server must probe in the shopper's market: `localization=<cc>` is the
+ *  storefront cookie that pins market context (self-setting it works —
+ *  verified live). Without it the answer reflects whatever market the
+ *  API's IP resolves to — a wrong-market "in stock" ships a dead button. */
 export async function storefrontProduct(
   shopHost: string,
   handle: string,
   password?: string,
+  market?: string,
 ): Promise<SfProduct | null> {
-  const key = `${shopHost}/${handle}`;
+  const mk = /^[A-Za-z]{2}$/.test(market ?? '') ? market!.toUpperCase() : '';
+  const key = `${shopHost}/${handle}/${mk}`;
   const hit = sfCache.get(key);
   if (hit && Date.now() - hit.ts < SF_TTL) return hit.data;
   const inflight = sfFlight.get(key);
@@ -696,7 +705,8 @@ export async function storefrontProduct(
     // /password under redirect:'follow' until the hop cap kills it, and
     // redirect detection is the signal that says "log in first".
     const get = async (cookie: string | null) => {
-      const headers = { accept: 'application/json', 'user-agent': SF_UA, ...(cookie ? { cookie } : {}) };
+      const jar = [cookie, mk ? `localization=${mk}` : null].filter(Boolean).join('; ');
+      const headers = { accept: 'application/json', 'user-agent': SF_UA, ...(jar ? { cookie: jar } : {}) };
       let r = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(4_000) });
       for (let hop = 0; hop < 3 && r.status >= 300 && r.status < 400; hop++) {
         const loc = r.headers.get('location') ?? '';
@@ -779,6 +789,7 @@ export async function storefrontTruth(
   widget: WidgetComponent,
   secrets: Record<string, string>,
   mode: 'badge' | 'drop' = 'badge',
+  market?: string,
 ): Promise<number> {
   if (widget.type !== 'cards') return 0;
   const shop = secrets.SHOPIFY_SHOP;
@@ -789,7 +800,7 @@ export async function storefrontTruth(
       if (it.stock) return; // already badged
       const m = /\/products\/([^/?#]+)/.exec(it.link ?? '');
       if (!m) return;
-      const p = await storefrontProduct(shop, m[1], secrets.SHOPIFY_STOREFRONT_PASSWORD);
+      const p = await storefrontProduct(shop, m[1], secrets.SHOPIFY_STOREFRONT_PASSWORD, market);
       if (!p || !Array.isArray(p.variants)) return;
       if (it.cart_variant_id) {
         const v = p.variants.find((x) => String(x.id) === it.cart_variant_id);

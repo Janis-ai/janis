@@ -1897,6 +1897,13 @@
   function sendPayload(entry) {
     // Shopify storefronts: attach a cart snapshot to EVERY send (typed
     // text, taps, forms) — the agent answers "what's in my cart" from it.
+    // `market` = the shopper's resolved Shopify market (Shopify.country) —
+    // multi-market stores price and stock DIFFERENTLY per market, so the
+    // server's storefront truth check must probe in the shopper's market,
+    // not whatever geography the API request lands in.
+    if (window.Shopify && Shopify.country && !entry.payload.market) {
+      entry.payload.market = Shopify.country;
+    }
     cartSnapshot().then(function (cart) {
       if (cart && !entry.payload.cart) entry.payload.cart = cart.slice(0, 300);
       postPayload(entry);

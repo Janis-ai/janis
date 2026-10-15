@@ -1315,3 +1315,50 @@ describe('reconcilePagedResult — filtered pages stay honest', () => {
     expect(out.__countFloor).toBeUndefined();
   });
 });
+
+describe('storefrontProduct market context', () => {
+  // Multi-market stores price/stock per market — the probe must pin the
+  // shopper's market via the localization cookie, or a wrong-market answer
+  // ships a dead Add button (or hides a sellable one).
+  it('sends a localization cookie and keys the cache per market', async () => {
+    const { storefrontProduct, clearStorefrontCache } = await import('./widgets.js');
+    clearStorefrontCache();
+    const seen: { url: string; cookie?: string }[] = [];
+    const fetchMock = vi.fn(async (url: unknown, init?: { headers?: Record<string, string> }) => {
+      seen.push({ url: String(url), cookie: init?.headers?.cookie });
+      return new Response(JSON.stringify({ title: 'X', variants: [{ id: 1, available: true }] }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await storefrontProduct('shop.myshopify.com', 'blue-tee', undefined, 'CA');
+      await storefrontProduct('shop.myshopify.com', 'blue-tee', undefined, 'US');
+      await storefrontProduct('shop.myshopify.com', 'blue-tee', undefined, 'CA'); // cached
+      expect(seen).toHaveLength(2);
+      expect(seen[0].cookie).toBe('localization=CA');
+      expect(seen[1].cookie).toBe('localization=US');
+    } finally {
+      vi.unstubAllGlobals();
+      clearStorefrontCache();
+    }
+  });
+
+  it('probes without a localization cookie when no market is known', async () => {
+    const { storefrontProduct, clearStorefrontCache } = await import('./widgets.js');
+    clearStorefrontCache();
+    const seen: { cookie?: string }[] = [];
+    const fetchMock = vi.fn(async (_u: unknown, init?: { headers?: Record<string, string> }) => {
+      seen.push({ cookie: init?.headers?.cookie });
+      return new Response(JSON.stringify({ title: 'X', variants: [] }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await storefrontProduct('shop.myshopify.com', 'blue-tee');
+      await storefrontProduct('shop.myshopify.com', 'blue-tee', undefined, 'bad-market!!');
+      expect(seen).toHaveLength(1); // invalid market falls back to the unmarketed cache slot
+      expect(seen[0].cookie).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+      clearStorefrontCache();
+    }
+  });
+});
