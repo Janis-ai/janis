@@ -503,10 +503,24 @@ export default function ShopifyApp() {
         // on the iframe URL. App Bridge's cache can serve a token that
         // expired while the frame was suspended — take whichever is
         // freshest rather than trusting the bridge blindly.
-        const bridged = await mintLiveToken(bridge);
-        const token = [bridged, params.get('id_token')]
-          .filter((t): t is string => !!t)
-          .sort((a, b) => tokenExpMs(b) - tokenExpMs(a))[0];
+        // Credential preference, live-first:
+        //  1. the 12h janis_token from an earlier bootstrap this page life —
+        //     a tick re-run (post-save reload etc.) must not re-mint a
+        //     Shopify token when we're already holding a valid session.
+        //  2. whichever of bridge-minted / ?id_token= is freshest — the
+        //     bridge can serve an expired cache entry after a suspend.
+        const held =
+          sessionToken.current && tokenExpMs(sessionToken.current) > Date.now() + 10_000
+            ? sessionToken.current
+            : undefined;
+        // Only ask the bridge to mint when we actually need a Shopify
+        // credential — a dead bridge would otherwise burn seconds per run.
+        const bridged = held ? undefined : await mintLiveToken(bridge);
+        const token =
+          held ??
+          [bridged, params.get('id_token')]
+            .filter((t): t is string => !!t)
+            .sort((a, b) => tokenExpMs(b) - tokenExpMs(a))[0];
         if (!token) throw new Error('no session token — open this app inside Shopify admin');
         sessionToken.current = token;
         bridgeRef.current = bridge;
