@@ -4021,6 +4021,20 @@ async function replyAsHostedAgent(
   // concierge's operator set rather than the agent's own builtins.
   const merchantAsk =
     ((conv.userProfile ?? {}) as { kind?: string }).kind === 'merchant_ask';
+  // Unclaimed shops (zero-login installs) have no console access — console
+  // deep links land on a login wall, so the copilot must steer merchant-ask
+  // users to the embed's own Agent tab or act via tools instead.
+  const merchantAskClaimed = merchantAsk
+    ? Boolean(
+        (
+          await db
+            .select({ o: workspaces.ownerUserId })
+            .from(workspaces)
+            .where(eq(workspaces.id, agent.workspaceId))
+            .limit(1)
+        )[0]?.o,
+      )
+    : false;
   // The newest inbound this run's transcript actually contained — stamped on
   // every emitted message_out as covers_through so newestInboundIsPending can
   // tell "the reply shipped after the inbound" from "the reply SAW it". Set
@@ -4234,7 +4248,11 @@ async function replyAsHostedAgent(
       }) +
       ((await campaignContextFor(db, convId)) ?? '') +
       (merchantAsk
-        ? "\nThis operator is a verified staff member of the bound Shopify store, chatting inside the embedded app — their workspace is pinned, so act on it directly without asking which one. Agent-scoped questions ('how is the agent doing', stats, gaps, transcripts) default to the shop's bound agent — the one they're chatting with — unless they ask about the whole workspace or name another agent. Store questions (sales, orders, products) are fair game alongside workspace ops. Keep replies compact — the embed is a narrow panel, and long console links can be shortened to the essentials."
+        ? "\nThis operator is a verified staff member of the bound Shopify store, chatting inside the embedded app — their workspace is pinned, so act on it directly without asking which one. Agent-scoped questions ('how is the agent doing', stats, gaps, transcripts) default to the shop's bound agent — the one they're chatting with — unless they ask about the whole workspace or name another agent. Store questions (sales, orders, products) are fair game alongside workspace ops. Keep replies compact — the embed is a narrow panel, and long console links can be shortened to the essentials." +
+          "\nThe embedded app itself covers the basics: the Agent tab edits the agent's name, purpose, greeting and quick replies, and the Inbox tab is the shopper inbox — for 'how do I set you up / change the greeting' asks, point at that tab or make the change yourself with an approval card." +
+          (merchantAskClaimed
+            ? ''
+            : " This store's workspace isn't claimed into a Janis account yet — console links (app.janis.ai/…) land on a login wall, so never emit them; prefer the embed's own tabs and your tools.")
         : '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;
