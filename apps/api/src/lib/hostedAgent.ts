@@ -4536,6 +4536,18 @@ async function replyAsHostedAgent(
         console.warn(`[hosted] named-product promotion failed conv=${convId}`, e);
       }
     }
+    // A confirmed add-to-cart reply must not re-render the product card —
+    // the card above it is the one the shopper just tapped; re-showing it
+    // (with another live Add button for the item they just added) invites a
+    // duplicate add and buries the confirmation. The cart widget attached
+    // below is the only component this reply should carry.
+    if (confirmedAddTap) {
+      const kept = widgets.filter((w) => w.type !== 'cards');
+      if (kept.length !== widgets.length) {
+        console.warn(`[hosted] stripped product card(s) from add-to-cart ack conv=${convId}`);
+        widgets = kept;
+      }
+    }
     // A confirmed add-to-cart tap ends in the shopper's live cart — attach
     // it mechanically. The widget hydrates from the store's own /cart.js so
     // it can't fabricate contents, and the model isn't depended on to
