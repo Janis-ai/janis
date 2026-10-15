@@ -454,13 +454,15 @@ export default function ShopifyApp() {
   }, [tick]);
 
   return (
-    <div className="login-wrap">
+    // Margin all around so an expanded card never runs flush to the iframe's
+    // edges — .login-wrap itself only pads inside the narrow-viewport query.
+    <div className="login-wrap" style={{ padding: 16, alignItems: 'flex-start' }}>
       <div
         className="card login-card"
         style={
           state.kind === 'linked' && tab === 'inbox'
-            ? { maxWidth: expanded ? 900 : 560, width: '100%' }
-            : undefined
+            ? { maxWidth: expanded ? 900 : 560, width: '100%', margin: '24px auto' }
+            : { margin: '24px auto' }
         }
       >
         <div className="login-brand">
