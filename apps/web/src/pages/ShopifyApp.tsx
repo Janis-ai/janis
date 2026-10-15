@@ -251,10 +251,18 @@ export default function ShopifyApp() {
 
   // New messages land at the bottom — pin the thread view there whenever
   // content changes (load, poll, sent reply).
-  useEffect(() => {
+  const pinBottom = () => {
     const el = threadBox.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [thread?.messages.length]);
+  };
+  useEffect(() => {
+    pinBottom();
+    // Attachment images finish loading after first paint and grow the
+    // transcript — re-pin once they settle (img onLoad covers stragglers).
+    const t = setTimeout(pinBottom, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread?.messages.length, thread?.conv.id]);
 
   useEffect(() => {
     if (state.kind !== 'linked' || tab !== 'inbox') return;
@@ -779,6 +787,7 @@ export default function ShopifyApp() {
                                     <img
                                       src={a.url}
                                       alt={a.name}
+                                      onLoad={pinBottom}
                                       style={{ maxWidth: 200, borderRadius: 8, marginTop: 6 }}
                                     />
                                   </a>
