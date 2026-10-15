@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import type { Attachment } from '@janis/shared';
 import { api } from '../api/client';
-import { BrandImg } from '../components/bits';
+import { BrandImg, fmtTime, mdSpans } from '../components/bits';
+import Composer from '../components/Composer';
+import { splitBlocks } from '../lib/richText';
 
 /**
  * The embedded app — loaded inside Shopify admin's iframe (App URL). App
@@ -148,6 +151,17 @@ export default function ShopifyApp() {
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
   const [inboxError, setInboxError] = useState('');
+  // Inbox views default to a mid-width card; the expand toggle goes
+  // full-bleed inside the iframe (the admin chrome gives us what it gives).
+  const [expanded, setExpanded] = useState(false);
+
+  const uploadInboxFile = async (file: File) => {
+    const fd = new FormData();
+    fd.append('token', await tok());
+    fd.append('file', file);
+    const res = await fetch('/api/shopify/inbox/upload', { method: 'POST', body: fd });
+    return res.ok ? ((await res.json()) as Attachment) : null;
+  };
 
   const loadThread = async (id: string) => {
     const res = await api<{
@@ -214,16 +228,21 @@ export default function ShopifyApp() {
     setReply('');
   };
 
-  const sendReply = async () => {
+  const sendReply = async (attachments: Attachment[]) => {
     const id = threadId.current;
     const text = reply.trim();
-    if (!id || !text || busy) return;
+    if (!id || (!text && !attachments.length) || busy) return;
     setBusy(true);
     setInboxError('');
     try {
       await api('/api/shopify/inbox/reply', {
         method: 'POST',
-        body: JSON.stringify({ token: await tok(), conversation_id: id, text }),
+        body: JSON.stringify({
+          token: await tok(),
+          conversation_id: id,
+          text,
+          ...(attachments.length ? { attachments } : {}),
+        }),
       });
       setReply('');
       await loadThread(id);
@@ -396,7 +415,14 @@ export default function ShopifyApp() {
 
   return (
     <div className="login-wrap">
-      <div className="card login-card">
+      <div
+        className="card login-card"
+        style={
+          state.kind === 'linked' && tab === 'inbox'
+            ? { maxWidth: expanded ? 900 : 560, width: '100%' }
+            : undefined
+        }
+      >
         <div className="login-brand">
           <BrandImg alt="Janis" style={{ height: 40, marginBottom: 6 }} />
           <p className="muted">Human backup for AI agents</p>
@@ -518,11 +544,19 @@ export default function ShopifyApp() {
                     {thread.conv.state === 'needs_human' && (
                       <span style={{ fontSize: 12, color: '#b45309' }}>· asked for a human</span>
                     )}
+                    <span style={{ flex: 1 }} />
+                    <button
+                      className="btn icon"
+                      title={expanded ? 'Shrink' : 'Expand'}
+                      onClick={() => setExpanded((e) => !e)}
+                    >
+                      {expanded ? '⤡' : '⤢'}
+                    </button>
                   </div>
                   <div
                     ref={threadBox}
                     style={{
-                      maxHeight: 320,
+                      maxHeight: expanded ? '58vh' : 320,
                       overflowY: 'auto',
                       margin: '10px 0',
                       textAlign: 'left',
@@ -541,6 +575,7 @@ export default function ShopifyApp() {
                         );
                       }
                       const mine = m.direction !== 'in';
+                      const atts = (m.payload?.attachments ?? []) as Attachment[];
                       return (
                         <div
                           key={m.id}
@@ -558,52 +593,74 @@ export default function ShopifyApp() {
                               color: '#1f2937',
                               fontSize: 13,
                               textAlign: 'left',
-                              whiteSpace: 'pre-wrap',
                             }}
                           >
-                            {m.direction === 'human' ? (
-                              <span style={{ fontSize: 11, display: 'block', color: '#6b7280' }}>
-                                Staff reply
-                              </span>
-                            ) : null}
-                            {m.text}
+                            <span
+                              style={{ fontSize: 11, display: 'block', color: '#6b7280' }}
+                              title={new Date(m.created_at).toLocaleString()}
+                            >
+                              {m.direction === 'human' ? 'Staff' : m.direction === 'out' ? 'Agent' : 'Visitor'}{' '}
+                              · {fmtTime(m.created_at)}
+                            </span>
+                            {splitBlocks(m.text ?? '').map((blk, bi) => {
+                              const cls = blk.breakBefore ? ' md-gap' : '';
+                              if (blk.kind !== 'list') {
+                                return (
+                                  <div key={bi} className={`md-para${cls}`}>
+                                    {mdSpans(blk.text ?? '', bi)}
+                                  </div>
+                                );
+                              }
+                              const Tag = blk.ordered ? 'ol' : 'ul';
+                              return (
+                                <Tag key={bi} className={`md-list${cls}`}>
+                                  {(blk.items ?? []).map((item, ii) => (
+                                    <li key={ii}>{mdSpans(item)}</li>
+                                  ))}
+                                </Tag>
+                              );
+                            })}
+                            {atts.map((a, i) => (
+                              <div key={i}>
+                                {a.type.startsWith('image/') ? (
+                                  <a href={a.url} target="_blank" rel="noreferrer">
+                                    <img
+                                      src={a.url}
+                                      alt={a.name}
+                                      style={{ maxWidth: 200, borderRadius: 8, marginTop: 6 }}
+                                    />
+                                  </a>
+                                ) : (
+                                  <a
+                                    href={a.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    style={{ fontSize: 12 }}
+                                  >
+                                    📎 {a.name}
+                                  </a>
+                                )}
+                              </div>
+                            ))}
                           </span>
                         </div>
                       );
                     })}
                   </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <input
-                      value={reply}
-                      onChange={(e) => setReply(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          void sendReply();
-                        }
-                      }}
-                      placeholder="Reply as staff…"
-                      style={{ flex: 1 }}
-                    />
-                    <button
-                      className="btn primary"
-                      onClick={() => void sendReply()}
-                      disabled={busy || !reply.trim()}
-                    >
-                      Send
-                    </button>
-                  </div>
+                  <Composer
+                    value={reply}
+                    onChange={setReply}
+                    onSend={(atts) => void sendReply(atts)}
+                    onResume={
+                      thread.conv.state === 'human' ? () => void resumeAgent() : undefined
+                    }
+                    sendAs="human"
+                    setSendAs={() => {}}
+                    showModeSelect={false}
+                    sending={busy}
+                    uploadFile={uploadInboxFile}
+                  />
                   {inboxError && <div className="error">{inboxError}</div>}
-                  {thread.conv.state === 'human' ? (
-                    <button
-                      className="btn"
-                      style={{ width: '100%', marginTop: 8 }}
-                      onClick={() => void resumeAgent()}
-                      disabled={busy}
-                    >
-                      Resume agent on this chat
-                    </button>
-                  ) : null}
                   <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
                     {thread.conv.state === 'human'
                       ? 'Replies come from your staff account — the agent stays paused and auto-resumes after ~10 minutes idle.'
@@ -612,6 +669,17 @@ export default function ShopifyApp() {
                 </>
               ) : (
                 <>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                    <strong style={{ fontSize: 14 }}>Inbox</strong>
+                    <span style={{ flex: 1 }} />
+                    <button
+                      className="btn icon"
+                      title={expanded ? 'Shrink' : 'Expand'}
+                      onClick={() => setExpanded((e) => !e)}
+                    >
+                      {expanded ? '⤡' : '⤢'}
+                    </button>
+                  </div>
                   {!inbox ? (
                     <div className="muted">Loading conversations…</div>
                   ) : inbox.length === 0 ? (

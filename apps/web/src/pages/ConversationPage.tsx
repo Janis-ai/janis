@@ -5,7 +5,7 @@ import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
-import { ArgsRows, Avatar, channelLabel, displayName, fmtTime } from '../components/bits';
+import { ArgsRows, Avatar, channelLabel, displayName, fmtTime, mdSpans } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
@@ -14,7 +14,7 @@ import { useScenarioMatch } from '../lib/scenarioMatch';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
-import { linkifyParts, splitBlocks, splitEmphasis } from '../lib/richText';
+import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { Paperclip, RefreshCw, Star, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 
@@ -24,46 +24,8 @@ const WHO: Record<Message['direction'], string> = {
   human: 'Operator',
 };
 
-/** Canonical agent text is markdown-ish — **bold**, *italic*, ~~strike~~ and
- *  `code`, plus real links (lists are handled one level up by splitBlocks). */
-function mdSpans(text: string, keyBase = 0) {
-  return splitEmphasis(text).flatMap((seg, i) => {
-    if (seg.kind === 'math')
-      return [
-        <span key={keyBase * 1000 + i} className="md-math">
-          {seg.text}
-        </span>,
-      ];
-    const inner = linkifyParts(seg.text).map((p, j) =>
-      typeof p === 'string' ? (
-        p
-      ) : (
-        <a
-          key={keyBase * 1000 + i * 100 + j}
-          href={p.href}
-          target="_blank"
-          rel="noreferrer"
-        >
-          {p.label}
-        </a>
-      ),
-    );
-    if (seg.kind === 'text') return inner;
-    const Tag =
-      seg.kind === 'bold'
-        ? 'b'
-        : seg.kind === 'italic'
-          ? 'em'
-          : seg.kind === 'strike'
-            ? 's'
-            : 'code';
-    return [
-      <Tag key={keyBase * 1000 + i} className={seg.kind === 'code' ? 'md-code' : undefined}>
-        {inner}
-      </Tag>,
-    ];
-  });
-}
+/** Canonical transcript renderer lives in components/bits (mdSpans) — shared
+ *  with the embedded Shopify inbox. */
 
 // Optimistic outbound entries — render immediately, reconcile against the
 // server's echoed row once the post-send refetch lands (same model the

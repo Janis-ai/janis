@@ -15,6 +15,7 @@ export default function Composer({
   showModeSelect,
   canTeach,
   sending,
+  uploadFile,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -27,6 +28,9 @@ export default function Composer({
   showModeSelect: boolean;
   canTeach?: boolean;
   sending: boolean;
+  /** Upload override — the embedded Shopify app can't reach the cookie-authed
+   *  /api/uploads; it supplies a session-token POST instead. */
+  uploadFile?: (file: File) => Promise<Attachment | null>;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -100,17 +104,20 @@ export default function Composer({
     setRepliesOpen(false);
   };
 
+  const uploadOne = async (file: File): Promise<Attachment | null> => {
+    if (uploadFile) return uploadFile(file);
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/uploads', { method: 'POST', body: fd, credentials: 'include' });
+    return res.ok ? ((await res.json()) as Attachment) : null;
+  };
+
   const uploadFiles = async (files: FileList | File[]) => {
     setUploading(true);
     try {
       for (const file of Array.from(files)) {
-        const fd = new FormData();
-        fd.append('file', file);
-        const res = await fetch('/api/uploads', { method: 'POST', body: fd, credentials: 'include' });
-        if (res.ok) {
-          const att = (await res.json()) as Attachment;
-          setAttachments((a) => [...a, att]);
-        }
+        const att = await uploadOne(file);
+        if (att) setAttachments((a) => [...a, att]);
       }
     } finally {
       setUploading(false);

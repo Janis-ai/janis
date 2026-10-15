@@ -15,6 +15,7 @@ import {
 } from '../db/schema.js';
 import { audit } from '../lib/audit.js';
 import { invalidateChannelCache } from '../lib/channels.js';
+import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
 import { generateDraft } from '../lib/agentBuilder.js';
 import { messageCap, PLANS } from '../lib/plans.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -392,6 +393,32 @@ export function shopifyPublicRoutes(db: Db) {
     },
   );
 
+  // File upload for the composer's attachments — same storeUpload path as
+  // /api/uploads, authed by the session token riding as a form field
+  // (multipart bodies can't carry it in JSON).
+  app.post('/inbox/upload', async (c) => {
+    if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+    const body = await c.req.parseBody();
+    const token = typeof body.token === 'string' ? body.token : '';
+    const claims = token ? verifySessionToken(token) : null;
+    if (!claims) return c.json({ error: 'invalid session token' }, 401);
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, claims.shop))
+      .limit(1);
+    if (!row || row.state !== 'linked') return c.json({ error: 'no bound agent' }, 409);
+    const file = body.file;
+    if (!(file instanceof File)) return c.json({ error: 'file field required' }, 400);
+    if (file.size > MAX_UPLOAD_BYTES) return c.json({ error: 'file too large (max 10MB)' }, 413);
+    const ref = await storeUpload(db, {
+      name: file.name,
+      type: file.type,
+      data: Buffer.from(await file.arrayBuffer()),
+    });
+    return c.json(ref, 201);
+  });
+
   // Staff reply — implies takeover when the conversation isn't already in
   // human mode; the reply then travels via the same humanReply path the
   // console uses (channel delivery, Slack mirror, webhook event included).
@@ -402,7 +429,17 @@ export function shopifyPublicRoutes(db: Db) {
       z.object({
         token: z.string(),
         conversation_id: z.string().uuid(),
-        text: z.string().min(1).max(4000),
+        text: z.string().max(4000),
+        attachments: z
+          .array(
+            z.object({
+              name: z.string(),
+              url: z.string(),
+              type: z.string(),
+              size: z.number(),
+            }),
+          )
+          .optional(),
       }),
     ),
     async (c) => {
@@ -410,7 +447,10 @@ export function shopifyPublicRoutes(db: Db) {
       const { sess, row } = await linkedShop(c);
       if (!sess) return c.json({ error: 'invalid session token' }, 401);
       if (!row) return c.json({ error: 'no bound agent' }, 409);
-      const { conversation_id, text } = c.req.valid('json');
+      const { conversation_id, text, attachments } = c.req.valid('json');
+      if (!text.trim() && !attachments?.length) {
+        return c.json({ error: 'text or attachments required' }, 400);
+      }
       try {
         const { conversation } = await getConversationForWorkspace(
           db,
@@ -430,6 +470,7 @@ export function shopifyPublicRoutes(db: Db) {
           conversation_id,
           staff,
           text,
+          attachments,
         );
         return c.json({ message: toMessage(message), delivery, state: 'human' }, 201);
       } catch (err) {

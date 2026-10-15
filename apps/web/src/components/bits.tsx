@@ -4,7 +4,7 @@ import type { Conversation, ConversationState, UserProfile } from '@janis/shared
 import { friendlyName } from '@janis/shared';
 import { currentTheme, THEME_CHANGE_EVENT } from '../lib/theme';
 import { highlight, type CodeLang } from '../lib/highlight';
-import { splitEmphasis, stripStrayMarkers } from '../lib/richText';
+import { linkifyParts, splitEmphasis, stripStrayMarkers } from '../lib/richText';
 
 /** The wordmark/mark PNGs are white-on-transparent — invisible in light mode.
  *  Swaps to the ink variant when the theme flips (or on first render). */
@@ -144,6 +144,49 @@ export function Md({ children }: { children: string }) {
 
 export function Empty({ children }: { children: React.ReactNode }) {
   return <div className="card muted" style={{ textAlign: 'center', padding: 40 }}>{children}</div>;
+}
+
+/** Canonical agent text is markdown-ish — **bold**, *italic*, ~~strike~~ and
+ *  `code`, plus real links (lists are handled one level up by splitBlocks).
+ *  The transcript renderer shared by the console conversation page and the
+ *  embedded Shopify inbox. */
+export function mdSpans(text: string, keyBase = 0) {
+  return splitEmphasis(text).flatMap((seg, i) => {
+    if (seg.kind === 'math')
+      return [
+        <span key={keyBase * 1000 + i} className="md-math">
+          {seg.text}
+        </span>,
+      ];
+    const inner = linkifyParts(seg.text).map((p, j) =>
+      typeof p === 'string' ? (
+        p
+      ) : (
+        <a
+          key={keyBase * 1000 + i * 100 + j}
+          href={p.href}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {p.label}
+        </a>
+      ),
+    );
+    if (seg.kind === 'text') return inner;
+    const Tag =
+      seg.kind === 'bold'
+        ? 'b'
+        : seg.kind === 'italic'
+          ? 'em'
+          : seg.kind === 'strike'
+            ? 's'
+            : 'code';
+    return [
+      <Tag key={keyBase * 1000 + i} className={seg.kind === 'code' ? 'md-code' : undefined}>
+        {inner}
+      </Tag>,
+    ];
+  });
 }
 
 /** Tool-call args as readable key → value rows instead of a JSON blob.
