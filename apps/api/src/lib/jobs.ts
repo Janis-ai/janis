@@ -270,6 +270,13 @@ const HANDLERS: Record<
       p as { convId?: string; checkoutToken?: string; summary?: string },
     );
   },
+  // Abandoned-checkout recovery emails — the off-site leg, enqueued as a
+  // +1h/+24h/+72h sequence alongside the nudge; the handler re-checks
+  // conversion, consent, opt-out, per-step dedupe and quiet hours.
+  'shopify.checkout_email': async (db, ws, p) => {
+    const { runCheckoutEmail } = await import('./shopifyApp.js');
+    await runCheckoutEmail(db, ws, p as import('./shopifyApp.js').CheckoutEmailJob);
+  },
   'eval.triage': async (db, ws, p, job) => {
     const { agentId, batchId } = p as { agentId?: string; batchId?: string };
     if (!agentId || !batchId) throw new Error('eval.triage job missing agentId/batchId');

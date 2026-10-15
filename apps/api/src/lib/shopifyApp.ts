@@ -26,7 +26,7 @@ import { purgeContactData } from './contacts.js';
 import { bumpCatalogSync, ensureShopifyKnowledge } from './shopifySync.js';
 import { systemNote } from './systemNote.js';
 import { enqueueJob } from './jobs.js';
-import { runHostedEvent } from './hostedAgent.js';
+import { complete, llmFor, runHostedEvent, transcriptFor } from './hostedAgent.js';
 import { filterDismissedGaps, gapsCacheFresh, readGapsCache } from '../services/knowledgeGaps.js';
 import { bus } from './bus.js';
 import { toMessage } from './serializers.js';
@@ -1263,13 +1263,30 @@ async function checkoutNote(
   const summary = `Shopify: checkout activity — ${items || '?'} item${items === 1 ? '' : 's'}${
     total ? `, ${cur ?? ''} ${total}`.trimEnd() : ''
   } (${email})`;
+  // Recovery-email context the jobs need at fire time — captured once here
+  // because checkouts/update won't refire this far for the same token.
+  const checkoutUrl = payload.abandoned_checkout_url as string | undefined;
+  const marketing = payload.buyer_accepts_marketing === true;
+  const itemNames = Array.isArray(payload.line_items)
+    ? (payload.line_items as { quantity?: number; title?: string }[])
+        .slice(0, 6)
+        .map((li) => `${li.quantity ?? 1}× ${li.title ?? 'item'}`)
+        .join(', ')
+    : '';
   const [note] = await db
     .insert(messages)
     .values({
       conversationId: conv.id,
       direction: 'out',
       text: summary,
-      payload: { internal: true, event: 'checkout_event', checkout: token },
+      payload: {
+        internal: true,
+        event: 'checkout_event',
+        checkout: token,
+        checkout_url: checkoutUrl,
+        marketing,
+        items: itemNames,
+      },
     })
     .returning();
   bus.publish(row.workspaceId, { type: 'message', data: toMessage(note) });
@@ -1278,7 +1295,8 @@ async function checkoutNote(
   // check above guarantees exactly one). At fire time runCheckoutNudge
   // re-verifies the shopper still hasn't ordered before speaking.
   const st = shopSettings(row);
-  if (st.nudge !== false && conv.state !== 'human' && conv.state !== 'archived') {
+  const live = conv.state !== 'human' && conv.state !== 'archived';
+  if (st.nudge !== false && live) {
     await enqueueJob(db, {
       workspaceId: row.workspaceId,
       type: 'shopify.checkout_nudge',
@@ -1286,14 +1304,54 @@ async function checkoutNote(
       runAt: new Date(Date.now() + (st.nudge_after_minutes ?? 30) * 60_000),
     });
   }
+
+  // Recovery-email sequence — the off-site leg: the shopper left, so the
+  // nudge can't reach them. +1h reminder, +24h and +72h follow-ups; each
+  // re-checks conversion at fire time. Touches 2+ are marketing sends, so
+  // they're only enqueued when the shopper consented at checkout.
+  if (st.recovery_email !== false && live && checkoutUrl) {
+    const base = {
+      workspaceId: row.workspaceId,
+      type: 'shopify.checkout_email',
+    };
+    const jobPayload = {
+      shopId: row.id,
+      convId: conv.id,
+      checkoutToken: token,
+      email,
+      checkoutUrl,
+      marketing,
+      items: itemNames,
+      summary,
+    };
+    const steps: [number, number][] = [
+      [1, 60 * 60_000],
+      [2, 24 * 3600_000],
+      [3, 72 * 3600_000],
+    ];
+    for (const [step, delayMs] of steps) {
+      if (step >= 2 && !marketing) continue;
+      await enqueueJob(db, {
+        ...base,
+        payload: { ...jobPayload, step },
+        runAt: new Date(Date.now() + delayMs),
+      });
+    }
+  }
 }
 
-/** Merchant-tunable shop settings ({nudge, nudge_after_minutes}) — the
- *  abandoned-checkout proactive message. On by default; the embedded app's
- *  Store tab toggle writes these via PATCH /api/shopify/settings. */
+/** Merchant-tunable shop settings ({nudge, nudge_after_minutes,
+ *  recovery_email}) — the abandoned-checkout proactive nudge and the
+ *  off-site email recovery sequence. On by default; the embedded app's
+ *  Agent tab toggles write these via POST /api/shopify/settings.
+ *  iana_timezone/shop_name are cached shop-context values (fetched once
+ *  from the Admin API), not merchant input. */
 export interface ShopSettings {
   nudge?: boolean;
   nudge_after_minutes?: number;
+  recovery_email?: boolean;
+  iana_timezone?: string;
+  shop_name?: string;
 }
 export function shopSettings(row: ShopRow): ShopSettings {
   return (row.settings ?? {}) as ShopSettings;
@@ -1374,6 +1432,368 @@ export async function runCheckoutNudge(
   }).catch((err) => console.error(`checkout nudge ${convId}:`, err));
 }
 
+/* ── Abandoned-checkout recovery emails ────────────────────────────────
+ *  The off-site leg: the nudge only reaches shoppers still on-site, so
+ *  checkouts/update also enqueues a 3-touch email sequence (+1h, +24h,
+ *  +72h — touches 2+ only when the shopper consented to marketing at
+ *  checkout). At fire time the handler re-checks conversion, opt-out,
+ *  per-step dedupe, and the shop's local quiet hours (7am–9pm). */
+
+export interface CheckoutEmailJob {
+  shopId?: string;
+  convId?: string;
+  checkoutToken?: string;
+  email?: string;
+  checkoutUrl?: string;
+  step?: number;
+  marketing?: boolean;
+  items?: string;
+  summary?: string;
+}
+
+/** HMAC-signed token for the recovery-email unsubscribe link — stateless,
+ *  bound to the conversation so a forwarded link can't mute other threads. */
+function recoveryUnsubUrl(convId: string): string {
+  const sig = createHmac('sha256', env.sessionSecret)
+    .update(`recovery-unsub:${convId}`)
+    .digest('base64url');
+  return `${env.apiOrigin}/shopify/recovery-unsubscribe?c=${convId}&t=${sig}`;
+}
+
+export function verifyRecoveryUnsub(convId: string, sig: string): boolean {
+  const expected = createHmac('sha256', env.sessionSecret)
+    .update(`recovery-unsub:${convId}`)
+    .digest('base64url');
+  const a = Buffer.from(sig ?? '');
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Shop display name + local timezone — fetched from the Admin API once
+ *  and cached on shop settings (quiet-hours clamping needs the tz). */
+async function shopContext(
+  db: Db,
+  row: ShopRow,
+): Promise<{ name: string; tz?: string }> {
+  const st = shopSettings(row);
+  const fallback = row.shop.replace(/\.myshopify\.com$/, '');
+  if (st.iana_timezone && st.shop_name) return { name: st.shop_name, tz: st.iana_timezone };
+  let name = st.shop_name ?? fallback;
+  let tz = st.iana_timezone;
+  try {
+    const token = await adminToken(db, row);
+    const res = await shopifyGraphql(row.shop, token, '{ shop { name ianaTimezone } }');
+    const shop = (res.data as { shop?: { name?: string; ianaTimezone?: string } } | undefined)
+      ?.shop;
+    if (shop?.name) name = shop.name;
+    if (shop?.ianaTimezone) tz = shop.ianaTimezone;
+    if (shop?.name || shop?.ianaTimezone) {
+      await db
+        .update(shopifyShops)
+        .set({
+          settings: { ...st, ...(shop.name ? { shop_name: shop.name } : {}), ...(shop.ianaTimezone ? { iana_timezone: shop.ianaTimezone } : {}) },
+          updatedAt: new Date(),
+        })
+        .where(eq(shopifyShops.id, row.id));
+    }
+  } catch {
+    // No token/API — send unclamped with the domain-derived name.
+  }
+  return { name, tz };
+}
+
+/** Milliseconds until the next 7am in the shop's local tz, or 0 when the
+ *  current local time sits inside the 7am–9pm send window. Returns 0 when
+ *  the tz is unknown/invalid (send unclamped rather than never). Exported
+ *  for tests. */
+export function quietHoursDefer(now: Date, tz: string | undefined): number {
+  if (!tz) return 0;
+  let hour: number;
+  let minute: number;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+      timeZone: tz,
+    }).formatToParts(now);
+    hour = Number(parts.find((p) => p.type === 'hour')?.value) % 24;
+    minute = Number(parts.find((p) => p.type === 'minute')?.value);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return 0;
+  } catch {
+    return 0;
+  }
+  const mins = hour * 60 + minute;
+  const open = 7 * 60;
+  if (mins >= open && mins < 21 * 60) return 0;
+  return ((mins < open ? open : 24 * 60 + open) - mins) * 60_000;
+}
+
+const esc = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** Agent-voiced draft for a recovery touch — the differentiator vs
+ *  Shopify's built-in email: the agent saw the shopper's chat and can
+ *  reference it. Tolerant parse of a `Subject:` contract; falls back to a
+ *  fixed template when the model misbehaves or no agent is bound. */
+async function draftRecoveryEmail(
+  db: Db,
+  agent: typeof agents.$inferSelect | undefined,
+  convId: string,
+  ctx: { step: number; items: string; storeName: string; checkoutUrl: string },
+): Promise<{ subject: string; body: string }> {
+  const stepSubject =
+    ctx.step === 1
+      ? `You left something behind at ${ctx.storeName}`
+      : ctx.step === 2
+        ? 'Still thinking it over?'
+        : `Your ${ctx.storeName} cart is about to expire`;
+  const stepBody =
+    ctx.step === 1
+      ? `Looks like you stepped away — your items${ctx.items ? ` (${ctx.items})` : ''} are saved and waiting.`
+      : ctx.step === 2
+        ? `Still thinking it over? Your items${ctx.items ? ` (${ctx.items})` : ''} are still in your cart — and happy to help if a question held you up.`
+        : `Last call — your cart${ctx.items ? ` (${ctx.items})` : ''} won't be held much longer.`;
+  const fallback = { subject: stepSubject, body: stepBody };
+  if (!agent?.hosted) return fallback;
+  try {
+    const cfg = (agent.config ?? {}) as { system_prompt?: string; tone?: string };
+    const persona = [cfg.system_prompt, cfg.tone ? `Tone: ${cfg.tone}` : '']
+      .filter(Boolean)
+      .join('\n\n');
+    const history = (await transcriptFor(db, convId))
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .slice(-8)
+      .map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : ''}`)
+      .join('\n');
+    const system =
+      `${persona ? persona + '\n\n' : ''}` +
+      `You are ${agent.name}, the shopping assistant for ${ctx.storeName}. ` +
+      `Write ONE abandoned-checkout recovery email — ` +
+      (ctx.step === 1
+        ? `touch 1 of 3: a warm "you left items behind" reminder.`
+        : ctx.step === 2
+          ? `touch 2 of 3: a gentle nudge a day later — offer help with whatever held them up.`
+          : `touch 3 of 3, the last: a short final-call note.`) +
+      ` Under 90 words, plain text paragraphs, no links and no HTML in the body ` +
+      `(the checkout button is appended for you). Never invent a discount, ` +
+      `coupon, or price. If the chat history shows what they asked about, you ` +
+      `may reference it naturally — otherwise keep it generic.\n` +
+      `Output exactly:\nSubject: <subject line>\n\n<body>`;
+    const res = await complete(await llmFor(db, agent), system, [
+      {
+        role: 'user',
+        content:
+          `Cart: ${ctx.items || 'items in cart'}\n` +
+          (history ? `Recent chat:\n${history}` : 'No prior chat.'),
+      },
+    ]);
+    const raw = res.text?.trim() ?? '';
+    const m = /^subject:\s*(.+?)\n+([\s\S]*)$/i.exec(raw);
+    if (!m) return fallback;
+    const body = m[2].replace(/https?:\/\/\S+/g, '').trim().slice(0, 1200);
+    const subject = m[1].trim().slice(0, 140);
+    if (!body) return fallback;
+    return { subject: subject || fallback.subject, body };
+  } catch {
+    return fallback;
+  }
+}
+
+/** Standalone Resend send for recovery emails — shopper-facing sends don't
+ *  ride a channel (the shopper's thread is webchat), so this isn't
+ *  sendEmailReply: From is the store name on the verified inbound domain,
+ *  replies route to the merchant's shop email. */
+async function sendRecoveryEmail(
+  opts: {
+    to: string;
+    subject: string;
+    text: string;
+    html: string;
+    fromName: string;
+    replyTo?: string | null;
+    unsubUrl: string;
+  },
+): Promise<{ ok: boolean; retryable: boolean }> {
+  if (!env.resendApiKey) return { ok: false, retryable: false };
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.resendApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: `${opts.fromName} via Janis <recovery@${env.emailInboundDomain}>`,
+        ...(opts.replyTo ? { reply_to: [opts.replyTo] } : {}),
+        to: [opts.to],
+        subject: opts.subject,
+        text: opts.text,
+        html: opts.html,
+        headers: {
+          'X-Janis-Outbound': 'shopify-recovery',
+          'Auto-Submitted': 'auto-generated',
+          'List-Unsubscribe': `<${opts.unsubUrl}>`,
+        },
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => null)) as { message?: string } | null;
+      console.error(`recovery email send failed ${res.status}: ${data?.message ?? ''}`);
+      return { ok: false, retryable: res.status === 429 || res.status >= 500 };
+    }
+    return { ok: true, retryable: false };
+  } catch (e) {
+    console.error('recovery email send error:', e);
+    return { ok: false, retryable: true };
+  }
+}
+
+/** jobs.ts handler — 'shopify.checkout_email'. One touch of the recovery
+ *  sequence: fires only if the shopper still hasn't converted, still hasn't
+ *  opted out, this exact touch hasn't sent, and the shop's local clock is
+ *  inside the 7am–9pm window (outside → re-enqueues for next 7am). */
+export async function runCheckoutEmail(
+  db: Db,
+  workspaceId: string,
+  payload: CheckoutEmailJob,
+): Promise<void> {
+  const { shopId, convId, checkoutToken, email, checkoutUrl, step, marketing, items, summary } =
+    payload;
+  if (!shopId || !convId || !checkoutToken || !email || !checkoutUrl || !step) return;
+  const [conv] = await db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.id, convId))
+    .limit(1);
+  if (!conv || conv.state === 'human' || conv.state === 'archived') return;
+  const [row] = await db
+    .select()
+    .from(shopifyShops)
+    .where(eq(shopifyShops.id, shopId))
+    .limit(1);
+  if (!row || shopSettings(row).recovery_email === false) return;
+  if (step >= 2 && !marketing) return;
+  const [contact] = conv.contactId
+    ? await db.select().from(contacts).where(eq(contacts.id, conv.contactId)).limit(1)
+    : [];
+  if ((contact?.metadata as { recovery_unsubscribed?: boolean } | undefined)?.recovery_unsubscribed)
+    return;
+
+  const [converted] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, convId),
+        sql`${messages.payload}->>'event' = 'order_event'`,
+        sql`${messages.payload}->'order'->>'checkout_token' = ${checkoutToken}`,
+      ),
+    )
+    .limit(1);
+  if (converted) return;
+
+  // Per-touch dedupe — the marker is written before the send so a crash
+  // mid-send can never double-mail the shopper on job retry.
+  const [sent] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, convId),
+        sql`${messages.payload}->>'event' = 'checkout_email'`,
+        sql`${messages.payload}->>'checkout' = ${checkoutToken}`,
+        sql`(${messages.payload}->>'step')::int = ${step}`,
+      ),
+    )
+    .limit(1);
+  if (sent) return;
+
+  // Quiet hours — defer to next 7am shop-local rather than a 3am send.
+  const { name: storeName, tz } = await shopContext(db, row);
+  const deferMs = quietHoursDefer(new Date(), tz);
+  if (deferMs > 0) {
+    await enqueueJob(db, {
+      workspaceId,
+      type: 'shopify.checkout_email',
+      payload: payload as Record<string, unknown>,
+      runAt: new Date(Date.now() + deferMs),
+    });
+    return;
+  }
+
+  const [agent] = await db.select().from(agents).where(eq(agents.id, conv.agentId)).limit(1);
+  const draft = await draftRecoveryEmail(db, agent, convId, {
+    step,
+    items: items ?? '',
+    storeName,
+    checkoutUrl,
+  });
+  const unsubUrl = recoveryUnsubUrl(convId);
+  const cta = 'Return to your cart';
+  const text = `${draft.body}\n\n${cta}: ${checkoutUrl}\n\n—\nYou received this because you started checkout at ${storeName}. Unsubscribe: ${unsubUrl}`;
+  const html =
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#1a1a1a">` +
+    `<p style="font-size:15px;font-weight:600;margin:0 0 16px">${esc(storeName)}</p>` +
+    draft.body
+      .split(/\n{2,}/)
+      .map((p) => `<p style="font-size:15px;line-height:1.55;margin:0 0 14px">${esc(p).replace(/\n/g, '<br>')}</p>`)
+      .join('') +
+    `<a href="${esc(checkoutUrl)}" style="display:inline-block;background:#111;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-size:15px;margin:6px 0 20px">${cta}</a>` +
+    `<p style="font-size:12px;color:#888;line-height:1.5">You received this because you started checkout at ${esc(storeName)}. ` +
+    `<a href="${esc(unsubUrl)}" style="color:#888">Unsubscribe</a></p></div>`;
+
+  // Marker first — retry-safe dedupe; the text reflects the outcome after.
+  const [marker] = await db
+    .insert(messages)
+    .values({
+      conversationId: convId,
+      direction: 'out',
+      text: `Recovery email ${step}/3 → ${email} (sending…)`,
+      payload: {
+        internal: true,
+        event: 'checkout_email',
+        checkout: checkoutToken,
+        step,
+        sent: false,
+      },
+    })
+    .returning();
+  bus.publish(workspaceId, { type: 'message', data: toMessage(marker) });
+
+  const sendOnce = () =>
+    sendRecoveryEmail({
+      to: email,
+      subject: draft.subject,
+      text,
+      html,
+      fromName: storeName,
+      replyTo: row.contactEmail,
+      unsubUrl,
+    });
+  const res = await sendOnce();
+  // One inline retry on a transient failure — the marker already guards
+  // dedupe so a further job-level retry would just re-skip here.
+  const ok = res.ok || (res.retryable && (await sendOnce()).ok);
+  const finalText = ok
+    ? `Recovery email ${step}/3 sent to ${email} — "${draft.subject}"`
+    : `Recovery email ${step}/3 to ${email} failed — giving up on this touch`;
+  const finalPayload = {
+    internal: true,
+    event: 'checkout_email',
+    checkout: checkoutToken,
+    step,
+    sent: ok,
+  };
+  const [updated] = await db
+    .update(messages)
+    .set({ text: finalText, payload: finalPayload })
+    .where(eq(messages.id, marker.id))
+    .returning();
+  if (updated) bus.publish(workspaceId, { type: 'message', data: toMessage(updated) });
+}
+
 /** Embedded-app stats: orders attributed to a chat conversation (the
  *  shopper emailed/checkout while a thread existed — the order note lands
  *  on it) plus question/topic mix and open knowledge gaps for the
@@ -1385,10 +1805,17 @@ export async function shopifyStats(
 ): Promise<{
   orders_30d: number;
   revenue_30d: { amount: number; currency: string; orders: number }[];
+  recovered_30d: { amount: number; currency: string; orders: number }[];
   top_intents: { label: string; count: number }[];
   open_gaps: number;
 }> {
-  const empty = { orders_30d: 0, revenue_30d: [], top_intents: [], open_gaps: 0 };
+  const empty = {
+    orders_30d: 0,
+    revenue_30d: [],
+    recovered_30d: [],
+    top_intents: [],
+    open_gaps: 0,
+  };
   if (!row.agentId) return empty;
   const rev = (await db.execute(sql`
     select count(*)::int as orders,
@@ -1404,6 +1831,29 @@ export async function shopifyStats(
     order by 1 desc
   `)) as unknown as { rows?: { orders: number; amount: number; currency: string }[] };
   const revenue = (rev.rows ?? []).filter((r) => r.currency);
+  // Email-recovered orders: a placed order whose checkout token got a
+  // checkout_email send before the order landed.
+  const rec = (await db.execute(sql`
+    select count(*)::int as orders,
+           coalesce(sum((o.payload->'order'->>'total')::numeric), 0)::float as amount,
+           o.payload->'order'->>'currency' as currency
+    from ${messages} o
+    inner join ${conversations} c on c.id = o.conversation_id
+    where c.agent_id = ${row.agentId}
+      and o.payload->>'event' = 'order_event'
+      and o.payload->'order'->>'kind' = 'placed'
+      and o.created_at > now() - interval '30 days'
+      and exists (
+        select 1 from ${messages} e
+        where e.conversation_id = o.conversation_id
+          and e.payload->>'event' = 'checkout_email'
+          and e.payload->>'sent' = 'true'
+          and e.payload->>'checkout' = o.payload->'order'->>'checkout_token'
+          and e.created_at < o.created_at
+      )
+    group by 3
+  `)) as unknown as { rows?: { orders: number; amount: number; currency: string }[] };
+  const recovered = (rec.rows ?? []).filter((r) => r.currency);
   const intents = (await db.execute(sql`
     select intent as label, count(*)::int as count
     from ${conversations}
@@ -1421,6 +1871,7 @@ export async function shopifyStats(
   return {
     orders_30d: revenue.reduce((n, r) => n + r.orders, 0),
     revenue_30d: revenue,
+    recovered_30d: recovered,
     top_intents: intents.rows ?? [],
     open_gaps: openGaps,
   };

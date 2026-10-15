@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
@@ -9,6 +9,7 @@ import {
   agentMembers,
   agents,
   channels,
+  contacts,
   conversations,
   memberships,
   messages,
@@ -59,6 +60,7 @@ import {
   verifyWebhookHmac,
   shopifyStats,
   shopSettings,
+  verifyRecoveryUnsub,
 } from '../lib/shopifyApp.js';
 import { MERCHANT_CONV } from '../lib/convFilters.js';
 import { runHostedEvent } from '../lib/hostedAgent.js';
@@ -191,7 +193,12 @@ export function shopifyPublicRoutes(db: Db) {
       out.contact_email = row.contactEmail ?? null;
       // Merchant settings (abandoned-checkout nudge) + 30-day stats for
       // the Store tab cards — orders attributed to chat, revenue, topic mix.
-      out.settings = { nudge: true, nudge_after_minutes: 30, ...shopSettings(row) };
+      out.settings = {
+        nudge: true,
+        nudge_after_minutes: 30,
+        recovery_email: true,
+        ...shopSettings(row),
+      };
       out.stats = await shopifyStats(db, row, agent?.config);
       // The staff member's persistent Ask-Janis thread — lets the Ask tab
       // reload prior Q&A instead of opening blank every visit.
@@ -602,6 +609,7 @@ export function shopifyPublicRoutes(db: Db) {
         token: z.string(),
         nudge: z.boolean().optional(),
         nudge_after_minutes: z.number().int().min(5).max(240).optional(),
+        recovery_email: z.boolean().optional(),
       }),
     ),
     async (c) => {
@@ -616,6 +624,7 @@ export function shopifyPublicRoutes(db: Db) {
         ...(q.nudge_after_minutes !== undefined
           ? { nudge_after_minutes: q.nudge_after_minutes }
           : {}),
+        ...(q.recovery_email !== undefined ? { recovery_email: q.recovery_email } : {}),
       };
       const [updated] = await db
         .update(shopifyShops)
@@ -623,7 +632,12 @@ export function shopifyPublicRoutes(db: Db) {
         .where(eq(shopifyShops.id, row.id))
         .returning();
       return c.json({
-        settings: { nudge: true, nudge_after_minutes: 30, ...shopSettings(updated) },
+        settings: {
+          nudge: true,
+          nudge_after_minutes: 30,
+          recovery_email: true,
+          ...shopSettings(updated),
+        },
       });
     },
   );
@@ -1149,6 +1163,47 @@ export function shopifyWebhookRoutes(db: Db) {
     }
     return c.json({ ok: true });
   });
+
+  // Recovery-email unsubscribe — public, HMAC-signed per conversation
+  // (the shopper-facing link in every recovery send). GET renders a
+  // confirmation page; POST is the one-click action Gmail/Yahoo expect.
+  const unsub = async (c: Context) => {
+    const convId = c.req.query('c') ?? '';
+    const sig = c.req.query('t') ?? '';
+    if (!convId || !verifyRecoveryUnsub(convId, sig)) {
+      return c.html('<p style="font-family:sans-serif">Invalid unsubscribe link.</p>', 400);
+    }
+    const [conv] = await db
+      .select({ contactId: conversations.contactId })
+      .from(conversations)
+      .where(eq(conversations.id, convId))
+      .limit(1);
+    if (conv?.contactId) {
+      const [contact] = await db
+        .select({ id: contacts.id, metadata: contacts.metadata })
+        .from(contacts)
+        .where(eq(contacts.id, conv.contactId))
+        .limit(1);
+      if (contact) {
+        await db
+          .update(contacts)
+          .set({
+            metadata: {
+              ...((contact.metadata as Record<string, unknown>) ?? {}),
+              recovery_unsubscribed: true,
+            },
+            updatedAt: new Date(),
+          })
+          .where(eq(contacts.id, contact.id));
+      }
+    }
+    return c.html(
+      '<div style="font-family:sans-serif;max-width:420px;margin:80px auto;text-align:center">' +
+        '<h2>Unsubscribed</h2><p>You won\'t receive cart reminder emails anymore.</p></div>',
+    );
+  };
+  app.get('/recovery-unsubscribe', unsub);
+  app.post('/recovery-unsubscribe', unsub);
 
   return app;
 }

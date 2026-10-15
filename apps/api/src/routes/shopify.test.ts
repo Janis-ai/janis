@@ -99,12 +99,22 @@ const stubShopifyApi = (
     // Theme settings probe — 'enabled'/'disabled' writes our block,
     // 'no-scope' 403s (read_themes not granted yet), unset = no match.
     embed?: 'enabled' | 'disabled' | 'absent' | 'no-scope';
+    // Recovery-email send — 'ok' 200s, 'fail' 500s; captures the body.
+    resend?: 'ok' | 'fail';
+    onResend?: (body: Record<string, unknown>) => void;
   } = {},
 ) =>
   vi.stubGlobal(
     'fetch',
     vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('api.resend.com')) {
+        if (opts.onResend && typeof init?.body === 'string')
+          opts.onResend(JSON.parse(init.body) as Record<string, unknown>);
+        if (opts.resend === 'fail')
+          return Promise.resolve(new Response('{"message":"boom"}', { status: 500 }));
+        return Promise.resolve(Response.json({ id: 're_1' }));
+      }
       if (url.includes('/admin/oauth/access_token')) {
         // Exchange posts JSON; the refresh grant posts form-encoded fields.
         const body = init?.body;
@@ -1936,6 +1946,217 @@ describe('abandoned-checkout nudge, ask + stats', () => {
       (j) => (j.payload as { checkoutToken?: string }).checkoutToken === 'chk-off',
     );
     expect(jobRows.length).toBe(0);
+  });
+
+  it('checkouts/update enqueues the 3-touch email sequence — touch 1 only without marketing consent', async () => {
+    const row = await provision();
+    const conv = await plantShopper(row, 'rec1@x.com');
+    await webhook(
+      'checkouts/update',
+      {
+        token: 'chk-e1',
+        email: 'rec1@x.com',
+        total_price: '50.00',
+        currency: 'USD',
+        line_items: [{ title: 'Wax', quantity: 1 }],
+        abandoned_checkout_url: 'https://checkout.example/c/chk-e1',
+        buyer_accepts_marketing: true,
+      },
+      SECRET,
+      ASHOP,
+    );
+    const conv2 = await plantShopper(row, 'rec2@x.com');
+    await webhook(
+      'checkouts/update',
+      {
+        token: 'chk-e2',
+        email: 'rec2@x.com',
+        total_price: '9.00',
+        currency: 'USD',
+        line_items: [{ title: 'x' }],
+        abandoned_checkout_url: 'https://checkout.example/c/chk-e2',
+        buyer_accepts_marketing: false,
+      },
+      SECRET,
+      ASHOP,
+    );
+    const emailJobs = await db
+      .select()
+      .from(jobs)
+      .where(eq(jobs.type, 'shopify.checkout_email'));
+    const forConv = (id: string) =>
+      emailJobs.filter((j) => (j.payload as { convId?: string }).convId === id);
+    // Consented shopper: all three touches; non-consented: reminder only.
+    expect(
+      forConv(conv.id)
+        .map((j) => (j.payload as { step?: number }).step)
+        .sort(),
+    ).toEqual([1, 2, 3]);
+    expect(forConv(conv2.id).map((j) => (j.payload as { step?: number }).step)).toEqual([1]);
+    // Touch 1 lands ~1h out; 2 at ~24h; 3 at ~72h.
+    const t1 = forConv(conv.id).find((j) => (j.payload as { step?: number }).step === 1)!;
+    const t3 = forConv(conv.id).find((j) => (j.payload as { step?: number }).step === 3)!;
+    expect(Math.abs(t1.runAt.getTime() - Date.now() - 3600_000)).toBeLessThan(60_000);
+    expect(Math.abs(t3.runAt.getTime() - Date.now() - 72 * 3600_000)).toBeLessThan(60_000);
+    // The recovery context rides the job payload.
+    const p = t1.payload as { checkoutUrl?: string; email?: string };
+    expect(p.checkoutUrl).toBe('https://checkout.example/c/chk-e1');
+    expect(p.email).toBe('rec1@x.com');
+
+    // Toggle off → no email jobs for the next checkout.
+    await app.request('/api/shopify/settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(ASHOP, { sub: '77' }), recovery_email: false }),
+    });
+    await webhook(
+      'checkouts/update',
+      {
+        token: 'chk-e3',
+        email: 'rec1@x.com',
+        total_price: '5.00',
+        currency: 'USD',
+        line_items: [{ title: 'y' }],
+        abandoned_checkout_url: 'https://checkout.example/c/chk-e3',
+      },
+      SECRET,
+      ASHOP,
+    );
+    const after = (await db.select().from(jobs).where(eq(jobs.type, 'shopify.checkout_email')))
+      .filter((j) => (j.payload as { checkoutToken?: string }).checkoutToken === 'chk-e3');
+    expect(after.length).toBe(0);
+    // Restore for the rest of the suite.
+    await app.request('/api/shopify/settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(ASHOP, { sub: '77' }), recovery_email: true }),
+    });
+  });
+
+  it('recovery email sends once per touch, honors consent/conversion/opt-out', async () => {
+    const row = await provision();
+    const { env } = await import('../env.js');
+    const prev = env.resendApiKey;
+    env.resendApiKey = 'rk_test';
+    const sentBodies: Record<string, unknown>[] = [];
+    stubShopifyApi({ resend: 'ok', onResend: (b) => sentBodies.push(b) });
+    try {
+      const { runCheckoutEmail } = await import('../lib/shopifyApp.js');
+      const conv = await plantShopper(row, 'rec3@x.com');
+      const job = {
+        shopId: row.id,
+        convId: conv.id,
+        checkoutToken: 'chk-r3',
+        email: 'rec3@x.com',
+        checkoutUrl: 'https://checkout.example/c/chk-r3',
+        step: 1,
+        marketing: true,
+        items: '1× Wax',
+      };
+      await runCheckoutEmail(db, row.workspaceId!, job);
+      expect(sentBodies.length).toBe(1);
+      expect((sentBodies[0].to as string[])[0]).toBe('rec3@x.com');
+      expect(String(sentBodies[0].from)).toContain('Test Shop via Janis');
+      const marks = async (convId: string) =>
+        (await db.select().from(messages).where(eq(messages.conversationId, convId))).filter(
+          (m) => (m.payload as { event?: string })?.event === 'checkout_email',
+        );
+      const [mark] = await marks(conv.id);
+      expect((mark.payload as { sent?: boolean }).sent).toBe(true);
+      expect(mark.text).toContain('Recovery email 1/3 sent');
+
+      // A retried job must not re-send or re-mark.
+      await runCheckoutEmail(db, row.workspaceId!, job);
+      expect(sentBodies.length).toBe(1);
+      expect((await marks(conv.id)).length).toBe(1);
+
+      // Marketing consent gates touches 2+.
+      await runCheckoutEmail(db, row.workspaceId!, { ...job, step: 2, marketing: false });
+      expect(sentBodies.length).toBe(1);
+
+      // Conversion silences later touches — orders/create carries the token.
+      await webhook(
+        'orders/create',
+        { id: 992, name: '#2002', email: 'rec3@x.com', total_price: '12.00', currency: 'USD', checkout_token: 'chk-r3' },
+        SECRET,
+        ASHOP,
+      );
+      await runCheckoutEmail(db, row.workspaceId!, { ...job, step: 2, marketing: true });
+      expect(sentBodies.length).toBe(1);
+
+      // Opted-out contact blocks the send entirely.
+      const conv2 = await plantShopper(row, 'rec4@x.com');
+      await db
+        .update(contacts)
+        .set({ metadata: { recovery_unsubscribed: true } })
+        .where(eq(contacts.id, conv2.contactId!));
+      await runCheckoutEmail(db, row.workspaceId!, {
+        ...job,
+        convId: conv2.id,
+        checkoutToken: 'chk-r4',
+        email: 'rec4@x.com',
+      });
+      expect(sentBodies.length).toBe(1);
+      expect((await marks(conv2.id)).length).toBe(0);
+    } finally {
+      env.resendApiKey = prev;
+    }
+  });
+
+  it('recovery-unsubscribe marks the contact and rejects bad signatures', async () => {
+    const row = await provision();
+    const conv = await plantShopper(row, 'unsub@x.com');
+    const { env } = await import('../env.js');
+    const sig = createHmac('sha256', env.sessionSecret)
+      .update(`recovery-unsub:${conv.id}`)
+      .digest('base64url');
+    const bad = await app.request(`/shopify/recovery-unsubscribe?c=${conv.id}&t=bogus`);
+    expect(bad.status).toBe(400);
+    const ok = await app.request(`/shopify/recovery-unsubscribe?c=${conv.id}&t=${sig}`);
+    expect(ok.status).toBe(200);
+    const [contact] = await db.select().from(contacts).where(eq(contacts.id, conv.contactId!));
+    expect(
+      (contact.metadata as { recovery_unsubscribed?: boolean }).recovery_unsubscribed,
+    ).toBe(true);
+  });
+
+  it('quietHoursDefer clamps sends to 7am–9pm shop-local', async () => {
+    const { quietHoursDefer } = await import('../lib/shopifyApp.js');
+    // Noon UTC → in-window, no deferral.
+    expect(quietHoursDefer(new Date('2026-10-15T12:00:00Z'), 'UTC')).toBe(0);
+    // 3:30am → defers 3.5h to 7am.
+    expect(quietHoursDefer(new Date('2026-10-15T03:30:00Z'), 'UTC')).toBe(210 * 60_000);
+    // 10:15pm → defers 8h45m to next-morning 7am.
+    expect(quietHoursDefer(new Date('2026-10-15T22:15:00Z'), 'UTC')).toBe(525 * 60_000);
+    // Unknown tz → unclamped.
+    expect(quietHoursDefer(new Date('2026-10-15T03:30:00Z'), undefined)).toBe(0);
+  });
+
+  it('session stats count email-recovered orders separately', async () => {
+    const row = await provision();
+    const conv = await plantShopper(row, 'rec5@x.com');
+    // A sent recovery marker for chk-r5, then the order lands on it.
+    await db.insert(messages).values({
+      conversationId: conv.id,
+      direction: 'out',
+      text: 'Recovery email 1/3 sent',
+      payload: { internal: true, event: 'checkout_email', checkout: 'chk-r5', step: 1, sent: true },
+    });
+    await webhook(
+      'orders/create',
+      { id: 993, name: '#2003', email: 'rec5@x.com', total_price: '40.00', currency: 'USD', checkout_token: 'chk-r5' },
+      SECRET,
+      ASHOP,
+    );
+    const { shopifyStats } = await import('../lib/shopifyApp.js');
+    const stats = await shopifyStats(db, row, {});
+    // The same shop row persists across tests — chk-r3's order above also
+    // qualifies (marker before order), so assert the USD bucket includes
+    // this test's $40 order rather than a literal total.
+    const usd = stats.recovered_30d.find((r) => r.currency === 'USD');
+    expect(usd).toBeDefined();
+    expect(usd!.amount).toBeGreaterThanOrEqual(40);
+    expect(usd!.orders).toBeGreaterThanOrEqual(1);
   });
 
   it('ask threads are verified merchant convs, hidden from the shopper inbox', async () => {

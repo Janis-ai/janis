@@ -65,10 +65,11 @@ type SessionState =
       embedEnabled: boolean | null;
       contactEmail: string | null;
       plans: { key: string; name: string; price_cents: number; included_messages: number }[];
-      settings: { nudge: boolean; nudge_after_minutes: number };
+      settings: { nudge: boolean; nudge_after_minutes: number; recovery_email: boolean };
       stats: {
         orders_30d: number;
         revenue_30d: { amount: number; currency: string; orders: number }[];
+        recovered_30d: { amount: number; currency: string; orders: number }[];
         top_intents: { label: string; count: number }[];
         open_gaps: number;
       } | null;
@@ -374,9 +375,13 @@ export default function ShopifyApp() {
     }
   };
 
-  const saveSettings = async (patch: { nudge?: boolean; nudge_after_minutes?: number }) => {
+  const saveSettings = async (patch: {
+    nudge?: boolean;
+    nudge_after_minutes?: number;
+    recovery_email?: boolean;
+  }) => {
     const res = await shopifyApi<{
-      settings: { nudge: boolean; nudge_after_minutes: number };
+      settings: { nudge: boolean; nudge_after_minutes: number; recovery_email: boolean };
     }>('/api/shopify/settings', patch);
     setState((s) =>
       s.kind === 'linked'
@@ -385,6 +390,7 @@ export default function ShopifyApp() {
             settings: {
               nudge: res.settings.nudge,
               nudge_after_minutes: res.settings.nudge_after_minutes,
+              recovery_email: res.settings.recovery_email,
             },
           }
         : s,
@@ -684,10 +690,11 @@ export default function ShopifyApp() {
             embed_enabled?: boolean | null;
             contact_email?: string | null;
             plans?: { key: string; name: string; price_cents: number; included_messages: number }[];
-            settings?: { nudge?: boolean; nudge_after_minutes?: number };
+            settings?: { nudge?: boolean; nudge_after_minutes?: number; recovery_email?: boolean };
             stats?: {
               orders_30d: number;
               revenue_30d: { amount: number; currency: string; orders: number }[];
+              recovered_30d: { amount: number; currency: string; orders: number }[];
               top_intents: { label: string; count: number }[];
               open_gaps: number;
             } | null;
@@ -765,6 +772,7 @@ export default function ShopifyApp() {
               settings: {
                 nudge: res.settings?.nudge !== false,
                 nudge_after_minutes: res.settings?.nudge_after_minutes ?? 30,
+                recovery_email: res.settings?.recovery_email !== false,
               },
               stats: res.stats ?? null,
               askConv: res.ask_conversation_id ?? null,
@@ -976,6 +984,32 @@ export default function ShopifyApp() {
                       ? ` — about ${state.settings.nudge_after_minutes} minutes later`
                       : ''}
                     .
+                  </p>
+                  <label
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                      marginTop: 12,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={state.settings.recovery_email}
+                      onChange={(e) =>
+                        void saveSettings({ recovery_email: e.target.checked }).catch(() => {})
+                      }
+                    />
+                    Abandoned-cart recovery emails
+                  </label>
+                  <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+                    If they leave without ordering, your agent emails them — a reminder after about
+                    an hour, then follow-ups at 1 and 3 days, each linking back to their saved
+                    checkout. Sent in the store's daytime hours only, and stops the moment they
+                    order.
                   </p>
                 </div>
                 <p className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
@@ -1620,6 +1654,25 @@ export default function ShopifyApp() {
                 <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
                   Orders placed by shoppers who had chatted with your agent.
                 </p>
+                {(state.stats.recovered_30d ?? []).reduce((n, r) => n + r.orders, 0) > 0 && (
+                  <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+                    <strong style={{ color: '#1a1a1a' }}>
+                      {state.stats.recovered_30d.reduce((n, r) => n + r.orders, 0)}
+                    </strong>{' '}
+                    recovered by a cart email
+                    {state.stats.recovered_30d.length > 0 && (
+                      <>
+                        {' · '}
+                        {state.stats.recovered_30d
+                          .map(
+                            (r) =>
+                              `${r.currency} ${r.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                          )
+                          .join(' · ')}
+                      </>
+                    )}
+                  </p>
+                )}
               </div>
             ) : null}
 
