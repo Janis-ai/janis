@@ -149,9 +149,31 @@ export default function ShopifyApp() {
   const [briefSaved, setBriefSaved] = useState(false);
   const sessionToken = useRef('');
   const bridgeRef = useRef<NonNullable<Window['shopify']> | null>(null);
-  const tok = async () => {
+  // Decode the JWT's exp — lets us reuse a live token (minting costs a
+  // postMessage round-trip to admin per call) and detect when the bridge
+  // hands back a stale cached token.
+  const tokenExpMs = (jwt: string): number => {
+    try {
+      const p = jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      return ((JSON.parse(atob(p)).exp as number) ?? 0) * 1000;
+    } catch {
+      return 0;
+    }
+  };
+
+  const tok = async (forceFresh = false): Promise<string> => {
+    if (
+      !forceFresh &&
+      sessionToken.current &&
+      tokenExpMs(sessionToken.current) > Date.now() + 10_000
+    ) {
+      return sessionToken.current;
+    }
     const direct = await bridgeRef.current?.idToken?.().catch(() => undefined);
-    if (direct) return direct;
+    if (direct && tokenExpMs(direct) > Date.now() + 5_000) {
+      sessionToken.current = direct;
+      return direct;
+    }
     // The bridge can lose its session context when the frame idles — try
     // re-attaching before falling back to the (likely dead) boot token.
     if (apiKey) {
@@ -159,10 +181,37 @@ export default function ShopifyApp() {
       if (revived) {
         bridgeRef.current = revived;
         const t = await revived.idToken?.().catch(() => undefined);
-        if (t) return t;
+        if (t && tokenExpMs(t) > Date.now() + 5_000) {
+          sessionToken.current = t;
+          return t;
+        }
       }
     }
-    return sessionToken.current;
+    return sessionToken.current; // last resort
+  };
+
+  // Session-token POST with one recovery shot: if the API says the token is
+  // invalid, drop the cache, force a re-mint, and repost before failing.
+  const shopifyApi = async <T,>(path: string, body: Record<string, unknown> = {}): Promise<T> => {
+    const post = async () =>
+      api<T>(path, { method: 'POST', body: JSON.stringify({ ...body, token: await tok() }) });
+    try {
+      return await post();
+    } catch (err) {
+      if (!(err instanceof Error && err.message.includes('invalid session token'))) throw err;
+      sessionToken.current = '';
+      try {
+        return await api<T>(path, {
+          method: 'POST',
+          body: JSON.stringify({ ...body, token: await tok(true) }),
+        });
+      } catch (err2) {
+        if (err2 instanceof Error && err2.message.includes('invalid session token')) {
+          throw new Error('Session expired — close and reopen the app from Shopify admin');
+        }
+        throw err2;
+      }
+    }
   };
   const [subscribing, setSubscribing] = useState('');
   const [planError, setPlanError] = useState('');
@@ -179,6 +228,7 @@ export default function ShopifyApp() {
   } | null>(null);
   const threadId = useRef<string | null>(null);
   const threadBox = useRef<HTMLDivElement | null>(null);
+  const [threadLoading, setThreadLoading] = useState(false);
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
   const [inboxError, setInboxError] = useState('');
@@ -191,14 +241,11 @@ export default function ShopifyApp() {
   };
 
   const loadThread = async (id: string) => {
-    const res = await api<{
+    const res = await shopifyApi<{
       conversation: InboxConv;
       messages: InboxMsg[];
       has_more: boolean;
-    }>('/api/shopify/inbox/thread', {
-      method: 'POST',
-      body: JSON.stringify({ token: await tok(), conversation_id: id }),
-    });
+    }>('/api/shopify/inbox/thread', { conversation_id: id });
     setThread({ conv: res.conversation, messages: res.messages, hasMore: res.has_more });
   };
 
@@ -214,10 +261,7 @@ export default function ShopifyApp() {
     let dead = false;
     const loadList = async () => {
       try {
-        const res = await api<{ conversations: InboxConv[] }>('/api/shopify/inbox', {
-          method: 'POST',
-          body: JSON.stringify({ token: await tok() }),
-        });
+        const res = await shopifyApi<{ conversations: InboxConv[] }>('/api/shopify/inbox');
         if (!dead) setInbox(res.conversations);
       } catch {
         /* stale list beats an empty one */
@@ -242,10 +286,13 @@ export default function ShopifyApp() {
   const openThread = async (id: string) => {
     threadId.current = id;
     setInboxError('');
+    setThreadLoading(true);
     try {
       await loadThread(id);
     } catch (err) {
       setInboxError(err instanceof Error ? err.message : 'could not load thread');
+    } finally {
+      setThreadLoading(false);
     }
   };
 
@@ -262,14 +309,10 @@ export default function ShopifyApp() {
     setBusy(true);
     setInboxError('');
     try {
-      await api('/api/shopify/inbox/reply', {
-        method: 'POST',
-        body: JSON.stringify({
-          token: await tok(),
-          conversation_id: id,
-          text,
-          ...(attachments.length ? { attachments } : {}),
-        }),
+      await shopifyApi('/api/shopify/inbox/reply', {
+        conversation_id: id,
+        text,
+        ...(attachments.length ? { attachments } : {}),
       });
       setReply('');
       await loadThread(id);
@@ -286,10 +329,7 @@ export default function ShopifyApp() {
     setBusy(true);
     setInboxError('');
     try {
-      await api('/api/shopify/inbox/resume', {
-        method: 'POST',
-        body: JSON.stringify({ token: await tok(), conversation_id: id }),
-      });
+      await shopifyApi('/api/shopify/inbox/resume', { conversation_id: id });
       await loadThread(id);
     } catch (err) {
       setInboxError(err instanceof Error ? err.message : 'resume failed');
@@ -303,10 +343,7 @@ export default function ShopifyApp() {
     setSubscribing(plan);
     setPlanError('');
     try {
-      const res = await api<{ confirmation_url: string }>('/api/shopify/plan', {
-        method: 'POST',
-        body: JSON.stringify({ token: await tok(), plan }),
-      });
+      const res = await shopifyApi<{ confirmation_url: string }>('/api/shopify/plan', { plan });
       // Shopify's own approval page — a deliberate top-level navigation.
       window.open(res.confirmation_url, '_top');
     } catch (err) {
@@ -345,10 +382,7 @@ export default function ShopifyApp() {
       if (setupPurpose.trim() !== state.purpose) body.purpose = setupPurpose.trim();
       if (setupGreeting.trim() !== state.greeting) body.greeting = setupGreeting.trim();
       if (Object.keys(body).length) {
-        await api('/api/shopify/agent', {
-          method: 'POST',
-          body: JSON.stringify({ token: await tok(), ...body }),
-        });
+        await shopifyApi('/api/shopify/agent', body);
       }
       if (advance) localStorage.setItem(`janis:setup-done:${state.shop}`, '1');
       setBriefSaved(true);
@@ -618,14 +652,15 @@ export default function ShopifyApp() {
                   shoppers see. Edit and save; it takes effect immediately.
                 </p>
                 {briefFields}
-                <button
-                  className="btn primary"
-                  style={{ width: '100%', marginTop: 12 }}
-                  onClick={() => void saveBrief(false)}
-                  disabled={setupSaving || !setupName.trim() || !setupPurpose.trim()}
-                >
-                  {setupSaving ? 'Saving…' : briefSaved ? 'Saved ✓' : 'Save changes'}
-                </button>
+                <div style={{ textAlign: 'right', marginTop: 12 }}>
+                  <button
+                    className="btn primary"
+                    onClick={() => void saveBrief(false)}
+                    disabled={setupSaving || !setupName.trim() || !setupPurpose.trim()}
+                  >
+                    {setupSaving ? 'Saving…' : briefSaved ? 'Saved ✓' : 'Save changes'}
+                  </button>
+                </div>
                 <p className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
                   Knowledge base, tools, channels, evals and more live in the full console —{' '}
                   <a
@@ -645,7 +680,15 @@ export default function ShopifyApp() {
                 </p>
               </>
             ) : tab === 'inbox' ? (
-              thread ? (
+              threadLoading && !thread ? (
+                <div
+                  className="muted"
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '24px 0' }}
+                >
+                  <span className="spin" />
+                  Opening conversation…
+                </div>
+              ) : thread ? (
                 <>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <button className="btn" onClick={closeThread}>
@@ -782,7 +825,13 @@ export default function ShopifyApp() {
                     <strong style={{ fontSize: 14 }}>Inbox</strong>
                   </div>
                   {!inbox ? (
-                    <div className="muted">Loading conversations…</div>
+                    <div
+                      className="muted"
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '24px 0' }}
+                    >
+                      <span className="spin" />
+                      Loading conversations…
+                    </div>
                   ) : inbox.length === 0 ? (
                     <div className="muted" style={{ fontSize: 13 }}>
                       No conversations yet — shopper chats will show up here.
