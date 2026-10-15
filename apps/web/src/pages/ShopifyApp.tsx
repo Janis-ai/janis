@@ -223,6 +223,12 @@ export default function ShopifyApp() {
   };
   const [subscribing, setSubscribing] = useState('');
   const [planError, setPlanError] = useState('');
+  // Console access — the session token proves shop staff; we mail a magic
+  // link that signs them into the console and claims the workspace.
+  const [consoleEmail, setConsoleEmail] = useState('');
+  const [consoleSending, setConsoleSending] = useState(false);
+  const [consoleSent, setConsoleSent] = useState(false);
+  const [consoleErr, setConsoleErr] = useState('');
 
   // In-frame inbox — the session token is the credential for
   // /api/shopify/inbox/*. Staff identity comes from the JWT on the API
@@ -351,6 +357,21 @@ export default function ShopifyApp() {
       setInboxError(err instanceof Error ? err.message : 'resume failed');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const sendConsoleAccess = async () => {
+    if (consoleSending) return;
+    setConsoleSending(true);
+    setConsoleErr('');
+    setConsoleSent(false);
+    try {
+      await shopifyApi('/api/shopify/console-access', { email: consoleEmail.trim() });
+      setConsoleSent(true);
+    } catch (err) {
+      setConsoleErr(err instanceof Error ? err.message : 'could not send link');
+    } finally {
+      setConsoleSending(false);
     }
   };
 
@@ -1027,13 +1048,49 @@ export default function ShopifyApp() {
               </p>
             )}
 
-            {!state.claimed && state.claimUrl ? (
-              <p className="muted" style={{ fontSize: 12.5, marginTop: 12, textAlign: 'center' }}>
-                <a href={state.claimUrl} target="_blank" rel="noreferrer">
-                  Manage this store in the Janis console →
-                </a>
+            <div
+              style={{
+                marginTop: 16,
+                padding: 12,
+                border: '1px solid #e5e7eb',
+                borderRadius: 8,
+                textAlign: 'left',
+              }}
+            >
+              <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 4px' }}>Janis console</p>
+              <p className="muted" style={{ fontSize: 12.5, margin: '0 0 8px' }}>
+                Knowledge base, tools, channels, evals and more live in the full console — we'll
+                email you a link that signs you in and connects you to this store's workspace.
               </p>
-            ) : null}
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  type="email"
+                  placeholder="you@store.com"
+                  value={consoleEmail}
+                  onChange={(e) => {
+                    setConsoleEmail(e.target.value);
+                    setConsoleSent(false);
+                  }}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  className="btn primary"
+                  disabled={!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(consoleEmail.trim()) || consoleSending}
+                  onClick={() => void sendConsoleAccess()}
+                >
+                  {consoleSending ? 'Sending…' : consoleSent ? 'Sent ✓' : 'Email me a link'}
+                </button>
+              </div>
+              {consoleErr && <div className="error" style={{ marginTop: 8 }}>{consoleErr}</div>}
+              {!state.claimed && state.claimUrl ? (
+                <p className="muted" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+                  Already have a Janis login?{' '}
+                  <a href={state.claimUrl} target="_blank" rel="noreferrer">
+                    Claim this workspace directly →
+                  </a>
+                </p>
+              ) : null}
+            </div>
             {state.linkUrl ? (
               <p className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
                 Serving the wrong agent or workspace?{' '}

@@ -38,6 +38,7 @@ let publicRoutes: typeof shopifyPublicRoutes;
 let apiRoutes: typeof shopifyApiRoutes;
 let webhookRoutes: typeof shopifyWebhookRoutes;
 let signLinkCode: (shopId: string) => string;
+let signAccessCode: (shopId: string, email: string) => string;
 
 const SHOP = 'dev-store.myshopify.com';
 const KEY = 'shp_key';
@@ -192,6 +193,7 @@ beforeAll(async () => {
   apiRoutes = mod.shopifyApiRoutes;
   webhookRoutes = mod.shopifyWebhookRoutes;
   signLinkCode = (await import('../lib/shopifyApp.js')).signLinkCode;
+  signAccessCode = (await import('../lib/shopifyApp.js')).signAccessCode;
 
   const client = new PGlite();
   db = drizzle(client, { schema }) as unknown as Db;
@@ -272,6 +274,65 @@ describe('janis embedded session token', () => {
       'wrong',
     );
     expect((await postSession(wrongSecret)).status).toBe(401);
+  });
+});
+
+describe('shopify console access — magic sign-in', () => {
+  const ACCESS_SHOP = 'access-store.myshopify.com';
+
+  it('console-access accepts staff email; magic-login signs in, claims the workspace and sets the cookie', async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt(ACCESS_SHOP)); // provision → linked
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, ACCESS_SHOP));
+    expect(row.state).toBe('linked');
+
+    const res = await app.request('/api/shopify/console-access', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(ACCESS_SHOP), email: 'Owner@Store.com' }),
+    });
+    expect(res.status).toBe(200);
+
+    const code = signAccessCode(row.id, 'owner@store.com');
+    const redeem = await app.request(
+      `/api/shopify/magic-login?code=${encodeURIComponent(code)}`,
+    );
+    expect(redeem.status).toBe(302);
+    expect(redeem.headers.get('set-cookie')).toContain(SESSION_COOKIE);
+    expect(redeem.headers.get('location')).toBe('/');
+
+    // New user claimed — admin membership, owns the provisioned workspace,
+    // session lands in the store's workspace.
+    const [u] = await db.select().from(users).where(eq(users.email, 'owner@store.com'));
+    expect(u).toBeTruthy();
+    const [m] = await db
+      .select()
+      .from(memberships)
+      .where(
+        and(eq(memberships.userId, u.id), eq(memberships.workspaceId, row.workspaceId!)),
+      );
+    expect(m?.role).toBe('admin');
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId!));
+    expect(ws.ownerUserId).toBe(u.id);
+    const [sess] = await db.select().from(sessions).where(eq(sessions.userId, u.id));
+    expect(sess.workspaceId).toBe(row.workspaceId);
+  });
+
+  it('rejects a forged code and refuses a disconnected shop', async () => {
+    expect(
+      (await app.request('/api/shopify/magic-login?code=forged.code')).status,
+    ).toBe(401);
+    const [unlinked] = await db
+      .insert(shopifyShops)
+      .values({ shop: 'gone.myshopify.com', state: 'unlinked' })
+      .returning();
+    const res = await app.request(
+      `/api/shopify/magic-login?code=${encodeURIComponent(signAccessCode(unlinked.id, 'x@y.com'))}`,
+    );
+    expect(res.status).toBe(409);
   });
 });
 

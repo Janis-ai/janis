@@ -407,6 +407,40 @@ export function verifyLinkCode(code: string): { shopId: string } | null {
   }
 }
 
+/* ── Console-access codes — emailed magic sign-in links for shop staff ── */
+
+const ACCESS_CODE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Same HMAC scheme as link codes, but carries the destination email so a
+ *  leaked code only signs in the person it was sent to. 24h — long enough
+ *  to survive an inbox check on another device. */
+export function signAccessCode(shopId: string, email: string): string {
+  const body = Buffer.from(
+    JSON.stringify({ s: shopId, e: email.toLowerCase(), x: Date.now() + ACCESS_CODE_TTL_MS }),
+  ).toString('base64url');
+  const sig = createHmac('sha256', env.sessionSecret).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+
+export function verifyAccessCode(code: string): { shopId: string; email: string } | null {
+  const [body, sig] = (code ?? '').split('.');
+  if (!body || !sig) return null;
+  const expected = createHmac('sha256', env.sessionSecret).update(body).digest('base64url');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const i = JSON.parse(Buffer.from(body, 'base64url').toString()) as {
+      s?: string;
+      e?: string;
+      x?: number;
+    };
+    return i.s && i.e && i.x && i.x > Date.now() ? { shopId: i.s, email: i.e } : null;
+  } catch {
+    return null;
+  }
+}
+
 /* ── Shop lifecycle ─────────────────────────────────────────────────── */
 
 type ShopRow = typeof shopifyShops.$inferSelect;

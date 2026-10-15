@@ -1,16 +1,19 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, lt, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
+import { setCookie } from 'hono/cookie';
 import {
   agents,
   channels,
   conversations,
   memberships,
   messages,
+  sessions,
   shopifyShops,
+  users,
   workspaces,
 } from '../db/schema.js';
 import { audit } from '../lib/audit.js';
@@ -18,7 +21,9 @@ import { invalidateChannelCache } from '../lib/channels.js';
 import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
 import { generateDraft } from '../lib/agentBuilder.js';
 import { messageCap, PLANS } from '../lib/plans.js';
-import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { adminOnly, sessionAuth, SESSION_COOKIE, type SessionEnv } from '../middleware/sessionAuth.js';
+import { generateSessionToken } from '../lib/crypto.js';
+import { sendEmail } from '../lib/notify.js';
 import { toConversation, toMessage } from '../lib/serializers.js';
 import {
   getConversationForWorkspace,
@@ -33,6 +38,8 @@ import {
   ensureShopForSession,
   handleShopifyWebhook,
   mintEmbeddedSession,
+  signAccessCode,
+  verifyAccessCode,
   provisionShopWorkspace,
   shopBilling,
   shopifyAppConfigured,
@@ -518,6 +525,88 @@ export function shopifyPublicRoutes(db: Db) {
       }
     },
   );
+
+  // Console access — staff types their email in the embedded app, we mail a
+  // signed magic link. The session token already proves they're staff of
+  // this shop; the link only works for the inbox it was sent to.
+  app.post(
+    '/console-access',
+    zValidator(
+      'json',
+      z.object({ token: z.string(), email: z.string().email().max(320) }),
+    ),
+    async (c) => {
+      if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+      const { sess, row } = await linkedShop(c);
+      if (!sess) return c.json({ error: 'invalid session token' }, 401);
+      if (!row) return c.json({ error: 'no bound agent' }, 409);
+      const { email } = c.req.valid('json');
+      const code = signAccessCode(row.id, email);
+      await sendEmail(
+        [email],
+        'Your Janis sign-in link',
+        `Open the Janis console for ${row.shop} — this link signs you in and connects you to the store's workspace. It's valid for 24 hours.`,
+        `/api/shopify/magic-login?code=${encodeURIComponent(code)}`,
+      );
+      return c.json({ ok: true });
+    },
+  );
+
+  // The emailed link redeems here: verify → find/create the user → claim
+  // them into the bound workspace → console session cookie → console.
+  app.get('/magic-login', async (c) => {
+    if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+    const grant = verifyAccessCode(c.req.query('code') ?? '');
+    if (!grant) return c.json({ error: 'invalid or expired link' }, 401);
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.id, grant.shopId))
+      .limit(1);
+    if (!row || row.state !== 'linked' || !row.workspaceId) {
+      return c.json({ error: 'store is no longer connected' }, 409);
+    }
+    const email = grant.email.toLowerCase();
+    let [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    if (!user) {
+      [user] = await db
+        .insert(users)
+        .values({ email, name: email.split('@')[0] })
+        .onConflictDoNothing()
+        .returning();
+      // Lost the insert race — the other writer's row is the one to use.
+      user ??= (await db.select().from(users).where(eq(users.email, email)).limit(1))[0];
+    }
+    await db
+      .insert(memberships)
+      .values({
+        userId: user.id,
+        workspaceId: row.workspaceId,
+        role: 'admin',
+        acceptedAt: new Date(),
+      })
+      .onConflictDoNothing();
+    // Same claim semantics as /shopify/claim — an ownerless provisioned
+    // workspace gets its owner from the first console access too.
+    await db
+      .update(workspaces)
+      .set({ ownerUserId: user.id })
+      .where(and(eq(workspaces.id, row.workspaceId), isNull(workspaces.ownerUserId)));
+    const { token, id } = generateSessionToken();
+    await db.insert(sessions).values({
+      id,
+      userId: user.id,
+      workspaceId: row.workspaceId,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    });
+    setCookie(c, SESSION_COOKIE, token, {
+      httpOnly: true,
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 30 * 24 * 60 * 60,
+    });
+    return c.redirect('/');
+  });
 
   // Storefront loader — the theme app extension drops
   //   <script src="/api/shopify/storefront.js?s=<shop>">
