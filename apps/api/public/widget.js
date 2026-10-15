@@ -1146,17 +1146,17 @@
               headers: { 'content-type': 'application/json', accept: 'application/json' },
               body: JSON.stringify({ items: [{ id: Number(item.cart_variant_id), quantity: 1 }] }),
             })
-              .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+              .then(function (r) { return r.ok ? r.json() : cartErr(r); })
               .then(function () {
                 cartBtn.textContent = 'Added ✓';
                 // tap marker — the model sees this as a component action on
                 // the product card (an add-to-cart event), not typed text.
                 sendText('I just added ' + (item.title || 'an item') + ' to my cart.', { of: (item.title || 'product') + ' — add to cart' });
               })
-              .catch(function (status) {
+              .catch(function (err) {
                 cartBtn.disabled = false;
                 cartBtn.textContent = 'Add to cart';
-                cartFail(item, status);
+                cartFail(item, err, cartBtn);
               });
           };
           btns.appendChild(cartBtn);
@@ -1550,7 +1550,7 @@
               headers: { 'content-type': 'application/json', accept: 'application/json' },
               body: JSON.stringify(payload),
             })
-              .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+              .then(function (r) { return r.ok ? r.json() : cartErr(r); })
               .then(function () {
                 var planName = '';
                 if (planId !== null) {
@@ -1560,10 +1560,10 @@
                 closeOptionsSheet();
                 sendText('I just added ' + (item.title || 'an item') + (desc ? ' (' + desc + ')' : '') + ' to my cart.', { of: (item.title || 'product') + ' — add to cart' });
               })
-              .catch(function (status) {
+              .catch(function (err) {
                 add.disabled = false;
                 add.textContent = 'Add to cart';
-                cartFail(item, status);
+                cartFail(item, err, add);
               });
           } : null;
         }
@@ -1967,10 +1967,31 @@
   // suffix keeps the tap marker out of the confirmed-success path — a bare
   // '— add to cart' marker annotates as "the storefront confirmed it went
   // through" and the model would claim a rejected add landed.
-  function cartFail(item, status) {
+  // /cart/add.js answers 4xx with a JSON body whose `description` is the
+  // exact reason the storefront shows ("already sold out", "can't be
+  // purchased with a selling plan", …). Surface it verbatim — the shopper
+  // sees the same message the site would show, and the agent inherits a
+  // real reason to relay instead of guessing.
+  function cartErr(r) {
+    return r.json().catch(function () { return {}; }).then(function (b) {
+      return Promise.reject({ status: r.status, description: (b && b.description) || '' });
+    });
+  }
+
+  function cartFail(item, err, btn) {
+    var status = typeof err === 'object' && err ? err.status : err;
+    var desc = typeof err === 'object' && err && err.description ? String(err.description) : '';
+    var why = desc
+      ? ' — ' + desc.replace(/[.\s]+$/, '')
+      : status === 401 ? ' — the storefront is locked behind a password' : '';
+    // The storefront's own verdict beats the catalogue's — when the reason
+    // is unavailability the card's Add button is a dead control: retire it.
+    if (btn && desc && /sold out|out of stock|cannot be purchas|can't be purchas|unavailable|not in stock/i.test(desc)) {
+      btn.disabled = true;
+      btn.textContent = 'Unavailable';
+    }
     sendText(
-      "I tried to add " + (item.title || 'an item') + ' to my cart but it failed' +
-        (status === 401 ? ' — the storefront is locked behind a password' : '') + '.',
+      "I tried to add " + (item.title || 'an item') + ' to my cart but it failed' + why + '.',
       { of: (item.title || 'product') + ' — add to cart — failed' }
     );
   }
