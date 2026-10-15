@@ -84,6 +84,8 @@
     oldestTs: null, // created_at of the oldest rendered message — before cursor
     loadingMore: false,
     lastSeen: localStorage.getItem(LS_SEEN), // newest ts the visitor has seen
+    cfgReady: false, // channel branding applied — bubble stays hidden until then
+    pendingOpen: false, // host called Janis.open() before config landed
     seenInit: false, // first poll sets the baseline — history never counts unread
     unread: 0,
     fails: 0,        // consecutive poll failures — drives the reconnect strip
@@ -640,6 +642,10 @@
   // ---- DOM ----------------------------------------------------------------
   var bubble = el('button', { background: accent }, { id: 'janis-bubble', 'aria-label': 'Chat with us' });
   bubble.id = 'janis-bubble';
+  // Hidden until the channel config applies — a default-colour bubble that
+  // repaints into brand colours a beat later reads as a glitch. visibility
+  // (not display) keeps it out of the tab order while hidden too.
+  bubble.style.visibility = 'hidden';
   bubble.textContent = '💬';
   var badgeEl = el('span', {}, { id: 'janis-badge' });
   bubble.appendChild(badgeEl);
@@ -2254,8 +2260,25 @@
   // Phone-width → the open panel is full-viewport; lock the storefront's
   // scroll behind it. Cleared on close (and harmless on desktop).
   var mobileQ = typeof matchMedia === 'function' ? matchMedia('(max-width:640px)') : null;
+  // Reveal once branding is applied (or the config fetch failed — a
+  // default-styled bubble beats no bubble). Idempotent: applyCfg re-runs on
+  // every console-preview postMessage.
+  var reveal = function () {
+    state.cfgReady = true;
+    bubble.style.visibility = '';
+    if (state.pendingOpen) {
+      state.pendingOpen = false;
+      setOpen(true);
+    }
+  };
   function setOpen(open) {
     if (PAGE && !open) return; // the page-mode panel is the surface — always open
+    // A host-page Janis.open() (or any caller) before config landed would
+    // open an unstyled panel — park the intent and open once branded.
+    if (open && !state.cfgReady) {
+      state.pendingOpen = true;
+      return;
+    }
     state.open = open;
     panel.classList.toggle('open', open);
     backdrop.classList.toggle('open', open && panel.classList.contains('janis-modal'));
@@ -2655,8 +2678,13 @@
   // ---- bootstrap ----------------------------------------------------------
   // no-store: branding edits apply on the next page load, not whenever a
   // heuristic cache decides to expire.
-  fetch(API + '/chat/' + TOKEN, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (cfg) {
-    if (!cfg) return;
+  fetch(API + '/chat/' + TOKEN, {
+    cache: 'no-store',
+    // 8s ceiling — a hung config request must not hide the launcher forever;
+    // the catch reveals it default-styled rather than never appearing.
+    signal: window.AbortSignal && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined,
+  }).then(function (r) { return r.ok ? r.json() : null; }).then(function (cfg) {
+    if (!cfg) { reveal(); return; }
     if (OVR.accent) cfg.accent = OVR.accent;
     if (OVR.position) cfg.position = OVR.position;
     if (OVR.teaser) cfg.teaser_text = OVR.teaser;
@@ -2787,6 +2815,8 @@
         if (cfg.quick_replies && cfg.quick_replies.length) renderChips(cfg.quick_replies);
         else clearChips();
       }
+      // Config applied — the launcher (and any parked host open) may show.
+      reveal();
     };
     applyCfg();
     if (darkQ && darkQ.addEventListener) {
@@ -2816,7 +2846,7 @@
       });
     }
     if (PAGE || state.open) setOpen(true); // page mode always opens
-  }).catch(function () {});
+  }).catch(function () { reveal(); });
   // Commands queued before this script evaluated — a host button calling
   // Janis.q.push('open') before widget.js loaded drains now that everything
   // is wired.
