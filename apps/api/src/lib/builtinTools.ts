@@ -54,6 +54,10 @@ export interface BuiltinCtx {
   workspaceId: string;
   /** The agent this conversation belongs to — the concierge for Ask Janis. */
   agent?: { id: string; workspaceId: string };
+  /** Embedded merchant-Ask runs pin workspace resolution to the shop's bound
+   *  workspace — Shopify staff have no Janis membership to resolve through,
+   *  and the session token is already proof of staff status on that shop. */
+  pinWorkspaceId?: string;
 }
 
 /**
@@ -151,6 +155,49 @@ async function visitorWorkspace(
   hint: string | undefined,
   opts: { adminOnly?: boolean } = {},
 ): Promise<{ ws: WorkspaceRow } | { error: string }> {
+  // Embedded merchant-Ask: the shop's bound workspace is the whole universe
+  // — there's no "which workspace?" ambiguity, and the staff member's Shopify
+  // session is the trust (they may hold no Janis membership at all). Member-
+  // level tools pass for any verified staff; adminOnly writes still require
+  // an admin membership — except on an ownerless auto-provisioned workspace,
+  // where no admin exists to defer to and the shop's staff act as operators
+  // (same first-redeemer-owns-it model as the magic-link claim path).
+  if (ctx.pinWorkspaceId) {
+    const [ws] = await ctx.db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, ctx.pinWorkspaceId))
+      .limit(1);
+    if (!ws) return { error: 'the shop\u2019s workspace no longer exists' };
+    if (opts.adminOnly) {
+      const [adm] = await ctx.db
+        .select({ id: memberships.id })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, ws.id),
+            eq(memberships.role, 'admin'),
+            isNotNull(memberships.acceptedAt),
+          ),
+        )
+        .limit(1);
+      if (!adm) {
+        const [anyMember] = await ctx.db
+          .select({ id: memberships.id })
+          .from(memberships)
+          .where(and(eq(memberships.workspaceId, ws.id), isNotNull(memberships.acceptedAt)))
+          .limit(1);
+        if (anyMember) {
+          return {
+            error:
+              'this needs workspace admin rights — the workspace owner can grant them via console access (Settings → Team)',
+          };
+        }
+      }
+    }
+    return { ws };
+  }
   const conds = [eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)];
   if (opts.adminOnly) conds.push(eq(memberships.role, 'admin'));
   const rows = await ctx.db
@@ -3346,6 +3393,16 @@ export function enabledBuiltins(
   workspaceId?: string,
 ): BuiltinTool[] {
   return BUILTIN_TOOLS.filter((b) => enabled?.includes(b.name) && b.available(workspaceId));
+}
+
+/** The copilot toolset for embedded merchant-Ask threads — every builtin
+ *  that would be offered to the concierge on the operator workspace. Driving
+ *  off available() keeps this self-maintaining: new operator-gated builtins
+ *  are picked up automatically, env-gated ones (no key configured) drop out. */
+export function copilotBuiltins(): BuiltinTool[] {
+  return BUILTIN_TOOLS.filter(
+    (b) => env.operatorWorkspaceId && b.available(env.operatorWorkspaceId),
+  );
 }
 
 /** Catalog view for the UI — every builtin, flagging whether it can run now. */

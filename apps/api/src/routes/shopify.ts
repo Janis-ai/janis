@@ -12,6 +12,7 @@ import {
   conversations,
   memberships,
   messages,
+  pendingActions,
   sessions,
   shopifyShops,
   users,
@@ -61,6 +62,7 @@ import {
 } from '../lib/shopifyApp.js';
 import { MERCHANT_CONV } from '../lib/convFilters.js';
 import { runHostedEvent } from '../lib/hostedAgent.js';
+import { decidePendingAction } from '../lib/approvals.js';
 
 /**
  * Embedded-app endpoints — three trust domains, three mounts:
@@ -601,14 +603,30 @@ export function shopifyPublicRoutes(db: Db) {
     '/ask',
     zValidator(
       'json',
-      z.object({ token: z.string(), text: z.string().min(1).max(4000) }),
+      z.object({
+        token: z.string(),
+        text: z.string().max(4000),
+        attachments: z
+          .array(
+            z.object({
+              name: z.string(),
+              url: z.string(),
+              type: z.string(),
+              size: z.number(),
+            }),
+          )
+          .optional(),
+      }),
     ),
     async (c) => {
       if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
       const { sess, row } = await linkedShop(c);
       if (!sess) return c.json({ error: 'invalid session token' }, 401);
       if (!row) return c.json({ error: 'no bound agent' }, 409);
-      const { text } = c.req.valid('json');
+      const { text, attachments } = c.req.valid('json');
+      if (!text.trim() && !attachments?.length) {
+        return c.json({ error: 'text or attachments required' }, 400);
+      }
       const staff = await staffUserFor(db, row, sess.sub);
 
       const externalId = `shopify-ask:${sess.sub ?? 'staff'}`;
@@ -644,7 +662,10 @@ export function shopifyPublicRoutes(db: Db) {
         direction: 'in',
         authorId: staff.id,
         text,
-        payload: { merchant_ask: true },
+        payload: {
+          merchant_ask: true,
+          ...(attachments?.length ? { attachments } : {}),
+        },
       });
       await db
         .update(conversations)
@@ -665,6 +686,59 @@ export function shopifyPublicRoutes(db: Db) {
         }).catch((err) => console.error(`shopify ask ${row.shop}:`, err));
       }
       return c.json({ conversation_id: conv.id });
+    },
+  );
+
+  // Decide a copilot approval card — the copilot's writes (teach_agent,
+  // config changes, new channels…) park as cards in the ask thread. Only the
+  // staff member whose thread holds the card may decide it — the card's
+  // conversation must be THIS staff member's ask thread on THIS shop's
+  // agent. Workspace members can also decide from the console (the action
+  // routes fall through to the member path for merchant_ask threads).
+  app.post(
+    '/ask/decide',
+    zValidator(
+      'json',
+      z.object({
+        token: z.string(),
+        action_id: z.string().uuid(),
+        decision: z.enum(['approved', 'denied']),
+      }),
+    ),
+    async (c) => {
+      if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+      const { sess, row } = await linkedShop(c);
+      if (!sess) return c.json({ error: 'invalid session token' }, 401);
+      if (!row) return c.json({ error: 'no bound agent' }, 409);
+      const { action_id, decision } = c.req.valid('json');
+      const [action] = await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.id, action_id))
+        .limit(1);
+      if (!action) return c.json({ error: 'not found' }, 404);
+      const [conv] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, action.conversationId))
+        .limit(1);
+      if (
+        !conv ||
+        conv.agentId !== row.agentId ||
+        conv.externalId !== `shopify-ask:${sess.sub ?? 'staff'}`
+      ) {
+        return c.json({ error: 'not found' }, 404);
+      }
+      const staff = await staffUserFor(db, row, sess.sub);
+      const decided = await decidePendingAction(
+        db,
+        action.id,
+        { id: staff.id, name: staff.name ?? 'Store staff' },
+        decision === 'approved',
+      );
+      if (decided === 'not-pending') return c.json({ error: 'already decided' }, 409);
+      if (!decided) return c.json({ error: 'not found' }, 404);
+      return c.json({ ok: true, status: decided.action.status, result: decided.action.result });
     },
   );
 

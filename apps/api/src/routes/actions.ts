@@ -32,7 +32,9 @@ export function actionRoutes(db: Db) {
       .from(conversations)
       .where(eq(conversations.id, action.conversationId))
       .limit(1);
-    if (isConciergeAction(action.workspaceId, conv?.userProfile)) {
+    const merchantAsk =
+      ((conv?.userProfile ?? {}) as UserProfile).kind === 'merchant_ask';
+    if (isConciergeAction(action.workspaceId, conv?.userProfile) && !merchantAsk) {
       // Concierge action cards live on Janis's own workspace — the decider is
       // the verified signed-in visitor of the concierge conversation, not a
       // member here.

@@ -23,7 +23,12 @@ const RESULT_PREVIEW = 400;
  * in the operator workspace (customer threads aren't sign-in verified)
  * take the normal workspace-member path. */
 export function isConciergeAction(actionWorkspaceId: string, userProfile: unknown): boolean {
-  const p = (userProfile ?? {}) as { identity_verified?: unknown };
+  const p = (userProfile ?? {}) as { identity_verified?: unknown; kind?: unknown };
+  // Merchant-Ask threads live on the SHOP's workspace, not the operator one —
+  // the decider is the verified staff member the card was parked for (the
+  // embedded app decides via /api/shopify/ask/decide, scoped to that staff
+  // thread), not a workspace member.
+  if (p.kind === 'merchant_ask') return p.identity_verified === true;
   return (
     !!env.operatorWorkspaceId &&
     actionWorkspaceId === env.operatorWorkspaceId &&

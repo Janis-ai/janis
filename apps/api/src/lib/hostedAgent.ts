@@ -11,7 +11,7 @@ import { recordLlmUsage, llmSpendOverCap } from './usage.js';
 import { loadSecretsMap } from './secrets.js';
 import { freshShopifyToken } from './shopifyToken.js';
 import { connectionSecrets } from './connections.js';
-import { enabledBuiltins, type BuiltinTool } from './builtinTools.js';
+import { copilotBuiltins, enabledBuiltins, type BuiltinTool } from './builtinTools.js';
 import { bus } from './bus.js';
 import { PLANS, planFor } from './plans.js';
 import type { AttachmentRef } from './channels.js';
@@ -2079,6 +2079,9 @@ export interface AgentRunContext {
    *  the storefront truth probe must answer for THIS market, not wherever
    *  the API's IP lands. */
   shopperMarket?: string;
+  /** Merchant-Ask threads pin concierge workspace resolution to the bound
+   *  shop's workspace — see BuiltinCtx.pinWorkspaceId. */
+  pinWorkspaceId?: string;
 }
 
 /** Channel kinds where the sender address is verified by the mailbox —
@@ -2124,6 +2127,11 @@ export async function verifiedIdentityFor(
           )
           .limit(1);
         if (mem) {
+          operator = true;
+        } else if ((p as { kind?: string }).kind === 'merchant_ask') {
+          // Embedded-Ask threads carry identity_verified staff whose Shopify
+          // session already proved they run this shop — operator-grade access
+          // to the bound workspace without a console membership.
           operator = true;
         } else if (env.supportChannelId) {
           // Every signed-in user on the concierge channel is a copilot user
@@ -4007,6 +4015,12 @@ async function replyAsHostedAgent(
   const convId = conv.id;
   const externalId = conv.externalId;
   const t0 = Date.now();
+  // Merchant-Ask threads (embedded Shopify app) run as the copilot, not the
+  // shopper-facing persona: the visitor is verified store staff, workspace
+  // resolution pins to the shop's bound workspace, and the toolset is the
+  // concierge's operator set rather than the agent's own builtins.
+  const merchantAsk =
+    ((conv.userProfile ?? {}) as { kind?: string }).kind === 'merchant_ask';
   // The newest inbound this run's transcript actually contained — stamped on
   // every emitted message_out as covers_through so newestInboundIsPending can
   // tell "the reply shipped after the inbound" from "the reply SAW it". Set
@@ -4163,6 +4177,7 @@ async function replyAsHostedAgent(
       paginationTap,
       inboundText: lastInboundText,
       shopperMarket,
+      ...(merchantAsk ? { pinWorkspaceId: agent.workspaceId } : {}),
     };
     // One escalation lookup feeds the prompt (pending offer) AND the
     // post-generation decline check below.
@@ -4216,7 +4231,11 @@ async function replyAsHostedAgent(
         offerMade: offeredBefore,
         savedWidgets: [...refSpecs.entries()].map(([name, def]) => ({ name, ...def })),
         operator: ctx.identity?.operator,
-      }) + ((await campaignContextFor(db, convId)) ?? '');
+      }) +
+      ((await campaignContextFor(db, convId)) ?? '') +
+      (merchantAsk
+        ? "\nThis operator is a verified staff member of the bound Shopify store, chatting inside the embedded app — their workspace is pinned, so act on it directly without asking which one. Store questions (sales, orders, products) are fair game alongside workspace ops. Keep replies compact — the embed is a narrow panel, and long console links can be shortened to the essentials."
+        : '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;
     const onStall = () => {
@@ -4239,10 +4258,12 @@ async function replyAsHostedAgent(
     // An empty completion is usually a provider blip (transient 500, timeout,
     // a tool loop that never wrapped up) — one retry is cheaper than paging
     // a human over it. Only the retry's output is kept.
-    const builtins = enabledBuiltins(
-      ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
-      agent.workspaceId,
-    );
+    const builtins = merchantAsk
+      ? copilotBuiltins()
+      : enabledBuiltins(
+          ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
+          agent.workspaceId,
+        );
     let gen!: Awaited<ReturnType<typeof generateReply>>;
     let reply = '';
     let widgets: ReturnType<typeof extractWidgets>['widgets'] = [];

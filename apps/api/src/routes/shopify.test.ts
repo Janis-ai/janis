@@ -1977,4 +1977,161 @@ describe('abandoned-checkout nudge, ask + stats', () => {
     const usd = body.stats.revenue_30d.find((r) => r.currency === 'USD');
     expect(usd?.amount).toBeGreaterThanOrEqual(42.5);
   });
+
+  it('ask accepts attachments and staff count as operators', async () => {
+    await provision();
+    const res = await app.request('/api/shopify/ask', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: sessionJwt(ASHOP, { sub: '77' }),
+        text: 'what is in this screenshot?',
+        attachments: [{ name: 'shot.png', url: '/uploads/x.png', type: 'image/png', size: 12 }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const { conversation_id } = (await res.json()) as { conversation_id: string };
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conversation_id));
+    const inb = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    const inbound = inb.find(
+      (m) => m.direction === 'in' && m.text === 'what is in this screenshot?',
+    );
+    const atts = (inbound?.payload as { attachments?: { name: string }[] })?.attachments;
+    expect(atts?.[0]?.name).toBe('shot.png');
+
+    // Merchant-ask identity resolves as an operator — customer-record tools
+    // run unbound for staff, and concierge gating treats the card visitor as
+    // the decider.
+    const { verifiedIdentityFor } = await import('../lib/hostedAgent.js');
+    const id = await verifiedIdentityFor(db, conv, workspaceId);
+    expect(id.operator).toBe(true);
+    const { isConciergeAction } = await import('../lib/approvals.js');
+    expect(isConciergeAction(workspaceId, conv.userProfile)).toBe(true);
+  });
+
+  it('copilot builtins are the concierge set — stats, gaps, teaching', async () => {
+    const { env } = await import('../env.js');
+    const prev = env.operatorWorkspaceId;
+    env.operatorWorkspaceId = workspaceId;
+    try {
+      const { copilotBuiltins } = await import('../lib/builtinTools.js');
+      const names = copilotBuiltins().map((b) => b.name);
+      expect(names).toContain('workspace_stats');
+      expect(names).toContain('knowledge_gaps');
+      expect(names).toContain('teach_agent');
+      expect(names).toContain('debug_conversation');
+    } finally {
+      env.operatorWorkspaceId = prev;
+    }
+  });
+
+  it('ask/decide resolves a parked card on the staff member\u2019s own thread only', async () => {
+    const row = await provision();
+    const res = await app.request('/api/shopify/ask', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(ASHOP, { sub: '77' }), text: 'hi' }),
+    });
+    const { conversation_id } = (await res.json()) as { conversation_id: string };
+    const staff = await db.select().from(users).where(eq(users.email, `shopify-staff+77@${ASHOP}`));
+    const { pendingActions } = await import('../db/schema.js');
+    const [action] = await db
+      .insert(pendingActions)
+      .values({
+        workspaceId: row.workspaceId!,
+        agentId: row.agentId!,
+        conversationId: conversation_id,
+        toolName: 'teach_agent',
+        tool: { builtin: 'teach_agent' } as never,
+        args: { facts: ['test fact'] } as never,
+      })
+      .returning();
+    expect(staff.length).toBe(1);
+
+    // A different staff member can't decide it.
+    const denied404 = await app.request('/api/shopify/ask/decide', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: sessionJwt(ASHOP, { sub: '88' }),
+        action_id: action.id,
+        decision: 'denied',
+      }),
+    });
+    expect(denied404.status).toBe(404);
+
+    // The owner of the thread decides — denied leaves the action resolved.
+    const deny = await app.request('/api/shopify/ask/decide', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: sessionJwt(ASHOP, { sub: '77' }),
+        action_id: action.id,
+        decision: 'denied',
+      }),
+    });
+    expect(deny.status).toBe(200);
+    expect(((await deny.json()) as { status: string }).status).toBe('denied');
+
+    // Second decide is a conflict.
+    const again = await app.request('/api/shopify/ask/decide', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: sessionJwt(ASHOP, { sub: '77' }),
+        action_id: action.id,
+        decision: 'approved',
+      }),
+    });
+    expect(again.status).toBe(409);
+  });
+
+  it('pinned workspace: staff run copilot tools with no Janis membership', async () => {
+    const { env } = await import('../env.js');
+    const prev = env.operatorWorkspaceId;
+    env.operatorWorkspaceId = workspaceId;
+    try {
+      const row = await provision();
+      const res = await app.request('/api/shopify/ask', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: sessionJwt(ASHOP, { sub: '91' }), text: 'stats?' }),
+      });
+      const { conversation_id } = (await res.json()) as { conversation_id: string };
+      const { copilotBuiltins } = await import('../lib/builtinTools.js');
+      const ctx = {
+        db,
+        convId: conversation_id,
+        workspaceId: row.workspaceId!,
+        agent: { id: row.agentId!, workspaceId: row.workspaceId! },
+        pinWorkspaceId: row.workspaceId!,
+      };
+
+      // Read tool — the pin resolves the workspace without any membership.
+      const stats = copilotBuiltins().find((b) => b.name === 'workspace_stats')!;
+      const out = await stats.run({}, ctx);
+      expect(out).not.toMatch(/"error"|^error/);
+
+      // adminOnly write on an ownerless workspace — staff act as operator,
+      // and the write still parks as an approval card rather than executing.
+      const teach = copilotBuiltins().find((b) => b.name === 'teach_agent')!;
+      const t = await teach.run({ entry: 'test fact from the ask tab' }, ctx);
+      expect(t).toContain('action_card');
+      const { pendingActions } = await import('../db/schema.js');
+      const acts = await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, conversation_id));
+      expect(acts.length).toBe(1);
+      expect(acts[0].toolName).toBe('apply_knowledge');
+    } finally {
+      env.operatorWorkspaceId = prev;
+    }
+  });
 });

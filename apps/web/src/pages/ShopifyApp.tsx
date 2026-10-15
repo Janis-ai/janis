@@ -3,6 +3,7 @@ import type { Attachment } from '@janis/shared';
 import { api } from '../api/client';
 import { BrandImg, fmtTime, mdSpans } from '../components/bits';
 import Composer from '../components/Composer';
+import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import { splitBlocks } from '../lib/richText';
 
 /**
@@ -323,20 +324,40 @@ export default function ShopifyApp() {
     const el = askBox.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [askMsgs.length]);
-  const sendAsk = async () => {
-    const text = askText.trim();
-    if (!text || askSending) return;
+  const sendAsk = async (atts: Attachment[], overrideText?: string) => {
+    const text = (overrideText ?? askText).trim();
+    if ((!text && !atts.length) || askSending) return;
     setAskSending(true);
     setAskErr('');
     try {
-      const res = await shopifyApi<{ conversation_id: string }>('/api/shopify/ask', { text });
+      const res = await shopifyApi<{ conversation_id: string }>('/api/shopify/ask', {
+        text,
+        ...(atts.length ? { attachments: atts } : {}),
+      });
       setAskConv(res.conversation_id);
-      setAskText('');
+      if (overrideText === undefined) setAskText('');
       await loadAsk(res.conversation_id).catch(() => {});
     } catch (err) {
       setAskErr(err instanceof Error ? err.message : 'failed to send');
     } finally {
       setAskSending(false);
+    }
+  };
+
+  // Copilot approval cards — writes the agent proposes park as cards in the
+  // ask thread; deciding runs (or discards) them server-side.
+  const [deciding, setDeciding] = useState<string | null>(null);
+  const decideAsk = async (actionId: string, decision: 'approved' | 'denied') => {
+    if (deciding) return;
+    setDeciding(actionId);
+    setAskErr('');
+    try {
+      await shopifyApi('/api/shopify/ask/decide', { action_id: actionId, decision });
+      if (askConv) await loadAsk(askConv).catch(() => {});
+    } catch (err) {
+      setAskErr(err instanceof Error ? err.message : 'failed to decide');
+    } finally {
+      setDeciding(null);
     }
   };
 
@@ -1114,12 +1135,16 @@ export default function ShopifyApp() {
                 </>
               )
             ) : tab === 'ask' ? (
-              // Ask Janis — the merchant copilot: staff chat with their own
-              // agent (analytics, orders, catalog) inside the admin frame.
+              // Ask Janis — the copilot embedded in Shopify admin: the same
+              // concierge toolset the console rail carries (stats, gaps,
+              // transcripts, teach/config via approval cards), pinned to this
+              // shop's workspace. Staff chat here is store-ops work, not a
+              // shopper conversation — internal directive rows stay hidden,
+              // but internal rows carrying an approval card must render.
               <>
                 <p style={{ fontSize: 13, marginBottom: 4 }}>
-                  Ask {state.agent ?? 'your agent'} about the store — sales, orders,
-                  products, what shoppers are asking.
+                  Ask about your store and your agent — sales, orders, what shoppers
+                  ask about, or teach it something new.
                 </p>
                 <div
                   ref={askBox}
@@ -1136,14 +1161,86 @@ export default function ShopifyApp() {
                 >
                   {askMsgs.length === 0 ? (
                     <p className="muted" style={{ fontSize: 12.5, textAlign: 'center', marginTop: 24 }}>
-                      Nothing asked yet — try "how did sales look this week?" or "what do shoppers
-                      ask about most?"
+                      Nothing asked yet — try "what are shoppers asking about most?", "which
+                      questions couldn't it answer?", or "how did sales look this week?"
                     </p>
                   ) : (
                     askMsgs
-                      .filter((m) => !m.payload?.internal)
+                      .filter((m) => !m.payload?.internal || m.payload?.action)
                       .map((m) => {
                         const mine = m.direction === 'in';
+                        const action = m.payload?.action as
+                          | {
+                              id: string;
+                              tool?: string;
+                              label?: string;
+                              args?: Record<string, unknown>;
+                              display?: Record<string, unknown>;
+                              status: string;
+                              decided_by?: string;
+                              result?: string;
+                            }
+                          | undefined;
+                        if (action) {
+                          const rows = Object.entries(action.display ?? action.args ?? {});
+                          return (
+                            <div
+                              key={m.id}
+                              style={{
+                                margin: '8px 0',
+                                padding: '8px 10px',
+                                border: '1px solid #e5e7eb',
+                                borderRadius: 10,
+                                background: '#fafafa',
+                                fontSize: 12.5,
+                                textAlign: 'left',
+                              }}
+                            >
+                              <div className="mono" style={{ fontSize: 12 }}>
+                                {action.label ?? action.tool}
+                              </div>
+                              {rows.slice(0, 6).map(([k, v]) => (
+                                <div key={k} style={{ display: 'flex', gap: 8, marginTop: 3 }}>
+                                  <span className="muted" style={{ minWidth: 72 }}>
+                                    {k}
+                                  </span>
+                                  <span style={{ wordBreak: 'break-word' }}>
+                                    {typeof v === 'string' ? v : JSON.stringify(v)}
+                                  </span>
+                                </div>
+                              ))}
+                              {action.status === 'pending' ? (
+                                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                                  <button
+                                    className="btn primary sm"
+                                    disabled={deciding === action.id}
+                                    onClick={() => void decideAsk(action.id, 'approved')}
+                                  >
+                                    Approve &amp; run
+                                  </button>
+                                  <button
+                                    className="btn sm"
+                                    disabled={deciding === action.id}
+                                    onClick={() => void decideAsk(action.id, 'denied')}
+                                  >
+                                    Deny
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                                  {action.status === 'approved' ? '✅ approved' : '⛔ denied'}
+                                  {action.decided_by ? ` by ${action.decided_by}` : ''}
+                                  {action.result ? ` — ${action.result}` : ''}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+                        const widgets = ((m.payload?.widgets ?? []) as ChatWidget[]) ?? [];
+                        const qrs = ((m.payload?.quick_replies ?? []) as unknown[]).filter(
+                          (q): q is string => typeof q === 'string',
+                        );
+                        const atts = ((m.payload?.attachments ?? []) as Attachment[]) ?? [];
                         return (
                           <div
                             key={m.id}
@@ -1182,33 +1279,71 @@ export default function ShopifyApp() {
                                   </Tag>
                                 );
                               })}
+                              {atts.map((a, i) => (
+                                <div key={i}>
+                                  {a.type.startsWith('image/') ? (
+                                    <a href={a.url} target="_blank" rel="noreferrer">
+                                      <img
+                                        src={a.url}
+                                        alt={a.name}
+                                        style={{ maxWidth: 200, borderRadius: 8, marginTop: 6 }}
+                                      />
+                                    </a>
+                                  ) : (
+                                    <a
+                                      href={a.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      style={{ fontSize: 12 }}
+                                    >
+                                      📎 {a.name}
+                                    </a>
+                                  )}
+                                </div>
+                              ))}
                             </span>
+                            {widgets.length ? (
+                              <Widgets
+                                widgets={widgets}
+                                onSend={(t) => void sendAsk([], t)}
+                              />
+                            ) : null}
+                            {qrs.length ? (
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  gap: 6,
+                                  flexWrap: 'wrap',
+                                  marginTop: 4,
+                                  justifyContent: mine ? 'flex-end' : 'flex-start',
+                                }}
+                              >
+                                {qrs.map((q, qi) => (
+                                  <button
+                                    key={qi}
+                                    className="btn sm"
+                                    onClick={() => void sendAsk([], q)}
+                                  >
+                                    {q}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
                         );
                       })
                   )}
                 </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <input
-                    placeholder="Ask about sales, orders, products…"
-                    value={askText}
-                    onChange={(e) => setAskText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        void sendAsk();
-                      }
-                    }}
-                    style={{ flex: 1 }}
-                  />
-                  <button
-                    className="btn primary"
-                    disabled={!askText.trim() || askSending}
-                    onClick={() => void sendAsk()}
-                  >
-                    {askSending ? 'Sending…' : 'Ask'}
-                  </button>
-                </div>
+                <Composer
+                  value={askText}
+                  onChange={setAskText}
+                  onSend={(atts) => void sendAsk(atts)}
+                  sendAs="human"
+                  setSendAs={() => {}}
+                  showModeSelect={false}
+                  sending={askSending}
+                  uploadFile={uploadInboxFile}
+                />
                 {askErr && <div className="error" style={{ marginTop: 8 }}>{askErr}</div>}
               </>
             ) : (
