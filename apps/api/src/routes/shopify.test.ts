@@ -8,6 +8,7 @@ import { and, eq } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/client.js';
 import {
+  agentMembers,
   agentSecrets,
   agents,
   alerts,
@@ -343,6 +344,42 @@ describe('shopify console access — magic sign-in', () => {
     expect(ws.ownerUserId).toBe(u.id);
     const [sess] = await db.select().from(sessions).where(eq(sessions.userId, u.id));
     expect(sess.workspaceId).toBe(row.workspaceId);
+  });
+
+  it('a staff member on an OWNED workspace gets agent-scoped member, never workspace admin', async () => {
+    const SHOP2 = 'staff-shop.myshopify.com';
+    stubShopifyApi();
+    await postSession(sessionJwt(SHOP2));
+    const [row] = await db.select().from(shopifyShops).where(eq(shopifyShops.shop, SHOP2));
+    // Simulate a claimed workspace — the merchant bound to their existing
+    // multi-agent workspace, which already has an owner.
+    const [owner] = await db.insert(users).values({ email: 'real-owner@x.com', name: 'Owner' }).returning();
+    await db.insert(memberships).values({
+      userId: owner.id, workspaceId: row.workspaceId!, role: 'admin', acceptedAt: new Date(),
+    });
+    await db.update(workspaces).set({ ownerUserId: owner.id }).where(eq(workspaces.id, row.workspaceId!));
+
+    const code = signAccessCode(row.id, 'staff@x.com');
+    const redeem = await app.request(`/api/shopify/magic-login?code=${encodeURIComponent(code)}`);
+    expect(redeem.status).toBe(302);
+
+    const [u] = await db.select().from(users).where(eq(users.email, 'staff@x.com'));
+    expect(u).toBeTruthy();
+    // No workspace membership at all…
+    const mem = await db
+      .select()
+      .from(memberships)
+      .where(and(eq(memberships.userId, u.id), eq(memberships.workspaceId, row.workspaceId!)));
+    expect(mem).toHaveLength(0);
+    // …just an agent-scoped member grant on the bound agent.
+    const [grant] = await db
+      .select()
+      .from(agentMembers)
+      .where(and(eq(agentMembers.userId, u.id), eq(agentMembers.agentId, row.agentId!)));
+    expect(grant?.role).toBe('member');
+    // And the existing owner was never disturbed.
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId!));
+    expect(ws.ownerUserId).toBe(owner.id);
   });
 
   it('rejects a forged code and refuses a disconnected shop', async () => {

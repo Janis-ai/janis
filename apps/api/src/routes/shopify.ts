@@ -1,11 +1,12 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, isNull, lt, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import { setCookie } from 'hono/cookie';
 import {
+  agentMembers,
   agents,
   channels,
   conversations,
@@ -638,21 +639,55 @@ export function shopifyPublicRoutes(db: Db) {
       // Lost the insert race — the other writer's row is the one to use.
       user ??= (await db.select().from(users).where(eq(users.email, email)).limit(1))[0];
     }
-    await db
-      .insert(memberships)
-      .values({
-        userId: user.id,
-        workspaceId: row.workspaceId,
-        role: 'admin',
-        acceptedAt: new Date(),
-      })
-      .onConflictDoNothing();
-    // Same claim semantics as /shopify/claim — an ownerless provisioned
-    // workspace gets its owner from the first console access too.
-    await db
-      .update(workspaces)
-      .set({ ownerUserId: user.id })
-      .where(and(eq(workspaces.id, row.workspaceId), isNull(workspaces.ownerUserId)));
+    // Access grant depends on who's redeeming:
+    //  - ownerless provisioned workspace → the redeemer claims it
+    //    (admin membership + owner), same as /shopify/claim.
+    //  - owned workspace, new face → agent-scoped member on the bound agent
+    //    only. A store employee must not inherit admin over an existing
+    //    workspace's other agents, billing, or settings.
+    //  - already a workspace member → their existing role stands.
+    const [ws] = await db
+      .select({ ownerUserId: workspaces.ownerUserId })
+      .from(workspaces)
+      .where(eq(workspaces.id, row.workspaceId))
+      .limit(1);
+    const [existingMembership] = await db
+      .select()
+      .from(memberships)
+      .where(
+        and(
+          eq(memberships.userId, user.id),
+          eq(memberships.workspaceId, row.workspaceId),
+          isNotNull(memberships.acceptedAt),
+        ),
+      )
+      .limit(1);
+    if (!ws?.ownerUserId) {
+      await db
+        .insert(memberships)
+        .values({
+          userId: user.id,
+          workspaceId: row.workspaceId,
+          role: 'admin',
+          acceptedAt: new Date(),
+        })
+        .onConflictDoNothing();
+      await db
+        .update(workspaces)
+        .set({ ownerUserId: user.id })
+        .where(and(eq(workspaces.id, row.workspaceId), isNull(workspaces.ownerUserId)));
+    } else if (!existingMembership && row.agentId) {
+      await db
+        .insert(agentMembers)
+        .values({
+          agentId: row.agentId,
+          userId: user.id,
+          role: 'member',
+          invitedBy: ws.ownerUserId,
+          acceptedAt: new Date(),
+        })
+        .onConflictDoNothing();
+    }
     const { token, id } = generateSessionToken();
     await db.insert(sessions).values({
       id,
