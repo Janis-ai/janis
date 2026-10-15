@@ -403,6 +403,7 @@ export default function ShopifyApp() {
       if (advance) localStorage.setItem(`janis:setup-done:${state.shop}`, '1');
       setBriefSaved(true);
       setTick((t) => t + 1); // reload → linked card (or refreshed brief values)
+      setSetupSaving(false); // the Agent-tab path stays put — unstick the button
     } catch (err) {
       setSetupError(err instanceof Error ? err.message : 'save failed');
       setSetupSaving(false);
