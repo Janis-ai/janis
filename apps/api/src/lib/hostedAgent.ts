@@ -2649,6 +2649,14 @@ export async function complete(
   // short-circuited instead of burning the remaining tool rounds.
   const failedCalls = new Set<string>();
 
+  // Photo-match pass — when the customer's current turn carries an image
+  // and a catalog search renders cards, the cards' own product photos get
+  // injected once as candidate images so the model compares pixels instead
+  // of matching a text description to a title (look-alike products are
+  // indistinguishable by title alone).
+  const matchCandidates: { title: string; image: string }[] = [];
+  let matchSent = false;
+
   // Truncated replies (finish_reason 'length') resume as a continuation
   // turn instead of shipping a reply cut mid-word or mid-link. The
   // continuations budget widens the round cap so resuming doesn't eat
@@ -3153,6 +3161,12 @@ export async function complete(
         }
         if (w) {
           toolWidgets.push(w);
+          if (w.type === 'cards') {
+            for (const i of w.items) {
+              if (i.image && !matchCandidates.some((c) => c.image === i.image))
+                matchCandidates.push({ title: i.title, image: i.image });
+            }
+          }
           result += `\n[already rendered to the customer as a "${w.type}" component — do not restate it with a WIDGET: line; narrate it in text if needed]`;
         }
         // Result-side facts the model must not guess — catalogue totals and
@@ -3215,6 +3229,41 @@ export async function complete(
         }
       }
       msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
+    }
+
+    // Visual match — a photo in the customer's CURRENT turn plus fresh
+    // catalog cards means "which product is this?" is on the table. Text
+    // search alone can't pick between look-alike products (descriptions
+    // don't encode the graphic), so hand the model the candidates' own
+    // product photos and let it compare directly. Injected as a user turn
+    // (tool results can't carry images) — in-memory only, never stored.
+    if (!matchSent && matchCandidates.length) {
+      matchSent = true;
+      const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
+      const hasPhoto =
+        Array.isArray(lastUser?.content) &&
+        (lastUser.content as ContentPart[]).some((p) => p.type === 'image_url');
+      if (hasPhoto) {
+        const parts: ContentPart[] = [];
+        for (const c of matchCandidates.slice(0, MATCH_IMAGE_MAX)) {
+          const img = await fetchMatchImage(c.image);
+          if (img) {
+            parts.push({ type: 'text', text: `candidate photo — "${c.title}":` });
+            parts.push(img);
+          }
+        }
+        if (parts.some((p) => p.type === 'image_url')) {
+          parts.unshift({
+            type: 'text',
+            text:
+              '[product photos for the results just shown follow — compare the image in the ' +
+              "customer's last message against each candidate and name the closest match by its " +
+              "title; if none resembles it, say so rather than guessing. Visible cues like sale " +
+              'badges, colors and graphics are part of the match.]',
+          });
+          msgs.push({ role: 'user', content: parts });
+        }
+      }
     }
   }
   // The model spent every round on tool calls and never wrote a reply — one
@@ -3407,6 +3456,29 @@ async function attachmentContent(
   for (const a of atts.slice(MAX_ATTS_PER_MSG))
     skipped.push(`${a.name} (only the first ${MAX_ATTS_PER_MSG} attachments load)`);
   return { parts, extraText: texts.length ? `\n${texts.join('\n')}` : '', skipped };
+}
+
+/** Cap on a catalog candidate photo fetched for the visual-match pass —
+ *  storefront thumbs are small, anything bigger is not worth the round-trip. */
+const MATCH_IMAGE_BYTES = 2 * 1024 * 1024;
+const MATCH_IMAGE_MAX = 4;
+
+/** Fetch one remote product photo into a base64 image_url part for the
+ *  visual-match injection (the Gemini shim rejects remote URLs). Returns
+ *  null on any failure — a missing candidate just drops from the compare. */
+async function fetchMatchImage(raw: string): Promise<ContentPart | null> {
+  if (!publiclyFetchable(raw)) return null;
+  try {
+    const res = await fetch(raw, { signal: AbortSignal.timeout(6_000) });
+    if (!res.ok) return null;
+    const mime = (res.headers.get('content-type') ?? '').split(';')[0].trim();
+    if (!VISION_MIME.test(mime)) return null;
+    const data = Buffer.from(await res.arrayBuffer());
+    if (!data.length || data.length > MATCH_IMAGE_BYTES) return null;
+    return { type: 'image_url', image_url: { url: `data:${mime};base64,${data.toString('base64')}` } };
+  } catch {
+    return null;
+  }
 }
 
 /** File analysis (vision + inline file text) is a paid-plan feature — free
