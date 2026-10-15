@@ -1042,6 +1042,52 @@ export default function ShopifyApp() {
                               </div>
                             ))}
                           </span>
+                          {/* Mirror of what the customer saw — same render as
+                              the console transcript: widgets inert, suggested
+                              replies echoed as a muted line, not pills. */}
+                          {!!(m.payload?.widgets as ChatWidget[] | undefined)?.length && (
+                            <div
+                              className="transcript-widgets"
+                              style={{ textAlign: 'left', marginTop: 4 }}
+                            >
+                              <Widgets
+                                widgets={m.payload?.widgets as ChatWidget[]}
+                                onSend={() => {}}
+                              />
+                              <div
+                                className="muted"
+                                style={{ fontSize: 11, marginTop: 2, opacity: 0.75 }}
+                              >
+                                interactive for the customer — preview only here
+                              </div>
+                            </div>
+                          )}
+                          {!!(
+                            m.payload?.quick_replies as
+                              | (string | { type: 'email' | 'phone' })[]
+                              | undefined
+                          )?.length && (
+                            <div
+                              className="transcript-qrs"
+                              style={{ textAlign: mine ? 'right' : 'left' }}
+                            >
+                              <span className="transcript-qrs-label">quick replies:</span>
+                              {(
+                                m.payload?.quick_replies as (
+                                  | string
+                                  | { type: 'email' | 'phone' }
+                                )[]
+                              ).map((q, i) => (
+                                <span key={i} className="transcript-qr">
+                                  {typeof q === 'string'
+                                    ? q
+                                    : q.type === 'email'
+                                      ? 'share email'
+                                      : 'share phone'}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
