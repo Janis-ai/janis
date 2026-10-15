@@ -474,6 +474,33 @@ export async function handleChannelMessage(
         detail: `Message cap reached on ${cap.plan.name} plan (${cap.used}/${cap.plan.includedMessages} this period) — inbound messages are dropped until the plan is upgraded.`,
       });
     }
+    // Webchat visitors shouldn't type into a void — store one canned offline
+    // reply per conversation so the transcript poll renders an answer. The
+    // via marker doubles as the dedupe key and identifies it in the console.
+    if (channel.kind === 'webchat') {
+      const [sent] = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, conv.id),
+            sql`direction = 'out' and payload->>'via' = 'cap_offline'`,
+          ),
+        )
+        .limit(1);
+      if (!sent) {
+        const [note] = await db
+          .insert(messages)
+          .values({
+            conversationId: conv.id,
+            direction: 'out',
+            text: "Sorry — this chat is offline right now. Please try again later, or reach the store through its contact page.",
+            payload: { via: 'cap_offline' },
+          })
+          .returning();
+        bus.publish(agent.workspaceId, { type: 'message', data: toMessage(note) });
+      }
+    }
     return;
   }
 

@@ -346,6 +346,53 @@ describe('hard cap', () => {
     expect(capAlerts).toHaveLength(1);
     expect(capAlerts[0].detail).toContain('Message cap reached');
   });
+
+  it('capped webchat stores one visible offline reply per conversation', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'CappedChat' }).returning();
+    const { hash, preview } = generateApiKey();
+    const [cappedAgent] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'ChatBot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    const [chat] = await db
+      .insert(channels)
+      .values({
+        workspaceId: ws.id,
+        agentId: cappedAgent.id,
+        kind: 'webchat',
+        name: 'Bubble',
+        credentials: {},
+      })
+      .returning();
+
+    // Fill the free plan so the cap trips.
+    const [seedConv] = await db
+      .insert(conversations)
+      .values({ agentId: cappedAgent.id, externalId: 'seed' })
+      .returning();
+    for (let i = 0; i < 250; i++) {
+      await db.insert(messages).values({ conversationId: seedConv.id, direction: 'in', text: 'x' });
+    }
+
+    const msg = { objectId: '', senderId: 'visitor-1', text: 'anyone there?' };
+    await handleChannelMessage(db, chat, msg);
+    await handleChannelMessage(db, chat, msg);
+
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(
+        and(eq(conversations.agentId, cappedAgent.id), eq(conversations.externalId, 'webchat:visitor-1')),
+      )
+      .limit(1);
+    const stored = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    const offline = stored.filter((m) => (m.payload as { via?: string })?.via === 'cap_offline');
+    expect(offline).toHaveLength(1); // deduped across repeats
+    expect(offline[0].direction).toBe('out');
+    expect(offline[0].text).toContain('offline');
+    // The visitor's own messages still never land.
+    expect(stored.filter((m) => m.direction === 'in')).toHaveLength(0);
+  });
 });
 
 describe('conversation memory', () => {

@@ -8,9 +8,11 @@ import { agents, channels, memberships, shopifyShops, workspaces } from '../db/s
 import { audit } from '../lib/audit.js';
 import { invalidateChannelCache } from '../lib/channels.js';
 import { generateDraft } from '../lib/agentBuilder.js';
+import { messageCap, PLANS } from '../lib/plans.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import {
   bindShop,
+  embedEnabled,
   ensureShopForSession,
   handleShopifyWebhook,
   provisionShopWorkspace,
@@ -114,6 +116,29 @@ export function shopifyPublicRoutes(db: Db) {
       const cfg = (agent?.config ?? {}) as { purpose?: string; greeting?: string };
       out.purpose = cfg.purpose ?? null;
       out.greeting = cfg.greeting ?? null;
+      // Billing + usage state for the plan card: current plan, this period's
+      // message count, cap status, and any pending/active AppSubscription.
+      const [cap, enabled] = await Promise.all([
+        row.workspaceId ? messageCap(db, row.workspaceId) : Promise.resolve(null),
+        embedEnabled(db, row),
+      ]);
+      const [wsPlan] = await db
+        .select({ plan: workspaces.plan })
+        .from(workspaces)
+        .where(eq(workspaces.id, row.workspaceId!))
+        .limit(1);
+      out.plan = wsPlan?.plan ?? 'free';
+      out.usage = cap
+        ? { used: cap.used, included: cap.plan.includedMessages, capped: cap.capped }
+        : null;
+      out.billing = shopBilling(row);
+      out.embed_enabled = enabled; // null = read_themes not granted yet
+      out.plans = (['starter', 'pro', 'scale'] as const).map((key) => ({
+        key,
+        name: PLANS[key].name,
+        price_cents: PLANS[key].baseCents,
+        included_messages: PLANS[key].includedMessages,
+      }));
       // A linked shop can still re-enter the link flow — the console page
       // rebinds to whichever agent the merchant picks (or creates).
       out.link_url = `${env.webOrigin}/shopify-link?code=${signLinkCode(row.id)}`;
@@ -187,6 +212,34 @@ export function shopifyPublicRoutes(db: Db) {
         meta: { shop: row.shop, renamed: Boolean(body.name), redrafted: body.purpose !== cfg.purpose },
       });
       return c.json({ ok: true, greeting: (nextCfg.greeting as string) ?? null });
+    },
+  );
+
+  // Plan subscription from inside the iframe — the session token is the
+  // credential and Shopify's own confirmation page handles the money, so an
+  // unclaimed (zero-login) merchant can subscribe without a Janis account.
+  app.post(
+    '/plan',
+    zValidator('json', z.object({ token: z.string(), plan: z.enum(['starter', 'pro', 'scale']) })),
+    async (c) => {
+      if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+      const sess = await sessionShop(c);
+      if (!sess) return c.json({ error: 'invalid session token' }, 401);
+      const { plan } = c.req.valid('json');
+      const [row] = await db
+        .select()
+        .from(shopifyShops)
+        .where(eq(shopifyShops.shop, sess.shop))
+        .limit(1);
+      if (!row || row.state !== 'linked' || !row.workspaceId) {
+        return c.json({ error: 'no bound workspace — link the shop first' }, 409);
+      }
+      try {
+        const { confirmationUrl, test } = await startBillingSubscription(db, row, plan);
+        return c.json({ confirmation_url: confirmationUrl, test_mode: test });
+      } catch (e) {
+        return c.json({ error: e instanceof Error ? e.message : 'billing start failed' }, 502);
+      }
     },
   );
 

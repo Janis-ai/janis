@@ -18,6 +18,7 @@ import { PLANS } from './plans.js';
 import { encryptSecret } from './secrets.js';
 import { adminToken, clearMirroredSecrets, mirrorSecrets } from './shopifyToken.js';
 import { audit } from './audit.js';
+import { sendEmail } from './notify.js';
 import { dispatchAlert, openAlertOnce } from './alerts.js';
 import { invalidateChannelCache } from './channels.js';
 import { purgeContactData } from './contacts.js';
@@ -339,8 +340,8 @@ export async function registerWebhooks(shop: string, token: string): Promise<voi
 
 /* ── Link codes (signed, stateless — same scheme as Calendly intent) ─── */
 
-export function signLinkCode(shopId: string): string {
-  const body = Buffer.from(JSON.stringify({ s: shopId, x: Date.now() + LINK_CODE_TTL_MS })).toString(
+export function signLinkCode(shopId: string, ttlMs = LINK_CODE_TTL_MS): string {
+  const body = Buffer.from(JSON.stringify({ s: shopId, x: Date.now() + ttlMs })).toString(
     'base64url',
   );
   const sig = createHmac('sha256', env.sessionSecret).update(body).digest('base64url');
@@ -558,6 +559,47 @@ export async function bindShop(
     targetId: row.id,
     meta: { shop: row.shop, agentId: binding.agentId },
   });
+  // The merchant moved the shop to their own workspace — the provisioned
+  // one is orphaned forever. Tear it down (ownerless, provisioned, and no
+  // other shop still points at it) so unclaimed shells don't accumulate.
+  if (row.workspaceId && row.workspaceId !== binding.workspaceId) {
+    const [oldWs] = await db
+      .select({ config: workspaces.config, ownerUserId: workspaces.ownerUserId })
+      .from(workspaces)
+      .where(eq(workspaces.id, row.workspaceId))
+      .limit(1);
+    const otherShops = await db
+      .select({ id: shopifyShops.id })
+      .from(shopifyShops)
+      .where(and(eq(shopifyShops.workspaceId, row.workspaceId), sql`${shopifyShops.id} != ${row.id}`))
+      .limit(1);
+    if (
+      (oldWs?.config as { shopify_provisioned?: boolean } | null)?.shopify_provisioned &&
+      !oldWs.ownerUserId &&
+      !otherShops.length
+    ) {
+      await tearDownWorkspace(db, row.workspaceId).catch((err) =>
+        console.error(`shopify orphan teardown ${row.shop}:`, err),
+      );
+    }
+  }
+}
+
+/** Delete a workspace that only provision wrote — agents + their secrets,
+ *  channels, knowledge and audit rows go first (no FK cascades on these),
+ *  then the shell. Only used for ownerless auto-provisioned workspaces. */
+async function tearDownWorkspace(db: Db, workspaceId: string): Promise<void> {
+  const agIds = (
+    await db.select({ id: agents.id }).from(agents).where(eq(agents.workspaceId, workspaceId))
+  ).map((a) => a.id);
+  for (const id of agIds) {
+    await db.delete(agentSecrets).where(eq(agentSecrets.agentId, id));
+    await db.delete(channels).where(eq(channels.agentId, id));
+    await db.delete(knowledgeFiles).where(eq(knowledgeFiles.agentId, id));
+  }
+  await db.delete(agents).where(eq(agents.workspaceId, workspaceId));
+  await db.delete(auditLog).where(eq(auditLog.workspaceId, workspaceId));
+  await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
 }
 
 /** Zero-login install — an embedded session found an unlinked shop, so we
@@ -580,15 +622,19 @@ export async function provisionShopWorkspace(db: Db, row: ShopRow): Promise<Shop
   try {
     const token = row.accessTokenEnc ? await adminToken(db, row).catch(() => '') : '';
     let shopName = row.shop.replace(/\.myshopify\.com$/, '');
+    let contactEmail: string | undefined;
     if (token) {
       try {
         const res = await fetch(`https://${row.shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-shopify-access-token': token },
-          body: JSON.stringify({ query: '{shop{name}}' }),
+          body: JSON.stringify({ query: '{shop{name contactEmail email}}' }),
         });
-        const json = (await res.json()) as { data?: { shop?: { name?: string } } };
+        const json = (await res.json()) as {
+          data?: { shop?: { name?: string; contactEmail?: string; email?: string } };
+        };
         shopName = json.data?.shop?.name || shopName;
+        contactEmail = json.data?.shop?.contactEmail || json.data?.shop?.email || undefined;
       } catch {
         /* the handle-derived name is fine */
       }
@@ -621,6 +667,20 @@ export async function provisionShopWorkspace(db: Db, row: ShopRow): Promise<Shop
       targetId: row.id,
       meta: { shop: row.shop, workspace_id: ws.id, agent_id: agent.id },
     });
+
+    // Install receipt — the merchant never created a Janis login, so email
+    // the shop's contact address the claim link. 30-day TTL vs the in-app
+    // 30-minute one: a receipt has to survive a weekend. Best-effort —
+    // no Resend key / no contact email just skips it.
+    if (contactEmail) {
+      const claim = signLinkCode(row.id, 30 * 24 * 60 * 60 * 1000);
+      void sendEmail(
+        [contactEmail],
+        `Your Janis assistant is live on ${shopName}`,
+        `Hi — Janis just installed on your Shopify store ${shopName} (${row.shop}) and your AI storefront assistant is ready. It can answer product questions, look up orders, and chat with shoppers as soon as you enable the theme embed.\n\nWant the full console — conversations, knowledge base, settings? Claim your workspace here (sign in or create a free account):`,
+        `/shopify-claim?code=${claim}`,
+      ).catch((err) => console.error(`shopify install email ${row.shop}:`, err));
+    }
 
     // Purpose-drafted config lands a beat later — the agent already works
     // (tools + catalog knowledge from bindShop); the draft just sharpens
@@ -661,17 +721,7 @@ export async function provisionShopWorkspace(db: Db, row: ShopRow): Promise<Shop
     await db.update(shopifyShops).set({ provisionedAt: null }).where(eq(shopifyShops.id, row.id));
     if (ws) {
       try {
-        const agIds = (
-          await db.select({ id: agents.id }).from(agents).where(eq(agents.workspaceId, ws.id))
-        ).map((a) => a.id);
-        for (const id of agIds) {
-          await db.delete(agentSecrets).where(eq(agentSecrets.agentId, id));
-          await db.delete(channels).where(eq(channels.agentId, id));
-          await db.delete(knowledgeFiles).where(eq(knowledgeFiles.agentId, id));
-        }
-        await db.delete(agents).where(eq(agents.workspaceId, ws.id));
-        await db.delete(auditLog).where(eq(auditLog.workspaceId, ws.id));
-        await db.delete(workspaces).where(eq(workspaces.id, ws.id));
+        await tearDownWorkspace(db, ws.id);
       } catch {
         /* residue is an empty ownerless workspace — harmless */
       }
@@ -681,6 +731,55 @@ export async function provisionShopWorkspace(db: Db, row: ShopRow): Promise<Shop
 
   const [fresh] = await db.select().from(shopifyShops).where(eq(shopifyShops.id, row.id)).limit(1);
   return fresh;
+}
+
+/** Whether the Janis app embed is toggled on in the live theme. Reads the
+ *  published theme's settings_data.json (read_themes scope) — app embeds
+ *  land in current.blocks keyed by the client id. null = unknown (scope not
+ *  granted yet, or the probe failed) — the caller falls back to the
+ *  click-tracked flag. Cached briefly; this is a remote fetch on every
+ *  embedded load otherwise. */
+const embedCache = new Map<string, { v: boolean | null; exp: number }>();
+export async function embedEnabled(db: Db, row: ShopRow): Promise<boolean | null> {
+  const hit = embedCache.get(row.shop);
+  if (hit && hit.exp > Date.now()) return hit.v;
+  let out: boolean | null = null;
+  try {
+    const token = row.accessTokenEnc ? await adminToken(db, row).catch(() => null) : null;
+    if (token) {
+      const themesRes = await fetch(
+        `https://${row.shop}/admin/api/${SHOPIFY_API_VERSION}/themes.json?role=main`,
+        { headers: { 'x-shopify-access-token': token } },
+      );
+      if (themesRes.ok) {
+        const { themes } = (await themesRes.json()) as { themes?: { id: number }[] };
+        const themeId = themes?.[0]?.id;
+        if (themeId) {
+          const assetRes = await fetch(
+            `https://${row.shop}/admin/api/${SHOPIFY_API_VERSION}/themes/${themeId}/assets.json?asset[key]=config/settings_data.json`,
+            { headers: { 'x-shopify-access-token': token } },
+          );
+          if (assetRes.ok) {
+            const { asset } = (await assetRes.json()) as { asset?: { value?: string } };
+            const settings = JSON.parse(asset?.value ?? '{}') as {
+              current?: { blocks?: Record<string, { type?: string; disabled?: boolean }> };
+            };
+            const blocks = Object.entries(settings.current?.blocks ?? {});
+            const ours = blocks.find(
+              ([key, b]) =>
+                (key.startsWith(env.shopifyAppApiKey) || (b.type ?? '').includes('janis')) &&
+                (b.type ?? '').includes('apps'),
+            );
+            if (ours) out = ours[1].disabled !== true;
+          }
+        }
+      }
+    }
+  } catch {
+    /* unknown — null */
+  }
+  embedCache.set(row.shop, { v: out, exp: Date.now() + 120_000 });
+  return out;
 }
 
 /** Console unlink — the shop stays installed, the binding + mirrored

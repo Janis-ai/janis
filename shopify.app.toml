@@ -23,8 +23,10 @@ automatically_update_urls_on_dev = false
 # (sales-channel publication status — Admin 'availableForSale' ≠ Online
 # Store availability), read_markets (market → catalog bindings — the only
 # way to see a market whose catalog excludes products, which the storefront
-# reports as "sold out" for everything).
-scopes = "read_orders,write_orders,write_draft_orders,read_products,read_customers,read_legal_policies,write_returns,write_customers,write_discounts,read_checkouts,read_reports,read_inventory,read_locations,read_product_listings,read_markets"
+# reports as "sold out" for everything), read_themes (detect whether the
+# Janis app embed is toggled on in the live theme — the embedded app can
+# show real enablement state instead of inferring from a click).
+scopes = "read_orders,write_orders,write_draft_orders,read_products,read_customers,read_legal_policies,write_returns,write_customers,write_discounts,read_checkouts,read_reports,read_inventory,read_locations,read_product_listings,read_markets,read_themes"
 
 [auth]
 # Managed install (token exchange) — no OAuth redirect endpoints.

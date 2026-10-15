@@ -91,6 +91,11 @@ const stubShopifyApi = (
     // Reply to grant_type=refresh_token; may rotate the refresh token.
     refreshReply?: { access_token: string; refresh_token?: string; expires_in?: number };
     onTokenRequest?: (fields: Record<string, unknown>) => void;
+    // appSubscriptionCreate reply; 'fail' returns a userError.
+    billing?: 'ok' | 'fail';
+    // Theme settings probe — 'enabled'/'disabled' writes our block,
+    // 'no-scope' 403s (read_themes not granted yet), unset = no match.
+    embed?: 'enabled' | 'disabled' | 'absent' | 'no-scope';
   } = {},
 ) =>
   vi.stubGlobal(
@@ -124,10 +129,48 @@ const stubShopifyApi = (
           }),
         );
       }
+      if (url.includes('themes.json')) {
+        if (opts.embed === 'no-scope') return Promise.resolve(new Response('{}', { status: 403 }));
+        return Promise.resolve(Response.json({ themes: [{ id: 7 }] }));
+      }
+      if (url.includes('assets.json')) {
+        const blocks =
+          opts.embed === 'enabled'
+            ? { [`${KEY}-x`]: { type: 'shopify://apps/janis/blocks/janis-chat/abc', disabled: false } }
+            : opts.embed === 'disabled'
+              ? { [`${KEY}-x`]: { type: 'shopify://apps/janis/blocks/janis-chat/abc', disabled: true } }
+              : {};
+        return Promise.resolve(
+          Response.json({ asset: { value: JSON.stringify({ current: { blocks } }) } }),
+        );
+      }
       if (url.includes('graphql.json')) {
+        const q = typeof init?.body === 'string' ? init.body : '';
+        if (q.includes('appSubscriptionCreate')) {
+          return Promise.resolve(
+            Response.json({
+              data: {
+                appSubscriptionCreate:
+                  opts.billing === 'fail'
+                    ? { userErrors: [{ message: 'shop cannot be charged' }] }
+                    : {
+                        confirmationUrl: 'https://shop.example/admin/charges/confirm',
+                        appSubscription: { id: 'sub_1', status: 'PENDING' },
+                        userErrors: [],
+                      },
+              },
+            }),
+          );
+        }
+        if (q.includes('partnerDevelopment')) {
+          return Promise.resolve(
+            Response.json({ data: { shop: { plan: { partnerDevelopment: true } } } }),
+          );
+        }
         return Promise.resolve(
           Response.json({
             data: {
+              shop: { name: 'Test Shop', contactEmail: 'owner@test.dev', email: 'owner@test.dev' },
               webhookSubscriptions: { nodes: [] },
               webhookSubscriptionCreate: {
                 webhookSubscription: { id: 'wh1' },
@@ -660,6 +703,95 @@ describe('shopify claim', () => {
       .returning();
     const res = await postClaim(signLinkCode(row.id));
     expect(res.status).toBe(409);
+  });
+});
+
+describe('shopify embedded billing + theme detection', () => {
+  it('/plan returns a Shopify confirmation URL for a linked shop', async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt('billing-shop.myshopify.com'));
+    const res = await app.request('/api/shopify/plan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt('billing-shop.myshopify.com'), plan: 'starter' }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { confirmation_url: string; test_mode: boolean };
+    expect(body.confirmation_url).toContain('/admin/charges/confirm');
+    expect(body.test_mode).toBe(true); // dev store → test charge
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'billing-shop.myshopify.com'));
+    expect((row.billing as { subscriptionId?: string }).subscriptionId).toBe('sub_1');
+  });
+
+  it('/plan refuses an unlinked shop and a forged token', async () => {
+    const [bare] = await db
+      .insert(shopifyShops)
+      .values({ shop: 'nobill.myshopify.com', provisionedAt: new Date() })
+      .returning();
+    expect(bare.state).toBe('unlinked');
+    const res = await app.request('/api/shopify/plan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt('nobill.myshopify.com'), plan: 'pro' }),
+    });
+    expect(res.status).toBe(409);
+    const forged = await app.request('/api/shopify/plan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(SHOP, {}, 'wrong'), plan: 'pro' }),
+    });
+    expect(forged.status).toBe(401);
+  });
+
+  it('session reports plan/usage/billing/embed state on a linked shop', async () => {
+    stubShopifyApi({ embed: 'enabled' });
+    const res = await postSession(sessionJwt('metered.myshopify.com'));
+    const body = (await res.json()) as {
+      state: string;
+      plan?: string;
+      usage?: { used: number; included: number; capped: boolean };
+      embed_enabled?: boolean | null;
+      plans?: { key: string }[];
+    };
+    expect(body.state).toBe('linked');
+    expect(body.plan).toBe('free');
+    expect(body.usage?.included).toBe(250);
+    expect(body.embed_enabled).toBe(true);
+    expect(body.plans?.map((p) => p.key)).toEqual(['starter', 'pro', 'scale']);
+  });
+
+  it('embed_enabled is null when read_themes is not granted', async () => {
+    stubShopifyApi({ embed: 'no-scope' });
+    const res = await postSession(sessionJwt('noscope.myshopify.com'));
+    expect(((await res.json()) as { embed_enabled?: boolean | null }).embed_enabled).toBeNull();
+  });
+
+  it('rebinding a provisioned shop tears down the orphaned workspace', async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt('orphan.myshopify.com'));
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'orphan.myshopify.com'));
+    const provisionedWs = row.workspaceId!;
+    // Merchant consolidates: binds the shop to an agent in their own
+    // workspace — the provisioned shell should disappear with it.
+    const link = await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code: signLinkCode(row.id), agent_id: agentId }),
+    });
+    expect(link.status).toBe(200);
+    const [gone] = await db.select().from(workspaces).where(eq(workspaces.id, provisionedWs));
+    expect(gone).toBeUndefined();
+    // Rebind clears the test workspace for later tests.
+    await db
+      .update(shopifyShops)
+      .set({ workspaceId: null, agentId: null, state: 'unlinked', provisionedAt: new Date() })
+      .where(eq(shopifyShops.id, row.id));
   });
 });
 

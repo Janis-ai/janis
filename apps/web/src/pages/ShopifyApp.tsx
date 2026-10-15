@@ -15,6 +15,14 @@ import { BrandImg } from '../components/bits';
  * links use _top too: the editor lives inside admin, so Back returns here.
  */
 
+const PLAN_NAMES: Record<string, string> = {
+  free: 'Free',
+  starter: 'Starter',
+  pro: 'Pro',
+  scale: 'Scale',
+  internal: 'Internal',
+};
+
 declare global {
   interface Window {
     shopify?: { idToken?: () => Promise<string> };
@@ -34,7 +42,21 @@ type SessionState =
       greeting: string;
       linkUrl: string;
     }
-  | { kind: 'linked'; shop: string; agent: string | null; agentId: string | null; workspace: string | null; linkUrl: string; claimUrl: string; claimed: boolean }
+  | {
+      kind: 'linked';
+      shop: string;
+      agent: string | null;
+      agentId: string | null;
+      workspace: string | null;
+      linkUrl: string;
+      claimUrl: string;
+      claimed: boolean;
+      plan: string;
+      usage: { used: number; included: number; capped: boolean } | null;
+      billing: { status?: string; plan?: string } | null;
+      embedEnabled: boolean | null;
+      plans: { key: string; name: string; price_cents: number; included_messages: number }[];
+    }
   | { kind: 'uninstalled'; shop: string };
 
 async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopify']> | null> {
@@ -79,9 +101,28 @@ export default function ShopifyApp() {
   const [setupGreeting, setSetupGreeting] = useState('');
   const [setupSaving, setSetupSaving] = useState(false);
   const [setupError, setSetupError] = useState('');
-  // The App Bridge token doubles as the credential for /api/shopify/agent —
-  // kept in memory only, sent on the setup-save POST.
+  // The App Bridge token doubles as the credential for /api/shopify/agent
+  // and /api/shopify/plan — kept in memory only, sent on those POSTs.
   const sessionToken = useRef('');
+  const [subscribing, setSubscribing] = useState('');
+  const [planError, setPlanError] = useState('');
+
+  const subscribe = async (plan: string) => {
+    if (subscribing) return;
+    setSubscribing(plan);
+    setPlanError('');
+    try {
+      const res = await api<{ confirmation_url: string }>('/api/shopify/plan', {
+        method: 'POST',
+        body: JSON.stringify({ token: sessionToken.current, plan }),
+      });
+      // Shopify's own approval page — a deliberate top-level navigation.
+      window.open(res.confirmation_url, '_top');
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : 'could not start subscription');
+      setSubscribing('');
+    }
+  };
 
   useEffect(() => {
     if (state.kind === 'setup') {
@@ -147,6 +188,11 @@ export default function ShopifyApp() {
           workspace?: string | null;
           purpose?: string | null;
           greeting?: string | null;
+          plan?: string;
+          usage?: { used: number; included: number; capped: boolean } | null;
+          billing?: { status?: string; plan?: string } | null;
+          embed_enabled?: boolean | null;
+          plans?: { key: string; name: string; price_cents: number; included_messages: number }[];
         }>('/api/shopify/session', { method: 'POST', body: JSON.stringify({ token }) });
         if (cancelled) return;
         if (res.state === 'linked') {
@@ -178,6 +224,11 @@ export default function ShopifyApp() {
               linkUrl: res.link_url ?? '',
               claimUrl: res.claim_url ?? '',
               claimed: res.claimed ?? false,
+              plan: res.plan ?? 'free',
+              usage: res.usage ?? null,
+              billing: res.billing ?? null,
+              embedEnabled: res.embed_enabled ?? null,
+              plans: res.plans ?? [],
             });
           }
           if (localStorage.getItem(`janis:embed-opened:${res.shop}`) === '1') setEmbedOpened(true);
@@ -297,7 +348,13 @@ export default function ShopifyApp() {
               ) : null}
               {state.workspace ? <span className="muted"> ({state.workspace})</span> : null}.
             </p>
-            {embedOpened ? (
+            {state.usage?.capped ? (
+              <div className="error" style={{ marginTop: 10 }}>
+                The free plan's monthly message cap is reached — shoppers see an offline notice
+                until you pick a plan below.
+              </div>
+            ) : null}
+            {(state.embedEnabled ?? embedOpened) ? (
               // Returning visit — embed link was opened once, so the CTA
               // flips to day-2 actions: tune the agent, edit the embed.
               <>
@@ -353,6 +410,48 @@ export default function ShopifyApp() {
                   <strong>Save</strong>; the bubble appears on your storefront immediately.
                 </p>
               </>
+            )}
+
+            {state.plan === 'free' ? (
+              <div
+                style={{
+                  marginTop: 16,
+                  padding: '12px',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  textAlign: 'left',
+                }}
+              >
+                <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 4px' }}>
+                  Plan: Free
+                  {state.usage
+                    ? ` — ${state.usage.used.toLocaleString()} / ${state.usage.included.toLocaleString()} messages this month`
+                    : ''}
+                </p>
+                {state.plans.map((p) => (
+                  <button
+                    key={p.key}
+                    className="btn"
+                    style={{ width: '100%', marginTop: 6 }}
+                    disabled={Boolean(subscribing)}
+                    onClick={() => subscribe(p.key)}
+                  >
+                    {subscribing === p.key
+                      ? 'Opening Shopify…'
+                      : `${p.name} — $${(p.price_cents / 100).toFixed(0)}/mo · ${p.included_messages.toLocaleString()} messages`}
+                  </button>
+                ))}
+                {planError && <div className="error">{planError}</div>}
+                <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                  Billed by Shopify — approve the charge on the next screen.
+                </p>
+              </div>
+            ) : (
+              <p className="muted" style={{ fontSize: 12.5, marginTop: 14 }}>
+                {PLAN_NAMES[state.plan] ?? state.plan} plan
+                {state.usage ? ` · ${state.usage.used.toLocaleString()} messages this month` : ''}
+                {state.billing?.status === 'PENDING' ? ' · subscription awaiting approval' : ''}
+              </p>
             )}
 
             {!state.claimed && state.claimUrl ? (

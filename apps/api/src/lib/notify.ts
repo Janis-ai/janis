@@ -154,7 +154,7 @@ export async function sendPushToEndpoint(
 }
 
 /** Transactional email via Resend — no-op until RESEND_API_KEY is configured. */
-async function sendEmail(to: string[], title: string, body: string, url?: string) {
+export async function sendEmail(to: string[], title: string, body: string, url?: string) {
   if (!env.resendApiKey || to.length === 0) return;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
