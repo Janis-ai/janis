@@ -113,8 +113,6 @@ export default function ShopifyLink() {
             className="btn primary"
             style={{ display: 'block', textAlign: 'center' }}
             href={embedUrl}
-            target="_blank"
-            rel="noreferrer"
           >
             Enable storefront chat
           </a>

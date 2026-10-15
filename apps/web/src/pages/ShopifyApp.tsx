@@ -6,8 +6,10 @@ import { BrandImg } from '../components/bits';
  * The embedded app — loaded inside Shopify admin's iframe (App URL). App
  * Bridge v4 hands us a session-token JWT; /api/shopify/session verifies it
  * and answers with the shop's link state. Unlinked shops get a "Connect
- * your Janis workspace" button that opens the console link flow in a new
- * tab (cookies/session can't be relied on inside the iframe anyway).
+ * your Janis workspace" button that takes over the whole tab (target=_top
+ * escapes the iframe so the Janis session works — same window, not a
+ * popup). Theme-editor links use _top too: the editor lives inside admin,
+ * so Back returns to this app.
  */
 
 declare global {
@@ -54,9 +56,9 @@ export default function ShopifyApp() {
   const [state, setState] = useState<SessionState>({ kind: 'loading' });
   const [apiKey, setApiKey] = useState(''); // client_id — theme-editor deep link
   const [tick, setTick] = useState(0); // "I've connected" re-check
-  // "Enable storefront chat" opens the theme editor in a NEW tab — this tab
-  // would otherwise still show the CTA afterwards. Track the click (and
-  // persist it per shop) so the view advances to next-steps.
+  // "Enable storefront chat" navigates the tab to the theme editor — when
+  // they come back this page would otherwise still show the CTA. Track the
+  // click (persisted per shop) so the view advances to next-steps.
   const [embedOpened, setEmbedOpened] = useState(false);
 
   useEffect(() => {
@@ -142,7 +144,7 @@ export default function ShopifyApp() {
               className="btn primary"
               style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
               href={state.link_url}
-              target="_blank"
+              target="_top"
               rel="noreferrer"
             >
               Connect your Janis workspace
@@ -184,7 +186,7 @@ export default function ShopifyApp() {
                   className="btn"
                   style={{ display: 'block', marginTop: 10, textAlign: 'center' }}
                   href={`https://${state.shop}/admin/themes/current/editor?context=apps&activateAppId=${apiKey}/janis-chat`}
-                  target="_blank"
+                  target="_top"
                   rel="noreferrer"
                 >
                   Edit storefront chat
@@ -206,7 +208,7 @@ export default function ShopifyApp() {
                   className="btn primary"
                   style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
                   href={`https://${state.shop}/admin/themes/current/editor?context=apps&activateAppId=${apiKey}/janis-chat`}
-                  target="_blank"
+                  target="_top"
                   rel="noreferrer"
                   onClick={() => {
                     setEmbedOpened(true);
@@ -225,7 +227,7 @@ export default function ShopifyApp() {
             {state.linkUrl ? (
               <p className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
                 Serving the wrong agent or workspace?{' '}
-                <a href={state.linkUrl} target="_blank" rel="noreferrer">
+                <a href={state.linkUrl} target="_top" rel="noreferrer">
                   Switch or create an agent
                 </a>
               </p>
