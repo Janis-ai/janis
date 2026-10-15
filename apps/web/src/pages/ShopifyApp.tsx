@@ -162,6 +162,28 @@ export default function ShopifyApp() {
     }
   };
 
+  // Ask the bridge for a token that's actually unexpired. A suspended frame
+  // leaves App Bridge holding a stale cache entry — the first idToken()
+  // answers with the corpse while a refresh is in flight, and a second call
+  // a few hundred ms later usually returns the real mint. Also race each
+  // call with a timeout: a hung postMessage would stall everything forever.
+  const mintLiveToken = async (
+    bridge: NonNullable<Window['shopify']> | null,
+    attempts = 4,
+  ): Promise<string | undefined> => {
+    if (!bridge?.idToken) return undefined;
+    for (let i = 0; i < attempts; i++) {
+      const t = await Promise.race([
+        bridge.idToken().catch(() => undefined),
+        new Promise<undefined>((r) => setTimeout(() => r(undefined), 4000)),
+      ]);
+      if (t && tokenExpMs(t) > Date.now() + 5_000) return t;
+      if (t) console.warn('[shopify-app] idToken() served expired token, retrying');
+      await new Promise((r) => setTimeout(r, 350));
+    }
+    return undefined;
+  };
+
   const tok = async (forceFresh = false): Promise<string> => {
     if (
       !forceFresh &&
@@ -170,8 +192,8 @@ export default function ShopifyApp() {
     ) {
       return sessionToken.current;
     }
-    const direct = await bridgeRef.current?.idToken?.().catch(() => undefined);
-    if (direct && tokenExpMs(direct) > Date.now() + 5_000) {
+    const direct = await mintLiveToken(bridgeRef.current, 2);
+    if (direct) {
       sessionToken.current = direct;
       return direct;
     }
@@ -181,8 +203,8 @@ export default function ShopifyApp() {
       const revived = await loadAppBridge(apiKey);
       if (revived) {
         bridgeRef.current = revived;
-        const t = await revived.idToken?.().catch(() => undefined);
-        if (t && tokenExpMs(t) > Date.now() + 5_000) {
+        const t = await mintLiveToken(revived);
+        if (t) {
           sessionToken.current = t;
           return t;
         }
@@ -481,7 +503,7 @@ export default function ShopifyApp() {
         // on the iframe URL. App Bridge's cache can serve a token that
         // expired while the frame was suspended — take whichever is
         // freshest rather than trusting the bridge blindly.
-        const bridged = await bridge?.idToken?.().catch(() => undefined);
+        const bridged = await mintLiveToken(bridge);
         const token = [bridged, params.get('id_token')]
           .filter((t): t is string => !!t)
           .sort((a, b) => tokenExpMs(b) - tokenExpMs(a))[0];
@@ -515,9 +537,8 @@ export default function ShopifyApp() {
           // a poisoned idToken() cache just hands back the same corpse.
           if (err instanceof Error && err.message.includes('invalid session token')) {
             const fresh =
-              (await bridgeRef.current?.idToken?.().catch(() => undefined)) ??
-              (await bridge?.idToken?.().catch(() => undefined));
-            if (fresh && tokenExpMs(fresh) > Date.now() + 5_000) {
+              (await mintLiveToken(bridgeRef.current, 2)) ?? (await mintLiveToken(bridge, 2));
+            if (fresh) {
               sessionToken.current = fresh;
               return postSession(fresh);
             }
@@ -634,8 +655,12 @@ export default function ShopifyApp() {
         {state.kind === 'error' && (
           <>
             <div className="error">{state.message}</div>
-            {/* A real reload is the only rescue that re-mints credentials —
-                retrying the effect just replays the same stale token. */}
+            {state.message.toLowerCase().includes('session token') && (
+              <p className="muted" style={{ fontSize: 12.5, marginTop: 8, marginBottom: 0 }}>
+                Shopify issues a new credential when this page reloads — refresh this browser
+                window (&#8984;R / Ctrl+R), then reopen the app.
+              </p>
+            )}
             <button
               className="btn"
               style={{ width: '100%', marginTop: 12 }}
