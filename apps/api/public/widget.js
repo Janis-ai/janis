@@ -2746,8 +2746,6 @@
       // Logo tile — clear the old one first so re-applying doesn't stack.
       var oldLogo = panel.querySelector('#janis-head .janis-logo');
       if (oldLogo) oldLogo.remove();
-      var oldBub = bubble.querySelector('img');
-      if (oldBub) oldBub.remove();
       if (cfg.logo_url) {
         // Uploaded logos are /uploads/… paths on the API origin, not the host page's.
         var logoSrc = /^https?:\/\//.test(cfg.logo_url) ? cfg.logo_url : API + cfg.logo_url;
@@ -2767,21 +2765,12 @@
           logo.style.border = cfg.logo_border_width + 'px solid ' + (cfg.logo_border_color || 'rgba(0,0,0,.2)');
         }
         panel.querySelector('#janis-head').insertBefore(logo, panel.querySelector('#janis-head').firstChild);
-        var bub = document.createElement('img');
-        bub.src = logoSrc;
-        bub.alt = '';
-        if (logoPad > 0) {
-          // inset the logo inside the accent circle — the accent ring is the pad
-          bub.style.width = bub.style.height = 'calc(100% - ' + logoPad * 2 + 'px)';
-        }
-        bubble.textContent = '';
-        bubble.appendChild(bub);
-        bubble.appendChild(badgeEl); // textContent='' wiped it — re-attach
-      } else {
-        // No logo — default glyph (textContent wipes badgeEl; re-attach).
-        bubble.textContent = '💬';
-        bubble.appendChild(badgeEl);
       }
+      // Launcher stays a chat glyph — a logo in the circle reads as a brand
+      // mark, not a chat affordance, so visitors don't know to tap it. The
+      // logo's home is the header tile. (textContent wipes badgeEl — re-add.)
+      bubble.textContent = '💬';
+      bubble.appendChild(badgeEl);
       var helpLink = panel.querySelector('#janis-help');
       helpLink.href = cfg.help_url || '#';
       helpLink.style.display = cfg.help_url ? '' : 'none';
