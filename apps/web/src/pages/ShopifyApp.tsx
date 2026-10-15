@@ -121,9 +121,15 @@ export default function ShopifyApp() {
   const [setupGreeting, setSetupGreeting] = useState('');
   const [setupSaving, setSetupSaving] = useState(false);
   const [setupError, setSetupError] = useState('');
-  // The App Bridge token doubles as the credential for /api/shopify/agent
-  // and /api/shopify/plan — kept in memory only, sent on those POSTs.
+  // The App Bridge token doubles as the credential for the session-token
+  // endpoints — but it expires in ~60s, so we keep the bridge itself and
+  // mint a fresh JWT per call (idToken() is cheap and always current).
+  // sessionToken.current is the boot-time fallback for when bridge didn't
+  // attach and the iframe URL's ?id_token= was the only token.
   const sessionToken = useRef('');
+  const bridgeRef = useRef<NonNullable<Window['shopify']> | null>(null);
+  const tok = async () =>
+    (await bridgeRef.current?.idToken?.().catch(() => undefined)) ?? sessionToken.current;
   const [subscribing, setSubscribing] = useState('');
   const [planError, setPlanError] = useState('');
 
@@ -149,7 +155,7 @@ export default function ShopifyApp() {
       has_more: boolean;
     }>('/api/shopify/inbox/thread', {
       method: 'POST',
-      body: JSON.stringify({ token: sessionToken.current, conversation_id: id }),
+      body: JSON.stringify({ token: await tok(), conversation_id: id }),
     });
     setThread({ conv: res.conversation, messages: res.messages, hasMore: res.has_more });
   };
@@ -161,7 +167,7 @@ export default function ShopifyApp() {
       try {
         const res = await api<{ conversations: InboxConv[] }>('/api/shopify/inbox', {
           method: 'POST',
-          body: JSON.stringify({ token: sessionToken.current }),
+          body: JSON.stringify({ token: await tok() }),
         });
         if (!dead) setInbox(res.conversations);
       } catch {
@@ -209,7 +215,7 @@ export default function ShopifyApp() {
     try {
       await api('/api/shopify/inbox/reply', {
         method: 'POST',
-        body: JSON.stringify({ token: sessionToken.current, conversation_id: id, text }),
+        body: JSON.stringify({ token: await tok(), conversation_id: id, text }),
       });
       setReply('');
       await loadThread(id);
@@ -228,7 +234,7 @@ export default function ShopifyApp() {
     try {
       await api('/api/shopify/inbox/resume', {
         method: 'POST',
-        body: JSON.stringify({ token: sessionToken.current, conversation_id: id }),
+        body: JSON.stringify({ token: await tok(), conversation_id: id }),
       });
       await loadThread(id);
     } catch (err) {
@@ -245,7 +251,7 @@ export default function ShopifyApp() {
     try {
       const res = await api<{ confirmation_url: string }>('/api/shopify/plan', {
         method: 'POST',
-        body: JSON.stringify({ token: sessionToken.current, plan }),
+        body: JSON.stringify({ token: await tok(), plan }),
       });
       // Shopify's own approval page — a deliberate top-level navigation.
       window.open(res.confirmation_url, '_top');
@@ -277,7 +283,7 @@ export default function ShopifyApp() {
       if (Object.keys(body).length) {
         await api('/api/shopify/agent', {
           method: 'POST',
-          body: JSON.stringify({ token: sessionToken.current, ...body }),
+          body: JSON.stringify({ token: await tok(), ...body }),
         });
       }
       localStorage.setItem(`janis:setup-done:${state.shop}`, '1');
@@ -308,6 +314,7 @@ export default function ShopifyApp() {
         const token = bridge ? await bridge.idToken!() : params.get('id_token');
         if (!token) throw new Error('no session token — open this app inside Shopify admin');
         sessionToken.current = token;
+        bridgeRef.current = bridge;
         const res = await api<{
           shop: string;
           state: string;
