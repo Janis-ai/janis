@@ -1450,7 +1450,12 @@ async function syncBillingSubscription(
   if (!row.workspaceId || !PLANS[plan ?? '']) return;
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId)).limit(1);
   if (!ws) return;
-  if (status === 'ACTIVE') {
+  // A stray/legacy sub (created before a re-link to a paid workspace, or an
+  // abandoned approval later approved) must not hijack a workspace whose
+  // billing lives elsewhere — only free or already-shopify-billed
+  // workspaces take the plan flip.
+  const shopifyRail = ws.billingProvider === 'shopify' || ws.plan === 'free';
+  if (status === 'ACTIVE' && shopifyRail) {
     await db
       .update(workspaces)
       .set({ plan: plan!, billingProvider: 'shopify' })

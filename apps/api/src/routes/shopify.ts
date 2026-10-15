@@ -169,7 +169,7 @@ export function shopifyPublicRoutes(db: Db) {
         embedEnabled(db, row),
       ]);
       const [wsPlan] = await db
-        .select({ plan: workspaces.plan })
+        .select({ plan: workspaces.plan, billingProvider: workspaces.billingProvider })
         .from(workspaces)
         .where(eq(workspaces.id, row.workspaceId!))
         .limit(1);
@@ -177,7 +177,14 @@ export function shopifyPublicRoutes(db: Db) {
       out.usage = cap
         ? { used: cap.used, included: cap.plan.includedMessages, capped: cap.capped }
         : null;
-      out.billing = shopBilling(row);
+      // The shop row's AppSubscription record is only meaningful while
+      // Shopify is (or is becoming) the billing rail — a stale PENDING left
+      // behind after the shop re-bound to a Stripe/internal workspace is
+      // noise, not an actionable approval.
+      out.billing =
+        wsPlan?.billingProvider === 'shopify' || wsPlan?.plan === 'free'
+          ? shopBilling(row)
+          : null;
       out.embed_enabled = enabled; // null = read_themes not granted yet
       // Store account email — console-access prefills with it (staff
       // emails need the gated read_users scope; this is all Shopify gives).
@@ -307,6 +314,21 @@ export function shopifyPublicRoutes(db: Db) {
         .limit(1);
       if (!row || row.state !== 'linked' || !row.workspaceId) {
         return c.json({ error: 'no bound workspace — link the shop first' }, 409);
+      }
+      // Shopify billing only applies when the bound workspace is on the free
+      // plan or already billed by Shopify. A workspace on a Stripe-paid or
+      // internal plan must not gain a second subscription here — approving it
+      // would flip the whole workspace's plan + billing_provider.
+      const [ws] = await db
+        .select({ plan: workspaces.plan, billingProvider: workspaces.billingProvider })
+        .from(workspaces)
+        .where(eq(workspaces.id, row.workspaceId))
+        .limit(1);
+      if (ws && ws.plan !== 'free' && ws.billingProvider !== 'shopify') {
+        return c.json(
+          { error: 'this workspace already has a plan — manage billing in the Janis console' },
+          409,
+        );
       }
       try {
         const { confirmationUrl, test } = await startBillingSubscription(db, row, plan);
