@@ -466,7 +466,21 @@ export default function ShopifyApp() {
           <p className="muted">Human backup for AI agents</p>
         </div>
 
-        {state.kind === 'loading' && <div className="muted">Connecting to Janis…</div>}
+        {state.kind === 'loading' && (
+          <div
+            className="muted"
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 14,
+              padding: '56px 0',
+            }}
+          >
+            <span className="spin" style={{ width: 22, height: 22, borderWidth: 3 }} />
+            Connecting to Janis…
+          </div>
+        )}
 
         {state.kind === 'error' && (
           <>
@@ -781,7 +795,9 @@ export default function ShopifyApp() {
                 </>
               )
             ) : (
-              <>
+              // Store tab is short content — a wide card is fine chrome, but
+              // stacked buttons shouldn't stretch 960px. Center a column.
+              <div style={{ maxWidth: 520, margin: '0 auto', textAlign: 'center' }}>
             <p style={{ fontSize: 14, marginBottom: 4 }}>
               <strong>{state.shop}</strong> is connected
               {state.agent ? (
@@ -909,7 +925,7 @@ export default function ShopifyApp() {
                 </a>
               </p>
             ) : null}
-              </>
+              </div>
             )}
           </>
         )}

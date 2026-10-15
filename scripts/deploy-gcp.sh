@@ -154,6 +154,7 @@ else
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
     --memory 1Gi --no-cpu-throttling \
+    --min-instances "${MIN_INSTANCES:-1}" \
     --max-instances "${MAX_INSTANCES:-3}" \
     ${EXTRA[@]+"${EXTRA[@]}"} \
     ${SECRETS_FLAG[@]+"${SECRETS_FLAG[@]}"} \
