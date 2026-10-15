@@ -1654,6 +1654,13 @@ const LOOKUP_GUARD_RETRY =
   'Rewrite it: if the request needs a tool, call it this turn; if you have no tool for it, say so plainly. ' +
   'Never announce a step you are not taking.';
 
+const PHOTO_GUARD_RETRY =
+  'The customer\'s message included a photo and your draft named or priced a product without calling the catalogue search — ' +
+  'that identification is a guess, and look-alike products get misnamed. If the photo asks to identify or match a product, ' +
+  'call the catalogue search now with broad visual attributes (product type, colour, pattern — never a title: guess on what ' +
+  'you think it is), then compare the candidate product photos you are shown before naming a match. ' +
+  'If the photo is not about a product at all, rewrite the reply without naming or pricing one.';
+
 const WIDGET_PARSE_RETRY =
   'Your previous draft emitted a component line (WIDGET: or WIDGET_REF:) that produced nothing — the JSON was malformed or the component name unknown — ' +
   'so the customer only saw the text around it. Rewrite the reply: emit the component as ONE line of valid JSON in a supported shape, ' +
@@ -3258,8 +3265,9 @@ export async function complete(
             text:
               '[product photos for the results just shown follow — compare the image in the ' +
               "customer's last message against each candidate and name the closest match by its " +
-              "title; if none resembles it, say so rather than guessing. Visible cues like sale " +
-              'badges, colors and graphics are part of the match.]',
+              'title; visible cues like sale badges, colors and graphics are part of the match. ' +
+              'If none resembles it, run one broader catalogue search (product type or colour, ' +
+              'never a title: guess) and compare again — say "no match" only after that.]',
           });
           msgs.push({ role: 'user', content: parts });
         }
@@ -4390,6 +4398,24 @@ async function replyAsHostedAgent(
     // hoisted out of the retry loop so the error signal can report them
     let lostComponents = 0;
     const agentToolDefs = toolsFor(agent);
+    // Any cards-producing catalogue search tool qualifies for the
+    // photo-match guard and named-product promotion — Shopify or a
+    // WooCommerce/custom connector alike; the query arg name comes from
+    // the tool's own relevance config.
+    const productSearch = agentToolDefs.find(
+      (t) =>
+        t.widget?.type === 'cards' &&
+        t.widget.items &&
+        (t.widget.relevance?.arg || Object.keys(t.params ?? {}).includes('query')),
+    );
+    const searchQueryArg = productSearch?.widget?.relevance?.arg ?? 'query';
+    // The customer's CURRENT turn carrying a real image part (vision ran,
+    // not just a filename annotation) is what makes a text-only product
+    // answer a guess rather than a lookup.
+    const lastInbound = [...history].reverse().find((m) => m.role === 'user');
+    const photoInTurn =
+      Array.isArray(lastInbound?.content) &&
+      (lastInbound.content as ContentPart[]).some((p) => p.type === 'image_url');
     for (let attempt = 0; attempt < 2; attempt++) {
       gen = await generateReply(
         llm,
@@ -4481,6 +4507,25 @@ async function replyAsHostedAgent(
       ) {
         console.warn(`[hosted] unbacked lookup narration conv=${convId} — regenerating`);
         prompt += '\n\n' + LOOKUP_GUARD_RETRY;
+        continue;
+      }
+      // Photo-ID guess — the customer's turn carried an image and the draft
+      // names/prices a product or emits product cards without the catalogue
+      // search ever running: the model is matching from memory, so
+      // look-alike products get confidently misnamed (and a named-product
+      // hydration would render the wrong card with real data). Regenerate
+      // once so the search runs and the visual-match pass can compare the
+      // candidates' own photos.
+      if (
+        attempt === 0 &&
+        reply &&
+        photoInTurn &&
+        productSearch &&
+        !gen.toolCalls.some((t) => t.name === productSearch.name && t.outcome === 'ran') &&
+        (widgets.some((w) => w.type === 'cards') || PHANTOM_ASSERT.test(reply))
+      ) {
+        console.warn(`[hosted] photo product-ID without catalogue search conv=${convId} — regenerating`);
+        prompt += '\n\n' + PHOTO_GUARD_RETRY;
         continue;
       }
       // Phantom-product claim — the search returned zero rows for the named
@@ -4785,16 +4830,6 @@ async function replyAsHostedAgent(
     // row already in this run's corpus re-renders its real card; a name
     // the searches never surfaced gets a targeted fetch (the call is real
     // catalogue data, so nothing invents). Named items lead the carousel.
-    // Any cards-producing catalogue search tool qualifies — not just the
-    // Shopify one; the query arg name comes from the tool's own relevance
-    // config so a WooCommerce/custom connector gets the same protection.
-    const productSearch = agentToolDefs.find(
-      (t) =>
-        t.widget?.type === 'cards' &&
-        t.widget.items &&
-        (t.widget.relevance?.arg || Object.keys(t.params ?? {}).includes('query')),
-    );
-    const searchQueryArg = productSearch?.widget?.relevance?.arg ?? 'query';
     if (reply && productSearch?.widget) {
       try {
         type CardItem = Extract<WidgetComponent, { type: 'cards' }>['items'][number];
