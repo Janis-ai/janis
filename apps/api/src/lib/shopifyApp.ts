@@ -63,13 +63,21 @@ export function shopifyAppConfigured(): boolean {
  *  shop domain plus the staff member's Shopify user id (sub) — the inbox
  *  attributes replies to them. */
 export function verifySessionToken(token: string): { shop: string; sub?: string } | null {
+  // Rejections log a reason so production failures are diagnosable — the
+  // embedded app's only signal otherwise is a bare "invalid session token".
+  const reject = (reason: string, extra?: Record<string, unknown>) => {
+    console.warn('[shopify] session token rejected:', reason, extra ?? '');
+    return null;
+  };
   const [h, p, s] = (token ?? '').split('.');
-  if (!h || !p || !s || !env.shopifyAppApiSecret) return null;
+  if (!h || !p || !s) return reject('malformed');
+  if (!env.shopifyAppApiSecret) return reject('no_secret');
   const expected = createHmac('sha256', env.shopifyAppApiSecret)
     .update(`${h}.${p}`)
     .digest();
   const got = Buffer.from(s, 'base64url');
-  if (got.length !== expected.length || !timingSafeEqual(got, expected)) return null;
+  if (got.length !== expected.length || !timingSafeEqual(got, expected))
+    return reject('bad_signature');
 
   let claims: {
     iss?: string;
@@ -82,13 +90,15 @@ export function verifySessionToken(token: string): { shop: string; sub?: string 
   try {
     claims = JSON.parse(Buffer.from(p, 'base64url').toString());
   } catch {
-    return null;
+    return reject('bad_payload');
   }
   const now = Date.now() / 1000;
-  if (!claims.exp || claims.exp < now - 30) return null; // 30s clock skew
-  if (claims.nbf && claims.nbf > now + 30) return null;
+  if (!claims.exp || claims.exp < now - 30)
+    return reject('expired', { exp: claims.exp, now: Math.floor(now) });
+  if (claims.nbf && claims.nbf > now + 30)
+    return reject('not_yet_valid', { nbf: claims.nbf, now: Math.floor(now) });
   const aud = Array.isArray(claims.aud) ? claims.aud[0] : claims.aud;
-  if (aud !== env.shopifyAppApiKey) return null;
+  if (aud !== env.shopifyAppApiKey) return reject('aud', { aud });
 
   const host = (u?: string) => {
     try {
@@ -100,7 +110,9 @@ export function verifySessionToken(token: string): { shop: string; sub?: string 
   const shop = host(claims.dest);
   // Session tokens always identify the shop by its myshopify domain even
   // when the storefront runs on a custom domain — pin both claims to it.
-  if (!shop.endsWith('.myshopify.com') || host(claims.iss) !== shop) return null;
+  if (!shop.endsWith('.myshopify.com')) return reject('dest', { dest: claims.dest });
+  if (host(claims.iss) !== shop)
+    return reject('iss', { iss: claims.iss, dest: claims.dest });
   return { shop, sub: claims.sub != null ? String(claims.sub) : undefined };
 }
 

@@ -207,6 +207,14 @@ export default function ShopifyApp() {
         });
       } catch (err2) {
         if (err2 instanceof Error && err2.message.includes('invalid session token')) {
+          // A backgrounded iframe can leave App Bridge's token cache stale —
+          // a fresh page is the only remaining recovery. Once per load, or
+          // admins would get a reload loop.
+          if (!sessionStorage.getItem('janis:tok-reload')) {
+            sessionStorage.setItem('janis:tok-reload', '1');
+            window.location.reload();
+            return new Promise<T>(() => {}); // page is reloading anyway
+          }
           throw new Error('Session expired — close and reopen the app from Shopify admin');
         }
         throw err2;
@@ -480,6 +488,7 @@ export default function ShopifyApp() {
           throw err;
         });
         if (cancelled) return;
+        sessionStorage.removeItem('janis:tok-reload'); // healthy boot — allow future auto-recovery
         if (res.state === 'linked') {
           // Auto-provisioned shops (claimed=false) get the brief-approval
           // step in place of the old link wizard — editable name, purpose
