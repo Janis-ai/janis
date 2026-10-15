@@ -30,6 +30,7 @@
     greeting: script.getAttribute('data-janis-greeting'),
     replies: script.getAttribute('data-janis-replies'),
     launcher: script.getAttribute('data-janis-launcher'),
+    logo: script.getAttribute('data-janis-logo'),
   };
   // Shopify storefront mode (the theme app-embed loader sets this) — the
   // widget may read the shopper's real cart via the same-origin Ajax API
@@ -2691,6 +2692,7 @@
     if (OVR.teaser) cfg.teaser_text = OVR.teaser;
     if (OVR.greeting) cfg.greeting = OVR.greeting;
     if (OVR.launcher) cfg.launcher = OVR.launcher;
+    if (OVR.logo) cfg.logo_url = OVR.logo;
     if (OVR.replies) {
       try {
         var ovReplies = JSON.parse(OVR.replies);

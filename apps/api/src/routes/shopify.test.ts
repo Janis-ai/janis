@@ -1470,7 +1470,7 @@ describe('storefront loader', () => {
       body: JSON.stringify({ code, agent_id: agentId }),
     });
     const res = await app.request(
-      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&position=left&launcher=${encodeURIComponent('https://cdn.shopify.com/icon.png')}&teaser=Hi!&greeting=Hello&qrs=${encodeURIComponent('Track order, Returns')}&bogus=ignored&accent2=notahex&launcher2=javascript:x`,
+      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&position=left&launcher=${encodeURIComponent('https://cdn.shopify.com/icon.png')}&logo=${encodeURIComponent('https://cdn.shopify.com/logo.png')}&teaser=Hi!&greeting=Hello&qrs=${encodeURIComponent('Track order, Returns')}&bogus=ignored&accent2=notahex&launcher2=javascript:x`,
     );
     const js = await res.text();
     expect(js).toContain('data-janis-accent');
@@ -1479,6 +1479,8 @@ describe('storefront loader', () => {
     expect(js).toContain('"left"');
     expect(js).toContain('data-janis-launcher');
     expect(js).toContain('cdn.shopify.com/icon.png');
+    expect(js).toContain('data-janis-logo');
+    expect(js).toContain('cdn.shopify.com/logo.png');
     expect(js).toContain('data-janis-teaser');
     expect(js).toContain('data-janis-greeting');
     expect(js).toContain('data-janis-replies');
@@ -1509,6 +1511,11 @@ describe('storefront loader', () => {
       `/api/shopify/storefront.js?s=${SHOP}&launcher=${encodeURIComponent('javascript:alert(1)')}`,
     );
     expect(await bad.text()).not.toContain('data-janis-launcher');
+    // Same rule for the chat-window logo — https only.
+    const badLogo = await app.request(
+      `/api/shopify/storefront.js?s=${SHOP}&logo=${encodeURIComponent('javascript:alert(1)')}`,
+    );
+    expect(await badLogo.text()).not.toContain('data-janis-logo');
   });
 
   it('theme-embed settings persist onto flat channel credentials', async () => {
@@ -1520,7 +1527,7 @@ describe('storefront loader', () => {
       body: JSON.stringify({ code, agent_id: agentId }),
     });
     await app.request(
-      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&launcher=logo&teaser=${encodeURIComponent('Need help?')}&qrs=${encodeURIComponent('Track order, Returns')}`,
+      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&launcher=logo&logo=${encodeURIComponent('https://cdn.shopify.com/logo.png')}&teaser=${encodeURIComponent('Need help?')}&qrs=${encodeURIComponent('Track order, Returns')}`,
     );
     // The sync write is fire-and-forget — give it a tick to land.
     await new Promise((r) => setTimeout(r, 50));
@@ -1532,6 +1539,7 @@ describe('storefront loader', () => {
     // Flat keys are what the widget bootstrap + console editor read.
     expect(creds.accent).toBe('#aabbcc');
     expect(creds.launcher).toBe('logo');
+    expect(creds.logo_url).toBe('https://cdn.shopify.com/logo.png');
     expect(creds.teaser_text).toBe('Need help?');
     expect(creds.quick_replies).toEqual(['Track order', 'Returns']);
     expect(creds.branding).toBeUndefined();

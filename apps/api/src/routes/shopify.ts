@@ -1038,6 +1038,11 @@ export function shopifyPublicRoutes(db: Db) {
     const position = (q.position ?? '').trim();
     if (position === 'left' || position === 'right')
       attrs.push(`s.setAttribute('data-janis-position',${JSON.stringify(position)});`);
+    // Chat-window logo — the theme block's image_picker emits an https
+    // cdn.shopify.com URL; anything else drops.
+    const logo = (q.logo ?? '').trim();
+    if (/^https:\/\//.test(logo) && logo.length <= 500)
+      attrs.push(`s.setAttribute('data-janis-logo',${JSON.stringify(logo)});`);
     // Launcher icon — 'glyph'/'logo' keywords or an https image URL (the theme
     // block's image_picker emits a cdn.shopify.com URL). Anything else drops.
     const launcher = (q.launcher ?? '').trim();
@@ -1097,6 +1102,7 @@ export function shopifyPublicRoutes(db: Db) {
       // not persisted into channel credentials.
       if (/^#[0-9a-fA-F]{6}$/.test(accent)) next.accent = accent;
       if (position === 'left' || position === 'right') next.position = position;
+      if (/^https:\/\//.test(logo) && logo.length <= 500) next.logo_url = logo;
       if (
         launcher === 'glyph' ||
         launcher === 'logo' ||
