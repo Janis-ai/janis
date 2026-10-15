@@ -795,6 +795,182 @@ describe('shopify embedded billing + theme detection', () => {
   });
 });
 
+describe('shopify in-frame inbox', () => {
+  const INBOX_SHOP = 'inbox-shop.myshopify.com';
+
+  const provisionInboxShop = async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt(INBOX_SHOP, { sub: '77' }));
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, INBOX_SHOP));
+    return row;
+  };
+
+  it('lists only the bound agent\'s conversations', async () => {
+    const row = await provisionInboxShop();
+    // A conversation on the shop's own provisioned agent…
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: row.agentId!, externalId: 'webchat:visitor-list', isUnread: true })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'is this in stock?' });
+    // …and one on the test workspace's agent — must not leak into the shop's inbox.
+    await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'webchat:other-store' });
+
+    const res = await app.request('/api/shopify/inbox', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(INBOX_SHOP, { sub: '77' }) }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { conversations: { id: string; is_unread: boolean }[] };
+    expect(body.conversations.map((cv) => cv.id)).toEqual([conv.id]);
+    expect(body.conversations[0].is_unread).toBe(true);
+
+    // Other shops + forged tokens get nothing.
+    const forged = await app.request('/api/shopify/inbox', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(INBOX_SHOP, {}, 'wrong') }),
+    });
+    expect(forged.status).toBe(401);
+  });
+
+  it('thread returns messages, marks the conversation read, and 404s foreign agents', async () => {
+    const row = await provisionInboxShop();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: row.agentId!, externalId: 'webchat:visitor-thread', isUnread: true })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'hello?' });
+    const [foreign] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: 'webchat:not-yours' })
+      .returning();
+
+    const res = await app.request('/api/shopify/inbox/thread', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: sessionJwt(INBOX_SHOP, { sub: '77' }),
+        conversation_id: conv.id,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      conversation: { is_unread: boolean };
+      messages: { direction: string; text: string }[];
+    };
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].text).toBe('hello?');
+    expect(body.conversation.is_unread).toBe(false);
+
+    const foreignRes = await app.request('/api/shopify/inbox/thread', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: sessionJwt(INBOX_SHOP, { sub: '77' }),
+        conversation_id: foreign.id,
+      }),
+    });
+    expect(foreignRes.status).toBe(404);
+  });
+
+  it('reply auto-takes-over, attributes to store staff, and resume hands back', async () => {
+    const row = await provisionInboxShop();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: row.agentId!, externalId: 'webchat:visitor-reply' })
+      .returning();
+
+    const reply = await app.request('/api/shopify/inbox/reply', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: sessionJwt(INBOX_SHOP, { sub: '77' }),
+        conversation_id: conv.id,
+        text: 'Yes, we have it in stock!',
+      }),
+    });
+    expect(reply.status).toBe(201);
+    const rbody = (await reply.json()) as {
+      message: { direction: string; text: string };
+      state: string;
+    };
+    expect(rbody.message.direction).toBe('human');
+    expect(rbody.state).toBe('human');
+
+    // Conversation flipped to human mode; the staff identity row exists
+    // (Admin API user lookup didn't resolve under the stub → generic label).
+    const [after] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(after.state).toBe('human');
+    const [staff] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, `shopify-staff+77@${INBOX_SHOP}`));
+    expect(staff.name).toBe('Store staff');
+    expect(after.assigneeId).toBe(staff.id);
+    const stored = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    const human = stored.find((m) => m.direction === 'human' && m.text.includes('in stock'));
+    expect(human?.authorId).toBe(staff.id);
+
+    // Resume hands the thread back to the agent.
+    const res = await app.request('/api/shopify/inbox/resume', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: sessionJwt(INBOX_SHOP, { sub: '77' }),
+        conversation_id: conv.id,
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { state: string }).state).toBe('active');
+  });
+
+  it('rejects replies on archived and foreign conversations', async () => {
+    const row = await provisionInboxShop();
+    const [archConv] = await db
+      .insert(conversations)
+      .values({ agentId: row.agentId!, externalId: 'webchat:old', state: 'archived' })
+      .returning();
+    const res = await app.request('/api/shopify/inbox/reply', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: sessionJwt(INBOX_SHOP, { sub: '77' }),
+        conversation_id: archConv.id,
+        text: 'hi',
+      }),
+    });
+    expect(res.status).toBe(409);
+    const unlinked = await app.request('/api/shopify/inbox/reply', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: sessionJwt('no-inbox.myshopify.com'),
+        conversation_id: archConv.id,
+        text: 'hi',
+      }),
+    });
+    // 'no-inbox' shop doesn't exist at all → treated as unlinked.
+    expect([409, 401]).toContain(unlinked.status);
+  });
+});
+
 describe('shopify webhooks', () => {
   it('rejects a bad signature', async () => {
     const res = await webhook('app/uninstalled', {}, 'wrong');

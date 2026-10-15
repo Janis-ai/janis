@@ -1,15 +1,31 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq, lt, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
-import { agents, channels, memberships, shopifyShops, workspaces } from '../db/schema.js';
+import {
+  agents,
+  channels,
+  conversations,
+  memberships,
+  messages,
+  shopifyShops,
+  workspaces,
+} from '../db/schema.js';
 import { audit } from '../lib/audit.js';
 import { invalidateChannelCache } from '../lib/channels.js';
 import { generateDraft } from '../lib/agentBuilder.js';
 import { messageCap, PLANS } from '../lib/plans.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { toConversation, toMessage } from '../lib/serializers.js';
+import {
+  getConversationForWorkspace,
+  humanReply,
+  resume,
+  takeover,
+  TakeoverError,
+} from '../services/takeover.js';
 import {
   bindShop,
   embedEnabled,
@@ -20,6 +36,7 @@ import {
   shopifyAppConfigured,
   shopIsDevelopment,
   shopifyCustomerClaim,
+  staffUserFor,
   startBillingSubscription,
   signLinkCode,
   unbindShop,
@@ -42,7 +59,7 @@ import {
 
 async function sessionShop(c: {
   req: { json: () => Promise<unknown> };
-}): Promise<{ shop: string; token: string } | null> {
+}): Promise<{ shop: string; sub?: string; token: string } | null> {
   const body = (await c.req.json().catch(() => null)) as { token?: string } | null;
   if (!body?.token) return null;
   const claims = verifySessionToken(body.token);
@@ -239,6 +256,217 @@ export function shopifyPublicRoutes(db: Db) {
         return c.json({ confirmation_url: confirmationUrl, test_mode: test });
       } catch (e) {
         return c.json({ error: e instanceof Error ? e.message : 'billing start failed' }, 502);
+      }
+    },
+  );
+
+  /* ── In-frame inbox ──────────────────────────────────────────────────
+   * The App Bridge token is the credential and the shop's bound agent is
+   * the scope — every endpoint below pins conversations to row.agentId.
+   * A reply implies takeover (the staff member IS the human); the agent's
+   * auto-resume timer hands the thread back after idle. Staff identity
+   * comes from the JWT's sub → a loginless users row, so transcript and
+   * Slack attribution read "Sarah", not "operator". */
+
+  const linkedShop = async (c: Parameters<typeof sessionShop>[0]) => {
+    const sess = await sessionShop(c);
+    if (!sess) return { sess: null, row: null };
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, sess.shop))
+      .limit(1);
+    if (!row || row.state !== 'linked' || !row.workspaceId || !row.agentId) {
+      return { sess, row: null };
+    }
+    return { sess, row };
+  };
+
+  // Conversation list for the bound agent — newest activity first, cursor
+  // pagination identical to the console list.
+  app.post(
+    '/inbox',
+    zValidator(
+      'json',
+      z.object({
+        token: z.string(),
+        cursor: z.string().optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      }),
+    ),
+    async (c) => {
+      if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+      const { sess, row } = await linkedShop(c);
+      if (!sess) return c.json({ error: 'invalid session token' }, 401);
+      if (!row) return c.json({ error: 'no bound agent' }, 409);
+      const q = c.req.valid('json');
+
+      const conditions = [
+        eq(conversations.agentId, row.agentId!),
+        ne(conversations.state, 'archived'),
+      ];
+      const sortKey = sql`coalesce(${conversations.lastMessageAt}, ${conversations.createdAt})`;
+      if (q.cursor) {
+        const [ms, id] = q.cursor.split('_');
+        conditions.push(
+          sql`(${sortKey}, ${conversations.id}) < (${new Date(Number(ms)).toISOString()}::timestamptz, ${id}::uuid)`,
+        );
+      }
+      const limit = q.limit ?? 50;
+      const rows = await db
+        .select()
+        .from(conversations)
+        .where(and(...conditions))
+        .orderBy(sql`${sortKey} desc`, desc(conversations.id))
+        .limit(limit + 1);
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+      const last = page[page.length - 1];
+      return c.json({
+        conversations: page.map((conv) => toConversation(conv)),
+        next_cursor:
+          hasMore && last
+            ? `${(last.lastMessageAt ?? last.createdAt).getTime()}_${last.id}`
+            : null,
+      });
+    },
+  );
+
+  // One thread — conversation meta plus a page of messages (?before for
+  // history paging, same contract as the console's messages endpoint).
+  app.post(
+    '/inbox/thread',
+    zValidator(
+      'json',
+      z.object({
+        token: z.string(),
+        conversation_id: z.string().uuid(),
+        before: z.string().optional(),
+      }),
+    ),
+    async (c) => {
+      if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+      const { sess, row } = await linkedShop(c);
+      if (!sess) return c.json({ error: 'invalid session token' }, 401);
+      if (!row) return c.json({ error: 'no bound agent' }, 409);
+      const { conversation_id, before } = c.req.valid('json');
+      try {
+        const { conversation } = await getConversationForWorkspace(
+          db,
+          row.workspaceId!,
+          conversation_id,
+        );
+        if (conversation.agentId !== row.agentId) {
+          return c.json({ error: 'not found' }, 404);
+        }
+        const beforeDate =
+          before && !Number.isNaN(Date.parse(before)) ? new Date(before) : null;
+        const PAGE = 100;
+        const fetched = await db
+          .select()
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, conversation.id),
+              ...(beforeDate ? [lt(messages.createdAt, beforeDate)] : []),
+            ),
+          )
+          .orderBy(desc(messages.createdAt))
+          .limit(PAGE + 1);
+        // Mark read — opening the thread in-frame counts as seeing it.
+        if (conversation.isUnread) {
+          await db
+            .update(conversations)
+            .set({ isUnread: false })
+            .where(eq(conversations.id, conversation.id));
+        }
+        return c.json({
+          conversation: toConversation({ ...conversation, isUnread: false }),
+          messages: fetched.slice(0, PAGE).reverse().map(toMessage),
+          has_more: fetched.length > PAGE,
+        });
+      } catch (err) {
+        if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+        throw err;
+      }
+    },
+  );
+
+  // Staff reply — implies takeover when the conversation isn't already in
+  // human mode; the reply then travels via the same humanReply path the
+  // console uses (channel delivery, Slack mirror, webhook event included).
+  app.post(
+    '/inbox/reply',
+    zValidator(
+      'json',
+      z.object({
+        token: z.string(),
+        conversation_id: z.string().uuid(),
+        text: z.string().min(1).max(4000),
+      }),
+    ),
+    async (c) => {
+      if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+      const { sess, row } = await linkedShop(c);
+      if (!sess) return c.json({ error: 'invalid session token' }, 401);
+      if (!row) return c.json({ error: 'no bound agent' }, 409);
+      const { conversation_id, text } = c.req.valid('json');
+      try {
+        const { conversation } = await getConversationForWorkspace(
+          db,
+          row.workspaceId!,
+          conversation_id,
+        );
+        if (conversation.agentId !== row.agentId) {
+          return c.json({ error: 'not found' }, 404);
+        }
+        const staff = await staffUserFor(db, row, sess.sub);
+        if (conversation.state !== 'human') {
+          await takeover(db, row.workspaceId!, conversation_id, staff);
+        }
+        const { message, delivery } = await humanReply(
+          db,
+          row.workspaceId!,
+          conversation_id,
+          staff,
+          text,
+        );
+        return c.json({ message: toMessage(message), delivery, state: 'human' }, 201);
+      } catch (err) {
+        if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+        throw err;
+      }
+    },
+  );
+
+  // Hand the thread back to the agent ahead of the auto-resume timer.
+  app.post(
+    '/inbox/resume',
+    zValidator(
+      'json',
+      z.object({ token: z.string(), conversation_id: z.string().uuid() }),
+    ),
+    async (c) => {
+      if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+      const { sess, row } = await linkedShop(c);
+      if (!sess) return c.json({ error: 'invalid session token' }, 401);
+      if (!row) return c.json({ error: 'no bound agent' }, 409);
+      const { conversation_id } = c.req.valid('json');
+      try {
+        const { conversation } = await getConversationForWorkspace(
+          db,
+          row.workspaceId!,
+          conversation_id,
+        );
+        if (conversation.agentId !== row.agentId) {
+          return c.json({ error: 'not found' }, 404);
+        }
+        const staff = await staffUserFor(db, row, sess.sub);
+        const updated = await resume(db, row.workspaceId!, conversation_id, staff);
+        return c.json({ state: updated.state });
+      } catch (err) {
+        if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+        throw err;
       }
     },
   );

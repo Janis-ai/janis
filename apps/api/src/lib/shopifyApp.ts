@@ -12,6 +12,7 @@ import {
   knowledgeFiles,
   messages,
   shopifyShops,
+  users,
   workspaces,
 } from '../db/schema.js';
 import { PLANS } from './plans.js';
@@ -59,8 +60,9 @@ export function shopifyAppConfigured(): boolean {
 
 /** Verify an App Bridge session token — HS256 signed with the app secret,
  *  aud = api key, iss/dest pin it to one *.myshopify.com shop. Returns the
- *  shop domain or null. */
-export function verifySessionToken(token: string): { shop: string } | null {
+ *  shop domain plus the staff member's Shopify user id (sub) — the inbox
+ *  attributes replies to them. */
+export function verifySessionToken(token: string): { shop: string; sub?: string } | null {
   const [h, p, s] = (token ?? '').split('.');
   if (!h || !p || !s || !env.shopifyAppApiSecret) return null;
   const expected = createHmac('sha256', env.shopifyAppApiSecret)
@@ -75,6 +77,7 @@ export function verifySessionToken(token: string): { shop: string } | null {
     aud?: string | string[];
     exp?: number;
     nbf?: number;
+    sub?: string | number;
   };
   try {
     claims = JSON.parse(Buffer.from(p, 'base64url').toString());
@@ -98,7 +101,7 @@ export function verifySessionToken(token: string): { shop: string } | null {
   // Session tokens always identify the shop by its myshopify domain even
   // when the storefront runs on a custom domain — pin both claims to it.
   if (!shop.endsWith('.myshopify.com') || host(claims.iss) !== shop) return null;
-  return { shop };
+  return { shop, sub: claims.sub != null ? String(claims.sub) : undefined };
 }
 
 /* ── Webhook HMAC ────────────────────────────────────────────────────── */
@@ -583,6 +586,50 @@ export async function bindShop(
       );
     }
   }
+}
+
+/** Shopify staff member → a loginless Janis user row, so in-frame inbox
+ *  replies/takeovers attribute to a real person ("Sarah took over") instead
+ *  of a synthetic actor. The email is a deterministic synthetic address —
+ *  password_hash stays null so the row can never sign in, and it holds no
+ *  membership; it exists purely as an identity for audit + message
+ *  authorship. The staff member's real name comes from the Admin API
+ *  user(id:) query — no extra scope required; failure leaves the generic
+ *  "Store staff" label. */
+export async function staffUserFor(
+  db: Db,
+  row: ShopRow,
+  sub?: string,
+): Promise<typeof users.$inferSelect> {
+  const email = `shopify-staff+${sub || 'unknown'}@${row.shop}`;
+  const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  if (existing) return existing;
+  let name = 'Store staff';
+  try {
+    const token = row.accessTokenEnc ? await adminToken(db, row) : null;
+    if (token && sub) {
+      const res = await fetch(
+        `https://${row.shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-shopify-access-token': token },
+          body: JSON.stringify({
+            query: `{ user(id: "gid://shopify/User/${sub}") { firstName lastName } }`,
+          }),
+        },
+      );
+      const json = (await res.json()) as {
+        data?: { user?: { firstName?: string | null; lastName?: string | null } | null };
+      };
+      const u = json.data?.user;
+      name = [u?.firstName, u?.lastName].filter(Boolean).join(' ') || name;
+    }
+  } catch {
+    /* generic label is fine */
+  }
+  await db.insert(users).values({ email, name }).onConflictDoNothing();
+  const [u] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return u;
 }
 
 /** Delete a workspace that only provision wrote — agents + their secrets,

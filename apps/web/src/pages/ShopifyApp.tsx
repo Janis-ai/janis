@@ -59,6 +59,26 @@ type SessionState =
     }
   | { kind: 'uninstalled'; shop: string };
 
+type InboxConv = {
+  id: string;
+  state: string;
+  is_unread: boolean;
+  last_message_preview: string | null;
+  last_message_at: string | null;
+  user_profile: { name?: string; first_name?: string; email?: string } | null;
+};
+
+type InboxMsg = {
+  id: string;
+  direction: string;
+  text: string;
+  payload?: Record<string, unknown>;
+  created_at: string;
+};
+
+const convName = (cv: InboxConv) =>
+  cv.user_profile?.name || cv.user_profile?.first_name || cv.user_profile?.email || 'Visitor';
+
 async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopify']> | null> {
   // The meta tag MUST exist before the script evaluates — v4 reads its
   // config (api key + host param) off it at init.
@@ -106,6 +126,117 @@ export default function ShopifyApp() {
   const sessionToken = useRef('');
   const [subscribing, setSubscribing] = useState('');
   const [planError, setPlanError] = useState('');
+
+  // In-frame inbox — the session token is the credential for
+  // /api/shopify/inbox/*. Staff identity comes from the JWT on the API
+  // side; the client just sends the token.
+  const [tab, setTab] = useState<'home' | 'inbox'>('home');
+  const [inbox, setInbox] = useState<InboxConv[] | null>(null);
+  const [thread, setThread] = useState<{
+    conv: InboxConv;
+    messages: InboxMsg[];
+    hasMore: boolean;
+  } | null>(null);
+  const threadId = useRef<string | null>(null);
+  const [reply, setReply] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [inboxError, setInboxError] = useState('');
+
+  const loadThread = async (id: string) => {
+    const res = await api<{
+      conversation: InboxConv;
+      messages: InboxMsg[];
+      has_more: boolean;
+    }>('/api/shopify/inbox/thread', {
+      method: 'POST',
+      body: JSON.stringify({ token: sessionToken.current, conversation_id: id }),
+    });
+    setThread({ conv: res.conversation, messages: res.messages, hasMore: res.has_more });
+  };
+
+  useEffect(() => {
+    if (state.kind !== 'linked' || tab !== 'inbox') return;
+    let dead = false;
+    const loadList = async () => {
+      try {
+        const res = await api<{ conversations: InboxConv[] }>('/api/shopify/inbox', {
+          method: 'POST',
+          body: JSON.stringify({ token: sessionToken.current }),
+        });
+        if (!dead) setInbox(res.conversations);
+      } catch {
+        /* stale list beats an empty one */
+      }
+      if (threadId.current) {
+        try {
+          await loadThread(threadId.current);
+        } catch {
+          /* keep the last snapshot */
+        }
+      }
+    };
+    void loadList();
+    const t = setInterval(() => void loadList(), 8000);
+    return () => {
+      dead = true;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.kind, tab]);
+
+  const openThread = async (id: string) => {
+    threadId.current = id;
+    setInboxError('');
+    try {
+      await loadThread(id);
+    } catch (err) {
+      setInboxError(err instanceof Error ? err.message : 'could not load thread');
+    }
+  };
+
+  const closeThread = () => {
+    threadId.current = null;
+    setThread(null);
+    setReply('');
+  };
+
+  const sendReply = async () => {
+    const id = threadId.current;
+    const text = reply.trim();
+    if (!id || !text || busy) return;
+    setBusy(true);
+    setInboxError('');
+    try {
+      await api('/api/shopify/inbox/reply', {
+        method: 'POST',
+        body: JSON.stringify({ token: sessionToken.current, conversation_id: id, text }),
+      });
+      setReply('');
+      await loadThread(id);
+    } catch (err) {
+      setInboxError(err instanceof Error ? err.message : 'reply failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resumeAgent = async () => {
+    const id = threadId.current;
+    if (!id || busy) return;
+    setBusy(true);
+    setInboxError('');
+    try {
+      await api('/api/shopify/inbox/resume', {
+        method: 'POST',
+        body: JSON.stringify({ token: sessionToken.current, conversation_id: id }),
+      });
+      await loadThread(id);
+    } catch (err) {
+      setInboxError(err instanceof Error ? err.message : 'resume failed');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const subscribe = async (plan: string) => {
     if (subscribing) return;
@@ -339,6 +470,187 @@ export default function ShopifyApp() {
 
         {state.kind === 'linked' && (
           <>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+              <button
+                className={tab === 'home' ? 'btn primary' : 'btn'}
+                style={{ flex: 1 }}
+                onClick={() => setTab('home')}
+              >
+                Store
+              </button>
+              <button
+                className={tab === 'inbox' ? 'btn primary' : 'btn'}
+                style={{ flex: 1 }}
+                onClick={() => setTab('inbox')}
+              >
+                Inbox
+              </button>
+            </div>
+
+            {tab === 'inbox' ? (
+              thread ? (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button className="btn" onClick={closeThread}>
+                      ←
+                    </button>
+                    <strong style={{ fontSize: 14 }}>{convName(thread.conv)}</strong>
+                    {thread.conv.state === 'human' && (
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        · agent paused
+                      </span>
+                    )}
+                    {thread.conv.state === 'needs_human' && (
+                      <span style={{ fontSize: 12, color: '#b45309' }}>· asked for a human</span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      maxHeight: 320,
+                      overflowY: 'auto',
+                      margin: '10px 0',
+                      textAlign: 'left',
+                    }}
+                  >
+                    {thread.messages.map((m) => {
+                      if (m.direction === 'system' || m.payload?.internal) {
+                        return (
+                          <div
+                            key={m.id}
+                            className="muted"
+                            style={{ fontSize: 11, textAlign: 'center', margin: '4px 0' }}
+                          >
+                            {m.text}
+                          </div>
+                        );
+                      }
+                      const mine = m.direction !== 'in';
+                      return (
+                        <div
+                          key={m.id}
+                          style={{ margin: '4px 0', textAlign: mine ? 'right' : 'left' }}
+                        >
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              maxWidth: '85%',
+                              padding: '6px 10px',
+                              borderRadius: 12,
+                              background: mine ? '#dcf0ff' : '#f1f1f4',
+                              fontSize: 13,
+                              textAlign: 'left',
+                              whiteSpace: 'pre-wrap',
+                            }}
+                          >
+                            {m.direction === 'human' ? (
+                              <span className="muted" style={{ fontSize: 11, display: 'block' }}>
+                                Staff reply
+                              </span>
+                            ) : null}
+                            {m.text}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input
+                      value={reply}
+                      onChange={(e) => setReply(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          void sendReply();
+                        }
+                      }}
+                      placeholder="Reply as staff…"
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      className="btn primary"
+                      onClick={() => void sendReply()}
+                      disabled={busy || !reply.trim()}
+                    >
+                      Send
+                    </button>
+                  </div>
+                  {inboxError && <div className="error">{inboxError}</div>}
+                  {thread.conv.state === 'human' ? (
+                    <button
+                      className="btn"
+                      style={{ width: '100%', marginTop: 8 }}
+                      onClick={() => void resumeAgent()}
+                      disabled={busy}
+                    >
+                      Resume agent on this chat
+                    </button>
+                  ) : null}
+                  <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                    {thread.conv.state === 'human'
+                      ? 'Replies come from your staff account — the agent stays paused and auto-resumes after ~10 minutes idle.'
+                      : 'Replying pauses the agent on this chat — it auto-resumes after ~10 minutes.'}
+                  </p>
+                </>
+              ) : (
+                <>
+                  {!inbox ? (
+                    <div className="muted">Loading conversations…</div>
+                  ) : inbox.length === 0 ? (
+                    <div className="muted" style={{ fontSize: 13 }}>
+                      No conversations yet — shopper chats will show up here.
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        textAlign: 'left',
+                        maxHeight: 380,
+                        overflowY: 'auto',
+                        margin: '0 -6px',
+                      }}
+                    >
+                      {inbox.map((cv) => (
+                        <button
+                          key={cv.id}
+                          onClick={() => void openThread(cv.id)}
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            textAlign: 'left',
+                            padding: '8px 6px',
+                            border: 'none',
+                            background: 'none',
+                            borderBottom: '1px solid #eee',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <strong style={{ fontSize: 13 }}>{convName(cv)}</strong>
+                            {cv.is_unread ? (
+                              <span style={{ color: '#2563eb', fontSize: 12 }}>● new</span>
+                            ) : cv.state === 'needs_human' ? (
+                              <span style={{ color: '#b45309', fontSize: 12 }}>needs you</span>
+                            ) : null}
+                          </div>
+                          <div
+                            className="muted"
+                            style={{
+                              fontSize: 12,
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                            }}
+                          >
+                            {cv.last_message_preview ?? ''}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {inboxError && <div className="error">{inboxError}</div>}
+                </>
+              )
+            ) : (
+              <>
             <p style={{ fontSize: 14, marginBottom: 4 }}>
               <strong>{state.shop}</strong> is connected
               {state.agent ? (
@@ -469,6 +781,8 @@ export default function ShopifyApp() {
                 </a>
               </p>
             ) : null}
+              </>
+            )}
           </>
         )}
 
