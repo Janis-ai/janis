@@ -1,3 +1,4 @@
+import { createHmac, randomInt } from 'node:crypto';
 import { and, asc, desc, eq, gt, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
@@ -19,6 +20,7 @@ import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolD
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
+import { sendEmail } from './notify.js';
 import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, internalDataResult, interpolateSpec, itemsFromResult, namedProductsInReply, normTitle, normWidgetRef, propsFromResult, purchaseOptionsLine, reconcilePagedResult, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, titlesMatch, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
@@ -290,7 +292,7 @@ export function conversationContext(
       ? `- Customer email: ${p.email}${
           p.identity_verified || (EMAIL_KINDS as string[]).includes(channel)
             ? ' (verified — safe for identity-bound account lookups)'
-            : ' (self-reported — NOT verified; do not use it for identity-bound account tools)'
+            : ' (self-reported — NOT verified; verify it with send_verification_email + check_verification_code before identity-bound account tools)'
         }`
       : '- Customer email: unknown — if you need it, ask the customer and save it with save_user_profile',
   );
@@ -2245,6 +2247,145 @@ export async function saveUserProfile(
   return `saved: ${saved.join(', ')}`;
 }
 
+const SEND_VERIFY_TOOL = 'send_verification_email';
+const CHECK_VERIFY_TOOL = 'check_verification_code';
+
+/** Pending email-code state — lives on the conversation's userProfile, so
+ *  verification is scoped to this conversation and dies with it. */
+interface PendingVerification {
+  email: string;
+  hash: string;
+  expiresAt: string;
+  attempts: number;
+  sends: number;
+}
+
+const VERIFY_TTL_MS = 10 * 60_000;
+const VERIFY_MAX_SENDS = 3;
+const VERIFY_MAX_ATTEMPTS = 5;
+
+function verifyCodeHash(convId: string, email: string, code: string): string {
+  return createHmac('sha256', env.sessionSecret)
+    .update(`verify:${convId}:${email}:${code}`)
+    .digest('hex');
+}
+
+type VerifyProfile = UserProfile & { pending_verification?: PendingVerification };
+
+/**
+ * Built-in tool: email a 6-digit code to the address the customer claims —
+ * controlling the inbox is the proof that binds them to that identity.
+ * Order/account tools gate on a VERIFIED email; a guest earns it here.
+ */
+export async function sendVerificationEmail(
+  ctx: AgentRunContext,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const email = typeof args.email === 'string' ? args.email.trim().toLowerCase() : '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return 'error: not sent — that does not look like a valid email address';
+  }
+  if (!env.resendApiKey) {
+    return 'error: verification email cannot be sent — email sending is not configured; offer a human instead';
+  }
+  const [conv] = await ctx.db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.id, ctx.convId))
+    .limit(1);
+  if (!conv) return 'error: conversation not found';
+  const base = (conv.userProfile ?? {}) as VerifyProfile;
+  // Re-sends to the same address share the cap; a new claim restarts it.
+  const sends = base.pending_verification?.email === email ? base.pending_verification.sends : 0;
+  if (sends >= VERIFY_MAX_SENDS) {
+    return `error: verification email limit reached for this conversation — if the customer cannot receive the code at ${email}, offer a human`;
+  }
+  const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+  const pending: PendingVerification = {
+    email,
+    hash: verifyCodeHash(ctx.convId, email, code),
+    expiresAt: new Date(Date.now() + VERIFY_TTL_MS).toISOString(),
+    attempts: 0,
+    sends: sends + 1,
+  };
+  await ctx.db
+    .update(conversations)
+    .set({ userProfile: { ...base, pending_verification: pending } })
+    .where(eq(conversations.id, ctx.convId));
+  await sendEmail(
+    [email],
+    'Your verification code',
+    `Your verification code is ${code} — enter it in the chat to continue. It expires in 10 minutes. If you did not request it, you can ignore this email.`,
+  );
+  return `sent — a 6-digit verification code was emailed to ${email}. Ask the customer for the code, then call check_verification_code with it. If it doesn't arrive, suggest checking spam before resending.`;
+}
+
+/**
+ * Built-in tool: validate the code the customer read back. On match the
+ * claimed email becomes the conversation's verified identity — the same
+ * flag a signed-in session sets — which unblocks identity-bound tools.
+ */
+export async function checkVerificationCode(
+  ctx: AgentRunContext,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const code = typeof args.code === 'string' ? args.code.trim() : String(args.code ?? '');
+  const [conv] = await ctx.db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.id, ctx.convId))
+    .limit(1);
+  if (!conv) return 'error: conversation not found';
+  const base = (conv.userProfile ?? {}) as VerifyProfile;
+  const pending = base.pending_verification;
+  if (!pending) {
+    return 'error: no verification is pending — call send_verification_email first';
+  }
+  if (pending.attempts >= VERIFY_MAX_ATTEMPTS) {
+    return 'error: too many incorrect codes — call send_verification_email to send a fresh one';
+  }
+  if (Date.parse(pending.expiresAt) < Date.now()) {
+    return 'error: the verification code expired — call send_verification_email to send a fresh one';
+  }
+  if (verifyCodeHash(ctx.convId, pending.email, code) !== pending.hash) {
+    const attempts = pending.attempts + 1;
+    await ctx.db
+      .update(conversations)
+      .set({ userProfile: { ...base, pending_verification: { ...pending, attempts } } })
+      .where(eq(conversations.id, ctx.convId));
+    return attempts >= VERIFY_MAX_ATTEMPTS
+      ? 'error: incorrect code — attempt limit reached; call send_verification_email to send a fresh one'
+      : `error: incorrect code — ${VERIFY_MAX_ATTEMPTS - attempts} attempt(s) left; ask the customer to re-check the email`;
+  }
+  const { pending_verification: _drop, ...rest } = base;
+  await ctx.db
+    .update(conversations)
+    .set({
+      userProfile: {
+        ...rest,
+        email: pending.email,
+        identity_verified: true,
+        verified_via: 'email_code',
+      },
+    })
+    .where(eq(conversations.id, ctx.convId));
+  // Same-run effect — the identity snapshot was taken at run start, so
+  // unblock the very next tool call (order lookup follows naturally).
+  ctx.identity?.emails.add(pending.email);
+  if (conv.contactId) {
+    try {
+      await enrichContactClaimed(ctx.db, conv.contactId, { email: pending.email });
+    } catch (err) {
+      console.error('checkVerificationCode contact enrich failed:', err);
+    }
+  }
+  bus.publish(ctx.workspaceId, {
+    type: 'conversation',
+    data: { id: ctx.convId, state: conv.state },
+  });
+  return `verified — ${pending.email} is confirmed as the customer's own address for this conversation. You may now run order and account tools bound to that address.`;
+}
+
 /** One tool call from a run — surfaced on the message inspector so an
  *  operator can see exactly what the agent did for a reply. */
 export interface InspectorToolCall {
@@ -2437,6 +2578,42 @@ export async function complete(
                       'Other stated details worth keeping, as short-label keys — e.g. {"interest": "package 9", "company": "Acme"}. Only facts the customer stated.',
                   },
                 },
+              },
+            },
+          },
+          {
+            type: 'function',
+            function: {
+              name: SEND_VERIFY_TOOL,
+              description:
+                'Email a 6-digit verification code to the customer\'s claimed address — how a guest PROVES they control the inbox their orders/account are under. Required before identity-bound tools (order lookup, order changes, customer records) for anyone who is not signed in and not on an email channel. When the customer asks for something needing verification, offer it naturally ("I can email a quick code to the address on the order") and call this once they agree.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  email: {
+                    type: 'string',
+                    description: "the customer's claimed email address — the code goes there",
+                  },
+                },
+                required: ['email'],
+              },
+            },
+          },
+          {
+            type: 'function',
+            function: {
+              name: CHECK_VERIFY_TOOL,
+              description:
+                'Check the 6-digit code the customer read back from the verification email. On success their address becomes the verified identity for this conversation.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  code: {
+                    type: 'string',
+                    description: 'the 6-digit code from the verification email',
+                  },
+                },
+                required: ['code'],
               },
             },
           },
@@ -2740,9 +2917,19 @@ export async function complete(
           outcome = 'failed';
           result = `error: ${denied}`;
         } else {
+          // Server-side customer-facing builtins — dispatched on name
+          // before the workspace-builtin / HTTP-tool fallthrough.
+          const customerBuiltin =
+            call.function.name === SAVE_PROFILE_TOOL
+              ? saveUserProfile
+              : call.function.name === SEND_VERIFY_TOOL
+                ? sendVerificationEmail
+                : call.function.name === CHECK_VERIFY_TOOL
+                  ? checkVerificationCode
+                  : null;
           result =
-            call.function.name === SAVE_PROFILE_TOOL && ctx
-              ? await saveUserProfile(ctx, args)
+            customerBuiltin && ctx
+              ? await customerBuiltin(ctx, args)
               : builtin
                 ? await builtin.run(
                     Object.fromEntries(Object.entries(args).map(([k, v]) => [k, String(v)])),

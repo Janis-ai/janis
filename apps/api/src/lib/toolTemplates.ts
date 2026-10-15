@@ -101,7 +101,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_lookup_order',
         label: 'Look up order',
         description:
-          'Look up a Shopify order by order number + the email it was placed under — the pair verifies the shopper (same model as Shopify guest order tracking; a guest needs no sign-in). Returns status, items, totals, fulfilment/tracking info, the customer gid (customer.id — feed it to shopify_update_customer) and fulfillmentLineItem ids (feed them to shopify_request_return).',
+          'Look up a Shopify order by order number + the VERIFIED customer\'s email — the customer must be verified first (signed-in shopper, email-channel sender, or send_verification_email + check_verification_code for a guest). Returns status, items, totals, fulfilment/tracking info, the customer gid (customer.id — feed it to shopify_update_customer) and fulfillmentLineItem ids (feed them to shopify_request_return).',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
@@ -109,8 +109,9 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           '{"query":"query($q:String!){orders(first:1,query:$q){nodes{id name email customer{id} displayFinancialStatus displayFulfillmentStatus totalPriceSet{shopMoney{amount currencyCode}} createdAt cancelledAt lineItems(first:10){nodes{title quantity}} fulfillments{status trackingInfo{number url company} fulfillmentLineItems(first:10){nodes{id quantity lineItem{title}}}}}}}","variables":{"q":"name:${order_number:text} email:${email:text}"}}',
         params: {
           order_number: 'the order number including the # prefix, e.g. #1234',
-          email: 'the email the order was placed under — required alongside the order number',
+          email: "the verified customer's own email address — must match the order",
         },
+        identity: true,
       },
       {
         name: 'shopify_customer_orders',
@@ -260,13 +261,14 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_cancel_order',
         label: 'Cancel order',
         description:
-          'Cancel a Shopify order by its numeric order id (from shopify_lookup_order) — the same self-serve cancel a website offers: cancels with reason CUSTOMER, restocks items, notifies the customer. Only for orders that are not yet fulfilled; if the customer wants money back on a paid/fulfilled order that is a REFUND — escalate to a human instead of guessing.',
+          'Cancel a Shopify order by its numeric order id (from shopify_lookup_order — the customer must be verified) — the same self-serve cancel a website offers: cancels with reason CUSTOMER, restocks items, notifies the customer. Only for orders that are not yet fulfilled; if the customer wants money back on a paid/fulfilled order that is a REFUND — escalate to a human instead of guessing.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
           '{"query":"mutation($id:ID!){orderCancel(orderId:$id,restock:true,reason:CUSTOMER,notifyCustomer:true){job{id} orderCancelUserErrors{field message}}}","variables":{"id":"gid://shopify/Order/${order_id:text}"}}',
         params: { order_id: 'numeric Shopify order id (not the #number) from shopify_lookup_order' },
+        identity: true,
       },
       {
         name: 'shopify_create_draft_order',
@@ -313,7 +315,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_update_shipping_address',
         label: 'Update shipping address',
         description:
-          'Change the shipping address on an unfulfilled Shopify order by numeric order id (from shopify_lookup_order).',
+          'Change the shipping address on an unfulfilled Shopify order by numeric order id (from shopify_lookup_order — the customer must be verified).',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
@@ -324,11 +326,12 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           shipping_address:
             'JSON object — a MailingAddressInput, e.g. {"address1":"123 Main St","city":"Austin","province":"TX","zip":"78701","countryCode":"US"}',
         },
+        identity: true,
       },
       {
         name: 'shopify_update_order_tags',
         label: 'Update order tags',
-        description: 'Set the tags on a Shopify order by numeric order id (from shopify_lookup_order). Replaces all existing tags.',
+        description: 'Set the tags on a Shopify order by numeric order id (from shopify_lookup_order — the customer must be verified). Replaces all existing tags.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
@@ -338,6 +341,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           order_id: 'numeric Shopify order id',
           tags: 'JSON array of tag strings, e.g. ["vip","chat-order"]',
         },
+        identity: true,
       },
       {
         name: 'shopify_update_customer',
@@ -361,6 +365,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         description:
           'File a return request on a fulfilled Shopify order — the store-side equivalent of the customer returns portal. Flow: shopify_lookup_order → pick the fulfillmentLineItems to return → call this with orderId + returnLineItems. A teammate approves before it\'s filed; tell the customer their request is submitted for review, not confirmed. For an EXCHANGE ("swap for a different size"), file this for the item going back, then offer to create a draft order for the replacement — that pair is the exchange.',
         approval: true,
+        identity: true,
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },

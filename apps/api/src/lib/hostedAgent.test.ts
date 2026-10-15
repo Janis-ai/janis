@@ -6,7 +6,9 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { identityBlockReason } from './toolExec.js';
+import { env } from '../env.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
 
@@ -2416,5 +2418,176 @@ describe('confirmed-add denial guard', () => {
     expect(deniesConfirmedAdd("That item is out of stock right now, so it couldn't be added to your cart.")).toBe(true);
     expect(deniesConfirmedAdd('The add failed — sorry about that.')).toBe(true);
     expect(deniesConfirmedAdd('Added! Your cart has 2 items — want to check out?')).toBe(false);
+  });
+});
+
+describe('email code verification — guest earns verified identity', () => {
+  const mkAgent = async (name: string) => {
+    const [a] = await db
+      .insert(agents)
+      .values({ workspaceId: wsId, name, apiKeyHash: `h-${name}`, apiKeyPreview: 'p', hosted: true })
+      .returning();
+    return a;
+  };
+  const mkConv = async (agentId: string, externalId: string) => {
+    const [c] = await db
+      .insert(conversations)
+      .values({ agentId, externalId, state: 'active' })
+      .returning();
+    return c;
+  };
+  const profileOf = async (id: string) => {
+    const [c] = await db.select().from(conversations).where(eq(conversations.id, id));
+    return c.userProfile as Record<string, unknown>;
+  };
+
+  /** Stubs Resend, returns a fn that extracts the emailed 6-digit code. */
+  const stubResend = () => {
+    const bodies: { text?: string }[] = [];
+    const origFetch = globalThis.fetch;
+    const key = env.resendApiKey;
+    env.resendApiKey = 're_test';
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes('api.resend.com/emails')) {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response('{}', { status: 200 });
+      }
+      return origFetch(url as never, init);
+    }) as typeof fetch;
+    return {
+      bodies,
+      code: () => bodies.at(-1)?.text?.match(/code is (\d{6})/)?.[1] ?? '',
+      restore: () => {
+        globalThis.fetch = origFetch;
+        env.resendApiKey = key;
+      },
+    };
+  };
+
+  it('send → check marks the conversation verified and unblocks identity tools', async () => {
+    const r = stubResend();
+    try {
+      const a = await mkAgent('vc1');
+      const conv = await mkConv(a.id, 'webchat:vc1');
+      const identity = { emails: new Set<string>(), operator: false };
+      const ctx = { db, convId: conv.id, workspaceId: wsId, identity };
+
+      const sent = await sendVerificationEmail(ctx, { email: 'Shopper@X.com' });
+      expect(sent).toContain('sent');
+      expect(r.bodies).toHaveLength(1);
+      const pend = (await profileOf(conv.id)).pending_verification as { email: string };
+      expect(pend.email).toBe('shopper@x.com');
+
+      const ok = await checkVerificationCode(ctx, { code: r.code() });
+      expect(ok).toContain('verified');
+      const p = await profileOf(conv.id);
+      expect(p.identity_verified).toBe(true);
+      expect(p.email).toBe('shopper@x.com');
+      expect(p.pending_verification).toBeUndefined();
+      // Same-run effect — the run's identity snapshot picked the email up.
+      expect(identity.emails.has('shopper@x.com')).toBe(true);
+
+      // And the persistent read agrees — next turn stays verified.
+      const id = await verifiedIdentityFor(db, (await db.select().from(conversations).where(eq(conversations.id, conv.id)))[0], wsId);
+      expect(id.emails.has('shopper@x.com')).toBe(true);
+      expect(
+        identityBlockReason(
+          { order_number: '#1002', email: 'shopper@x.com' },
+          id.emails,
+          new Set(),
+        ),
+      ).toBeNull();
+    } finally {
+      r.restore();
+    }
+  });
+
+  it('wrong codes count attempts and hit the limit; unclaimed email stays blocked', async () => {
+    const r = stubResend();
+    try {
+      const a = await mkAgent('vc2');
+      const conv = await mkConv(a.id, 'webchat:vc2');
+      const ctx = { db, convId: conv.id, workspaceId: wsId };
+      await sendVerificationEmail(ctx, { email: 'a@b.co' });
+
+      for (let i = 0; i < 4; i++) {
+        const out = await checkVerificationCode(ctx, { code: '000000' });
+        expect(out).toContain('incorrect code');
+      }
+      const last = await checkVerificationCode(ctx, { code: '000000' });
+      expect(last).toContain('attempt limit');
+      // Limit reached — even the right code can't brute-force through.
+      expect(await checkVerificationCode(ctx, { code: r.code() })).toContain(
+        'too many incorrect codes',
+      );
+      const p = await profileOf(conv.id);
+      expect(p.identity_verified).toBeUndefined();
+      // Order tools stay blocked on the typed (unverified) address.
+      expect(
+        identityBlockReason(
+          { order_number: '#1002', email: 'a@b.co' },
+          new Set(),
+          new Set(),
+        ),
+      ).toContain('not the verified');
+    } finally {
+      r.restore();
+    }
+  });
+
+  it('expired code rejects; send cap stops a bomber after 3 emails', async () => {
+    const r = stubResend();
+    try {
+      const a = await mkAgent('vc3');
+      const conv = await mkConv(a.id, 'webchat:vc3');
+      const ctx = { db, convId: conv.id, workspaceId: wsId };
+
+      await sendVerificationEmail(ctx, { email: 'x@y.co' });
+      // Age the code past expiry.
+      const p = await profileOf(conv.id);
+      const pend = p.pending_verification as Record<string, unknown>;
+      await db
+        .update(conversations)
+        .set({
+          userProfile: {
+            ...p,
+            pending_verification: { ...pend, expiresAt: new Date(Date.now() - 1000).toISOString() },
+          },
+        })
+        .where(eq(conversations.id, conv.id));
+      expect(await checkVerificationCode(ctx, { code: r.code() })).toContain('expired');
+
+      // Sends cap at 3 per conversation for one address.
+      await sendVerificationEmail(ctx, { email: 'bomb@x.co' });
+      await sendVerificationEmail(ctx, { email: 'bomb@x.co' });
+      await sendVerificationEmail(ctx, { email: 'bomb@x.co' });
+      const fourth = await sendVerificationEmail(ctx, { email: 'bomb@x.co' });
+      expect(fourth).toContain('limit reached');
+      expect(r.bodies.filter((b) => b.text).length).toBe(4); // 1 + 3
+    } finally {
+      r.restore();
+    }
+  });
+
+  it('refuses to send without a Resend key or a valid address', async () => {
+    const a = await mkAgent('vc4');
+    const conv = await mkConv(a.id, 'webchat:vc4');
+    const ctx = { db, convId: conv.id, workspaceId: wsId };
+    const key = env.resendApiKey;
+    env.resendApiKey = '';
+    try {
+      expect(await sendVerificationEmail(ctx, { email: 'x@y.co' })).toContain('cannot be sent');
+    } finally {
+      env.resendApiKey = key;
+    }
+    const r = stubResend();
+    try {
+      expect(await sendVerificationEmail(ctx, { email: 'not-an-email' })).toContain(
+        'valid email address',
+      );
+      expect(r.bodies).toHaveLength(0);
+    } finally {
+      r.restore();
+    }
   });
 });

@@ -116,12 +116,12 @@ describe('toolsFor identity backfill', () => {
   });
 
   it('clears a stale stored identity flag when the catalog def dropped it', () => {
-    // shopify_lookup_order was identity-bound when installed; the def is
-    // now pair-verified (order_number + email) — the stored flag must go.
+    // shopify_search_products is a public-catalog tool — the catalog def
+    // carries no identity flag, so a stale stored one must go.
     const t = toolsFor(
       fakeAgent([
         {
-          name: 'shopify_lookup_order',
+          name: 'shopify_search_products',
           description: 'd',
           method: 'POST',
           url: 'https://x.myshopify.com/admin/api/2026-10/graphql.json',

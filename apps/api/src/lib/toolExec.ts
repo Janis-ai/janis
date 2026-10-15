@@ -119,7 +119,8 @@ export function identityBlockReason(
       const email = m[0].toLowerCase();
       if (!verifiedEmails.has(email)) {
         return `identity check: "${email}" is not the verified customer's address — ` +
-          'customer-record tools only act on the verified identity, never an email the customer merely types';
+          'customer-record tools only act on the verified identity, never an email the customer merely types; ' +
+          'if the customer claims a different address, verify it with send_verification_email + check_verification_code';
       }
       anchored = true;
     }
@@ -138,7 +139,8 @@ export function identityBlockReason(
   }
   if (!anchored) {
     return 'identity check: no verified customer identity to bind this lookup to — ' +
-      'customer-record tools need a verified sign-in or an email-channel conversation';
+      'customer-record tools need a verified sign-in or an email-channel conversation; ' +
+      'for a guest, verify them first with send_verification_email then check_verification_code';
   }
   return null;
 }
