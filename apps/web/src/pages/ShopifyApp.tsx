@@ -54,6 +54,8 @@ type SessionState =
       linkUrl: string;
       claimUrl: string;
       claimed: boolean;
+      purpose: string;
+      greeting: string;
       plan: string;
       usage: { used: number; included: number; capped: boolean } | null;
       billing: { status?: string; plan?: string } | null;
@@ -129,6 +131,7 @@ export default function ShopifyApp() {
   // mint a fresh JWT per call (idToken() is cheap and always current).
   // sessionToken.current is the boot-time fallback for when bridge didn't
   // attach and the iframe URL's ?id_token= was the only token.
+  const [briefSaved, setBriefSaved] = useState(false);
   const sessionToken = useRef('');
   const bridgeRef = useRef<NonNullable<Window['shopify']> | null>(null);
   const tok = async () =>
@@ -139,7 +142,7 @@ export default function ShopifyApp() {
   // In-frame inbox — the session token is the credential for
   // /api/shopify/inbox/*. Staff identity comes from the JWT on the API
   // side; the client just sends the token.
-  const [tab, setTab] = useState<'home' | 'inbox'>('home');
+  const [tab, setTab] = useState<'home' | 'inbox' | 'agent'>('home');
   const [inbox, setInbox] = useState<InboxConv[] | null>(null);
   const [thread, setThread] = useState<{
     conv: InboxConv;
@@ -293,18 +296,28 @@ export default function ShopifyApp() {
       setSetupName(state.name);
       setSetupPurpose(state.purpose);
       setSetupGreeting(state.greeting);
+    } else if (state.kind === 'linked') {
+      // The Agent tab edits the same fields — keep them in sync with the
+      // served values whenever the session reloads.
+      setSetupName(state.agent ?? '');
+      setSetupPurpose(state.purpose);
+      setSetupGreeting(state.greeting);
     }
   }, [state]);
 
-  const approveSetup = async () => {
-    if (state.kind !== 'setup' || setupSaving) return;
+  // One save path for both the first-run setup card and the Agent tab —
+  // `advance` moves setup → linked; the Agent tab just persists edits.
+  const saveBrief = async (advance: boolean) => {
+    if ((state.kind !== 'setup' && state.kind !== 'linked') || setupSaving) return;
+    const currentName = state.kind === 'setup' ? state.name : (state.agent ?? '');
     setSetupSaving(true);
     setSetupError('');
+    setBriefSaved(false);
     try {
       // Only send changed fields — an unchanged purpose must not trigger a
       // re-draft.
       const body: Record<string, string> = {};
-      if (setupName.trim() && setupName.trim() !== state.name) body.name = setupName.trim();
+      if (setupName.trim() && setupName.trim() !== currentName) body.name = setupName.trim();
       if (setupPurpose.trim() !== state.purpose) body.purpose = setupPurpose.trim();
       if (setupGreeting.trim() !== state.greeting) body.greeting = setupGreeting.trim();
       if (Object.keys(body).length) {
@@ -313,13 +326,38 @@ export default function ShopifyApp() {
           body: JSON.stringify({ token: await tok(), ...body }),
         });
       }
-      localStorage.setItem(`janis:setup-done:${state.shop}`, '1');
-      setTick((t) => t + 1); // reload → linked card
+      if (advance) localStorage.setItem(`janis:setup-done:${state.shop}`, '1');
+      setBriefSaved(true);
+      setTick((t) => t + 1); // reload → linked card (or refreshed brief values)
     } catch (err) {
       setSetupError(err instanceof Error ? err.message : 'save failed');
       setSetupSaving(false);
     }
   };
+
+  // Shared brief fields — the setup card and the linked-state Agent tab
+  // render the same inputs.
+  const briefFields = (
+    <>
+      <label>Assistant name</label>
+      <input value={setupName} onChange={(e) => setSetupName(e.target.value)} style={{ width: '100%' }} />
+      <label>What should it do for your customers?</label>
+      <textarea
+        value={setupPurpose}
+        onChange={(e) => setSetupPurpose(e.target.value)}
+        rows={5}
+        style={{ width: '100%' }}
+      />
+      <label>Greeting shoppers see</label>
+      <input
+        value={setupGreeting}
+        onChange={(e) => setSetupGreeting(e.target.value)}
+        placeholder="Hi there! How can I help you today?"
+        style={{ width: '100%' }}
+      />
+      {setupError && <div className="error">{setupError}</div>}
+    </>
+  );
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -389,6 +427,8 @@ export default function ShopifyApp() {
               linkUrl: res.link_url ?? '',
               claimUrl: res.claim_url ?? '',
               claimed: res.claimed ?? false,
+              purpose: res.purpose ?? '',
+              greeting: res.greeting ?? '',
               plan: res.plan ?? 'free',
               usage: res.usage ?? null,
               billing: res.billing ?? null,
@@ -469,31 +509,11 @@ export default function ShopifyApp() {
               <strong>{state.shop}</strong> — your assistant is ready. Check the brief and adjust
               anything:
             </p>
-            <label>Assistant name</label>
-            <input
-              value={setupName}
-              onChange={(e) => setSetupName(e.target.value)}
-              style={{ width: '100%' }}
-            />
-            <label>What should it do for your customers?</label>
-            <textarea
-              value={setupPurpose}
-              onChange={(e) => setSetupPurpose(e.target.value)}
-              rows={5}
-              style={{ width: '100%' }}
-            />
-            <label>Greeting shoppers see</label>
-            <input
-              value={setupGreeting}
-              onChange={(e) => setSetupGreeting(e.target.value)}
-              placeholder="Hi there! How can I help you today?"
-              style={{ width: '100%' }}
-            />
-            {setupError && <div className="error">{setupError}</div>}
+            {briefFields}
             <button
               className="btn primary"
               style={{ width: '100%', marginTop: 12 }}
-              onClick={approveSetup}
+              onClick={() => void saveBrief(true)}
               disabled={setupSaving || !setupName.trim() || !setupPurpose.trim()}
             >
               {setupSaving ? 'Saving…' : 'Looks good — continue'}
@@ -526,9 +546,49 @@ export default function ShopifyApp() {
               >
                 Inbox
               </button>
+              <button
+                className={tab === 'agent' ? 'btn primary' : 'btn'}
+                style={{ flex: 1 }}
+                onClick={() => setTab('agent')}
+              >
+                Agent
+              </button>
             </div>
 
-            {tab === 'inbox' ? (
+            {tab === 'agent' ? (
+              <>
+                <p style={{ fontSize: 13, marginBottom: 4 }}>
+                  The brief your assistant runs on — name, what it does, and the greeting
+                  shoppers see. Edit and save; it takes effect immediately.
+                </p>
+                {briefFields}
+                <button
+                  className="btn primary"
+                  style={{ width: '100%', marginTop: 12 }}
+                  onClick={() => void saveBrief(false)}
+                  disabled={setupSaving || !setupName.trim() || !setupPurpose.trim()}
+                >
+                  {setupSaving ? 'Saving…' : briefSaved ? 'Saved ✓' : 'Save changes'}
+                </button>
+                <p className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
+                  Knowledge base, tools, channels, evals and more live in the full console —{' '}
+                  <a
+                    href={
+                      state.claimed
+                        ? state.agentId
+                          ? `/agents/${state.agentId}`
+                          : '/agents'
+                        : state.claimUrl
+                    }
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {state.claimed ? 'open it here' : 'claim your workspace to unlock it'}
+                  </a>
+                  .
+                </p>
+              </>
+            ) : tab === 'inbox' ? (
               thread ? (
                 <>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -757,18 +817,15 @@ export default function ShopifyApp() {
               // Returning visit — embed link was opened once, so the CTA
               // flips to day-2 actions: tune the agent, edit the embed.
               <>
-                <a
+                <button
                   className="btn primary"
-                  style={{ display: 'block', marginTop: 8, textAlign: 'center' }}
-                  // Unclaimed (auto-provisioned) workspaces route through the
-                  // claim flow first — a direct /agents link would land the
-                  // merchant on a workspace they aren't a member of.
-                  href={state.claimed ? (state.agentId ? `/agents/${state.agentId}` : '/agents') : state.claimUrl}
-                  target="_blank"
-                  rel="noreferrer"
+                  style={{ display: 'block', width: '100%', marginTop: 8, textAlign: 'center' }}
+                  // The brief edits happen in-frame on the Agent tab; the
+                  // console launcher lives in that tab's footer.
+                  onClick={() => setTab('agent')}
                 >
                   Configure your agent
-                </a>
+                </button>
                 <a
                   className="btn"
                   style={{ display: 'block', marginTop: 10, textAlign: 'center' }}
