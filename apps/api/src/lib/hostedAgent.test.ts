@@ -106,7 +106,8 @@ describe('transcriptFor file analysis', () => {
     });
     const history = await transcriptFor(db, convId, true);
     const last = history.at(-1)!;
-    expect(last.content as string).toContain('[attachments: gone.pdf]');
+    expect(last.content as string).toContain('gone.pdf');
+    expect(last.content as string).toContain('not viewable');
   });
 
   it('annotates widget taps with the card they came from', async () => {

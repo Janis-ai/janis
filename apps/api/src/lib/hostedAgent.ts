@@ -3340,7 +3340,12 @@ function attachmentNote(payload: unknown): string {
   return atts.length ? ` [attachments: ${atts.map((a) => a.name ?? 'file').join(', ')}]` : '';
 }
 
-const MAX_VISION_BYTES = 8 * 1024 * 1024;
+// Same cap as the widget upload limit — anything a shopper can attach is
+// viewable, so a 9MB photo never silently lands as a filename annotation.
+const MAX_VISION_BYTES = 10 * 1024 * 1024;
+// Only image types vision models actually accept go out as image parts —
+// bmp/tiff/svg would 400 the whole request on the provider side.
+const VISION_MIME = /^image\/(jpe?g|png|webp|gif|heic|heif)$/i;
 const MAX_FILE_TEXT = 4_000;
 const MAX_FILE_TEXT_TOTAL = 12_000;
 const MAX_ATTS_PER_MSG = 3;
@@ -3369,13 +3374,20 @@ async function attachmentContent(
   for (const a of atts.slice(0, MAX_ATTS_PER_MSG)) {
     const isImage = a.type.startsWith('image/');
     const key = a.url.startsWith('/uploads/') ? a.url.slice('/uploads/'.length) : undefined;
-    if (!key) { skipped.push(a.name); continue; }
+    if (!key) { skipped.push(`${a.name} (not retrievable)`); continue; }
     const row = await getUpload(db, key).catch(() => undefined);
-    if (!row) { skipped.push(a.name); continue; }
+    if (!row) { skipped.push(`${a.name} (not retrievable)`); continue; }
     // bytea arrives as Buffer (postgres) or Uint8Array (PGlite) — normalize
     const data = Buffer.from(row.data);
     if (vision && isImage) {
-      if (data.length > MAX_VISION_BYTES) { skipped.push(a.name); continue; }
+      if (data.length > MAX_VISION_BYTES) {
+        skipped.push(`${a.name} (over the 10 MB image limit)`);
+        continue;
+      }
+      if (!VISION_MIME.test(a.type)) {
+        skipped.push(`${a.name} (unsupported format — jpg, png or webp work best)`);
+        continue;
+      }
       parts.push({
         type: 'image_url',
         image_url: { url: `data:${a.type};base64,${data.toString('base64')}` },
@@ -3388,8 +3400,12 @@ async function attachmentContent(
       texts.push(`<file name="${a.name}">\n${text}\n</file>`);
       continue;
     }
-    skipped.push(a.name);
+    skipped.push(`${a.name} (unsupported type)`);
   }
+  // Past the per-message cap — still name them so the agent knows they
+  // arrived but weren't opened.
+  for (const a of atts.slice(MAX_ATTS_PER_MSG))
+    skipped.push(`${a.name} (only the first ${MAX_ATTS_PER_MSG} attachments load)`);
   return { parts, extraText: texts.length ? `\n${texts.join('\n')}` : '', skipped };
 }
 
