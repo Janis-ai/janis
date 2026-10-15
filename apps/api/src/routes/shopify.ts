@@ -628,6 +628,11 @@ export function shopifyPublicRoutes(db: Db) {
         return c.json({ error: 'text or attachments required' }, 400);
       }
       const staff = await staffUserFor(db, row, sess.sub);
+      const [agent] = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, row.agentId!))
+        .limit(1);
 
       const externalId = `shopify-ask:${sess.sub ?? 'staff'}`;
       let [conv] = await db
@@ -647,15 +652,29 @@ export function shopifyPublicRoutes(db: Db) {
               email: staff.email,
               identity_verified: true,
               external_id: staff.id,
+              // The embedded app is scoped to the shop's bound agent — stamp
+              // it as the "selected" agent so workspace tools (visitorAgent)
+              // default to it the way the console's selection does.
+              metadata: { current_agent: agent?.name ?? '' },
             },
           })
           .returning();
-      } else if (conv.state === 'archived' || conv.state === 'human') {
+      } else {
+        const p = conv.userProfile as { metadata?: { current_agent?: string } };
+        const patch: Record<string, unknown> = {};
         // A dormant ask thread just wakes up — staff chats never park.
-        await db
-          .update(conversations)
-          .set({ state: 'active' })
-          .where(eq(conversations.id, conv.id));
+        if (conv.state === 'archived' || conv.state === 'human') patch.state = 'active';
+        // Threads from before the current_agent stamp get it backfilled —
+        // tools read it on every call, so one write fixes them forever.
+        if (!p?.metadata?.current_agent && agent?.name) {
+          patch.userProfile = {
+            ...(conv.userProfile as Record<string, unknown>),
+            metadata: { ...p?.metadata, current_agent: agent.name },
+          };
+        }
+        if (Object.keys(patch).length) {
+          await db.update(conversations).set(patch).where(eq(conversations.id, conv.id));
+        }
       }
       await db.insert(messages).values({
         conversationId: conv.id,
@@ -676,7 +695,6 @@ export function shopifyPublicRoutes(db: Db) {
           isUnread: false,
         })
         .where(eq(conversations.id, conv.id));
-      const [agent] = await db.select().from(agents).where(eq(agents.id, row.agentId!)).limit(1);
       if (agent) {
         void runHostedEvent(db, agent, {
           type: 'message.user',

@@ -16,6 +16,7 @@ export default function Composer({
   canTeach,
   sending,
   uploadFile,
+  placeholder,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -31,6 +32,9 @@ export default function Composer({
   /** Upload override — the embedded Shopify app can't reach the cookie-authed
    *  /api/uploads; it supplies a session-token POST instead. */
   uploadFile?: (file: File) => Promise<Attachment | null>;
+  /** Placeholder override — the sendAs-derived default fits inbox replies;
+   *  other surfaces (merchant Ask) need their own. */
+  placeholder?: string;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -175,13 +179,14 @@ export default function Composer({
             if (files?.length) void uploadFiles(files);
           }}
           placeholder={
-            sendAs === 'agent'
+            placeholder ??
+            (sendAs === 'agent'
               ? 'Message the agent will deliver…'
               : sendAs === 'note'
                 ? 'Internal note — teammates only…'
                 : sendAs === 'teach'
                   ? 'Teach the agent a fact it should always know…'
-                  : 'Reply as a human… (Enter sends, Shift+Enter for newline)'
+                  : 'Reply as a human… (Enter sends, Shift+Enter for newline)')
           }
         />
 

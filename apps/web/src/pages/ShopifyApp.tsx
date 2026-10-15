@@ -287,6 +287,7 @@ export default function ShopifyApp() {
   const [askText, setAskText] = useState('');
   const [askSending, setAskSending] = useState(false);
   const [askErr, setAskErr] = useState('');
+  const [askWaiting, setAskWaiting] = useState(false);
   const askBox = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (state.kind === 'linked') setAskConv(state.askConv);
@@ -296,6 +297,13 @@ export default function ShopifyApp() {
       conversation_id: convId,
     });
     setAskMsgs(res.messages);
+    // Typing dots while the newest staff message is unanswered — copilot
+    // runs with tool calls can take a few seconds. Approval cards count as
+    // a response (they're the reply's visible artifact).
+    const last = res.messages
+      .filter((m) => !m.payload?.internal || m.payload?.action)
+      .at(-1);
+    setAskWaiting(last?.direction === 'in');
   };
   // Poll while the Ask tab is open — fast enough to catch the reply the
   // in-flight question triggered without a push channel.
@@ -323,7 +331,7 @@ export default function ShopifyApp() {
   useEffect(() => {
     const el = askBox.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [askMsgs.length]);
+  }, [askMsgs.length, askWaiting]);
   const sendAsk = async (atts: Attachment[], overrideText?: string) => {
     const text = (overrideText ?? askText).trim();
     if ((!text && !atts.length) || askSending) return;
@@ -336,6 +344,7 @@ export default function ShopifyApp() {
       });
       setAskConv(res.conversation_id);
       if (overrideText === undefined) setAskText('');
+      setAskWaiting(true); // the run just kicked off — poll catches the reply
       await loadAsk(res.conversation_id).catch(() => {});
     } catch (err) {
       setAskErr(err instanceof Error ? err.message : 'failed to send');
@@ -1230,31 +1239,23 @@ export default function ShopifyApp() {
                         if (action) {
                           const rows = Object.entries(action.display ?? action.args ?? {});
                           return (
-                            <div
-                              key={m.id}
-                              style={{
-                                margin: '8px 0',
-                                padding: '8px 10px',
-                                border: '1px solid #e5e7eb',
-                                borderRadius: 10,
-                                background: '#fafafa',
-                                fontSize: 12.5,
-                                textAlign: 'left',
-                              }}
-                            >
+                            // Same card chrome as the console rail's
+                            // approval cards.
+                            <div key={m.id} className="action-card" style={{ margin: '8px 0' }}>
                               <div className="mono" style={{ fontSize: 12 }}>
                                 {action.label ?? action.tool}
                               </div>
-                              {rows.slice(0, 6).map(([k, v]) => (
-                                <div key={k} style={{ display: 'flex', gap: 8, marginTop: 3 }}>
-                                  <span className="muted" style={{ minWidth: 72 }}>
-                                    {k}
-                                  </span>
-                                  <span style={{ wordBreak: 'break-word' }}>
-                                    {typeof v === 'string' ? v : JSON.stringify(v)}
-                                  </span>
+                              {rows.length > 0 && (
+                                <div className="action-args">
+                                  {rows
+                                    .slice(0, 6)
+                                    .map(
+                                      ([k, v]) =>
+                                        `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`,
+                                    )
+                                    .join('\n')}
                                 </div>
-                              ))}
+                              )}
                               {action.status === 'pending' ? (
                                 <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                                   <button
@@ -1379,6 +1380,23 @@ export default function ShopifyApp() {
                         );
                       })
                   )}
+                  {askWaiting && (
+                    <div style={{ margin: '4px 0', textAlign: 'left' }}>
+                      <span
+                        className="conv-typing"
+                        style={{
+                          display: 'inline-flex',
+                          padding: '8px 12px',
+                          borderRadius: 12,
+                          background: '#f1f1f4',
+                        }}
+                      >
+                        <span className="dot" />
+                        <span className="dot" />
+                        <span className="dot" />
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <Composer
                   value={askText}
@@ -1389,6 +1407,7 @@ export default function ShopifyApp() {
                   showModeSelect={false}
                   sending={askSending}
                   uploadFile={uploadInboxFile}
+                  placeholder="Ask about your store or your agent…"
                 />
                 {askErr && <div className="error" style={{ marginTop: 8 }}>{askErr}</div>}
               </>

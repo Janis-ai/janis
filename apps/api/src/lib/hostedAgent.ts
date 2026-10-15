@@ -4234,7 +4234,7 @@ async function replyAsHostedAgent(
       }) +
       ((await campaignContextFor(db, convId)) ?? '') +
       (merchantAsk
-        ? "\nThis operator is a verified staff member of the bound Shopify store, chatting inside the embedded app — their workspace is pinned, so act on it directly without asking which one. Store questions (sales, orders, products) are fair game alongside workspace ops. Keep replies compact — the embed is a narrow panel, and long console links can be shortened to the essentials."
+        ? "\nThis operator is a verified staff member of the bound Shopify store, chatting inside the embedded app — their workspace is pinned, so act on it directly without asking which one. Agent-scoped questions ('how is the agent doing', stats, gaps, transcripts) default to the shop's bound agent — the one they're chatting with — unless they ask about the whole workspace or name another agent. Store questions (sales, orders, products) are fair game alongside workspace ops. Keep replies compact — the embed is a narrow panel, and long console links can be shortened to the essentials."
         : '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;
