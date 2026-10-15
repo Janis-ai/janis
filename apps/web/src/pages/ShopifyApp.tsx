@@ -154,10 +154,6 @@ export default function ShopifyApp() {
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
   const [inboxError, setInboxError] = useState('');
-  // Inbox views default to a mid-width card; the expand toggle goes
-  // full-bleed inside the iframe (the admin chrome gives us what it gives).
-  const [expanded, setExpanded] = useState(false);
-
   const uploadInboxFile = async (file: File) => {
     const fd = new FormData();
     fd.append('token', await tok());
@@ -345,7 +341,7 @@ export default function ShopifyApp() {
       <textarea
         value={setupPurpose}
         onChange={(e) => setSetupPurpose(e.target.value)}
-        rows={5}
+        rows={8}
         style={{ width: '100%' }}
       />
       <label>Greeting shoppers see</label>
@@ -460,8 +456,8 @@ export default function ShopifyApp() {
       <div
         className="card login-card"
         style={
-          state.kind === 'linked' && tab === 'inbox'
-            ? { maxWidth: expanded ? 900 : 560, width: '100%', margin: '24px auto' }
+          state.kind === 'linked' || state.kind === 'setup'
+            ? { maxWidth: 960, width: '100%', margin: '24px auto' }
             : { margin: '24px auto' }
         }
       >
@@ -606,19 +602,12 @@ export default function ShopifyApp() {
                     {thread.conv.state === 'needs_human' && (
                       <span style={{ fontSize: 12, color: '#b45309' }}>· asked for a human</span>
                     )}
-                    <span style={{ flex: 1 }} />
-                    <button
-                      className="btn icon"
-                      title={expanded ? 'Shrink' : 'Expand'}
-                      onClick={() => setExpanded((e) => !e)}
-                    >
-                      {expanded ? '⤡' : '⤢'}
-                    </button>
                   </div>
                   <div
                     ref={threadBox}
                     style={{
-                      maxHeight: expanded ? '58vh' : 320,
+                      maxHeight: '58vh',
+                      minHeight: 320,
                       overflowY: 'auto',
                       margin: '10px 0',
                       textAlign: 'left',
@@ -733,14 +722,6 @@ export default function ShopifyApp() {
                 <>
                   <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
                     <strong style={{ fontSize: 14 }}>Inbox</strong>
-                    <span style={{ flex: 1 }} />
-                    <button
-                      className="btn icon"
-                      title={expanded ? 'Shrink' : 'Expand'}
-                      onClick={() => setExpanded((e) => !e)}
-                    >
-                      {expanded ? '⤡' : '⤢'}
-                    </button>
                   </div>
                   {!inbox ? (
                     <div className="muted">Loading conversations…</div>
@@ -752,7 +733,8 @@ export default function ShopifyApp() {
                     <div
                       style={{
                         textAlign: 'left',
-                        maxHeight: 380,
+                        maxHeight: '55vh',
+                        minHeight: 300,
                         overflowY: 'auto',
                         margin: '0 -6px',
                       }}
