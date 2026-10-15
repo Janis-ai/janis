@@ -1,0 +1,1 @@
+ALTER TABLE "shopify_shops" ADD COLUMN "contact_email" text;

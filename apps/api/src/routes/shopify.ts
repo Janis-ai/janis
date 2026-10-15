@@ -32,10 +32,12 @@ import {
   takeover,
   TakeoverError,
 } from '../services/takeover.js';
+import { adminToken } from '../lib/shopifyToken.js';
 import {
   bindShop,
   embedEnabled,
   ensureShopForSession,
+  SHOPIFY_API_VERSION,
   handleShopifyWebhook,
   mintEmbeddedSession,
   signAccessCode,
@@ -165,6 +167,9 @@ export function shopifyPublicRoutes(db: Db) {
         : null;
       out.billing = shopBilling(row);
       out.embed_enabled = enabled; // null = read_themes not granted yet
+      // Store account email — console-access prefills with it (staff
+      // emails need the gated read_users scope; this is all Shopify gives).
+      out.contact_email = row.contactEmail ?? null;
       out.plans = (['starter', 'pro', 'scale'] as const).map((key) => ({
         key,
         name: PLANS[key].name,
@@ -533,14 +538,70 @@ export function shopifyPublicRoutes(db: Db) {
     '/console-access',
     zValidator(
       'json',
-      z.object({ token: z.string(), email: z.string().email().max(320) }),
+      z.object({
+        token: z.string(),
+        // Optional — defaults to the shop's contactEmail (the only address
+        // Shopify exposes without the gated read_users scope). Shops
+        // provisioned before the column existed lazy-fetch + persist here.
+        email: z.string().email().max(320).optional(),
+      }),
     ),
     async (c) => {
       if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
       const { sess, row } = await linkedShop(c);
       if (!sess) return c.json({ error: 'invalid session token' }, 401);
       if (!row) return c.json({ error: 'no bound agent' }, 409);
-      const { email } = c.req.valid('json');
+      let { email } = c.req.valid('json');
+      if (!email && !row.contactEmail) {
+        const token = row.accessTokenEnc ? await adminToken(db, row).catch(() => '') : '';
+        if (token) {
+          try {
+            const res = await fetch(
+              `https://${row.shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+              {
+                method: 'POST',
+                headers: {
+                  'content-type': 'application/json',
+                  'x-shopify-access-token': token,
+                },
+                body: JSON.stringify({ query: '{shop{contactEmail email}}' }),
+              },
+            );
+            const json = (await res.json()) as {
+              data?: { shop?: { contactEmail?: string; email?: string } };
+            };
+            const ce = json.data?.shop?.contactEmail || json.data?.shop?.email;
+            if (ce) {
+              await db
+                .update(shopifyShops)
+                .set({ contactEmail: ce })
+                .where(eq(shopifyShops.id, row.id));
+              row.contactEmail = ce;
+            }
+          } catch {
+            /* fall through to the 400 below */
+          }
+        }
+      }
+      email = email ?? row.contactEmail ?? undefined;
+      if (!email) {
+        return c.json({ error: 'no store email on file — enter one' }, 400);
+      }
+      email = email.toLowerCase();
+      // The staff member's real address just landed on our side — stamp it
+      // on their synthetic staff row so inbox replies attribute to a person
+      // ("mike@store.com took over") instead of "Store staff".
+      if (sess.sub) {
+        await db
+          .update(users)
+          .set({ name: email })
+          .where(
+            and(
+              eq(users.email, `shopify-staff+${sess.sub}@${row.shop}`),
+              eq(users.name, 'Store staff'),
+            ),
+          );
+      }
       const code = signAccessCode(row.id, email);
       await sendEmail(
         [email],
@@ -548,7 +609,7 @@ export function shopifyPublicRoutes(db: Db) {
         `Open the Janis console for ${row.shop} — this link signs you in and connects you to the store's workspace. It's valid for 24 hours.`,
         `/api/shopify/magic-login?code=${encodeURIComponent(code)}`,
       );
-      return c.json({ ok: true });
+      return c.json({ ok: true, sent_to: email });
     },
   );
 

@@ -1059,6 +1059,9 @@ export const shopifyShops = pgTable('shopify_shops', {
   scopes: text('scopes').notNull().default(''), // granted scope list
   // 'unlinked' = installed-not-bound | 'linked' = serving | 'uninstalled'.
   state: text('state').notNull().default('unlinked'),
+  // The shop's account email (Admin API shop.contactEmail) — prefills
+  // console-access; staff emails themselves need the gated read_users scope.
+  contactEmail: text('contact_email'),
   // Auto-provision gate — stamped when the embedded session created the
   // shop's workspace+agent itself (zero-login install), and also stamped by
   // unbindShop so a deliberate unlink is never auto-rebound on next load.

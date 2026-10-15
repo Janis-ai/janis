@@ -60,6 +60,7 @@ type SessionState =
       usage: { used: number; included: number; capped: boolean } | null;
       billing: { status?: string; plan?: string } | null;
       embedEnabled: boolean | null;
+      contactEmail: string | null;
       plans: { key: string; name: string; price_cents: number; included_messages: number }[];
     }
   | { kind: 'uninstalled'; shop: string };
@@ -366,7 +367,13 @@ export default function ShopifyApp() {
     setConsoleErr('');
     setConsoleSent(false);
     try {
-      await shopifyApi('/api/shopify/console-access', { email: consoleEmail.trim() });
+      const em = consoleEmail.trim();
+      // Empty → server falls back to the shop's stored contact email.
+      const res = await shopifyApi<{ sent_to?: string }>(
+        '/api/shopify/console-access',
+        em ? { email: em } : {},
+      );
+      if (res.sent_to && !em) setConsoleEmail(res.sent_to);
       setConsoleSent(true);
     } catch (err) {
       setConsoleErr(err instanceof Error ? err.message : 'could not send link');
@@ -498,6 +505,7 @@ export default function ShopifyApp() {
             usage?: { used: number; included: number; capped: boolean } | null;
             billing?: { status?: string; plan?: string } | null;
             embed_enabled?: boolean | null;
+            contact_email?: string | null;
             plans?: { key: string; name: string; price_cents: number; included_messages: number }[];
           }>('/api/shopify/session', { method: 'POST', body: JSON.stringify({ token: t }) });
         const res = await postSession(token).catch(async (err) => {
@@ -566,9 +574,13 @@ export default function ShopifyApp() {
               usage: res.usage ?? null,
               billing: res.billing ?? null,
               embedEnabled: res.embed_enabled ?? null,
+              contactEmail: res.contact_email ?? null,
               plans: res.plans ?? [],
             });
           }
+          // Prefill console-access with the shop's contact email — staff
+          // emails aren't readable without the gated read_users scope.
+          if (res.contact_email) setConsoleEmail((v) => v || res.contact_email!);
           if (localStorage.getItem(`janis:embed-opened:${res.shop}`) === '1') setEmbedOpened(true);
         } else if (res.state === 'uninstalled') {
           setState({ kind: 'uninstalled', shop: res.shop });
@@ -1081,7 +1093,8 @@ export default function ShopifyApp() {
               <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 4px' }}>Janis console</p>
               <p className="muted" style={{ fontSize: 12.5, margin: '0 0 8px' }}>
                 Knowledge base, tools, channels, evals and more live in the full console — we'll
-                email you a link that signs you in and connects you to this store's workspace.
+                email a sign-in link to your store email{state.contactEmail ? '' : ' (enter it below)'};
+                it signs you in and connects you to this store's workspace.
               </p>
               <div style={{ display: 'flex', gap: 6 }}>
                 <input

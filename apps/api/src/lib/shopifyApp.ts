@@ -49,7 +49,7 @@ import { generateDraft } from './agentBuilder.js';
  */
 
 // Same version the shopify_* tool defs target (toolTemplates.ts) — probe-verified live.
-const SHOPIFY_API_VERSION = '2026-10';
+export const SHOPIFY_API_VERSION = '2026-10';
 const LINK_CODE_TTL_MS = 30 * 60 * 1000;
 // The Shopify session token is a ~90s bootstrap credential — once /session
 // verifies it we hand back this Janis-minted JWT so the iframe's subsequent
@@ -668,9 +668,9 @@ export async function bindShop(
  *  of a synthetic actor. The email is a deterministic synthetic address —
  *  password_hash stays null so the row can never sign in, and it holds no
  *  membership; it exists purely as an identity for audit + message
- *  authorship. The staff member's real name comes from the Admin API
- *  user(id:) query — no extra scope required; failure leaves the generic
- *  "Store staff" label. */
+ *  authorship. Shopify gives us only the numeric staff sub — names/emails
+ *  sit behind the gated read_users scope, so the label stays generic until
+ *  console-access backfills a real address. */
 export async function staffUserFor(
   db: Db,
   row: ShopRow,
@@ -679,29 +679,11 @@ export async function staffUserFor(
   const email = `shopify-staff+${sub || 'unknown'}@${row.shop}`;
   const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existing) return existing;
-  let name = 'Store staff';
-  try {
-    const token = row.accessTokenEnc ? await adminToken(db, row) : null;
-    if (token && sub) {
-      const res = await fetch(
-        `https://${row.shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-shopify-access-token': token },
-          body: JSON.stringify({
-            query: `{ user(id: "gid://shopify/User/${sub}") { firstName lastName } }`,
-          }),
-        },
-      );
-      const json = (await res.json()) as {
-        data?: { user?: { firstName?: string | null; lastName?: string | null } | null };
-      };
-      const u = json.data?.user;
-      name = [u?.firstName, u?.lastName].filter(Boolean).join(' ') || name;
-    }
-  } catch {
-    /* generic label is fine */
-  }
+  // Staff names/emails need the gated read_users scope (Plus/Advanced or
+  // finance apps only — verified against Admin API 2026-10). The real
+  // address lands on this row when the staff member requests console
+  // access; until then the label is generic.
+  const name = 'Store staff';
   await db.insert(users).values({ email, name }).onConflictDoNothing();
   const [u] = await db.select().from(users).where(eq(users.email, email)).limit(1);
   return u;
@@ -760,6 +742,14 @@ export async function provisionShopWorkspace(db: Db, row: ShopRow): Promise<Shop
       } catch {
         /* the handle-derived name is fine */
       }
+    }
+    // Persist the store's account email — console-access defaults to it
+    // (staff emails need the gated read_users scope; this is all we get).
+    if (contactEmail) {
+      await db
+        .update(shopifyShops)
+        .set({ contactEmail })
+        .where(eq(shopifyShops.id, row.id));
     }
 
     [ws] = await db

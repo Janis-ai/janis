@@ -288,13 +288,37 @@ describe('shopify console access — magic sign-in', () => {
       .from(shopifyShops)
       .where(eq(shopifyShops.shop, ACCESS_SHOP));
     expect(row.state).toBe('linked');
+    // contactEmail persisted at provision (stub returns owner@test.dev).
+    expect(row.contactEmail).toBe('owner@test.dev');
 
-    const res = await app.request('/api/shopify/console-access', {
+    // Synthetic staff row for this session's sub — console-access should
+    // backfill its name with the requested address.
+    await db.insert(users).values({
+      email: `shopify-staff+42@${ACCESS_SHOP}`, name: 'Store staff',
+    }).onConflictDoNothing();
+
+    // No email → defaults to the persisted store contact email.
+    const res0 = await app.request('/api/shopify/console-access', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(ACCESS_SHOP) }),
+    });
+    expect(res0.status).toBe(200);
+    const body0 = await res0.json();
+    expect(body0.sent_to).toBe('owner@test.dev');
+
+    // Staff row now names the real address.
+    const [su] = await db.select().from(users).where(
+      eq(users.email, `shopify-staff+42@${ACCESS_SHOP}`));
+    expect(su.name).toBe('owner@test.dev');
+
+    // Explicit address still works.
+    const res2 = await app.request('/api/shopify/console-access', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ token: sessionJwt(ACCESS_SHOP), email: 'Owner@Store.com' }),
     });
-    expect(res.status).toBe(200);
+    expect(res2.status).toBe(200);
 
     const code = signAccessCode(row.id, 'owner@store.com');
     const redeem = await app.request(
