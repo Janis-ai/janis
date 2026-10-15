@@ -85,12 +85,27 @@ const convName = (cv: InboxConv) =>
   cv.user_profile?.name || cv.user_profile?.first_name || cv.user_profile?.email || 'Visitor';
 
 async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopify']> | null> {
+  // Re-running this effect must NOT re-inject the script — a second eval can
+  // reset the bridge singleton, after which idToken() rejects and every
+  // request silently falls back to the dead 60-second boot token.
+  if (window.shopify?.idToken) return window.shopify;
   // The meta tag MUST exist before the script evaluates — v4 reads its
   // config (api key + host param) off it at init.
-  const meta = document.createElement('meta');
-  meta.name = 'shopify-api-key';
-  meta.content = apiKey;
-  document.head.appendChild(meta);
+  if (!document.querySelector('meta[name="shopify-api-key"]')) {
+    const meta = document.createElement('meta');
+    meta.name = 'shopify-api-key';
+    meta.content = apiKey;
+    document.head.appendChild(meta);
+  }
+  if (document.querySelector('script[src*="app-bridge.js"]')) {
+    // Script already injected (still initializing) — just poll.
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      if (window.shopify?.idToken) return window.shopify;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return null;
+  }
   await new Promise<void>((resolve, reject) => {
     const s = document.createElement('script');
     s.src = 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
@@ -134,8 +149,21 @@ export default function ShopifyApp() {
   const [briefSaved, setBriefSaved] = useState(false);
   const sessionToken = useRef('');
   const bridgeRef = useRef<NonNullable<Window['shopify']> | null>(null);
-  const tok = async () =>
-    (await bridgeRef.current?.idToken?.().catch(() => undefined)) ?? sessionToken.current;
+  const tok = async () => {
+    const direct = await bridgeRef.current?.idToken?.().catch(() => undefined);
+    if (direct) return direct;
+    // The bridge can lose its session context when the frame idles — try
+    // re-attaching before falling back to the (likely dead) boot token.
+    if (apiKey) {
+      const revived = await loadAppBridge(apiKey);
+      if (revived) {
+        bridgeRef.current = revived;
+        const t = await revived.idToken?.().catch(() => undefined);
+        if (t) return t;
+      }
+    }
+    return sessionToken.current;
+  };
   const [subscribing, setSubscribing] = useState('');
   const [planError, setPlanError] = useState('');
 
@@ -376,23 +404,39 @@ export default function ShopifyApp() {
         if (!token) throw new Error('no session token — open this app inside Shopify admin');
         sessionToken.current = token;
         bridgeRef.current = bridge;
-        const res = await api<{
-          shop: string;
-          state: string;
-          link_url?: string;
-          claim_url?: string;
-          claimed?: boolean;
-          agent?: string | null;
-          agent_id?: string | null;
-          workspace?: string | null;
-          purpose?: string | null;
-          greeting?: string | null;
-          plan?: string;
-          usage?: { used: number; included: number; capped: boolean } | null;
-          billing?: { status?: string; plan?: string } | null;
-          embed_enabled?: boolean | null;
-          plans?: { key: string; name: string; price_cents: number; included_messages: number }[];
-        }>('/api/shopify/session', { method: 'POST', body: JSON.stringify({ token }) });
+        const postSession = (t: string) =>
+          api<{
+            shop: string;
+            state: string;
+            link_url?: string;
+            claim_url?: string;
+            claimed?: boolean;
+            agent?: string | null;
+            agent_id?: string | null;
+            workspace?: string | null;
+            purpose?: string | null;
+            greeting?: string | null;
+            plan?: string;
+            usage?: { used: number; included: number; capped: boolean } | null;
+            billing?: { status?: string; plan?: string } | null;
+            embed_enabled?: boolean | null;
+            plans?: { key: string; name: string; price_cents: number; included_messages: number }[];
+          }>('/api/shopify/session', { method: 'POST', body: JSON.stringify({ token: t }) });
+        const res = await postSession(token).catch(async (err) => {
+          // The boot token can be stale (admin shell sat open >60s, bridge
+          // hiccup → stale URL-param fallback). One recovery shot: re-mint
+          // and repost before surfacing an error.
+          if (err instanceof Error && err.message.includes('invalid session token')) {
+            const fresh =
+              (await bridgeRef.current?.idToken?.().catch(() => undefined)) ??
+              (await bridge?.idToken?.().catch(() => undefined));
+            if (fresh) {
+              sessionToken.current = fresh;
+              return postSession(fresh);
+            }
+          }
+          throw err;
+        });
         if (cancelled) return;
         if (res.state === 'linked') {
           // Auto-provisioned shops (claimed=false) get the brief-approval
