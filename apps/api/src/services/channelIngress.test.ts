@@ -662,6 +662,61 @@ describe('hosted handoff offers', () => {
     expect(offers).toHaveLength(1);
   });
 
+  it('an [OFFER_HUMAN] after text with no offer question still ships a visible offer', async () => {
+    // Prod incident (conv 3f10cfee): a failed tool call made the model emit
+    // "I'm unable to create draft orders … you can check out in your cart."
+    // + [OFFER_HUMAN] — the reply never asked, yet "Yes, get a human" chips
+    // attached to text that offered nothing.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          llmResponse(
+            "I'm unable to create draft orders directly in this chat, but you can check out in your cart.\n[OFFER_HUMAN]",
+          ),
+        ),
+      ),
+    );
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'Hosted',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-offer-unasked' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'great' });
+
+    await runHostedEvent(db, hosted, offerEvent(conv.id, 'ext-offer-unasked'));
+
+    const outs = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    const visible = outs.filter(
+      (m) => m.direction === 'out' && !(m.flags as { handoff_offer?: boolean } | null)?.handoff_offer,
+    );
+    expect(visible).toHaveLength(1);
+    // the original text stays, plus an appended offer line so the buttons
+    // have an antecedent
+    expect(visible[0].text).toContain('unable to create draft orders');
+    expect(visible[0].text).toMatch(/\?/);
+    expect((visible[0].payload as { quick_replies?: unknown[] }).quick_replies).toEqual([
+      'Yes, get a human',
+      'No thanks',
+    ]);
+  });
+
   it('a bare [HANDOFF] still tells the customer a human is coming', async () => {
     vi.stubGlobal(
       'fetch',
