@@ -56,7 +56,11 @@ import {
   verifyProxySig,
   verifySessionToken,
   verifyWebhookHmac,
+  shopifyStats,
+  shopSettings,
 } from '../lib/shopifyApp.js';
+import { MERCHANT_CONV } from '../lib/convFilters.js';
+import { runHostedEvent } from '../lib/hostedAgent.js';
 
 /**
  * Embedded-app endpoints — three trust domains, three mounts:
@@ -171,6 +175,23 @@ export function shopifyPublicRoutes(db: Db) {
       // Store account email — console-access prefills with it (staff
       // emails need the gated read_users scope; this is all Shopify gives).
       out.contact_email = row.contactEmail ?? null;
+      // Merchant settings (abandoned-checkout nudge) + 30-day stats for
+      // the Store tab cards — orders attributed to chat, revenue, topic mix.
+      out.settings = { nudge: true, nudge_after_minutes: 30, ...shopSettings(row) };
+      out.stats = await shopifyStats(db, row, agent?.config);
+      // The staff member's persistent Ask-Janis thread — lets the Ask tab
+      // reload prior Q&A instead of opening blank every visit.
+      const [askConv] = await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.agentId, row.agentId),
+            eq(conversations.externalId, `shopify-ask:${sess.sub ?? 'staff'}`),
+          ),
+        )
+        .limit(1);
+      out.ask_conversation_id = askConv?.id ?? null;
       out.plans = (['starter', 'pro', 'scale'] as const).map((key) => ({
         key,
         name: PLANS[key].name,
@@ -325,6 +346,7 @@ export function shopifyPublicRoutes(db: Db) {
       const conditions = [
         eq(conversations.agentId, row.agentId!),
         ne(conversations.state, 'archived'),
+        sql`not ${MERCHANT_CONV}`,
       ];
       const sortKey = sql`coalesce(${conversations.lastMessageAt}, ${conversations.createdAt})`;
       if (q.cursor) {
@@ -529,6 +551,120 @@ export function shopifyPublicRoutes(db: Db) {
         if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
         throw err;
       }
+    },
+  );
+
+  // Merchant settings — today just the abandoned-checkout nudge (a
+  // proactive agent message ~N min after a checkout starts and doesn't
+  // convert). Read back via /session.
+  app.post(
+    '/settings',
+    zValidator(
+      'json',
+      z.object({
+        token: z.string(),
+        nudge: z.boolean().optional(),
+        nudge_after_minutes: z.number().int().min(5).max(240).optional(),
+      }),
+    ),
+    async (c) => {
+      if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+      const { sess, row } = await linkedShop(c);
+      if (!sess) return c.json({ error: 'invalid session token' }, 401);
+      if (!row) return c.json({ error: 'no bound agent' }, 409);
+      const q = c.req.valid('json');
+      const next = {
+        ...shopSettings(row),
+        ...(q.nudge !== undefined ? { nudge: q.nudge } : {}),
+        ...(q.nudge_after_minutes !== undefined
+          ? { nudge_after_minutes: q.nudge_after_minutes }
+          : {}),
+      };
+      const [updated] = await db
+        .update(shopifyShops)
+        .set({ settings: next, updatedAt: new Date() })
+        .where(eq(shopifyShops.id, row.id))
+        .returning();
+      return c.json({
+        settings: { nudge: true, nudge_after_minutes: 30, ...shopSettings(updated) },
+      });
+    },
+  );
+
+  // Ask Janis — the merchant copilot. A staff member chats with their own
+  // agent from the embedded app ("how did we do this week?", "how many
+  // orders shipped yesterday?") — the agent runs its real tool set with
+  // operator-grade identity, so analytics/order tools answer for them.
+  // One persistent thread per staff member (externalId shopify-ask:<sub>);
+  // excluded from inbox lists everywhere via userProfile.kind.
+  app.post(
+    '/ask',
+    zValidator(
+      'json',
+      z.object({ token: z.string(), text: z.string().min(1).max(4000) }),
+    ),
+    async (c) => {
+      if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+      const { sess, row } = await linkedShop(c);
+      if (!sess) return c.json({ error: 'invalid session token' }, 401);
+      if (!row) return c.json({ error: 'no bound agent' }, 409);
+      const { text } = c.req.valid('json');
+      const staff = await staffUserFor(db, row, sess.sub);
+
+      const externalId = `shopify-ask:${sess.sub ?? 'staff'}`;
+      let [conv] = await db
+        .select()
+        .from(conversations)
+        .where(and(eq(conversations.agentId, row.agentId!), eq(conversations.externalId, externalId)))
+        .limit(1);
+      if (!conv) {
+        [conv] = await db
+          .insert(conversations)
+          .values({
+            agentId: row.agentId!,
+            externalId,
+            userProfile: {
+              kind: 'merchant_ask',
+              name: staff.name,
+              email: staff.email,
+              identity_verified: true,
+              external_id: staff.id,
+            },
+          })
+          .returning();
+      } else if (conv.state === 'archived' || conv.state === 'human') {
+        // A dormant ask thread just wakes up — staff chats never park.
+        await db
+          .update(conversations)
+          .set({ state: 'active' })
+          .where(eq(conversations.id, conv.id));
+      }
+      await db.insert(messages).values({
+        conversationId: conv.id,
+        direction: 'in',
+        authorId: staff.id,
+        text,
+        payload: { merchant_ask: true },
+      });
+      await db
+        .update(conversations)
+        .set({
+          lastMessageAt: new Date(),
+          lastMessageDirection: 'in',
+          lastMessagePreview: text.slice(0, 120),
+          isUnread: false,
+        })
+        .where(eq(conversations.id, conv.id));
+      const [agent] = await db.select().from(agents).where(eq(agents.id, row.agentId!)).limit(1);
+      if (agent) {
+        void runHostedEvent(db, agent, {
+          type: 'message.user',
+          conversation_id: conv.externalId,
+          janis_conversation_id: conv.id,
+          timestamp: new Date().toISOString(),
+        }).catch((err) => console.error(`shopify ask ${row.shop}:`, err));
+      }
+      return c.json({ conversation_id: conv.id });
     },
   );
 

@@ -47,6 +47,9 @@ export async function systemNote(
     authorId?: string | null;
     /** 'human' shows the operator as sender; 'out' (default) shows Janis. */
     direction?: 'out' | 'human';
+    /** Extra fields merged into payload.internal — structured data a later
+     *  job or stat query can match on (e.g. an order's checkout_token). */
+    extra?: Record<string, unknown>;
   } = {},
 ): Promise<void> {
   const [note] = await db
@@ -56,7 +59,7 @@ export async function systemNote(
       direction: opts.direction ?? 'out',
       authorId: opts.authorId ?? null,
       text,
-      payload: { internal: true, event },
+      payload: { internal: true, event, ...opts.extra },
     })
     .returning();
   bus.publish(workspaceId, { type: 'message', data: toMessage(note) });

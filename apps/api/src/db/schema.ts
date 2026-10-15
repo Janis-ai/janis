@@ -1068,6 +1068,10 @@ export const shopifyShops = pgTable('shopify_shops', {
   provisionedAt: timestamp('provisioned_at', { withTimezone: true }),
   // Shopify Billing state (phase 5): {subscription_id, capped_amount_cents…}
   billing: jsonb('billing').notNull().default({}),
+  // Merchant-tunable behavior: { nudge?: boolean (default true),
+  // nudge_after_minutes?: number (default 30) } — the abandoned-checkout
+  // proactive message the agent sends when a checkout stalls.
+  settings: jsonb('settings').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

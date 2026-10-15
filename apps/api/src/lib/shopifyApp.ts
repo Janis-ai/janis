@@ -25,6 +25,9 @@ import { invalidateChannelCache } from './channels.js';
 import { purgeContactData } from './contacts.js';
 import { bumpCatalogSync, ensureShopifyKnowledge } from './shopifySync.js';
 import { systemNote } from './systemNote.js';
+import { enqueueJob } from './jobs.js';
+import { runHostedEvent } from './hostedAgent.js';
+import { filterDismissedGaps, gapsCacheFresh, readGapsCache } from '../services/knowledgeGaps.js';
 import { bus } from './bus.js';
 import { toMessage } from './serializers.js';
 import { TOOL_TEMPLATES } from './toolTemplates.js';
@@ -1111,7 +1114,17 @@ async function orderEventNote(
     .orderBy(desc(conversations.lastMessageAt))
     .limit(1);
   if (!conv) return;
-  await systemNote(db, row.workspaceId, conv.id, summary, 'order_event');
+  // checkout_token links an order back to the checkout session that
+  // produced it — the abandonment nudge checks for this marker before
+  // sending, and the attribution stat counts placed orders carrying it.
+  const orderRef = {
+    kind,
+    order_id: String(payload.id ?? payload.order_number ?? ''),
+    checkout_token: (payload.checkout_token as string | undefined) ?? null,
+    total: total ?? null,
+    currency: currency ?? null,
+  };
+  await systemNote(db, row.workspaceId, conv.id, summary, 'order_event', { extra: { order: orderRef } });
 
   if (kind === 'refunded') {
     const { created, alert } = await openAlertOnce(db, {
@@ -1260,6 +1273,157 @@ async function checkoutNote(
     })
     .returning();
   bus.publish(row.workspaceId, { type: 'message', data: toMessage(note) });
+
+  // Abandoned-checkout nudge — one delayed job per checkout token (the dup
+  // check above guarantees exactly one). At fire time runCheckoutNudge
+  // re-verifies the shopper still hasn't ordered before speaking.
+  const st = shopSettings(row);
+  if (st.nudge !== false && conv.state !== 'human' && conv.state !== 'archived') {
+    await enqueueJob(db, {
+      workspaceId: row.workspaceId,
+      type: 'shopify.checkout_nudge',
+      payload: { convId: conv.id, checkoutToken: token, summary },
+      runAt: new Date(Date.now() + (st.nudge_after_minutes ?? 30) * 60_000),
+    });
+  }
+}
+
+/** Merchant-tunable shop settings ({nudge, nudge_after_minutes}) — the
+ *  abandoned-checkout proactive message. On by default; the embedded app's
+ *  Store tab toggle writes these via PATCH /api/shopify/settings. */
+export interface ShopSettings {
+  nudge?: boolean;
+  nudge_after_minutes?: number;
+}
+export function shopSettings(row: ShopRow): ShopSettings {
+  return (row.settings ?? {}) as ShopSettings;
+}
+
+/** jobs.ts handler — 'shopify.checkout_nudge'. The checkout that produced
+ *  the job sat ~N minutes by fire time: if an orders/create note carrying
+ *  the same checkout token landed, the shopper converted and no nudge is
+ *  owed. Otherwise the agent writes ONE shopper-visible nudge — the
+ *  instruction rides as an internal 'in' turn (visitor-filtered, but the
+ *  model reads it) so the normal reply pipeline composes it in-voice. */
+export async function runCheckoutNudge(
+  db: Db,
+  workspaceId: string,
+  payload: { convId?: string; checkoutToken?: string; summary?: string },
+): Promise<void> {
+  const { convId, checkoutToken, summary } = payload;
+  if (!convId || !checkoutToken) return;
+  const [conv] = await db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.id, convId))
+    .limit(1);
+  if (!conv || conv.state === 'human' || conv.state === 'archived') return;
+  const [agent] = await db.select().from(agents).where(eq(agents.id, conv.agentId)).limit(1);
+  if (!agent?.hosted) return;
+
+  const [converted] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, convId),
+        sql`${messages.payload}->>'event' = 'order_event'`,
+        sql`${messages.payload}->'order'->>'checkout_token' = ${checkoutToken}`,
+      ),
+    )
+    .limit(1);
+  if (converted) return;
+
+  // One nudge per checkout — a retried job must not nag twice.
+  const [sent] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, convId),
+        sql`${messages.payload}->>'event' = 'checkout_nudge'`,
+        sql`${messages.payload}->>'checkout' = ${checkoutToken}`,
+      ),
+    )
+    .limit(1);
+  if (sent) return;
+
+  const directive =
+    `(Janis — not the shopper: they began checkout on the store a while ago ` +
+    `(${summary ?? 'items in their cart'}) and haven't placed the order yet. ` +
+    `Send ONE short, warm nudge — acknowledge what they were buying if the ` +
+    `conversation shows it, and offer help or an answer to whatever held them ` +
+    `up. Never invent a discount. Do not mention this note.)`;
+  await db.insert(messages).values({
+    conversationId: convId,
+    direction: 'in',
+    text: directive,
+    payload: { internal: true, event: 'checkout_nudge', checkout: checkoutToken },
+  });
+  await db
+    .update(conversations)
+    .set({ lastMessageAt: new Date(), lastMessageDirection: 'in' })
+    .where(eq(conversations.id, convId));
+  // Best-effort: the nudge marker above is already written, so a transient
+  // LLM failure would never re-fire anyway — don't dead-letter the job.
+  await runHostedEvent(db, agent, {
+    type: 'message.user',
+    conversation_id: conv.externalId,
+    janis_conversation_id: convId,
+    timestamp: new Date().toISOString(),
+  }).catch((err) => console.error(`checkout nudge ${convId}:`, err));
+}
+
+/** Embedded-app stats: orders attributed to a chat conversation (the
+ *  shopper emailed/checkout while a thread existed — the order note lands
+ *  on it) plus question/topic mix and open knowledge gaps for the
+ *  insights card. 30-day window. */
+export async function shopifyStats(
+  db: Db,
+  row: ShopRow,
+  agentConfig: unknown,
+): Promise<{
+  orders_30d: number;
+  revenue_30d: { amount: number; currency: string; orders: number }[];
+  top_intents: { label: string; count: number }[];
+  open_gaps: number;
+}> {
+  const empty = { orders_30d: 0, revenue_30d: [], top_intents: [], open_gaps: 0 };
+  if (!row.agentId) return empty;
+  const rev = (await db.execute(sql`
+    select count(*)::int as orders,
+           coalesce(sum((m.payload->'order'->>'total')::numeric), 0)::float as amount,
+           m.payload->'order'->>'currency' as currency
+    from ${messages} m
+    inner join ${conversations} c on c.id = m.conversation_id
+    where c.agent_id = ${row.agentId}
+      and m.payload->>'event' = 'order_event'
+      and m.payload->'order'->>'kind' = 'placed'
+      and m.created_at > now() - interval '30 days'
+    group by 3
+    order by 1 desc
+  `)) as unknown as { rows?: { orders: number; amount: number; currency: string }[] };
+  const revenue = (rev.rows ?? []).filter((r) => r.currency);
+  const intents = (await db.execute(sql`
+    select intent as label, count(*)::int as count
+    from ${conversations}
+    where agent_id = ${row.agentId}
+      and intent is not null
+      and created_at > now() - interval '30 days'
+    group by intent
+    order by 2 desc
+    limit 5
+  `)) as unknown as { rows?: { label: string; count: number }[] };
+  const cached = readGapsCache(agentConfig);
+  const openGaps = cached && gapsCacheFresh(cached)
+    ? filterDismissedGaps(cached.gaps, agentConfig).length
+    : 0;
+  return {
+    orders_30d: revenue.reduce((n, r) => n + r.orders, 0),
+    revenue_30d: revenue,
+    top_intents: intents.rows ?? [],
+    open_gaps: openGaps,
+  };
 }
 
 /** app_subscriptions/update → reconcile workspace plan. ACTIVE flips

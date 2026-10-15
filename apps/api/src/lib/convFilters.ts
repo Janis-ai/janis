@@ -61,6 +61,11 @@ export const TEST_CONV = sql`(
   )
 )`;
 
+/** Merchant-ask threads — a Shopify staff member talking to their own agent
+ *  from the embedded app's Ask tab. Not a customer conversation: excluded
+ *  from inbox lists, unread/attention badges, and search everywhere. */
+export const MERCHANT_CONV = sql`coalesce(${conversations.userProfile}->>'kind', '') = 'merchant_ask'`;
+
 /** WHERE conditions for conversation listing — workspace scope + filters.
  * Shared by /api/conversations and /api/search so filters behave identically. */
 export function convListConditions(
@@ -70,7 +75,11 @@ export function convListConditions(
   scope?: AgentScope,
 ): SQL[] {
   const scoped = agentScopeCond(scope ?? null);
-  const conditions: SQL[] = [eq(agents.workspaceId, workspaceId), ...(scoped ? [scoped] : [])];
+  const conditions: SQL[] = [
+    eq(agents.workspaceId, workspaceId),
+    ...(scoped ? [scoped] : []),
+    sql`not ${MERCHANT_CONV}`,
+  ];
   // Legacy single-select `state` folds into the same buckets the csv params
   // feed — ?state=unread and ?flags=unread are the same filter.
   const states = new Set(q.states ?? []);

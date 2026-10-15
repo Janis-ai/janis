@@ -62,6 +62,14 @@ type SessionState =
       embedEnabled: boolean | null;
       contactEmail: string | null;
       plans: { key: string; name: string; price_cents: number; included_messages: number }[];
+      settings: { nudge: boolean; nudge_after_minutes: number };
+      stats: {
+        orders_30d: number;
+        revenue_30d: { amount: number; currency: string; orders: number }[];
+        top_intents: { label: string; count: number }[];
+        open_gaps: number;
+      } | null;
+      askConv: string | null;
     }
   | { kind: 'uninstalled'; shop: string };
 
@@ -256,7 +264,7 @@ export default function ShopifyApp() {
   // In-frame inbox — the session token is the credential for
   // /api/shopify/inbox/*. Staff identity comes from the JWT on the API
   // side; the client just sends the token.
-  const [tab, setTab] = useState<'home' | 'inbox' | 'agent'>('home');
+  const [tab, setTab] = useState<'home' | 'inbox' | 'agent' | 'ask'>('home');
   const [inbox, setInbox] = useState<InboxConv[] | null>(null);
   const [thread, setThread] = useState<{
     conv: InboxConv;
@@ -269,6 +277,86 @@ export default function ShopifyApp() {
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
   const [inboxError, setInboxError] = useState('');
+
+  // Ask Janis — the merchant's own thread with their agent (merchant_ask
+  // conversations never surface in the shopper inbox; one per staff member,
+  // resumed across sessions via /session's ask_conversation_id).
+  const [askConv, setAskConv] = useState<string | null>(null);
+  const [askMsgs, setAskMsgs] = useState<InboxMsg[]>([]);
+  const [askText, setAskText] = useState('');
+  const [askSending, setAskSending] = useState(false);
+  const [askErr, setAskErr] = useState('');
+  const askBox = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (state.kind === 'linked') setAskConv(state.askConv);
+  }, [state]);
+  const loadAsk = async (convId: string) => {
+    const res = await shopifyApi<{ messages: InboxMsg[] }>('/api/shopify/inbox/thread', {
+      conversation_id: convId,
+    });
+    setAskMsgs(res.messages);
+  };
+  // Poll while the Ask tab is open — fast enough to catch the reply the
+  // in-flight question triggered without a push channel.
+  useEffect(() => {
+    if (state.kind !== 'linked' || tab !== 'ask' || !askConv) return;
+    let dead = false;
+    const load = async () => {
+      try {
+        const res = await shopifyApi<{ messages: InboxMsg[] }>('/api/shopify/inbox/thread', {
+          conversation_id: askConv,
+        });
+        if (!dead) setAskMsgs(res.messages);
+      } catch {
+        /* keep the last snapshot */
+      }
+    };
+    void load();
+    const t = setInterval(() => void load(), 3000);
+    return () => {
+      dead = true;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.kind, tab, askConv]);
+  useEffect(() => {
+    const el = askBox.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [askMsgs.length]);
+  const sendAsk = async () => {
+    const text = askText.trim();
+    if (!text || askSending) return;
+    setAskSending(true);
+    setAskErr('');
+    try {
+      const res = await shopifyApi<{ conversation_id: string }>('/api/shopify/ask', { text });
+      setAskConv(res.conversation_id);
+      setAskText('');
+      await loadAsk(res.conversation_id).catch(() => {});
+    } catch (err) {
+      setAskErr(err instanceof Error ? err.message : 'failed to send');
+    } finally {
+      setAskSending(false);
+    }
+  };
+
+  const saveSettings = async (patch: { nudge?: boolean; nudge_after_minutes?: number }) => {
+    const res = await shopifyApi<{
+      settings: { nudge: boolean; nudge_after_minutes: number };
+    }>('/api/shopify/settings', patch);
+    setState((s) =>
+      s.kind === 'linked'
+        ? {
+            ...s,
+            settings: {
+              nudge: res.settings.nudge,
+              nudge_after_minutes: res.settings.nudge_after_minutes,
+            },
+          }
+        : s,
+    );
+  };
+
   const uploadInboxFile = async (file: File) => {
     const fd = new FormData();
     fd.append('token', await tok());
@@ -543,6 +631,14 @@ export default function ShopifyApp() {
             embed_enabled?: boolean | null;
             contact_email?: string | null;
             plans?: { key: string; name: string; price_cents: number; included_messages: number }[];
+            settings?: { nudge?: boolean; nudge_after_minutes?: number };
+            stats?: {
+              orders_30d: number;
+              revenue_30d: { amount: number; currency: string; orders: number }[];
+              top_intents: { label: string; count: number }[];
+              open_gaps: number;
+            } | null;
+            ask_conversation_id?: string | null;
           }>('/api/shopify/session', { method: 'POST', body: JSON.stringify({ token: t }) });
         const res = await postSession(token).catch(async (err) => {
           // The boot token can be stale (admin shell sat open >60s, bridge
@@ -611,6 +707,12 @@ export default function ShopifyApp() {
               embedEnabled: res.embed_enabled ?? null,
               contactEmail: res.contact_email ?? null,
               plans: res.plans ?? [],
+              settings: {
+                nudge: res.settings?.nudge !== false,
+                nudge_after_minutes: res.settings?.nudge_after_minutes ?? 30,
+              },
+              stats: res.stats ?? null,
+              askConv: res.ask_conversation_id ?? null,
             });
           }
           // Prefill console-access with the shop's contact email — staff
@@ -744,6 +846,13 @@ export default function ShopifyApp() {
                 onClick={() => setTab('home')}
               >
                 Store
+              </button>
+              <button
+                className={tab === 'ask' ? 'btn primary' : 'btn'}
+                style={{ flex: 1 }}
+                onClick={() => setTab('ask')}
+              >
+                Ask
               </button>
               <button
                 className={tab === 'inbox' ? 'btn primary' : 'btn'}
@@ -1004,6 +1113,104 @@ export default function ShopifyApp() {
                   {inboxError && <div className="error">{inboxError}</div>}
                 </>
               )
+            ) : tab === 'ask' ? (
+              // Ask Janis — the merchant copilot: staff chat with their own
+              // agent (analytics, orders, catalog) inside the admin frame.
+              <>
+                <p style={{ fontSize: 13, marginBottom: 4 }}>
+                  Ask {state.agent ?? 'your agent'} about the store — sales, orders,
+                  products, what shoppers are asking.
+                </p>
+                <div
+                  ref={askBox}
+                  style={{
+                    maxHeight: '52vh',
+                    minHeight: 280,
+                    overflowY: 'auto',
+                    margin: '10px 0',
+                    textAlign: 'left',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 8,
+                    padding: 8,
+                  }}
+                >
+                  {askMsgs.length === 0 ? (
+                    <p className="muted" style={{ fontSize: 12.5, textAlign: 'center', marginTop: 24 }}>
+                      Nothing asked yet — try "how did sales look this week?" or "what do shoppers
+                      ask about most?"
+                    </p>
+                  ) : (
+                    askMsgs
+                      .filter((m) => !m.payload?.internal)
+                      .map((m) => {
+                        const mine = m.direction === 'in';
+                        return (
+                          <div
+                            key={m.id}
+                            style={{ margin: '4px 0', textAlign: mine ? 'right' : 'left' }}
+                          >
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                maxWidth: '85%',
+                                padding: '6px 10px',
+                                borderRadius: 12,
+                                background: mine ? '#dcf0ff' : '#f1f1f4',
+                                color: '#1f2937',
+                                fontSize: 13,
+                                textAlign: 'left',
+                              }}
+                            >
+                              <span style={{ fontSize: 11, display: 'block', color: '#6b7280' }}>
+                                {mine ? 'You' : 'Janis'} · {fmtTime(m.created_at)}
+                              </span>
+                              {splitBlocks(m.text ?? '').map((blk, bi) => {
+                                const cls = blk.breakBefore ? ' md-gap' : '';
+                                if (blk.kind !== 'list') {
+                                  return (
+                                    <div key={bi} className={`md-para${cls}`}>
+                                      {mdSpans(blk.text ?? '', bi)}
+                                    </div>
+                                  );
+                                }
+                                const Tag = blk.ordered ? 'ol' : 'ul';
+                                return (
+                                  <Tag key={bi} className={`md-list${cls}`}>
+                                    {(blk.items ?? []).map((item, ii) => (
+                                      <li key={ii}>{mdSpans(item)}</li>
+                                    ))}
+                                  </Tag>
+                                );
+                              })}
+                            </span>
+                          </div>
+                        );
+                      })
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    placeholder="Ask about sales, orders, products…"
+                    value={askText}
+                    onChange={(e) => setAskText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        void sendAsk();
+                      }
+                    }}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    className="btn primary"
+                    disabled={!askText.trim() || askSending}
+                    onClick={() => void sendAsk()}
+                  >
+                    {askSending ? 'Sending…' : 'Ask'}
+                  </button>
+                </div>
+                {askErr && <div className="error" style={{ marginTop: 8 }}>{askErr}</div>}
+              </>
             ) : (
               // Store tab is short content — a wide card is fine chrome, but
               // stacked buttons shouldn't stretch 960px. Center a column.
@@ -1119,6 +1326,98 @@ export default function ShopifyApp() {
                 {state.billing?.status === 'PENDING' ? ' · subscription awaiting approval' : ''}
               </p>
             )}
+
+            {state.stats && state.stats.orders_30d > 0 ? (
+              <div
+                style={{
+                  marginTop: 16,
+                  padding: 12,
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  textAlign: 'left',
+                }}
+              >
+                <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 4px' }}>
+                  Sales from chat — last 30 days
+                </p>
+                <p style={{ fontSize: 13, margin: 0 }}>
+                  <strong>{state.stats.orders_30d}</strong> order
+                  {state.stats.orders_30d === 1 ? '' : 's'}
+                  {state.stats.revenue_30d.length > 0 && (
+                    <>
+                      {' · '}
+                      {state.stats.revenue_30d
+                        .map(
+                          (r) =>
+                            `${r.currency} ${r.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                        )
+                        .join(' · ')}
+                    </>
+                  )}
+                </p>
+                <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+                  Orders placed by shoppers who had chatted with your agent.
+                </p>
+              </div>
+            ) : null}
+
+            {state.stats && (state.stats.top_intents.length > 0 || state.stats.open_gaps > 0) ? (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: 12,
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  textAlign: 'left',
+                }}
+              >
+                <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 6px' }}>Insights</p>
+                {state.stats.top_intents.length > 0 && (
+                  <p style={{ fontSize: 12.5, margin: '0 0 4px' }}>
+                    <span className="muted">Top topics: </span>
+                    {state.stats.top_intents.map((t) => t.label).join(', ')}
+                  </p>
+                )}
+                {state.stats.open_gaps > 0 && (
+                  <p style={{ fontSize: 12.5, margin: 0 }}>
+                    <span className="muted">Unanswered questions: </span>
+                    {state.stats.open_gaps} knowledge gap
+                    {state.stats.open_gaps === 1 ? '' : 's'} — teach the agent in the console
+                  </p>
+                )}
+              </div>
+            ) : null}
+
+            <div
+              style={{
+                marginTop: 12,
+                padding: 12,
+                border: '1px solid #e5e7eb',
+                borderRadius: 8,
+                textAlign: 'left',
+              }}
+            >
+              <label
+                style={{ fontSize: 13, fontWeight: 600, display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={state.settings.nudge}
+                  onChange={(e) =>
+                    void saveSettings({ nudge: e.target.checked }).catch(() => {})
+                  }
+                />
+                Abandoned-checkout nudge
+              </label>
+              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+                When a shopper chats, then starts checkout but doesn't finish, your agent sends one
+                friendly follow-up in the chat
+                {state.settings.nudge
+                  ? ` — about ${state.settings.nudge_after_minutes} minutes later`
+                  : ''}
+                .
+              </p>
+            </div>
 
             <div
               style={{

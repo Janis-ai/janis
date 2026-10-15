@@ -259,6 +259,17 @@ const HANDLERS: Record<
       heartbeat: () => db.update(jobs).set({ runAt: new Date() }).where(eq(jobs.id, job.id)),
     });
   },
+  // Abandoned-checkout nudge — enqueued by the checkouts/update webhook;
+  // the handler re-verifies non-conversion before the agent speaks.
+  // Lazy import: shopifyApp already pulls this module in for enqueueJob.
+  'shopify.checkout_nudge': async (db, ws, p) => {
+    const { runCheckoutNudge } = await import('./shopifyApp.js');
+    await runCheckoutNudge(
+      db,
+      ws,
+      p as { convId?: string; checkoutToken?: string; summary?: string },
+    );
+  },
   'eval.triage': async (db, ws, p, job) => {
     const { agentId, batchId } = p as { agentId?: string; batchId?: string };
     if (!agentId || !batchId) throw new Error('eval.triage job missing agentId/batchId');

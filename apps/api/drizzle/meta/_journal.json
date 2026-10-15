@@ -708,6 +708,20 @@
       "when": 1792030612593,
       "tag": "0100_light_maelstrom",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1792079351969,
+      "tag": "0101_sticky_dakota_north",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1792084429621,
+      "tag": "0102_powerful_human_cannonball",
+      "breakpoints": true
     }
   ]
 }

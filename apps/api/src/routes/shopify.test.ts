@@ -15,6 +15,7 @@ import {
   channels,
   contacts,
   conversations,
+  jobs,
   knowledgeFiles,
   memberships,
   messages,
@@ -1797,5 +1798,183 @@ describe('app wiring', () => {
       headers: { cookie },
     });
     expect(res.status).toBe(400); // mounted → code validation, not "route not found"
+  });
+});
+
+describe('abandoned-checkout nudge, ask + stats', () => {
+  const ASHOP = 'ask-shop.myshopify.com';
+  const provision = async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt(ASHOP, { sub: '77' }));
+    const [row] = await db.select().from(shopifyShops).where(eq(shopifyShops.shop, ASHOP));
+    return row;
+  };
+  const plantShopper = async (row: { workspaceId: string | null; agentId: string | null }, email: string) => {
+    const [contact] = await db
+      .insert(contacts)
+      .values({ workspaceId: row.workspaceId!, email })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: row.agentId!, externalId: `chat:${email}`, contactId: contact.id })
+      .returning();
+    return conv;
+  };
+  const nudgeMsgs = async (convId: string) =>
+    (await db.select().from(messages).where(eq(messages.conversationId, convId))).filter(
+      (m) => (m.payload as { event?: string })?.event === 'checkout_nudge',
+    );
+
+  it('checkouts/update enqueues exactly one nudge job per checkout token', async () => {
+    const row = await provision();
+    const conv = await plantShopper(row, 'nudge1@x.com');
+    const payload = {
+      token: 'chk-n1',
+      email: 'nudge1@x.com',
+      total_price: '50.00',
+      currency: 'USD',
+      line_items: [{ title: 'Wax' }],
+    };
+    await webhook('checkouts/update', payload, SECRET, ASHOP);
+    await webhook('checkouts/update', { ...payload, total_price: '51.00' }, SECRET, ASHOP);
+    // Other shops/tests enqueue their own nudges — scope to this conv.
+    const jobRows = (await db.select().from(jobs).where(eq(jobs.type, 'shopify.checkout_nudge'))).filter(
+      (j) => (j.payload as { convId?: string }).convId === conv.id,
+    );
+    expect(jobRows.length).toBe(1);
+    const p = jobRows[0].payload as { convId?: string; checkoutToken?: string };
+    expect(p.convId).toBe(conv.id);
+    expect(p.checkoutToken).toBe('chk-n1');
+  });
+
+  it('nudge writes an internal directive, dedupes, and skips converted checkouts', async () => {
+    const row = await provision();
+    const conv = await plantShopper(row, 'nudge2@x.com');
+    const { runCheckoutNudge } = await import('../lib/shopifyApp.js');
+
+    await runCheckoutNudge(db, row.workspaceId!, {
+      convId: conv.id,
+      checkoutToken: 'chk-a',
+      summary: 'Shopify: checkout activity — 1 item, USD 50.00',
+    });
+    expect((await nudgeMsgs(conv.id)).length).toBe(1);
+    const [dir] = await nudgeMsgs(conv.id);
+    // The instruction is an inbound internal row — the visitor transcript
+    // filters it, but the model reads it as the turn to answer.
+    expect(dir.direction).toBe('in');
+    expect((dir.payload as { internal?: boolean }).internal).toBe(true);
+    // The reply pass fires immediately after — lastMessageDirection settles
+    // on whatever the run did; what matters is the directive reached the
+    // model as the latest inbound turn.
+    const [after] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(['in', 'out']).toContain(after.lastMessageDirection);
+
+    // A retried job for the same checkout must not nag twice.
+    await runCheckoutNudge(db, row.workspaceId!, { convId: conv.id, checkoutToken: 'chk-a' });
+    expect((await nudgeMsgs(conv.id)).length).toBe(1);
+
+    // Conversion silences the nudge: orders/create carries checkout_token.
+    const conv2 = await plantShopper(row, 'nudge3@x.com');
+    await webhook(
+      'orders/create',
+      { id: 991, name: '#2001', email: 'nudge3@x.com', total_price: '12.00', currency: 'USD', checkout_token: 'chk-b' },
+      SECRET,
+      ASHOP,
+    );
+    const orderNote = (await db.select().from(messages).where(eq(messages.conversationId, conv2.id))).find(
+      (m) => (m.payload as { event?: string })?.event === 'order_event',
+    );
+    expect((orderNote?.payload as { order?: { checkout_token?: string } })?.order?.checkout_token).toBe('chk-b');
+    await runCheckoutNudge(db, row.workspaceId!, { convId: conv2.id, checkoutToken: 'chk-b' });
+    expect((await nudgeMsgs(conv2.id)).length).toBe(0);
+  });
+
+  it('settings off → checkouts/update does not enqueue the nudge', async () => {
+    const row = await provision();
+    await plantShopper(row, 'nudge4@x.com');
+    const res = await app.request('/api/shopify/settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(ASHOP, { sub: '77' }), nudge: false }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { settings: { nudge: boolean } }).settings.nudge).toBe(false);
+    await webhook(
+      'checkouts/update',
+      { token: 'chk-off', email: 'nudge4@x.com', total_price: '1.00', currency: 'USD', line_items: [{ title: 'x' }] },
+      SECRET,
+      ASHOP,
+    );
+    const jobRows = (await db.select().from(jobs).where(eq(jobs.type, 'shopify.checkout_nudge'))).filter(
+      (j) => (j.payload as { checkoutToken?: string }).checkoutToken === 'chk-off',
+    );
+    expect(jobRows.length).toBe(0);
+  });
+
+  it('ask threads are verified merchant convs, hidden from the shopper inbox', async () => {
+    const row = await provision();
+    // the nudge-off setting above persists — flip back for isolation sanity
+    const res = await app.request('/api/shopify/ask', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(ASHOP, { sub: '77' }), text: 'how did we do today?' }),
+    });
+    expect(res.status).toBe(200);
+    const { conversation_id } = (await res.json()) as { conversation_id: string };
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, conversation_id));
+    const profile = conv.userProfile as { kind?: string; identity_verified?: boolean; external_id?: string };
+    expect(profile.kind).toBe('merchant_ask');
+    expect(profile.identity_verified).toBe(true);
+    expect(profile.external_id).toBeTruthy();
+    const inb = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(inb.some((m) => m.direction === 'in' && m.text === 'how did we do today?')).toBe(true);
+
+    // Hidden from the embedded inbox…
+    const inbox = await app.request('/api/shopify/inbox', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(ASHOP, { sub: '77' }) }),
+    });
+    const list = ((await inbox.json()) as { conversations: { id: string }[] }).conversations;
+    expect(list.map((c) => c.id)).not.toContain(conv.id);
+
+    // …but the thread endpoint still serves it for the Ask tab.
+    const thread = await app.request('/api/shopify/inbox/thread', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(ASHOP, { sub: '77' }), conversation_id: conv.id }),
+    });
+    expect(thread.status).toBe(200);
+
+    // A second staff member gets their own thread.
+    const res2 = await app.request('/api/shopify/ask', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt(ASHOP, { sub: '88' }), text: 'show me top products' }),
+    });
+    const { conversation_id: other } = (await res2.json()) as { conversation_id: string };
+    expect(other).not.toBe(conv.id);
+
+    // /session hands back this staff member's ask thread so the tab resumes.
+    const sess = await postSession(sessionJwt(ASHOP, { sub: '77' }));
+    expect(((await sess.json()) as { ask_conversation_id?: string }).ask_conversation_id).toBe(conv.id);
+  });
+
+  it('session stats count chat-attributed orders and revenue', async () => {
+    const row = await provision();
+    await plantShopper(row, 'stat@x.com');
+    await webhook(
+      'orders/create',
+      { id: 881, name: '#9', email: 'stat@x.com', total_price: '42.50', currency: 'USD' },
+      SECRET,
+      ASHOP,
+    );
+    const sess = await postSession(sessionJwt(ASHOP, { sub: '77' }));
+    const body = (await sess.json()) as {
+      stats: { orders_30d: number; revenue_30d: { amount: number; currency: string }[] };
+    };
+    expect(body.stats.orders_30d).toBeGreaterThanOrEqual(1);
+    const usd = body.stats.revenue_30d.find((r) => r.currency === 'USD');
+    expect(usd?.amount).toBeGreaterThanOrEqual(42.5);
   });
 });
