@@ -516,6 +516,7 @@ export function webchatRoutes(db: Db) {
       position: creds.position === 'left' ? 'left' : 'right',
       display: creds.display === 'modal' ? 'modal' : 'bubble',
       logo_url: creds.logo_url ?? null,
+      launcher: creds.launcher ?? null,
       logo_padding: creds.logo_padding ?? null,
       logo_radius: creds.logo_radius ?? null,
       logo_border_width: creds.logo_border_width ?? null,

@@ -626,7 +626,10 @@ export const Channel = z.object({
         // 'modal' centers on a dimmed page (the launcher stays)
         display: z.enum(['bubble', 'modal']).optional(),
         logo_url: z.string().optional(),
-        // logo tile (header) + launcher inset
+        // launcher icon — absent/'glyph' = chat glyph (default), 'logo' =
+        // reuse the header logo, otherwise a custom image URL
+        launcher: z.string().optional(),
+        // header logo tile — inset/corners/outline
         logo_padding: z.number().optional(),
         logo_radius: z.number().optional(),
         logo_border_width: z.number().optional(),

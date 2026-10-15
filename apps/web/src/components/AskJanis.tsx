@@ -24,6 +24,7 @@ interface ChatConfig {
   greeting: string | null;
   quick_replies: string[];
   logo_url: string | null;
+  launcher?: string | null;
   dictation?: boolean;
   dictation_engine?: 'llm' | 'browser';
   greeting_widgets?: ChatWidget[];

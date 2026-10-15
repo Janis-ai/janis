@@ -10,7 +10,7 @@
   fall back to the channel's Bubble config in the Janis console, so the
   embed stays zero-config for merchants who never open them.
 {% endcomment %}
-<script src="https://app.janis.ai/api/shopify/storefront.js?s={{ shop.permanent_domain }}&accent={{ block.settings.accent_color | url_encode }}&position={{ block.settings.position | url_encode }}&teaser={{ block.settings.teaser_text | url_encode }}&greeting={{ block.settings.greeting | url_encode }}&qrs={{ block.settings.quick_replies | url_encode }}{% if customer %}&cid={{ customer.id | url_encode }}&cemail={{ customer.email | url_encode }}&cname={{ customer.name | url_encode }}{% endif %}" async></script>
+<script src="https://app.janis.ai/api/shopify/storefront.js?s={{ shop.permanent_domain }}&accent={{ block.settings.accent_color | url_encode }}&position={{ block.settings.position | url_encode }}&launcher={% if block.settings.launcher_icon == 'custom' and block.settings.launcher_image %}{{ block.settings.launcher_image | image_url: width: 256 | url_encode }}{% else %}{{ block.settings.launcher_icon | url_encode }}{% endif %}&teaser={{ block.settings.teaser_text | url_encode }}&greeting={{ block.settings.greeting | url_encode }}&qrs={{ block.settings.quick_replies | url_encode }}{% if customer %}&cid={{ customer.id | url_encode }}&cemail={{ customer.email | url_encode }}&cname={{ customer.name | url_encode }}{% endif %}" async></script>
 {% schema %}
 {
   "name": "Janis chat",
@@ -36,6 +36,25 @@
         { "value": "right", "label": "Bottom right" },
         { "value": "left", "label": "Bottom left" }
       ]
+    },
+    {
+      "type": "select",
+      "id": "launcher_icon",
+      "label": "Launcher icon",
+      "default": "",
+      "info": "The circular button shoppers tap to open chat. The chat icon is the most recognizable; a mascot or logo image works too.",
+      "options": [
+        { "value": "", "label": "Channel default" },
+        { "value": "glyph", "label": "Chat icon" },
+        { "value": "logo", "label": "Header logo" },
+        { "value": "custom", "label": "Custom image" }
+      ]
+    },
+    {
+      "type": "image_picker",
+      "id": "launcher_image",
+      "label": "Custom launcher image",
+      "info": "Used when Launcher icon is \"Custom image\". Square works best — it's cropped into a circle."
     },
     {
       "type": "header",

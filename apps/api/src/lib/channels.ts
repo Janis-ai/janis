@@ -42,8 +42,11 @@ export interface ChannelCredentials {
   // webchat: how the open panel presents — 'bubble' docks to the corner
   // (default); 'modal' centers on a dimmed page (the launcher stays)
   display?: 'bubble' | 'modal';
-  logo_url?: string; // webchat: header/bubble logo image
-  logo_padding?: number; // webchat: px inset inside the header tile + launcher ring
+  logo_url?: string; // webchat: header logo image
+  // webchat: launcher icon — absent/'glyph' = chat glyph, 'logo' = reuse the
+  // header logo, otherwise a custom image URL (/uploads/ path or https)
+  launcher?: string;
+  logo_padding?: number; // webchat: px inset inside the header logo tile
   logo_radius?: number; // webchat: px corner radius of the header logo tile
   logo_border_width?: number; // webchat: px outline on the header logo tile
   logo_border_color?: string; // webchat: outline color (falls back to soft dark)

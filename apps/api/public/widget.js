@@ -29,6 +29,7 @@
     teaser: script.getAttribute('data-janis-teaser'),
     greeting: script.getAttribute('data-janis-greeting'),
     replies: script.getAttribute('data-janis-replies'),
+    launcher: script.getAttribute('data-janis-launcher'),
   };
   // Shopify storefront mode (the theme app-embed loader sets this) — the
   // widget may read the shopper's real cart via the same-origin Ajax API
@@ -2689,6 +2690,7 @@
     if (OVR.position) cfg.position = OVR.position;
     if (OVR.teaser) cfg.teaser_text = OVR.teaser;
     if (OVR.greeting) cfg.greeting = OVR.greeting;
+    if (OVR.launcher) cfg.launcher = OVR.launcher;
     if (OVR.replies) {
       try {
         var ovReplies = JSON.parse(OVR.replies);
@@ -2746,9 +2748,11 @@
       // Logo tile — clear the old one first so re-applying doesn't stack.
       var oldLogo = panel.querySelector('#janis-head .janis-logo');
       if (oldLogo) oldLogo.remove();
-      if (cfg.logo_url) {
-        // Uploaded logos are /uploads/… paths on the API origin, not the host page's.
-        var logoSrc = /^https?:\/\//.test(cfg.logo_url) ? cfg.logo_url : API + cfg.logo_url;
+      // Uploaded images are /uploads/… paths on the API origin, not the host page's.
+      var logoSrc = cfg.logo_url
+        ? (/^https?:\/\//.test(cfg.logo_url) ? cfg.logo_url : API + cfg.logo_url)
+        : null;
+      if (logoSrc) {
         // Logo tile: padding/corner-radius/outline are branding-configurable.
         var logoPad = cfg.logo_padding != null ? cfg.logo_padding : 2;
         var logo = document.createElement('img');
@@ -2766,10 +2770,25 @@
         }
         panel.querySelector('#janis-head').insertBefore(logo, panel.querySelector('#janis-head').firstChild);
       }
-      // Launcher stays a chat glyph — a logo in the circle reads as a brand
-      // mark, not a chat affordance, so visitors don't know to tap it. The
-      // logo's home is the header tile. (textContent wipes badgeEl — re-add.)
-      bubble.textContent = '💬';
+      // Launcher icon — the default chat glyph stays the affordance (a logo in
+      // the circle reads as a brand mark, not "tap to chat"), but the merchant
+      // may opt into their header logo ('logo') or a custom image. Wipe first
+      // so repeated previews never stack children; badgeEl re-attaches after.
+      var launcherSrc =
+        cfg.launcher === 'logo' ? logoSrc
+        : cfg.launcher && cfg.launcher !== 'glyph'
+          ? (/^https?:\/\//.test(cfg.launcher) ? cfg.launcher : API + cfg.launcher)
+          : null;
+      bubble.textContent = '';
+      if (launcherSrc) {
+        var bub = document.createElement('img');
+        bub.src = launcherSrc;
+        bub.alt = '';
+        bub.draggable = false;
+        bubble.appendChild(bub);
+      } else {
+        bubble.textContent = '💬';
+      }
       bubble.appendChild(badgeEl);
       var helpLink = panel.querySelector('#janis-help');
       helpLink.href = cfg.help_url || '#';

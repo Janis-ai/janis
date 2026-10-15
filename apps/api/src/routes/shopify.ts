@@ -1038,6 +1038,15 @@ export function shopifyPublicRoutes(db: Db) {
     const position = (q.position ?? '').trim();
     if (position === 'left' || position === 'right')
       attrs.push(`s.setAttribute('data-janis-position',${JSON.stringify(position)});`);
+    // Launcher icon — 'glyph'/'logo' keywords or an https image URL (the theme
+    // block's image_picker emits a cdn.shopify.com URL). Anything else drops.
+    const launcher = (q.launcher ?? '').trim();
+    if (
+      launcher === 'glyph' ||
+      launcher === 'logo' ||
+      (/^https:\/\//.test(launcher) && launcher.length <= 500)
+    )
+      attrs.push(`s.setAttribute('data-janis-launcher',${JSON.stringify(launcher)});`);
     for (const [param, attr] of [
       ['teaser', 'data-janis-teaser'],
       ['greeting', 'data-janis-greeting'],
@@ -1088,6 +1097,12 @@ export function shopifyPublicRoutes(db: Db) {
       // not persisted into channel credentials.
       if (/^#[0-9a-fA-F]{6}$/.test(accent)) next.accent = accent;
       if (position === 'left' || position === 'right') next.position = position;
+      if (
+        launcher === 'glyph' ||
+        launcher === 'logo' ||
+        (/^https:\/\//.test(launcher) && launcher.length <= 500)
+      )
+        next.launcher = launcher;
       const teaser = (q.teaser ?? '').trim().slice(0, 200);
       if (teaser) next.teaser_text = teaser;
       const greeting = (q.greeting ?? '').trim().slice(0, 500);

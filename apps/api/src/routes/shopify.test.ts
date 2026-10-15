@@ -1470,13 +1470,15 @@ describe('storefront loader', () => {
       body: JSON.stringify({ code, agent_id: agentId }),
     });
     const res = await app.request(
-      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&position=left&teaser=Hi!&greeting=Hello&qrs=${encodeURIComponent('Track order, Returns')}&bogus=ignored&accent2=notahex`,
+      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&position=left&launcher=${encodeURIComponent('https://cdn.shopify.com/icon.png')}&teaser=Hi!&greeting=Hello&qrs=${encodeURIComponent('Track order, Returns')}&bogus=ignored&accent2=notahex&launcher2=javascript:x`,
     );
     const js = await res.text();
     expect(js).toContain('data-janis-accent');
     expect(js).toContain('#aabbcc');
     expect(js).toContain('data-janis-position');
     expect(js).toContain('"left"');
+    expect(js).toContain('data-janis-launcher');
+    expect(js).toContain('cdn.shopify.com/icon.png');
     expect(js).toContain('data-janis-teaser');
     expect(js).toContain('data-janis-greeting');
     expect(js).toContain('data-janis-replies');
@@ -1484,6 +1486,29 @@ describe('storefront loader', () => {
     // unwhitelisted/invalid params never reach the tag
     expect(js).not.toContain('bogus');
     expect(js).not.toContain('notahex');
+    expect(js).not.toContain('javascript:');
+  });
+
+  it('launcher icon keywords pass through; junk values drop', async () => {
+    stubShopifyApi();
+    const code = await linkCodeFor();
+    await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code, agent_id: agentId }),
+    });
+    for (const kw of ['glyph', 'logo']) {
+      const res = await app.request(
+        `/api/shopify/storefront.js?s=${SHOP}&launcher=${kw}`,
+      );
+      const js = await res.text();
+      expect(js).toContain(`data-janis-launcher',"${kw}"`);
+    }
+    // A bare non-https value is not a valid launcher — no attr emitted.
+    const bad = await app.request(
+      `/api/shopify/storefront.js?s=${SHOP}&launcher=${encodeURIComponent('javascript:alert(1)')}`,
+    );
+    expect(await bad.text()).not.toContain('data-janis-launcher');
   });
 
   it('theme-embed settings persist onto flat channel credentials', async () => {
@@ -1495,7 +1520,7 @@ describe('storefront loader', () => {
       body: JSON.stringify({ code, agent_id: agentId }),
     });
     await app.request(
-      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&teaser=${encodeURIComponent('Need help?')}&qrs=${encodeURIComponent('Track order, Returns')}`,
+      `/api/shopify/storefront.js?s=${SHOP}&accent=%23aabbcc&launcher=logo&teaser=${encodeURIComponent('Need help?')}&qrs=${encodeURIComponent('Track order, Returns')}`,
     );
     // The sync write is fire-and-forget — give it a tick to land.
     await new Promise((r) => setTimeout(r, 50));
@@ -1506,6 +1531,7 @@ describe('storefront loader', () => {
     const creds = chan.credentials as Record<string, unknown>;
     // Flat keys are what the widget bootstrap + console editor read.
     expect(creds.accent).toBe('#aabbcc');
+    expect(creds.launcher).toBe('logo');
     expect(creds.teaser_text).toBe('Need help?');
     expect(creds.quick_replies).toEqual(['Track order', 'Returns']);
     expect(creds.branding).toBeUndefined();

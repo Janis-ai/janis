@@ -159,6 +159,24 @@ describe('webchat widget endpoints', () => {
       .where(eq(channels.id, channelId));
   });
 
+  it('passes the launcher icon through — glyph default, keyword, custom url', async () => {
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    let body = await (await app.request(`/chat/${channelId}`)).json();
+    expect(body.launcher).toBeNull();
+    for (const v of ['logo', 'https://cdn.example.com/icon.png']) {
+      await db
+        .update(channels)
+        .set({ credentials: { ...(ch.credentials as object), launcher: v } })
+        .where(eq(channels.id, channelId));
+      body = await (await app.request(`/chat/${channelId}`)).json();
+      expect(body.launcher).toBe(v);
+    }
+    await db
+      .update(channels)
+      .set({ credentials: ch.credentials as object })
+      .where(eq(channels.id, channelId));
+  });
+
   it('help_url honours the agent domain override, then the workspace claim', async () => {
     const [agent] = await db.select().from(agents).where(eq(agents.workspaceId, wsId));
     await db.insert(helpArticles).values({

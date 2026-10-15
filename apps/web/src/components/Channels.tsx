@@ -868,6 +868,9 @@ function WebchatBranding({
     border_width: b.border_width ?? 0,
     border_color: b.border_color ?? '#d1d5db',
     logo_url: b.logo_url ?? '',
+    // launcher: ''/'glyph' → chat glyph, 'logo' → reuse header logo, else a custom image url
+    launcher_icon: b.launcher === 'logo' ? 'logo' : b.launcher && b.launcher !== 'glyph' ? 'custom' : 'glyph',
+    launcher_url: b.launcher && b.launcher !== 'logo' && b.launcher !== 'glyph' ? b.launcher : '',
     logo_padding: b.logo_padding ?? 2,
     logo_radius: b.logo_radius ?? 8,
     logo_border_width: b.logo_border_width ?? 0,
@@ -934,19 +937,21 @@ function WebchatBranding({
   // so the truncation is a choice, not a surprise.
   const qrOver = parseReplies(f.quick_replies).filter((r) => [...r].length > 20);
   const [msg, setMsg] = useState('');
-  const uploadLogo = async (file: File) => {
+  const uploadImage = async (file: File, key: 'logo_url' | 'launcher_url', label: string) => {
     setMsg('Uploading…');
     const fd = new FormData();
     fd.append('file', file);
     const res = await fetch('/api/uploads', { method: 'POST', body: fd, credentials: 'include' });
     if (res.ok) {
       const att = (await res.json()) as { url: string };
-      setF((cur) => ({ ...cur, logo_url: att.url }));
-      setMsg('Logo uploaded — save appearance to apply.');
+      setF((cur) => ({ ...cur, [key]: att.url }));
+      setMsg(`${label} uploaded — save appearance to apply.`);
     } else {
       setMsg('Upload failed.');
     }
   };
+  const uploadLogo = (file: File) => uploadImage(file, 'logo_url', 'Logo');
+  const uploadLauncherIcon = (file: File) => uploadImage(file, 'launcher_url', 'Launcher icon');
   const save = useMutation({
     mutationFn: () =>
       api(`/api/channels/${channel.id}`, {
@@ -960,6 +965,8 @@ function WebchatBranding({
             position: f.position,
             display: f.display,
             logo_url: f.logo_url,
+            // 'glyph' saves as '' — absent IS the glyph default; keeps creds clean
+            launcher: f.launcher_icon === 'custom' ? f.launcher_url : f.launcher_icon === 'logo' ? 'logo' : '',
             logo_padding: f.logo_padding,
             logo_radius: f.logo_radius,
             logo_border_width: f.logo_border_width,
@@ -1205,7 +1212,75 @@ function WebchatBranding({
                 ))}
               </div>
             </BubField>
-            <BubField label="Logo" hint="Shows in the panel header and inside the launcher button">
+            <BubField label="Launcher icon" hint="The circular button shoppers tap — the chat icon is the most recognizable">
+              <div className="bub-pos">
+                {(
+                  [
+                    ['glyph', 'Chat icon'],
+                    ['logo', 'Header logo'],
+                    ['custom', 'Custom image'],
+                  ] as const
+                ).map(([v, label]) => (
+                  <button
+                    key={v}
+                    type="button"
+                    className={f.launcher_icon === v ? 'on' : ''}
+                    onClick={() => setF({ ...f, launcher_icon: v })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </BubField>
+            {f.launcher_icon === 'custom' && (
+              <BubField label="Custom image" hint="Square works best — it's cropped into a circle">
+                <div className="col">
+                  <div className="row">
+                    <input
+                      className="grow"
+                      placeholder="Image URL"
+                      value={f.launcher_url}
+                      onChange={(e) => setF({ ...f, launcher_url: e.target.value })}
+                    />
+                    <label className="btn" style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                      Upload
+                      <input
+                        type="file"
+                        accept="image/*"
+                        hidden
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) void uploadLauncherIcon(file);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                  </div>
+                  {f.launcher_url && (
+                    <div className="row">
+                      <img
+                        src={f.launcher_url}
+                        alt="launcher icon preview"
+                        style={{
+                          width: 44, height: 44, objectFit: 'cover',
+                          borderRadius: '50%',
+                          background: '#fff',
+                          border: '1px solid var(--border, #ddd)',
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => setF({ ...f, launcher_url: '' })}
+                      >
+                        Remove image
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </BubField>
+            )}
+            <BubField label="Logo" hint="Shows in the chat panel header — pick 'Header logo' above to reuse it as the launcher icon">
               <div className="row">
                 <input
                   className="grow"
@@ -1380,6 +1455,7 @@ function WebchatBranding({
               border_width: f.border_width,
               border_color: f.border_color,
               logo_url: f.logo_url,
+              launcher: f.launcher_icon === 'custom' ? f.launcher_url : f.launcher_icon,
               logo_padding: f.logo_padding,
               logo_radius: f.logo_radius,
               logo_border_width: f.logo_border_width,

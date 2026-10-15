@@ -102,6 +102,17 @@ const patchChannel = z.object({
       logo_url: z
         .union([z.literal(''), z.string().url().max(500), z.string().regex(/^\/uploads\//).max(500)])
         .optional(),
+      // launcher icon — ''/'glyph' = chat glyph (default), 'logo' = reuse the
+      // header logo, otherwise a custom image (absolute url or /uploads/ path)
+      launcher: z
+        .union([
+          z.literal(''),
+          z.literal('glyph'),
+          z.literal('logo'),
+          z.string().url().max(500),
+          z.string().regex(/^\/uploads\//).max(500),
+        ])
+        .optional(),
       // logo tile: inset padding, corner radius, outline — px ints
       logo_padding: z.number().int().min(0).max(16).optional(),
       logo_radius: z.number().int().min(0).max(16).optional(),
@@ -569,7 +580,7 @@ export function channelApiRoutes(db: Db) {
     }
     if (body.branding) {
       const b = body.branding;
-      for (const key of ['title', 'subtitle', 'greeting', 'accent', 'logo_url'] as const) {
+      for (const key of ['title', 'subtitle', 'greeting', 'accent', 'logo_url', 'launcher'] as const) {
         const v = b[key];
         if (v === undefined) continue;
         if (v === '') delete creds[key];
