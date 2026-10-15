@@ -470,9 +470,14 @@ export default function ShopifyApp() {
         const cfg = await api<{ api_key: string }>('/api/shopify/app-config');
         setApiKey(cfg.api_key);
         const bridge = await loadAppBridge(cfg.api_key);
-        // Managed install also drops a session-token JWT on the iframe URL
-        // (?id_token=) — use it when App Bridge didn't attach its global.
-        const token = bridge ? await bridge.idToken!() : params.get('id_token');
+        // Two credential sources: the bridge-minted JWT and the ?id_token=
+        // on the iframe URL. App Bridge's cache can serve a token that
+        // expired while the frame was suspended — take whichever is
+        // freshest rather than trusting the bridge blindly.
+        const bridged = await bridge?.idToken?.().catch(() => undefined);
+        const token = [bridged, params.get('id_token')]
+          .filter((t): t is string => !!t)
+          .sort((a, b) => tokenExpMs(b) - tokenExpMs(a))[0];
         if (!token) throw new Error('no session token — open this app inside Shopify admin');
         sessionToken.current = token;
         bridgeRef.current = bridge;
@@ -498,20 +503,30 @@ export default function ShopifyApp() {
         const res = await postSession(token).catch(async (err) => {
           // The boot token can be stale (admin shell sat open >60s, bridge
           // hiccup → stale URL-param fallback). One recovery shot: re-mint
-          // and repost before surfacing an error.
+          // and repost — but only with a token that's actually unexpired;
+          // a poisoned idToken() cache just hands back the same corpse.
           if (err instanceof Error && err.message.includes('invalid session token')) {
             const fresh =
               (await bridgeRef.current?.idToken?.().catch(() => undefined)) ??
               (await bridge?.idToken?.().catch(() => undefined));
-            if (fresh) {
+            if (fresh && tokenExpMs(fresh) > Date.now() + 5_000) {
               sessionToken.current = fresh;
               return postSession(fresh);
+            }
+            // Bridge can't produce a live token — a fresh page gets a fresh
+            // URL-param credential AND a healthy bridge. Once per tab.
+            if (!sessionStorage.getItem('janis:boot-reload')) {
+              sessionStorage.setItem('janis:boot-reload', '1');
+              window.location.reload();
+              return new Promise<never>(() => {});
             }
           }
           throw err;
         });
         if (cancelled) return;
-        sessionStorage.removeItem('janis:tok-reload'); // healthy boot — allow future auto-recovery
+        // Healthy boot — allow future auto-recovery.
+        sessionStorage.removeItem('janis:tok-reload');
+        sessionStorage.removeItem('janis:boot-reload');
         // The Shopify JWT was only a bootstrap credential — run the rest of
         // the session on the Janis-minted 12h token so App Bridge expiry /
         // idle-cache staleness can't kill mid-session calls.
@@ -607,8 +622,14 @@ export default function ShopifyApp() {
         {state.kind === 'error' && (
           <>
             <div className="error">{state.message}</div>
-            <button className="btn" style={{ width: '100%', marginTop: 12 }} onClick={() => setTick((t) => t + 1)}>
-              Try again
+            {/* A real reload is the only rescue that re-mints credentials —
+                retrying the effect just replays the same stale token. */}
+            <button
+              className="btn"
+              style={{ width: '100%', marginTop: 12 }}
+              onClick={() => window.location.reload()}
+            >
+              Reload app
             </button>
           </>
         )}
