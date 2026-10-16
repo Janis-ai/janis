@@ -18,6 +18,7 @@ export async function ensureSeed(db: Db): Promise<void> {
       email: env.seedAdminEmail,
       name: 'Admin',
       passwordHash: await hashPassword(env.seedAdminPassword),
+      emailVerifiedAt: new Date(), // seed is operator-created, not self-signup
     })
     .returning();
   const [workspace] = await db

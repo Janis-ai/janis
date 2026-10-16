@@ -6,7 +6,7 @@ import { and, asc, eq, gt, isNotNull, isNull, ne } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { Context } from 'hono';
 import type { Db } from '../db/client.js';
-import { agentMembers, agents, memberships, passwordResetTokens, sessions, users, workspaces } from '../db/schema.js';
+import { agentMembers, agents, emailVerificationTokens, memberships, passwordResetTokens, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken, hashPassword, sha256, verifyPassword } from '../lib/crypto.js';
 import { passwordIssue } from '../lib/passwordCheck.js';
 import { dbRateLimit } from '../lib/rateLimit.js';
@@ -19,6 +19,7 @@ import { env } from '../env.js';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const OAUTH_STATE_COOKIE = 'janis_oauth_state';
 const RESET_TTL_MS = 60 * 60 * 1000; // password-reset links live 1h
+const VERIFY_TTL_MS = 24 * 60 * 60 * 1000; // verification links live 24h
 
 const credentials = z.object({
   email: z.string().trim().toLowerCase().email().max(320),
@@ -209,15 +210,37 @@ export function authRoutes(db: Db) {
       await verifyPassword(password, await timingPad()); // equalize the timing
       return c.json({ error: 'invalid credentials' }, 401);
     }
+    if (!user.emailVerifiedAt) {
+      return c.json({ error: 'unverified', detail: 'Confirm your email first — check your inbox for the verification link.' }, 403);
+    }
     await issueSession(c, user.id);
     return c.json({ user: toWorkspaceUser(user) });
     },
   );
 
-  // Email signup — new account + personal workspace (provisioned lazily by
-  // issueSession). An existing email 409s: blunt, rate-limited, and the
-  // friendlier path is a reset — deliberately NOT a silent merge onto an
-  // OAuth-only account, which would be a password-only takeover route.
+  /** Mint a fresh verification link — burns any older unused ones. */
+  const sendVerification = async (user: { id: string; email: string; name: string }) => {
+    await db
+      .delete(emailVerificationTokens)
+      .where(and(eq(emailVerificationTokens.userId, user.id), isNull(emailVerificationTokens.usedAt)));
+    const raw = randomBytes(32).toString('base64url');
+    await db.insert(emailVerificationTokens).values({
+      userId: user.id,
+      tokenHash: sha256(raw),
+      expiresAt: new Date(Date.now() + VERIFY_TTL_MS),
+    });
+    await sendEmail(
+      [user.email],
+      'Confirm your Janis email',
+      `Hi ${user.name.split(' ')[0] || 'there'} — confirm this is your email to activate your Janis account. The link works once and expires in 24 hours. If you didn't sign up, ignore this email.`,
+      `/verify-email?token=${raw}`,
+    );
+  };
+
+  // Email signup — the account exists immediately but no session is issued
+  // until the emailed link is clicked. An existing email 409s: blunt,
+  // rate-limited, and the friendlier path is a reset — deliberately NOT a
+  // silent merge onto an OAuth-only account (password-only takeover route).
   app.post(
     '/signup',
     dbRateLimit(db, { scope: 'signup', max: 10, windowMs: 60 * 60_000 }),
@@ -244,8 +267,58 @@ export function authRoutes(db: Db) {
           passwordHash: await hashPassword(password),
         })
         .returning();
-      await issueSession(c, user.id);
-      return c.json({ user: toWorkspaceUser(user) }, 201);
+      await sendVerification(user);
+      return c.json({ needsVerification: true }, 201);
+    },
+  );
+
+  // Resend the verification link — always 200 so it can't enumerate.
+  app.post(
+    '/resend-verification',
+    dbRateLimit(db, { scope: 'resend-verify', max: 5, windowMs: 60 * 60_000 }),
+    zValidator('json', z.object({ email: z.string().trim().toLowerCase().email().max(320) })),
+    async (c) => {
+      if (!env.passwordLogin) return c.json({ ok: true });
+      const { email } = c.req.valid('json');
+      const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+      if (user && !user.emailVerifiedAt) await sendVerification(user);
+      return c.json({ ok: true });
+    },
+  );
+
+  // Verify — burns the single-use token, welcomes the account, and issues
+  // the first session so the emailed link lands signed in.
+  app.post(
+    '/verify',
+    dbRateLimit(db, { scope: 'verify', max: 10, windowMs: 10 * 60_000 }),
+    zValidator('json', z.object({ token: z.string().min(20).max(200) })),
+    async (c) => {
+      const { token } = c.req.valid('json');
+      const [row] = await db
+        .select({ tok: emailVerificationTokens, user: users })
+        .from(emailVerificationTokens)
+        .innerJoin(users, eq(emailVerificationTokens.userId, users.id))
+        .where(eq(emailVerificationTokens.tokenHash, sha256(token)))
+        .limit(1);
+      if (!row || row.tok.usedAt || row.tok.expiresAt < new Date()) {
+        return c.json({ error: 'That verification link is expired or already used — request a fresh one' }, 400);
+      }
+      await db
+        .update(users)
+        .set({ emailVerifiedAt: new Date() })
+        .where(eq(users.id, row.user.id));
+      await db
+        .update(emailVerificationTokens)
+        .set({ usedAt: new Date() })
+        .where(eq(emailVerificationTokens.id, row.tok.id));
+      await sendEmail(
+        [row.user.email],
+        'Welcome to Janis',
+        `Hi ${row.user.name.split(' ')[0] || 'there'} — your email is confirmed and your account is live. Your workspace is ready: connect a channel, drop the widget on your site, and Janis starts answering.`,
+        '/conversations',
+      );
+      await issueSession(c, row.user.id);
+      return c.json({ user: toWorkspaceUser(row.user) });
     },
   );
 
@@ -307,7 +380,8 @@ export function authRoutes(db: Db) {
       if (issue) return c.json({ error: issue }, 400);
       await db
         .update(users)
-        .set({ passwordHash: await hashPassword(password) })
+        // A working reset link proves inbox ownership — count it as verified.
+        .set({ passwordHash: await hashPassword(password), emailVerifiedAt: new Date() })
         .where(eq(users.id, row.user.id));
       await db
         .update(passwordResetTokens)
@@ -651,15 +725,25 @@ export function authRoutes(db: Db) {
   );
 
   /** Existing user by verified provider email, else create the account. The
+   *  provider vouched for the email — mark it verified on create AND on
+   *  sign-in (an SSO pass repairs an unverified password-only account). The
    *  personal workspace is provisioned in issueSession so invite-created
    *  users heal on their first login too. */
   const findOrProvisionUser = async (rawEmail: string, name: string) => {
     const email = rawEmail.trim().toLowerCase();
     const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
-    if (existing) return existing;
+    if (existing) {
+      if (!existing.emailVerifiedAt) {
+        await db
+          .update(users)
+          .set({ emailVerifiedAt: new Date() })
+          .where(eq(users.id, existing.id));
+      }
+      return existing;
+    }
     const [user] = await db
       .insert(users)
-      .values({ email, name: name || email })
+      .values({ email, name: name || email, emailVerifiedAt: new Date() })
       .returning();
     return user;
   };

@@ -37,7 +37,12 @@ const makeUser = async (
 ) => {
   const [u] = await db
     .insert(users)
-    .values({ email, name: email, passwordHash: await hashPassword('password123') })
+    .values({
+      email,
+      name: email,
+      passwordHash: await hashPassword('password123'),
+      emailVerifiedAt: new Date(), // test users stand in for established accounts
+    })
     .returning();
   if (workspaceId) {
     await db.insert(memberships).values({

@@ -7,6 +7,7 @@ import { useMe } from './api/hooks';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import ResetPassword from './pages/ResetPassword';
+import VerifyEmail from './pages/VerifyEmail';
 import Landing from './pages/Landing';
 import { Privacy, Terms } from './pages/Legal';
 import Docs from './pages/Docs';
@@ -176,6 +177,7 @@ export default function App() {
         <Route path="/" element={isAppHost() ? <Landing /> : <ChatDomain />} />
         <Route path="/login" element={<Login />} />
         <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/terms" element={<Terms />} />
         <Route path="/docs" element={<Docs />} />

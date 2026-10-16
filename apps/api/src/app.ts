@@ -138,7 +138,8 @@ export function createApp(db: Db) {
   // chat uploads — use the Postgres limiter so caps hold across instances and,
   // for chat, across IPs rotated against a single channel token.
   app.use('/v1/*', rateLimit({ scope: 'v1', windowMs: 60_000, max: 300 }));
-  app.use('/auth/login', dbRateLimit(db, { scope: 'login', windowMs: 60_000, max: 10 }));
+  // /auth/* credential endpoints carry their own dbRateLimit in auth.ts —
+  // a second limiter here would double-count the same bucket row.
   app.use('/slack/events', rateLimit({ scope: 'slack', windowMs: 60_000, max: 120 }));
   app.use('/slack/interactions', rateLimit({ scope: 'slack', windowMs: 60_000, max: 120 }));
   app.use('/channels/meta/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));

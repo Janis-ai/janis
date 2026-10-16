@@ -33,7 +33,8 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [sent, setSent] = useState(false);
+  const [unverified, setUnverified] = useState(false);
+  const [sent, setSent] = useState<'reset' | 'verify' | ''>('');
   const [busy, setBusy] = useState(false);
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -47,7 +48,8 @@ export default function Login() {
   const switchMode = (m: Mode) => {
     setMode(m);
     setError('');
-    setSent(false);
+    setUnverified(false);
+    setSent('');
   };
 
   const submit = async (e: React.FormEvent) => {
@@ -55,23 +57,49 @@ export default function Login() {
     if (busy) return;
     setBusy(true);
     setError('');
+    setUnverified(false);
     try {
       if (mode === 'forgot') {
         await api('/auth/forgot', { method: 'POST', body: JSON.stringify({ email }) });
-        setSent(true);
+        setSent('reset');
         setBusy(false);
         return;
       }
-      await api(mode === 'signup' ? '/auth/signup' : '/auth/login', {
-        method: 'POST',
-        body: JSON.stringify(mode === 'signup' ? { email, password, name: name || undefined } : { email, password }),
-      });
+      const res = await api<{ needsVerification?: boolean }>(
+        mode === 'signup' ? '/auth/signup' : '/auth/login',
+        {
+          method: 'POST',
+          body: JSON.stringify(mode === 'signup' ? { email, password, name: name || undefined } : { email, password }),
+        },
+      );
+      if (res.needsVerification) {
+        setSent('verify');
+        setBusy(false);
+        return;
+      }
       await qc.invalidateQueries({ queryKey: ['me'] });
       navigate('/conversations');
     } catch (err) {
-      setError(err instanceof ApiError ? friendlyError(err.message).text : 'something went wrong');
+      if (err instanceof ApiError && err.status === 403 && err.message === 'unverified') {
+        setUnverified(true);
+      } else {
+        setError(err instanceof ApiError ? friendlyError(err.message).text : 'something went wrong');
+      }
       setBusy(false);
     }
+  };
+
+  const resendVerification = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api('/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email }) });
+      setSent('verify');
+      setUnverified(false);
+    } catch {
+      setError('could not send — try again');
+    }
+    setBusy(false);
   };
 
   const oauthError = params.get('error');
@@ -142,12 +170,29 @@ export default function Login() {
         )}
         {sent ? (
           <div className="muted" style={{ marginTop: 12 }}>
-            If an account exists for {email}, a reset link is on its way — it works once and
-            expires in an hour.
+            {sent === 'verify' ? (
+              <>
+                We sent a confirmation link to <strong>{email}</strong> — click it to activate
+                your account. It works once and expires in 24 hours.
+              </>
+            ) : (
+              <>
+                If an account exists for {email}, a reset link is on its way — it works once and
+                expires in an hour.
+              </>
+            )}
           </div>
         ) : (
           <>
-            {(error || oauthError) && <div className="error" title={oauthError ?? undefined}>{error || friendlyError(oauthError!).text}</div>}
+            {(error || oauthError) && !unverified && <div className="error" title={oauthError ?? undefined}>{error || friendlyError(oauthError!).text}</div>}
+            {unverified && (
+              <div className="muted" style={{ marginTop: 12 }}>
+                Confirm your email first — we sent a link to {email}.{' '}
+                <button type="button" className="link" onClick={resendVerification}>
+                  Resend it
+                </button>
+              </div>
+            )}
             {passwordLogin && (
               <button className="btn primary" disabled={busy} style={{ width: '100%', marginTop: 20 }}>
                 {busy

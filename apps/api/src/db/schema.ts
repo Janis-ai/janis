@@ -72,6 +72,9 @@ export const users = pgTable(
     email: text('email').notNull().unique(),
     name: text('name').notNull(),
     passwordHash: text('password_hash'), // null for OAuth-only accounts
+    // Password signups must verify before a session is issued; OAuth/SSO
+    // emails arrive provider-verified. Backfilled for pre-gate accounts.
+    emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
     // {push, email} — which channels alert this user when agents need a human
     notifyPrefs: jsonb('notify_prefs').notNull().default({ push: true, email: true }),
     slackUserId: text('slack_user_id'), // resolved via users.lookupByEmail — cached for alert @mentions
@@ -156,6 +159,23 @@ export const passwordResetTokens = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('password_reset_tokens_user').on(t.userId)],
+);
+
+// Email verification — single-use, sha256-hashed link emailed after signup;
+// verifying unlocks session issuance and fires the welcome email.
+export const emailVerificationTokens = pgTable(
+  'email_verification_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    tokenHash: text('token_hash').notNull().unique(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('email_verification_tokens_user').on(t.userId)],
 );
 
 export const agents = pgTable('agents', {
