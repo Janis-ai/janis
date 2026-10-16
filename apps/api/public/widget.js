@@ -2788,6 +2788,10 @@
         bub.src = launcherSrc;
         bub.alt = '';
         bub.draggable = false;
+        // Letterbox inside the accent ring — launcher artwork is typically a
+        // logo or mascot (wide, transparent-bg) that cover-cropping mangles.
+        bub.style.width = bub.style.height = 'calc(100% - 12px)';
+        bub.style.objectFit = 'contain';
         bubble.appendChild(bub);
       } else {
         bubble.textContent = '💬';
