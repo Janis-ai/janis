@@ -141,7 +141,9 @@ Draft justification text for the form:
 
 - [x] Create the new **Janis** app, distribution **Public** — done (step 0);
       confirm the flag is set: dev.shopify.com/dashboard/240865640/apps/435599310849
-- [ ] Partner profile: developer name, support email, privacy policy URL
+- [x] Partner profile — business name (Janis), website, support email,
+      address saved via Partner settings (2026-10-16). Still open: phone
+      number (personal — Mike) and privacy policy URL in the listing form.
 - [x] Charge test mode — **automatic**: derived per-shop from
       `shop.plan.partnerDevelopment` (dev stores → test:true, real installs →
       live charges). No env flag to forget.
@@ -158,7 +160,16 @@ Draft justification text for the form:
       verification gate, launcher bubble, inbox thread w/ internal note,
       agent editor knowledge panel (Shopify-synced sources), embedded-app
       home in Shopify admin
-- [ ] PCD declaration (step 6)
-- [ ] Demo video — review requires a walkthrough: install → link agent →
-      storefront chat → order lookup → draft order → inbox handoff
-- [ ] App listing submitted for review
+- [x] PCD declaration (step 6) — completed in Partner Dashboard
+      (2026-10-16): protected customer data w/ reasons (customer service,
+      store management, app functionality); field-level grants for
+      Name/Email/Phone (Address deliberately unselected — webhook-only);
+      16/16 data-protection questions. Backed by docs/security-policy.md.
+      Status: Draft — submits WITH the app listing, not separately.
+- [x] Demo video — docs/listing-assets/demo-video.mp4 (88s): title →
+      embedded-app home → live storefront chat (cards, collect form,
+      draft order, verify-identity) → console inbox handoff
+- [ ] App Store registration ($19 one-time fee + payment method +
+      Individual/Organization + associated-accounts declaration) —
+      partners.shopify.com/5256121/apps/register. GATES the submission.
+- [ ] App listing submitted for review (blocked on registration)
