@@ -2750,10 +2750,12 @@
       // Logo tile — clear the old one first so re-applying doesn't stack.
       var oldLogo = panel.querySelector('#janis-head .janis-logo');
       if (oldLogo) oldLogo.remove();
-      // Uploaded images are /uploads/… paths on the API origin, not the host page's.
-      var logoSrc = cfg.logo_url
-        ? (/^https?:\/\//.test(cfg.logo_url) ? cfg.logo_url : API + cfg.logo_url)
-        : null;
+      // Uploaded images are /uploads/… paths on the API origin; Shopify theme
+      // settings can hand us protocol-relative //cdn… URLs — lift to https.
+      var imgSrc = function (u) {
+        return /^\/\//.test(u) ? 'https:' + u : /^https?:\/\//.test(u) ? u : API + u;
+      };
+      var logoSrc = cfg.logo_url ? imgSrc(cfg.logo_url) : null;
       if (logoSrc) {
         // Logo tile: padding/corner-radius/outline are branding-configurable.
         var logoPad = cfg.logo_padding != null ? cfg.logo_padding : 2;
@@ -2778,9 +2780,8 @@
       // so repeated previews never stack children; badgeEl re-attaches after.
       var launcherSrc =
         cfg.launcher === 'logo' ? logoSrc
-        : cfg.launcher && cfg.launcher !== 'glyph'
-          ? (/^https?:\/\//.test(cfg.launcher) ? cfg.launcher : API + cfg.launcher)
-          : null;
+        : cfg.launcher && cfg.launcher !== 'glyph' ? imgSrc(cfg.launcher)
+        : null;
       bubble.textContent = '';
       if (launcherSrc) {
         var bub = document.createElement('img');

@@ -1038,20 +1038,21 @@ export function shopifyPublicRoutes(db: Db) {
     const position = (q.position ?? '').trim();
     if (position === 'left' || position === 'right')
       attrs.push(`s.setAttribute('data-janis-position',${JSON.stringify(position)});`);
-    // Chat-window logo — the theme block's image_picker emits an https
-    // cdn.shopify.com URL; anything else drops.
-    const logo = (q.logo ?? '').trim();
-    if (/^https:\/\//.test(logo) && logo.length <= 500)
+    // Shopify's image_url emits PROTOCOL-RELATIVE URLs (//shop/cdn/…) — lift
+    // them to https so the value is absolute everywhere downstream. Anything
+    // that isn't https (or the launcher keywords) drops.
+    const absImg = (u: string) =>
+      u.startsWith('//') ? `https:${u}` : /^https:\/\//.test(u) ? u : null;
+    // Chat-window logo — the theme block's image_picker emits a cdn URL.
+    const logo = absImg((q.logo ?? '').trim());
+    if (logo && logo.length <= 500)
       attrs.push(`s.setAttribute('data-janis-logo',${JSON.stringify(logo)});`);
-    // Launcher icon — 'glyph'/'logo' keywords or an https image URL (the theme
-    // block's image_picker emits a cdn.shopify.com URL). Anything else drops.
+    // Launcher icon — 'glyph'/'logo' keywords or an image URL (the theme
+    // block's image_picker emits a cdn URL). Anything else drops.
     const launcher = (q.launcher ?? '').trim();
-    if (
-      launcher === 'glyph' ||
-      launcher === 'logo' ||
-      (/^https:\/\//.test(launcher) && launcher.length <= 500)
-    )
-      attrs.push(`s.setAttribute('data-janis-launcher',${JSON.stringify(launcher)});`);
+    const launcherImg = launcher === 'glyph' || launcher === 'logo' ? launcher : absImg(launcher);
+    if (launcherImg && launcherImg.length <= 500)
+      attrs.push(`s.setAttribute('data-janis-launcher',${JSON.stringify(launcherImg)});`);
     for (const [param, attr] of [
       ['teaser', 'data-janis-teaser'],
       ['greeting', 'data-janis-greeting'],
@@ -1102,13 +1103,8 @@ export function shopifyPublicRoutes(db: Db) {
       // not persisted into channel credentials.
       if (/^#[0-9a-fA-F]{6}$/.test(accent)) next.accent = accent;
       if (position === 'left' || position === 'right') next.position = position;
-      if (/^https:\/\//.test(logo) && logo.length <= 500) next.logo_url = logo;
-      if (
-        launcher === 'glyph' ||
-        launcher === 'logo' ||
-        (/^https:\/\//.test(launcher) && launcher.length <= 500)
-      )
-        next.launcher = launcher;
+      if (logo && logo.length <= 500) next.logo_url = logo;
+      if (launcherImg && launcherImg.length <= 500) next.launcher = launcherImg;
       const teaser = (q.teaser ?? '').trim().slice(0, 200);
       if (teaser) next.teaser_text = teaser;
       const greeting = (q.greeting ?? '').trim().slice(0, 500);

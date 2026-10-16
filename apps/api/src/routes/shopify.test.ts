@@ -1516,6 +1516,16 @@ describe('storefront loader', () => {
       `/api/shopify/storefront.js?s=${SHOP}&logo=${encodeURIComponent('javascript:alert(1)')}`,
     );
     expect(await badLogo.text()).not.toContain('data-janis-logo');
+    // Protocol-relative URLs — what Shopify's image_url actually emits for
+    // image_picker settings — normalize to https instead of dropping.
+    const rel = await app.request(
+      `/api/shopify/storefront.js?s=${SHOP}&launcher=${encodeURIComponent('//cdn.shopify.com/icon.png')}&logo=${encodeURIComponent('//cdn.shopify.com/logo.png')}`,
+    );
+    const relJs = await rel.text();
+    expect(relJs).toContain('data-janis-launcher');
+    expect(relJs).toContain('https://cdn.shopify.com/icon.png');
+    expect(relJs).toContain('data-janis-logo');
+    expect(relJs).toContain('https://cdn.shopify.com/logo.png');
   });
 
   it('theme-embed settings persist onto flat channel credentials', async () => {
