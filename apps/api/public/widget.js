@@ -336,7 +336,7 @@
     // Backdrop < bubble < panel, same as before.
     '#janis-bubble{position:fixed;right:calc(20px + env(safe-area-inset-right,0px));' +
     'bottom:calc(20px + env(safe-area-inset-bottom,0px));width:56px;height:56px;border-radius:50%;' +
-    'border:none;cursor:pointer;z-index:2147483646;display:flex;align-items:center;justify-content:center;' +
+    'border:none;padding:0;cursor:pointer;z-index:2147483646;display:flex;align-items:center;justify-content:center;' +
     'box-shadow:0 4px 16px rgba(0,0,0,.3);font-size:24px;color:#fff}' +
     '#janis-panel{position:fixed;right:20px;bottom:88px;width:340px;max-width:calc(100vw - 40px);' +
     'height:480px;max-height:calc(100vh - 120px);background:#fff;border-radius:var(--janis-radius,14px);overflow:hidden;' +
