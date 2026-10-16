@@ -2788,10 +2788,10 @@
         bub.src = launcherSrc;
         bub.alt = '';
         bub.draggable = false;
-        // Letterbox inside the accent ring — launcher artwork is typically a
-        // logo or mascot (wide, transparent-bg) that cover-cropping mangles.
-        bub.style.width = bub.style.height = 'calc(100% - 12px)';
-        bub.style.objectFit = 'contain';
+        // Fill the inner circle — cover means the image's smaller dimension
+        // spans the diameter (maximized, longer edge cropped); the 2px inset
+        // leaves an accent ring. (CSS carries object-fit:cover + radius.)
+        bub.style.width = bub.style.height = 'calc(100% - 4px)';
         bubble.appendChild(bub);
       } else {
         bubble.textContent = '💬';

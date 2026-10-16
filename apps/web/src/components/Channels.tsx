@@ -1262,9 +1262,9 @@ function WebchatBranding({
                         src={f.launcher_url}
                         alt="launcher icon preview"
                         style={{
-                          width: 44, height: 44, objectFit: 'contain',
+                          width: 44, height: 44, objectFit: 'cover',
                           borderRadius: '50%',
-                          padding: 5,
+                          padding: 2,
                           background: /^#[0-9a-fA-F]{6}$/.test(f.accent) ? f.accent : '#5b21b6',
                           border: '1px solid var(--border, #ddd)',
                         }}
