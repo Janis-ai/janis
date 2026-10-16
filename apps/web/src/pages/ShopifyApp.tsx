@@ -586,15 +586,26 @@ export default function ShopifyApp() {
       if (Object.keys(body).length) {
         await shopifyApi('/api/shopify/agent', body);
       }
-      if (advance) localStorage.setItem(`janis:setup-done:${state.shop}`, '1');
+      if (advance) {
+        localStorage.setItem(`janis:setup-done:${state.shop}`, '1');
+        setAdvancing(true); // session reload is the slow part — hold the busy state
+      }
       setBriefSaved(true);
       setTick((t) => t + 1); // reload → linked card (or refreshed brief values)
-      setSetupSaving(false); // the Agent-tab path stays put — unstick the button
+      if (!advance) setSetupSaving(false); // the Agent-tab path stays put — unstick the button
     } catch (err) {
       setSetupError(err instanceof Error ? err.message : 'save failed');
       setSetupSaving(false);
+      setAdvancing(false);
     }
   };
+  const [advancing, setAdvancing] = useState(false);
+  // 'Looks good — continue' holds 'Setting up…' until the session reload
+  // resolves into linked/error — otherwise the button looks dead for
+  // several seconds and invites repeat clicks.
+  useEffect(() => {
+    if (state.kind !== 'setup') setAdvancing(false);
+  }, [state.kind]);
 
   // Shared brief fields — the setup card and the linked-state Agent tab
   // render the same inputs.
@@ -885,9 +896,9 @@ export default function ShopifyApp() {
               className="btn primary"
               style={{ width: '100%', marginTop: 12 }}
               onClick={() => void saveBrief(true)}
-              disabled={setupSaving || !setupName.trim() || !setupPurpose.trim()}
+              disabled={setupSaving || advancing || !setupName.trim() || !setupPurpose.trim()}
             >
-              {setupSaving ? 'Saving…' : 'Looks good — continue'}
+              {advancing ? 'Setting up…' : setupSaving ? 'Saving…' : 'Looks good — continue'}
             </button>
             {state.linkUrl ? (
               <p className="muted" style={{ fontSize: 12.5, marginTop: 12, textAlign: 'center' }}>
