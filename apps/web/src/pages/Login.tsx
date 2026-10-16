@@ -24,11 +24,16 @@ const SlackLogo = () => (
   </svg>
 );
 
+type Mode = 'signin' | 'signup' | 'forgot';
+
 export default function Login() {
   usePageTitle('Sign in');
+  const [mode, setMode] = useState<Mode>('signin');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -39,17 +44,32 @@ export default function Login() {
     staleTime: Infinity,
   });
 
+  const switchMode = (m: Mode) => {
+    setMode(m);
+    setError('');
+    setSent(false);
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (busy) return;
     setBusy(true);
     setError('');
     try {
-      await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+      if (mode === 'forgot') {
+        await api('/auth/forgot', { method: 'POST', body: JSON.stringify({ email }) });
+        setSent(true);
+        setBusy(false);
+        return;
+      }
+      await api(mode === 'signup' ? '/auth/signup' : '/auth/login', {
+        method: 'POST',
+        body: JSON.stringify(mode === 'signup' ? { email, password, name: name || undefined } : { email, password }),
+      });
       await qc.invalidateQueries({ queryKey: ['me'] });
       navigate('/conversations');
     } catch (err) {
-      setError(err instanceof ApiError ? friendlyError(err.message).text : 'login failed');
+      setError(err instanceof ApiError ? friendlyError(err.message).text : 'something went wrong');
       setBusy(false);
     }
   };
@@ -74,7 +94,7 @@ export default function Login() {
             connecting it.
           </div>
         )}
-        {anyProvider && (
+        {anyProvider && mode !== 'forgot' && (
           <div className="oauth-buttons">
             {providers.data?.google && (
               <a className="btn oauth-btn" href="/auth/google">
@@ -91,17 +111,70 @@ export default function Login() {
         )}
         {passwordLogin && (
           <>
+            {mode === 'signup' && (
+              <>
+                <label>Name</label>
+                <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" style={{ width: '100%' }} />
+              </>
+            )}
             <label>Email</label>
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required style={{ width: '100%' }} />
-            <label>Password</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ width: '100%' }} />
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" required style={{ width: '100%' }} />
+            {mode !== 'forgot' && (
+              <>
+                <label>Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                  minLength={mode === 'signup' ? 8 : 1}
+                  required
+                  style={{ width: '100%' }}
+                />
+              </>
+            )}
+            {mode === 'signin' && (
+              <button type="button" className="link" onClick={() => switchMode('forgot')} style={{ marginTop: 8 }}>
+                Forgot password?
+              </button>
+            )}
           </>
         )}
-        {(error || oauthError) && <div className="error" title={oauthError ?? undefined}>{error || friendlyError(oauthError!).text}</div>}
+        {sent ? (
+          <div className="muted" style={{ marginTop: 12 }}>
+            If an account exists for {email}, a reset link is on its way — it works once and
+            expires in an hour.
+          </div>
+        ) : (
+          <>
+            {(error || oauthError) && <div className="error" title={oauthError ?? undefined}>{error || friendlyError(oauthError!).text}</div>}
+            {passwordLogin && (
+              <button className="btn primary" disabled={busy} style={{ width: '100%', marginTop: 20 }}>
+                {busy
+                  ? mode === 'signup' ? 'Creating account…' : mode === 'forgot' ? 'Sending…' : 'Signing in…'
+                  : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Sign in'}
+              </button>
+            )}
+          </>
+        )}
         {passwordLogin && (
-          <button className="btn primary" disabled={busy} style={{ width: '100%', marginTop: 20 }}>
-            {busy ? 'Signing in…' : 'Sign in'}
-          </button>
+          <div className="muted" style={{ marginTop: 16, textAlign: 'center' }}>
+            {mode === 'signin' && (
+              <button type="button" className="link" onClick={() => switchMode('signup')}>
+                New to Janis? Create an account
+              </button>
+            )}
+            {mode === 'signup' && (
+              <button type="button" className="link" onClick={() => switchMode('signin')}>
+                Already have an account? Sign in
+              </button>
+            )}
+            {mode === 'forgot' && (
+              <button type="button" className="link" onClick={() => switchMode('signin')}>
+                Back to sign in
+              </button>
+            )}
+          </div>
         )}
         {providers.data && !anyProvider && !passwordLogin && (
           <div className="muted">Sign-in is not configured on this server.</div>

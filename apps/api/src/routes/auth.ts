@@ -6,8 +6,11 @@ import { and, asc, eq, gt, isNotNull, isNull, ne } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { Context } from 'hono';
 import type { Db } from '../db/client.js';
-import { agentMembers, agents, memberships, sessions, users, workspaces } from '../db/schema.js';
-import { generateSessionToken, sha256, verifyPassword } from '../lib/crypto.js';
+import { agentMembers, agents, memberships, passwordResetTokens, sessions, users, workspaces } from '../db/schema.js';
+import { generateSessionToken, hashPassword, sha256, verifyPassword } from '../lib/crypto.js';
+import { passwordIssue } from '../lib/passwordCheck.js';
+import { dbRateLimit } from '../lib/rateLimit.js';
+import { sendEmail } from '../lib/notify.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { toWorkspaceUser } from '../lib/serializers.js';
 import { syncMemberToAlertChannels } from '../lib/slack.js';
@@ -15,10 +18,18 @@ import { env } from '../env.js';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const OAUTH_STATE_COOKIE = 'janis_oauth_state';
+const RESET_TTL_MS = 60 * 60 * 1000; // password-reset links live 1h
 
 const credentials = z.object({
-  email: z.string().trim().toLowerCase().email(),
-  password: z.string().min(1),
+  email: z.string().trim().toLowerCase().email().max(320),
+  password: z.string().min(1).max(128),
+});
+
+const newCredentials = z.object({
+  email: z.string().trim().toLowerCase().email().max(320),
+  // length is the only real rule — breach/common checks run server-side
+  password: z.string().min(8).max(128),
+  name: z.string().trim().max(120).optional(),
 });
 
 export function authRoutes(db: Db) {
@@ -175,18 +186,138 @@ export function authRoutes(db: Db) {
     });
   };
 
-  app.post('/login', zValidator('json', credentials), async (c) => {
+  // A miss short-circuits verifyPassword, leaking "no such account" by
+  // timing — always run a scrypt compare against this pad on the miss path.
+  let dummyHash: string | null = null;
+  const timingPad = async () =>
+    (dummyHash ??= await hashPassword(`pad-${randomBytes(16).toString('hex')}`));
+
+  app.post(
+    '/login',
+    dbRateLimit(db, { scope: 'login', max: 10, windowMs: 10 * 60_000 }),
+    zValidator('json', credentials),
+    async (c) => {
     if (!env.passwordLogin) {
       return c.json({ error: 'password sign-in is disabled — use Google or Slack' }, 403);
     }
     const { email, password } = c.req.valid('json');
     const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
-    if (!user?.passwordHash || !(await verifyPassword(password, user.passwordHash))) {
+    const ok = user?.passwordHash
+      ? await verifyPassword(password, user.passwordHash)
+      : false;
+    if (!ok || !user) {
+      await verifyPassword(password, await timingPad()); // equalize the timing
       return c.json({ error: 'invalid credentials' }, 401);
     }
     await issueSession(c, user.id);
     return c.json({ user: toWorkspaceUser(user) });
-  });
+    },
+  );
+
+  // Email signup — new account + personal workspace (provisioned lazily by
+  // issueSession). An existing email 409s: blunt, rate-limited, and the
+  // friendlier path is a reset — deliberately NOT a silent merge onto an
+  // OAuth-only account, which would be a password-only takeover route.
+  app.post(
+    '/signup',
+    dbRateLimit(db, { scope: 'signup', max: 10, windowMs: 60 * 60_000 }),
+    zValidator('json', newCredentials),
+    async (c) => {
+      if (!env.passwordLogin) {
+        return c.json({ error: 'password sign-in is disabled — use Google or Slack' }, 403);
+      }
+      const { email, password, name } = c.req.valid('json');
+      const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+      if (existing) {
+        return c.json(
+          { error: 'An account with this email already exists — sign in or reset your password' },
+          409,
+        );
+      }
+      const issue = await passwordIssue(password);
+      if (issue) return c.json({ error: issue }, 400);
+      const [user] = await db
+        .insert(users)
+        .values({
+          email,
+          name: name || email.split('@')[0],
+          passwordHash: await hashPassword(password),
+        })
+        .returning();
+      await issueSession(c, user.id);
+      return c.json({ user: toWorkspaceUser(user) }, 201);
+    },
+  );
+
+  // Forgot password — always 200 so the endpoint can't enumerate accounts;
+  // the rate limit blunts address-probing anyway. A reset on an OAuth-only
+  // account is the sanctioned "add a password" path: the emailed link proves
+  // inbox ownership before a password is set.
+  app.post(
+    '/forgot',
+    dbRateLimit(db, { scope: 'forgot', max: 5, windowMs: 60 * 60_000 }),
+    zValidator('json', z.object({ email: z.string().trim().toLowerCase().email().max(320) })),
+    async (c) => {
+      if (!env.passwordLogin) return c.json({ ok: true });
+      const { email } = c.req.valid('json');
+      const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+      if (user) {
+        // One live token per account — minting anew burns older links.
+        await db
+          .delete(passwordResetTokens)
+          .where(and(eq(passwordResetTokens.userId, user.id), isNull(passwordResetTokens.usedAt)));
+        const raw = randomBytes(32).toString('base64url');
+        await db.insert(passwordResetTokens).values({
+          userId: user.id,
+          tokenHash: sha256(raw),
+          expiresAt: new Date(Date.now() + RESET_TTL_MS),
+        });
+        await sendEmail(
+          [user.email],
+          'Reset your Janis password',
+          `Hi ${user.name.split(' ')[0] || 'there'} — someone asked to reset the password on this Janis account. The link works once and expires in 1 hour. If that wasn't you, ignore this email — your password is unchanged.`,
+          `/reset-password?token=${raw}`,
+        );
+      }
+      return c.json({ ok: true });
+    },
+  );
+
+  // Reset — single-use hashed token, then revoke every live session so the
+  // new password is the only way back in. The fresh session logs them in.
+  app.post(
+    '/reset',
+    dbRateLimit(db, { scope: 'reset', max: 10, windowMs: 10 * 60_000 }),
+    zValidator('json', z.object({ token: z.string().min(20).max(200), password: z.string().min(8).max(128) })),
+    async (c) => {
+      if (!env.passwordLogin) {
+        return c.json({ error: 'password sign-in is disabled — use Google or Slack' }, 403);
+      }
+      const { token, password } = c.req.valid('json');
+      const [row] = await db
+        .select({ tok: passwordResetTokens, user: users })
+        .from(passwordResetTokens)
+        .innerJoin(users, eq(passwordResetTokens.userId, users.id))
+        .where(eq(passwordResetTokens.tokenHash, sha256(token)))
+        .limit(1);
+      if (!row || row.tok.usedAt || row.tok.expiresAt < new Date()) {
+        return c.json({ error: 'That reset link is expired or already used — request a fresh one' }, 400);
+      }
+      const issue = await passwordIssue(password);
+      if (issue) return c.json({ error: issue }, 400);
+      await db
+        .update(users)
+        .set({ passwordHash: await hashPassword(password) })
+        .where(eq(users.id, row.user.id));
+      await db
+        .update(passwordResetTokens)
+        .set({ usedAt: new Date() })
+        .where(eq(passwordResetTokens.id, row.tok.id));
+      await db.delete(sessions).where(eq(sessions.userId, row.user.id));
+      await issueSession(c, row.user.id);
+      return c.json({ user: toWorkspaceUser(row.user) });
+    },
+  );
 
   app.post('/logout', async (c) => {
     const token = getCookie(c, SESSION_COOKIE);
