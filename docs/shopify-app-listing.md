@@ -153,11 +153,11 @@ Draft justification text for the form:
 - [x] Bundled scopes live — blamp carries the full janis-10 set
       (`read_legal_policies`, `write_returns`, `write_customers`,
       `write_discounts`, `read_checkouts`); no re-approval needed
-- [~] Screenshots (step 5) — storefront shots captured to
-      docs/listing-assets/ (product cards, draft-order pay link, collect
-      form, verification gate, launcher bubble). STILL NEEDED (console
-      auth required): inbox thread w/ internal notes, agent editor
-      knowledge panel, embedded-app home in Shopify admin
+- [x] Screenshots (step 5) — all captured to docs/listing-assets/:
+      storefront product cards, draft-order pay link, collect form,
+      verification gate, launcher bubble, inbox thread w/ internal note,
+      agent editor knowledge panel (Shopify-synced sources), embedded-app
+      home in Shopify admin
 - [ ] PCD declaration (step 6)
 - [ ] Demo video — review requires a walkthrough: install → link agent →
       storefront chat → order lookup → draft order → inbox handoff
