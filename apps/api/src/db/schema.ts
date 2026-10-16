@@ -313,6 +313,35 @@ export const contactIdentities = pgTable(
   ],
 );
 
+/** Collect-data submissions — a visitor filled one of the agent's
+ *  collect_forms (cfg.collect_forms). The readable summary also lands as a
+ *  normal inbound message; this row is the structured record that powers
+ *  destinations (contact enrich, tags, webhook, email) and the console's
+ *  submission history. */
+export const formSubmissions = pgTable(
+  'form_submissions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    conversationId: uuid('conversation_id').references(() => conversations.id),
+    contactId: uuid('contact_id').references(() => contacts.id),
+    // collect_forms name — the WIDGET_REF identity the visitor submitted.
+    form: text('form').notNull(),
+    values: jsonb('values').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('form_submissions_ws').on(t.workspaceId),
+    index('form_submissions_agent').on(t.agentId),
+    index('form_submissions_conv').on(t.conversationId),
+  ],
+);
+
 /** Named static audiences — CSV imports and manual picks. Campaigns target
  *  a list via segment.list_id; dynamic filters stay in segment. */
 export const contactLists = pgTable(

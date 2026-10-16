@@ -2068,6 +2068,67 @@ describe('procedures', () => {
     const p = systemPrompt({ name: 'Bot', config: {} } as never, [], undefined, {});
     expect(p).not.toContain('Procedures');
   });
+
+  it('renders tool-bound steps as required calls', () => {
+    const fakeAgent = {
+      name: 'Bot',
+      config: {
+        procedures: [
+          {
+            name: 'Returns',
+            steps: [
+              'Ask for the order number',
+              { text: 'Verify the order', tool: 'shopify_lookup_order' },
+            ],
+          },
+        ],
+      },
+    } as never;
+    const p = systemPrompt(fakeAgent, [], undefined, {});
+    expect(p).toContain('1. Ask for the order number');
+    expect(p).toContain('2. Verify the order → TOOL: shopify_lookup_order');
+    expect(p).toContain('REQUIRES that exact tool call');
+  });
+});
+
+describe('collect-data forms', () => {
+  it('lists configured forms with their trigger + fields', () => {
+    const fakeAgent = {
+      name: 'Bot',
+      config: {
+        collect_forms: [
+          {
+            name: 'lead_capture',
+            title: 'Stay in touch',
+            when: 'a shopper wants pricing or a callback',
+            fields: [
+              { name: 'email', label: 'Email', type: 'email' },
+              { name: 'topic', label: 'Topic', type: 'text' },
+            ],
+          },
+        ],
+      },
+    } as never;
+    const p = systemPrompt(fakeAgent, [], undefined, {});
+    expect(p).toContain('Data-collection forms');
+    expect(p).toContain('lead_capture — Stay in touch');
+    expect(p).toContain('use when: a shopper wants pricing or a callback');
+    expect(p).toContain('WIDGET_REF: <name>');
+  });
+
+  it('omits the section for suggestion drafts and empty config', () => {
+    const cfg = {
+      collect_forms: [
+        { name: 'lead_capture', fields: [{ name: 'email', label: 'Email', type: 'email' }] },
+      ],
+    };
+    const p = systemPrompt({ name: 'Bot', config: cfg } as never, [], undefined, {
+      forSuggestion: true,
+    });
+    expect(p).not.toContain('Data-collection forms');
+    const plain = systemPrompt({ name: 'Bot', config: {} } as never, [], undefined, {});
+    expect(plain).not.toContain('Data-collection forms');
+  });
 });
 
 describe('handoff opt-out', () => {

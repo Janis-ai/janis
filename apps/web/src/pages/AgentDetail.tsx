@@ -436,6 +436,9 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
           {sub === 'instructions' && janisBrain(agent) && (
             <ProceduresSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
           )}
+          {sub === 'instructions' && janisBrain(agent) && (
+            <CollectSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+          )}
         </>
       )}
       {section === 'knowledge' && janisBrain(agent) && (
@@ -918,24 +921,67 @@ export function InstructionsSection({
   );
 }
 
-/** Steps editor — keeps raw text while typing (a trailing newline isn't a
- *  step), syncs filtered steps into cfg on blur. */
+/** Steps editor — one row per step: the instruction plus an optional tool
+ *  binding (the model is then REQUIRED to call that tool for the step).
+ *  Emits plain strings for unbound steps, {text, tool} for bound ones. */
 function StepsEditor({
   steps,
+  tools,
   onChange,
 }: {
-  steps: string[];
-  onChange: (steps: string[]) => void;
+  steps: (string | { text: string; tool?: string })[];
+  tools: string[];
+  onChange: (steps: (string | { text: string; tool?: string })[]) => void;
 }) {
-  const [text, setText] = useState(steps.join('\n'));
+  const rows = steps.map((s) => (typeof s === 'string' ? { text: s } : s));
+  const emit = (next: { text: string; tool?: string }[]) =>
+    onChange(next.map((s) => (s.tool ? s : s.text)));
+  const setRow = (i: number, patch: Partial<{ text: string; tool?: string }>) =>
+    emit(rows.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   return (
-    <textarea
-      rows={Math.min(10, Math.max(3, text.split('\n').length + 1))}
-      placeholder={'Steps, one per line — e.g.\nAsk for the order number and the email it was placed under\nRun shopify_lookup_order to verify\nRun shopify_request_return with the items they pick'}
-      value={text}
-      onChange={(e) => setText(e.target.value)}
-      onBlur={() => onChange(text.split('\n').map((s) => s.trim()).filter(Boolean))}
-    />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {rows.map((s, i) => (
+        <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span className="muted" style={{ width: 18, fontSize: 12 }}>{i + 1}.</span>
+          <input
+            style={{ flex: 1 }}
+            placeholder="e.g. Ask for the order number"
+            value={s.text}
+            onChange={(e) => setRow(i, { text: e.target.value })}
+          />
+          <select
+            style={{ width: 190 }}
+            value={s.tool ?? ''}
+            title="Tool this step must call"
+            onChange={(e) => setRow(i, { tool: e.target.value || undefined })}
+          >
+            <option value="">no tool</option>
+            {tools.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+            {s.tool && !tools.includes(s.tool) && (
+              <option value={s.tool}>{s.tool} (removed)</option>
+            )}
+          </select>
+          <button
+            className="ghost"
+            type="button"
+            onClick={() => emit(rows.filter((_, j) => j !== i))}
+            aria-label="Remove step"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      <button
+        className="ghost"
+        type="button"
+        style={{ alignSelf: 'flex-start' }}
+        onClick={() => emit([...rows, { text: '' }])}
+      >
+        + Add step
+      </button>
+    </div>
   );
 }
 
@@ -958,7 +1004,7 @@ export function ProceduresSection({
       <strong>Procedures</strong>
       <span className="muted" style={{ fontSize: 13 }}>
         Step-by-step workflows the agent follows in order when a request matches — returns,
-        warranty intake, onboarding. Steps can name a tool to call (e.g. shopify_lookup_order).
+        warranty intake, onboarding. Steps can bind a tool — pick one per step and the agent is required to call it there (e.g. shopify_lookup_order).
         Rules and policies still belong in Instructions and knowledge.
       </span>
       <ReadOnly off={!isAdmin}>
@@ -992,7 +1038,11 @@ export function ProceduresSection({
               value={p.when ?? ''}
               onChange={(e) => update(i, { when: e.target.value })}
             />
-            <StepsEditor steps={p.steps} onChange={(steps) => update(i, { steps })} />
+            <StepsEditor
+              steps={p.steps}
+              tools={(cfg.tools ?? []).map((t) => t.name)}
+              onChange={(steps) => update(i, { steps })}
+            />
           </div>
         ))}
         {procs.length < 12 && (
@@ -1007,6 +1057,200 @@ export function ProceduresSection({
             }
           >
             + Add procedure
+          </button>
+        )}
+      </ReadOnly>
+    </div>
+  );
+}
+
+type CollectFormCfg = NonNullable<AgentConfig['collect_forms']>[number];
+type CollectField = CollectFormCfg['fields'][number];
+
+/** Collect-data actions — named chat forms whose submissions land as
+ *  structured data: the visitor's message plus contact enrichment, tags,
+ *  and webhook/email destinations. */
+export function CollectSection({
+  cfg,
+  setCfg,
+  isAdmin,
+}: {
+  cfg: AgentConfig;
+  setCfg: (c: AgentConfig) => void;
+  isAdmin: boolean;
+}) {
+  const forms = cfg.collect_forms ?? [];
+  const write = (next: CollectFormCfg[]) => setCfg({ ...cfg, collect_forms: next });
+  const update = (i: number, patch: Partial<CollectFormCfg>) =>
+    write(forms.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+  const setField = (fi: number, i: number, patch: Partial<CollectField>) =>
+    update(fi, {
+      fields: forms[fi].fields.map((f, j) => (j === i ? { ...f, ...patch } : f)),
+    });
+  const blankField = (): CollectField => ({ name: '', label: '', type: 'text' });
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+      <strong>Collect data</strong>
+      <span className="muted" style={{ fontSize: 13 }}>
+        Named forms the agent can present in chat — lead capture, intake, return details.
+        A submission arrives as the visitor's message AND as data: it fills the contact,
+        applies tags, and posts to your destinations (webhook, email). Fields of type
+        email / phone / a field named "name" map onto the contact record; the rest are
+        saved as stated details.
+      </span>
+      <ReadOnly off={!isAdmin}>
+        {forms.map((f, fi) => (
+          <div
+            key={fi}
+            style={{
+              border: '1px solid var(--border, #e5e7eb)',
+              borderRadius: 8,
+              padding: 10,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+            }}
+          >
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                style={{ flex: 1 }}
+                placeholder="Name — e.g. lead_capture (letters, digits, _)"
+                value={f.name}
+                onChange={(e) => update(fi, { name: e.target.value })}
+              />
+              <button className="ghost" type="button" onClick={() => write(forms.filter((_, j) => j !== fi))}>
+                Remove
+              </button>
+            </div>
+            <input
+              placeholder="Use when — e.g. a shopper wants to be notified or quoted"
+              value={f.when ?? ''}
+              onChange={(e) => update(fi, { when: e.target.value })}
+            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                style={{ flex: 2 }}
+                placeholder="Form title — shown above the fields"
+                value={f.title ?? ''}
+                onChange={(e) => update(fi, { title: e.target.value })}
+              />
+              <input
+                style={{ flex: 1 }}
+                placeholder="Submit label (Submit)"
+                value={f.submit_label ?? ''}
+                onChange={(e) => update(fi, { submit_label: e.target.value })}
+              />
+            </div>
+            {f.fields.map((fd, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  style={{ flex: 1 }}
+                  placeholder="field_name"
+                  value={fd.name}
+                  onChange={(e) => setField(fi, i, { name: e.target.value })}
+                />
+                <input
+                  style={{ flex: 2 }}
+                  placeholder="Label — shown to the visitor"
+                  value={fd.label}
+                  onChange={(e) => setField(fi, i, { label: e.target.value })}
+                />
+                <select
+                  value={fd.type ?? 'text'}
+                  onChange={(e) => setField(fi, i, { type: e.target.value as CollectField['type'] })}
+                >
+                  {(['text', 'email', 'tel', 'textarea', 'select'] as const).map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+                <label className="check-label" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!fd.required}
+                    onChange={(e) => setField(fi, i, { required: e.target.checked || undefined })}
+                  />
+                  req
+                </label>
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => update(fi, { fields: f.fields.filter((_, j) => j !== i) })}
+                  aria-label="Remove field"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            {f.fields.some((fd) => fd.type === 'select') &&
+              f.fields.map((fd, i) =>
+                fd.type === 'select' ? (
+                  <input
+                    key={`opts-${i}`}
+                    placeholder={`Options for "${fd.name || 'select'}" — comma separated`}
+                    value={(fd.options ?? []).join(', ')}
+                    onChange={(e) =>
+                      setField(fi, i, {
+                        options: e.target.value.split(',').map((o) => o.trim()).filter(Boolean),
+                      })
+                    }
+                  />
+                ) : null,
+              )}
+            <div>
+              <button
+                className="ghost"
+                type="button"
+                disabled={f.fields.length >= 8}
+                onClick={() => update(fi, { fields: [...f.fields, blankField()] })}
+              >
+                + Add field
+              </button>
+            </div>
+            <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+              <label className="check-label" style={{ fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={f.contact !== false}
+                  onChange={(e) => update(fi, { contact: e.target.checked ? undefined : false })}
+                />
+                Save to contact
+              </label>
+              <input
+                style={{ flex: 1, minWidth: 140 }}
+                placeholder="Tags — comma separated"
+                value={(f.tags ?? []).join(', ')}
+                onChange={(e) =>
+                  update(fi, {
+                    tags: e.target.value.split(',').map((t) => t.trim()).filter(Boolean),
+                  })
+                }
+              />
+            </div>
+            <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+              <input
+                style={{ flex: 2, minWidth: 180 }}
+                placeholder="Webhook URL — POSTs the submission JSON (optional)"
+                value={f.webhook_url ?? ''}
+                onChange={(e) => update(fi, { webhook_url: e.target.value || undefined })}
+              />
+              <input
+                style={{ flex: 1, minWidth: 140 }}
+                placeholder="Notify email (optional)"
+                value={f.email ?? ''}
+                onChange={(e) => update(fi, { email: e.target.value || undefined })}
+              />
+            </div>
+          </div>
+        ))}
+        {forms.length < 8 && (
+          <button
+            className="ghost"
+            type="button"
+            onClick={() =>
+              write([...forms, { name: '', fields: [blankField()] }])
+            }
+          >
+            + Add form
           </button>
         )}
       </ReadOnly>

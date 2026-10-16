@@ -1636,6 +1636,7 @@
     wtext(submit, w.submit_label || 'Submit');
     submit.onclick = function () {
       var pairs = [];
+      var values = {};
       for (var i = 0; i < fields.length; i++) {
         var v = fields[i].input.value.trim();
         if (fields[i].f.required && !v) { fields[i].input.focus(); return; }
@@ -1643,17 +1644,25 @@
           fields[i].input.focus();
           return;
         }
-        if (v) pairs.push(fields[i].f.label + ': ' + v);
+        if (v) {
+          pairs.push(fields[i].f.label + ': ' + v);
+          values[fields[i].f.name] = v;
+        }
       }
       if (!pairs.length) return;
       // The submission lands as a normal customer message — the agent reads
-      // it like any other turn, no special wire needed.
+      // it like any other turn; a configured collect form (w.collect) also
+      // carries the structured values so the server enriches the contact
+      // and fires the form's destinations.
       var text = (w.title ? 'Form "' + w.title + '"' : 'Form') + ' — ' + pairs.join(' · ');
       box.innerHTML = '';
       var done = el('div', {}, { class: 'janis-wsent' });
       wtext(done, 'Sent ✓');
       box.appendChild(done);
-      sendText(text, { of: w.title || 'form' });
+      sendText(text, {
+        of: w.title || 'form',
+        form: w.collect ? { name: w.collect, values: values } : undefined,
+      });
     };
     form.appendChild(submit);
     box.appendChild(form);
@@ -2012,6 +2021,7 @@
     if (tap) {
       body.tap = true;
       if (tap.of) body.tap_of = tap.of;
+      if (tap.form) body.form = tap.form;
     }
     var entry = addPending(body, []);
     sendPayload(entry);

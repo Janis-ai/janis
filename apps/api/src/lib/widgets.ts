@@ -76,6 +76,10 @@ export const WidgetComponent = z.discriminatedUnion('type', [
     type: z.literal('form'),
     title: s(120).optional(),
     submit_label: s(30).optional(),
+    // Server-stamped collect-form name (cfg.collect_forms) — marks the
+    // submission for structured handling (contact enrich + destinations).
+    // Renderers pass it back; ad-hoc WIDGET: forms never carry it.
+    collect: s(40).optional(),
     fields: z
       .array(
         z.object({

@@ -23,6 +23,7 @@ import { processEvents } from '../services/ingest.js';
 import { bus } from '../lib/bus.js';
 import { rateLimit, takeDbAllowance } from '../lib/rateLimit.js';
 import { agentWorking, operatorTyping } from '../lib/typingState.js';
+import { collectFormNamed, recordFormSubmission } from '../lib/collectForms.js';
 import { operatorIdentities } from '../lib/access.js';
 
 /**
@@ -180,6 +181,16 @@ const postMessage = z
     // Copilot thread key (t<rand>) — scopes a signed-in concierge chat to
     // its own conversation; ignored for anonymous visitors.
     thread: z.string().max(48).optional(),
+    // Structured collect-form submit — the widget stamps `collect` on a
+    // configured form's spec and posts {name, values} alongside the readable
+    // text so the server can enrich the contact + fire destinations. Ad-hoc
+    // model-authored forms never carry this.
+    form: z
+      .object({
+        name: z.string().max(60),
+        values: z.record(z.string().max(2000)),
+      })
+      .optional(),
   })
   .refine((d) => d.text.trim().length > 0 || (d.attachments?.length ?? 0) > 0, {
     message: 'text or attachments required',
@@ -575,7 +586,7 @@ export function webchatRoutes(db: Db) {
   app.post('/:token/messages', zValidator('json', postMessage), async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
-    const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of, cart, market, thread } =
+    const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of, cart, market, thread, form } =
       c.req.valid('json');
     const threadKey = threadFor(thread);
     // Inbound throttle — anonymous widgets are the spam/cost surface. Two
@@ -626,6 +637,23 @@ export function webchatRoutes(db: Db) {
         // the loop) sees "accepted" for messages that never stored.
         if (dup) return c.json({ ok: true, deduped: true });
       }
+    }
+    // Collect-form submission — the widget sent the readable summary as
+    // `text` (the agent reads it like any turn) plus the structured values
+    // here. Record + enrich + destinations; the visitor's message still
+    // flows through normal ingress regardless of the outcome.
+    if (form) {
+      void (async () => {
+        const [agent] = await db.select().from(agents).where(eq(agents.id, channel.agentId)).limit(1);
+        const def = agent ? collectFormNamed(agent, form.name) : undefined;
+        if (!agent || !def) return;
+        const conv = await findConversation(
+          db,
+          channel,
+          participantFor(resolved, visitor_id, threadKey),
+        );
+        await recordFormSubmission(db, { agent, conv, form: def, values: form.values });
+      })().catch((err) => console.error('[webchat] form submission failed:', err));
     }
     // Ingress includes awaited side-paths (sync greeting generation on a
     // fresh test conversation, rule notifications) that can stretch past a

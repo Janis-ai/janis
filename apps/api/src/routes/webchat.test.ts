@@ -7,7 +7,7 @@ import { eq, sql } from 'drizzle-orm';
 import { createHmac } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentMembers, agents, channels, conversations, helpArticles, memberships, messages, sessions, slackInstallations, slackThreads, usageEvents, users, workspaces } from '../db/schema.js';
+import { agentMembers, agents, channels, contacts, conversations, formSubmissions, helpArticles, memberships, messages, sessions, slackInstallations, slackThreads, usageEvents, users, workspaces } from '../db/schema.js';
 import { generateApiKey, sha256 } from '../lib/crypto.js';
 import { markOperatorTyping } from '../lib/typingState.js';
 import { takeover, humanReply } from '../services/takeover.js';
@@ -2234,6 +2234,109 @@ describe('widget custom domain', () => {
     const html = await normal.text();
     expect(html).toContain('data-janis-preview="1"');
     expect(html).not.toContain('data-janis-page');
+  });
+});
+
+describe('collect-form submissions', () => {
+  const waitFor = async (fn: () => Promise<unknown>, tries = 50) => {
+    for (let i = 0; i < tries; i++) {
+      const v = await fn();
+      if (v) return v;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return null;
+  };
+
+  it('records the submission, enriches the contact, and applies tags', async () => {
+    const [agent] = await db.select().from(agents).limit(1);
+    await db
+      .update(agents)
+      .set({
+        config: {
+          collect_forms: [
+            {
+              name: 'lead_capture',
+              title: 'Stay in touch',
+              fields: [
+                { name: 'email', label: 'Email', type: 'email', required: true },
+                { name: 'topic', label: 'Topic', type: 'text' },
+              ],
+              tags: ['lead'],
+            },
+          ],
+        },
+      })
+      .where(eq(agents.id, agent.id));
+
+    const visitor = 'vis_collect00000001';
+    await post('hi there', visitor); // creates the conversation + contact
+    const res = await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        visitor_id: visitor,
+        text: 'Form "Stay in touch" — Email: bee@example.com · Topic: pricing',
+        form: {
+          name: 'lead_capture',
+          values: { email: 'bee@example.com', topic: 'pricing' },
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    const sub = await waitFor(async () => {
+      const [r] = await db
+        .select()
+        .from(formSubmissions)
+        .where(eq(formSubmissions.agentId, agent.id))
+        .limit(1);
+      return r;
+    });
+    expect(sub).toBeTruthy();
+    expect(sub.form).toBe('lead_capture');
+    expect((sub.values as Record<string, string>).email).toBe('bee@example.com');
+
+    // Contact enrichment — the claimed email lands on the bound contact,
+    // tagged 'lead' (+ the self-reported provenance tag).
+    const contact = await waitFor(async () => {
+      if (!sub.contactId) return null;
+      const [r] = await db.select().from(contacts).where(eq(contacts.id, sub.contactId)).limit(1);
+      return r?.email === 'bee@example.com' ? r : null;
+    });
+    expect(contact).toBeTruthy();
+    expect(contact.tags).toContain('lead');
+    expect(contact.tags).toContain('self-reported');
+    const md = contact.metadata as { claimed?: Record<string, string> };
+    expect(md.claimed?.Topic).toBe('pricing');
+
+    // The readable summary still landed as a normal inbound message.
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, sub.conversationId))
+      .limit(1);
+    expect((conv.userProfile as { email?: string }).email).toBe('bee@example.com');
+  });
+
+  it('ignores an unknown form name but still delivers the message', async () => {
+    const visitor = 'vis_collect00000002';
+    await post('hello', visitor);
+    const res = await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        visitor_id: visitor,
+        text: 'Form "Bogus" — A: 1',
+        form: { name: 'nope_not_configured', values: { a: '1' } },
+      }),
+    });
+    expect(res.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 200));
+    const rows = await db
+      .select()
+      .from(formSubmissions)
+      .where(eq(formSubmissions.form, 'nope_not_configured'));
+    expect(rows.length).toBe(0);
   });
 });
 

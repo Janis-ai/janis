@@ -1,7 +1,9 @@
 import { createHmac, randomInt } from 'node:crypto';
 import { and, asc, desc, eq, gt, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import type { OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
+import type { AgentConfig, OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
+
+type CollectForm = NonNullable<AgentConfig['collect_forms']>[number];
 import type { Db } from '../db/client.js';
 import { agents, agentWidgets, alerts, channelBindings, channels, contactIdentities, contacts, conversations, helpArticles, knowledgeFiles, memberships, messages, users, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
@@ -520,7 +522,8 @@ export function systemPrompt(
   const cfg = (agent.config ?? {}) as {
     system_prompt?: string;
     knowledge?: string[];
-    procedures?: { name: string; when?: string; steps: string[] }[];
+    procedures?: { name: string; when?: string; steps: (string | { text: string; tool?: string })[] }[];
+    collect_forms?: CollectForm[];
     tone?: string;
     auto_archive?: boolean;
     handoff_enabled?: boolean;
@@ -562,21 +565,52 @@ export function systemPrompt(
     // Half-edited rows survive the lenient schema — drop blank names and
     // empty steps here so they never reach the prompt.
     const procs = cfg.procedures
-      .filter((p) => p.name.trim() && p.steps.some((s) => s.trim()))
+      .filter((p) => p.name.trim() && p.steps.some((s) => (typeof s === 'string' ? s : s?.text ?? '').trim()))
       .slice(0, 12);
     if (procs.length) {
       parts.push(
-        '\nProcedures — authored workflows you MUST run stepwise. When the customer\'s request matches a procedure\'s trigger, work it in order: collect whatever a step needs (ask the customer if it\'s missing), call the named tool where a step says to, and never skip, reorder, merge or improvise steps. If the customer already supplied a step\'s input, do not re-ask — just do the step.\n' +
+        '\nProcedures — authored workflows you MUST run stepwise. When the customer\'s request matches a procedure\'s trigger, work it in order: collect whatever a step needs (ask the customer if it\'s missing), call the named tool where a step says to, and never skip, reorder, merge or improvise steps. If the customer already supplied a step\'s input, do not re-ask — just do the step. A step marked "→ TOOL: name" REQUIRES that exact tool call — make it for that step, not a different tool.\n' +
           procs
             .map(
               (p) =>
                 `### ${sanitizeSourceText(p.name)}${p.when?.trim() ? ` — use when: ${sanitizeSourceText(p.when)}` : ''}\n` +
                 p.steps
-                  .filter((s) => s.trim())
-                  .map((s, i) => `${i + 1}. ${sanitizeSourceText(s)}`)
+                  .map((s) => (typeof s === 'string' ? { text: s } : s))
+                  .filter((s) => s.text.trim())
+                  .map(
+                    (s, i) =>
+                      `${i + 1}. ${sanitizeSourceText(s.text)}${s.tool ? ` → TOOL: ${sanitizeSourceText(s.tool)}` : ''}`,
+                  )
                   .join('\n'),
             )
             .join('\n\n'),
+      );
+    }
+  }
+  // Collect-data forms — named lead/intake forms. Presented via
+  // WIDGET_REF (they're registered alongside saved components); the
+  // structured submit lands server-side — enrich, tags, destinations — so
+  // the model never needs to save the fields again itself. Suggestion
+  // drafts never get the component catalog, and forms only render on
+  // webchat — other channels keep the section out entirely.
+  if (
+    !opts.forSuggestion &&
+    (!conv || channelKeyFor(conv) === 'webchat') &&
+    Array.isArray(cfg.collect_forms) &&
+    cfg.collect_forms.length
+  ) {
+    const forms = cfg.collect_forms
+      .filter((f) => f.name?.trim() && f.fields?.some((x) => x.label?.trim()))
+      .slice(0, 8);
+    if (forms.length) {
+      parts.push(
+        '\nData-collection forms — when the conversation matches one, present it by emitting WIDGET_REF: <name> on its own line (it renders as a real form). A submission arrives as the customer\'s message AND is saved to their contact + routed automatically — do NOT also call save_user_profile for fields the form collected:\n' +
+          forms
+            .map(
+              (f) =>
+                `- ${f.name} — ${f.title ?? f.name}${f.when?.trim() ? ` (use when: ${sanitizeSourceText(f.when)})` : ''}: ${f.fields.map((x) => x.label).join(', ')}`,
+            )
+            .join('\n'),
       );
     }
   }
@@ -4353,6 +4387,23 @@ async function replyAsHostedAgent(
       .from(agentWidgets)
       .where(eq(agentWidgets.agentId, agent.id));
     const refSpecs = new Map<string, SavedWidgetDef>();
+    // Collect-data forms register as WIDGET_REF targets — the form spec is
+    // stamped `collect: <name>` so its submission gets structured handling
+    // (contact enrich + destinations) instead of arriving as prose only.
+    // Registered first so a real saved component wins a name collision.
+    for (const f of (agent.config as { collect_forms?: CollectForm[] } | undefined)?.collect_forms ??
+      []) {
+      if (!f.name?.trim() || !f.fields?.length) continue;
+      refSpecs.set(normWidgetRef(f.name), {
+        spec: {
+          type: 'form',
+          title: f.title ?? f.name,
+          submit_label: f.submit_label,
+          fields: f.fields,
+          collect: f.name,
+        },
+      });
+    }
     for (const w of savedWidgets) {
       const spec = WidgetComponent.safeParse(w.spec);
       if (!spec.success) continue;

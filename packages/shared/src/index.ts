@@ -204,10 +204,56 @@ export const AgentConfig = z.object({
         // save) — blank names/empty steps are dropped at prompt-build time.
         name: z.string().max(80),
         when: z.string().max(240).optional(), // the trigger — "customer wants to return"
-        steps: z.array(z.string().max(300)).max(25),
+        // Plain string steps stay valid; the object form binds a step to a
+        // tool the agent has installed ("check the order" → shopify_lookup_order)
+        // so the prompt can name the required call instead of hoping prose does.
+        steps: z
+          .array(
+            z.union([
+              z.string().max(300),
+              z.object({ text: z.string().max(300), tool: z.string().max(80).optional() }),
+            ]),
+          )
+          .max(25),
       }),
     )
     .max(12)
+    .optional(),
+  // Collect-data actions — named forms the agent presents in chat (via
+  // WIDGET_REF). A submission lands as the customer message AND as data:
+  // the fields enrich the bound contact, tags apply, and destinations
+  // (webhook, email) fan out. The first-class version of "ask the customer
+  // for their email and order number" — values arrive structured, not prose.
+  collect_forms: z
+    .array(
+      z.object({
+        // Also the WIDGET_REF name — the model emits WIDGET_REF: <name>.
+        name: z.string().max(40).regex(/^[a-z][a-z0-9_ ]*$/i),
+        when: z.string().max(240).optional(), // when to present it
+        title: z.string().max(120).optional(),
+        submit_label: z.string().max(30).optional(),
+        fields: z
+          .array(
+            z.object({
+              name: z.string().max(40).regex(/^[a-z][a-z0-9_]*$/i),
+              label: z.string().max(60),
+              type: z.enum(['text', 'email', 'tel', 'textarea', 'select']).default('text'),
+              options: z.array(z.string().max(60)).max(10).optional(),
+              required: z.boolean().optional(),
+            }),
+          )
+          .min(1)
+          .max(8),
+        // Contact enrichment runs by default (email/phone/name fields fill
+        // the contact, the rest fold into claimed metadata) — false records
+        // the submission without touching the contact.
+        contact: z.boolean().optional(),
+        tags: z.array(z.string().max(40)).max(10).optional(), // applied to the contact
+        webhook_url: z.string().url().max(500).optional(), // POSTs the submission JSON
+        email: z.string().email().max(200).optional(), // notifies this address
+      }),
+    )
+    .max(8)
     .optional(),
   tone: z.string().optional(),
   // Per-agent help-center domain override — beats the workspace-level
