@@ -1187,10 +1187,13 @@ export async function startBillingSubscription(
   const token = await adminToken(db, row);
   const test = await shopIsDevelopment(db, row);
   const amount = (plan.baseCents / 100).toFixed(2);
+  // Return to the embedded app via the admin URL — Shopify wraps it with
+  // host context; a bare origin lands the merchant on a shop-less page.
+  const returnUrl = `https://${row.shop}/admin/apps/${env.shopifyAppApiKey}`;
   const res = await shopifyGraphql(
     row.shop,
     token,
-    `mutation { appSubscriptionCreate(name: ${JSON.stringify(`Janis ${plan.name}`)}, returnUrl: ${JSON.stringify(`${env.webOrigin}/shopify-app`)}, test: ${test}, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: ${amount}, currencyCode: USD}, interval: EVERY_30_DAYS}}}]) { confirmationUrl appSubscription { id status } userErrors { field message } } }`,
+    `mutation { appSubscriptionCreate(name: ${JSON.stringify(`Janis ${plan.name}`)}, returnUrl: ${JSON.stringify(returnUrl)}, test: ${test}, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: ${amount}, currencyCode: USD}, interval: EVERY_30_DAYS}}}]) { confirmationUrl appSubscription { id status } userErrors { field message } } }`,
   );
   const out = (res.data as {
     appSubscriptionCreate?: {
