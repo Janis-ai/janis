@@ -50,6 +50,7 @@ export default function Login() {
     setError('');
     setUnverified(false);
     setSent('');
+    setResent(false);
   };
 
   const submit = async (e: React.FormEvent) => {
@@ -102,12 +103,71 @@ export default function Login() {
     setBusy(false);
   };
 
+  const [resent, setResent] = useState(false);
+  const resendSent = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api(sent === 'verify' ? '/auth/resend-verification' : '/auth/forgot', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      });
+      setResent(true);
+    } catch {
+      setResent(false);
+    }
+    setBusy(false);
+  };
+
   const oauthError = params.get('error');
   // Slack OAuth completed before sign-in (public "Add to Slack" flow) — the
   // grant waits in a cookie; once signed in, the app claims it.
   const slackPending = params.get('slack') === 'pending';
   const anyProvider = providers.data?.google || providers.data?.slack;
   const passwordLogin = providers.data?.password;
+
+  if (sent) {
+    return (
+      <div className="login-wrap">
+        <div className="card login-card" style={{ textAlign: 'center' }}>
+          <div className="login-brand">
+            <BrandImg alt="Janis" style={{ height: 40, marginBottom: 6 }} />
+          </div>
+          <h2 style={{ margin: '8px 0 10px', fontSize: 20 }}>Check your email</h2>
+          <p className="muted" style={{ margin: 0 }}>
+            {sent === 'verify' ? (
+              <>
+                We sent a confirmation link to <strong>{email}</strong> — click it to activate
+                your account. It works once and expires in 24 hours.
+              </>
+            ) : (
+              <>
+                If an account exists for <strong>{email}</strong>, a reset link is on its way —
+                it works once and expires in an hour.
+              </>
+            )}
+          </p>
+          <div className="muted" style={{ marginTop: 20, fontSize: 13 }}>
+            {resent ? (
+              'Sent again — give it a minute, then check spam.'
+            ) : (
+              <>
+                Didn't get it?{' '}
+                <button type="button" className="link" onClick={resendSent} disabled={busy}>
+                  {busy ? 'Sending…' : 'Resend'}
+                </button>
+              </>
+            )}
+          </div>
+          <div className="muted" style={{ marginTop: 12, fontSize: 13 }}>
+            <button type="button" className="link" onClick={() => switchMode('signin')}>
+              Back to sign in
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="login-wrap">
@@ -168,39 +228,21 @@ export default function Login() {
             )}
           </>
         )}
-        {sent ? (
+        {(error || oauthError) && !unverified && <div className="error" title={oauthError ?? undefined}>{error || friendlyError(oauthError!).text}</div>}
+        {unverified && (
           <div className="muted" style={{ marginTop: 12 }}>
-            {sent === 'verify' ? (
-              <>
-                We sent a confirmation link to <strong>{email}</strong> — click it to activate
-                your account. It works once and expires in 24 hours.
-              </>
-            ) : (
-              <>
-                If an account exists for {email}, a reset link is on its way — it works once and
-                expires in an hour.
-              </>
-            )}
+            Confirm your email first — we sent a link to {email}.{' '}
+            <button type="button" className="link" onClick={resendVerification}>
+              Resend it
+            </button>
           </div>
-        ) : (
-          <>
-            {(error || oauthError) && !unverified && <div className="error" title={oauthError ?? undefined}>{error || friendlyError(oauthError!).text}</div>}
-            {unverified && (
-              <div className="muted" style={{ marginTop: 12 }}>
-                Confirm your email first — we sent a link to {email}.{' '}
-                <button type="button" className="link" onClick={resendVerification}>
-                  Resend it
-                </button>
-              </div>
-            )}
-            {passwordLogin && (
-              <button className="btn primary" disabled={busy} style={{ width: '100%', marginTop: 20 }}>
-                {busy
-                  ? mode === 'signup' ? 'Creating account…' : mode === 'forgot' ? 'Sending…' : 'Signing in…'
-                  : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Sign in'}
-              </button>
-            )}
-          </>
+        )}
+        {passwordLogin && (
+          <button className="btn primary" disabled={busy} style={{ width: '100%', marginTop: 20 }}>
+            {busy
+              ? mode === 'signup' ? 'Creating account…' : mode === 'forgot' ? 'Sending…' : 'Signing in…'
+              : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Sign in'}
+          </button>
         )}
         {passwordLogin && (
           <div className="muted" style={{ marginTop: 16, textAlign: 'center' }}>
