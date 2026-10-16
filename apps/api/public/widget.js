@@ -426,6 +426,8 @@
     '.janis-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:8px;' +
     'background:#f3f4f6;font-size:12px;color:#374151;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
     '.janis-chip button{background:none;border:none;cursor:pointer;color:#6b7280;font-size:13px;padding:0;line-height:1}' +
+    '.janis-chip.err{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}' +
+    '#janis-panel.janis-dark .janis-chip.err{background:#7f1d1d;color:#fecaca;border-color:#991b1b}' +
     '#janis-emoji{display:none;grid-template-columns:repeat(10,1fr);gap:2px;padding:8px 12px;background:#fff;border-top:1px solid #f3f4f6;max-height:120px;overflow-y:auto}' +
     '#janis-emoji.open{display:grid}' +
     '#janis-emoji button{background:none;border:none;cursor:pointer;font-size:18px;padding:3px;border-radius:6px;line-height:1}' +
@@ -2636,12 +2638,32 @@
     syncSend();
   }
 
+  // Transient error note in the attach row — a rejected pick should never
+  // vanish silently. Auto-dismisses; renderPending's innerHTML wipe also
+  // clears it, which is fine (a fresh pick replaces stale feedback).
+  var MAX_UPLOAD_MB = 10; // mirrors MAX_UPLOAD_BYTES server-side
+  function attachNote(msg) {
+    var n = el('span', {}, { class: 'janis-chip err' });
+    n.textContent = msg;
+    attachRow.classList.add('show');
+    attachRow.appendChild(n);
+    setTimeout(function () {
+      n.remove();
+      if (!state.pending.length) attachRow.classList.remove('show');
+    }, 4500);
+  }
+
   panel.querySelector('#janis-clip').onclick = function () { fileInput.click(); };
   fileInput.addEventListener('change', function () {
     var files = Array.prototype.slice.call(fileInput.files || []);
     fileInput.value = '';
     files.forEach(function (f) {
-      if (state.pending.length >= 5) return;
+      if (state.pending.length >= 5) { attachNote('Up to 5 attachments at a time'); return; }
+      // Pre-check: the server rejects >10MB with 413 — skip the wasted POST.
+      if (f.size > MAX_UPLOAD_MB * 1024 * 1024) {
+        attachNote('\u201C' + f.name + '\u201D is too large \u2014 ' + MAX_UPLOAD_MB + ' MB max');
+        return;
+      }
       var slot = { name: f.name, uploading: true };
       state.pending.push(slot);
       renderPending();
@@ -2651,11 +2673,20 @@
       fetch(API + '/chat/' + TOKEN + '/uploads', { method: 'POST', body: fd })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (a) {
-          if (!a) { state.pending.splice(state.pending.indexOf(slot), 1); renderPending(); return; }
+          if (!a) {
+            state.pending.splice(state.pending.indexOf(slot), 1);
+            renderPending();
+            attachNote('Couldn\u2019t attach \u201C' + slot.name + '\u201D');
+            return;
+          }
           slot.name = a.name; slot.url = a.url; slot.type = a.type; slot.size = a.size; slot.uploading = false;
           renderPending();
         })
-        .catch(function () { state.pending.splice(state.pending.indexOf(slot), 1); renderPending(); });
+        .catch(function () {
+          state.pending.splice(state.pending.indexOf(slot), 1);
+          renderPending();
+          attachNote('Couldn\u2019t attach \u201C' + slot.name + '\u201D');
+        });
     });
   });
 
