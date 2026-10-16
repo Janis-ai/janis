@@ -39,16 +39,14 @@ Mike still needs to:
   showed no picker. Now that janis-2 is released, check
   https://dev.shopify.com/dashboard/240865640/apps/435599310849 → Home /
   left-nav Distribution → Public.
-- Create the new dev store under the new org (generated test data) and
-  hand Devin its domain.
 
-Devin's part once the new dev store exists:
+Status 2026-10-16: the dev-store question resolved itself — all 9 stores
+in Partner Dashboard are already under the Janis org; the old org's only
+store (janis-store-sx5bpcd3, frozen → deprecated-token warning source) is
+deleted. Canonical test store = **snowboardsareus.myshopify.com** (zero-
+login provisioned, linked, billing-verified). Blamp is the secondary.
 
-- Reinstall on the NEW dev store → re-link the agent → verify storefront
-  widget, webhooks, and a test charge end-to-end; update SHOP constants in
-  the tmp battery scripts to the new dev-store domain.
-
-Everything below applies to the NEW app once it exists.
+Everything below applies to the NEW app.
 
 ## 2. Organization / partner profile
 
@@ -141,20 +139,25 @@ Draft justification text for the form:
 
 ## 7. Review checklist (order of operations)
 
-- [ ] Create the new **Janis** app, distribution **Public** (step 0 — gate
-      for everything below); hand Devin the new client_id + API secret
+- [x] Create the new **Janis** app, distribution **Public** — done (step 0);
+      confirm the flag is set: dev.shopify.com/dashboard/240865640/apps/435599310849
 - [ ] Partner profile: developer name, support email, privacy policy URL
 - [x] Charge test mode — **automatic**: derived per-shop from
       `shop.plan.partnerDevelopment` (dev stores → test:true, real installs →
       live charges). No env flag to forget.
-- [ ] Verify a real `appSubscriptionCreate` on the dev store (test:true
-      auto-applies) → approve → `app_subscriptions/update`
-      webhook flips `workspaces.plan` — billing rail proven end-to-end
-- [ ] Re-approve the app in the dev store admin so the token picks up the
-      bundled scopes — `read_legal_policies`, `write_returns`,
-      `write_customers`, `write_discounts`, `read_checkouts` (janis-10) —
-      one consent covers all five
-- [ ] Screenshots (step 5)
+- [x] Billing rail proven end-to-end (2026-10-16, snowboardsareus):
+      `appSubscriptionCreate` (test:true auto) → merchant approve →
+      `app_subscriptions/update` webhook → `workspaces.plan` free→pro,
+      `billing_provider=shopify`. On blamp the stray-sub guard correctly
+      skipped the flip (workspace plan `internal`).
+- [x] Bundled scopes live — blamp carries the full janis-10 set
+      (`read_legal_policies`, `write_returns`, `write_customers`,
+      `write_discounts`, `read_checkouts`); no re-approval needed
+- [~] Screenshots (step 5) — storefront shots captured to
+      docs/listing-assets/ (product cards, draft-order pay link, collect
+      form, verification gate, launcher bubble). STILL NEEDED (console
+      auth required): inbox thread w/ internal notes, agent editor
+      knowledge panel, embedded-app home in Shopify admin
 - [ ] PCD declaration (step 6)
 - [ ] Demo video — review requires a walkthrough: install → link agent →
       storefront chat → order lookup → draft order → inbox handoff
