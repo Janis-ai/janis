@@ -735,6 +735,9 @@ export function systemPrompt(
   const handoffOff = cfg.handoff_enabled === false;
   const parts = [
     cfg.system_prompt || defaultPersona(agent.name, { ...opts, handoff: !handoffOff }),
+    // The model has no clock — "what day is it" confabulates a training-era
+    // date. One line grounds the whole turn.
+    `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}.`,
   ];
   if (Array.isArray(cfg.knowledge) && cfg.knowledge.length) {
     // Notes aren't ranked — every line injects on every reply — so they
@@ -2439,10 +2442,22 @@ export function buttonLabelOverflow(buttons: ReturnType<typeof extractButtons>['
  *  against "1234" in the corpus. */
 export function ungroundedFigures(reply: string, corpus: string): string[] {
   const haystack = corpus.replace(/[,$\s]/g, '');
+  // Standalone-token check — "$530.02" must not verify inside "$1,530.02",
+  // and "$29" must not sneak through inside "$290".
+  const present = (fig: string) => {
+    let i = haystack.indexOf(fig);
+    while (i !== -1) {
+      const before = i > 0 ? haystack[i - 1] : '';
+      const after = i + fig.length < haystack.length ? haystack[i + fig.length] : '';
+      if (!/[\d.]/.test(before) && !/[\d.]/.test(after)) return true;
+      i = haystack.indexOf(fig, i + 1);
+    }
+    return false;
+  };
   const bad = new Set<string>();
   for (const m of reply.matchAll(/\$\s?\d[\d,]*(?:\.\d+)?/g)) {
     const fig = m[0].replace(/\s/g, '');
-    if (!haystack.includes(fig.replace(/[$,]/g, ''))) bad.add(fig);
+    if (!present(fig.replace(/[$,]/g, ''))) bad.add(fig);
   }
   return [...bad];
 }

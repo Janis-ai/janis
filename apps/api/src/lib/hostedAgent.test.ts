@@ -3036,6 +3036,12 @@ describe('ungroundedFigures', () => {
     expect(ungroundedFigures('Market cap is $1,234.56.', 'cap: 1234.56')).toEqual([]);
   });
 
+  it('rejects substring-only matches — $530.02 inside $1,530.02 is not a source', () => {
+    expect(ungroundedFigures('AMD is trading at $530.02.', 'market cap: $1,530.02')).toEqual(['$530.02']);
+    // and $29 must not pass inside $290
+    expect(ungroundedFigures('It costs $29/mo.', 'plan: $290/yr')).toEqual(['$29']);
+  });
+
   it('dedupes repeated figures and ignores non-currency text', () => {
     expect(
       ungroundedFigures('$5 then $5 again — 20% off list.', 'nothing here'),
