@@ -10,6 +10,7 @@
 
 import { and, eq, sql } from 'drizzle-orm';
 import {
+  agents,
   conversations,
   slackClassicChannels,
   users,
@@ -18,7 +19,7 @@ import { takeover, resume, humanReply } from '../../services/takeover.js';
 import type { ClassicCtx } from './types.js';
 import { slashCommandWarning } from './strings.js';
 import { removeFormatting } from './profiles.js';
-import { getClassicChannelBySlackId, resolveAgentDf, saveClassicChannel } from './store.js';
+import { agentIdForClientKey, getClassicChannelBySlackId, resolveAgentDf, saveClassicChannel } from './store.js';
 import { reconnectMessengerButtons } from './buttons.js';
 import { openClassicDialog } from './dialogView.js';
 
@@ -261,7 +262,7 @@ async function transcriptChannelShell(
   const contexts: { name: string; lifespan: number }[] = [
     { name: 'transcript_channel', lifespan: 1 },
   ];
-  const sourceConv = await conversationForSource(ctx, channel.sourceChannel);
+  const sourceConv = await conversationForSource(ctx, channel.sourceChannel, channel.clientKey);
   if (sourceConv?.state === 'human' || channel.paused) {
     contexts.push({ name: 'paused', lifespan: 1 });
   } else {
@@ -895,7 +896,7 @@ export async function classicApiAiResponse(
 
   if (action === 'transcript_help') {
     const { pauseResumeButtons } = await import('./buttons.js');
-    const conv = await conversationForSource(ctx, channel.sourceChannel);
+    const conv = await conversationForSource(ctx, channel.sourceChannel, channel.clientKey);
     const buttons = pauseResumeButtons({ paused: conv?.state === 'human' || channel.paused });
     data.attachments = [...(data.attachments ?? []), buttons];
     await say(data);
@@ -1206,7 +1207,7 @@ async function redirectToCustomer(
           // metadata (platform-asserted traits live top-level) when the
           // conversation is contact-linked, else userProfile.attributes.
           if (set_attributes_obj) {
-            const conv = await conversationForSource(ctx, channel.sourceChannel);
+            const conv = await conversationForSource(ctx, channel.sourceChannel, channel.clientKey);
             if (conv?.contactId) {
               const { contacts } = await import('../../db/schema.js');
               const [contact] = await ctx.db
@@ -1381,7 +1382,7 @@ export async function sendToUser(
     ctx.result.suppressed.push({ channel: message.channel, reason: 'send_to_user: empty fulfillment' });
     return;
   }
-  const conv = await conversationForSource(ctx, channel.sourceChannel);
+  const conv = await conversationForSource(ctx, channel.sourceChannel, channel.clientKey);
   if (!conv) {
     ctx.result.suppressed.push({ channel: message.channel, reason: 'send_to_user: no source conversation' });
     return;
@@ -1423,7 +1424,7 @@ export async function channelResponse(
     return { ok: true };
   }
 
-  const conv = await conversationForSource(ctx, channel.sourceChannel);
+  const conv = await conversationForSource(ctx, channel.sourceChannel, channel.clientKey);
   if (!conv) return { ok: false, error: 'no source conversation' };
 
   // send_chat_response findChannels leg: operator send pauses the source
@@ -1516,7 +1517,7 @@ export async function handleClassicSlash(
         minutes = /^(unlimited|forever|infinity)$/i.test(text) ? -1 : parseInt(text, 10);
         customDuration = true;
       }
-      const conv = await conversationForSource(ctx, channel.sourceChannel);
+      const conv = await conversationForSource(ctx, channel.sourceChannel, channel.clientKey);
       if (!conv) return { ephemeral: slashCommandWarning };
       const userRow = await slackUserToRow(ctx, userId);
       if (conv.state !== 'human') {
@@ -1539,7 +1540,7 @@ export async function handleClassicSlash(
     }
     case '/resume': {
       if (!channel?.sourceChannel) return { ephemeral: slashCommandWarning };
-      const conv = await conversationForSource(ctx, channel.sourceChannel);
+      const conv = await conversationForSource(ctx, channel.sourceChannel, channel.clientKey);
       if (!conv) return { ephemeral: slashCommandWarning };
       const userRow = await slackUserToRow(ctx, userId);
       if (conv.state === 'human') {
@@ -1935,7 +1936,7 @@ export async function handleClassicCallback(
   }
   if (callbackId === 'resume_buttons_with_source_channel') {
     if (channel.sourceChannel) {
-      const conv = await conversationForSource(ctx, channel.sourceChannel);
+      const conv = await conversationForSource(ctx, channel.sourceChannel, channel.clientKey);
       if (conv) {
         const userRow = await slackUserToRow(ctx, message.user);
         if (conv.state === 'human')
@@ -2254,7 +2255,7 @@ async function transcriptFunctions(
   }
   if (action?.name === 'Resume') {
     if (channel.sourceChannel) {
-      const conv = await conversationForSource(ctx, channel.sourceChannel);
+      const conv = await conversationForSource(ctx, channel.sourceChannel, channel.clientKey);
       if (conv) {
         const userRow = await slackUserToRow(ctx, message.user);
         if (conv.state === 'human')
@@ -2279,7 +2280,7 @@ async function transcriptFunctions(
   if (action?.name === 'About User') {
     // Profile card → thread on the "See the `1 reply` below" reply.
     const conv = channel.sourceChannel
-      ? await conversationForSource(ctx, channel.sourceChannel)
+      ? await conversationForSource(ctx, channel.sourceChannel, channel.clientKey)
       : null;
     const profile = { ...((conv?.userProfile ?? {}) as Record<string, unknown>) };
     let contactMeta: Record<string, unknown> = {};
@@ -2707,7 +2708,7 @@ async function handleClassicDialogSubmission(
     if (duration == null) return;
     const src = channel?.sourceChannel;
     if (!src) return;
-    const conv = await conversationForSource(ctx, src);
+    const conv = await conversationForSource(ctx, src, channel?.clientKey);
     if (!conv) return;
     const userRow = await slackUserToRow(ctx, message.user);
     if (conv.state !== 'human') await takeover(ctx.db, ctx.install.workspaceId, conv.id, userRow);
@@ -2728,16 +2729,32 @@ async function handleClassicDialogSubmission(
   ctx.result.suppressed.push({ channel: message.channel, reason: `dialog unhandled: ${callbackId}` });
 }
 
+// Resolves the live conversation behind a source channel id. Scoped to the
+// install's workspace (PSID namespaces repeat across workspaces) and, when
+// the channel's client_key names an agent, prefers that agent's conv — a
+// repointed page otherwise reads a stale sibling's state.
 async function conversationForSource(
   ctx: Ctx,
   sourceChannel: string,
+  clientKey?: string | null,
 ): Promise<typeof conversations.$inferSelect | undefined> {
-  const [conv] = await ctx.db
-    .select()
+  const preferAgentId = await agentIdForClientKey(ctx.db, clientKey ?? undefined);
+  const [row] = await ctx.db
+    .select({ conv: conversations })
     .from(conversations)
-    .where(sql`${conversations.externalId} LIKE ${'%:' + sourceChannel}`)
+    .innerJoin(agents, eq(agents.id, conversations.agentId))
+    .where(
+      and(
+        eq(agents.workspaceId, ctx.install.workspaceId),
+        sql`${conversations.externalId} LIKE ${'%:' + sourceChannel}`,
+      ),
+    )
+    .orderBy(
+      sql`(${conversations.agentId} = ${preferAgentId})::int DESC NULLS LAST`,
+      sql`${conversations.createdAt} DESC`,
+    )
     .limit(1);
-  return conv;
+  return row?.conv;
 }
 
 // Slack user id → users row for takeover/humanReply. Falls back to a

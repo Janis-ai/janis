@@ -426,10 +426,32 @@ export async function setMemberDmChannel(
 
 // Find the conversation for a legacy sourceChannel (PSID etc.). New
 // externalIds are namespaced `kind:<participant>` — match on the suffix.
+// One externalId can map to several conversations — an agent-scoped id
+// means a repointed page or a reset thread keeps a conv per agent. The
+// event's client_key names the owning agent (legacy_client_key metadata, or
+// the synthetic janis-<agentId> key emitted for native agents).
+export async function agentIdForClientKey(
+  db: Db,
+  clientKey: string | undefined,
+): Promise<string | null> {
+  if (!clientKey) return null;
+  if (clientKey.startsWith('janis-')) {
+    const id = clientKey.slice('janis-'.length);
+    return /^[0-9a-f-]{36}$/.test(id) ? id : null;
+  }
+  const [row] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(sql`${agents.metadata}->>'legacy_client_key' = ${clientKey}`)
+    .limit(1);
+  return row?.id ?? null;
+}
+
 export async function conversationForSource(
   db: Db,
   workspaceId: string,
   sourceChannel: string,
+  preferAgentId?: string | null,
 ): Promise<typeof conversations.$inferSelect | undefined> {
   const [row] = await db
     .select({ conv: conversations })
@@ -440,6 +462,12 @@ export async function conversationForSource(
         eq(agents.workspaceId, workspaceId),
         sql`${conversations.externalId} LIKE ${'%:' + sourceChannel}`,
       ),
+    )
+    // The emitting agent's conv first, then the newest — a stale conv left
+    // by a repoint must never swallow a live backlog.
+    .orderBy(
+      sql`(${conversations.agentId} = ${preferAgentId ?? null})::int DESC NULLS LAST`,
+      sql`${conversations.createdAt} DESC`,
     )
     .limit(1);
   return row?.conv;

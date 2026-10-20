@@ -13,7 +13,7 @@
 //     menu lands on whatever the phrase matches next
 //   - &gt;/&lt; unescaping + null-text normalization on attachment mutations
 import { and, eq, sql } from 'drizzle-orm';
-import { conversations, messages } from '../../db/schema.js';
+import { agents, conversations, messages } from '../../db/schema.js';
 import { makeMessageFromApiAi } from './dfRender.js';
 import {
   addFollowUpIntent,
@@ -836,7 +836,7 @@ async function redetectMenu(
 /** getLatestWithParams({client_key, type:'in'}) — latest stored inbound
  *  message's parsed DF reply for this Slack channel's conversation. */
 async function latestInReply(ctx: ClassicCtx, channel: any): Promise<any | null> {
-  const conv = await conversationForSource(ctx, channel.sourceChannel);
+  const conv = await conversationForSource(ctx, channel.sourceChannel, channel.clientKey);
   if (!conv) return null;
   const [row] = await ctx.db
     .select()
@@ -850,7 +850,7 @@ async function latestInReply(ctx: ClassicCtx, channel: any): Promise<any | null>
 /** getWithParams({client_key, 'data.message.ts': ts}) — the stored 'in'
  *  message whose transcript ts matches (raw: link + suggested send). */
 async function replyByTs(ctx: ClassicCtx, channel: any, ts: number): Promise<any | null> {
-  const conv = await conversationForSource(ctx, channel.sourceChannel);
+  const conv = await conversationForSource(ctx, channel.sourceChannel, channel.clientKey);
   if (!conv) return null;
   const [row] = await ctx.db
     .select()
@@ -872,12 +872,28 @@ function replyOf(row: any): any | null {
   return typeof reply === 'string' ? safeJsonParse(reply) : reply;
 }
 
-async function conversationForSource(ctx: ClassicCtx, sourceChannel: string | null | undefined) {
+async function conversationForSource(
+  ctx: ClassicCtx,
+  sourceChannel: string | null | undefined,
+  clientKey?: string | null,
+) {
   if (!sourceChannel) return undefined;
-  const [conv] = await ctx.db
-    .select()
+  const { agentIdForClientKey } = await import('./store.js');
+  const preferAgentId = await agentIdForClientKey(ctx.db, clientKey ?? undefined);
+  const [row] = await ctx.db
+    .select({ conv: conversations })
     .from(conversations)
-    .where(sql`${conversations.externalId} LIKE ${'%:' + sourceChannel}`)
+    .innerJoin(agents, eq(agents.id, conversations.agentId))
+    .where(
+      and(
+        eq(agents.workspaceId, ctx.install.workspaceId),
+        sql`${conversations.externalId} LIKE ${'%:' + sourceChannel}`,
+      ),
+    )
+    .orderBy(
+      sql`(${conversations.agentId} = ${preferAgentId})::int DESC NULLS LAST`,
+      sql`${conversations.createdAt} DESC`,
+    )
     .limit(1);
-  return conv;
+  return row?.conv;
 }

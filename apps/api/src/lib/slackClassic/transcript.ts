@@ -5,6 +5,7 @@
 
 import type { ClassicChannelRow, ClassicCtx, LegacyEvent } from './types.js';
 import {
+  agentIdForClientKey,
   conversationForSource,
   fetchBacklog,
   markProcessed,
@@ -236,7 +237,13 @@ export async function sendMessageToChannel(
 // conversation, marks them processed, returns render-ready legacy messages.
 // Rejects (returns null) on empty backlog, verbatim.
 export async function getBulkMessages(ctx: PipeCtx, msg: LegacyEvent): Promise<any[] | null> {
-  const conv = await conversationForSource(ctx.db, ctx.install.workspaceId, String(msg.channel));
+  const conv = await conversationForSource(
+    ctx.db,
+    ctx.install.workspaceId,
+    String(msg.channel),
+    (msg.agent_id as string | undefined) ??
+      (await agentIdForClientKey(ctx.db, msg.client_key)),
+  );
   if (!conv) return null;
   const docs = await fetchBacklog(ctx.db, conv.id);
   const docIds = docs.slice(0, 20).map((d) => d.id);

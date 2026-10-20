@@ -127,6 +127,10 @@ export async function dispatchClassicForAgent(
       team_ids: [install.teamId],
       bot_name: agent.name,
       dialogflow: (agent.config as { engine?: string }).engine === 'dialogflow' ? true : undefined,
+      // Internal: the agent this event is for — conversationForSource uses it
+      // to pick the right conv when one externalId spans agents (a repointed
+      // page, a reset thread). Never sent on the wire.
+      agent_id: agent.id,
       ...fields,
     };
     out.push(
