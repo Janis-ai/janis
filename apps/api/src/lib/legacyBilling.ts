@@ -27,6 +27,8 @@ type LegacyStripe = {
   subscription_id?: string;
   meter_item_id?: string;
   plan?: string;
+  /** Internal/test bots — treated as paid, never metered. */
+  comp?: boolean;
 };
 
 type SubInfo = {
@@ -81,6 +83,7 @@ async function fetchSubscription(subId: string): Promise<SubInfo | null> {
  */
 export async function isLegacyPaid(agent: AgentRow): Promise<boolean> {
   const ls = ((agent.metadata ?? {}) as { legacy_stripe?: LegacyStripe }).legacy_stripe;
+  if (ls?.comp === true) return true;
   if (!ls?.subscription_id) return false;
   if (!env.stripeSecret) return true; // no key to check with (dev) — allow
   const sub = await fetchSubscription(ls.subscription_id);
@@ -100,7 +103,7 @@ export async function reportLegacyUsage(
   try {
     if (!env.stripeSecret) return;
     const ls = ((agent.metadata ?? {}) as { legacy_stripe?: LegacyStripe }).legacy_stripe;
-    if (!ls?.subscription_id) return;
+    if (!ls?.subscription_id || ls.comp === true) return;
 
     const sub = await fetchSubscription(ls.subscription_id);
     const itemId = sub?.meterItemId ?? ls.meter_item_id;

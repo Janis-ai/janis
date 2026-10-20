@@ -5,6 +5,8 @@ import { bus } from '../lib/bus.js';
 import { mirrorToSlack, setSlackThreadStatus, slackNotice, updateSlackAlert } from '../lib/slack.js';
 import { channelBindingFor, deliverToChannel, releaseThreadControl, takeThreadControl, type ChannelDelivery } from '../lib/channels.js';
 import { emitChannelUpdate } from '../lib/legacySocket.js';
+import { emitOutboundLine, syncClassicPaused } from '../lib/slackClassic/emit.js';
+import { markProcessed } from '../lib/slackClassic/store.js';
 import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { toMessage } from '../lib/serializers.js';
@@ -93,6 +95,9 @@ export async function takeover(
     // SDK bots learn pause state over their socket; /in responses only
     // carry it lazily on the next inbound message.
     if (b) await emitChannelUpdate(agent, b.platformUserId, true);
+    // classic-mode installs: pause the j-channel transcript doc (legacy's
+    // channel.paused — stop/resume buttons + transcript gate follow it).
+    await syncClassicPaused(db, agent, updated, true);
   })();
   // Status note in the transcript (internal — never sent to the customer)
   // and in Slack. slackNotice is awaited so a fresh thread row exists before
@@ -168,6 +173,16 @@ export async function humanReply(
   void clearOperatorTyping(db, conversationId);
   void setSlackThreadStatus(db, conversationId, null);
   bus.publish(workspaceId, { type: 'message', data: toMessage(message) });
+  // Classic j-channel line: verbatim 'bot message' with the operator's
+  // slack_user attached (sendBotMessageResponse renders `_<@U>_: text` and
+  // skips the delete-original dance without metadata.ts).
+  emitOutboundLine(db, agent, conversation, text, {
+    slack_user: user.slackUserId ?? undefined,
+    // slack_ts round-trips as metadata.ts → sendBotMessageResponse reposts
+    // the formatted line and chat.delete's the operator's raw original.
+    ...(viaSlack && slackTs ? { ts: parseFloat(slackTs) } : {}),
+  });
+  void markProcessed(db, [message.id]);
   // Per-agent override wins: the operator's identity for THIS agent's
   // channels (agent_members display_name/avatar/show_identity), else their
   // global profile.
@@ -464,6 +479,7 @@ export async function resume(
     const b = await channelBindingFor(db, conversationId);
     if (b) await releaseThreadControl(b.channel, b.platformUserId);
     if (b) await emitChannelUpdate(agent, b.platformUserId, false);
+    await syncClassicPaused(db, agent, updated, false);
   })();
   await systemNote(
     db,

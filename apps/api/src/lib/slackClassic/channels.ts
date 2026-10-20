@@ -161,9 +161,17 @@ async function createChannel(
   channelName = channelName.substr(0, 21);
   label = label.substr(0, 21);
   const uToken = userToken(install);
-  const created = await ctx.api<{ channel?: any }>(uToken, 'conversations.create', {
+  let created = await ctx.api<{ channel?: any }>(uToken, 'conversations.create', {
     name: label,
   });
+  // Fresh installs only carry user_scope=chat:write — legacy relied on the
+  // old app's broader user grants. Fall back to the bot token so channel
+  // creation still works when the installer token lacks channels:manage.
+  if (!created.ok && created.error === 'missing_scope' && uToken !== install.botToken) {
+    created = await ctx.api<{ channel?: any }>(install.botToken, 'conversations.create', {
+      name: label,
+    });
+  }
   if (!created.ok || !created.channel) {
     if (created.error === 'name_taken') {
       return duplicateNameHandler(ctx, channelName, label, index);

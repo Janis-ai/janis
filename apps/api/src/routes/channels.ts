@@ -1269,8 +1269,10 @@ export function channelWebhookRoutes(db: Db) {
           .from(agents)
           .where(eq(agents.id, channel.agentId))
           .limit(1);
-        if ((a?.metadata as Record<string, unknown> | null)?.legacy_client_key)
-          legacyOwned = true;
+        const meta = (a?.metadata ?? {}) as Record<string, unknown>;
+        // janis_only: the bot carries legacy_client_key purely for classic
+        // Slack resolution — it must NOT mirror events into wordhopapi.
+        if (meta.legacy_client_key && meta.janis_only !== true) legacyOwned = true;
       }
     }
     // Legacy coexistence: while old and new Janis share the Meta app, relay

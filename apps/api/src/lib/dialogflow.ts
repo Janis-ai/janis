@@ -563,6 +563,10 @@ export interface DfFulfillment {
   fbPayloads: Record<string, unknown>[];
   isFallback: boolean;
   intentName?: string;
+  /** v1 result.action — 'alert.custom' etc. drive the classic Slack alert gates */
+  action?: string;
+  /** raw v1-shaped result — the `reply` payload on classic Slack events */
+  raw?: unknown;
 }
 
 export async function detectIntent(
@@ -571,8 +575,9 @@ export async function detectIntent(
   text: string,
   lang: string,
   sa: ServiceAccount,
+  contexts?: LegacyContext[],
 ): Promise<DfFulfillment> {
-  const res = await detectIntentV1(project, sessionId, { text, lang }, sa);
+  const res = await detectIntentV1(project, sessionId, { text, lang, contexts }, sa);
   const texts: string[] = [];
   const fbPayloads: Record<string, unknown>[] = [];
   for (const m of res?.result.fulfillment.messages ?? []) {
@@ -590,5 +595,7 @@ export async function detectIntent(
     fbPayloads,
     isFallback: !!res?.result.metadata.isFallback,
     intentName: res?.result.metadata.intentName ?? undefined,
+    action: res?.result.action ?? undefined,
+    raw: res ? { id: res.id, result: res.result } : undefined,
   };
 }

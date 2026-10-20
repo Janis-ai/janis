@@ -54,7 +54,9 @@ export async function sendChatMessageResponse(
     attachments: out,
     metadata: msg.metadata,
     username: userObject.name,
-    as_user: false,
+    // Legacy sent as_user:false to make username/icon apply — the param was
+    // removed from the platform (invalid_arguments on non-grandfathered
+    // apps); custom username works via chat:write.customize without it.
   };
   if (userObject.image) message.icon_url = userObject.image;
   else message.icon_emoji = userObject.icon_emoji;
@@ -140,7 +142,6 @@ export async function sendBotMessageResponse(
       await ctx.api(ctx.install.installerUserToken!, 'chat.delete', {
         ts: metadata.ts,
         channel: wordhopChannel.slackChannelId,
-        as_user: true,
       });
     }
   } else {
@@ -149,7 +150,6 @@ export async function sendBotMessageResponse(
       await ctx.api(ctx.install.installerUserToken!, 'chat.update', {
         ts: msg.ts.toFixed(6),
         channel: wordhopChannel.slackChannelId,
-        as_user: true,
         text: `${msg.text} \n _YOUR BOT FAILED TO SEND THIS MESSAGE. ERROR: ${res.error}_`,
       });
     }

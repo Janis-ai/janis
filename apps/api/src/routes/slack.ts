@@ -1422,7 +1422,9 @@ export function slackPublicRoutes(db: Db) {
             }
             if (result.errors.length)
               console.error('classic view_submission errors:', result.errors);
-            return c.json({ ok: true });
+            // Empty 200 — a JSON body on view_submission must be a
+            // response_action, and Slack renders any other body oddly.
+            return c.body(null);
           }
           await handleClassicCallback(ctx, String(p.callback_id ?? ''), {
             channel: p.channel?.id ?? p.container?.channel_id ?? '',
@@ -1443,9 +1445,11 @@ export function slackPublicRoutes(db: Db) {
             text: '',
           }).catch((e) => console.error('classic callback failed:', e));
           if (result.errors.length) console.error('classic callback errors:', result.errors);
-          return c.json({ ok: true });
+          // Empty 200 — a non-empty JSON body on block_actions REPLACES the
+          // source message; legacy updated via response_url/chat.update.
+          return c.body(null);
         }
-        if (inst?.migrated) return c.json({ ok: true });
+        if (inst?.migrated) return c.body(null);
       }
       return forwardToLegacySlack(raw);
     }

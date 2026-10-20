@@ -28,6 +28,8 @@ import { messageCap } from '../lib/plans.js';
 import { clearAgentWorking, clearOperatorTyping } from '../lib/typingState.js';
 import { noteRuleRouting, systemNote, userNames } from '../lib/systemNote.js';
 import { applyConvEffects } from '../lib/conversationOps.js';
+import { emitInboundLine, emitOutboundLine } from '../lib/slackClassic/emit.js';
+import { markProcessed } from '../lib/slackClassic/store.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -156,6 +158,30 @@ export async function processEvents(
             widgets,
           });
         }
+      }
+
+      // Classic-Slack bridge — synthesize the legacy transcript events
+      // wordhopapi used to POST, so a classic-mode install renders the same
+      // j-channel lines for Janis-native bots. Dialogflow-engine bots emit
+      // their own 'chat message' inside runLegacyReply (the DF result rides
+      // along as `reply` for the training-menu enrichment) — unless a human
+      // owns the conv and the reply path never runs.
+      const operatorSent =
+        'payload' in event &&
+        (event.payload as { operator?: boolean } | undefined)?.operator === true;
+      if (message.direction === 'in' && !operatorSent) {
+        const engine = (agent.config as { engine?: string }).engine;
+        if (engine !== 'dialogflow' || conv.state === 'human') {
+          emitInboundLine(db, agent, conv, message.text);
+        }
+      } else if (event.type === 'message_out') {
+        emitOutboundLine(db, agent, conv, message.text, {
+          quick_replies: (message.payload as { quick_replies?: QuickReply[] } | undefined)
+            ?.quick_replies,
+        });
+        // Posted directly by the 'bot message' path — keep it out of the
+        // backlog so a later flush can't double-post it.
+        void markProcessed(db, [message.id]);
       }
     }
 

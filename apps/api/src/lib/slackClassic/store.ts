@@ -378,10 +378,20 @@ export async function classicMembersFor(
     dmChannelId: string | null;
     prefs: { clientKey: string; settings: ClassicPrefsSettings }[];
   }[] = [];
+  const seen = new Set<string>();
   for (const m of memberRows) {
     if (!m.slackUserId) continue;
+    seen.add(m.slackUserId);
     const entry = byUser.get(m.slackUserId) ?? { dmChannelId: null, prefs: [] };
     out.push({ slackUserId: m.slackUserId, dmChannelId: entry.dmChannelId, prefs: entry.prefs });
+  }
+  // Legacy: a member's DM channel doc was itself proof of membership — the
+  // prefs row is our equivalent, so a Slack id with any prefs on this
+  // install counts even without a users.slackUserId link (a member can be
+  // on several Slack teams but carries only one global id).
+  for (const [slackUserId, entry] of byUser) {
+    if (seen.has(slackUserId)) continue;
+    out.push({ slackUserId, dmChannelId: entry.dmChannelId, prefs: entry.prefs });
   }
   return out;
 }
@@ -447,6 +457,19 @@ export async function fetchBacklog(
       and(
         eq(messages.conversationId, conversationId),
         isNull(sql`${messages.payload}->>'processed_in_transcript'`),
+        // Internal notes (failure/custom-alert/handoff flags, payload.internal)
+        // are 'out' rows too — legacy kept them out of the j-channel; they
+        // surface via DM alerts instead. 'human' rows stay: operator lines
+        // and takeover notices are real transcript lines.
+        sql`(${messages.direction} <> 'out' OR (
+          coalesce(${messages.flags}->>'failure', 'false') = 'false'
+          AND coalesce(${messages.flags}->>'help_requested', 'false') = 'false'
+          AND coalesce(${messages.flags}->>'custom_alert', 'false') = 'false'
+          AND coalesce(${messages.flags}->>'handoff_offer', 'false') = 'false'
+          AND coalesce(${messages.flags}->>'handoff_cancelled', 'false') = 'false'
+          AND coalesce(${messages.flags}->>'resolved', 'false') = 'false'
+          AND coalesce(${messages.payload}->>'internal', 'false') = 'false'
+        ))`,
       ),
     )
     .orderBy(desc(messages.createdAt))

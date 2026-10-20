@@ -726,10 +726,9 @@ async function updateTrainingUI(
     attachments: menu.attachments,
   });
   try {
-    await ctx.api(ctx.install.botToken, 'chat.delete', {
+    await ctx.api(ctx.install.installerUserToken ?? ctx.install.botToken, 'chat.delete', {
       ts: message.ts,
       channel: message.channel,
-      as_user: true,
     });
   } catch {
     // verbatim swallows the delete error — bot token can't delete members'
