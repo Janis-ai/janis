@@ -3,14 +3,14 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, desc, eq, gt, isNotNull, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, conversations, memberships, messages, pendingActions, sessions, slackInstallations, slackPendingInstalls, slackThreads, suggestions } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackInstallations, slackPendingInstalls, slackThreads, suggestions, workspaces } from '../db/schema.js';
 import { env } from '../env.js';
 import { adminOnly, sessionAuth, SESSION_COOKIE, type SessionEnv } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
 import { runHostedEvent } from '../lib/hostedAgent.js';
-import { decidePendingAction } from '../lib/approvals.js';
+import { decidePendingAction, isConciergeAction } from '../lib/approvals.js';
 import {
   createSlackChannel,
   findThread,
@@ -23,13 +23,21 @@ import {
   sanitizeChannelName,
   slackApi,
   slackChannelInfo,
+  slackMrkdwn,
+  slackToCanonical,
   slackUserToMember,
+  slackWidgetBlocks,
   verifyAvatarSig,
   verifySlackSignature,
 } from '../lib/slack.js';
 import { fetchAvatar } from '../lib/avatar.js';
 import { membershipFor } from '../lib/members.js';
 import { agentSend, humanReply, internalNote, resume, takeover, TakeoverError, teachAgent } from '../services/takeover.js';
+import { handleChannelMessage } from '../services/channelIngress.js';
+import { makeClassicCtx } from '../lib/slackClassic/index.js';
+import { classicIncoming, handleClassicSlash, handleClassicCallback, handleClassicFilesUploaded, handleClassicWorkspaceEvent } from '../lib/slackClassic/relay.js';
+import type { ClassicResult } from '../lib/slackClassic/types.js';
+import type { SlackInbound } from '../lib/slackClassic/relay.js';
 
 type Installation = typeof slackInstallations.$inferSelect;
 
@@ -57,6 +65,11 @@ async function installationById(
 // (payload.slack_ts covers retries that outlive a restart.)
 const recentSlackEvents = new Map<string, number>();
 
+// Concierge posts ARE Janis — show the product logo. :robot_face: stays
+// reserved for transcript mirrors, where it means "the agent talking to its
+// end user". Served off the same origin that hosts the web app's PWA icons.
+const CONCIERGE_ICON_URL = `${env.webOrigin}/icon-512.png`;
+
 // Keep in sync with REQUIRED_BOT_SCOPES in scripts/slack-manifest-sync.ts —
 // the history scopes are what actually deliver the message.* event
 // subscriptions to an install; the manifest declares them, this requests them.
@@ -77,6 +90,7 @@ const SCOPES = [
   'commands', // slash commands (/pause, /resume)
   'users:read',
   'users:read.email',
+  'app_mentions:read', // @janis → concierge answers in-thread
 ].join(',');
 
 function oauthUrl(state: string) {
@@ -163,6 +177,407 @@ async function chooseAlertChannel(db: Db, inst: Installation) {
       .set({ alertChannelId: channelId })
       .where(eq(slackInstallations.id, inst.id));
     void inviteWorkspaceMembers(db, inst, channelId);
+  }
+}
+
+// Message ids already relayed to Slack by the concierge poll — two rapid
+// DMs debounce into a single hosted reply; the marker keeps the second
+// poll from re-posting it.
+const conciergePostedIds = new Set<string>();
+
+// Quick-reply button clicks already consumed — Slack retries and laggy
+// double-taps re-fire the action after chat.update stripped the buttons.
+const qrClickSeen = new Map<string, number>();
+
+/** A DM to the app (or an @mention) is a member talking to the concierge —
+ *  the same Ask-Janis pipeline the console rail uses, so the question lands
+ *  on the member's shared concierge thread and the reply posts back into
+ *  Slack (formatted + widget blocks rendered read-only). Non-members get a
+ *  polite refusal; an unconfigured concierge answers honestly rather than
+ *  dropping the message. */
+async function conciergeSlack(
+  db: Db,
+  teamId: string,
+  ev: {
+    user: string;
+    channel: string;
+    ts: string;
+    threadTs?: string;
+    text: string;
+    mention: boolean;
+  },
+): Promise<void> {
+  const [inst] = await db
+    .select()
+    .from(slackInstallations)
+    .where(eq(slackInstallations.teamId, teamId))
+    .limit(1);
+  if (!inst) return;
+  const say = (text: string) =>
+    slackApi(inst.botToken, 'chat.postMessage', {
+      channel: ev.channel,
+      ...(ev.threadTs ? { thread_ts: ev.threadTs } : {}),
+      text,
+    })
+      .then((r) => {
+        if (!r.ok) console.error('slack concierge say failed:', r.error, 'channel:', ev.channel);
+      })
+      .catch(() => {});
+
+  const member = await slackUserToMember(db, inst, ev.user).catch(() => undefined);
+  if (!member) {
+    await say(
+      `Hi! I'm the Janis concierge — I can help teammates with their workspace. ` +
+        `Your Slack account isn't linked to a Janis workspace though; sign in at ${env.webOrigin} with this Slack email to connect.`,
+    );
+    return;
+  }
+
+  // The concierge is the workspace support channel the Ask rail posts
+  // through. Unset → nobody to ask; say so rather than going silent.
+  const [channel] = env.supportChannelId
+    ? await db
+        .select()
+        .from(channels)
+        .where(and(eq(channels.id, env.supportChannelId), eq(channels.kind, 'webchat')))
+        .limit(1)
+    : [];
+  if (!channel) {
+    await say(`The Janis concierge isn't configured on this deployment — try ${env.webOrigin}/ask instead.`);
+    return;
+  }
+
+  // Mentions arrive as "<@BOT> question" — strip mention tokens so the
+  // question reads clean; other <@U> refs convert to names downstream.
+  const raw = ev.mention ? ev.text.replace(/<@[UW][A-Z0-9]+>\s*/g, '') : ev.text;
+  const text = await slackToCanonical(db, inst, raw).then((t) => t.trim());
+  if (!text) return;
+
+  const [ws] = await db
+    .select({ name: workspaces.name })
+    .from(workspaces)
+    .where(eq(workspaces.id, inst.workspaceId))
+    .limit(1);
+
+  const before = new Date();
+  // Fork Slack traffic off the shared u:<id> conversation — the DM gets its
+  // own coherent concierge thread (Ask-rail exchanges stay in the rail) and
+  // each CHANNEL is one conversation per member: a top-level @janis and a
+  // later mention inside a thread continue the same context. Keys satisfy
+  // the copilot thread shape: /^t[a-z0-9]{5,39}$/.
+  const threadKey = ev.mention ? `t${ev.channel.toLowerCase()}` : 'tslackdm';
+  // Assistant "thinking" status while the hosted run works — works in DMs
+  // (anchored to the inbound ts) and mention threads with current scopes.
+  const statusTs = ev.mention ? (ev.threadTs ?? ev.ts) : ev.ts;
+  const setStatus = (status: string) =>
+    slackApi(inst.botToken, 'assistant.threads.setStatus', {
+      channel_id: ev.channel,
+      thread_ts: statusTs,
+      status,
+    }).catch(() => {});
+  void setStatus('is thinking…');
+
+  // The Ask rail stamps a context pack (workspace inventory with real ids)
+  // — Slack needs the same: console deep links are built from these ids and
+  // the link guard strips any uuid it can't verify, so a context without
+  // ids makes every /agents/<id> link a hallucination by construction.
+  const memberWs = await db
+    .select({ id: workspaces.id, name: workspaces.name })
+    .from(memberships)
+    .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
+    .where(and(eq(memberships.userId, member.id), isNotNull(memberships.acceptedAt)));
+  const agentRows = await db
+    .select({ id: agents.id, name: agents.name })
+    .from(agents)
+    .where(eq(agents.workspaceId, inst.workspaceId));
+  const chanRows = agentRows.length
+    ? await db
+        .select({ agentId: channels.agentId, kind: channels.kind, id: channels.id, credentials: channels.credentials })
+        .from(channels)
+        .where(
+          inArray(
+            channels.agentId,
+            agentRows.map((a) => a.id),
+          ),
+        )
+    : [];
+  const pubChans = chanRows.filter(
+    (ch) => !(ch.credentials as { internal?: boolean }).internal,
+  );
+  const agentsTrait = agentRows
+    .map((a) => {
+      const kinds = pubChans
+        .filter((ch) => ch.agentId === a.id)
+        .map((ch) => `${ch.kind}:${ch.id}`);
+      return `${a.name} <${a.id}>${kinds.length ? ` (${kinds.join(', ')})` : ''}`;
+    })
+    .join('; ');
+  // select_agent's metadata stamp is the selection when there's no console
+  // driving one — read it off the existing conversation so "this agent"
+  // and /agents/<id> links resolve to the last focused agent.
+  const [prevBinding] = await db
+    .select({ conversationId: channelBindings.conversationId })
+    .from(channelBindings)
+    .where(
+      and(
+        eq(channelBindings.channelId, channel.id),
+        eq(channelBindings.platformUserId, `u:${member.id}:${threadKey}`),
+      ),
+    )
+    .limit(1);
+  let selMeta: Record<string, string> = {};
+  if (prevBinding) {
+    const [prevConv] = await db
+      .select({ userProfile: conversations.userProfile })
+      .from(conversations)
+      .where(eq(conversations.id, prevBinding.conversationId))
+      .limit(1);
+    selMeta =
+      ((prevConv?.userProfile as { metadata?: Record<string, string> })?.metadata) ?? {};
+  }
+  await handleChannelMessage(db, channel, {
+    objectId: channel.id,
+    senderId: `slack:${ev.user}`,
+    thread: threadKey,
+    text,
+    user: {
+      id: member.id,
+      name: member.name ?? undefined,
+      email: member.email,
+      verified: true,
+      via: 'session',
+      janisUser: true,
+      traits: {
+        janis_account: 'yes',
+        workspaces: memberWs.map((w) => w.name).join(', '),
+        current_workspace: ws?.name,
+        surface: 'slack',
+        current_agent: selMeta.current_agent ?? '',
+        current_agent_id: selMeta.current_agent_id ?? '',
+        agents: agentsTrait,
+      },
+    },
+    payload: { slack_ts: ev.ts, via_slack_dm: true },
+  });
+
+  // Replies mirror placement — a mention inside a thread answers in that
+  // thread; a top-level @janis answers top-level. The conversation is
+  // channel-scoped either way; no new threads are created.
+  const replyThread = ev.mention ? ev.threadTs : undefined;
+  try {
+    // The hosted reply is stored synchronously — read back the outbound rows
+    // this turn produced and relay them into the DM/mention thread.
+    const [binding] = await db
+      .select({ conversationId: channelBindings.conversationId })
+      .from(channelBindings)
+      .where(
+        and(
+          eq(channelBindings.channelId, channel.id),
+          eq(channelBindings.platformUserId, `u:${member.id}:${threadKey}`),
+        ),
+      )
+      .limit(1);
+    if (!binding) {
+      console.warn('slack concierge: no binding for', `u:${member.id}`, 'on channel', channel.id);
+      return;
+    }
+
+    // The hosted run is debounced — its reply lands seconds AFTER
+    // handleChannelMessage returns. Poll for outbound rows and post them as
+    // they appear, settling when the run goes quiet. Two rapid DMs coalesce
+    // into one hosted reply, so posted ids are tracked per-process to keep a
+    // shared reply from being relayed twice.
+    const [agent] = await db
+      .select({ name: agents.name, hosted: agents.hosted, webhookUrl: agents.webhookUrl })
+      .from(agents)
+      .where(eq(agents.id, channel.agentId))
+      .limit(1);
+    if (!agent?.hosted && !agent?.webhookUrl) return; // no reply path — nothing to relay
+    const deadline = Date.now() + 60_000;
+    let lastNewAt = 0;
+    let posted = 0;
+    while (Date.now() < deadline) {
+    const fresh = await db
+      .select({
+        id: messages.id,
+        direction: messages.direction,
+        text: messages.text,
+        flags: messages.flags,
+        payload: messages.payload,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, binding.conversationId),
+          gt(messages.createdAt, before),
+        ),
+      )
+      .orderBy(asc(messages.createdAt));
+    for (const m of fresh) {
+      if (conciergePostedIds.has(m.id)) continue;
+      // Relay only what a visitor would see — flagged event rows (handoff
+      // notes, declines) and payload.internal lines (systemNote: sentiment,
+      // takeover, approvals) are operator annotations, never customer-facing.
+      // Same set the webchat history endpoint filters out.
+      const f = (m.flags ?? {}) as {
+        failure?: boolean;
+        help_requested?: boolean;
+        custom_alert?: boolean;
+        handoff_offer?: boolean;
+        handoff_cancelled?: boolean;
+        resolved?: boolean;
+        action_request?: boolean;
+      };
+      const p = (m.payload ?? {}) as {
+        internal?: boolean;
+        action?: { id: string; label: string; display?: Record<string, unknown> };
+        widgets?: Parameters<typeof slackWidgetBlocks>[0];
+        quick_replies?: Parameters<typeof slackWidgetBlocks>[1];
+      };
+      // Approval cards are internal console rows — in Slack they become real
+      // Approve/Deny buttons so the operator can decide in place. The posted
+      // ts lands on pendingActions.slackPosts so resolveSlackActionCards
+      // rewrites the card to the outcome when it's decided.
+      if (f.action_request && p.action) {
+        conciergePostedIds.add(m.id);
+        const a = p.action;
+        const displayLines = Object.entries(a.display ?? {})
+          .map(([k, v]) => `*${k}:* ${String(v)}`)
+          .join('\n');
+        const cardText = `:lock: *Approval needed* — ${slackMrkdwn(a.label)}`;
+        const res = await slackApi(inst.botToken, 'chat.postMessage', {
+          channel: ev.channel,
+          ...(replyThread ? { thread_ts: replyThread } : {}),
+          text: cardText,
+          username: agent.name,
+          icon_url: CONCIERGE_ICON_URL,
+          blocks: [
+            {
+              type: 'section',
+              text: { type: 'mrkdwn', text: `${cardText}${displayLines ? `\n${displayLines}` : ''}` },
+            },
+            {
+              type: 'actions',
+              elements: [
+                {
+                  type: 'button',
+                  action_id: 'janis_approve_action',
+                  text: { type: 'plain_text', text: 'Approve & run' },
+                  style: 'primary',
+                  value: a.id,
+                },
+                {
+                  type: 'button',
+                  action_id: 'janis_deny_action',
+                  text: { type: 'plain_text', text: 'Dismiss' },
+                  style: 'danger',
+                  value: a.id,
+                },
+              ],
+            },
+          ],
+        }).catch((err) => ({ ok: false, error: String(err) }) as {
+          ok: boolean;
+          error?: string;
+          ts?: string;
+          channel?: string;
+        });
+        if (res.ok && res.ts) {
+          lastNewAt = Date.now();
+          posted++;
+          await db
+            .update(pendingActions)
+            .set({
+              slackPosts: sql`coalesce(${pendingActions.slackPosts}, '[]'::jsonb) || ${JSON.stringify([{ channelId: (res.channel as string | undefined) ?? ev.channel, ts: res.ts, installationId: inst.id }])}::jsonb`,
+            })
+            .where(eq(pendingActions.id, a.id));
+        } else if (!res.ok) {
+          console.error('slack concierge card post failed:', res.error, 'channel:', ev.channel);
+        }
+        continue;
+      }
+      if (m.direction !== 'out') {
+        conciergePostedIds.add(m.id);
+        continue;
+      }
+      if (
+        p.internal ||
+        f.failure ||
+        f.help_requested ||
+        f.custom_alert ||
+        f.handoff_offer ||
+        f.handoff_cancelled ||
+        f.resolved
+      ) {
+        conciergePostedIds.add(m.id);
+        continue;
+      }
+      // Concierge-authored quick replies become real buttons — a click
+      // speaks for the clicker (their own concierge turn), unlike transcript
+      // mirrors where suggestions stay read-only. String replies only;
+      // contact-share suggestions (email/phone) keep the context line.
+      const qr = p.quick_replies ?? [];
+      const qrButtons = qr.filter((q): q is string => typeof q === 'string').slice(0, 5);
+      const qrContext = qr.filter((q) => typeof q !== 'string');
+      const body = m.text ? slackMrkdwn(m.text) : '';
+      // Slack renders `blocks` INSTEAD of `text` — the field is only a
+      // notification fallback. The reply body must live in a section block
+      // or a reply carrying buttons shows up as bare buttons.
+      const blocks = [
+        ...(body ? [{ type: 'section', text: { type: 'mrkdwn', text: body } }] : []),
+        ...slackWidgetBlocks(p.widgets ?? [], qrContext),
+        ...(qrButtons.length
+          ? [
+              {
+                type: 'actions',
+                // action_ids must be unique WITHIN a message — repeating
+                // 'janis_quick_reply' on 2+ buttons is an invalid_blocks
+                // rejection, so index them.
+                elements: qrButtons.map((q, i) => ({
+                  type: 'button',
+                  action_id: `janis_quick_reply_${i}`,
+                  text: { type: 'plain_text', text: q.slice(0, 75) },
+                  value: q,
+                })),
+              },
+            ]
+          : []),
+      ];
+      const post = (withBlocks: boolean) =>
+        slackApi(inst.botToken, 'chat.postMessage', {
+          channel: ev.channel,
+          ...(replyThread ? { thread_ts: replyThread } : {}),
+          text: body || ' ',
+          username: agent.name,
+          icon_url: CONCIERGE_ICON_URL,
+          ...(withBlocks && blocks.length ? { blocks } : {}),
+        }).catch((err) => ({ ok: false, error: String(err) }));
+      // Blocks are enhancement, never load-bearing — if Slack rejects them
+      // (invalid_blocks etc.) repost the text bare so the reply still lands.
+      let res = await post(true);
+      if (!res.ok && blocks.length) res = await post(false);
+      if (res.ok) {
+        lastNewAt = Date.now();
+        posted++;
+      } else {
+        console.error('slack concierge reply post failed:', res.error, 'channel:', ev.channel);
+      }
+      // Mark the id posted either way — a failed payload is deterministic
+      // (bad blocks) or transient (Slack blip); retrying it every poll tick
+      // storms the API for the whole window and never self-heals.
+      conciergePostedIds.add(m.id);
+    }
+    // Settle: replies post as they land; once the run has been quiet for
+    // ~2.5s after producing something, we're done. Slack's 3s event ack
+    // already elapsed — retries hit the dedup map and no-op.
+    if (posted > 0 && Date.now() - lastNewAt > 2500) break;
+    await new Promise((r) => setTimeout(r, 1200));
+    }
+    if (!posted) console.warn('slack concierge: no outbound reply produced for', ev.channel);
+    // Prune occasionally — ids only matter within a poll window.
+    if (conciergePostedIds.size > 5000) conciergePostedIds.clear();
+  } finally {
+    void setStatus('');
   }
 }
 
@@ -611,12 +1026,14 @@ export function slackPublicRoutes(db: Db) {
     const body = JSON.parse(raw) as {
       type: string;
       challenge?: string;
+      team_id?: string;
       event?: {
         type: string;
         subtype?: string;
         bot_id?: string;
         user?: string;
         channel?: string;
+        channel_type?: string;
         thread_ts?: string;
         ts?: string;
         text?: string;
@@ -626,6 +1043,142 @@ export function slackPublicRoutes(db: Db) {
     if (body.type !== 'event_callback') return c.json({ ok: true });
 
     const ev = body.event;
+    // Classic-mode installs also need the workspace-sync events
+    // (channel_deleted, member_joined_channel, …) — resolve the install for
+    // every event type, not just message/mention.
+    const CLASSIC_SYNC_EVENT_TYPES = new Set([
+      'channel_deleted',
+      'channel_rename',
+      'channel_created',
+      'channel_archive',
+      'channel_unarchive',
+      'channel_marked',
+      'channel_history_changed',
+      'member_joined_channel',
+      'member_left_channel',
+      'team_join',
+    ]);
+    const evTeamInstall =
+      body.team_id &&
+      (ev?.type === 'message' ||
+        ev?.type === 'app_mention' ||
+        CLASSIC_SYNC_EVENT_TYPES.has(ev?.type ?? ''))
+        ? (
+            await db
+              .select()
+              .from(slackInstallations)
+              .where(eq(slackInstallations.teamId, body.team_id))
+              .limit(1)
+          )[0]
+        : undefined;
+
+    // Classic workspace-event sync (legacy slack_bot.js 1275-1458): channel
+    // lifecycle + membership events keep the classic channel registry in
+    // step with Slack; bot invites get the verbatim welcome cards.
+    if (
+      ev &&
+      body.team_id &&
+      evTeamInstall?.mode === 'classic' &&
+      CLASSIC_SYNC_EVENT_TYPES.has(ev.type)
+    ) {
+      const inst = evTeamInstall;
+      const result: ClassicResult = { posted: [], suppressed: [], errors: [] };
+      const ctx = makeClassicCtx(db, inst, result);
+      await handleClassicWorkspaceEvent(ctx, {
+        type: ev.type,
+        // channel_rename nests the channel object.
+        channel:
+          ev.channel ??
+          ((ev as { channel?: { id?: string } }).channel as { id?: string } | undefined)?.id,
+        // team_join's user is a full user object.
+        user:
+          typeof ev.user === 'string'
+            ? ev.user
+            : (ev.user as { id?: string } | undefined)?.id,
+        inviter: (ev as { inviter?: string }).inviter,
+        ts: ev.ts,
+        callback_id: (ev as { callback_id?: string }).callback_id,
+      }).catch((e) => console.error('classic sync event failed:', e));
+      if (result.errors.length) console.error('classic sync errors:', result.errors);
+      return c.json({ ok: true });
+    }
+
+    // Classic-mode installs: the WHOLE incoming surface (ambient j-channel
+    // relay, thread-reply channelTrain, DM/@mention incoming(), training
+    // channels) feeds incoming() verbatim — concierge never sees it.
+    if (
+      ev &&
+      (ev.type === 'message' || ev.type === 'app_mention') &&
+      !ev.bot_id &&
+      // legacy ambient/file_share only — edits, deletes, joins stay out
+      (ev.subtype == null || ev.subtype === 'file_share' || ev.subtype === 'thread_broadcast') &&
+      ev.user &&
+      ev.channel &&
+      ev.ts &&
+      body.team_id &&
+      evTeamInstall?.mode === 'classic'
+    ) {
+      const inst = evTeamInstall;
+      const evKey = `classic:${ev.channel}:${ev.ts}`;
+      if (recentSlackEvents.has(evKey)) return c.json({ ok: true });
+      recentSlackEvents.set(evKey, Date.now());
+      const result: ClassicResult = { posted: [], suppressed: [], errors: [] };
+      const ctx = makeClassicCtx(db, inst, result);
+      const inbound: SlackInbound = {
+        team: body.team_id,
+        channel: ev.channel,
+        user: ev.user,
+        text: ev.text ?? '',
+        ts: ev.ts,
+        type: 'message',
+        subtype: ev.subtype,
+        thread_ts: ev.thread_ts,
+        files: (ev as { files?: SlackInbound['files'] }).files,
+        // direct_mention/direct_message → incoming(), not ambient.
+        direct: ev.type === 'app_mention' || ev.channel_type === 'im',
+      };
+      if (ev.subtype === 'file_share' && inbound.files?.length) {
+        await handleClassicFilesUploaded(ctx, inbound).catch((e) =>
+          console.error('classic files_uploaded failed:', e),
+        );
+      } else {
+        await classicIncoming(ctx, inbound).catch((e) =>
+          console.error('classic inbound failed:', e),
+        );
+      }
+      if (result.errors.length) console.error('classic inbound errors:', result.errors);
+      return c.json({ ok: true });
+    }
+
+    // Concierge surface: a DM to the app (message.im) or an @mention
+    // (app_mention) is a member asking Janis — routed through the concierge
+    // channel like the Ask rail, with the reply posted back to Slack.
+    if (
+      ev &&
+      (ev.type === 'message' || ev.type === 'app_mention') &&
+      !ev.bot_id &&
+      !ev.subtype &&
+      ev.user &&
+      ev.text &&
+      ev.ts &&
+      ev.channel &&
+      body.team_id &&
+      (ev.type === 'app_mention' || ev.channel_type === 'im')
+    ) {
+      const evKey = `${ev.channel}:${ev.ts}`;
+      if (recentSlackEvents.has(evKey)) return c.json({ ok: true });
+      recentSlackEvents.set(evKey, Date.now());
+      await conciergeSlack(db, body.team_id, {
+        user: ev.user,
+        channel: ev.channel,
+        ts: ev.ts,
+        threadTs: ev.thread_ts,
+        text: ev.text,
+        mention: ev.type === 'app_mention',
+      }).catch((err) => console.error('slack concierge failed:', err));
+      return c.json({ ok: true });
+    }
+
     // Only user-authored thread replies (ignore bot echoes, edits, joins)
     if (!ev || ev.type !== 'message' || !ev.thread_ts || !ev.channel || !ev.user || !ev.text || !ev.ts) {
       return c.json({ ok: true });
@@ -700,7 +1253,14 @@ export function slackPublicRoutes(db: Db) {
       const noteText = /^(?:\/note\s+|note:\s*)(.+)$/is.exec(ev.text)?.[1]?.trim();
       const teachText = /^(?:\/teach\s+|teach:\s*)(.+)$/is.exec(ev.text)?.[1]?.trim();
       const agentText = /^(?:\/agent\s+|agent:\s*)(.+)$/is.exec(ev.text)?.[1]?.trim();
-      const text = agentText ?? noteText ?? teachText ?? ev.text;
+      // Slack mrkdwn → canonical — *bold*, _italic_, <url|label> and <@U>
+      // mentions all land as plain transcript markdown so the console
+      // renders them and delivery re-translates per channel.
+      const text = await slackToCanonical(
+        db,
+        found.installation,
+        agentText ?? noteText ?? teachText ?? ev.text,
+      );
       const asAgent = agentText !== undefined;
       if (!text) return c.json({ ok: true });
 
@@ -808,8 +1368,11 @@ export function slackPublicRoutes(db: Db) {
       user?: { id: string };
       team?: { id?: string };
       team_id?: string;
+      channel?: { id?: string };
+      container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
+      message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
       response_url?: string;
-      actions?: { action_id: string; value?: string }[];
+      actions?: { action_id: string; action_ts?: string; value?: string }[];
     };
 
     // Fan-out: the real Janis Slack app has ONE Interactivity URL serving both
@@ -828,10 +1391,60 @@ export function slackPublicRoutes(db: Db) {
       const teamId = payload.team?.id ?? payload.team_id;
       if (teamId) {
         const [inst] = await db
-          .select({ migrated: slackInstallations.migrated })
+          .select()
           .from(slackInstallations)
           .where(eq(slackInstallations.teamId, teamId))
           .limit(1);
+        // Classic-mode installs handle legacy callback_ids natively —
+        // fb_buttons, quick_reply_callback, archive_channel, resume buttons,
+        // filter menus — no forward to wordhop-slack.
+        if (inst?.mode === 'classic') {
+          const p = payload as any;
+          const result: ClassicResult = { posted: [], suppressed: [], errors: [] };
+          const ctx = makeClassicCtx(db, inst, result);
+          // view_submission = the modal-fallback submission — normalize to
+          // the dialog_submission shape the verbatim handlers expect.
+          if (p.type === 'view_submission') {
+            const { normalizeViewSubmission } = await import(
+              '../lib/slackClassic/dialogView.js'
+            );
+            const norm = normalizeViewSubmission(p);
+            if (norm) {
+              await handleClassicCallback(ctx, norm.callbackId, {
+                channel: norm.channel,
+                user: norm.user,
+                team: norm.team,
+                trigger_id: norm.triggerId,
+                submission: norm.submission,
+                type: 'dialog_submission',
+                text: '',
+              }).catch((e) => console.error('classic view_submission failed:', e));
+            }
+            if (result.errors.length)
+              console.error('classic view_submission errors:', result.errors);
+            return c.json({ ok: true });
+          }
+          await handleClassicCallback(ctx, String(p.callback_id ?? ''), {
+            channel: p.channel?.id ?? p.container?.channel_id ?? '',
+            user: p.user?.id,
+            actions: (p.actions ?? []).map((a: any) => ({
+              name: a.name,
+              value: a.value,
+              selected_options: a.selected_options,
+            })),
+            // interactive_message carries original_message; block_actions
+            // carries message — the dispatcher reads original_message.*.
+            original_message: p.original_message ?? p.message,
+            trigger_id: p.trigger_id,
+            submission: p.submission,
+            response_url: p.response_url,
+            attachment_id: p.attachment_id,
+            ts: p.message?.ts ?? p.container?.message_ts,
+            text: '',
+          }).catch((e) => console.error('classic callback failed:', e));
+          if (result.errors.length) console.error('classic callback errors:', result.errors);
+          return c.json({ ok: true });
+        }
         if (inst?.migrated) return c.json({ ok: true });
       }
       return forwardToLegacySlack(raw);
@@ -839,6 +1452,69 @@ export function slackPublicRoutes(db: Db) {
 
     if (!payload.user) return c.json({ ok: true });
     const action = payload.actions![0];
+
+    // Concierge quick-reply button — the value is the reply TEXT, not a conv
+    // id, so it bypasses the conv-resolution flow below. The click becomes
+    // the clicker's own concierge turn (DM → their DM thread; channel → the
+    // same mention thread), identical to them having typed it. Action ids are
+    // indexed (janis_quick_reply_0…) — Slack requires them unique per message.
+    if (action.action_id?.startsWith('janis_quick_reply')) {
+      const teamId = payload.team?.id ?? payload.team_id;
+      const chan = payload.channel?.id ?? payload.container?.channel_id;
+      const picked = action.value;
+      if (teamId && chan && picked) {
+        const msgTs = payload.message?.ts ?? payload.container?.message_ts;
+        // Double-click guard — a re-fired click on buttons already stripped
+        // by chat.update would inject the same inbound twice.
+        const clickKey = `${chan}:${msgTs}:${payload.user.id}:${picked}`;
+        if (msgTs && qrClickSeen.get(clickKey) !== undefined) return c.json({ ok: true });
+        if (msgTs) {
+          qrClickSeen.set(clickKey, Date.now());
+          if (qrClickSeen.size > 2000) qrClickSeen.clear();
+        }
+        const [inst] = await db
+          .select()
+          .from(slackInstallations)
+          .where(eq(slackInstallations.teamId, teamId))
+          .limit(1);
+        if (inst) {
+          // Swap the buttons for who-picked-what so a second viewer sees the
+          // choice was taken.
+          const orig = payload.message;
+          if (orig?.ts && orig.blocks) {
+            const kept = (orig.blocks as Record<string, unknown>[]).filter((b) => b.type !== 'actions');
+            kept.push({
+              type: 'context',
+              elements: [
+                { type: 'mrkdwn', text: `:point_right: *<@${payload.user.id}>* picked “${slackMrkdwn(picked)}”` },
+              ],
+            });
+            void slackApi(inst.botToken, 'chat.update', {
+              channel: chan,
+              ts: orig.ts,
+              text: orig.text ?? ' ',
+              blocks: kept,
+            }).catch(() => {});
+          }
+          const isDm = chan.startsWith('D');
+          // Only a real thread_ts continues a thread — a click on a
+          // top-level reply stays top-level (no message_ts fallback).
+          const threadTs = isDm
+            ? undefined
+            : (payload.message?.thread_ts ?? payload.container?.thread_ts);
+          void conciergeSlack(db, teamId, {
+            user: payload.user.id,
+            channel: chan,
+            ts: action.action_ts ?? `${Date.now() / 1000}`,
+            threadTs,
+            text: picked,
+            mention: !isDm,
+          });
+        }
+      }
+      return c.json({ ok: true });
+    }
+
     let convId = action.value;
     if (!convId) return c.json({ ok: true });
     // Approval buttons carry the pending_action id — resolve the conversation
@@ -875,12 +1551,55 @@ export function slackPublicRoutes(db: Db) {
       .from(slackThreads)
       .where(eq(slackThreads.conversationId, convId))
       .limit(1);
-    if (!thread) return c.json({ ok: true });
-    const [inst] = await db
-      .select()
-      .from(slackInstallations)
-      .where(eq(slackInstallations.id, thread.installationId))
-      .limit(1);
+    let inst: Installation | undefined;
+    // Concierge approval cards live on Ask/DM conversations that have no
+    // slack_threads row — fall back to the team install, but only for
+    // approve/deny on a real concierge pending action owned by that
+    // workspace (a stale/forged button can't reach another workspace's card).
+    let conciergeCard = false;
+    if (thread) {
+      const [row] = await db
+        .select()
+        .from(slackInstallations)
+        .where(eq(slackInstallations.id, thread.installationId))
+        .limit(1);
+      inst = row;
+    } else {
+      if (
+        action.action_id !== 'janis_approve_action' &&
+        action.action_id !== 'janis_deny_action'
+      )
+        return c.json({ ok: true });
+      const teamId = payload.team?.id ?? payload.team_id;
+      const [row] = teamId
+        ? await db
+            .select()
+            .from(slackInstallations)
+            .where(eq(slackInstallations.teamId, teamId))
+            .limit(1)
+        : [];
+      if (!row) return c.json({ ok: true });
+      const [act] = await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.id, action.value!))
+        .limit(1);
+      const [cardConv] = act
+        ? await db
+            .select()
+            .from(conversations)
+            .where(eq(conversations.id, act.conversationId))
+            .limit(1)
+        : [];
+      if (
+        !act ||
+        act.workspaceId !== row.workspaceId ||
+        !isConciergeAction(act.workspaceId, cardConv?.userProfile)
+      )
+        return c.json({ ok: true });
+      inst = row;
+      conciergeCard = true;
+    }
     if (!inst) return c.json({ ok: true });
     const user = await slackUserToMember(db, inst, payload.user.id);
     if (!user) {
@@ -896,6 +1615,34 @@ export function slackPublicRoutes(db: Db) {
         }).catch(() => {});
       }
       return c.json({ ok: true });
+    }
+    // Concierge cards gate admin-only workspace writes — the clicker must be
+    // an admin/owner, not just any linked member.
+    if (conciergeCard) {
+      const [mship] = await db
+        .select({ role: memberships.role })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, user.id),
+            eq(memberships.workspaceId, inst.workspaceId),
+            isNotNull(memberships.acceptedAt),
+          ),
+        )
+        .limit(1);
+      if (!mship || mship.role !== 'admin') {
+        if (payload.response_url) {
+          await fetch(payload.response_url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              response_type: 'ephemeral',
+              text: ':no_entry: only workspace admins can approve these changes',
+            }),
+          }).catch(() => {});
+        }
+        return c.json({ ok: true });
+      }
     }
 
     const [conv] = await db
@@ -915,6 +1662,7 @@ export function slackPublicRoutes(db: Db) {
         action.action_id === 'janis_deny_action'
       ) {
         const approve = action.action_id === 'janis_approve_action';
+        const clickedAt = new Date();
         const decided = await decidePendingAction(
           db,
           action.value!,
@@ -931,13 +1679,61 @@ export function slackPublicRoutes(db: Db) {
             }),
           }).catch(() => {});
         } else if (decided && decided !== 'not-pending') {
-          // Resume the agent so it can tell the customer the outcome.
-          void runHostedEvent(db, decided.agent, {
-            type: 'message.user',
-            conversation_id: decided.conv.externalId,
-            janis_conversation_id: decided.conv.id,
-            timestamp: new Date().toISOString(),
-          }).catch(() => {});
+          if (conciergeCard) {
+            // Concierge decisions write a deterministic "Done — …" out row
+            // (no LLM resume — same as the console decide route). Relay it
+            // to the DM/thread the card lived in; the card itself was
+            // already rewritten to the outcome via slackPosts inside
+            // decidePendingAction.
+            const destChannel =
+              payload.channel?.id ??
+              payload.container?.channel_id ??
+              (await db
+                .select({ slackPosts: pendingActions.slackPosts })
+                .from(pendingActions)
+                .where(eq(pendingActions.id, action.value!))
+                .limit(1)
+                .then(
+                  (rows) =>
+                    (rows[0]?.slackPosts as { channelId?: string }[] | null)?.[0]?.channelId,
+                ));
+            const destThread = payload.message?.thread_ts ?? payload.container?.thread_ts;
+            if (destChannel) {
+              const rows = await db
+                .select({ id: messages.id, text: messages.text })
+                .from(messages)
+                .where(
+                  and(
+                    eq(messages.conversationId, decided.conv.id),
+                    eq(messages.direction, 'out'),
+                    gt(messages.createdAt, clickedAt),
+                  ),
+                )
+                .orderBy(asc(messages.createdAt));
+              for (const m of rows) {
+                conciergePostedIds.add(m.id);
+                const r = await slackApi(inst.botToken, 'chat.postMessage', {
+                  channel: destChannel,
+                  ...(destThread ? { thread_ts: destThread } : {}),
+                  text: m.text ? slackMrkdwn(m.text) : ' ',
+                  username: decided.agent.name,
+                  icon_url: CONCIERGE_ICON_URL,
+                }).catch((err) => ({ ok: false, error: String(err) }));
+                if (!r.ok)
+                  console.error('slack concierge decision relay failed:', r.error, 'channel:', destChannel);
+              }
+            } else {
+              console.error('slack concierge decision relay: no destination channel for action', action.value);
+            }
+          } else {
+            // Resume the agent so it can tell the customer the outcome.
+            void runHostedEvent(db, decided.agent, {
+              type: 'message.user',
+              conversation_id: decided.conv.externalId,
+              janis_conversation_id: decided.conv.id,
+              timestamp: new Date().toISOString(),
+            }).catch(() => {});
+          }
         }
       } else if (action.action_id === 'janis_resume') {
         await resume(db, inst.workspaceId, convId, user);
@@ -1055,13 +1851,26 @@ export function slackPublicRoutes(db: Db) {
     const slackUserId = f.get('user_id') ?? '';
     const arg = f.get('text')?.trim() ?? '';
 
-    if (command !== '/pause' && command !== '/resume') return forwardToLegacySlack(raw);
-
     const [inst] = await db
       .select()
       .from(slackInstallations)
       .where(eq(slackInstallations.teamId, teamId))
       .limit(1);
+
+    // Classic-mode installs own their whole command surface (/pause /resume
+    // /bot /wordhop + legacy aliases) — dispatch before the new-mode filter.
+    if (inst?.mode === 'classic') {
+      const result: ClassicResult = { posted: [], suppressed: [], errors: [] };
+      const ctx = makeClassicCtx(db, inst, result);
+      const out = await handleClassicSlash(ctx, command, arg, channelId, slackUserId).catch(
+        (e) => ({ ephemeral: `:warning: ${String(e)}` }),
+      );
+      if (result.errors.length) console.error('classic slash errors:', result.errors);
+      if (out.ephemeral) return c.json({ response_type: 'ephemeral', text: out.ephemeral });
+      return c.json({ ok: true });
+    }
+
+    if (command !== '/pause' && command !== '/resume') return forwardToLegacySlack(raw);
     if (!inst) return forwardToLegacySlack(raw);
 
     const user = await slackUserToMember(db, inst, slackUserId);

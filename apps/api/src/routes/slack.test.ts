@@ -6,12 +6,12 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alerts, conversations, memberships, messages, sessions, slackInstallations, slackPendingInstalls, slackThreads, users, workspaces } from '../db/schema.js';
-import { eq } from 'drizzle-orm';
+import { agents, alerts, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackInstallations, slackPendingInstalls, slackThreads, users, workspaces } from '../db/schema.js';
+import { and, eq } from 'drizzle-orm';
 import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { slackApiRoutes, slackPublicRoutes } from './slack.js';
-import { findThread, mirrorToSlack, postSlackAlert, removeMemberFromAlertChannels, resetChannelScanCache, syncMemberToAlertChannels } from '../lib/slack.js';
+import { findThread, mirrorToSlack, postSlackAlert, removeMemberFromAlertChannels, resetChannelScanCache, slackMrkdwn, slackToCanonical, slackWidgetBlocks, syncMemberToAlertChannels } from '../lib/slack.js';
 import { env } from '../env.js';
 
 let app: Hono;
@@ -347,6 +347,91 @@ describe('slash commands', () => {
     expect(anchor.length).toBe(1);
   });
 
+  it('an assigned-but-unresolvable assignee still DMs the resolvable members', async () => {
+    // Assignee has no Slack user (no slack_user_id, lookupByEmail misses) —
+    // the page must fan out to the workspace instead of DMing nobody.
+    const [ghost] = await db
+      .insert(users)
+      .values({ email: 'ghost@x.c', name: 'Ghost' })
+      .returning();
+    const [conv] = await db
+      .update(conversations)
+      .set({ assigneeId: ghost.id })
+      .where(eq(conversations.id, convId))
+      .returning();
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+        calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+        if (String(url).includes('users.lookupByEmail')) {
+          return new Response('{"ok":false,"error":"users_not_found"}', { status: 200 });
+        }
+        if (String(url).includes('conversations.open')) {
+          return new Response('{"ok":true,"channel":{"id":"D_OP"}}', { status: 200 });
+        }
+        if (String(url).includes('chat.getPermalink')) {
+          return new Response('{"ok":true,"permalink":"https://t.slack.com/x/p1"}', { status: 200 });
+        }
+        return new Response('{"ok":true,"channel":"CALERT","ts":"9.9"}', { status: 200 });
+      }),
+    );
+    await db.update(alerts).set({ status: 'resolved' }).where(eq(alerts.conversationId, convId));
+    const [agent] = await db.select().from(agents).where(eq(agents.id, conv.agentId));
+    const [alert] = await db
+      .insert(alerts)
+      .values({ conversationId: conv.id, type: 'help_request', detail: 'needs a human' })
+      .returning();
+    await postSlackAlert(db, agent.workspaceId, conv, agent, alert);
+
+    const dms = calls.filter((c) => c.url.includes('conversations.open'));
+    expect(dms.map((d) => d.body.users)).toEqual(['U_OP']);
+    const topLevel = calls.find((c) => c.url.includes('chat.postMessage') && c.body.channel === 'CALERT' && !c.body.thread_ts);
+    expect(String(topLevel?.body.text)).toContain('<!here>');
+    await db.update(conversations).set({ assigneeId: null }).where(eq(conversations.id, convId));
+  });
+
+  it('a rule notify list DMs the listed members alongside the assignee', async () => {
+    // Assigned and resolvable — the notify list decides who gets paged past
+    // the owner, so the assignee's Slack mention stays but the DM fans out.
+    const [other] = await db
+      .insert(users)
+      .values({ email: 'other@x.c', name: 'Other', slackUserId: 'U_OTHER' })
+      .returning();
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId));
+    const admin = (await db.select().from(users).where(eq(users.slackUserId, 'U_OP')))[0];
+    await db.update(conversations).set({ assigneeId: admin.id }).where(eq(conversations.id, convId));
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+        calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+        if (String(url).includes('conversations.open')) {
+          return new Response('{"ok":true,"channel":{"id":"D_OTHER"}}', { status: 200 });
+        }
+        if (String(url).includes('chat.getPermalink')) {
+          return new Response('{"ok":true,"permalink":"https://t.slack.com/x/p1"}', { status: 200 });
+        }
+        return new Response('{"ok":true,"channel":"CALERT","ts":"9.9"}', { status: 200 });
+      }),
+    );
+    await db.update(alerts).set({ status: 'resolved' }).where(eq(alerts.conversationId, convId));
+    const [agent] = await db.select().from(agents).where(eq(agents.id, conv.agentId));
+    const [alert] = await db
+      .insert(alerts)
+      .values({ conversationId: conv.id, type: 'help_request', detail: 'needs a human' })
+      .returning();
+    await postSlackAlert(db, agent.workspaceId, { ...conv, assigneeId: admin.id }, agent, alert, {
+      notify: [other.id],
+    });
+
+    const dms = calls.filter((c) => c.url.includes('conversations.open'));
+    expect(dms.map((d) => d.body.users)).toEqual(['U_OTHER']);
+    const topLevel = calls.find((c) => c.url.includes('chat.postMessage') && c.body.channel === 'CALERT' && !c.body.thread_ts);
+    expect(String(topLevel?.body.text)).toContain('<@U_OP>');
+    await db.update(conversations).set({ assigneeId: null }).where(eq(conversations.id, convId));
+  });
+
   it('forwards to legacy when the channel has no mapped conversations', async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response('', { status: 200 })));
     vi.stubGlobal('fetch', fetchMock);
@@ -524,6 +609,29 @@ describe('slack member resolution', () => {
     expect(ingested[0].text).toBe('once only');
   });
 
+  it('an operator reply stores canonical markdown, not raw mrkdwn', async () => {
+    await db
+      .update(conversations)
+      .set({ state: 'active', assigneeId: null })
+      .where(eq(conversations.id, convId));
+    vi.stubGlobal('fetch', stubFor(null));
+    const res = await event(
+      'U_LINKED',
+      'here is *the link* — <https://x.test/a|docs> & more',
+    );
+    expect(res.status).toBe(200);
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, convId));
+    const last = rows.find(
+      (m) =>
+        (m.payload as { slack_ts?: string })?.slack_ts &&
+        m.text?.includes('the link'),
+    );
+    expect(last?.text).toBe('here is **the link** — [docs](https://x.test/a) & more');
+  });
+
   it('typed /pause in a thread pauses that conversation instead of replying', async () => {
     await db
       .update(conversations)
@@ -634,6 +742,9 @@ describe('slack member resolution', () => {
       );
       expect(repost?.body.thread_ts).toBe('9.0');
       expect(repost?.body.text).toBe('operator reply text');
+      // no avatar → bust silhouette, not the Janis app icon
+      expect(repost?.body.icon_emoji).toBe(':bust_in_silhouette:');
+      expect(repost?.body.icon_url).toBeUndefined();
       // opted out → the agent masquerade returns
       await db.update(users).set({ showIdentity: false }).where(eq(users.id, memberId));
       calls.length = 0;
@@ -643,6 +754,7 @@ describe('slack member resolution', () => {
         (c) => c.url.includes('chat.postMessage') && c.body.username === 'EvBot (operator)',
       );
       expect(masked?.body.text).toBe('anonymous reply');
+      expect(masked?.body.icon_emoji).toBe(':robot_face:');
     } finally {
       await db
         .update(slackInstallations)
@@ -1400,4 +1512,986 @@ describe('public OAuth install', () => {
       await db.select().from(slackThreads).where(eq(slackThreads.installationId, inst0.id)),
     ).toHaveLength(0);
   });
+});
+
+describe('canonical ↔ mrkdwn translation', () => {
+  it('slackMrkdwn translates canonical formatting to mrkdwn', () => {
+    expect(slackMrkdwn('**bold** and *ital* and ~~struck~~')).toBe(
+      '*bold* and _ital_ and ~struck~',
+    );
+    expect(slackMrkdwn('see [the docs](https://x.test/a)')).toBe(
+      'see <https://x.test/a|the docs>',
+    );
+    expect(slackMrkdwn('`inline` stays')).toBe('`inline` stays');
+  });
+
+  it('slackMrkdwn escapes &<> so they cannot form Slack markup', () => {
+    expect(slackMrkdwn('a & b < c > d')).toBe('a &amp; b &lt; c &gt; d');
+    // a literal <url> in canonical text must not become a Slack autolink
+    expect(slackMrkdwn('try <https://x.test> later')).toBe(
+      'try &lt;https://x.test&gt; later',
+    );
+  });
+
+  it('slackToCanonical reverses mrkdwn to canonical', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Fmt WS' }).returning();
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_FMT', botToken: 'xoxb-fmt' })
+      .returning();
+    expect(await slackToCanonical(db, inst, '*b* _i_ ~s~')).toBe('**b** *i* ~~s~~');
+    expect(await slackToCanonical(db, inst, 'see <https://x.test/a|the docs>')).toBe(
+      'see [the docs](https://x.test/a)',
+    );
+    expect(await slackToCanonical(db, inst, 'bare <https://x.test>')).toBe(
+      'bare https://x.test',
+    );
+    expect(await slackToCanonical(db, inst, 'a &amp; b &lt;c&gt;')).toBe('a & b <c>');
+    expect(await slackToCanonical(db, inst, 'heads up <!channel>')).toBe(
+      'heads up @channel',
+    );
+  });
+
+  it('slackToCanonical resolves <@U> mentions to member names', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Mention WS' }).returning();
+    const [member] = await db
+      .insert(users)
+      .values({ email: 'm@x.c', name: 'Maya', slackUserId: 'U01MAYA' })
+      .returning();
+    await db.insert(memberships).values({
+      userId: member.id,
+      workspaceId: ws.id,
+      role: 'member',
+      acceptedAt: new Date(),
+    });
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_MENT', botToken: 'xoxb-ment' })
+      .returning();
+    expect(await slackToCanonical(db, inst, 'cc <@U01MAYA> on this')).toBe(
+      'cc @Maya on this',
+    );
+  });
+
+  it('slackToCanonical degrades unknown mentions to @teammate', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Unk WS' }).returning();
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_UNK', botToken: 'xoxb-unk' })
+      .returning();
+    // users.info fails — no link, no member match
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('{"ok":false,"error":"user_not_found"}', { status: 200 }),
+      ),
+    );
+    expect(await slackToCanonical(db, inst, 'ask <@U09NOPE>')).toBe('ask @teammate');
+  });
+});
+
+describe('slackWidgetBlocks', () => {
+  it('renders cards with a link button + image blocks', () => {
+    const blocks = slackWidgetBlocks([
+      {
+        type: 'cards',
+        items: [
+          {
+            title: 'Powder Board',
+            price: '$499',
+            compare_at: '$599',
+            stock: 'In stock',
+            image: 'https://cdn.test/p.png',
+            link: 'https://shop.test/p/1',
+            link_label: 'View',
+          },
+        ],
+      },
+    ]);
+    // section (button accessory) + standalone image block — a link claims
+    // the accessory slot, so the image drops to its own block
+    expect(blocks).toHaveLength(2);
+    const b = blocks[0] as {
+      type: string;
+      text: { text: string };
+      accessory?: { type: string; url?: string; action_id?: string };
+    };
+    expect(b.type).toBe('section');
+    expect(b.text.text).toContain('*Powder Board*');
+    expect(b.text.text).toContain('~$599~ $499 (In stock)');
+    expect(b.accessory?.type).toBe('button');
+    expect(b.accessory?.url).toBe('https://shop.test/p/1');
+    expect(b.accessory?.action_id).toBe('janis_card_link_0');
+    const img = blocks[1] as { type: string; image_url: string };
+    expect(img.type).toBe('image');
+    expect(img.image_url).toBe('https://cdn.test/p.png');
+  });
+
+  it('renders a linkless card with an image accessory', () => {
+    const blocks = slackWidgetBlocks([
+      { type: 'cards', items: [{ title: 'Board', image: 'https://cdn.test/p.png' }] },
+    ]);
+    expect(blocks).toHaveLength(1);
+    const b = blocks[0] as { accessory?: { type: string; image_url: string } };
+    expect(b.accessory?.type).toBe('image');
+    expect(b.accessory?.image_url).toBe('https://cdn.test/p.png');
+  });
+
+  it('renders options as a bullet list and forms as context', () => {
+    const blocks = slackWidgetBlocks([
+      {
+        type: 'options',
+        title: 'Pick a slot',
+        items: [
+          { label: 'Monday 9am' },
+          { label: 'Tuesday 2pm', description: 'with Sam' },
+        ],
+      },
+      {
+        type: 'form',
+        title: 'Contact us',
+        fields: [
+          { name: 'email', label: 'Email', type: 'email' as const },
+          { name: 'msg', label: 'Message', type: 'textarea' as const },
+        ],
+      },
+    ]);
+    const sec = blocks[0] as { text: { text: string } };
+    expect(sec.text.text).toContain('*Pick a slot*');
+    expect(sec.text.text).toContain('• Monday 9am');
+    expect(sec.text.text).toContain('• Tuesday 2pm — with Sam');
+    const ctx = blocks[1] as { elements: { text: string }[] };
+    expect(ctx.elements[0].text).toContain('Contact us');
+    expect(ctx.elements[0].text).toContain('Email, Message');
+  });
+
+  it('renders status steps with state icons and receipt rows', () => {
+    const blocks = slackWidgetBlocks([
+      {
+        type: 'status',
+        title: 'Order 1001',
+        steps: [
+          { label: 'Placed', state: 'done' as const },
+          { label: 'Shipped', state: 'current' as const },
+          { label: 'Delivered', state: 'todo' as const },
+        ],
+      },
+      {
+        type: 'receipt',
+        title: 'Receipt',
+        rows: [{ label: 'Board', value: '$499' }],
+        total: { label: 'Total', value: '$549' },
+      },
+    ]);
+    const sec = blocks[0] as { text: { text: string } };
+    expect(sec.text.text).toContain(':heavy_check_mark: Placed');
+    expect(sec.text.text).toContain(':arrow_forward: Shipped');
+    expect(sec.text.text).toContain(':white_circle: Delivered');
+    const rec = blocks[1] as { text: { text: string } };
+    expect(rec.text.text).toContain('Board: $499');
+    expect(rec.text.text).toContain('*Total: $549*');
+  });
+
+  it('renders quick replies as a suggested-replies context line', () => {
+    const blocks = slackWidgetBlocks([], ['Yes, get a human', 'No thanks', { type: 'email' }]);
+    expect(blocks).toHaveLength(1);
+    const ctx = blocks[0] as { elements: { text: string }[] };
+    expect(ctx.elements[0].text).toBe(
+      '_suggested replies: Yes, get a human · No thanks · share email_',
+    );
+  });
+});
+
+describe('transcript mirroring fidelity', () => {
+  it('seeds threads with converted text and read-only widget blocks', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Mir WS' }).returning();
+    const { hash, preview } = generateApiKey();
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'MirBot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'mir-conv', userProfile: { name: 'Pat' } })
+      .returning();
+    await db.insert(messages).values([
+      {
+        conversationId: conv.id,
+        direction: 'in',
+        text: 'is the **Powder Board** in stock? see [size chart](https://x.test/sizes) & shipping',
+      },
+      {
+        conversationId: conv.id,
+        direction: 'out',
+        text: 'Yes — *two* options:',
+        payload: {
+          widgets: [
+            {
+              type: 'cards',
+              items: [
+                {
+                  title: 'Powder Board',
+                  price: '$499',
+                  link: 'https://shop.test/p/1',
+                  link_label: 'View',
+                },
+              ],
+            },
+          ],
+          quick_replies: ['Add to cart', { type: 'email' }],
+        },
+      },
+    ]);
+    await db.insert(slackInstallations).values({
+      workspaceId: ws.id,
+      teamId: 'T_MIRSEED',
+      botToken: 'xoxb-mirseed',
+      alertChannelId: 'CMIR',
+    });
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+        calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+        return new Response('{"ok":true,"channel":"CMIR","ts":"5.5"}', { status: 200 });
+      }),
+    );
+    const [alert] = await db
+      .insert(alerts)
+      .values({ conversationId: conv.id, type: 'help_request', detail: 'test' })
+      .returning();
+    await postSlackAlert(db, ws.id, conv, agent, alert);
+
+    const replies = calls.filter(
+      (c) => c.url.includes('chat.postMessage') && c.body.thread_ts === '5.5',
+    );
+    // customer message: canonical → mrkdwn (**→*, link→<url|label>, & escaped)
+    const cust = replies.find((r) => String(r.body.text).includes('Powder Board'));
+    expect(cust).toBeTruthy();
+    expect(cust!.body.text).toContain('*Powder Board*');
+    expect(cust!.body.text).toContain('<https://x.test/sizes|size chart>');
+    expect(cust!.body.text).toContain('&amp; shipping');
+    expect(cust!.body.text).not.toContain('**');
+    // sender attribution: avatar-less customer wears the silhouette, the
+    // agent wears the robot face rather than the Janis app icon
+    expect(cust!.body.username).toBe('Pat (customer)');
+    expect(cust!.body.icon_emoji).toBe(':bust_in_silhouette:');
+    expect(cust!.body.icon_url).toBeUndefined();
+    // agent message: *two* → _two_, card renders as a section, chips as context
+    const out = replies.find((r) => String(r.body.text).includes('_two_'));
+    expect(out).toBeTruthy();
+    expect(out!.body.username).toBe('MirBot (agent)');
+    expect(out!.body.icon_emoji).toBe(':robot_face:');
+    const blocks = out!.body.blocks as {
+      type: string;
+      text?: { text: string };
+      elements?: { text: string }[];
+      accessory?: { type: string; url?: string };
+    }[];
+    const section = blocks.find((b) => b.type === 'section');
+    expect(section?.text?.text).toContain('*Powder Board*');
+    // link lands as a url button accessory — navigation only, doesn't speak
+    expect(section?.accessory?.type).toBe('button');
+    expect(section?.accessory?.url).toBe('https://shop.test/p/1');
+    const ctx = blocks.find((b) => b.type === 'context');
+    expect(ctx?.elements?.[0]?.text).toBe('_suggested replies: Add to cart · share email_');
+    // read-only — no tappable actions
+    expect(blocks.some((b) => b.type === 'actions')).toBe(false);
+  });
+
+  it('mirrorToSlack converts text and appends widget blocks', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Mir2 WS' }).returning();
+    const { hash, preview } = generateApiKey();
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'Mir2Bot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'mir2-conv' })
+      .returning();
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_MIR2', botToken: 'xoxb-mir2' })
+      .returning();
+    await db.insert(slackThreads).values({
+      conversationId: conv.id,
+      installationId: inst.id,
+      channelId: 'CMIR2',
+      ts: '7.0',
+    });
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+        calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+        return new Response('{"ok":true,"ts":"7.1"}', { status: 200 });
+      }),
+    );
+    await mirrorToSlack(db, conv.id, 'x', 'pick *one*:', {
+      direction: 'out',
+      widgets: [
+        {
+          type: 'options',
+          title: 'Delivery',
+          items: [{ label: 'Ship it' }, { label: 'Pick up' }],
+        },
+      ],
+      quickReplies: ['Ship it', 'Pick up'],
+    });
+    const post = calls.find((c) => c.url.includes('chat.postMessage'));
+    expect(post?.body.text).toBe('pick _one_:');
+    expect(post?.body.username).toBe('Mir2Bot (agent)');
+    expect(post?.body.icon_emoji).toBe(':robot_face:');
+    const blocks = post?.body.blocks as { type: string; text?: { text: string }; elements?: { text: string }[] }[];
+    const section = blocks.find((b) => b.type === 'section');
+    expect(section?.text?.text).toContain('*Delivery*');
+    expect(section?.text?.text).toContain('• Ship it');
+    const ctx = blocks.find((b) => b.type === 'context');
+    expect(ctx?.elements?.[0]?.text).toBe('_suggested replies: Ship it · Pick up_');
+  });
+});
+
+describe('slack concierge (DM to the app)', () => {
+  let wsId: string;
+  let memberId: string;
+  let convChannelId: string;
+  const DCHAN = 'D_CONCIERGE';
+
+  const dm = (user: string, text: string, ts = `8.${Math.random().toString(36).slice(2, 6)}`) =>
+    signedPost(
+      JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T_DM',
+        event: {
+          type: 'message',
+          channel: DCHAN,
+          channel_type: 'im',
+          ts,
+          user,
+          text,
+        },
+      }),
+      '/slack/events',
+    );
+
+  beforeAll(async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'DM WS' }).returning();
+    wsId = ws.id;
+    const [member] = await db
+      .insert(users)
+      .values({ email: 'dm@x.c', name: 'Dm Member', slackUserId: 'U_DM' })
+      .returning();
+    memberId = member.id;
+    await db.insert(memberships).values({
+      userId: member.id,
+      workspaceId: ws.id,
+      role: 'member',
+      acceptedAt: new Date(),
+    });
+    const { hash, preview } = generateApiKey();
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'Concierge', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    const [ch] = await db
+      .insert(channels)
+      .values({ agentId: agent.id, workspaceId: ws.id, kind: 'webchat', name: 'Support' })
+      .returning();
+    convChannelId = ch.id;
+    await db.insert(slackInstallations).values({
+      workspaceId: ws.id,
+      teamId: 'T_DM',
+      botToken: 'xoxb-dm',
+    });
+    env.supportChannelId = ch.id;
+  });
+
+  it('a member DM lands on their concierge conversation bound to the support channel', async () => {
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+        calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+        return new Response('{"ok":true,"ts":"8.9"}', { status: 200 });
+      }),
+    );
+    const res = await dm('U_DM', 'how do *alerts* work?');
+    expect(res.status).toBe(200);
+
+    const [binding] = await db
+      .select()
+      .from(channelBindings)
+      .where(
+        and(
+          eq(channelBindings.channelId, convChannelId),
+          eq(channelBindings.platformUserId, `u:${memberId}:tslackdm`),
+        ),
+      );
+    expect(binding).toBeTruthy();
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, binding.conversationId));
+    const inbound = rows.find((m) => m.direction === 'in');
+    // mrkdwn → canonical on the way in
+    expect(inbound?.text).toBe('how do **alerts** work?');
+    expect((inbound?.payload as { slack_ts?: string })?.slack_ts).toBeTruthy();
+    expect((inbound?.payload as { via_slack_dm?: boolean })?.via_slack_dm).toBe(true);
+
+    // The console context pack lands on the conversation — agent/channel
+    // uuids in context are what the concierge builds (and the link guard
+    // verifies) /agents/<id> deep links from.
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, binding.conversationId));
+    const md = (conv.userProfile as { metadata?: Record<string, unknown> }).metadata!;
+    expect(md.surface).toBe('slack');
+    expect(String(md.workspaces)).toContain('DM WS');
+    expect(String(md.agents)).toContain('Concierge <');
+    expect(String(md.agents)).toMatch(/webchat:[0-9a-f-]{36}/);
+  });
+
+  it('a non-member DM gets a polite refusal, not silence', async () => {
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+        calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+        if (String(url).includes('users.info')) {
+          return new Response('{"ok":true,"user":{"profile":{"email":"nobody@elsewhere.c"}}}', {
+            status: 200,
+          });
+        }
+        return new Response('{"ok":true,"ts":"8.9"}', { status: 200 });
+      }),
+    );
+    const res = await dm('U_STRANGER9', 'hello?');
+    expect(res.status).toBe(200);
+    const refusal = calls.find(
+      (c) => c.url.includes('chat.postMessage') && c.body.channel === DCHAN,
+    );
+    expect(refusal).toBeTruthy();
+    expect(String(refusal!.body.text)).toContain("isn't linked");
+  });
+
+  it('duplicate DM deliveries ingest once', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('{"ok":true,"ts":"8.9"}', { status: 200 })),
+    );
+    const payload = JSON.stringify({
+      type: 'event_callback',
+      team_id: 'T_DM',
+      event: {
+        type: 'message',
+        channel: DCHAN,
+        channel_type: 'im',
+        ts: '8.555',
+        user: 'U_DM',
+        text: 'dup check',
+      },
+    });
+    await Promise.all([
+      signedPost(payload, '/slack/events'),
+      signedPost(payload, '/slack/events'),
+    ]);
+    await signedPost(payload, '/slack/events');
+    const [binding] = await db
+      .select()
+      .from(channelBindings)
+      .where(
+        and(
+          eq(channelBindings.channelId, convChannelId),
+          eq(channelBindings.platformUserId, `u:${memberId}:tslackdm`),
+        ),
+      );
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, binding.conversationId));
+    const dups = rows.filter(
+      (m) => (m.payload as { slack_ts?: string })?.slack_ts === '8.555',
+    );
+    expect(dups.length).toBe(1);
+  });
+
+  it(
+    'a parked approval card posts Slack buttons; approving in Slack runs it and relays the outcome',
+    { timeout: 20000 },
+    async () => {
+    const [concierge] = await db.select().from(agents).where(eq(agents.name, 'Concierge'));
+    const prevOpWs = env.operatorWorkspaceId;
+    env.operatorWorkspaceId = wsId;
+    // A second install on the same workspace — prod hit this: the
+    // workspace-install fallback picked an arbitrary row and tried to
+    // edit this team's DM with the OTHER team's token. The posting
+    // install's id is now recorded in slackPosts so resolution is exact.
+    const [otherInst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: wsId, teamId: 'T_OTHER', botToken: 'xoxb-other' })
+      .returning();
+    try {
+      // hosted flips the relay from early-return to poll — a card is the
+      // only thing this turn produces, and card posts count toward settle.
+      await db.update(agents).set({ hosted: true }).where(eq(agents.id, concierge.id));
+      const [jerry] = await db
+        .insert(agents)
+        .values({ workspaceId: wsId, name: 'Jerry Garcia', hosted: true })
+        .returning();
+      // concierge cards gate admin-only writes
+      await db
+        .update(memberships)
+        .set({ role: 'admin' })
+        .where(and(eq(memberships.userId, memberId), eq(memberships.workspaceId, wsId)));
+
+      const calls: { url: string; body: Record<string, unknown>; auth?: string }[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(
+          async (url: string, init?: { body?: string; headers?: Record<string, string> }) => {
+            calls.push({
+              url: String(url),
+              body: init?.body ? JSON.parse(init.body) : {},
+              auth: init?.headers?.Authorization,
+            });
+            return new Response('{"ok":true,"ts":"9.9","channel":"D_CONCIERGE"}', { status: 200 });
+          },
+        ),
+      );
+
+      // Seed the binding, then park the card mid-flight so it lands inside
+      // the relay's `before` window.
+      await dm('U_DM', 'seed');
+      const [binding] = await db
+        .select()
+        .from(channelBindings)
+        .where(
+          and(
+            eq(channelBindings.channelId, convChannelId),
+            eq(channelBindings.platformUserId, `u:${memberId}:tslackdm`),
+          ),
+        );
+      const dmRun = dm('U_DM', 'add to knowledge "my hair was blue for 3 days once"');
+      await new Promise((r) => setTimeout(r, 500));
+      const [pa] = await db
+        .insert(pendingActions)
+        .values({
+          workspaceId: wsId,
+          agentId: concierge.id,
+          conversationId: binding.conversationId,
+          toolName: 'apply_knowledge',
+          tool: { builtin: 'apply_knowledge' } as never,
+          args: {
+            workspace_id: wsId,
+            agent_id: jerry.id,
+            entry: 'my hair was blue for 3 days once',
+          } as never,
+        })
+        .returning();
+      await db.insert(messages).values({
+        conversationId: binding.conversationId,
+        direction: 'human',
+        text: 'Teach Jerry Garcia',
+        flags: { action_request: true },
+        payload: {
+          internal: true,
+          event: 'action proposed',
+          action: {
+            id: pa.id,
+            tool: 'apply_knowledge',
+            label: 'Teach Jerry Garcia',
+            args: {},
+            display: { agent: 'Jerry Garcia', entry: 'my hair was blue for 3 days once' },
+            status: 'pending',
+          },
+        },
+      });
+      await dmRun;
+
+      // The card reached Slack as real buttons, and its posted ts was
+      // recorded for outcome resolution.
+      const card = calls.find(
+        (c) =>
+          c.url.includes('chat.postMessage') &&
+          c.body.channel === 'D_CONCIERGE' &&
+          JSON.stringify(c.body.blocks ?? []).includes('janis_approve_action'),
+      );
+      expect(card).toBeTruthy();
+      expect(JSON.stringify(card!.body.blocks)).toContain(pa.id);
+      const [postedPa] = await db
+        .select({ slackPosts: pendingActions.slackPosts })
+        .from(pendingActions)
+        .where(eq(pendingActions.id, pa.id));
+      const [dmInst] = await db
+        .select()
+        .from(slackInstallations)
+        .where(eq(slackInstallations.teamId, 'T_DM'));
+      expect(postedPa.slackPosts).toEqual([
+        { channelId: 'D_CONCIERGE', ts: '9.9', installationId: dmInst.id },
+      ]);
+
+      // The member approves in Slack — no console round trip. DM payloads
+      // can arrive without payload.channel; the destination resolves via
+      // container.channel_id (and would fall back to the card's own
+      // slackPosts row).
+      calls.length = 0;
+      const click = await signedPost(
+        `payload=${encodeURIComponent(
+          JSON.stringify({
+            type: 'block_actions',
+            user: { id: 'U_DM' },
+            team: { id: 'T_DM' },
+            container: { channel_id: 'D_CONCIERGE', message_ts: '9.9' },
+            message: { ts: '9.9' },
+            actions: [{ action_id: 'janis_approve_action', value: pa.id }],
+          }),
+        )}`,
+        '/slack/interactions',
+      );
+      expect(click.status).toBe(200);
+
+      // Approved + executed — knowledge landed on Jerry.
+      const [decided] = await db
+        .select({ status: pendingActions.status })
+        .from(pendingActions)
+        .where(eq(pendingActions.id, pa.id));
+      expect(decided.status).toBe('approved');
+      const [jerryAfter] = await db.select().from(agents).where(eq(agents.id, jerry.id));
+      expect((jerryAfter.config as { knowledge?: string[] }).knowledge).toContain(
+        'my hair was blue for 3 days once',
+      );
+
+      // The card rewrote itself to the outcome on the POSTING install's
+      // token — the second same-workspace install must not be picked —
+      // and the deterministic "Done —" line relayed to the DM.
+      const update = calls.find(
+        (c) => c.url.includes('chat.update') && c.body.channel === 'D_CONCIERGE',
+      );
+      expect(update).toBeTruthy();
+      expect(update!.auth).toBe('Bearer xoxb-dm');
+      expect(JSON.stringify(update!.body.blocks)).toContain('approved');
+      expect(JSON.stringify(update!.body.blocks)).not.toContain('janis_approve_action');
+      const done = calls.find(
+        (c) =>
+          c.url.includes('chat.postMessage') &&
+          c.body.channel === 'D_CONCIERGE' &&
+          String(c.body.text).includes('Done'),
+      );
+      expect(done).toBeTruthy();
+    } finally {
+      env.operatorWorkspaceId = prevOpWs;
+      await db.update(agents).set({ hosted: false }).where(eq(agents.name, 'Concierge'));
+      await db
+        .update(memberships)
+        .set({ role: 'member' })
+        .where(and(eq(memberships.userId, memberId), eq(memberships.workspaceId, wsId)));
+      await db.delete(slackInstallations).where(eq(slackInstallations.id, otherInst.id));
+    }
+    },
+  );
+
+  it(
+    'dismissing a parked card rewrites it to the denied outcome and relays Dismissed',
+    { timeout: 20000 },
+    async () => {
+    const [concierge] = await db.select().from(agents).where(eq(agents.name, 'Concierge'));
+    const prevOpWs = env.operatorWorkspaceId;
+    env.operatorWorkspaceId = wsId;
+    try {
+      await db.update(agents).set({ hosted: true }).where(eq(agents.id, concierge.id));
+      const [jerry] = await db
+        .insert(agents)
+        .values({ workspaceId: wsId, name: 'Deny Target', hosted: true })
+        .returning();
+      await db
+        .update(memberships)
+        .set({ role: 'admin' })
+        .where(and(eq(memberships.userId, memberId), eq(memberships.workspaceId, wsId)));
+
+      const calls: { url: string; body: Record<string, unknown> }[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+          calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+          return new Response('{"ok":true,"ts":"9.8","channel":"D_CONCIERGE"}', { status: 200 });
+        }),
+      );
+
+      await dm('U_DM', 'seed deny');
+      const [binding] = await db
+        .select()
+        .from(channelBindings)
+        .where(
+          and(
+            eq(channelBindings.channelId, convChannelId),
+            eq(channelBindings.platformUserId, `u:${memberId}:tslackdm`),
+          ),
+        );
+      const dmRun = dm('U_DM', 'teach deny target something');
+      await new Promise((r) => setTimeout(r, 500));
+      const [pa] = await db
+        .insert(pendingActions)
+        .values({
+          workspaceId: wsId,
+          agentId: concierge.id,
+          conversationId: binding.conversationId,
+          toolName: 'apply_knowledge',
+          tool: { builtin: 'apply_knowledge' } as never,
+          args: {
+            workspace_id: wsId,
+            agent_id: jerry.id,
+            entry: 'should never land',
+          } as never,
+        })
+        .returning();
+      await db.insert(messages).values({
+        conversationId: binding.conversationId,
+        direction: 'human',
+        text: 'Teach Deny Target',
+        flags: { action_request: true },
+        payload: {
+          internal: true,
+          event: 'action proposed',
+          action: { id: pa.id, label: 'Teach Deny Target', display: { agent: 'Deny Target' } },
+        },
+      });
+      await dmRun;
+
+      calls.length = 0;
+      const click = await signedPost(
+        `payload=${encodeURIComponent(
+          JSON.stringify({
+            type: 'block_actions',
+            user: { id: 'U_DM' },
+            team: { id: 'T_DM' },
+            container: { channel_id: 'D_CONCIERGE', message_ts: '9.8' },
+            actions: [{ action_id: 'janis_deny_action', value: pa.id }],
+          }),
+        )}`,
+        '/slack/interactions',
+      );
+      expect(click.status).toBe(200);
+
+      const [decided] = await db
+        .select({ status: pendingActions.status })
+        .from(pendingActions)
+        .where(eq(pendingActions.id, pa.id));
+      expect(decided.status).toBe('denied');
+      const [jerryAfter] = await db.select().from(agents).where(eq(agents.id, jerry.id));
+      expect((jerryAfter.config as { knowledge?: string[] }).knowledge ?? []).not.toContain(
+        'should never land',
+      );
+
+      const update = calls.find(
+        (c) => c.url.includes('chat.update') && c.body.channel === 'D_CONCIERGE',
+      );
+      expect(update).toBeTruthy();
+      expect(JSON.stringify(update!.body.blocks)).toContain('denied');
+      expect(JSON.stringify(update!.body.blocks)).not.toContain('janis_approve_action');
+      expect(JSON.stringify(update!.body.blocks)).not.toContain('janis_deny_action');
+      const dismissed = calls.find(
+        (c) =>
+          c.url.includes('chat.postMessage') &&
+          c.body.channel === 'D_CONCIERGE' &&
+          String(c.body.text).includes('Dismissed'),
+      );
+      expect(dismissed).toBeTruthy();
+    } finally {
+      env.operatorWorkspaceId = prevOpWs;
+      await db.update(agents).set({ hosted: false }).where(eq(agents.name, 'Concierge'));
+      await db
+        .update(memberships)
+        .set({ role: 'member' })
+        .where(and(eq(memberships.userId, memberId), eq(memberships.workspaceId, wsId)));
+    }
+    },
+  );
+
+  it(
+    'concierge quick replies post as buttons; a click injects the pick as the clicker\'s own turn',
+    { timeout: 20000 },
+    async () => {
+    const [concierge] = await db.select().from(agents).where(eq(agents.name, 'Concierge'));
+    await db.update(agents).set({ hosted: true }).where(eq(agents.id, concierge.id));
+    try {
+      const calls: { url: string; body: Record<string, unknown> }[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+          calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+          return new Response('{"ok":true,"ts":"9.9","channel":"D_CONCIERGE"}', { status: 200 });
+        }),
+      );
+
+      await dm('U_DM', 'seed');
+      const [binding] = await db
+        .select()
+        .from(channelBindings)
+        .where(
+          and(
+            eq(channelBindings.channelId, convChannelId),
+            eq(channelBindings.platformUserId, `u:${memberId}:tslackdm`),
+          ),
+        );
+
+      // An outbound concierge reply carrying quick replies lands mid-poll.
+      const dmRun = dm('U_DM', 'what can I do?');
+      await new Promise((r) => setTimeout(r, 500));
+      await db.insert(messages).values({
+        conversationId: binding.conversationId,
+        direction: 'out',
+        text: 'Here are a few things:',
+        payload: { quick_replies: ['Show my agents', 'Check billing'] },
+      });
+      await dmRun;
+
+      const reply = calls.find(
+        (c) =>
+          c.url.includes('chat.postMessage') &&
+          c.body.channel === DCHAN &&
+          JSON.stringify(c.body.blocks ?? []).includes('janis_quick_reply'),
+      );
+      expect(reply).toBeTruthy();
+      const actions = (reply!.body.blocks as { type: string; elements?: { value?: string }[] }[]).find(
+        (b) => b.type === 'actions',
+      );
+      expect(actions!.elements!.map((e) => e.value)).toEqual(['Show my agents', 'Check billing']);
+      // `blocks` renders INSTEAD of the text field — the reply body must
+      // live in a section block or the message shows as bare buttons.
+      expect(JSON.stringify(reply!.body.blocks)).toContain('Here are a few things:');
+
+      // The member taps "Show my agents" — buttons swap to a picked line,
+      // and the pick ingests as their own concierge inbound.
+      calls.length = 0;
+      const click = await signedPost(
+        `payload=${encodeURIComponent(
+          JSON.stringify({
+            type: 'block_actions',
+            user: { id: 'U_DM' },
+            team: { id: 'T_DM' },
+            channel: { id: DCHAN },
+            message: {
+              ts: '9.9',
+              text: 'Here are a few things:',
+              blocks: [
+                { type: 'section', text: { type: 'mrkdwn', text: 'Here are a few things:' } },
+                { type: 'actions', elements: [{ type: 'button', action_id: 'janis_quick_reply' }] },
+              ],
+            },
+            actions: [{ action_id: 'janis_quick_reply', action_ts: '12.34', value: 'Show my agents' }],
+          }),
+        )}`,
+        '/slack/interactions',
+      );
+      expect(click.status).toBe(200);
+      await new Promise((r) => setTimeout(r, 1500));
+
+      const update = calls.find((c) => c.url.includes('chat.update') && c.body.ts === '9.9');
+      expect(update).toBeTruthy();
+      expect(JSON.stringify(update!.body.blocks)).toContain('picked');
+      expect(JSON.stringify(update!.body.blocks)).not.toContain('"actions"');
+
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.conversationId, binding.conversationId));
+      expect(
+        rows.some(
+          (m) => m.direction === 'in' && m.text === 'Show my agents',
+        ),
+      ).toBe(true);
+    } finally {
+      await db.update(agents).set({ hosted: false }).where(eq(agents.name, 'Concierge'));
+    }
+    },
+  );
+
+  it(
+    'channel mentions share one conversation per member per channel; replies mirror placement',
+    { timeout: 20000 },
+    async () => {
+    const [concierge] = await db.select().from(agents).where(eq(agents.name, 'Concierge'));
+    await db.update(agents).set({ hosted: true }).where(eq(agents.id, concierge.id));
+    try {
+      const calls: { url: string; body: Record<string, unknown> }[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+          calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+          return new Response('{"ok":true,"ts":"9.9","channel":"C_MENTION"}', { status: 200 });
+        }),
+      );
+      const mention = (text: string, extra?: { thread_ts?: string; ts?: string }) =>
+        signedPost(
+          JSON.stringify({
+            type: 'event_callback',
+            team_id: 'T_DM',
+            event: {
+              type: 'app_mention',
+              channel: 'C_MENTION',
+              ts: extra?.ts ?? `7.${Math.random().toString(36).slice(2, 6)}`,
+              user: 'U_DM',
+              text,
+              ...(extra?.thread_ts ? { thread_ts: extra.thread_ts } : {}),
+            },
+          }),
+          '/slack/events',
+        );
+
+      // Top-level mention → channel-scoped binding (u:<member>:t<channel>),
+      // replies post top-level — no thread is created.
+      const run = mention('<@U9BOTUSER> hello');
+      await new Promise((r) => setTimeout(r, 500));
+      const [binding] = await db
+        .select()
+        .from(channelBindings)
+        .where(
+          and(
+            eq(channelBindings.channelId, convChannelId),
+            eq(channelBindings.platformUserId, `u:${memberId}:tc_mention`),
+          ),
+        );
+      expect(binding).toBeTruthy();
+      await db.insert(messages).values({
+        conversationId: binding.conversationId,
+        direction: 'out',
+        text: 'top-level answer',
+      });
+      await run;
+      const topReply = calls.find(
+        (c) => c.url.includes('chat.postMessage') && c.body.text === 'top-level answer',
+      );
+      expect(topReply).toBeTruthy();
+      expect(topReply!.body.thread_ts).toBeUndefined();
+
+      // A mention inside an existing thread continues the SAME conversation
+      // and answers inside that thread.
+      calls.length = 0;
+      const run2 = mention('<@U9BOTUSER> follow up', { thread_ts: '5.5', ts: '7.777' });
+      await new Promise((r) => setTimeout(r, 500));
+      await db.insert(messages).values({
+        conversationId: binding.conversationId,
+        direction: 'out',
+        text: 'in-thread answer',
+      });
+      await run2;
+      const threadReply = calls.find(
+        (c) => c.url.includes('chat.postMessage') && c.body.text === 'in-thread answer',
+      );
+      expect(threadReply).toBeTruthy();
+      expect(threadReply!.body.thread_ts).toBe('5.5');
+
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.conversationId, binding.conversationId));
+      const ins = rows.filter((m) => m.direction === 'in');
+      expect(ins.map((m) => m.text)).toEqual(['hello', 'follow up']);
+    } finally {
+      await db.update(agents).set({ hosted: false }).where(eq(agents.name, 'Concierge'));
+    }
+    },
+  );
 });

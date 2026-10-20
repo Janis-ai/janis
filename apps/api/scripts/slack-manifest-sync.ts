@@ -49,6 +49,11 @@ const REQUIRED_BOT_SCOPES = [
   'mpim:history',
   'users:read',
   'users:read.email',
+  'app_mentions:read', // required companion to the app_mention bot event
+  // Classic-mode extras:
+  'im:read',    // conversations.info on D… channels (member DM resolution)
+  'files:read', // files.sharedPublicURL for files_uploaded
+  'team:read',  // team_join event companion
 ];
 
 const REQUIRED_BOT_EVENTS = [
@@ -56,6 +61,19 @@ const REQUIRED_BOT_EVENTS = [
   'message.groups',
   'message.im',
   'message.mpim',
+  'app_mention', // @janis → concierge question, answered in-thread
+  // Classic-mode workspace sync (slack_bot.js 1275-1458) — dispatched only
+  // for mode='classic' installs; new-mode installs ignore them.
+  'member_joined_channel',
+  'member_left_channel',
+  'channel_deleted',
+  'channel_rename',
+  'channel_created',
+  'channel_archive',
+  'channel_unarchive',
+  'channel_marked',
+  'channel_history_changed',
+  'team_join',
 ];
 
 const REDIRECT_URL = `${API_ORIGIN}/slack/oauth/callback`;
