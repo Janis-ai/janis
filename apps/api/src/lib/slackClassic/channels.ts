@@ -192,6 +192,45 @@ async function createChannel(
   });
   const final = info.ok && info.channel ? info.channel : channel;
   await saveTranscriptChannel(ctx, final);
+  // Latch BEFORE posting — the member_joined event our invite just fired
+  // can reach the sync handler mid-flow; it must see the flag set and skip.
+  await saveClassicChannel(ctx.db, {
+    installationId: install.id,
+    sourceChannel: ctx.sourceChannel,
+    introPostedAt: new Date(),
+  });
+  // Legacy's intro card arrived via member_joined_channel; posting inline
+  // keeps it reliable when the event races ahead of the registry row (or
+  // never arrives — apps missing the subscription).
+  const installerId = install.installerSlackUserId;
+  let inviter = '';
+  if (installerId) {
+    const ures = await ctx
+      .api<{ user?: { name?: string } }>(install.botToken, 'users.info', {
+        user: installerId,
+      })
+      .catch(() => ({}) as { user?: { name?: string } });
+    inviter = `<@${installerId}|${ures.user?.name ?? ''}>`;
+  }
+  const { invitedToTranscriptMessage } = await import('./strings.js');
+  const { pauseResumeButtons } = await import('./buttons.js');
+  const imsg = invitedToTranscriptMessage(inviter, ctx.sourceChannel);
+  imsg.attachments.push(pauseResumeButtons({}));
+  const ires = await ctx.say({ ...imsg, channel: channel.id });
+  if (!ires.ok) {
+    // Failed — unlatch so a later member_joined can still post the card.
+    await saveClassicChannel(ctx.db, {
+      installationId: install.id,
+      sourceChannel: ctx.sourceChannel,
+      introPostedAt: null,
+    });
+  }
+  ctx.result.posted.push({
+    channel: channel.id,
+    ts: ires.ts ?? '',
+    kind: 'sync:invited_transcript',
+    payload: imsg,
+  });
   return {
     id: '',
     installationId: install.id,

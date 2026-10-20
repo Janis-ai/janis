@@ -486,7 +486,7 @@ export async function detectIntentV1(
   if (body.entities?.length) {
     queryParams.sessionEntityTypes = body.entities.map((e) => ({
       name: `projects/${project}/agent/sessions/${sessionId}/entityTypes/${e.name}`,
-      entityOverrideMode: 'SESSION_ENTITY_TYPE_MODE_OVERRIDE',
+      entityOverrideMode: 'ENTITY_OVERRIDE_MODE_OVERRIDE',
       entities: e.entries,
     }));
   }

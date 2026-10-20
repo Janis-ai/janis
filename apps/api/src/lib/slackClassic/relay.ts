@@ -79,7 +79,22 @@ export async function classicIncoming(
     message.text = 'dialogflow';
     message.event = 'ListDialogflowAgents';
   }
-  const channel = await getClassicChannelBySlackId(ctx.db, message.channel);
+  let channel = await getClassicChannelBySlackId(ctx.db, message.channel);
+  if (!channel && (message.direct || message.command)) {
+    // incoming() auto-created the channel doc for directed messages
+    // (slack_bot.js 9573-9590): {id: channel, logSeverityLevel: 1, team}.
+    // Without it the DM concierge silently suppresses every message.
+    await saveClassicChannel(ctx.db, {
+      installationId: ctx.install.id,
+      sourceChannel: message.channel,
+      slackChannelId: message.channel,
+      name: message.channel,
+      team: typeof message.team === 'string' ? message.team : message.team?.id,
+      isWordhopChannel: false,
+      isTrainingChannel: false,
+    });
+    channel = await getClassicChannelBySlackId(ctx.db, message.channel);
+  }
   await classicIncomingContinued(ctx, message, channel);
 }
 
@@ -2410,8 +2425,14 @@ export async function handleClassicWorkspaceEvent(
           })
           .catch(() => ({} as { user?: { name?: string } }));
         const name = ures.user?.name ?? '';
-        const stored = await getClassicChannelBySlackId(ctx.db, ev.channel ?? '');
-        if (stored?.isWordhopChannel === true) {
+        // Slack can deliver this event while createChannel is still saving
+        // the registry row — retry once before concluding it's not ours.
+        let stored = await getClassicChannelBySlackId(ctx.db, ev.channel ?? '');
+        if (!stored) {
+          await new Promise((r) => setTimeout(r, 1500));
+          stored = await getClassicChannelBySlackId(ctx.db, ev.channel ?? '');
+        }
+        if (stored?.isWordhopChannel === true && stored.introPostedAt == null) {
           const { invitedToTranscriptMessage } = await import('./strings.js');
           const { pauseResumeButtons } = await import('./buttons.js');
           const msg = invitedToTranscriptMessage(
@@ -2422,6 +2443,13 @@ export async function handleClassicWorkspaceEvent(
             pauseResumeButtons({ paused: stored.paused === true }),
           );
           const res = await ctx.say({ ...msg, channel: ev.channel });
+          if (res.ok) {
+            await saveClassicChannel(ctx.db, {
+              installationId: ctx.install.id,
+              sourceChannel: stored.sourceChannel,
+              introPostedAt: new Date(),
+            });
+          }
           ctx.result.posted.push({
             channel: ev.channel ?? '',
             ts: res.ts ?? '',

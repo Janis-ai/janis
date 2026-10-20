@@ -665,6 +665,12 @@ export const slackClassicChannels = pgTable(
     // display + pause/resume buttons (fed by update_channel / takeover).
     paused: boolean('paused').notNull().default(false),
     shouldProcessTranscript: boolean('should_process_transcript').notNull().default(false),
+    // The invitedToTranscriptMessage + pause/resume button card has been
+    // posted — guards the member_joined_channel handler against double
+    // posting when the create flow already posted it inline (legacy posted
+    // via the join event; we post at create because Slack can deliver the
+    // event before the registry row exists).
+    introPostedAt: timestamp('intro_posted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

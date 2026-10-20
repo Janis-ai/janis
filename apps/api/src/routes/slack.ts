@@ -1084,6 +1084,7 @@ export function slackPublicRoutes(db: Db) {
       const inst = evTeamInstall;
       const result: ClassicResult = { posted: [], suppressed: [], errors: [] };
       const ctx = makeClassicCtx(db, inst, result);
+      console.log('[classic] workspace event', ev.type, ev.channel ?? '', ev.user ?? '');
       await handleClassicWorkspaceEvent(ctx, {
         type: ev.type,
         // channel_rename nests the channel object.

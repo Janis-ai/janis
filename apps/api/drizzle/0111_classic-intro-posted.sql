@@ -1,0 +1,1 @@
+ALTER TABLE "slack_classic_channels" ADD COLUMN "intro_posted_at" timestamp with time zone;

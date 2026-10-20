@@ -131,12 +131,12 @@ function planAttachments(
         ),
       );
     } else if (wordhopChannel) {
-      const lastTs = wordhopChannel.lastMessageTs
-        ? `/p${wordhopChannel.lastMessageTs.replace('.', '')}`
-        : '';
+      // Legacy appended /p<last_message_ts>, but every user line is a thread
+      // parent now (the training-menu reply), and current Slack opens those
+      // links in thread view — the bare channel link lands in the channel.
       const domain =
         cfg.teamDomain ?? `${install.teamName ?? install.teamId}`;
-      transcriptLink = `https://${domain}.slack.com/archives/${wordhopChannel.slackChannelId}${lastTs}`;
+      transcriptLink = `https://${domain}.slack.com/archives/${wordhopChannel.slackChannelId}`;
       attachments.push({
         mrkdwn_in: ['fields'],
         fields: [
@@ -368,9 +368,7 @@ async function showAlertToMember(
   if (ctx.pro && res.message) {
     const domain = cfg.teamDomain ?? `${ctx.install.teamName ?? ctx.install.teamId}`;
     const transcriptLink = wordhopChannel
-      ? `https://${domain}.slack.com/archives/${wordhopChannel.slackChannelId}${
-          wordhopChannel.lastMessageTs ? `/p${wordhopChannel.lastMessageTs.replace('.', '')}` : ''
-        }`
+      ? `https://${domain}.slack.com/archives/${wordhopChannel.slackChannelId}`
       : undefined;
     await ctx.api(ctx.install.botToken, 'chat.postMessage', {
       channel: dmChannelId,
