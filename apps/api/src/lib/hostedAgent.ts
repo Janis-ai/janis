@@ -5037,7 +5037,7 @@ async function replyAsHostedAgent(
       // NVDA's snippet gave market cap, not a price, and the model invented
       // "$215.32 from Robinhood" rather than say the search came up short.
       (builtins.some((b) => b.name === 'web_search')
-        ? '\nYou have a web_search tool — call it whenever an answer needs something current or outside your knowledge (prices, news, weather, releases, schedules) BEFORE saying you lack real-time data. Answer only from what it returns — if the results don\'t contain the fact, say what they did show or run one narrower query; never quote a figure or name a source no result contained.'
+        ? '\nYou have a web_search tool — call it whenever an answer needs something current or outside your knowledge (news, weather, releases, schedules, outside-world facts like stocks or sports) BEFORE saying you lack real-time data. It is only for the outside world — questions about your own product, prices, features or knowledge are answered from your knowledge base, tools and saved components, never from a web search. Answer only from what it returns — if the results don\'t contain the fact, say what they did show or run one narrower query; never quote a figure or name a source no result contained.'
         : '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;
