@@ -543,6 +543,24 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     },
   },
   {
+    name: 'web_fetch',
+    description:
+      'Open a web page and read its text. Use after web_search when a live value matters (a stock price, a schedule) — snippets are indexed and can be stale, the page itself is current.',
+    params: { url: 'page URL — typically a result returned by web_search' },
+    platform: true,
+    available: () => env.searchApiKey.length > 0 || env.searchBaseUrl.length > 0,
+    run: async (args) => {
+      const url = (args.url ?? '').trim();
+      if (!/^https?:\/\//.test(url)) return 'error: url must start with http(s)://';
+      try {
+        const { text, finalUrl } = await fetchUrlText(url);
+        return JSON.stringify({ url: finalUrl, text: text.slice(0, 6000) });
+      } catch (err) {
+        return `error: ${err instanceof Error ? err.message : 'fetch failed'}`;
+      }
+    },
+  },
+  {
     name: 'account_status',
     description:
       'Look up the signed-in visitor\'s Janis account: whether they have a workspace, which plan they\'re on, and how many agents they run. Only works when the visitor is a verified signed-in user — otherwise say they\'re not signed in.',
