@@ -1769,6 +1769,7 @@
   // line + feature bullets + select action), not product cards.
   function renderPricing(box, w) {
     wTitle(box, w.title);
+    var wrap = el('div', {}, { class: 'janis-wcards-wrap' });
     var row = el('div', {}, { class: 'janis-wpricing' });
     (w.items || []).forEach(function (p) {
       var plan = el('div', {}, { class: 'janis-wplan' + (p.highlight ? ' featured' : '') });
@@ -1782,9 +1783,11 @@
         head.appendChild(cur);
       }
       plan.appendChild(head);
-      var pr = el('div', {}, { class: 'janis-wplan-price' });
-      wtext(pr, p.price);
-      plan.appendChild(pr);
+      if (p.price) {
+        var pr = el('div', {}, { class: 'janis-wplan-price' });
+        wtext(pr, p.price);
+        plan.appendChild(pr);
+      }
       if (p.price_alt) {
         var alt = el('div', {}, { class: 'janis-wplan-alt' });
         wtext(alt, p.price_alt);
@@ -1806,13 +1809,39 @@
       }
       if (p.select_label) {
         var b = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
-        wtext(b, p.select_label);
+        wtext(b, p.select_button || p.select_label);
         b.onclick = function () { sendText(p.select_label, { of: p.name }); };
         plan.appendChild(b);
       }
       row.appendChild(plan);
     });
-    box.appendChild(row);
+    wrap.appendChild(row);
+    // Same overflow-arrow treatment as the cards row — the pricing row
+    // scrolls natively but nothing signaled that on desktop.
+    function arrow(cls, dir, label) {
+      var b = el('button', {}, { class: 'janis-wscroll ' + cls, type: 'button', 'aria-label': label });
+      wtext(b, dir < 0 ? '‹' : '›');
+      b.onclick = function () { row.scrollBy({ left: dir * 168, behavior: 'smooth' }); };
+      return b;
+    }
+    var prev = arrow('janis-wprev', -1, 'Scroll left');
+    var next = arrow('janis-wnext', 1, 'Scroll right');
+    function syncArrows() {
+      var over = row.scrollWidth > row.clientWidth + 4;
+      prev.style.display = over ? 'flex' : 'none';
+      next.style.display = over ? 'flex' : 'none';
+      prev.disabled = !over || row.scrollLeft <= 0;
+      next.disabled = !over || row.scrollLeft + row.clientWidth >= row.scrollWidth - 2;
+    }
+    row.addEventListener('scroll', syncArrows, { passive: true });
+    wrap.appendChild(prev);
+    wrap.appendChild(next);
+    box.appendChild(wrap);
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(syncArrows).observe(row);
+    }
+    requestAnimationFrame(syncArrows);
+    setTimeout(syncArrows, 300);
   }
 
   // Live storefront cart — hydrates from the shop's same-origin Ajax API.

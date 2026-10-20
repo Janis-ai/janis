@@ -56,13 +56,14 @@ export type ChatWidget =
       title?: string;
       items: {
         name: string;
-        price: string;
+        price?: string;
         price_alt?: string;
         blurb?: string;
         features?: string[];
         highlight?: boolean;
         current?: boolean;
         select_label?: string;
+        select_button?: string;
       }[];
     }
   // Storefront cart — hydrates from the shop's /cart.js in widget.js; the
@@ -100,9 +101,13 @@ function Widget({ w, onSend }: { w: ChatWidget; onSend: (t: string, tap?: { of?:
   );
 }
 
-function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
+/** Overflow arrows for a horizontal widget row — the row scrolls natively
+ *  but nothing signals that on desktop. ‹ › step one item at a time and
+ *  fade out at the edges; a ResizeObserver keeps them honest when the rail
+ *  mounts hidden (scrollWidth 0) or resizes later. */
+function useOverflowRow(dep: number) {
   const rowRef = useRef<HTMLDivElement>(null);
-  // null = unmeasured. Until a real measurement lands, a multi-card row
+  // null = unmeasured. Until a real measurement lands, a multi-item row
   // assumes it overflows — a measurement that never fires (mounted while
   // the rail was hidden) must not leave the row unscrollable-looking.
   const [edges, setEdges] = useState<{ over: boolean; prev: boolean; next: boolean } | null>(null);
@@ -116,14 +121,11 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
       next: over && row.scrollLeft + row.clientWidth < row.scrollWidth - 2,
     });
   };
-  const showArrows = w.items.length > 1 && (edges === null || edges.over);
+  const showArrows = dep > 1 && (edges === null || edges.over);
   const canPrev = edges ? edges.prev : true;
   const canNext = edges ? edges.next : true;
   useEffect(() => {
     sync();
-    // The rail can mount while Ask Janis is collapsed (scrollWidth 0) or
-    // resize later — observe so the arrows appear whenever the row
-    // actually overflows, not just at mount.
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
     if (rowRef.current) ro?.observe(rowRef.current);
     // scrollWidth settles once fonts/images paint — re-check after a tick
@@ -132,8 +134,27 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
       ro?.disconnect();
       clearTimeout(t);
     };
-  }, [w.items.length]);
+  }, [dep]);
   const step = (dir: number) => rowRef.current?.scrollBy({ left: dir * 168, behavior: 'smooth' });
+  return { rowRef, sync, step, showArrows, canPrev, canNext };
+}
+
+function ScrollArrows({ show, canPrev, canNext, step }: { show: boolean; canPrev: boolean; canNext: boolean; step: (dir: number) => void }) {
+  if (!show) return null;
+  return (
+    <>
+      <button type="button" className="wgt-scroll wgt-prev" aria-label="Scroll left" disabled={!canPrev} onClick={() => step(-1)}>
+        ‹
+      </button>
+      <button type="button" className="wgt-scroll wgt-next" aria-label="Scroll right" disabled={!canNext} onClick={() => step(1)}>
+        ›
+      </button>
+    </>
+  );
+}
+
+function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
+  const { rowRef, sync, step, showArrows, canPrev, canNext } = useOverflowRow(w.items.length);
   // Placeholder tiles exist to keep a mixed carousel uniform — when NO card
   // has an image the whole slot is just a wall of broken icons; drop it.
   const anyImage = w.items.some((i) => i.image);
@@ -217,28 +238,7 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
         );
       })}
       </div>
-      {showArrows && (
-        <>
-          <button
-            type="button"
-            className="wgt-scroll wgt-prev"
-            aria-label="Scroll left"
-            disabled={!canPrev}
-            onClick={() => step(-1)}
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            className="wgt-scroll wgt-next"
-            aria-label="Scroll right"
-            disabled={!canNext}
-            onClick={() => step(1)}
-          >
-            ›
-          </button>
-        </>
-      )}
+      <ScrollArrows show={showArrows} canPrev={canPrev} canNext={canNext} step={step} />
       {typeof w.total === 'number' && w.total > w.items.length && (
         <button
           type="button"
@@ -375,17 +375,19 @@ function Receipt({ w }: { w: Extract<ChatWidget, { type: 'receipt' }> }) {
 }
 
 function Pricing({ w, onSend }: { w: Extract<ChatWidget, { type: 'pricing' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
+  const { rowRef, sync, step, showArrows, canPrev, canNext } = useOverflowRow(w.items.length);
   return (
     <div className="wgt-pricing">
       {w.title && <div className="wgt-title">{w.title}</div>}
-      <div className="wgt-pricing-row">
+      <div className="wgt-cards-wrap">
+        <div className="wgt-pricing-row" ref={rowRef} onScroll={sync}>
         {w.items.map((p, i) => (
           <div key={i} className={`wgt-plan${p.highlight ? ' featured' : ''}`}>
             <div className="wgt-plan-head">
               <strong>{p.name}</strong>
               {p.current && <span className="badge">current</span>}
             </div>
-            <div className="wgt-plan-price">{p.price}</div>
+            {p.price && <div className="wgt-plan-price">{p.price}</div>}
             {p.price_alt && <div className="wgt-plan-alt">{p.price_alt}</div>}
             {p.blurb && <div className="wgt-plan-blurb">{p.blurb}</div>}
             {p.features?.length ? (
@@ -401,11 +403,13 @@ function Pricing({ w, onSend }: { w: Extract<ChatWidget, { type: 'pricing' }>; o
                 className="wgt-btn wgt-btn-primary"
                 onClick={() => onSend(p.select_label!, { of: p.name })}
               >
-                {p.select_label}
+                {p.select_button ?? p.select_label}
               </button>
             )}
           </div>
         ))}
+        </div>
+        <ScrollArrows show={showArrows} canPrev={canPrev} canNext={canNext} step={step} />
       </div>
     </div>
   );

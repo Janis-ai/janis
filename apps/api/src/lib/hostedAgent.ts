@@ -392,7 +392,7 @@ function widgetDigest(w: SavedWidgetDef & { name: string; toolDef?: ToolDef }): 
   const s = w.spec;
   let detail = '';
   if (s.type === 'cards') detail = s.items.map((i) => i.title).join(', ');
-  else if (s.type === 'pricing') detail = s.items.map((i) => `${i.name} ${i.price}`).join(', ');
+  else if (s.type === 'pricing') detail = s.items.map((i) => `${i.name} ${i.price ?? ''}`.trim()).join(', ');
   else if (s.type === 'options') detail = [s.title, ...s.items.map((i) => i.label)].filter(Boolean).join(' — ');
   else if (s.type === 'form') detail = [s.title, ...s.fields.map((f) => f.label)].filter(Boolean).join(' — ');
   else detail = s.title ?? '';
@@ -809,7 +809,8 @@ export function systemPrompt(
         : ' Write plain text: no markup emphasis (no **bold**, *italics*, or headings) — this channel renders plain text only.') +
       ' When you write math, wrap it in $…$ LaTeX (e.g. $x^2$, $60^\\circ$, $\\frac{1}{2}$) — it renders correctly on every channel. Prices and percentages are NOT math — write $50 and 50% plainly, with no extra $ or backslashes.' +
       ' When an answer enumerates several items (plans, prices, steps, options), put each on its own line — optionally as "- item" bullets — rather than running them together in a paragraph; line breaks render on every channel.' +
-      ' When your answer points the customer at a page and a URL for it appears in your knowledge base or context, include it rather than describing where to click — a bare https:// URL renders clickable on every channel.',
+      ' When your answer points the customer at a page and a URL for it appears in your knowledge base or context, include it rather than describing where to click — a bare https:// URL renders clickable on every channel.' +
+      ' Internal economics stay internal — when you describe plans or prices, never volunteer margins, markups, wholesale rates or what a service costs to run; prices are what the customer pays, quoted exactly as they appear in your knowledge.',
   );
   if (!opts.forSuggestion) {
     parts.push(
@@ -838,6 +839,7 @@ export function systemPrompt(
             ? '\n{"type":"form","title","submit_label","fields":[{"name","label","type":"text|email|tel|textarea|select","options":[...],"required":true}]} — collects fields and submits them as a message you\'ll receive.' +
               '\n{"type":"status","title","steps":[{"label","state":"done|current|todo","note"}]} — order/application tracker.' +
               '\n{"type":"receipt","title","rows":[{"label","value"}],"total":{"label","value"}} — order summary.' +
+              '\n{"type":"pricing","title","items":[{"name","price","price_alt","blurb","features":["…"],"highlight","select_button","select_label"}]} — plan/price table for "what do you cost?" asks. Every "price"/"price_alt" is copied VERBATIM from your knowledge — never type a number from memory; if a plan\'s price isn\'t in your context, omit the field rather than guess. "select_label" is the message sent on tap ("Tell me more about the Pro plan"); "select_button" is the short text shown on it ("Tell me more…").' +
               '\n{"type":"cart","title"} — Shopify storefronts only: renders the shopper\'s LIVE cart (items, quantity controls, remove, subtotal, a checkout button) read from the store itself — emit it when they ask what\'s in their cart, want to check out, or confirm an add-to-cart; it carries no items, you never list them yourself.'
             : '') +
           '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. For a card about a specific page or listing, use only the "Image:" URL attached to that page\'s knowledge — never reuse another document\'s image, and omit "image" if the page has none. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.' +
@@ -1509,17 +1511,95 @@ export function normalizeCardSelects(
   skip: Set<WidgetComponent> = new Set(),
 ): void {
   for (const w of widgets) {
-    if (w.type !== 'cards' || skip.has(w)) continue;
-    for (const item of w.items) {
-      if (!item.select_label || item.select_button || !item.title) continue;
-      const label = item.select_label.trim().toLowerCase();
-      const title = item.title.trim().toLowerCase();
-      if (label === title) {
-        item.select_label = `Tell me more about ${item.title}`;
-        item.select_button = 'Tell me more…';
-      } else if (label.startsWith('tell me more')) {
-        item.select_button = 'Tell me more…';
+    if (w.type === 'cards' && !skip.has(w)) {
+      for (const item of w.items) {
+        if (!item.select_label || item.select_button || !item.title) continue;
+        const label = item.select_label.trim().toLowerCase();
+        const title = item.title.trim().toLowerCase();
+        if (label === title) {
+          item.select_label = `Tell me more about ${item.title}`;
+          item.select_button = 'Tell me more…';
+        } else if (label.startsWith('tell me more')) {
+          item.select_button = 'Tell me more…';
+        }
       }
+    } else if (w.type === 'pricing' && !skip.has(w)) {
+      for (const item of w.items) {
+        if (!item.select_label || item.select_button || !item.name) continue;
+        const label = item.select_label.trim().toLowerCase();
+        const name = item.name.trim().toLowerCase();
+        if (label === name) {
+          item.select_label = `Tell me more about ${item.name}`;
+          item.select_button = 'Tell me more…';
+        } else if (label.startsWith('tell me more')) {
+          item.select_button = 'Tell me more…';
+        }
+      }
+    }
+  }
+}
+
+/** Internal-economics terms never belong on a customer-facing price card —
+ *  the help center may describe how metering works ("a small margin",
+ *  "cost plus margin"), but what WE pay to serve them is not what THEY pay. */
+const INTERNAL_ECONOMICS = /\b(margins?|markups?|wholesale|cost\s*plus)\b/i;
+
+/** Does `s` appear in the corpus as a standalone token? Word-ish boundaries
+ *  keep "9/mo" from verifying inside "$29/mo" — the exact drift class this
+ *  pass exists to catch. */
+function verbatimIn(s: string, lowerCorpus: string): boolean {
+  const esc = s.trim().toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!esc) return false;
+  return new RegExp(`(?<![\\w$])${esc}(?![\\w])`).test(lowerCorpus);
+}
+
+/** The price the corpus attributes to a named plan — scan each occurrence
+ *  of the name and take the first money figure inside its window. Returns
+ *  the corpus's literal text (verbatim, so it re-passes verification). */
+function priceNearName(name: string, corpus: string): string | undefined {
+  const esc = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!esc) return undefined;
+  const re = new RegExp(`\\b${esc}\\b`, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(corpus))) {
+    const win = corpus.slice(m.index, m.index + 160);
+    const p = win.match(/\$\s?\d[\d,.]*\s*\/\s*(?:mo|month|yr|year)\b|\$\s?\d[\d,.]+/i);
+    if (p) return p[0].replace(/\s+/g, '');
+  }
+  return undefined;
+}
+
+/** A pricing widget is a billing page, not a guessing game — every price
+ *  shown must exist in the agent's own knowledge. Model-typed prices drift
+ *  ("$29/mo" → "9/mo", or outright garbage like "bash/mo"): each price
+ *  field is verified verbatim against the doc corpus; an unverifiable one
+ *  is re-resolved from the plan name's context, else dropped — a plan card
+ *  with no price beats one quoting an invented number. Internal-economics
+ *  terms are stripped from bullets and blurbs. `skip` holds ref-resolved
+ *  specs — saved components are deterministic by construction. */
+export function repairPricingItems(
+  widgets: WidgetComponent[],
+  docs: { name: string; text: string }[],
+  skip: Set<WidgetComponent> = new Set(),
+): void {
+  const corpus = docs.map((d) => `${d.name}\n${d.text}`).join('\n');
+  if (!corpus.trim()) return;
+  const lower = corpus.toLowerCase();
+  for (const w of widgets) {
+    if (w.type !== 'pricing' || skip.has(w)) continue;
+    for (const item of w.items) {
+      if (item.price && !verbatimIn(item.price, lower)) {
+        const found = item.name ? priceNearName(item.name, corpus) : undefined;
+        if (found) item.price = found;
+        else delete item.price;
+      }
+      if (item.price_alt && !verbatimIn(item.price_alt, lower)) delete item.price_alt;
+      if (item.features?.length) {
+        const kept = item.features.filter((f) => !INTERNAL_ECONOMICS.test(f));
+        if (kept.length) item.features = kept;
+        else delete item.features;
+      }
+      if (item.blurb && INTERNAL_ECONOMICS.test(item.blurb)) delete item.blurb;
     }
   }
 }
@@ -5466,6 +5546,12 @@ async function replyAsHostedAgent(
     // listings" turn typically injects only the index doc, and a title
     // matched there can never find the item's own page/image.
     repairCardImages(widgets, allDocs, [...blessedUrls, ...gen.toolUrls], refResolved);
+    // Plan prices are model-typed too — a mangled "$29/mo" → "9/mo" (or
+    // outright garbage like "bash/mo") is a hallucinated number the
+    // customer acts on. Verify each price verbatim against the corpus,
+    // re-resolve from the plan name, or drop it; internal-economics terms
+    // (margin/wholesale) never belong on a customer's price card.
+    repairPricingItems(widgets, allDocs, refResolved);
     // Catalog-shaped card items must trace to this run's tool output —
     // "here are both items" backed by a model-typed six-product carousel is
     // a hallucination the customer acts on. Dropped entirely → regenerate.

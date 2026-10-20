@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { identityBlockReason, type ToolDef } from './toolExec.js';
 import { env } from '../env.js';
 import { extractWidgets } from './widgets.js';
@@ -1199,6 +1199,100 @@ describe('normalizeCardSelects', () => {
     const w = [card([{ title: 'Oak', select_label: 'Oak' }])];
     normalizeCardSelects(w, new Set(w));
     expect(w[0].items[0]).toMatchObject({ select_label: 'Oak' });
+  });
+
+  it('normalizes pricing items the same way', () => {
+    const w = [
+      {
+        type: 'pricing' as const,
+        items: [
+          { name: 'Pro', price: '$99/mo', select_label: 'Tell me more about the Pro plan' },
+          { name: 'Free', price: '$0/mo', select_label: 'Free' },
+        ] as never,
+      },
+    ];
+    normalizeCardSelects(w);
+    expect(w[0].items[0]).toMatchObject({
+      select_label: 'Tell me more about the Pro plan',
+      select_button: 'Tell me more…',
+    });
+    expect(w[0].items[1]).toMatchObject({
+      select_label: 'Tell me more about Free',
+      select_button: 'Tell me more…',
+    });
+  });
+});
+
+describe('repairPricingItems', () => {
+  const pricing = (items: Record<string, unknown>[]) => ({
+    type: 'pricing' as const,
+    items: items as never,
+  });
+  const DOCS = [
+    {
+      name: 'Help center: Plans and billing',
+      text:
+        'Plans — each tier includes a monthly message allowance, then graduated overage per thousand.\n' +
+        '- Free: $0/mo with 250 messages.\n' +
+        '- Starter: $29/mo with 2,000 messages, then $8 per 1,000.\n' +
+        '- Pro: $99/mo with 20,000 messages, then $5 per 1,000.\n' +
+        '- Scale: $299/mo with 100,000 messages, then $3 per 1,000.\n' +
+        'Annual billing is pay 10 months, get 12.',
+    },
+  ];
+
+  it('repairs a mangled price from the plan name\u2019s context', () => {
+    const w = [
+      pricing([
+        { name: 'Free', price: 'bash/mo' },
+        { name: 'Starter', price: '9/mo' },
+        { name: 'Pro', price: '9/mo' },
+        { name: 'Scale', price: '99/mo' },
+      ]),
+    ];
+    repairPricingItems(w, DOCS);
+    expect(w[0].items.map((i) => i.price)).toEqual(['$0/mo', '$29/mo', '$99/mo', '$299/mo']);
+  });
+
+  it('keeps verbatim prices and drops an unverifiable one with no name match', () => {
+    const w = [
+      pricing([
+        { name: 'Starter', price: '$29/mo' },
+        { name: 'Enterprise', price: '$999/mo' },
+      ]),
+    ];
+    repairPricingItems(w, DOCS);
+    expect(w[0].items[0]).toMatchObject({ price: '$29/mo' });
+    expect(w[0].items[1]).not.toHaveProperty('price');
+  });
+
+  it('drops an unverifiable price_alt', () => {
+    const w = [pricing([{ name: 'Pro', price: '$99/mo', price_alt: '$499/yr' }])];
+    repairPricingItems(w, DOCS);
+    expect(w[0].items[0]).toMatchObject({ price: '$99/mo' });
+    expect(w[0].items[0]).not.toHaveProperty('price_alt');
+  });
+
+  it('strips internal-economics language from features and blurbs', () => {
+    const w = [
+      pricing([
+        {
+          name: 'Pro',
+          price: '$99/mo',
+          blurb: 'Usage metered at cost plus margin',
+          features: ['20,000 messages/mo included', 'LLM usage with a small margin', 'Priority support'],
+        },
+      ]),
+    ];
+    repairPricingItems(w, DOCS);
+    expect(w[0].items[0]).not.toHaveProperty('blurb');
+    expect(w[0].items[0].features).toEqual(['20,000 messages/mo included', 'Priority support']);
+  });
+
+  it('leaves resolved saved-component specs alone', () => {
+    const w = [pricing([{ name: 'Pro', price: 'bash/mo' }])];
+    repairPricingItems(w, DOCS, new Set(w));
+    expect(w[0].items[0]).toMatchObject({ price: 'bash/mo' });
   });
 });
 

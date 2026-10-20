@@ -140,7 +140,10 @@ export const WidgetComponent = z.discriminatedUnion('type', [
       .array(
         z.object({
           name: s(60),
-          price: s(30), // "$29/mo"
+          // "$29/mo" — optional: a plan whose price isn't in context should
+          // omit this, not guess (the field is post-verified verbatim
+          // against the corpus in repairPricingItems).
+          price: s(30).optional(),
           price_alt: s(80).optional(), // "$290/yr — pay 10 months, get 12"
           blurb: s(200).optional(),
           features: z.array(s(80)).max(8).optional(),
@@ -150,6 +153,10 @@ export const WidgetComponent = z.discriminatedUnion('type', [
           // Tapping the plan sends this as the customer's message —
           // "Tell me more about Pro" / "I want to upgrade to Pro".
           select_label: s(160).optional(),
+          // Short text shown ON the button when select_label is a whole
+          // sentence — same split as cards: button shows "Tell me more…",
+          // the tap still sends the full select_label.
+          select_button: s(30).optional(),
         }),
       )
       .min(1)
