@@ -199,6 +199,33 @@ describe('transcriptFor file analysis', () => {
     expect(history.some((m) => String(m.content).includes('passed to a human teammate'))).toBe(true);
     expect(history.at(-1)!.content as string).toBe('(human operator) whisper to the bot');
   });
+
+  it('replays earlier tool calls so the next turn knows they happened', async () => {
+    // prod incident: the concierge ran web_search, quoted a fabricated
+    // price, then the NEXT turn claimed "no record of a web search tool" —
+    // the call lived only in the inspector, invisible to the transcript.
+    await db.insert(messages).values({
+      conversationId: convId,
+      direction: 'out',
+      text: 'NVDA is trading around $200.',
+      payload: {
+        via: 'hosted',
+        inspector: {
+          tools: [
+            { name: 'web_search', outcome: 'ran', args: { q: 'current price of NVDA stock' } },
+            { name: 'stripe_find_customer', outcome: 'failed', args: { email: 'x@y.z' } },
+            { name: 'change_plan', outcome: 'proposed' },
+          ],
+        },
+      },
+      createdAt: new Date(),
+    });
+    const history = await transcriptFor(db, convId, false);
+    const annotated = history.find((m) => String(m.content).includes('NVDA is trading'))!;
+    expect(annotated.content as string).toContain('(searched the web for "current price of NVDA stock"');
+    expect(annotated.content as string).toContain('stripe_find_customer failed');
+    expect(annotated.content as string).not.toContain('change_plan');
+  });
 });
 
 describe('newestInboundIsPending', () => {

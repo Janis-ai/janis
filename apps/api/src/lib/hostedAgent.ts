@@ -4065,6 +4065,34 @@ export async function generateGreeting(
   return text ? text.slice(0, 480) : null;
 }
 
+/** Tool calls from earlier turns live only in payload.inspector — without
+ *  replaying them the next turn can't see it searched ("I don't have a
+ *  record of a web search tool"), denies a capability it just used, and
+ *  re-derives answers it already fetched. A compact "(searched the web for
+ *  "q")" tail on the assistant turn keeps the record visible. Only 'ran'
+ *  and 'failed' count — proposed/simulated calls never executed. */
+function toolCallAnnotation(payload: unknown): string {
+  const tools = (payload as { inspector?: { tools?: InspectorToolCall[] } } | null)?.inspector
+    ?.tools;
+  if (!tools?.length) return '';
+  const notes: string[] = [];
+  for (const t of tools) {
+    if (t.outcome === 'failed') {
+      notes.push(`${t.name} failed`);
+      continue;
+    }
+    if (t.outcome !== 'ran') continue;
+    const q =
+      typeof t.args?.q === 'string'
+        ? t.args.q
+        : typeof t.args?.query === 'string'
+          ? t.args.query
+          : '';
+    notes.push(t.name === 'web_search' && q ? `searched the web for "${q}"` : `used ${t.name}`);
+  }
+  return notes.length ? ` (${notes.join('; ')})` : '';
+}
+
 export async function transcriptFor(
   db: Db,
   convId: string,
@@ -4181,6 +4209,7 @@ export async function transcriptFor(
       content:
         (m.direction === 'human' ? `(human operator) ${m.text}` : m.text!) +
         tapAnnotation(tap) +
+        (m.direction === 'out' ? toolCallAnnotation(m.payload) : '') +
         attachmentNote(m.payload),
     });
   }
@@ -4863,6 +4892,12 @@ async function replyAsHostedAgent(
       });
     }
     const agentToolDefs = toolsFor(agent);
+    const builtins = merchantAsk
+      ? copilotBuiltins()
+      : enabledBuiltins(
+          ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
+          agent.workspaceId,
+        );
     let prompt =
       systemPrompt(agent, docs, conv, {
         pendingOffer: openEsc.some((a) => a.type === 'handoff_offer'),
@@ -4883,6 +4918,14 @@ async function replyAsHostedAgent(
           (merchantAskClaimed
             ? ''
             : " This store's workspace isn't claimed into a Janis account yet — console links (app.janis.ai/…) land on a login wall, so never emit them; prefer the embed's own tabs and your tools.")
+        : '') +
+      // web_search sits in the schema but small models never look there on
+      // an out-of-domain ask — they disclaim "no real-time data" instead.
+      // Say the capability out loud, and bound what a result can become:
+      // NVDA's snippet gave market cap, not a price, and the model invented
+      // "$215.32 from Robinhood" rather than say the search came up short.
+      (builtins.some((b) => b.name === 'web_search')
+        ? '\nYou have a web_search tool — call it whenever an answer needs something current or outside your knowledge (prices, news, weather, releases, schedules) BEFORE saying you lack real-time data. Answer only from what it returns — if the results don\'t contain the fact, say what they did show or run one narrower query; never quote a figure or name a source no result contained.'
         : '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;
@@ -4906,12 +4949,6 @@ async function replyAsHostedAgent(
     // An empty completion is usually a provider blip (transient 500, timeout,
     // a tool loop that never wrapped up) — one retry is cheaper than paging
     // a human over it. Only the retry's output is kept.
-    const builtins = merchantAsk
-      ? copilotBuiltins()
-      : enabledBuiltins(
-          ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
-          agent.workspaceId,
-        );
     let gen!: Awaited<ReturnType<typeof generateReply>>;
     let reply = '';
     let widgets: ReturnType<typeof extractWidgets>['widgets'] = [];
